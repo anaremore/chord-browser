@@ -58,6 +58,8 @@ function TabRow({ tab, index, section, ctx }: { tab: TabNode; index: number; sec
   const live = state.live[tab.id];
   const pinned = section === 'pinned';
   const away = pinned && awayFromHome(tab);
+  // An unloaded pinned tab has nothing to close, so it shows no ×.
+  const unloaded = pinned && !live && !isActive;
   const dispatch = api.state.dispatch;
   const close = () => void dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
   return (
@@ -89,7 +91,7 @@ function TabRow({ tab, index, section, ctx }: { tab: TabNode; index: number; sec
         type="button"
         className={`${styles.row} ${isActive ? styles.active : ''}`}
         // A pinned tab that hasn't been opened yet reads quieter (DESIGN.md §7.2).
-        data-unloaded={pinned && !live && !isActive ? true : undefined}
+        data-unloaded={unloaded || undefined}
         aria-current={isActive ? 'page' : undefined}
         title={pageTitle(tab) || tab.url}
         onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
@@ -107,7 +109,7 @@ function TabRow({ tab, index, section, ctx }: { tab: TabNode; index: number; sec
         >
           <Undo2 size={14} strokeWidth={2} />
         </button>
-      ) : (
+      ) : unloaded ? null : (
         <button
           type="button"
           className={styles.close}
@@ -171,10 +173,12 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'dragging'> &
         if (target?.id === PINNED_ZONE) {
           void api.state.dispatch({ t: 'node.move', nodeId, section: 'pinned', index: 0 });
         } else if (isSortable(source) && isSortable(target) && source.group !== target.group && (target.group === 'pinned' || target.group === 'today')) {
-          // Into the other list: above the row it was dropped on, or below if past its middle.
+          // Into the other list: above the row it was dropped on, or below if past its middle. The
+          // row's place comes from our own order; dnd-kit's index can lag behind after earlier drops.
           const box = target.shape?.boundingRectangle;
           const below = box ? position.current.y > box.top + box.height / 2 : false;
-          void api.state.dispatch({ t: 'node.move', nodeId, section: target.group, index: target.index + (below ? 1 : 0) });
+          const at = tabsIn(target.group).findIndex((t) => t.id === target.id);
+          if (at >= 0) void api.state.dispatch({ t: 'node.move', nodeId, section: target.group, index: at + (below ? 1 : 0) });
         } else if (isSortable(source) && (source.group === 'pinned' || source.group === 'today')) {
           void api.state.dispatch({ t: 'node.move', nodeId, section: source.group, index: source.index });
         }

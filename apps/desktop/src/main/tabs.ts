@@ -77,7 +77,12 @@ export class TabManager {
   }
 
   private wire(nodeId: NodeId, contents: WebContents): void {
-    const { dispatch } = this.deps;
+    // A page being closed (a pinned tab unloading) still fires a few events on its way out.
+    // Only the tab's current page may report, or a late event would mark it loaded again.
+    const current = () => !contents.isDestroyed() && this.views.get(nodeId)?.webContents === contents;
+    const dispatch = (command: Command) => {
+      if (current()) this.deps.dispatch(command);
+    };
     const history = () => ({
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward(),

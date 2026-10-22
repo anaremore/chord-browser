@@ -384,6 +384,9 @@ test('pinned tabs: pin with a key, close keeps them, and dragging reorders and p
     await pinned.getByRole('button', { name: /^Close/ }).click();
     await expect(pinned.getByRole('listitem')).toHaveCount(1);
     await expect(pinned.getByRole('button', { name: 'Third page', exact: true })).not.toHaveAttribute('aria-current', 'page');
+    // It reads as unloaded, and stays that way once the page has gone.
+    await shell.waitForTimeout(800);
+    await expect(pinned.getByRole('button', { name: 'Third page', exact: true })).toHaveAttribute('data-unloaded', 'true');
 
     // Drag First page (bottom of Today) above Second page.
     const drag = async (from: Locator, to: Locator, offsetY: number) => {
@@ -408,6 +411,13 @@ test('pinned tabs: pin with a key, close keeps them, and dragging reorders and p
     await expect(pinned.getByRole('listitem')).toHaveCount(2);
     await expect(pinned.getByRole('listitem').nth(1)).toContainText('Second page');
     await expect(today.getByRole('listitem')).toHaveCount(1);
+
+    // And back down: dropping a pinned tab on a Today row unpins it there.
+    await shell.waitForTimeout(600);
+    await drag(pinned.getByRole('listitem').first(), today.getByRole('listitem').first(), 4);
+    await expect(pinned.getByRole('listitem')).toHaveCount(1);
+    await expect(today.getByRole('listitem')).toHaveCount(2);
+    await expect(today.getByRole('listitem').first()).toContainText('Third page');
   } finally {
     await app.close();
   }
