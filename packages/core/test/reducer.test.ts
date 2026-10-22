@@ -221,7 +221,7 @@ describe('reducer', () => {
       expect(t.state.chords['c1']).toMatchObject({ name: 'Home', icon: '⌂' });
     });
 
-    it('deletes a chord: its tabs close, and windows move to a neighbor', () => {
+    it('deletes a chord: its tabs go with it, windows move to a neighbor, and Undo brings it all back', () => {
       const t = setup();
       t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });
       t.run({ t: 'chord.create', windowId: 'w1', name: 'Work', icon: '♪', theme });
@@ -232,9 +232,14 @@ describe('reducer', () => {
       expect(t.state.windows['w1']).toMatchObject({ activeChordId: 'c1', activeTab: { c1: 'id-001' } });
       expect(t.state.windows['w1']!.activeTab[work]).toBeUndefined();
       expect(result.effects).toContainEqual({ e: 'view.destroy', nodeId: 'id-003' });
-      expect(t.state.closed[0]!.node.url).toBe('https://w.test/');
+      expect(t.state.closed).toHaveLength(0);
       // The last chord stays.
       expect(t.run({ t: 'chord.delete', chordId: 'c1' }).patches).toHaveLength(0);
+
+      t.run({ t: 'chord.restore', windowId: 'w1', chordId: work });
+      expect(t.state.chords[work]).toMatchObject({ name: 'Work' });
+      expect(t.state.windows['w1']).toMatchObject({ activeChordId: work, activeTab: { [work]: 'id-003' } });
+      expect(t.state.deletedChords).toHaveLength(0);
     });
   });
 

@@ -350,6 +350,15 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
     await overlay.keyboard.type('work');
     await expect(overlay.getByRole('option').filter({ hasText: /Work\s*Chord/ })).toHaveCount(1);
     await overlay.keyboard.press('Escape');
+
+    // Deleting is immediate, with Undo in a toast (never a system dialog).
+    await run('chord.goto2');
+    await run('chord.delete');
+    await expect(chords.getByRole('tab', { name: 'Work' })).toHaveCount(0);
+    const toast = shell.getByRole('status').filter({ hasText: 'Deleted “Work”' });
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect(chords.getByRole('tab', { name: 'Work' })).toHaveAttribute('aria-selected', 'true');
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Third page');
   } finally {
     await app.close();
   }

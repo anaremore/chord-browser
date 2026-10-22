@@ -17,7 +17,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
-import { app, BaseWindow, clipboard, dialog, screen, type Menu, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
 import { FindInPage } from './find';
@@ -365,29 +365,25 @@ export class Browser {
           this.lastWindowId = w.id;
           this.openSettings('appearance');
         },
-        delete: onlyChord ? null : () => void this.confirmDeleteChord(w, chordId),
+        delete: onlyChord ? null : () => this.deleteChord(w, chordId),
       }),
       { ...at, width: 0, height: 0 },
     );
   }
 
-  private async confirmDeleteChord(w: AppWindow, chordId: string): Promise<void> {
-    const state = this.store.state;
-    const chord = state.chords[chordId];
+  /**
+   * Delete at once and offer Undo in a toast: no confirmation box (native ones
+   * also make Windows play a warning sound).
+   */
+  private deleteChord(w: AppWindow, chordId: string): void {
+    const chord = this.store.state.chords[chordId];
     if (!chord) return;
-    const tabs = Object.values(state.nodes).filter((n) => n.chordId === chordId && n.kind === 'tab').length;
-    const { response } = await dialog.showMessageBox(w.window, {
-      type: 'warning',
-      buttons: ['Delete chord', 'Cancel'],
-      defaultId: 1,
-      cancelId: 1,
-      message: `Delete “${chord.name}”?`,
-      detail:
-        tabs === 0
-          ? 'It has no tabs.'
-          : `Its ${tabs === 1 ? 'tab closes' : `${tabs} tabs close`}. You can reopen ${tabs === 1 ? 'it' : 'them'} with Reopen closed tab.`,
+    this.store.dispatch({ t: 'chord.delete', chordId });
+    send(w.shell.webContents, 'toast:show', {
+      id: `chord-deleted:${chordId}`,
+      message: `Deleted “${chord.name}”`,
+      action: { label: 'Undo', command: { t: 'chord.restore', windowId: w.id, chordId } },
     });
-    if (response === 0) this.store.dispatch({ t: 'chord.delete', chordId });
   }
 
   private runAction(action: ActionId, w: AppWindow): boolean {
@@ -485,6 +481,11 @@ export class Browser {
       case 'app.quit':
         app.quit();
         return true;
+      case 'chord.delete': {
+        const chordId = this.store.state.windows[w.id]?.activeChordId;
+        if (chordId && Object.keys(this.store.state.chords).length > 1) this.deleteChord(w, chordId);
+        return true;
+      }
       case 'chord.next':
       case 'chord.previous':
         this.store.dispatch({ t: 'chord.cycle', windowId: w.id, direction: action === 'chord.next' ? 1 : -1 });

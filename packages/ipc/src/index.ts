@@ -79,6 +79,7 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('chord.cycle'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
   z.object({ t: z.literal('chord.goto'), windowId: id, index: z.number().int().min(0).max(8) }),
   z.object({ t: z.literal('chord.update'), chordId: id, name: chordName.optional(), icon: chordIcon.optional() }),
+  z.object({ t: z.literal('chord.restore'), windowId: id, chordId: id }),
   // chord.delete isn't here: it goes through main's confirmation (menu:chord).
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
@@ -142,6 +143,13 @@ export interface PopoverState {
 export interface HistorySearch {
   history: { url: string; title: string; visitCount: number; typedCount: number; lastVisitAt: number; frecency: number }[];
   choices: Choice[];
+}
+
+/** A short-lived note in the sidebar, usually with Undo (DESIGN.md §7.5). */
+export interface Toast {
+  id: string;
+  message: string;
+  action?: { label: string; command: RendererCommand };
 }
 
 export interface ChordEdit {
@@ -253,6 +261,7 @@ export interface EventPayloads {
   'overlay:open': OverlayOpenEvent;
   'settings:changed': SettingsSnapshot;
   'popover:state': PopoverState;
+  'toast:show': Toast;
   /** Start renaming a chord, or choosing its icon, in the sidebar (from its menu). */
   'chord:edit': ChordEdit;
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
@@ -291,6 +300,7 @@ export interface ShellApi {
     chord(chordId: string, at: { x: number; y: number }): Promise<void>;
   };
   chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
+  toasts: { onShow(listener: (toast: Toast) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
 }
 

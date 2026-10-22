@@ -56,8 +56,10 @@ export type Command =
   /** ⌘1–⌘8 go to that chord; ⌘9 always goes to the last one, as tab shortcuts do in Chrome. */
   | { t: 'chord.goto'; windowId: WindowId; index: number }
   | { t: 'chord.update'; chordId: ChordId; name?: string; icon?: string }
-  /** Removes a chord and its tabs (they go to recently closed). The last chord can't be deleted. */
+  /** Removes a chord and its tabs, kept for Undo. The last chord can't be deleted. */
   | { t: 'chord.delete'; chordId: ChordId }
+  /** Undo a deletion: the chord and its tabs come back, and this window switches to it. */
+  | { t: 'chord.restore'; windowId: WindowId; chordId: ChordId }
   /** Engine reports: a download started or moved on. */
   | { t: 'download.update'; download: Download }
   /** Take one download off the list (the file stays where it is). */
@@ -89,6 +91,8 @@ export interface Result {
 }
 
 const MAX_CLOSED = 50;
+/** Deleted chords kept for Undo this session. */
+const MAX_DELETED_CHORDS = 5;
 /** Finished downloads kept in the list; older ones drop off. */
 const MAX_DOWNLOADS = 100;
 /** Longest chord name; the switcher and headers truncate well before this. */
@@ -409,17 +413,25 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (win.activeChordId === cmd.chordId) switchChord(draft, win.id, neighbor.id, ctx, effects);
         delete win.activeTab[cmd.chordId];
       }
-      const tabs = Object.values(draft.nodes).filter((n) => n.chordId === cmd.chordId);
-      for (const node of tabs) {
-        if (node.kind === 'tab') {
-          draft.closed.unshift({ node: { ...(node as TabNode) }, windowId: Object.keys(draft.windows)[0] ?? '', closedAt: ctx.now });
-          effects.push({ e: 'view.destroy', nodeId: node.id });
-        }
+      const nodes = Object.values(draft.nodes).filter((n) => n.chordId === cmd.chordId);
+      draft.deletedChords.unshift({ chord: { ...draft.chords[cmd.chordId]! }, nodes: nodes.map((n) => ({ ...n })), deletedAt: ctx.now });
+      if (draft.deletedChords.length > MAX_DELETED_CHORDS) draft.deletedChords.length = MAX_DELETED_CHORDS;
+      for (const node of nodes) {
+        if (node.kind === 'tab') effects.push({ e: 'view.destroy', nodeId: node.id });
         delete draft.nodes[node.id];
         delete draft.live[node.id];
       }
-      if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
       delete draft.chords[cmd.chordId];
+      return;
+    }
+
+    case 'chord.restore': {
+      const index = draft.deletedChords.findIndex((d) => d.chord.id === cmd.chordId);
+      if (index < 0 || draft.chords[cmd.chordId]) return;
+      const [deleted] = draft.deletedChords.splice(index, 1);
+      draft.chords[cmd.chordId] = deleted!.chord;
+      for (const node of deleted!.nodes) draft.nodes[node.id] = node;
+      switchChord(draft, cmd.windowId, cmd.chordId, ctx, effects);
       return;
     }
 

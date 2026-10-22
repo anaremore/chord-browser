@@ -52,6 +52,7 @@ const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'page.print', title: 'Print', words: 'print pdf' },
   { action: 'page.viewSource', title: 'View page source', words: 'view source html code' },
   { action: 'app.devtools', title: 'Developer tools', words: 'developer tools devtools inspect console' },
+  { action: 'chord.delete', title: 'Delete this chord', words: 'delete remove chord space' },
   { action: 'app.settings', title: 'Settings', words: 'settings preferences options' },
   { action: 'app.shortcuts', title: 'Keyboard shortcuts', words: 'keyboard shortcuts hotkeys keys cheat sheet' },
 ];

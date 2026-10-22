@@ -1,0 +1,78 @@
+/**
+ * Toasts (DESIGN.md §6.5, §7.5): short notes, usually with Undo, stacked
+ * above the sidebar footer (or one at a time in the minimal bar). Each stays
+ * six seconds, and the clock pauses while you hover it.
+ */
+import type { Toast } from '@chord/ipc';
+import { durations } from '@chord/tokens';
+import { AnimatePresence, motion, type Transition } from 'motion/react';
+import { useEffect, useRef, useState } from 'react';
+import { api } from './api';
+import styles from './App.module.css';
+
+/** At most this many at once; older ones give way. */
+const MAX_TOASTS = 3;
+
+function ToastCard({ toast, transition, onDone }: { toast: Toast; transition: Transition; onDone(): void }) {
+  const left = useRef<number>(durations.toast);
+  const [paused, setPaused] = useState(false);
+  useEffect(() => {
+    if (paused) return;
+    const started = Date.now();
+    const timer = setTimeout(onDone, left.current);
+    return () => {
+      clearTimeout(timer);
+      left.current -= Date.now() - started;
+    };
+  }, [paused, onDone]);
+  return (
+    <motion.div
+      layout
+      className={styles.toast}
+      role="status"
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 6, transition: { duration: durations.fadeFast / 1000 } }}
+      transition={transition}
+      onPointerEnter={() => setPaused(true)}
+      onPointerLeave={() => setPaused(false)}
+    >
+      <span className={styles.toastMessage}>{toast.message}</span>
+      {toast.action && (
+        <button
+          type="button"
+          className={styles.toastAction}
+          onClick={() => {
+            void api.state.dispatch(toast.action!.command);
+            onDone();
+          }}
+        >
+          {toast.action.label}
+        </button>
+      )}
+    </motion.div>
+  );
+}
+
+export function Toasts({ transition, compact }: { transition: Transition; compact: boolean }) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  useEffect(
+    () =>
+      api.toasts.onShow((toast) =>
+        // The same toast again (deleting twice) replaces the old one rather than stacking.
+        setToasts((all) => [toast, ...all.filter((t) => t.id !== toast.id)].slice(0, MAX_TOASTS)),
+      ),
+    [],
+  );
+  const dismiss = (id: string) => setToasts((all) => all.filter((t) => t.id !== id));
+  const shown = compact ? toasts.slice(0, 1) : toasts;
+  return (
+    <div className={compact ? styles.toastsInline : styles.toasts} aria-live="polite">
+      <AnimatePresence initial={false}>
+        {shown.map((toast) => (
+          <ToastCard key={toast.id} toast={toast} transition={transition} onDone={() => dismiss(toast.id)} />
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}

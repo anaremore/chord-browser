@@ -211,7 +211,7 @@ export function buildChordMenu(a: ChordMenuActions): Menu {
     { label: 'Change icon…', click: a.changeIcon },
     { label: 'Edit colors…', click: a.editColors },
     { type: 'separator' },
-    { label: 'Delete chord…', enabled: a.delete !== null, click: () => a.delete?.() },
+    { label: 'Delete chord', enabled: a.delete !== null, click: () => a.delete?.() },
   ]);
 }
 

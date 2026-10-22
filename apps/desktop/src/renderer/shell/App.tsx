@@ -14,6 +14,7 @@ import { useSystemInfo } from './hooks';
 import { keycap, withKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
 import { SidebarTabs } from './Tabs';
+import { Toasts } from './Toasts';
 
 /** What the frame shows when a page didn't load (DESIGN.md §9), instead of a blank page. */
 function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadError; canGoBack: boolean; windowId: string; tabId: string }) {
@@ -207,6 +208,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             </ChordPane>
           </AnimatePresence>
 
+          {!collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
+
           <ChordSwitcher
             state={state}
             windowId={windowId}
@@ -251,6 +254,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             </button>
             <span className={styles.flex} />
             {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
+            {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
             {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
             {overlayChrome && (
               <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>

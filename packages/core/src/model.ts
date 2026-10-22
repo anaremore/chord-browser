@@ -190,6 +190,14 @@ export interface State {
   live: Record<NodeId, LiveTab>;
   /** Recently closed tabs for ⌘⇧T, newest first. Moves to the archive in M1.4. */
   closed: ClosedTab[];
+  /** Chords deleted this session, with their tabs, for Undo (newest first; not persisted). */
+  deletedChords: DeletedChord[];
+}
+
+export interface DeletedChord {
+  chord: Chord;
+  nodes: SidebarNode[];
+  deletedAt: number;
 }
 
 export const emptyState = (): State => ({
@@ -202,6 +210,7 @@ export const emptyState = (): State => ({
   windows: {},
   live: {},
   closed: [],
+  deletedChords: [],
 });
 
 export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null };

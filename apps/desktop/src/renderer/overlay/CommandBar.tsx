@@ -24,6 +24,7 @@ import {
   Settings,
   SquareTerminal,
   TextSearch,
+  Trash2,
   X,
   ZoomIn,
   ZoomOut,
@@ -69,6 +70,7 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'page.viewSource': Code,
   'app.devtools': SquareTerminal,
   'app.settings': Settings,
+  'chord.delete': Trash2,
   'app.shortcuts': Keyboard,
 };
 

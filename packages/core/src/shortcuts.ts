@@ -34,6 +34,7 @@ export type ActionId =
   | `chord.goto${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`
   | 'chord.next'
   | 'chord.previous'
+  | 'chord.delete'
   | 'window.new'
   | 'window.newPrivate'
   | 'window.close'
@@ -99,6 +100,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   ...chordKeys.map((n) => s(`chord.goto${n}`, `Go to chord ${n}`, 'reserved', [`Mod+${n}`])),
   s('chord.next', 'Next chord', 'reserved', ['Mod+Alt+ArrowRight'], ['Ctrl+Alt+ArrowRight']),
   s('chord.previous', 'Previous chord', 'reserved', ['Mod+Alt+ArrowLeft'], ['Ctrl+Alt+ArrowLeft']),
+  // No keys: deleting is a deliberate act, from the chord's menu or the command bar.
+  s('chord.delete', 'Delete this chord', 'page-first', []),
   // Window and view
   s('window.new', 'New window', 'reserved', ['Mod+N']),
   s('window.newPrivate', 'New private window', 'reserved', ['Mod+Shift+N']),

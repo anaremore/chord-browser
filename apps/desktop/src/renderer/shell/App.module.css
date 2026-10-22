@@ -463,6 +463,66 @@ kbd {
   block-size: var(--size-footer);
 }
 
+/* ---------- Toasts ---------- */
+
+/* Above the footer, newest at the bottom, nearest the switcher. */
+.toasts {
+  display: flex;
+  flex: none;
+  flex-direction: column-reverse;
+  gap: var(--space-2);
+  padding-block-end: var(--space-2);
+}
+
+/* In the minimal bar: just the newest, inline. */
+.toastsInline {
+  display: flex;
+  flex: none;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.toast {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-block-size: var(--size-row);
+  padding-inline: var(--space-3) var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-fg);
+  font: var(--text-small);
+}
+
+.toastsInline .toast {
+  min-block-size: var(--size-icon-button);
+  box-shadow: var(--shadow-raised);
+}
+
+.toastMessage {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toastAction {
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-accent);
+  font: var(--text-label);
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.toastAction:hover {
+  background: var(--color-item-hover);
+}
+
 /* ---------- Downloads button ---------- */
 
 .downloadsButton {

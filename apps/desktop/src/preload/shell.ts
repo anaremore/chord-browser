@@ -19,6 +19,7 @@ const api: ShellApi = {
     chord: (chordId, at) => invoke('menu:chord', { chordId, x: at.x, y: at.y }),
   },
   chords: { onEdit: (listener) => subscribe('chord:edit', listener) },
+  toasts: { onShow: (listener) => subscribe('toast:show', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
 };
 
