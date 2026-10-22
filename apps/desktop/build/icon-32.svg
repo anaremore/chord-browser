@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!--
+    Chord's app icon redrawn for 32 px (taskbars, title bars, file
+    lists): the notes sit on whole pixels, and a gap stands in for the big
+    master's overlap. The big master is icon.svg.
+  -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#faf7ff"/>
+      <stop offset="1" stop-color="#ffede4"/>
+    </linearGradient>
+  </defs>
+  <path d="M11.2 0.5 L20.8 0.5 C23.88 0.5 25.42 0.5 26.81 0.96 L27.08 1.02 C28.89 1.68 30.32 3.11 30.98 4.92 C31.5 6.58 31.5 8.12 31.5 11.2 L31.5 20.8 C31.5 23.88 31.5 25.42 31.04 26.81 L30.98 27.08 C30.32 28.89 28.89 30.32 27.08 30.98 C25.42 31.5 23.88 31.5 20.8 31.5 L11.2 31.5 C8.12 31.5 6.58 31.5 5.19 31.04 L4.92 30.98 C3.11 30.32 1.68 28.89 1.02 27.08 C0.5 25.42 0.5 23.88 0.5 20.8 L0.5 11.2 C0.5 8.12 0.5 6.58 0.96 5.19 L1.02 4.92 C1.68 3.11 3.11 1.68 4.92 1.02 C6.58 0.5 8.12 0.5 11.2 0.5 Z" fill="url(#plate)" stroke="#d9c6e4" stroke-width="1"/>
+  <rect x="14" y="8" width="12" height="4" rx="2" fill="#a585f4"/>
+  <rect x="10" y="14" width="14" height="4" rx="2" fill="#f06aae"/>
+  <rect x="6" y="20" width="14" height="4" rx="2" fill="#ff7d55"/>
+</svg>

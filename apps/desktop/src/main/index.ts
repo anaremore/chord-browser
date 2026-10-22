@@ -3,6 +3,7 @@ import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { join } from 'node:path';
 import { app, clipboard, Menu, nativeTheme, session, type Session, type WebContents } from 'electron';
+import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
@@ -128,6 +129,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   void app.whenReady().then(async () => {
+    showDevelopmentDockIcon();
     // Development only: force an appearance for design QA captures.
     const forced = process.env['CHORD_APPEARANCE'];
     const forcedAppearance = forced === 'light' || forced === 'dark' ? forced : null;

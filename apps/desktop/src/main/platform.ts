@@ -6,6 +6,7 @@ import { release } from 'node:os';
 import type { SystemInfo } from '@chord/ipc';
 import { hexToRgb, oklchToRgb, rgbToHex, size, windowBackground } from '@chord/tokens';
 import { nativeTheme, systemPreferences, type BaseWindowConstructorOptions } from 'electron';
+import { windowIcon } from './app-icon';
 
 export type OsPlatform = 'darwin' | 'win32' | 'linux';
 export const platform = process.platform as OsPlatform;
@@ -42,6 +43,7 @@ export function usesTranslucentMaterial(): boolean {
 export function windowChromeOptions(): BaseWindowConstructorOptions {
   if (platform === 'darwin') {
     return {
+      ...windowIcon(),
       titleBarStyle: 'hidden',
       trafficLightPosition: { x: 16, y: (size.header - 12) / 2 },
       ...(usesTranslucentMaterial()
@@ -50,6 +52,7 @@ export function windowChromeOptions(): BaseWindowConstructorOptions {
     };
   }
   return {
+    ...windowIcon(),
     titleBarStyle: 'hidden',
     titleBarOverlay: titleBarOverlay(),
     ...(usesTranslucentMaterial() ? { backgroundMaterial: 'mica' } : { backgroundColor: backgroundHex() }),

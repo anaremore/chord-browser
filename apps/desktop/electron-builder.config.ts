@@ -19,8 +19,6 @@ const config: Configuration = {
   // app is just the build output; electron-builder would otherwise copy the
   // production node_modules too. package.json is always added.
   files: ['out/**/*', '!**/node_modules/**/*'],
-  // PLACEHOLDER icon from scripts/generate-icon.mjs; electron-builder derives .ico, .icns and the Linux sizes.
-  icon: 'build/icon.png',
   // Nothing native to rebuild: SQLite is Node's built-in node:sqlite.
   npmRebuild: false,
   // Arch is always in the name, so every build of a version can share one release.
@@ -43,8 +41,11 @@ const config: Configuration = {
     grantFileProtocolExtraPrivileges: false,
   },
 
+  // Icons: each OS gets files rendered for it from the SVG masters in build/
+  // (scripts/build-icons.mjs, DESIGN.md §2), so electron-builder converts nothing.
   win: {
     target: 'nsis',
+    icon: 'build/icon.ico',
   },
   nsis: {
     // One-click, per-user (ARCHITECTURE.md §15.1): no admin prompt.
@@ -55,6 +56,7 @@ const config: Configuration = {
 
   mac: {
     target: ['dmg', 'zip'],
+    icon: 'build/icon.icns',
     category: 'public.app-category.productivity',
     // Ad-hoc signature: Apple Silicon won't run unsigned code at all. Hardened
     // runtime only matters for notarization, and with an ad-hoc identity its
@@ -67,9 +69,8 @@ const config: Configuration = {
   linux: {
     target: ['AppImage', 'deb'],
     executableName: 'chord',
-    // A directory holding only icon.png makes electron-builder render the 16–512 px hicolor sizes;
-    // given the file itself, it would install just the 1024 px original.
-    icon: 'build',
+    // Every hicolor size, 16–512 px, each installed as is.
+    icon: 'build/icons',
     // The installed .desktop file is named after desktopName (package.json),
     // which Electron also uses as the Wayland app_id and X11 WM_CLASS.
     syncDesktopName: true,
