@@ -27,9 +27,8 @@ function startSite(): Promise<{ server: Server; origin: string }> {
   );
 }
 
-async function launch(env: Record<string, string>): Promise<ElectronApplication> {
-  // A fresh profile per launch: tests never touch a developer's real data.
-  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'))): Promise<ElectronApplication> {
+  // A fresh profile per launch unless a test reuses one: tests never touch a developer's real data.
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
   return electron.launch({ args: [appDir], env: childEnv, cwd: appDir });
@@ -244,6 +243,48 @@ test('Settings opens from the shell and its changes apply live', async () => {
     await settings.getByRole('button', { name: 'Appearance' }).click();
     await settings.getByRole('button', { name: /Sea Glass/ }).click();
     await expect.poll(tint).not.toBe(before);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a relaunch restores tabs, the sidebar and settings', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today).toContainText('First page');
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/third`);
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('listitem').first()).toContainText('Third page');
+    await shell.getByRole('button', { name: 'Hide sidebar' }).click();
+    await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
+    await settings.getByRole('radio', { name: /Kagi/ }).click();
+    await expect(settings.getByRole('radio', { name: /Kagi/ })).toHaveAttribute('aria-checked', 'true');
+  } finally {
+    await app.close();
+  }
+
+  app = await launch({}, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    // Same tabs, same order, same active tab; the sidebar is still collapsed.
+    await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
+    await shell.getByRole('button', { name: 'Show sidebar' }).click();
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today.getByRole('listitem')).toHaveCount(2);
+    await expect(today.getByRole('listitem').first()).toContainText('Third page');
+    await expect(today.getByRole('button', { name: 'Third page', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect.poll(() => app.windows().some((p) => p.url() === `${site.origin}/third`)).toBe(true);
+    // Settings came back too.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('chord browser');
+    await expect(overlay.getByRole('option').first()).toContainText('Search Kagi');
   } finally {
     await app.close();
   }

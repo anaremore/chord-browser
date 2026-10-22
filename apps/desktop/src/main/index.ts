@@ -1,10 +1,12 @@
-import { seedState, uuidv7, type Command, type WindowId } from '@chord/core';
+import { restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
+import { join } from 'node:path';
 import { app, Menu, nativeTheme, session, type Session, type WebContents } from 'electron';
 import { Browser } from './browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
+import { Persistence } from './persistence';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureBrowsingSession, configureUiSession, hardenAllWebContents } from './security';
@@ -20,6 +22,7 @@ app.enableSandbox();
 const HOME_URL = (!app.isPackaged && process.env['CHORD_HOME_URL']) || 'https://www.google.com/';
 
 let browser: Browser | undefined;
+let persistence: Persistence | undefined;
 
 function senderWindow(sender: WebContents) {
   const w = browser?.windowFor(sender);
@@ -79,7 +82,21 @@ if (!app.requestSingleInstanceLock()) {
     browser?.focusFirstWindow();
   });
 
-  void app.whenReady().then(() => {
+  // macOS keeps running with no windows; the Dock icon brings the last one back.
+  app.on('activate', () => {
+    if (browser?.windowCount === 0) browser.start();
+  });
+
+  // Flush unsaved changes before quitting (capped at 2 s inside close()).
+  let flushed = false;
+  app.on('before-quit', (event) => {
+    if (flushed || !persistence) return;
+    event.preventDefault();
+    flushed = true;
+    void persistence.close().finally(() => app.quit());
+  });
+
+  void app.whenReady().then(async () => {
     // Development only: force an appearance for design QA captures.
     const forced = process.env['CHORD_APPEARANCE'];
     if (!app.isPackaged && (forced === 'light' || forced === 'dark')) nativeTheme.themeSource = forced;
@@ -106,17 +123,26 @@ if (!app.requestSingleInstanceLock()) {
       return ses;
     };
 
-    // Persistence arrives in the next step; until then every launch starts fresh.
+    // Session restore: what chord-data saved, repaired; or a first chord in the OS accent color.
+    const opened = await Persistence.open(join(app.getPath('userData'), 'chord.db'));
+    persistence = opened.persistence;
     const accent = systemInfo().accentColor;
     const accentRgb = accent ? hexToRgb(accent) : null;
-    const initial = seedState({
+    const initial = restoreState(opened.saved, {
       now: Date.now(),
       newId: () => uuidv7(),
       theme: { stops: defaultChordStops(accentRgb ? rgbToOklch(accentRgb) : null), grain: 0.2, appearance: 'auto' },
       homeUrl: HOME_URL,
     });
+    if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
 
-    browser = new Browser({ initial, uiSession: ui, profileSession });
+    const store = persistence;
+    browser = new Browser({
+      initial,
+      uiSession: ui,
+      profileSession,
+      onChange: (change) => store.record(change.patches, change.state),
+    });
     Menu.setApplicationMenu(browser.appMenu);
     registerIpc();
     browser.start();

@@ -41,6 +41,9 @@ importers:
       '@chord/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@chord/data':
+        specifier: workspace:*
+        version: link:../../packages/data
       '@chord/ipc':
         specifier: workspace:*
         version: link:../../packages/ipc
@@ -105,6 +108,12 @@ importers:
       immer:
         specifier: 11.2.9
         version: 11.2.9
+
+  packages/data:
+    dependencies:
+      '@chord/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/ipc:
     dependencies:

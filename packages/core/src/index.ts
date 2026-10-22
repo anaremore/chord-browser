@@ -3,6 +3,7 @@ export * from './input';
 export * from './model';
 export * from './page';
 export * from './reducer';
+export * from './restore';
 export * from './seed';
 export * from './select';
 export * from './shortcuts';

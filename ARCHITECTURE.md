@@ -399,6 +399,14 @@ CREATE TABLE duet_site_rule (
 ) STRICT;
 ```
 
+**As built (migration 1, `packages/data/src/migrations.ts`):** the profile, chord, node, folder, tab, window_state, favicon and setting tables. Three deliberate differences from the sketch above:
+
+- `node.chord_id` is `DEFERRABLE INITIALLY DEFERRED`, because a batch writes whole entities in any order.
+- `parent_id` and `active_chord_id` aren't foreign keys. `restoreState()` in `@chord/core` repairs dangling references on load (an orphaned tab moves to its section root; a missing active chord falls back to the first).
+- `tab` and `folder` rows cascade from `node`.
+
+Favicons are stored once per distinct icon, keyed by content hash, and unused ones are dropped on open. Recently closed tabs are not persisted yet; they move to `archive_item` in M1.4.
+
 **Migrations** are forward-only numbered SQL files, each run in a transaction. Before every migration, and as a daily rolling copy (keep 3), we take a backup with `VACUUM INTO`. A failed migration restores the backup and opens in a read-only "something went wrong" state rather than losing data.
 
 **Profiles.** Chords share the default profile unless "Keep sign-ins separate" is on. That creates a profile with its own persistent partition: cookies, storage, cache, extensions. Moving a tab to a chord with a **different profile** recreates it in the target session and reloads it, because a WebContents can't change session. The UI says so before the drop completes.

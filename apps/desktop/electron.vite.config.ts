@@ -8,8 +8,16 @@ const src = (path: string) => resolve(import.meta.dirname, 'src', path);
 export default defineConfig({
   main: {
     // Bundle everything (workspace packages are TypeScript sources); only
-    // electron and Node built-ins stay external.
-    build: { externalizeDeps: false },
+    // electron and Node built-ins stay external. Two entries: main itself,
+    // and chord-data's utility process (ARCHITECTURE.md §4).
+    build: {
+      externalizeDeps: false,
+      rolldownOptions: {
+        input: { index: src('main/index.ts'), data: src('data/worker.ts') },
+        external: ['node:sqlite'],
+        output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },
+      },
+    },
   },
   preload: {
     // Sandboxed preloads can't load other files, so each one is a single

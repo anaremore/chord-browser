@@ -16,4 +16,4 @@ Run on 2026-10-22, Windows 11 x64, Electron 45.0.0 (Node 24.22.0), with `spikes/
 
 The slowest queries were single broad prefixes (`ch*`) that match about 1 in 20 rows. The command bar therefore queries history only from the second character on, and ranks by frecency before bm25 if p95 drifts above 5 ms with real data.
 
-**Still to confirm:** the same run on macOS and Linux. It becomes a CI test when `chord-data` lands in M1.1.
+**Still to confirm:** the same run on macOS and Linux. `chord-data` landed in M1.1, so the E2E test *a relaunch restores tabs, the sidebar and settings* now opens, writes and reloads a real database on every CI platform.

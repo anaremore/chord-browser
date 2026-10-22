@@ -17,7 +17,8 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { Rect, SettingsSnapshot } from '@chord/ipc';
-import { app, BaseWindow, clipboard, type Menu, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
+import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
@@ -86,9 +87,9 @@ export class Browser {
     });
   }
 
-  /** Open a window for every window in the state and show its active tab. */
+  /** Open a window for every window in the state that isn't open yet, and show its active tab. */
   start(): void {
-    for (const model of Object.values(this.store.state.windows)) this.openWindow(model.id);
+    for (const model of Object.values(this.store.state.windows)) if (!this.windows.has(model.id)) this.openWindow(model.id);
   }
 
   focusFirstWindow(): void {
@@ -120,7 +121,7 @@ export class Browser {
     const w = new AppWindow({
       id: windowId,
       uiSession: this.options.uiSession,
-      bounds: model.bounds,
+      bounds: model.bounds && placeOnDisplays(model.bounds, screen.getAllDisplays().map((d) => d.workArea)),
       sidebar: model.sidebar,
       onBounds: (bounds) => this.store.dispatch({ t: 'window.bounds', windowId, bounds }),
     });

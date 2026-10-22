@@ -1,0 +1,74 @@
+/**
+ * Forward-only migrations (ARCHITECTURE.md §7). `PRAGMA user_version` is the
+ * number of migrations applied. Each runs in a transaction, after a
+ * `VACUUM INTO` backup of the previous version. Tables arrive with the
+ * feature that needs them; history, archive and Duet add their own later.
+ */
+export const MIGRATIONS: readonly string[] = [
+  // 1: the sidebar tree, windows, settings and favicons (session restore, M1.1).
+  `
+  CREATE TABLE profile (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL,
+    partition TEXT NOT NULL UNIQUE,
+    is_default INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+  ) STRICT;
+  INSERT INTO profile (id, name, partition, is_default, created_at) VALUES ('default', 'Default', 'persist:default', 1, 0);
+
+  CREATE TABLE chord (
+    id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profile(id),
+    name TEXT NOT NULL, icon TEXT NOT NULL,
+    theme TEXT NOT NULL,
+    rank TEXT NOT NULL,
+    duet_enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER
+  ) STRICT;
+
+  -- Writes arrive as whole entities in any order within a batch, so the chord
+  -- reference is checked at commit. parent_id isn't a foreign key: restore
+  -- repairs a missing folder by moving its children to the section root.
+  CREATE TABLE node (
+    id TEXT PRIMARY KEY,
+    chord_id TEXT NOT NULL REFERENCES chord(id) DEFERRABLE INITIALLY DEFERRED,
+    parent_id TEXT,
+    section TEXT NOT NULL CHECK (section IN ('pinned','today')),
+    kind TEXT NOT NULL CHECK (kind IN ('folder','tab','split')),
+    rank TEXT NOT NULL,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER
+  ) STRICT;
+  CREATE INDEX node_children ON node(chord_id, section, parent_id, rank) WHERE deleted_at IS NULL;
+
+  CREATE TABLE folder (
+    node_id TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+    title TEXT NOT NULL, collapsed INTEGER NOT NULL DEFAULT 0
+  ) STRICT;
+
+  CREATE TABLE tab (
+    node_id TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+    pinned_url TEXT,
+    custom_title TEXT,
+    url TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+    favicon_key TEXT,
+    nav_state BLOB,
+    last_active_at INTEGER NOT NULL,
+    muted INTEGER NOT NULL DEFAULT 0, zoom REAL
+  ) STRICT;
+
+  CREATE TABLE window_state (
+    id TEXT PRIMARY KEY,
+    bounds TEXT NOT NULL,
+    active_chord_id TEXT,
+    sidebar_width INTEGER NOT NULL,
+    sidebar_mode TEXT NOT NULL DEFAULT 'docked' CHECK (sidebar_mode IN ('docked','collapsed')),
+    duet_width INTEGER,
+    active_tab_by_chord TEXT NOT NULL DEFAULT '{}'
+  ) STRICT;
+
+  CREATE TABLE favicon (
+    key TEXT PRIMARY KEY,
+    icon_url TEXT, data BLOB NOT NULL, mime TEXT NOT NULL,
+    dominant_color TEXT, fetched_at INTEGER NOT NULL
+  ) STRICT;
+
+  CREATE TABLE setting (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+  `,
+];

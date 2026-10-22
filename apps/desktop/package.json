@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@chord/core": "workspace:*",
+    "@chord/data": "workspace:*",
     "@chord/ipc": "workspace:*",
     "@chord/tokens": "workspace:*",
     "@leeoniya/ufuzzy": "1.0.19",

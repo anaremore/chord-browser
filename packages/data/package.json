@@ -1,0 +1,17 @@
+{
+  "name": "@chord/data",
+  "private": true,
+  "version": "0.0.0",
+  "description": "chord-data: Chord's SQLite store (schema, migrations, write-behind persistence)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./db": "./src/db.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@chord/core": "workspace:*"
+  }
+}
