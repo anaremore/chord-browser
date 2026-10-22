@@ -17,7 +17,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
-import { app, BaseWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, BrowserWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
 import { FindInPage } from './find';
@@ -90,6 +90,22 @@ export class Browser {
             const w = this.windowFor(contents);
             const bounds = this.tabs.get(nodeId)?.getBounds();
             return w && bounds ? { window: w.window, x: bounds.x, y: bounds.y } : undefined;
+          },
+        });
+      },
+      onPopupCreated: (contents, openerNodeId) => {
+        attachContextMenu(contents, {
+          surface: 'web',
+          inspect: true,
+          searchEngine: () => this.store.state.settings.searchEngine,
+          // Links from a sign-in window open beside the page that opened it.
+          openTab: (url, background) => {
+            const windowId = this.windowShowing(openerNodeId);
+            if (windowId) this.store.dispatch({ t: 'tab.open', windowId, url, background });
+          },
+          placement: () => {
+            const popup = BrowserWindow.fromWebContents(contents);
+            return popup ? { window: popup, x: 0, y: 0 } : undefined;
           },
         });
       },

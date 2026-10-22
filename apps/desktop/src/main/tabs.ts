@@ -4,7 +4,8 @@
  */
 import { placeKey, usableDataIcon, type Command, type LiveTab, type NodeId, type State, type TabNode, type WindowId } from '@chord/core';
 import { frameRadius } from '@chord/tokens';
-import { WebContentsView, type Session, type WebContents } from 'electron';
+import { WebContentsView, type BrowserWindow, type HandlerDetails, type Session, type WebContents, type WindowOpenHandlerResponse } from 'electron';
+import { windowIcon } from './app-icon';
 import { platform } from './platform';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
@@ -21,6 +22,8 @@ export interface TabManagerDeps {
   /** A page was visited (or its title arrived): history keeps it. */
   onVisit(url: string, title: string): void;
   onTitle(url: string, title: string): void;
+  /** A page opened a popup window (sign-in, payment): wire its context menu. */
+  onPopupCreated(contents: WebContents, openerNodeId: NodeId): void;
 }
 
 export class TabManager {
@@ -145,25 +148,44 @@ export class TabManager {
       }
     });
 
-    contents.setWindowOpenHandler(({ url, disposition, features }) => {
-      // Real popups (OAuth, payments) keep window.opener, so they stay windows.
-      if (disposition === 'new-window' && features) {
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: {
-            width: 520,
-            height: 680,
-            autoHideMenuBar: true,
-            webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
-          },
-        };
-      }
-      const windowId = this.deps.windowFor(nodeId);
-      if (windowId && /^https?:/i.test(url)) {
-        dispatch({ t: 'tab.open', windowId, url, background: disposition === 'background-tab' });
-      }
-      return { action: 'deny' };
-    });
+    contents.setWindowOpenHandler((details) => this.openFrom(nodeId, details));
+    contents.on('did-create-window', (popup) => this.wirePopup(popup, nodeId));
+  }
+
+  /**
+   * window.open from a tab, or from a popup it opened. Real popups (window
+   * features given: OAuth, payments) stay windows at the size they asked for,
+   * keeping window.opener so they can report back. Everything else becomes a
+   * tab in the opener's Chord window.
+   */
+  private openFrom(openerNodeId: NodeId, { url, disposition, features }: HandlerDetails): WindowOpenHandlerResponse {
+    if (disposition === 'new-window' && features) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          ...windowIcon(),
+          // The size a page asks for is its own area, as in Chrome, not the window's frame.
+          useContentSize: true,
+          autoHideMenuBar: true,
+          webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
+        },
+      };
+    }
+    const windowId = this.deps.windowFor(openerNodeId);
+    if (windowId && /^https?:/i.test(url)) {
+      this.deps.dispatch({ t: 'tab.open', windowId, url, background: disposition === 'background-tab' });
+    }
+    return { action: 'deny' };
+  }
+
+  private wirePopup(popup: BrowserWindow, openerNodeId: NodeId): void {
+    // Not the app menu: Alt would otherwise reveal it on Windows and Linux.
+    popup.removeMenu();
+    const contents = popup.webContents;
+    // Popups follow the same rules as their opener, so a sign-in window can't spawn unchecked windows.
+    contents.setWindowOpenHandler((details) => this.openFrom(openerNodeId, details));
+    contents.on('did-create-window', (child) => this.wirePopup(child, openerNodeId));
+    this.deps.onPopupCreated(contents, openerNodeId);
   }
 
   /** Fetch through the tab's own session (its cookies apply), keep small icons as data: URLs. */

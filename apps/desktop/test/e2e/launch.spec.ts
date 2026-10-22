@@ -19,6 +19,11 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     // "No icon", the way example.com says it; and an icon that claims to be a PNG but isn't.
     '/no-icon': '<title>No icon</title><link rel="icon" href="data:,">',
     '/bad-icon': '<title>Bad icon</title><link rel="icon" href="/bad.png">',
+    // A "Sign in with…" flow: a sized popup reports back through window.opener, then closes.
+    '/signin':
+      `<title>Signed out</title><button id="signin" onclick="window.open('/signin-popup', 'auth', 'width=420,height=560')">Sign in</button>` +
+      `<script>addEventListener('message', (e) => { if (e.data === 'signed-in') document.title = 'Signed in'; });</script>`,
+    '/signin-popup': `<title>Sign in</title><button id="done" onclick="window.opener.postMessage('signed-in', '*'); window.close()">Continue</button>`,
   };
   const server = createServer((req, res) => {
     if (req.url === '/bad.png') {
@@ -333,6 +338,26 @@ test('a page without a usable icon shows its monogram, never a broken image', as
     // The bad PNG is fetched, offered, fails to decode, and gives way to the monogram.
     await shell.waitForTimeout(1000);
     await expect(today.locator('img')).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a sign-in popup keeps its opener, opens at the size it asked for, and reports back', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/signin` });
+  try {
+    await pageWhere(app, isShell);
+    const tab = await pageWhere(app, (url) => url === `${site.origin}/signin`);
+    await tab.locator('#signin').click();
+    const popup = await pageWhere(app, (url) => url === `${site.origin}/signin-popup`);
+    const size = await app.evaluate(
+      ({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find((b) => b.webContents.getURL() === url)!.getContentSize(),
+      `${site.origin}/signin-popup`,
+    );
+    expect(size).toEqual([420, 560]);
+    await popup.locator('#done').click();
+    await expect.poll(() => tab.title()).toBe('Signed in');
+    await expect.poll(() => app.windows().some((p) => p.url() === `${site.origin}/signin-popup`)).toBe(false);
   } finally {
     await app.close();
   }
