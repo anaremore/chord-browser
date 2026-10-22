@@ -1,0 +1,257 @@
+/* Window shell (DESIGN.md §3). Tokens only: lint rejects raw values. */
+
+.window {
+  position: fixed;
+  inset: 0;
+  background: var(--color-base);
+  color: var(--color-fg);
+}
+
+/* Tint and grain blend with each other, never with the desktop behind the material. */
+.backdrop {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  pointer-events: none;
+}
+
+.tint {
+  position: absolute;
+  inset: 0;
+  background: var(--color-tint);
+}
+
+.grain {
+  position: absolute;
+  inset: 0;
+  background-image: url('@chord/tokens/grain.png');
+  opacity: var(--grain-opacity);
+  mix-blend-mode: soft-light;
+}
+
+/* ---------- Sidebar ---------- */
+
+.sidebar {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  inline-size: var(--size-sidebar-width);
+  padding-inline: var(--space-2);
+}
+
+.header {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-header);
+  padding-inline-start: var(--chrome-reserved-left);
+  -webkit-app-region: drag;
+}
+
+.header > * {
+  -webkit-app-region: no-drag;
+}
+
+.iconButton {
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-icon-button);
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard),
+    transform var(--spring-press-duration) var(--spring-press);
+}
+
+/* Unavailable controls stay in place at 40% so nothing shifts (DESIGN.md §3.3). */
+.iconButton:disabled {
+  opacity: 0.4;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.iconButton:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.urlPill {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  block-size: var(--size-url-pill);
+  margin-block-end: var(--space-2);
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.spaceHeader {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  block-size: var(--size-space-header);
+  padding-inline: var(--space-2);
+  font: var(--text-label);
+}
+
+.spaceIcon {
+  inline-size: var(--size-icon);
+  color: var(--color-accent);
+  text-align: center;
+}
+
+.divider {
+  display: flex;
+  flex: none;
+  align-items: center;
+  block-size: var(--size-divider);
+  padding-inline: var(--space-2);
+}
+
+.divider::after {
+  flex: 1;
+  block-size: var(--size-hairline);
+  background: var(--color-divider);
+  content: '';
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  block-size: var(--size-row);
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.active {
+  background: var(--color-item-active-bg);
+  box-shadow: var(--shadow-raised);
+  font: var(--text-label);
+}
+
+.monogram {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-favicon);
+  block-size: var(--size-favicon);
+  border-radius: var(--radius-xs);
+  background: var(--monogram-bg);
+  color: var(--monogram-fg);
+  font: var(--text-glyph);
+}
+
+.ellipsis {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flex {
+  flex: 1;
+}
+
+.footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  block-size: var(--size-footer);
+}
+
+.switcherPill {
+  display: grid;
+  place-items: center;
+  min-inline-size: var(--size-icon-button);
+  block-size: var(--size-hit-min);
+  border-radius: var(--radius-full);
+  background: var(--color-item-active-bg);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-accent);
+  font: var(--text-small);
+}
+
+/* ---------- Top strip (Windows/Linux) and the macOS drag gap ---------- */
+
+.strip {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: var(--size-sidebar-width) 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  block-size: var(--size-strip);
+  padding-inline-end: var(--chrome-reserved-right);
+  -webkit-app-region: drag;
+}
+
+.topDrag {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: var(--size-sidebar-width) 0;
+  block-size: var(--size-frame-inset);
+  -webkit-app-region: drag;
+}
+
+.address {
+  display: flex;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  padding-inline: var(--space-2);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.addressHost {
+  flex: none;
+  color: var(--color-fg);
+}
+
+.addressSeparator,
+.addressTitle {
+  overflow: hidden;
+  color: var(--color-fg-muted);
+  text-overflow: ellipsis;
+}
+
+/* ---------- Content frame: the shadow and hairline under the tab view ---------- */
+
+.frame {
+  position: absolute;
+  inset-block: var(--size-strip) var(--size-frame-inset);
+  inset-inline: var(--size-sidebar-width) var(--size-frame-inset);
+  border-radius: var(--radius-frame);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-frame);
+}
+
+:global(:root[data-platform='darwin']) .frame {
+  inset-block-start: var(--size-frame-inset);
+}

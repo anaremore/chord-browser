@@ -1,0 +1,6 @@
+packages:
+  - apps/*
+  - packages/*
+
+# electron-builder cannot follow pnpm's symlinked layout.
+nodeLinker: hoisted

@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "outDir": "node_modules/.tsc/node",
+    "types": ["node"]
+  },
+  "include": ["electron.vite.config.ts", "playwright.config.ts", "src/main", "src/preload", "test/unit"]
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "minimumReleaseAge": "7 days",
+  "rangeStrategy": "pin",
+  "packageRules": [
+    {
+      "description": "Electron ships Chromium security fixes: no waiting, automerge patch and minor once CI is green on every OS (ARCHITECTURE.md §14.2).",
+      "matchPackageNames": ["electron"],
+      "minimumReleaseAge": null,
+      "groupName": "electron",
+      "automerge": true,
+      "matchUpdateTypes": ["patch", "minor"]
+    },
+    {
+      "description": "Electron majors need a human: breaking changes every 8 weeks.",
+      "matchPackageNames": ["electron"],
+      "matchUpdateTypes": ["major"],
+      "minimumReleaseAge": null,
+      "automerge": false
+    },
+    {
+      "groupName": "electron tooling",
+      "matchPackageNames": ["electron-vite", "electron-builder", "electron-updater", "@electron/{/,}**"]
+    },
+    {
+      "groupName": "build and lint tooling",
+      "matchPackageNames": ["vite", "@vitejs/**", "vitest", "eslint", "@eslint/**", "typescript-eslint", "stylelint", "stylelint-config-standard", "@playwright/test", "babel-plugin-react-compiler", "@rolldown/plugin-babel", "@babel/core"]
+    },
+    {
+      "description": "typescript-eslint supports TypeScript <6.1 (ARCHITECTURE.md §2).",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<6.1"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+out/
+dist/
+release/
+test-results/
+playwright-report/
+coverage/

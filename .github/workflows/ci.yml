@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Typecheck · lint · unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  e2e:
+    name: E2E · ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x64, os: windows-latest }
+          - { name: Windows arm64, os: windows-11-arm }
+          - { name: macOS arm64, os: macos-26 }
+          - { name: macOS x64, os: macos-15-intel }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11 }
+          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland }
+          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Linux display servers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb weston
+          # Ubuntu 24.04 blocks the unprivileged user namespaces Chromium's
+          # sandbox needs. Allow them on the test runner so E2E keeps the
+          # sandbox on (packages ship an AppArmor profile instead).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: E2E (X11)
+        if: matrix.display == 'x11'
+        run: xvfb-run -a pnpm --filter @chord/desktop test:e2e
+
+      - name: E2E (Wayland, headless Weston)
+        if: matrix.display == 'wayland'
+        run: |
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          weston --backend=headless --socket=wayland-chord --idle-time=0 &
+          for i in $(seq 1 50); do [ -S "$XDG_RUNTIME_DIR/wayland-chord" ] && break; sleep 0.1; done
+          unset DISPLAY
+          export WAYLAND_DISPLAY=wayland-chord XDG_SESSION_TYPE=wayland
+          pnpm --filter @chord/desktop test:e2e
+
+      - name: E2E
+        if: runner.os != 'Linux'
+        run: pnpm --filter @chord/desktop test:e2e
+
+      - name: Upload design QA captures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: captures-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
+          path: apps/desktop/test-results/captures/
+          if-no-files-found: ignore
+
+      - name: Upload failure details
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-failures-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
+          path: apps/desktop/test-results/

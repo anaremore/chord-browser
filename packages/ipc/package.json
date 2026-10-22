@@ -1,0 +1,16 @@
+{
+  "name": "@chord/ipc",
+  "private": true,
+  "version": "0.0.0",
+  "description": "The IPC contract between Chord's renderers and main process",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  }
+}

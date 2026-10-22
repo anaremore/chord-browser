@@ -1,0 +1,28 @@
+{
+  "name": "chord-browser",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @chord/desktop dev",
+    "build": "pnpm --filter @chord/desktop build",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "lint": "eslint . && stylelint \"**/*.css\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "^24.19.2",
+    "eslint": "10.13.0",
+    "globals": "^17.13.0",
+    "stylelint": "17.16.0",
+    "stylelint-config-standard": "40.0.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
+  }
+}
