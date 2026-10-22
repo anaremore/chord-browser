@@ -29,6 +29,18 @@
   mix-blend-mode: soft-light;
 }
 
+.flex {
+  flex: 1;
+}
+
+.ellipsis {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- Sidebar ---------- */
 
 .sidebar {
@@ -86,6 +98,11 @@
   transform: scale(0.94);
 }
 
+kbd {
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+}
+
 .urlPill {
   display: flex;
   flex: none;
@@ -94,10 +111,36 @@
   block-size: var(--size-url-pill);
   margin-block-end: var(--space-2);
   padding-inline: var(--space-3);
+  border: 0;
   border-radius: var(--radius-sm);
   background: var(--color-item-hover);
   color: var(--color-fg-muted);
   font: var(--text-small);
+  text-align: start;
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    box-shadow var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard);
+}
+
+/* Hovering the address hints that it's editable: it lifts into the active-row surface. */
+.urlPill:hover {
+  background: var(--color-item-active-bg);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
+}
+
+.pillKeycap,
+.rowKeycap {
+  flex: none;
+  color: var(--color-fg-subtle);
+  opacity: 0;
+  transition: opacity var(--duration-fade-fast) var(--ease-standard);
+}
+
+.urlPill:hover .pillKeycap,
+.newTab:hover .rowKeycap {
+  opacity: 1;
 }
 
 .chordHeader {
@@ -131,52 +174,104 @@
   content: '';
 }
 
+/* ---------- Tab rows ---------- */
+
 .list {
   display: flex;
+  flex: 1;
   flex-direction: column;
+  min-block-size: 0;
   margin: 0;
   padding: 0;
+  overflow: hidden auto;
   list-style: none;
+  scrollbar-color: var(--color-divider) transparent;
+  scrollbar-width: thin;
+}
+
+.item {
+  position: relative;
+  flex: none;
 }
 
 .row {
+  position: relative;
+  z-index: var(--z-raised);
   display: flex;
   gap: var(--space-2);
   align-items: center;
+  inline-size: 100%;
   block-size: var(--size-row);
   padding-inline: var(--space-2);
+  border: 0;
   border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg);
+  font: var(--text-body);
+  text-align: start;
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    padding var(--duration-fade-fast) var(--ease-standard);
+}
+
+.newTab {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+
+/* Make room for the close button while it shows. */
+.item:hover .row {
+  padding-inline-end: calc(var(--space-2) + var(--size-hit-min));
+}
+
+.item:hover .row:not(.active),
+.newTab:hover {
+  background: var(--color-item-hover);
 }
 
 .active {
-  background: var(--color-item-active-bg);
-  box-shadow: var(--shadow-raised);
   font: var(--text-label);
 }
 
-.monogram {
+.activePill {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-active-bg);
+  box-shadow: var(--shadow-raised);
+}
+
+.close {
+  position: absolute;
+  inset-block-start: calc((var(--size-row) - var(--size-hit-min)) / 2);
+  inset-inline-end: var(--space-1);
+  z-index: var(--z-sticky);
   display: grid;
-  flex: none;
   place-items: center;
-  inline-size: var(--size-favicon);
-  block-size: var(--size-favicon);
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-xs);
-  background: var(--monogram-bg);
-  color: var(--monogram-fg);
-  font: var(--text-glyph);
+  background: transparent;
+  color: var(--color-fg-muted);
+  opacity: 0;
+  transition:
+    opacity var(--duration-fade-fast) var(--ease-standard),
+    background-color var(--duration-fade-fast) var(--ease-standard);
 }
 
-.ellipsis {
-  flex: 1;
-  min-inline-size: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.close:hover {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
 }
 
-.flex {
-  flex: 1;
+.close:focus-visible,
+.item:hover .close {
+  opacity: 1;
 }
+
+/* ---------- Footer ---------- */
 
 .footer {
   display: flex;
@@ -223,30 +318,41 @@
 .address {
   display: flex;
   gap: var(--space-1);
+  align-items: center;
   min-inline-size: 0;
+  max-inline-size: 100%;
+  block-size: var(--size-icon-button);
   padding-inline: var(--space-2);
-  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg);
+  font: var(--text-body);
   white-space: nowrap;
+  -webkit-app-region: no-drag;
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.address:hover {
+  background: var(--color-item-hover);
 }
 
 .addressHost {
   flex: none;
-  color: var(--color-fg);
 }
 
-.addressSeparator,
-.addressTitle {
-  overflow: hidden;
+.addressMuted {
   color: var(--color-fg-muted);
-  text-overflow: ellipsis;
 }
 
-/* ---------- Content frame: the shadow and hairline under the tab view ---------- */
+/* ---------- Content frame: the shadow under the tab view, and the empty state ---------- */
 
 .frame {
   position: absolute;
   inset-block: var(--size-strip) var(--size-frame-inset);
   inset-inline: var(--size-sidebar-width) var(--size-frame-inset);
+  display: grid;
+  place-items: center;
   border-radius: var(--radius-frame);
   background: var(--color-surface);
   box-shadow: var(--shadow-frame);
@@ -254,4 +360,45 @@
 
 :global(:root[data-platform='darwin']) .frame {
   inset-block-start: var(--size-frame-inset);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: center;
+  text-align: center;
+}
+
+.emptyTitle {
+  margin: 0;
+  font: var(--text-heading);
+  letter-spacing: var(--text-heading-tracking);
+}
+
+.emptyBody {
+  margin: 0 0 var(--space-4);
+  color: var(--color-fg-muted);
+}
+
+.emptyButton {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  block-size: var(--size-row);
+  padding-inline: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font: var(--text-label);
+  transition: transform var(--spring-press-duration) var(--spring-press);
+}
+
+.emptyButton:active {
+  transform: scale(0.97);
+}
+
+.inlineKeycap {
+  opacity: 0.75;
 }

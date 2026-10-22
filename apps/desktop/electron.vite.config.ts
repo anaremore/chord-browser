@@ -18,7 +18,7 @@ export default defineConfig({
       externalizeDeps: false,
       isolatedEntries: true,
       rolldownOptions: {
-        input: { shell: src('preload/shell.ts') },
+        input: { shell: src('preload/shell.ts'), overlay: src('preload/overlay.ts') },
         output: { format: 'cjs', entryFileNames: '[name].cjs' },
       },
     },
@@ -31,7 +31,7 @@ export default defineConfig({
       // Smaller bundles parse faster at launch (cold-start budget, ARCHITECTURE.md §1).
       minify: true,
       rolldownOptions: {
-        input: { shell: src('renderer/shell/index.html') },
+        input: { shell: src('renderer/shell/index.html'), overlay: src('renderer/overlay/index.html') },
       },
     },
     plugins: [react(), babel({ presets: [reactCompilerPreset()] })],

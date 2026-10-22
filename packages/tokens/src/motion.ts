@@ -41,6 +41,8 @@ export const durations = {
   tooltip: 600,
   springLoad: 600,
   toast: 6000,
+  /** One turn of the loading spinner. */
+  spin: 900,
 } as const;
 
 export const easing = {

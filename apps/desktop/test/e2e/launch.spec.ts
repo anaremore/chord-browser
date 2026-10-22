@@ -8,11 +8,12 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 const appDir = resolve(import.meta.dirname, '../..');
 const capturesDir = resolve(appDir, 'test-results', 'captures');
 
-/** Two tiny pages so navigation works without the network. */
+/** A few tiny pages so navigation works without the network. */
 function startSite(): Promise<{ server: Server; origin: string }> {
   const pages: Record<string, string> = {
     '/': '<title>First page</title><a id="next" href="/second">Next</a>',
     '/second': '<title>Second page</title><p>Second</p>',
+    '/third': '<title>Third page</title><p>Third</p>',
   };
   const server = createServer((req, res) => {
     const body = pages[req.url ?? '/'];
@@ -40,6 +41,13 @@ async function pageWhere(app: ElectronApplication, match: (url: string) => boole
 }
 
 const isShell = (url: string) => url.startsWith('chord://shell') || url.includes('/shell/index.html');
+const isOverlay = (url: string) => url.startsWith('chord://overlay') || url.includes('/overlay/index.html');
+
+/** Opens the command bar the way the shell's own buttons do. (Synthetic keys can't reach Chord's shortcut router.) */
+async function openCommandBar(shell: Page, overlay: Page, mode: 'new' | 'edit') {
+  await shell.evaluate((m) => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open(m), mode);
+  await expect(overlay.getByRole('dialog')).toBeVisible();
+}
 
 let site: { server: Server; origin: string };
 test.beforeAll(async () => {
@@ -52,19 +60,60 @@ test('browses, and the shell drives navigation over IPC', async () => {
   try {
     const shell = await pageWhere(app, isShell);
     const tab = await pageWhere(app, (url) => url.startsWith(site.origin));
+    const today = shell.getByRole('list', { name: 'Today' });
 
-    // The shell reflects the tab.
     await expect(shell.getByText('Personal')).toBeVisible();
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(today).toContainText('First page');
 
-    // Navigate inside the page, then go back from Chord's own Back button.
     await tab.click('#next');
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Second page');
+    await expect(today).toContainText('Second page');
     const back = shell.getByRole('button', { name: 'Back' });
     await expect(back).toBeEnabled();
     await back.click();
     await expect.poll(() => tab.url()).toBe(`${site.origin}/`);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(today).toContainText('First page');
+  } finally {
+    await app.close();
+  }
+});
+
+test('the command bar opens new tabs, edits the address in place, and tabs close', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today).toContainText('First page');
+
+    // New tab: type an address, press Enter.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/third`);
+    await expect(overlay.getByRole('option').first()).toContainText(`${site.origin}/third`);
+    await overlay.keyboard.press('Enter');
+    await expect(overlay.getByRole('dialog')).toBeHidden();
+    await expect(today.getByRole('listitem')).toHaveCount(2);
+    await expect(today.getByRole('listitem').first()).toContainText('Third page'); // new tabs land on top
+
+    // Edit in place: the current address is prefilled; navigate this tab.
+    await openCommandBar(shell, overlay, 'edit');
+    await expect(overlay.getByRole('textbox')).toHaveValue(`${site.origin}/third`);
+    await overlay.getByRole('textbox').fill(`${site.origin}/second`);
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('listitem').first()).toContainText('Second page');
+    await expect(today.getByRole('listitem')).toHaveCount(2);
+
+    // Typing part of an open tab's title offers to switch to it, first.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('first');
+    await expect(overlay.getByRole('option').first()).toContainText('First page');
+    await overlay.keyboard.press('Escape');
+    await expect(overlay.getByRole('dialog')).toBeHidden();
+
+    // Close the top tab from its close button; the other remains and becomes active.
+    await today.getByRole('listitem').first().hover();
+    await today.getByRole('button', { name: /^Close/ }).first().click();
+    await expect(today.getByRole('listitem')).toHaveCount(1);
+    await expect(today.getByRole('button', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
   } finally {
     await app.close();
   }
@@ -76,7 +125,7 @@ test('web content gets no Chord API; the shell does', async () => {
     const shell = await pageWhere(app, isShell);
     const tab = await pageWhere(app, (url) => url.startsWith(site.origin));
     expect(await tab.evaluate(() => typeof (window as { chord?: unknown }).chord)).toBe('undefined');
-    expect(await shell.evaluate(() => typeof window.chord.nav.command)).toBe('function');
+    expect(await shell.evaluate(() => typeof (window as unknown as { chord: { state: { dispatch: unknown } } }).chord.state.dispatch)).toBe('function');
     expect(await tab.evaluate(() => typeof (globalThis as { require?: unknown }).require)).toBe('undefined');
     // Decision S2: pages see a standard Chromium user agent.
     const userAgent = await tab.evaluate(() => navigator.userAgent);

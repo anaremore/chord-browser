@@ -1,102 +1,146 @@
 /**
- * One Chord window (ARCHITECTURE.md §5): a BaseWindow whose content view holds
- * the shell (Chord's UI, full window, transparent) and the active tab, inset
- * and rounded on top of it.
- *
- * M1.0 has a single tab; TabManager replaces `tab` in M1.1.
+ * One Chord window (ARCHITECTURE.md §5). Views, bottom to top:
+ *   shell    Chord's UI, full window, transparent
+ *   tab      the active tab, inset and rounded (index 1)
+ *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L
  */
 import { join } from 'node:path';
-import type { NavAction, TabState } from '@chord/ipc';
-import { frameRadius, size } from '@chord/tokens';
-import { BaseWindow, WebContentsView, app, nativeTheme, type Session } from 'electron';
+import type { Bounds, WindowId } from '@chord/core';
+import type { OverlayOpenEvent, Rect, Role } from '@chord/ipc';
+import { size } from '@chord/tokens';
+import { BaseWindow, WebContentsView, nativeTheme, type Session } from 'electron';
 import { registerCaller, send } from './ipc';
 import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
 import { lockToOrigins } from './security';
 import { originOf } from './urls';
 
-// Google is the default search engine (decided 2026-10-22). Tests override the
-// first page so CI never depends on the network.
-const HOME_URL = (!app.isPackaged && process.env['CHORD_HOME_URL']) || 'https://www.google.com/';
-
 export interface AppWindowOptions {
+  id: WindowId;
   uiSession: Session;
-  browsingSession: Session;
+  bounds: Bounds | null;
+  onBounds(bounds: Bounds): void;
+}
+
+function uiUrl(surface: 'shell' | 'overlay'): string {
+  const dev = process.env['ELECTRON_RENDERER_URL'];
+  return dev ? `${dev}/${surface}/index.html` : `chord://${surface}/`;
+}
+
+function createUiView(uiSession: Session, surface: 'shell' | 'overlay', role: Role): WebContentsView {
+  const view = new WebContentsView({
+    webPreferences: {
+      session: uiSession,
+      preload: join(import.meta.dirname, `../preload/${surface}.cjs`),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      spellcheck: false,
+    },
+  });
+  view.setBackgroundColor('#00000000');
+  const url = uiUrl(surface);
+  const origin = originOf(url);
+  if (!origin) throw new Error(`Bad UI URL ${url}`);
+  registerCaller(view.webContents, role, [origin]);
+  lockToOrigins(view.webContents, [origin]);
+  void view.webContents.loadURL(url);
+  return view;
 }
 
 export class AppWindow {
+  readonly id: WindowId;
   readonly window: BaseWindow;
   readonly shell: WebContentsView;
-  private readonly tab: WebContentsView;
+  readonly overlay: WebContentsView;
+  private tabView: WebContentsView | null = null;
+  private anchor: Rect | null = null;
+  private overlayVisible = false;
 
-  constructor({ uiSession, browsingSession }: AppWindowOptions) {
+  constructor({ id, uiSession, bounds, onBounds }: AppWindowOptions) {
+    this.id = id;
     this.window = new BaseWindow({
-      width: 1280,
-      height: 820,
+      ...(bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : { width: 1280, height: 820 }),
       minWidth: 720,
       minHeight: 480,
       title: 'Chord',
       show: false,
       ...windowChromeOptions(),
     });
+    if (bounds?.maximized) this.window.maximize();
 
-    this.shell = new WebContentsView({
-      webPreferences: {
-        session: uiSession,
-        preload: join(import.meta.dirname, '../preload/shell.cjs'),
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        spellcheck: false,
-      },
-    });
-    this.shell.setBackgroundColor('#00000000');
-
-    this.tab = new WebContentsView({
-      webPreferences: { session: browsingSession, sandbox: true, contextIsolation: true, nodeIntegration: false },
-    });
-    this.tab.setBorderRadius(frameRadius[platform]);
-
-    // Shell first, tab above it (later children draw on top).
+    this.shell = createUiView(uiSession, 'shell', 'shell');
+    this.overlay = createUiView(uiSession, 'overlay', 'overlay');
+    this.overlay.setVisible(false);
     this.window.contentView.addChildView(this.shell);
-    this.window.contentView.addChildView(this.tab);
+    this.window.contentView.addChildView(this.overlay);
 
-    const shellUrl = process.env['ELECTRON_RENDERER_URL']
-      ? `${process.env['ELECTRON_RENDERER_URL']}/shell/index.html`
-      : 'chord://shell/';
-    const shellOrigin = originOf(shellUrl);
-    if (!shellOrigin) throw new Error(`Bad shell URL ${shellUrl}`);
-    registerCaller(this.shell.webContents, 'shell', [shellOrigin]);
-    lockToOrigins(this.shell.webContents, [shellOrigin]);
-
-    this.wireTab();
     this.layout();
-    this.window.on('resize', () => this.layout());
+    let boundsTimer: ReturnType<typeof setTimeout> | undefined;
+    const reportBounds = () => {
+      clearTimeout(boundsTimer);
+      boundsTimer = setTimeout(() => {
+        if (this.window.isDestroyed() || this.window.isMinimized() || this.window.isFullScreen()) return;
+        const maximized = this.window.isMaximized();
+        const b = maximized ? this.window.getNormalBounds() : this.window.getBounds();
+        onBounds({ x: b.x, y: b.y, width: b.width, height: b.height, maximized });
+      }, 400);
+    };
+    this.window.on('resize', () => {
+      this.layout();
+      reportBounds();
+    });
+    this.window.on('move', reportBounds);
+    this.window.on('maximize', reportBounds);
+    this.window.on('unmaximize', reportBounds);
 
     const onTheme = () => {
       if (platform !== 'darwin') this.window.setTitleBarOverlay?.(titleBarOverlay());
-      send(this.shell.webContents, 'system:changed', systemInfo());
+      for (const view of [this.shell, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
     };
     nativeTheme.on('updated', onTheme);
     this.window.on('closed', () => {
       nativeTheme.off('updated', onTheme);
-      for (const view of [this.shell, this.tab]) if (!view.webContents.isDestroyed()) view.webContents.close();
+      clearTimeout(boundsTimer);
+      for (const view of [this.shell, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
     });
 
-    this.shell.webContents.once('did-finish-load', () => {
-      this.pushTabState();
-      this.window.show();
-    });
-    void this.shell.webContents.loadURL(shellUrl);
-    void this.tab.webContents.loadURL(HOME_URL);
+    this.shell.webContents.once('did-finish-load', () => this.window.show());
   }
 
-  navigate(action: NavAction): void {
-    const contents = this.tab.webContents;
-    const history = contents.navigationHistory;
-    if (action === 'back' && history.canGoBack()) history.goBack();
-    else if (action === 'forward' && history.canGoForward()) history.goForward();
-    else if (action === 'reload') contents.reload();
-    else if (action === 'stop') contents.stop();
+  /** Show a tab's view in the content frame (or nothing: the shell's empty state shows through). */
+  showTab(view: WebContentsView | null): void {
+    if (this.tabView === view) return;
+    if (this.tabView) this.window.contentView.removeChildView(this.tabView);
+    this.tabView = view;
+    if (view) {
+      this.window.contentView.addChildView(view, 1);
+      this.layout();
+      if (!this.overlayVisible) view.webContents.focus();
+    } else if (!this.overlayVisible) {
+      this.shell.webContents.focus();
+    }
+  }
+
+  get activeTabContents() {
+    return this.tabView?.webContents ?? null;
+  }
+
+  setAnchor(rect: Rect | null): void {
+    this.anchor = rect;
+  }
+
+  openOverlay(mode: OverlayOpenEvent['mode'], url: string): void {
+    this.overlayVisible = true;
+    this.overlay.setVisible(true);
+    this.overlay.webContents.focus();
+    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : null, url });
+  }
+
+  closeOverlay(): void {
+    if (!this.overlayVisible) return;
+    this.overlayVisible = false;
+    this.overlay.setVisible(false);
+    (this.tabView?.webContents ?? this.shell.webContents).focus();
   }
 
   /** The content frame: inset from the window, right of the sidebar, below the strip on Windows/Linux. */
@@ -105,50 +149,12 @@ export class AppWindow {
     const inset = size.frameInset;
     const top = platform === 'darwin' ? inset : size.strip;
     this.shell.setBounds({ x: 0, y: 0, width, height });
-    this.tab.setBounds({
+    this.overlay.setBounds({ x: 0, y: 0, width, height });
+    this.tabView?.setBounds({
       x: size.sidebarWidth,
       y: top,
       width: Math.max(0, width - size.sidebarWidth - inset),
       height: Math.max(0, height - top - inset),
     });
-  }
-
-  private faviconUrl: string | null = null;
-
-  private wireTab(): void {
-    const contents = this.tab.webContents;
-    const push = () => this.pushTabState();
-    for (const event of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page', 'page-title-updated'] as const) {
-      contents.on(event as 'did-start-loading', push);
-    }
-    contents.on('page-favicon-updated', (_event, favicons) => {
-      this.faviconUrl = favicons[0] ?? null;
-      push();
-    });
-    contents.on('did-start-navigation', (details) => {
-      if (details.isMainFrame && !details.isSameDocument) this.faviconUrl = null;
-    });
-    // M1.0 has one tab, so new windows load in place. M1.1 opens real tabs and OAuth popups.
-    contents.setWindowOpenHandler(({ url }) => {
-      if (url.startsWith('https:') || url.startsWith('http:')) void contents.loadURL(url);
-      return { action: 'deny' };
-    });
-  }
-
-  tabState(): TabState {
-    const contents = this.tab.webContents;
-    return {
-      url: contents.getURL(),
-      title: contents.getTitle(),
-      loading: contents.isLoading(),
-      canGoBack: contents.navigationHistory.canGoBack(),
-      canGoForward: contents.navigationHistory.canGoForward(),
-      faviconUrl: this.faviconUrl,
-    };
-  }
-
-  private pushTabState(): void {
-    if (this.tab.webContents.isDestroyed()) return;
-    send(this.shell.webContents, 'tab:state', this.tabState());
   }
 }

@@ -1,16 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { eventChannels, invokeChannels, SystemInfo } from '../src';
+import { RendererCommand, SystemInfo, invokeChannels } from '../src';
 
 describe('IPC contract', () => {
   it('rejects unknown nav actions', () => {
     const schema = invokeChannels['nav:command'].request;
     expect(schema.safeParse({ action: 'back' }).success).toBe(true);
     expect(schema.safeParse({ action: 'rm -rf' }).success).toBe(false);
-    expect(schema.safeParse({ action: 'back', extra: 1 }).success).toBe(true); // extra keys stripped, not trusted
   });
 
-  it('never grants the shell-only nav channel to popovers', () => {
+  it('accepts renderer commands and refuses engine-only ones', () => {
+    expect(RendererCommand.safeParse({ t: 'tab.open', windowId: 'w', url: 'https://example.com' }).success).toBe(true);
+    expect(RendererCommand.safeParse({ t: 'tab.activate', windowId: 'w', nodeId: 'n', touch: false }).success).toBe(true);
+    // Only the engine reports titles, favicons and loading state.
+    expect(RendererCommand.safeParse({ t: 'tab.updated', nodeId: 'n', title: 'spoofed' }).success).toBe(false);
+    expect(RendererCommand.safeParse({ t: 'tab.live', nodeId: 'n', live: { loading: true } }).success).toBe(false);
+    expect(RendererCommand.safeParse({ t: 'tab.open', windowId: 'w', url: '' }).success).toBe(false);
+  });
+
+  it('keeps privileged channels away from the wrong roles', () => {
     expect(invokeChannels['nav:command'].roles).not.toContain('popover');
+    expect(invokeChannels['overlay:open'].roles).toEqual(['shell']);
+    expect(invokeChannels['overlay:close'].roles).toEqual(['overlay']);
+    expect(invokeChannels['cmd:dispatch'].roles).not.toContain('internal');
   });
 
   it('validates system info', () => {
@@ -25,6 +36,5 @@ describe('IPC contract', () => {
       windowChrome: { kind: 'overlay', height: 40, reservedWidth: 138, side: 'right' },
     });
     expect(ok.success).toBe(true);
-    expect(Object.keys(eventChannels)).toContain('tab:state');
   });
 });

@@ -44,6 +44,9 @@ export const size = {
   /** The Windows/Linux top strip and the minimal-mode bar. */
   strip: 40,
   commandBarMin: 480,
+  /** The command bar input row (centered placement) and its result rows. */
+  inputRow: 56,
+  resultRow: 40,
   commandBarMax: 680,
   previewWidth: 280,
   hairline: 1,

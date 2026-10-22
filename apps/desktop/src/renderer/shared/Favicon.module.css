@@ -1,0 +1,61 @@
+.frame,
+.monogram,
+.spinner {
+  flex: none;
+  inline-size: var(--size-favicon);
+  block-size: var(--size-favicon);
+}
+
+.frame {
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-xs);
+}
+
+.icon {
+  inline-size: 100%;
+  block-size: 100%;
+  border-radius: var(--radius-xs);
+  object-fit: contain;
+}
+
+/* Dark icons on dark themes sit on a soft light plate so they stay visible. */
+.plate {
+  background: var(--color-fg);
+}
+
+.monogram {
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-xs);
+  background: var(--monogram-bg);
+  color: var(--monogram-fg);
+  font: var(--text-glyph);
+}
+
+.spinner {
+  box-sizing: border-box;
+  border: var(--size-focus-ring) solid var(--color-divider);
+  border-block-start-color: var(--color-accent);
+  border-radius: var(--radius-full);
+  animation: spin var(--duration-spin) linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: pulse var(--duration-spin) ease-in-out infinite alternate;
+    border-color: var(--color-accent);
+  }
+
+  @keyframes pulse {
+    from {
+      opacity: 0.35;
+    }
+  }
+}

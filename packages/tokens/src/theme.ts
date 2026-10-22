@@ -96,13 +96,18 @@ export const windowBackground: Record<Appearance, Oklch> = {
 };
 
 /**
- * A new chord's colors: the OS accent's hue at swatch lightness, so the first
+ * A new chord's colors: a gradient from the OS accent's hue, so the first
  * chord feels like it belongs on this computer (DESIGN.md §5.1). Falls back to
  * the Dusk preset when there's no usable accent.
  */
 export function defaultChordStops(accent: Oklch | null): Oklch[] {
   if (!accent || accent.c < 0.03) return presetStops('dusk');
-  return [{ l: 0.72, c: Math.min(0.14, Math.max(0.08, accent.c)), h: accent.h }];
+  // A soft analogous gradient: the accent, drifting 45° around the wheel.
+  const c = Math.min(0.14, Math.max(0.1, accent.c));
+  return [
+    { l: 0.72, c, h: accent.h },
+    { l: 0.72, c, h: (accent.h + 45) % 360 },
+  ];
 }
 
 const TEXT_MIN_CONTRAST = 4.5;
@@ -211,8 +216,11 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
       '--color-divider': cssOklch(fg, 0.1),
       '--color-accent': cssOklch(accent),
       '--color-accent-fg': accentFg,
+      /** Selected rows in lists like the command bar. */
+      '--color-selection': cssOklch(accent, light ? 0.14 : 0.22),
       '--color-surface': cssOklch(surface),
       '--color-surface-raised': cssOklch(surfaceRaised),
+      '--color-scrim': light ? 'oklch(0 0 0 / 0.18)' : 'oklch(0 0 0 / 0.36)',
       '--grain-opacity': (Math.min(Math.max(input.grain, 0), 1) * (light ? 0.2 : 0.28)).toFixed(3),
     },
   };

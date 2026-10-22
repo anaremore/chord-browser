@@ -1,0 +1,17 @@
+{
+  "name": "@chord/core",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Chord's domain model: chords, tabs, commands and the reducer shared by main and renderers",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "fractional-indexing": "4.0.0",
+    "immer": "11.2.9"
+  }
+}

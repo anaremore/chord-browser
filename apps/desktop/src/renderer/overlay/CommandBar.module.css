@@ -1,0 +1,177 @@
+/* The command bar (DESIGN.md §7.3). Tokens only. */
+
+.root {
+  position: fixed;
+  inset: 0;
+  color: var(--color-fg);
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-scrim);
+}
+
+/* Centered placement lives inside the content frame, not the whole window. */
+.frameArea {
+  position: absolute;
+  inset-block: var(--size-strip) var(--size-frame-inset);
+  inset-inline: var(--size-sidebar-width) var(--size-frame-inset);
+  pointer-events: none;
+}
+
+:global(:root[data-platform='darwin']) .frameArea {
+  inset-block-start: var(--size-frame-inset);
+}
+
+.panel {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-modal);
+  pointer-events: auto;
+}
+
+.centered {
+  inset-block-start: 18%;
+  inset-inline-start: 50%;
+  inline-size: clamp(var(--size-command-bar-min), 56%, var(--size-command-bar-max));
+  translate: -50% 0;
+}
+
+/* Anchored: the input sits exactly where the URL pill is, so editing feels in place. */
+.anchored {
+  margin: calc(var(--space-2) * -1);
+}
+
+.inputRow {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  block-size: var(--size-input-row);
+  padding-inline: var(--space-3);
+}
+
+.anchored .inputRow {
+  gap: var(--space-2);
+  block-size: var(--size-url-pill);
+}
+
+.inputIcon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+
+.input {
+  flex: 1;
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-fg);
+  font: var(--text-input);
+  letter-spacing: var(--text-input-tracking);
+}
+
+.anchored .input {
+  font: var(--text-body);
+  letter-spacing: var(--text-body-tracking);
+}
+
+.input::placeholder {
+  color: var(--color-fg-subtle);
+}
+
+.input::selection {
+  background: var(--color-selection);
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: var(--space-1) 0 0;
+  border-block-start: var(--size-hairline) solid var(--color-divider);
+  list-style: none;
+}
+
+.result {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  block-size: var(--size-result-row);
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-sm);
+  font: var(--text-body);
+  cursor: default;
+}
+
+.selected {
+  background: var(--color-selection);
+}
+
+.resultIcon {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+
+.resultTitle {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resultDetail {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resultDetail::before {
+  margin-inline-end: var(--space-2);
+  color: var(--color-fg-subtle);
+  content: '—';
+}
+
+.chip {
+  flex: none;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-item-hover);
+  color: var(--color-fg-muted);
+  font: var(--text-micro);
+}
+
+.hint {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  margin-inline-start: auto;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.keycap {
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--color-fg-subtle);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+}
+
+.hint .keycap {
+  margin-inline-start: 0;
+}

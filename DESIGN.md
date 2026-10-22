@@ -722,7 +722,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 2. **Two kinds of shortcut:**
    - **Reserved (R):** Chord always gets the key, even while a page has focus. These are the keys Chrome also refuses to give pages (new and close tab or window, tab switching), plus Chord's core keys (⌘L, ⌘1–9).
    - **Page-first (P):** the page sees the key first. If it uses it (Google Docs' ⌘S, a web editor's ⌘D), Chord stays out of the way. If not, Chord acts.
-3. **Hands off keys web apps depend on.** Chord binds nothing to ⌘K, ⌘E, ⌘B, ⌘I, ⌘U, ⌘↵ or ⌘/ by default.
+3. **Hands off keys web apps depend on.** Chord never *reserves* ⌘K, ⌘E, ⌘B, ⌘I, ⌘U, ⌘↵ or ⌘/. A page-first binding is allowed only where Chrome already has one, like Ctrl+U for view source on Windows/Linux, and the page still wins.
 4. **Discoverable.** Every action is in the command bar with its keycaps shown. The full cheat sheet is one shortcut away.
 5. **One registry.** `packages/core/src/shortcuts.ts` defines each shortcut once: id, macOS keys, Windows/Linux keys, kind, action. It generates the macOS menu bar, the reserved-key interceptor, keycaps, the cheat sheet, and the tables below. A test fails on any duplicate per platform. Rebinding with conflict detection comes in Phase 3.
 
