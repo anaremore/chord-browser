@@ -258,7 +258,7 @@ The neutral ramp is OKLCH with a whisper of the chord hue (chroma 0.006), so gra
 ```ts
 type ChordTheme = {
   stops: Oklch[];           // 1–3 colors chosen on the wheel or from swatches
-  grain: number;            // 0–1, default 0.35
+  grain: number;            // 0–1, default 0.2
   appearance: 'light' | 'dark' | 'auto';   // auto follows the OS
 };
 ```
@@ -297,7 +297,7 @@ type ChordTheme = {
    - `item-hover` = `fg` at 6% (light) / 7% (dark).
    - `item-active-bg` = white at 78% plus `shadow-raised` (light), or white at 10% plus an inset hairline (dark).
    - `divider` = `fg` at 10%.
-9. **Grain.** A pre-rendered 128 px monochrome noise tile (deterministic, generated at build time; no runtime `feTurbulence`), applied with `soft-light` *inside* the isolated tint group so it never blends with the desktop. Opacity = `grain × 0.20` (light) or `grain × 0.28` (dark).
+9. **Grain.** A pre-rendered 256 px tile of soft fractal value-noise at low contrast (deterministic, from `scripts/generate-grain.mjs`; no runtime `feTurbulence`), applied with `soft-light` *inside* the isolated tint group so it never blends with the desktop. Per-pixel static reads as dirt, not paper. Opacity = `grain × 0.20` (light) or `grain × 0.28` (dark).
 
 ### 5.3 Theme crossfade
 
@@ -706,7 +706,7 @@ Every UI change gets the following before it reaches you:
 2. **Sidebar toggle shortcut.** Proposed in §14: ⌘S / Ctrl+S, page-first (Google Docs and other editors keep their own ⌘S), with Save page on ⌘⇧S. Also: *peek on hover* on by default in minimal mode, with an off switch.
 3. **Favorites row.** Arc's favicon grid sits above the chord and is shared across chords. It isn't in the brief. Add it as a later-phase item, or leave it out?
 4. **Top strip on Windows/Linux.** Show the page title next to the domain, or only the domain (calmer)? I lean domain only, with the title on hover.
-5. **Default grain.** 0.35 (subtle paper) vs 0 (clean). I lean 0.35; it's part of the identity.
+5. **Default grain.** Decided 2026-10-22: 0.2, with a soft fractal tile (the first per-pixel tile read as static).
 6. **Density.** Ship a *Compact* option (28 px rows) in v1, or later?
 7. **Sounds.** None by default. Agreed?
 

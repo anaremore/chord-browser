@@ -5,7 +5,7 @@ import type { CSSProperties } from 'react';
 
 /** The CSS variables and resolved appearance for a chord (DESIGN.md §5). */
 export function chordStyle(chord: Chord | undefined, info: SystemInfo): { style: CSSProperties; appearance: Appearance } {
-  const theme = createChordTheme(chord?.theme ?? { stops: presetStops('dusk'), grain: 0.35, appearance: 'auto' }, {
+  const theme = createChordTheme(chord?.theme ?? { stops: presetStops('dusk'), grain: 0.2, appearance: 'auto' }, {
     systemAppearance: info.appearance,
     material: info.material,
   });
