@@ -187,7 +187,7 @@ function About({ about }: { about: AboutInfo }) {
         <Row label="Engine" control={<span className={styles.value}>Chromium {about.chromium}</span>} />
         <Row label="Electron" control={<span className={styles.value}>{about.electron}</span>} />
         <Row label="Platform" control={<span className={styles.value}>{`${about.platform} · ${about.arch}`}</span>} />
-        <Row label="License" description="Free and open source. No accounts, no telemetry." control={<span className={styles.value}>MPL-2.0</span>} />
+        <Row label="License" description="Free and open source. No accounts, no telemetry." control={<span className={styles.value}>MIT</span>} />
       </div>
       <div className={styles.links}>
         <button type="button" className={styles.linkButton} onClick={() => void api.settings.openUrl(REPO_URL)}>

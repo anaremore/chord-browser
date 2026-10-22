@@ -129,6 +129,8 @@ Run with `spikes/s9-extensions/` (usage is at the top of `run.mjs`):
 
 **What option (a), GPL-3 combined binaries, requires.** Not legal advice; ✅ marks clauses read from the license texts.
 
+> **Update 2026-10-22:** Chord's source moved from MPL-2.0 to MIT; the decision below (a) holds unchanged. MIT is GPL-compatible, and the one MPL-2.0 file (`core/rank.ts`) is covered by §3.3 as before.
+
 1. **MPL-2.0 allows the combination.**
    - §3.3 lets a Larger Work combine MPL code with code under a "Secondary License".
    - §1.12 defines that as GPL 2.0 "or any later versions", which includes GPL-3.0 ✅.

@@ -19,6 +19,11 @@ const config: Configuration = {
   // app is just the build output; electron-builder would otherwise copy the
   // production node_modules too. package.json is always added.
   files: ['out/**/*', '!**/node_modules/**/*'],
+  // Chord's licenses travel with every copy: MIT, plus MPL-2.0 for core/rank.ts (adapted from Crest).
+  extraResources: [
+    { from: '../../LICENSE', to: 'licenses/LICENSE' },
+    { from: '../../LICENSES', to: 'licenses' },
+  ],
   // Nothing native to rebuild: SQLite is Node's built-in node:sqlite.
   npmRebuild: false,
   // Arch is always in the name, so every build of a version can share one release.

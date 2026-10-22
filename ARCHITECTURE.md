@@ -2,7 +2,7 @@
 
 Status: **draft for review** · Last updated 2026-10-22 · Companion docs: [DESIGN.md](DESIGN.md), ROADMAP.md (next step)
 
-Chord is an open-source (MPL-2.0) desktop browser for people leaving Arc. It keeps the sidebar-first workflow and the delight, with no Chord account, no telemetry, no cloud, and no lock-in. Windows, macOS, and Linux (X11 and Wayland) are equal targets.
+Chord is an open-source (MIT) desktop browser for people leaving Arc. It keeps the sidebar-first workflow and the delight, with no Chord account, no telemetry, no cloud, and no lock-in. Windows, macOS, and Linux (X11 and Wayland) are equal targets.
 
 Every library, API, and version below was checked on 2026-10-22. Anything not confirmed from a primary source is marked **⚠ unverified** and has a spike or test that settles it. [§16](#16-decisions-needed-from-you) lists the decisions that need your call.
 
@@ -908,7 +908,7 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 
 | # | Decision | Status |
 |---|---|---|
-| **D1** | Extension library license | **Open; needed by milestone M1.5.** Chrome extensions themselves are decided (Phase 1). The options for the library: (a) ship Chord *binaries* as a GPL-3 combined work (MPL-2.0 §3.3 allows this; every Chord source file stays MPL-2.0; free); (b) the Patron License (an ongoing GitHub sponsorship; keeps binaries non-GPL); (c) clean-room our own `chrome.*` layer (months). **Recommendation, now that the focus is open source and no spending:** (a), with a note in README and About. The `ExtensionHost` seam keeps (b) and (c) available later. Not legal advice. |
+| **D1** | Extension library license | **Decided 2026-10-22: (a).** Chord's source is MIT. `core/rank.ts` stays MPL-2.0 because it comes from Crest. Release binaries that include the extensions library are a GPL-3 combined work: they ship the GPL-3 text and point to the source at the release tag. MIT is GPL-compatible, and so is MPL-2.0 (§3.3). The alternatives were (b) the Patron License, an ongoing sponsorship that keeps binaries non-GPL, and (c) our own `chrome.*` layer, months of work. The `ExtensionHost` seam keeps both open. Not legal advice. |
 | **D2** | Duet provider access | **Decided:** no provider agreement. Users run `claude auth login` / `codex login` themselves, as with T3 Code (§11.1). |
 | **D3** | Code signing | **Deferred:** open source first, unsigned builds, with the consequences handled in §15.2. Signing becomes roadmap Phase 4. |
 | **D4** | DRM (Netflix, Spotify, Disney+) | **Open; needed by M1.6.** (a) Stock Electron: no Widevine, fastest security patches. (b) castLabs ECS: Widevine on macOS/Windows, none on Linux. Its latest stable is 44.5.1+wvcus (2026-10-03) while upstream 44 is at 44.9.3, so it trails on patches. **Recommendation: (a) for v1**, with honest copy. |

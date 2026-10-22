@@ -29,4 +29,4 @@ pnpm lint
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the [Mozilla Public License 2.0](LICENSE).
+By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE). Changes to `packages/core/src/rank.ts`, which is adapted from Crest, stay under the [Mozilla Public License 2.0](LICENSES/MPL-2.0.txt), as its header says.

@@ -74,7 +74,7 @@ A milestone is done when all of these hold:
 | Q4 | Google search suggestions while typing. They make the command bar feel faster, but every keystroke goes to Google. | M1.1 | **On**, with a clear switch in Settings |
 | Q5 | Favorites: the row of app tiles at the top of the sidebar, shared across chords. Arc had them and your Dia screenshot shows them. | M1.2 | **Yes**, in M1.2 |
 | Q6 | Sidebar toggle shortcut: ⌘S / Ctrl+S (matches Arc, shadows "Save page") or ⌘⇧S / Ctrl+Shift+S | M1.2 | ⌘S, with Save page on ⌘⇧S |
-| D1 | Extension library license (ARCHITECTURE.md §16) | M1.5 | GPL-3 combined binaries; source stays MPL-2.0 |
+| D1 | Extension library license (ARCHITECTURE.md §16) | M1.5 | **Decided:** GPL-3 combined binaries; source is MIT |
 | D4 | DRM for Netflix and Spotify (ARCHITECTURE.md §16) | M1.6 | Stock Electron in v1, no DRM |
 
 **Defaults I'll use from DESIGN.md §13 unless you object:**
@@ -105,7 +105,7 @@ A milestone is done when all of these hold:
   - `macos-26`, `macos-15-intel`, `windows-latest`, `windows-11-arm`, `ubuntu-24.04` (Xvfb and Weston-headless Wayland), and `ubuntu-24.04-arm`.
   - Visual captures are uploaded as artifacts on every PR.
 - **Repo hygiene:**
-  - `LICENSE` (MPL-2.0), README, CONTRIBUTING, CODE_OF_CONDUCT.
+  - `LICENSE` (MIT), README, CONTRIBUTING, CODE_OF_CONDUCT.
   - SECURITY.md, with a temporary contact until `security@chordbrowser.com` exists.
   - Renovate config and the `electron-watch` workflow (ARCHITECTURE.md §14).
 - **Foundations:**
@@ -266,7 +266,7 @@ A milestone is done when all of these hold:
 
 ## Borrowed from Crest
 
-[Crest](https://github.com/pauljoda/Crest) is also MPL-2.0. Ideas are reimplemented freely. Any file ported from Crest keeps the MPL-2.0 header and adds "Portions derived from Crest, © 2026 Paul Davis".
+[Crest](https://github.com/pauljoda/Crest) is MPL-2.0. Ideas are reimplemented freely under Chord's MIT license. Any file *ported* from Crest keeps the MPL-2.0 header and adds "Portions derived from Crest, © 2026 Paul Davis". MPL-2.0 applies per file, so it doesn't spread to the rest of Chord.
 
 | From Crest | Where it lands |
 |---|---|
