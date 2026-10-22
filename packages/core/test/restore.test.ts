@@ -61,7 +61,7 @@ describe('restoreState', () => {
     const state = restoreState(saved, seed);
     expect(Object.keys(state.nodes)).toEqual(['t1', 't2']);
     expect(state.windows['w1']).toMatchObject({ activeChordId: 'c1', activeTab: { c1: 't2' }, sidebar: 'collapsed', bounds: { x: 10 } });
-    expect(state.live['t1']).toMatchObject({ loading: false, canGoBack: false });
+    expect(state.live).toEqual({}); // every tab starts unloaded
     expect(state.settings.searchEngine).toBe('kagi');
     expect(state.settings.motion).toEqual({ ...DEFAULT_SETTINGS.motion, sidebar: false });
     expect(state.version).toBe(0);

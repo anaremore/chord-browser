@@ -230,6 +230,52 @@ kbd {
   flex: none;
 }
 
+/* Pinned tabs sit above the Today divider and size to their rows; Today takes the rest. */
+.pinnedList {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Picked up: a little lift, as if held (DESIGN.md §6.5). */
+.item[data-dragging] {
+  z-index: var(--z-drag);
+  border-radius: var(--radius-sm);
+  background: var(--color-item-active-bg);
+  box-shadow: var(--shadow-lift);
+  scale: 1.03;
+  cursor: grabbing;
+}
+
+/* Where a tab dragged in from the other list will land. */
+.item[data-drop-target] {
+  border-radius: var(--radius-sm);
+  outline: var(--size-hairline) solid var(--color-accent);
+  outline-offset: calc(var(--size-hairline) * -1);
+}
+
+/* Shown while dragging when nothing is pinned yet. */
+.pinZone {
+  display: grid;
+  place-items: center;
+  block-size: var(--size-row);
+  border-radius: var(--radius-sm);
+  outline: var(--size-hairline) dashed var(--color-divider);
+  outline-offset: calc(var(--size-hairline) * -1);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.pinZone[data-over] {
+  background: var(--color-item-hover);
+  outline-color: var(--color-accent);
+  color: var(--color-fg);
+}
+
 .row {
   position: relative;
   z-index: var(--z-raised);
@@ -267,6 +313,11 @@ kbd {
 
 .active {
   font: var(--text-label);
+}
+
+/* A pinned tab that hasn't been opened yet. */
+.row[data-unloaded] {
+  color: var(--color-fg-muted);
 }
 
 .activePill {

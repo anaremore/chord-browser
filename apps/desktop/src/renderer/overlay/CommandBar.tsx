@@ -15,6 +15,7 @@ import {
   Link,
   Maximize,
   PanelLeft,
+  Pin,
   Printer,
   RotateCcw,
   RotateCw,
@@ -45,6 +46,7 @@ interface Session {
 const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'tab.reopen': RotateCcw,
   'tab.close': X,
+  'tab.pin': Pin,
   'address.copy': Link,
   'address.copyMarkdown': Link,
   'tab.next': ArrowDown,

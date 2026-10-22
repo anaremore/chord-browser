@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 
 const appDir = resolve(import.meta.dirname, '../..');
 const capturesDir = resolve(appDir, 'test-results', 'captures');
@@ -331,6 +331,61 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
     await overlay.keyboard.type('work');
     await expect(overlay.getByRole('option').filter({ hasText: /Work\s*Chord/ })).toHaveCount(1);
     await overlay.keyboard.press('Escape');
+  } finally {
+    await app.close();
+  }
+});
+
+test('pinned tabs: pin with a key, close keeps them, and dragging reorders and pins', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('list', { name: 'Today' });
+    const pinned = shell.getByRole('list', { name: 'Pinned' });
+    await expect(today).toContainText('First page');
+    for (const path of ['second', 'third']) {
+      await openCommandBar(shell, overlay, 'new');
+      await overlay.keyboard.type(`${site.origin}/${path}`);
+      await overlay.keyboard.press('Enter');
+      await expect(today.getByRole('listitem').first()).toContainText(path === 'second' ? 'Second page' : 'Third page');
+    }
+
+    // ⌘D / Ctrl+D pins the active tab.
+    await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('tab.pin'));
+    await expect(pinned.getByRole('listitem')).toHaveCount(1);
+    await expect(pinned).toContainText('Third page');
+    await expect(today.getByRole('listitem')).toHaveCount(2);
+
+    // Closing a pinned tab unloads it; it stays pinned.
+    await pinned.getByRole('listitem').first().hover();
+    await pinned.getByRole('button', { name: /^Close/ }).click();
+    await expect(pinned.getByRole('listitem')).toHaveCount(1);
+    await expect(pinned.getByRole('button', { name: 'Third page', exact: true })).not.toHaveAttribute('aria-current', 'page');
+
+    // Drag First page (bottom of Today) above Second page.
+    const drag = async (from: Locator, to: Locator, offsetY: number) => {
+      const a = (await from.boundingBox())!;
+      const b = (await to.boundingBox())!;
+      await shell.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+      await shell.mouse.down();
+      await shell.mouse.move(a.x + a.width / 2, a.y + a.height / 2 + 6, { steps: 4 });
+      await shell.mouse.move(b.x + b.width / 2, b.y + offsetY, { steps: 12 });
+      // Let the sortable settle over the target before letting go, as a hand would.
+      await shell.waitForTimeout(200);
+      await shell.mouse.move(b.x + b.width / 2 + 1, b.y + offsetY, { steps: 2 });
+      await shell.mouse.up();
+    };
+    await drag(today.getByRole('listitem').nth(1), today.getByRole('listitem').first(), 4);
+    await expect(today.getByRole('listitem').first()).toContainText('First page');
+    // A new drag can't start while the last one's drop animation is still settling.
+    await shell.waitForTimeout(600);
+
+    // Drag Second page up into Pinned, below Third page.
+    await drag(today.getByRole('listitem').nth(1), pinned.getByRole('listitem').first(), 28);
+    await expect(pinned.getByRole('listitem')).toHaveCount(2);
+    await expect(pinned.getByRole('listitem').nth(1)).toContainText('Second page');
+    await expect(today.getByRole('listitem')).toHaveCount(1);
   } finally {
     await app.close();
   }

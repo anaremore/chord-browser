@@ -17,6 +17,7 @@ export type Result =
 const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'tab.reopen', title: 'Reopen closed tab', words: 'reopen closed tab undo restore' },
   { action: 'tab.close', title: 'Close tab', words: 'close tab' },
+  { action: 'tab.pin', title: 'Pin or unpin tab', words: 'pin unpin tab keep' },
   { action: 'address.copy', title: 'Copy page address', words: 'copy url address link' },
   { action: 'address.copyMarkdown', title: 'Copy as Markdown link', words: 'copy markdown link md' },
   { action: 'tab.next', title: 'Next tab', words: 'next tab down' },

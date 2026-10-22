@@ -14,6 +14,7 @@ import {
   type ClosedTab,
   type LiveTab,
   type NodeId,
+  type Section,
   type SettingsPatch,
   type State,
   type TabNode,
@@ -31,6 +32,12 @@ export type Command =
   | { t: 'tab.reopenClosed'; windowId: WindowId }
   | { t: 'tab.navigate'; nodeId: NodeId; url: string }
   | { t: 'tab.cycle'; windowId: WindowId; direction: 1 | -1 }
+  /** Drag and drop: put a tab at a position in a section (pinned or Today) of its chord. */
+  | { t: 'node.move'; nodeId: NodeId; section: Section; index: number }
+  /** Pin to the bottom of the pinned section, keeping the current page as its home. */
+  | { t: 'tab.pin'; nodeId: NodeId }
+  /** Unpin to the top of Today. */
+  | { t: 'tab.unpin'; nodeId: NodeId }
   /** Engine reports (not user intent). */
   | { t: 'tab.updated'; nodeId: NodeId; url?: string; title?: string; favicon?: string | null }
   | { t: 'tab.live'; nodeId: NodeId; live: Partial<LiveTab> }
@@ -85,6 +92,32 @@ export function apply(state: State, command: Command, ctx: Context): Result {
     draft.version += 1;
   });
   return { state: versioned, patches: [...patches, ...versionPatches], effects };
+}
+
+/** A rank strictly between two neighbors; ties (possible in old data) fall back to after `before`. */
+function rankBetween(before: string | null, after: string | null): string {
+  if (before !== null && after !== null && before >= after) return generateKeyBetween(before, null);
+  return generateKeyBetween(before, after);
+}
+
+/**
+ * Move a tab within or between its chord's sections. Pinning keeps the page
+ * it's on as the pinned home; unpinning forgets it. Returns false for a no-op.
+ */
+function moveTab(draft: Draft<State>, node: Draft<TabNode>, section: Section, index: number): boolean {
+  const siblings = children(draft as State, node.chordId, section, null).filter((n) => n.id !== node.id);
+  const at = Math.max(0, Math.min(index, siblings.length));
+  if (node.section === section && node.parentId === null) {
+    const current = children(draft as State, node.chordId, section, null).findIndex((n) => n.id === node.id);
+    if (current === at) return false;
+  }
+  node.rank = rankBetween(siblings[at - 1]?.rank ?? null, siblings[at]?.rank ?? null);
+  node.parentId = null;
+  if (node.section !== section) {
+    node.section = section;
+    node.pinnedUrl = section === 'pinned' ? (node.pinnedUrl ?? node.url) : null;
+  }
+  return true;
 }
 
 function topOfToday(state: Draft<State>, chordId: ChordId): string {
@@ -168,6 +201,18 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const index = order.findIndex((t) => t.id === node.id);
       // Arc's rule: land on the tab below, or above if this was the last one.
       const neighbor = order[index + 1] ?? order[index - 1] ?? null;
+      // A pinned tab never goes away: closing unloads it and takes it home to its pinned page.
+      if (node.section === 'pinned') {
+        if (node.pinnedUrl && node.url !== node.pinnedUrl) node.url = node.pinnedUrl;
+        delete draft.live[cmd.nodeId];
+        effects.push({ e: 'view.destroy', nodeId: cmd.nodeId });
+        for (const win of Object.values(draft.windows)) {
+          if (win.activeTab[node.chordId] !== cmd.nodeId) continue;
+          if (node.chordId === win.activeChordId) activate(draft, win.id, neighbor?.id ?? null, ctx, effects);
+          else win.activeTab[node.chordId] = neighbor?.id ?? null;
+        }
+        return;
+      }
       const closed: ClosedTab = { node: { ...(node as TabNode) }, windowId: cmd.windowId, closedAt: ctx.now };
       draft.closed.unshift(closed);
       if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
@@ -213,6 +258,26 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (node?.kind !== 'tab') return;
       node.url = cmd.url;
       effects.push({ e: 'view.ensure', nodeId: cmd.nodeId }, { e: 'view.navigate', nodeId: cmd.nodeId, url: cmd.url });
+      return;
+    }
+
+    case 'node.move': {
+      const node = draft.nodes[cmd.nodeId];
+      if (node?.kind === 'tab') moveTab(draft, node, cmd.section, cmd.index);
+      return;
+    }
+
+    case 'tab.pin': {
+      const node = draft.nodes[cmd.nodeId];
+      if (node?.kind !== 'tab' || node.section === 'pinned') return;
+      moveTab(draft, node, 'pinned', children(draft as State, node.chordId, 'pinned', null).length);
+      return;
+    }
+
+    case 'tab.unpin': {
+      const node = draft.nodes[cmd.nodeId];
+      if (node?.kind !== 'tab' || node.section !== 'pinned') return;
+      moveTab(draft, node, 'today', 0);
       return;
     }
 

@@ -1,9 +1,8 @@
-import { activeTabId, formatKeys, shortcutById, sortedChords, tabsInOrder, type ActionId, type LiveTab, type TabNode } from '@chord/core';
+import { activeTabId, sortedChords, type LiveTab, type TabNode } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
-import { ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, Plus, RotateCw, X } from 'lucide-react';
-import { AnimatePresence, motion, MotionConfig } from 'motion/react';
+import { ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
+import { AnimatePresence, MotionConfig } from 'motion/react';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import { Favicon } from '../shared/Favicon';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
@@ -12,20 +11,10 @@ import { api } from './api';
 import styles from './App.module.css';
 import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Chords';
 import { useSystemInfo } from './hooks';
+import { keycap, withKeys } from './keys';
+import { SidebarTabs } from './Tabs';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
-
-function keycap(id: ActionId, info: SystemInfo): string {
-  const keys = shortcutById(id);
-  const first = keys ? (info.platform === 'darwin' ? keys.mac : keys.other)[0] : undefined;
-  return first ? formatKeys(first, info.platform) : '';
-}
-
-/** A label with its shortcut, for tooltips: "Reload  Ctrl+R". */
-function withKeys(label: string, id: ActionId, info: SystemInfo): string {
-  const keys = keycap(id, info);
-  return keys ? `${label}  ${keys}` : label;
-}
 
 /**
  * Reports where the address sits so ⌘L can grow the command bar out of it.
@@ -108,7 +97,6 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const win = state.windows[windowId];
   const chord = win ? state.chords[win.activeChordId] : undefined;
   const { style, appearance } = chordStyle(chord, info);
-  const tabs = chord ? tabsInOrder(state, chord.id) : [];
   const activeId = activeTabId(state, windowId);
   const active = activeId ? (state.nodes[activeId] as TabNode | undefined) : undefined;
   const live = activeId ? state.live[activeId] : undefined;
@@ -136,8 +124,6 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
     setRenaming(mirror.get().windows[windowId]?.activeChordId ?? null);
   };
 
-  const dispatch = api.state.dispatch;
-  const closeTab = (id: string) => void dispatch({ t: 'tab.close', windowId, nodeId: id });
   const toggleSidebar = () => void api.action.run('view.toggleSidebar');
   const openOptions = (e: MouseEvent<HTMLButtonElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -175,73 +161,15 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           <AnimatePresence initial={false} mode="popLayout" custom={slide}>
             <ChordPane key={chord?.id} slide={slide} transition={spring('smooth', 'chordSlide')}>
               <ChordHeader chord={chord} renaming={renaming !== null && renaming === chord?.id} onRenamed={() => setRenaming(null)} />
-
-              <div className={styles.divider} role="separator" />
-
-              <button type="button" className={`${styles.row} ${styles.newTab}`} onClick={() => void api.overlay.open('new')}>
-                <Plus {...ICON} aria-hidden />
-                <span className={styles.ellipsis}>New tab</span>
-                <kbd className={styles.rowKeycap}>{keycap('tab.new', info)}</kbd>
-              </button>
-
-              <ul className={styles.list} aria-label="Today">
-                <AnimatePresence initial={false} mode="popLayout">
-                  {tabs.map((tab) => {
-                    const isActive = tab.id === activeId;
-                    const tabLive = state.live[tab.id];
-                    return (
-                      <motion.li
-                        key={tab.id}
-                        layout="position"
-                        className={styles.item}
-                        initial={{ opacity: 0, scale: 0.96 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, x: -8 }}
-                        transition={spring('smooth', 'tabMoves')}
-                        onMouseDown={(e: MouseEvent) => {
-                          if (e.button === 1) e.preventDefault(); // no autoscroll
-                        }}
-                        onAuxClick={(e: MouseEvent) => {
-                          if (e.button === 1) closeTab(tab.id);
-                        }}
-                        onContextMenu={(e: MouseEvent) => {
-                          e.preventDefault();
-                          void api.menu.tab(tab.id, { x: e.clientX, y: e.clientY });
-                        }}
-                      >
-                        {isActive && (
-                          <motion.span layoutId={`active-pill-${tab.chordId}`} className={styles.activePill} transition={spring('snappy', 'tabMoves')} />
-                        )}
-                        <button
-                          type="button"
-                          className={`${styles.row} ${isActive ? styles.active : ''}`}
-                          aria-current={isActive ? 'page' : undefined}
-                          title={pageTitle(tab) || tab.url}
-                          onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
-                        >
-                          <Favicon
-                            url={tab.url}
-                            title={tab.title}
-                            favicon={tab.favicon}
-                            loading={Boolean(tabLive?.loading) && !tab.favicon}
-                            appearance={appearance}
-                          />
-                          <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.close}
-                          aria-label={`Close ${tab.title || 'tab'}`}
-                          title={withKeys('Close tab', 'tab.close', info)}
-                          onClick={() => closeTab(tab.id)}
-                        >
-                          <X size={14} strokeWidth={2} />
-                        </button>
-                      </motion.li>
-                    );
-                  })}
-                </AnimatePresence>
-              </ul>
+              <SidebarTabs
+                chordId={chord?.id ?? ''}
+                state={state}
+                windowId={windowId}
+                activeId={activeId}
+                info={info}
+                appearance={appearance}
+                spring={spring}
+              />
             </ChordPane>
           </AnimatePresence>
 

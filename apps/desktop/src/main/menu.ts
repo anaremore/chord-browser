@@ -70,6 +70,8 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
       { type: 'separator' },
       item('Next Tab', 'tab.next'),
       item('Previous Tab', 'tab.previous'),
+      { type: 'separator' },
+      item('Pin or Unpin Tab', 'tab.pin'),
     ];
     const template: MenuItemConstructorOptions[] = [
       {
@@ -151,6 +153,7 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
     item('Show or hide sidebar', 'view.toggleSidebar'),
     item('Edit address', 'address.edit'),
     item('Copy page address', 'address.copy'),
+    item('Pin or unpin tab', 'tab.pin'),
     { type: 'separator' },
     {
       label: 'Zoom',
@@ -205,6 +208,8 @@ export function buildChordMenu(a: ChordMenuActions): Menu {
 
 export interface TabMenuActions {
   url: string;
+  pinned: boolean;
+  togglePin(): void;
   copyLink(): void;
   copyMarkdown(): void;
   reload(): void;
@@ -219,9 +224,10 @@ export function buildTabMenu(a: TabMenuActions): Menu {
     { label: 'Copy link', enabled: web, click: a.copyLink },
     { label: 'Copy as Markdown link', enabled: web, click: a.copyMarkdown },
     { type: 'separator' },
+    { label: a.pinned ? 'Unpin tab' : 'Pin tab', accelerator: acceleratorFor('tab.pin'), click: a.togglePin },
     { label: 'Reload', click: a.reload },
     { label: 'Duplicate', click: a.duplicate },
     { type: 'separator' },
-    { label: 'Close tab', accelerator: acceleratorFor('tab.close'), click: a.close },
+    { label: a.pinned ? 'Close (stays pinned)' : 'Close tab', accelerator: acceleratorFor('tab.close'), click: a.close },
   ]);
 }

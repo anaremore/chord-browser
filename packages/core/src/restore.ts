@@ -5,7 +5,7 @@
  * chords or tabs are dropped, settings fill in from defaults, and there is
  * always at least one chord and one window.
  */
-import { DEFAULT_SETTINGS, IDLE_LIVE, emptyState, type Chord, type MotionSettings, type Settings, type SidebarNode, type State, type WindowModel } from './model';
+import { DEFAULT_SETTINGS, emptyState, type Chord, type MotionSettings, type Settings, type SidebarNode, type State, type WindowModel } from './model';
 import { SEARCH_ENGINES } from './input';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
@@ -56,7 +56,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   for (const node of Object.values(state.nodes)) {
     if (node.parentId && !state.nodes[node.parentId]) node.parentId = null;
   }
-  for (const node of Object.values(state.nodes)) if (node.kind === 'tab') state.live[node.id] = { ...IDLE_LIVE };
+  // No live entries: every tab starts unloaded, and gets one when its page starts loading.
 
   const firstChord = sortedChords(state)[0]!;
   for (const win of saved.windows) {

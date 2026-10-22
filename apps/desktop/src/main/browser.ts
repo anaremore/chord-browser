@@ -262,6 +262,8 @@ export class Browser {
     w.popupMenu(
       buildTabMenu({
         url: tab.url,
+        pinned: tab.section === 'pinned',
+        togglePin: () => this.store.dispatch({ t: tab.section === 'pinned' ? 'tab.unpin' : 'tab.pin', nodeId }),
         copyLink: () => clipboard.writeText(tab.url),
         copyMarkdown: () => clipboard.writeText(markdownLink(tab.title, tab.url)),
         reload: () => this.tabs.get(nodeId)?.webContents.reload(),
@@ -376,6 +378,9 @@ export class Browser {
         return true;
       case 'address.copyMarkdown':
         if (tab) clipboard.writeText(markdownLink(tab.title, tab.url));
+        return true;
+      case 'tab.pin':
+        if (tab) this.store.dispatch({ t: tab.section === 'pinned' ? 'tab.unpin' : 'tab.pin', nodeId: tab.id });
         return true;
       case 'app.settings':
         this.openSettings();

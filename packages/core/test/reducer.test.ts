@@ -1,6 +1,6 @@
 import { applyPatches, enablePatches } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { apply, emptyState, tabsInOrder, type Command, type Context, type State } from '../src';
+import { apply, emptyState, tabsInOrder, type Command, type Context, type State, type TabNode } from '../src';
 
 enablePatches();
 
@@ -123,6 +123,53 @@ describe('reducer', () => {
     expect(t.state.chords['c1']!.theme).toMatchObject({ grain: 1, appearance: 'dark' });
     t.run({ t: 'chord.theme', chordId: 'c1', theme: { stops: [{ l: 0.7, c: 0.15, h: 30 }] } });
     expect(t.state.chords['c1']!.theme.stops).toEqual([{ l: 0.7, c: 0.15, h: 30 }]);
+  });
+
+  describe('pinning and moving', () => {
+    const section = (t: ReturnType<typeof setup>, s: 'pinned' | 'today') =>
+      Object.values(t.state.nodes)
+        .filter((n) => n.section === s)
+        .sort((a, b) => (a.rank < b.rank ? -1 : 1))
+        .map((n) => (n as TabNode).url.slice(8, 9));
+    const open3 = () => {
+      const t = setup();
+      for (const u of ['a', 'b', 'c']) t.run({ t: 'tab.open', windowId: 'w1', url: `https://${u}.test/` });
+      return t; // Today: c, b, a
+    };
+
+    it('pins to the bottom of pinned, keeping the page as home; unpins to the top of Today', () => {
+      const t = open3();
+      t.run({ t: 'tab.pin', nodeId: 'id-001' });
+      t.run({ t: 'tab.pin', nodeId: 'id-003' });
+      expect(section(t, 'pinned')).toEqual(['a', 'c']);
+      expect(t.state.nodes['id-001']).toMatchObject({ section: 'pinned', pinnedUrl: 'https://a.test/' });
+      t.run({ t: 'tab.unpin', nodeId: 'id-001' });
+      expect(section(t, 'today')).toEqual(['a', 'b']);
+      expect((t.state.nodes['id-001'] as TabNode).pinnedUrl).toBeNull();
+    });
+
+    it('moves within a section and between sections, and ignores a drop in place', () => {
+      const t = open3();
+      t.run({ t: 'node.move', nodeId: 'id-003', section: 'today', index: 2 });
+      expect(section(t, 'today')).toEqual(['b', 'a', 'c']);
+      t.run({ t: 'node.move', nodeId: 'id-002', section: 'pinned', index: 0 });
+      expect(section(t, 'pinned')).toEqual(['b']);
+      expect(section(t, 'today')).toEqual(['a', 'c']);
+      expect(t.run({ t: 'node.move', nodeId: 'id-001', section: 'today', index: 0 }).patches).toHaveLength(0);
+    });
+
+    it('closing a pinned tab unloads it and takes it home; it stays pinned', () => {
+      const t = open3();
+      t.run({ t: 'tab.pin', nodeId: 'id-003' });
+      t.run({ t: 'tab.activate', windowId: 'w1', nodeId: 'id-003' });
+      t.run({ t: 'tab.updated', nodeId: 'id-003', url: 'https://c.test/elsewhere' });
+      const result = t.run({ t: 'tab.close', windowId: 'w1', nodeId: 'id-003' });
+      expect(t.state.nodes['id-003']).toMatchObject({ section: 'pinned', url: 'https://c.test/' });
+      expect(t.state.live['id-003']).toBeUndefined();
+      expect(result.effects).toContainEqual({ e: 'view.destroy', nodeId: 'id-003' });
+      expect(t.state.windows['w1']!.activeTab['c1']).not.toBe('id-003');
+      expect(t.state.closed).toHaveLength(0);
+    });
   });
 
   describe('chords', () => {
