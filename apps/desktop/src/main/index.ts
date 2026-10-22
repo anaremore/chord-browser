@@ -4,6 +4,7 @@ import { handle } from './ipc';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureBrowsingSession, configureUiSession, hardenAllWebContents } from './security';
+import { chromiumUserAgent } from './user-agent';
 import { AppWindow } from './window';
 
 // Before `ready`: privileged schemes, identity (decides userData), sandbox for every renderer.
@@ -44,10 +45,10 @@ if (!app.requestSingleInstanceLock()) {
     const forced = process.env['CHORD_APPEARANCE'];
     if (!app.isPackaged && (forced === 'light' || forced === 'dark')) nativeTheme.themeSource = forced;
 
-    // Spike S2 (development only): try a Chromium user agent without the
-    // Electron and app-name tokens.
-    if (!app.isPackaged && process.env['CHORD_UA'] === 'chromium') {
-      app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, '').replace(/ ChordDev\/\S+/, '');
+    // Standard Chromium user agent (decision S2). Development builds can set
+    // CHORD_UA=electron to compare against Electron's default.
+    if (app.isPackaged || process.env['CHORD_UA'] !== 'electron') {
+      app.userAgentFallback = chromiumUserAgent(app.userAgentFallback, app.getName());
     }
 
     const ui = session.fromPartition('chord-ui');

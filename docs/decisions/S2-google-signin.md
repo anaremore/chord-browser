@@ -1,20 +1,33 @@
 # S2: Google sign-in
 
-**Status: in progress, waiting on a manual test.**
+**Result: pass for Google on Windows. Decision: ship a standard Chromium user agent.**
 
-## What we know (2026-10-22, Windows 11, Electron 45.0.0)
+## Evidence (2026-10-22, Windows 11, Electron 45.0.0)
 
 - Electron's default user agent is
   `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ChordDev/0.0.0 Chrome/156.0.8078.48 Electron/45.0.0 Safari/537.36`.
   It names both the app and Electron. `navigator.userAgentData.brands` lists only `Not:A-Brand` and `Chromium`.
-- **Automated probe, fresh profile, default UA:** after entering an email, Google showed "Couldn't sign you in. This browser or app may not be secure."
-  - Google served its "WebLiteSignIn" flow first, a reduced variant.
-  - **Confounder:** the probe drives Chord through Playwright, which attaches a DevTools debugger. Google flags automated browsers regardless of user agent, so this result can't separate "automation" from "Electron".
-- A developer profile that had been used by hand already held a Google session, which hints that manual sign-in may work.
+- **Automated probe, fresh profile:** Google refused with "Couldn't sign you in. This browser or app may not be secure."
+  - The probe drives Chord through Playwright, which attaches a DevTools debugger. Google flags automated browsers.
+  - The manual results below show that automation, not Electron, triggered the block.
+- **Manual sign-in by the project owner, fresh profiles:** succeeded with **both** user agents:
+  - A: Electron's default.
+  - B: the default minus the `Electron/…` and app-name tokens.
 
-## Next
+## Decision
 
-1. A person signs in by hand in two builds: the default UA, and a Chromium UA without the `Electron/…` and app-name tokens (`CHORD_UA=chromium`, development builds only).
-2. Repeat for Microsoft, Apple, GitHub and a Cloudflare Turnstile page.
-3. Decide the shipping UA from those results.
-4. Check whether Crest (MPL-2.0, Chromium engine) found a working approach.
+Ship B: the standard Chromium user agent, the same format other Chromium browsers send (`src/main/user-agent.ts`).
+
+- **Why, when A also works for Google:** some sites sniff "Electron" and serve degraded or blocked pages, and the extra tokens buy nothing.
+- **This is not impersonation:**
+  - The string is Chromium's own format.
+  - Client-hint brands still say `Chromium`, not `Google Chrome`.
+- An E2E test asserts that pages see no `Electron/` or `Chord` token.
+- Development builds can compare against Electron's default with `CHORD_UA=electron`.
+
+## Still to check (by hand, once M1.1 adds an address bar)
+
+- Google on macOS and Linux.
+- Microsoft, Apple, and GitHub sign-in.
+- A Cloudflare Turnstile page. Electron sends no `Sec-CH-UA` headers on navigations (Electron PR #53519), which bot checks may notice.
+- Automated tests must never be used to judge sign-in. Google blocks them by design.

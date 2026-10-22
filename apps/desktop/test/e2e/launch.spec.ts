@@ -78,6 +78,10 @@ test('web content gets no Chord API; the shell does', async () => {
     expect(await tab.evaluate(() => typeof (window as { chord?: unknown }).chord)).toBe('undefined');
     expect(await shell.evaluate(() => typeof window.chord.nav.command)).toBe('function');
     expect(await tab.evaluate(() => typeof (globalThis as { require?: unknown }).require)).toBe('undefined');
+    // Decision S2: pages see a standard Chromium user agent.
+    const userAgent = await tab.evaluate(() => navigator.userAgent);
+    expect(userAgent).toContain('Chrome/');
+    expect(userAgent).not.toMatch(/Electron\/|Chord/);
   } finally {
     await app.close();
   }
