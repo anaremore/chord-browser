@@ -59,7 +59,7 @@ Every library, API, and version below was checked on 2026-10-22. Anything not co
 | Language | TypeScript, strict | **6.0.x** | ✅ TypeScript 7.0.2 (the Go-native compiler) is out, but typescript-eslint 8.72 supports only TS `<6.1`, and TS 7's JS API is still `unstable/*`. We revisit once typescript-eslint supports 7. |
 | UI | React 19 + React Compiler 1.0 | Compiler 1.0 stable since 2025-10-07 | ✅ Wired through plugin-react 6's documented `reactCompilerPreset` + `@rolldown/plugin-babel`. Its other route, `compiler: true` on `oxc-transform-react`, is marked experimental in the plugin README, so we don't use it. |
 | Build | Vite 8 via **electron-vite 6.0** | 6.0.0, 2026-10-14 | ✅ Works with Electron 45, verified in M1.0, with two adjustments. First, Electron 45 downloads its binary lazily and has no install script, but electron-vite looks for the `path.txt` that download writes; so `apps/desktop` runs `install-electron` on postinstall. Second, a wrapper script clears `ELECTRON_RUN_AS_NODE`, which some Electron-based hosts leak and which makes Electron start as plain Node. Sandboxed preloads are built as one self-contained CJS file each (`isolatedEntries`, no externalized deps). electron-vite has one maintainer; fallback is plain Vite configs. Forge 8's Vite plugin brings Forge's packager, which we don't want. |
-| Packaging | **electron-builder 26.18.0** (pinned) | 26.18.0 is on the `v26` dist-tag | ✅ npm's `latest` tag still points at 26.15.3, so pin exact versions. v27 is in alpha. |
+| Packaging | **electron-builder 26.18.0** (pinned) | 26.18.0 is on the `v26` dist-tag | ✅ npm's `latest` tag still points at 26.15.3, so pin exact versions. v27 is in alpha. Config: `apps/desktop/electron-builder.config.ts` ([§15](#15-packaging-distribution-ci-testing)). |
 | Updates | **electron-updater 6.8.11** + Chord's Ed25519 manifest check | 6.8.11 (`v26` tag) | ✅ Signed manifests are built into v27 alpha only. Until then we verify through a custom provider ([§14.4](#144-auto-updates)). |
 | Database | **`node:sqlite`** in a utility process, with FTS5 | Node 24 marks it "Release candidate" (1.2) | ✅ Works in Electron main without flags since 35. FTS5 is compiled in. ⚠ **utilityProcess use is inferred, not documented**; spike S1 settles it. Fallback: better-sqlite3 v13 (N-API, prebuilds bundled). A thin `Db` interface keeps the swap cheap. |
 | Motion | **motion** (motion.dev, MIT) | 14.6.0 | ✅ Majors ship fast (13.0 on 2026-08-05, 14.0 on 2026-10-02), so pin. Only the MIT core is used; no Motion+ components. |
@@ -101,16 +101,18 @@ chord-browser/
 │  │  ├─ popover/               hover previews, permission prompts
 │  │  └─ pages/                 chord://settings, chord://archive
 │  ├─ src/data/                 "chord-data" utility process: SQLite, search, favicons
-│  └─ src/agent/                "chord-agent" utility process: Duet providers + MCP server
+│  ├─ src/agent/                "chord-agent" utility process: Duet providers + MCP server
+│  ├─ test/                     unit · e2e (dev build) · packaged (smoke test of a packaged build)
+│  ├─ build/                    packaging resources: app icon; later NSIS include, entitlements
+│  └─ electron-builder.config.ts
 ├─ packages/
 │  ├─ core/                     pure domain model: entities, commands, reducer, policies
 │  ├─ ipc/                      channel contract, zod schemas, typed client/server helpers
 │  ├─ db/                       schema, migrations, prepared queries
 │  ├─ tokens/                   design tokens → CSS vars + TS; chord theme generator
 │  └─ ui/                       shared React primitives (Button, Keycap, Favicon, Toast…)
-├─ build/                       electron-builder config, NSIS include, entitlements, AppArmor
 ├─ flatpak/                     Flathub manifest (built from source)
-├─ scripts/                     release, manifest signing, Electron release watcher
+├─ scripts/                     asset generators (grain, icon); later release, manifest signing, Electron release watcher
 ├─ docs/                        SECURITY-PATCHING.md, decision records, design QA captures
 └─ .github/workflows/           ci.yml · release.yml · electron-watch.yml
 ```
@@ -265,6 +267,8 @@ Every destructive command returns inverse patches plus an `UndoToken`. A toast h
 | macOS | `~/Library/Application Support/Chord` (Electron default) |
 | Windows | `%LOCALAPPDATA%\Chord\User Data`, set via `app.setPath` before ready. Browsers don't roam multi-GB profiles, which is why Electron's `%APPDATA%` default is wrong here. Chrome uses the same location. |
 | Linux | `$XDG_CONFIG_HOME/Chord` (default `~/.config/Chord`) |
+
+**Throwaway profiles.** A Chrome-style `--user-data-dir=<path>` replaces `userData` in every build, so packaged builds can be smoke-tested without touching a real profile. Chromium parses it: only the `=` form counts, an empty value is ignored, and a relative path resolves against the working directory ✅. Development builds also read `CHORD_USER_DATA`. The single-instance lock follows `userData`, so such a run doesn't hand off to a running Chord (✅ two packaged instances with different profiles ran side by side on Windows).
 
 **Conventions:**
 - IDs are UUIDv7 `TEXT`.
@@ -712,9 +716,9 @@ interface PlatformServices {
 
 | Control | Setting |
 |---|---|
-| Renderer sandbox | Default since Electron 20 ✅. `app.enableSandbox()` also called. |
+| Renderer sandbox | Default since Electron 20 ✅. `app.enableSandbox()` also called. It also removes a `--no-sandbox` switch from the command line (✅ `app.commandLine.hasSwitch('no-sandbox')` is false afterwards), so no launcher can turn the sandbox off. |
 | Web content | `contextIsolation: true`, `nodeIntegration: false`, `webviewTag: false`, `sandbox: true`, **no preload**. `will-attach-webview` denied globally. |
-| Fuses (`@electron/fuses` 2.1.3) | `RunAsNode` **off** · `EnableCookieEncryption` **on** · `EnableNodeOptionsEnvironmentVariable` **off** · `EnableNodeCliInspectArguments` **off** · `EnableEmbeddedAsarIntegrityValidation` **on** (macOS, Windows; not available on Linux ✅) · `OnlyLoadAppFromAsar` **on** · `GrantFileProtocolExtraPrivileges` **off** · `LoadBrowserProcessSpecificV8Snapshot` off for now (revisit for startup) · `WasmTrapHandlers` on (default) |
+| Fuses | `RunAsNode` **off** · `EnableCookieEncryption` **on** · `EnableNodeOptionsEnvironmentVariable` **off** · `EnableNodeCliInspectArguments` **off** · `EnableEmbeddedAsarIntegrityValidation` **on** (macOS, Windows; compiled out on Linux, so a no-op there ✅) · `OnlyLoadAppFromAsar` **on** · `GrantFileProtocolExtraPrivileges` **off** · `LoadBrowserProcessSpecificV8Snapshot` off for now (revisit for startup) · `WasmTrapHandlers` on (default). Set by electron-builder's `electronFuses` right before signing. It bundles `@electron/fuses` 1.8.0, which doesn't know `WasmTrapHandlers`, so that one keeps Electron's default. ✅ Read back with `@electron/fuses` 2.1.3 from the Windows x64 and Linux x64 builds: exactly this list. electron-builder writes the asar integrity data (an `INTEGRITY` resource on Windows, `ElectronAsarIntegrity` in macOS's Info.plist). ✅ On Windows, a one-byte change inside `app.asar` stops the app with *ASAR Integrity Violation*. With `EnableNodeCliInspectArguments` off, Playwright's `_electron.launch` can't attach to a packaged build (it needs `--inspect`), so the packaged smoke test drives it over Chromium's remote-debugging port ([§15.5](#155-testing)). |
 | IPC | §8 allowlist, sender validation, zod schemas |
 | Internal protocols | `chord://` and `chord-favicon://` registered only on the `chord-ui` session, with CSP |
 | Secrets | Only Duet BYO API keys (later). `safeStorage` **async** API, since the sync API is deprecated in 45 and removed in 46 ✅. |
@@ -806,13 +810,24 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
 | Internal schemes | `chord://`, `chord-favicon://` | only on the `chord-ui` session (§4) |
 | Future web uses of the domain | site, install guides, `security@` contact for SECURITY.md (Cloudflare Email Routing), optional `dl.` CNAME for package repos | no rush |
 
+In the packages:
+- **Linux:** the `.desktop` file is `com.chordbrowser.Chord.desktop` with `StartupWMClass=com.chordbrowser.Chord` ✅ (checked in the built `.deb` and AppImage). `desktopName` in `apps/desktop/package.json` sets it; Electron uses the same value as the Wayland `app_id` and X11 `WM_CLASS`, and electron-builder's `linux.syncDesktopName` names the file after it.
+- **Windows:** the one-click per-user installer names its folder after the npm package name, so the packaged `package.json` is renamed `chord`: `%LOCALAPPDATA%\Programs\chord` (⚠ read from electron-builder's NSIS source; the release workflow logs where it installs). The installer is `Chord-<version>-win-<arch>-setup.exe`; its uninstall entry's GUID derives from the app ID.
+
 ### 15.1 Targets
 
 | Platform | Artifact | Notes |
 |---|---|---|
 | macOS | Signed, notarized **universal** (arm64 + x64) `.dmg` + `.zip` | Developer ID; notarization via notarytool API key. electron-builder's docs say to base64 the key, but the code wants a **file path**: write the `.p8` to disk in CI ✅. Entitlements start with `allow-jit` only and are added only when a test fails ✅. Icon: Icon Composer `.icon` for macOS 26 Liquid Glass, supported since electron-builder PR #9279 ✅. |
 | Windows | **NSIS**, per-user, one combined x64 + arm64 installer ✅ | Recommended over MSIX: it works with electron-updater, has no virtualized AppData surprises, and uses classic default-browser registration through a custom NSIS include (electron-builder writes none of those keys ✅). MSIX can declare a browser via `uap3:Protocol` ✅ but updates only through the Store or App Installer. A future Store channel would come from the same build. |
-| Linux | **deb + rpm** (primary, Cloudsmith repos), **Flatpak** (Flathub, built from source with `org.electronjs.Electron2.BaseApp` + zypak ✅), **AppImage** | electron-builder's deb/rpm post-install adds an AppArmor `userns` profile or a setuid `chrome-sandbox` as needed ✅. **AppImage:** electron-builder's launcher silently adds `--no-sandbox` when user namespaces are blocked (Ubuntu 23.10+) ✅. We override that so Chord **refuses to run unsandboxed** and points the user to the deb or Flatpak. |
+| Linux | **deb + rpm** (primary, Cloudsmith repos), **Flatpak** (Flathub, built from source with `org.electronjs.Electron2.BaseApp` + zypak ✅), **AppImage** | electron-builder's deb/rpm post-install adds an AppArmor `userns` profile or a setuid `chrome-sandbox` as needed ✅. **AppImage:** electron-builder's launcher silently adds `--no-sandbox` when user namespaces are blocked (Ubuntu 23.10+) ✅. `app.enableSandbox()` drops that switch ([§14.1](#141-hardening)), so Chord **never runs unsandboxed**. A dialog that explains this and points the user to the deb or Flatpak is still to do. |
+
+**Preview builds today** (unsigned, [§15.2](#152-code-signing)) differ from the table above:
+- **One artifact per OS and architecture**, each built on its own native runner so it can be smoke-tested there: `Chord-<version>-win-<arch>-setup.exe`, `Chord-<version>-mac-<arch>.dmg` and `.zip`, `Chord-<version>-linux-<arch>.AppImage` and `.deb` (Linux names x64 `x86_64` or `amd64`). A universal Mac app or a combined Windows installer would double every download. Revisit when signing arrives.
+- **No rpm yet.** Flatpak and package repos stay in Phase 3.
+- **AppImage uses electron-builder's static runtime** (`toolsets.appimage: '1.0.3'`, which electron-builder labels beta). The default runtime needs libfuse2, which Ubuntu 22.04 and later don't install. ✅ The static one ran Chord on Ubuntu 22.04 (WSL) without libfuse2, and is 8 MB smaller. Where user namespaces are blocked, the AppImage won't start (⚠ how it fails is unverified), and the README sends those users to the deb.
+- **deb:** electron-builder's post-install installs an AppArmor `userns` profile ✅ (present in the built package). ⚠ That it lets the sandbox run on Ubuntu 24.04 is checked by the release workflow's install smoke test, which hasn't run yet.
+- **Icon:** a placeholder (Dusk gradient with a white ✦) from `scripts/generate-icon.mjs`. electron-builder derives the `.ico` (16–256 px), `.icns` (16–1024 px) and the Linux hicolor sizes (16–512 px) from one 1024 px PNG ✅.
 
 ### 15.2 Code signing
 
@@ -820,8 +835,8 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
 >
 > | Platform | Unsigned behavior | What Chord does |
 > |---|---|---|
-> | macOS | Gatekeeper blocks first launch. On macOS 15+ the user must allow it under System Settings → Privacy & Security → *Open Anyway*. **Squirrel.Mac can't auto-update unsigned apps.** ⚠ Apple Silicon requires at least an ad-hoc signature to run at all; electron-builder's ad-hoc behavior without an identity is verified in M1.6. | Install guide with screenshots; in-app update is notify-and-download only. |
-> | Windows | SmartScreen shows "Windows protected your PC" → *More info* → *Run anyway*. | Install guide; electron-updater still works (no `publisherName` pin), integrity comes from the Ed25519 manifest check. |
+> | macOS | Gatekeeper blocks first launch. On macOS 15+ the user must allow it under System Settings → Privacy & Security → *Open Anyway*. **Squirrel.Mac can't auto-update unsigned apps.** Apple Silicon requires at least an ad-hoc signature to run at all. electron-builder 26.18 has no automatic ad-hoc fallback: without an identity it skips signing ✅ (its option docs and source). So Chord sets `mac.identity: '-'` (ad-hoc) and `hardenedRuntime: false`, because with an ad-hoc identity the hardened runtime's library validation rejects Electron's frameworks ✅ (electron-builder's docs and warning). Hardened runtime and `allow-jit` come back with Developer ID signing. ⚠ That the ad-hoc build launches on Apple Silicon is checked by the release workflow on `macos-26` (`codesign --verify`, then the smoke test), which hasn't run yet. ⚠ Cookie encryption keeps its key in the keychain, and keychain access is tied to the code signature. An ad-hoc signature changes with every build, so macOS may ask to allow *Chord Safe Storage* after an update. | Install steps in the README (*Try the preview*); screenshots to come. In-app update is notify-and-download only. |
+> | Windows | SmartScreen shows "Windows protected your PC" → *More info* → *Run anyway*. | Install steps in the README; electron-updater still works (no `publisherName` pin), integrity comes from the Ed25519 manifest check. |
 > | Linux | Unaffected: AppImage/deb/rpm don't use OS code signing; repos and Flathub use free GPG signing. | Normal. |
 >
 > Everything below is the plan for when signing is switched on (roadmap Phase 4). Each piece is additive, so nothing built now has to change.
@@ -834,14 +849,20 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
 
 ### 15.3 Releases come only from CI
 
-Tags `v*` trigger `release.yml`:
-1. Build the matrix.
-2. Sign through a **protected GitHub Environment** (`release`). Signing secrets are available only to tag builds on `main`, with required reviewers.
-3. Notarize.
-4. Sign the manifests.
-5. Upload a draft GitHub Release.
-6. Run an install smoke test on clean runners.
-7. A maintainer publishes.
+Tags `v*` trigger `release.yml`. It can also be run by hand, which builds and tests without releasing. Today, unsigned, it does this:
+1. **Build the matrix:** each OS and architecture on its own native runner (§15.4). A tag must match the version in `apps/desktop/package.json`.
+2. **Install or open each build as a user would, and smoke-test that copy** ([§15.5](#155-testing)):
+   - Windows: the per-user NSIS install, run silently.
+   - macOS: `codesign --verify` and `hdiutil verify`, then the app.
+   - Linux: the installed `.deb`, with no sysctl change, so its AppArmor profile is what's tested. Then the AppImage.
+   - The fuses are read back into the log.
+3. **Upload a draft prerelease** with `SHA256SUMS.txt`. The only write permission is `contents: write`, on that job.
+4. **A maintainer publishes.**
+
+When signing arrives (Phase 4), these steps slot in after the build:
+- Sign through a **protected GitHub Environment** (`release`). Signing secrets are available only to tag builds on `main`, with required reviewers.
+- Notarize.
+- Sign the manifests.
 
 A laptop never holds signing keys.
 
@@ -865,6 +886,7 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 | Unit | Vitest | `@chord/core` reducer and policies (property tests for ordering and undo round-trips), `@chord/tokens` (contrast guarantees across random themes), `@chord/db` migrations and queries against real SQLite |
 | Component | Vitest + Testing Library | sidebar tree keyboard navigation, command bar ranking |
 | E2E | Playwright `_electron` 1.64 (experimental) | ✅ Verified in M1.0: `app.windows()` returns both the tab and the `chord://shell/` page inside `WebContentsView`s, and tests drive them directly. `browserWindow(page)` fails for `BaseWindow`, so we don't use it. Tests set `CHORD_HOME_URL` (dev builds only) so they never need the network. ⚠ Verified in M1.1: Playwright's synthetic key presses **never reach Electron's `before-input-event`**, so tests can't press reserved shortcuts. Real OS input does reach it. E2E tests open the command bar through the shell's API, and the shortcut router is covered by unit tests on the registry. A **test-only** IPC for querying state arrives with the Store in M1.1. |
+| Packaged | Playwright over CDP (`test/packaged`, `pnpm --filter @chord/desktop test:packaged`) | Starts a packaged build (the platform's unpacked output, or the file in `CHORD_APP`) with a throwaway `--user-data-dir`. Checks that the shell loads from `chord://shell/` inside the asar with its bundled font, a tab loads a local page, and Settings opens. Then it quits, relaunches, and checks that the tabs and a setting were restored, which proves the asar'd chord-data utility process and `node:sqlite` work. `_electron.launch` can't attach to a packaged build ([§14.1](#141-hardening)), so the test passes `--remote-debugging-port=0` and connects with `chromium.connectOverCDP`; it has no main-process access. ✅ Passed on Windows x64 (the unpacked build and the installer's payload) and on Linux x64 (the AppImage, in WSL). |
 | Visual | Playwright screenshots of shell and overlay | Uploaded as CI artifacts per OS × light/dark × 3 chord themes. Reviewed against DESIGN.md before any UI change is shown to you. |
 | Performance | Startup, command bar, and frame-time probes | Run in CI for trends. **Enforced** on reference hardware locally, since CI runners are noisy. |
 
