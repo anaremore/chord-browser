@@ -11,6 +11,19 @@ export function zoomStep(factor: number, direction: 1 | -1): number {
 }
 
 /** `[title](url)`, with brackets in the title escaped and parentheses in the URL encoded. */
+/**
+ * Whether a page's `data:` icon is worth showing: an image type with some
+ * bytes, under the size limit. Pages use `data:,` to mean "no icon"
+ * (example.com does), which would otherwise show as a broken image.
+ */
+export function usableDataIcon(url: string, maxBytes: number): boolean {
+  const match = /^data:(image\/[\w.+-]+)(;[^,]*)?,(.+)$/is.exec(url);
+  if (!match) return false;
+  const base64 = /;base64/i.test(match[2] ?? '');
+  const size = base64 ? Math.floor((match[3]!.length * 3) / 4) : match[3]!.length;
+  return size > 0 && size <= maxBytes;
+}
+
 export function markdownLink(title: string, url: string): string {
   const text = (title.trim() || url).replace(/([\\[\]])/g, '\\$1');
   const href = url.replace(/\(/g, '%28').replace(/\)/g, '%29');

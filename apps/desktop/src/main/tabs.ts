@@ -2,7 +2,7 @@
  * TabManager (ARCHITECTURE.md §9): one WebContentsView per live tab, created
  * lazily, wired to report navigation back into the Store.
  */
-import { placeKey, type Command, type LiveTab, type NodeId, type State, type TabNode, type WindowId } from '@chord/core';
+import { placeKey, usableDataIcon, type Command, type LiveTab, type NodeId, type State, type TabNode, type WindowId } from '@chord/core';
 import { frameRadius } from '@chord/tokens';
 import { WebContentsView, type Session, type WebContents } from 'electron';
 import { platform } from './platform';
@@ -172,7 +172,7 @@ export class TabManager {
     if (!url) return;
     try {
       if (url.startsWith('data:')) {
-        if (url.length <= MAX_FAVICON_BYTES * 1.4) this.deps.dispatch({ t: 'tab.updated', nodeId, favicon: url });
+        if (usableDataIcon(url, MAX_FAVICON_BYTES)) this.deps.dispatch({ t: 'tab.updated', nodeId, favicon: url });
         return;
       }
       const response = await contents.session.fetch(url, { signal: AbortSignal.timeout(8000) });

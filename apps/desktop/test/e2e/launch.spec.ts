@@ -16,8 +16,16 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     '/third': '<title>Third page</title><p>Third</p>',
     '/words': '<title>Words</title><p>A chord is three notes. Play the chord, then the next chord.</p>',
     '/files': '<title>Files</title><a id="get" href="/report.bin">Get the report</a>',
+    // "No icon", the way example.com says it; and an icon that claims to be a PNG but isn't.
+    '/no-icon': '<title>No icon</title><link rel="icon" href="data:,">',
+    '/bad-icon': '<title>Bad icon</title><link rel="icon" href="/bad.png">',
   };
   const server = createServer((req, res) => {
+    if (req.url === '/bad.png') {
+      res.writeHead(200, { 'content-type': 'image/png' });
+      res.end('this is not a png');
+      return;
+    }
     if (req.url === '/report.bin') {
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="report.bin"' });
       res.end(Buffer.alloc(300_000, 7));
@@ -306,6 +314,25 @@ test('Settings opens from the shell and its changes apply live', async () => {
     const divider = await shellVar('--color-divider');
     await settings.getByRole('slider', { name: 'Contrast' }).fill('100');
     await expect.poll(() => shellVar('--color-divider')).not.toBe(divider);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a page without a usable icon shows its monogram, never a broken image', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/no-icon` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today).toContainText('No icon');
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/bad-icon`);
+    await overlay.keyboard.press('Enter');
+    await expect(today).toContainText('Bad icon');
+    // The bad PNG is fetched, offered, fails to decode, and gives way to the monogram.
+    await shell.waitForTimeout(1000);
+    await expect(today.locator('img')).toHaveCount(0);
   } finally {
     await app.close();
   }

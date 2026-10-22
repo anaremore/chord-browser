@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { markdownLink, zoomStep } from '../src';
+import { markdownLink, usableDataIcon, zoomStep } from '../src';
 
 describe('zoomStep', () => {
   it('walks Chromium presets and stops at the ends', () => {
@@ -24,5 +24,22 @@ describe('markdownLink', () => {
 
   it('falls back to the URL when there is no title', () => {
     expect(markdownLink('  ', 'https://a.test/')).toBe('[https://a.test/](https://a.test/)');
+  });
+});
+
+describe('usableDataIcon', () => {
+  it('accepts small image data URLs', () => {
+    expect(usableDataIcon('data:image/png;base64,iVBORw0KGgo=', 1024)).toBe(true);
+    expect(usableDataIcon('data:image/svg+xml,%3Csvg%2F%3E', 1024)).toBe(true);
+  });
+
+  it('rejects "no icon" and non-image data URLs', () => {
+    expect(usableDataIcon('data:,', 1024)).toBe(false);
+    expect(usableDataIcon('data:image/png;base64,', 1024)).toBe(false);
+    expect(usableDataIcon('data:text/html,<b>hi</b>', 1024)).toBe(false);
+  });
+
+  it('rejects icons over the size limit', () => {
+    expect(usableDataIcon(`data:image/png;base64,${'A'.repeat(4000)}`, 1024)).toBe(false);
   });
 });
