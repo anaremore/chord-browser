@@ -593,15 +593,39 @@ kbd {
   box-shadow: 0 0 0 var(--size-hairline) var(--color-surface);
 }
 
-/* The chord switcher: each chord's icon in its own accent; the current one sits on a raised pill. */
+/*
+ * The chord switcher: each chord's icon in its own accent; the current one sits on a raised pill.
+ * Centered while the chords fit; past that it scrolls sideways (wheel or trackpad), with no scrollbar.
+ */
 .switcher {
+  --fade: var(--space-4);
+
   display: flex;
   flex: 1;
   gap: var(--space-1);
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
   min-inline-size: 0;
-  overflow: hidden;
+  overflow: auto hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.switcher::-webkit-scrollbar {
+  display: none;
+}
+
+/* Soft edges only where chords are hidden. */
+.switcher[data-fade='start'] {
+  mask-image: linear-gradient(to right, transparent, currentColor var(--fade));
+}
+
+.switcher[data-fade='end'] {
+  mask-image: linear-gradient(to left, transparent, currentColor var(--fade));
+}
+
+.switcher[data-fade='both'] {
+  mask-image: linear-gradient(to right, transparent, currentColor var(--fade), currentColor calc(100% - var(--fade)), transparent);
 }
 
 .chordButton {

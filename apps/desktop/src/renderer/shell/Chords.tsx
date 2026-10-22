@@ -250,10 +250,44 @@ export function ChordSwitcher({
 }) {
   const chords = sortedChords(state);
   const current = state.windows[windowId]?.activeChordId;
+  const strip = useRef<HTMLDivElement>(null);
+  // More chords than fit: the strip scrolls sideways (no scrollbar), fading at whichever edge hides some.
+  const [fade, setFade] = useState<'none' | 'start' | 'end' | 'both'>('none');
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    const update = () => {
+      const before = el.scrollLeft > 1;
+      const after = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setFade(before && after ? 'both' : before ? 'start' : after ? 'end' : 'none');
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener('scroll', update);
+      observer.disconnect();
+    };
+  }, [chords.length]);
+  // The chord you're in is always in view.
+  useEffect(() => {
+    strip.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }, [current, chords.length]);
   return (
     <footer className={styles.footer}>
       {leading}
-      <div className={styles.switcher} role="tablist" aria-label="Chords">
+      <div
+        ref={strip}
+        className={styles.switcher}
+        role="tablist"
+        aria-label="Chords"
+        data-fade={fade}
+        // A mouse wheel scrolls up and down; turn that into sideways movement here.
+        onWheel={(e) => {
+          if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) strip.current?.scrollBy({ left: e.deltaY });
+        }}
+      >
         {chords.map((chord, index) => {
           const selected = chord.id === current;
           // Each chord's icon wears its own accent, so the switcher previews every chord's color.

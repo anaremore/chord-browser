@@ -364,6 +364,37 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
   }
 });
 
+test('many chords: the switcher scrolls sideways with the wheel and keeps the current one in view', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const strip = shell.getByRole('tablist', { name: 'Chords' });
+    await expect(strip.getByRole('tab')).toHaveCount(1);
+    const theme = { stops: [{ l: 0.72, c: 0.1, h: 200 }], grain: 0.2, appearance: 'auto' as const };
+    for (let i = 2; i <= 12; i++) {
+      await shell.evaluate(
+        (args) => (window as unknown as { chord: { state: { dispatch(c: unknown): Promise<void> } } }).chord.state.dispatch(args),
+        { t: 'chord.create', windowId: 'w', name: `Chord ${i}`, icon: String.fromCodePoint(0x24b6 + i), theme },
+      );
+    }
+    await expect(strip.getByRole('tab')).toHaveCount(12);
+    const metrics = () => strip.evaluate((el) => ({ scroll: el.scrollLeft, overflow: el.scrollWidth - el.clientWidth, fade: el.dataset['fade'] }));
+    // The newest chord is current and scrolled into view, at the end.
+    await expect.poll(async () => (await metrics()).overflow).toBeGreaterThan(0);
+    await expect(strip.getByRole('tab', { name: 'Chord 12' })).toBeInViewport();
+    await expect.poll(async () => (await metrics()).fade).not.toBe('none');
+
+    // A plain mouse wheel moves it back toward the start.
+    const box = (await strip.boundingBox())!;
+    await shell.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const before = (await metrics()).scroll;
+    await shell.mouse.wheel(0, -200);
+    await expect.poll(async () => (await metrics()).scroll).toBeLessThan(before);
+  } finally {
+    await app.close();
+  }
+});
+
 test('a chord takes a custom icon: picked from the grid, or typed', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
