@@ -290,6 +290,49 @@ test('a relaunch restores tabs, the sidebar and settings', async () => {
   }
 });
 
+test('chords: create, name, switch, and each keeps its own tabs', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const run = (action: string) =>
+      shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
+    const chords = shell.getByRole('tablist', { name: 'Chords' });
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+
+    // A new chord starts empty, with its name ready to type over.
+    await shell.getByRole('button', { name: 'New chord' }).click();
+    const name = shell.getByRole('textbox', { name: 'Chord name' });
+    await expect(name).toBeFocused();
+    await name.fill('Work');
+    await name.press('Enter');
+    await expect(chords.getByRole('tab', { name: 'Work' })).toHaveAttribute('aria-selected', 'true');
+    await expect(shell.getByText('Fresh chord, fresh start.')).toBeVisible();
+
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/third`);
+    await overlay.keyboard.press('Enter');
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Third page');
+
+    // Back to Personal from the switcher: its tab is still there, and Work's isn't.
+    await chords.getByRole('tab', { name: 'Personal' }).click();
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today).toContainText('First page');
+    await expect(today).not.toContainText('Third page');
+
+    // ⌘2 / Ctrl+2, and the command bar, both reach Work.
+    await run('chord.goto2');
+    await expect(chords.getByRole('tab', { name: 'Work' })).toHaveAttribute('aria-selected', 'true');
+    await run('chord.goto1');
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('work');
+    await expect(overlay.getByRole('option').filter({ hasText: /Work\s*Chord/ })).toHaveCount(1);
+    await overlay.keyboard.press('Escape');
+  } finally {
+    await app.close();
+  }
+});
+
 test('web content gets no Chord API; the shell does', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {

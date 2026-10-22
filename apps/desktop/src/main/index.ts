@@ -58,6 +58,7 @@ function registerIpc(): void {
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
   handle('menu:tab', ({ nodeId, x, y }, sender) => browser!.openTabMenu(sender, nodeId, { x, y }));
+  handle('menu:chord', ({ chordId, x, y }, sender) => browser!.openChordMenu(sender, chordId, { x, y }));
   handle('action:run', ({ action }, sender) => {
     browser!.run(action, sender);
   });

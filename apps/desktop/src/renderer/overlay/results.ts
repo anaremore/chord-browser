@@ -3,14 +3,15 @@
  * M1.1 sources: the typed address or search, open tabs, and actions. History,
  * archive and Crest's ranking arrive in M1.4.
  */
-import { parseInput, searchEngine, searchUrl, type ActionId, type State, type TabNode } from '@chord/core';
+import { parseInput, searchEngine, searchUrl, sortedChords, type ActionId, type Chord, type State, type TabNode } from '@chord/core';
 import uFuzzy from '@leeoniya/ufuzzy';
 import { displayHost, pageTitle } from '../shared/site';
 
 export type Result =
   | { kind: 'open'; key: string; title: string; detail: string; url: string; search: boolean }
   | { kind: 'tab'; key: string; title: string; detail: string; tab: TabNode; chordName: string | null }
-  | { kind: 'action'; key: string; title: string; action: ActionId };
+  | { kind: 'action'; key: string; title: string; action: ActionId }
+  | { kind: 'chord'; key: string; title: string; chord: Chord };
 
 /** Actions that work in this milestone; the list grows with each feature. */
 const ACTIONS: { action: ActionId; title: string; words: string }[] = [
@@ -91,6 +92,13 @@ export function buildResults(query: string, state: State, windowId: string, mode
   // An open tab that clearly matches beats searching for it (until M1.4's full ranking).
   if (tabMatches[0] && parsed?.kind !== 'url' && strongMatch(tabMatches[0], q)) out.unshift(tabResult(tabMatches.shift()!));
   out.push(...tabMatches.map(tabResult));
+
+  // Other chords by name: how to switch when the sidebar is hidden.
+  const chords = sortedChords(state).filter((c) => c.id !== win?.activeChordId);
+  for (const i of fuzzyIndexes(chords.map((c) => c.name), q).slice(0, 3)) {
+    const chord = chords[i]!;
+    out.push({ kind: 'chord', key: `chord:${chord.id}`, title: chord.name, chord });
+  }
 
   const words = ACTIONS.map((a) => `${a.title} ${a.words}`);
   for (const i of fuzzyIndexes(words, q).slice(0, 3)) {

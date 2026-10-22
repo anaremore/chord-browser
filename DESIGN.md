@@ -273,6 +273,8 @@ type ChordTheme = {
 
 **First chord default:** the OS accent color's hue, available on all three platforms. Chord ships the *Dusk* preset as a fallback if the accent can't be read.
 
+**New chords** take the first gradient preset and icon that no other chord uses yet. The icons are ✦ ♪ ♫ ♩ ♬ ◆ ● ▲ ★, a nod to the name. The new chord opens empty, with its name selected so typing renames it. In the switcher, each chord's icon wears that chord's own accent, so the footer previews every chord's color.
+
 ### 5.2 `createChordTheme()` — a pure, tested function
 
 1. **Resolve the appearance.** `auto` follows `nativeTheme`.

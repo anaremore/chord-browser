@@ -44,6 +44,15 @@ describe('IPC contract', () => {
     expect(invokeChannels['settings:set'].roles).toEqual(['internal']);
   });
 
+  it('accepts chord commands with sane names, icons and themes, but never deletion', () => {
+    const theme = { stops: [{ l: 0.72, c: 0.1, h: 165 }], grain: 0.2, appearance: 'auto' };
+    expect(RendererCommand.safeParse({ t: 'chord.create', windowId: 'w', name: 'Work', icon: '♪', theme }).success).toBe(true);
+    expect(RendererCommand.safeParse({ t: 'chord.create', windowId: 'w', name: 'x'.repeat(65), icon: '♪', theme }).success).toBe(false);
+    expect(RendererCommand.safeParse({ t: 'chord.create', windowId: 'w', name: 'W', icon: '', theme }).success).toBe(false);
+    expect(RendererCommand.safeParse({ t: 'chord.goto', windowId: 'w', index: 9 }).success).toBe(false);
+    expect(RendererCommand.safeParse({ t: 'chord.delete', chordId: 'c' }).success).toBe(false);
+  });
+
   it('keeps privileged channels away from the wrong roles', () => {
     expect(invokeChannels['nav:command'].roles).not.toContain('popover');
     expect(invokeChannels['overlay:open'].roles).toEqual(['shell']);

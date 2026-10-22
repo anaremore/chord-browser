@@ -17,12 +17,12 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { Rect, SettingsSnapshot } from '@chord/ipc';
-import { app, BaseWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, clipboard, dialog, screen, type Menu, type Session, type WebContents } from 'electron';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
-import { buildAppMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
+import { buildAppMenu, buildChordMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import { systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
@@ -272,6 +272,47 @@ export class Browser {
     );
   }
 
+  openChordMenu(contents: WebContents, chordId: string, at: { x: number; y: number }): void {
+    const w = this.windowFor(contents);
+    const chord = this.store.state.chords[chordId];
+    if (!w || !chord) return;
+    const onlyChord = Object.keys(this.store.state.chords).length < 2;
+    w.popupMenu(
+      buildChordMenu({
+        rename: () => {
+          this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
+          send(w.shell.webContents, 'chord:rename', chordId);
+        },
+        editColors: () => {
+          this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
+          this.lastWindowId = w.id;
+          this.openSettings('appearance');
+        },
+        delete: onlyChord ? null : () => void this.confirmDeleteChord(w, chordId),
+      }),
+      { ...at, width: 0, height: 0 },
+    );
+  }
+
+  private async confirmDeleteChord(w: AppWindow, chordId: string): Promise<void> {
+    const state = this.store.state;
+    const chord = state.chords[chordId];
+    if (!chord) return;
+    const tabs = Object.values(state.nodes).filter((n) => n.chordId === chordId && n.kind === 'tab').length;
+    const { response } = await dialog.showMessageBox(w.window, {
+      type: 'warning',
+      buttons: ['Delete chord', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      message: `Delete “${chord.name}”?`,
+      detail:
+        tabs === 0
+          ? 'It has no tabs.'
+          : `Its ${tabs === 1 ? 'tab closes' : `${tabs} tabs close`}. You can reopen ${tabs === 1 ? 'it' : 'them'} with Reopen closed tab.`,
+    });
+    if (response === 0) this.store.dispatch({ t: 'chord.delete', chordId });
+  }
+
   private runAction(action: ActionId, w: AppWindow): boolean {
     const active = activeTabId(this.store.state, w.id);
     const tab = activeTab(this.store.state, w.id);
@@ -351,9 +392,15 @@ export class Browser {
       case 'app.quit':
         app.quit();
         return true;
-      default:
-        // Chords arrive in M1.3; keep their keys reserved so pages never see them.
-        return action.startsWith('chord.');
+      case 'chord.next':
+      case 'chord.previous':
+        this.store.dispatch({ t: 'chord.cycle', windowId: w.id, direction: action === 'chord.next' ? 1 : -1 });
+        return true;
+      default: {
+        const goto = /^chord\.goto(\d)$/.exec(action);
+        if (goto) this.store.dispatch({ t: 'chord.goto', windowId: w.id, index: Number(goto[1]) - 1 });
+        return Boolean(goto);
+      }
     }
   }
 

@@ -125,6 +125,72 @@ describe('reducer', () => {
     expect(t.state.chords['c1']!.theme.stops).toEqual([{ l: 0.7, c: 0.15, h: 30 }]);
   });
 
+  describe('chords', () => {
+    const theme = { stops: [{ l: 0.72, c: 0.1, h: 165 }], grain: 0.2, appearance: 'auto' as const };
+
+    it('creates a chord after the others and switches to it, empty', () => {
+      const t = setup();
+      t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });
+      const result = t.run({ t: 'chord.create', windowId: 'w1', name: '  Work  ', icon: '♪', theme });
+      const id = t.state.windows['w1']!.activeChordId;
+      expect(t.state.chords[id]).toMatchObject({ name: 'Work', icon: '♪' });
+      expect(t.state.chords[id]!.rank > t.state.chords['c1']!.rank).toBe(true);
+      expect(result.effects).toContainEqual({ e: 'view.show', windowId: 'w1', nodeId: null });
+    });
+
+    it('remembers the tab each chord was showing', () => {
+      const t = setup();
+      t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });
+      t.run({ t: 'chord.create', windowId: 'w1', name: 'Work', icon: '♪', theme });
+      const work = t.state.windows['w1']!.activeChordId;
+      t.run({ t: 'tab.open', windowId: 'w1', url: 'https://w.test/' });
+      t.run({ t: 'chord.activate', windowId: 'w1', chordId: 'c1' });
+      expect(t.state.windows['w1']!.activeTab['c1']).toBe('id-001');
+      t.run({ t: 'chord.activate', windowId: 'w1', chordId: work });
+      expect(t.state.windows['w1']!.activeTab[work]).toBe('id-003');
+    });
+
+    it('cycles with wraparound, and ⌘9 goes to the last chord', () => {
+      const t = setup();
+      t.run({ t: 'chord.create', windowId: 'w1', name: 'Two', icon: '2', theme });
+      t.run({ t: 'chord.create', windowId: 'w1', name: 'Three', icon: '3', theme });
+      const name = () => t.state.chords[t.state.windows['w1']!.activeChordId]!.name;
+      t.run({ t: 'chord.cycle', windowId: 'w1', direction: 1 });
+      expect(name()).toBe('Personal');
+      t.run({ t: 'chord.cycle', windowId: 'w1', direction: -1 });
+      expect(name()).toBe('Three');
+      t.run({ t: 'chord.goto', windowId: 'w1', index: 1 });
+      expect(name()).toBe('Two');
+      t.run({ t: 'chord.goto', windowId: 'w1', index: 8 });
+      expect(name()).toBe('Three');
+      t.run({ t: 'chord.goto', windowId: 'w1', index: 5 });
+      expect(name()).toBe('Three');
+    });
+
+    it('renames, ignoring blank names', () => {
+      const t = setup();
+      t.run({ t: 'chord.update', chordId: 'c1', name: 'Home', icon: '⌂' });
+      t.run({ t: 'chord.update', chordId: 'c1', name: '   ' });
+      expect(t.state.chords['c1']).toMatchObject({ name: 'Home', icon: '⌂' });
+    });
+
+    it('deletes a chord: its tabs close, and windows move to a neighbor', () => {
+      const t = setup();
+      t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });
+      t.run({ t: 'chord.create', windowId: 'w1', name: 'Work', icon: '♪', theme });
+      const work = t.state.windows['w1']!.activeChordId;
+      t.run({ t: 'tab.open', windowId: 'w1', url: 'https://w.test/' });
+      const result = t.run({ t: 'chord.delete', chordId: work });
+      expect(t.state.chords[work]).toBeUndefined();
+      expect(t.state.windows['w1']).toMatchObject({ activeChordId: 'c1', activeTab: { c1: 'id-001' } });
+      expect(t.state.windows['w1']!.activeTab[work]).toBeUndefined();
+      expect(result.effects).toContainEqual({ e: 'view.destroy', nodeId: 'id-003' });
+      expect(t.state.closed[0]!.node.url).toBe('https://w.test/');
+      // The last chord stays.
+      expect(t.run({ t: 'chord.delete', chordId: 'c1' }).patches).toHaveLength(0);
+    });
+  });
+
   it('produces no patches (and keeps the version) for no-op updates', () => {
     const t = setup();
     t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });

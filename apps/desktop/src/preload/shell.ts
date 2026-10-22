@@ -4,7 +4,7 @@
  */
 import type { ShellApi } from '@chord/ipc';
 import { contextBridge } from 'electron';
-import { invoke, stateApi, systemApi } from './bridge';
+import { invoke, stateApi, subscribe, systemApi } from './bridge';
 
 const api: ShellApi = {
   system: systemApi,
@@ -15,7 +15,9 @@ const api: ShellApi = {
   menu: {
     app: (anchor) => invoke('menu:app', anchor),
     tab: (nodeId, at) => invoke('menu:tab', { nodeId, x: at.x, y: at.y }),
+    chord: (chordId, at) => invoke('menu:chord', { chordId, x: at.x, y: at.y }),
   },
+  chords: { onRename: (listener) => subscribe('chord:rename', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
 };
 

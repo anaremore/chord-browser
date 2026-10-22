@@ -19,7 +19,7 @@ import {
   type TabNode,
   type WindowId,
 } from './model';
-import { children, tabsInOrder } from './select';
+import { children, sortedChords, tabsInOrder } from './select';
 
 enablePatches();
 
@@ -37,7 +37,17 @@ export type Command =
   | { t: 'window.bounds'; windowId: WindowId; bounds: Bounds }
   | { t: 'window.sidebar'; windowId: WindowId; sidebar: 'docked' | 'collapsed' }
   | { t: 'settings.set'; settings: SettingsPatch }
-  | { t: 'chord.theme'; chordId: ChordId; theme: Partial<ChordThemeSpec> };
+  | { t: 'chord.theme'; chordId: ChordId; theme: Partial<ChordThemeSpec> }
+  /** A new chord after the others, switched to in this window. */
+  | { t: 'chord.create'; windowId: WindowId; name: string; icon: string; theme: ChordThemeSpec }
+  | { t: 'chord.activate'; windowId: WindowId; chordId: ChordId }
+  /** Next or previous chord in the switcher, wrapping around. */
+  | { t: 'chord.cycle'; windowId: WindowId; direction: 1 | -1 }
+  /** ⌘1–⌘8 go to that chord; ⌘9 always goes to the last one, as tab shortcuts do in Chrome. */
+  | { t: 'chord.goto'; windowId: WindowId; index: number }
+  | { t: 'chord.update'; chordId: ChordId; name?: string; icon?: string }
+  /** Removes a chord and its tabs (they go to recently closed). The last chord can't be deleted. */
+  | { t: 'chord.delete'; chordId: ChordId };
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -61,6 +71,8 @@ export interface Result {
 }
 
 const MAX_CLOSED = 50;
+/** Longest chord name; the switcher and headers truncate well before this. */
+const MAX_CHORD_NAME = 64;
 
 export function apply(state: State, command: Command, ctx: Context): Result {
   const effects: Effect[] = [];
@@ -97,6 +109,19 @@ function activate(
     effects.push({ e: 'view.ensure', nodeId });
   }
   effects.push({ e: 'view.show', windowId, nodeId });
+}
+
+/** Switch a window to a chord, landing on the tab it last showed there (or its most recently used one). */
+function switchChord(draft: Draft<State>, windowId: WindowId, chordId: ChordId, ctx: Context, effects: Effect[]): void {
+  const win = draft.windows[windowId];
+  if (!win || !draft.chords[chordId] || win.activeChordId === chordId) return;
+  win.activeChordId = chordId;
+  let tabId = win.activeTab[chordId] ?? null;
+  if (!tabId || draft.nodes[tabId]?.kind !== 'tab') {
+    const recent = tabsInOrder(draft as State, chordId).sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0];
+    tabId = recent?.id ?? null;
+  }
+  activate(draft, windowId, tabId, ctx, effects);
 }
 
 function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[]): void {
@@ -240,6 +265,78 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       for (const [key, value] of Object.entries(motion ?? {}) as [keyof typeof draft.settings.motion, boolean | undefined][]) {
         if (value !== undefined && draft.settings.motion[key] !== value) draft.settings.motion[key] = value;
       }
+      return;
+    }
+
+    case 'chord.create': {
+      const win = draft.windows[cmd.windowId];
+      if (!win) return;
+      const last = sortedChords(draft as State).at(-1);
+      const id = ctx.newId();
+      draft.chords[id] = {
+        id,
+        profileId: 'default',
+        name: cmd.name.trim().slice(0, MAX_CHORD_NAME) || 'New chord',
+        icon: cmd.icon,
+        theme: cmd.theme,
+        rank: generateKeyBetween(last?.rank ?? null, null),
+        createdAt: ctx.now,
+      };
+      win.activeTab[id] = null;
+      switchChord(draft, cmd.windowId, id, ctx, effects);
+      return;
+    }
+
+    case 'chord.activate':
+      switchChord(draft, cmd.windowId, cmd.chordId, ctx, effects);
+      return;
+
+    case 'chord.cycle': {
+      const win = draft.windows[cmd.windowId];
+      if (!win) return;
+      const order = sortedChords(draft as State);
+      const current = order.findIndex((c) => c.id === win.activeChordId);
+      const next = order[(current + cmd.direction + order.length) % order.length];
+      if (next) switchChord(draft, cmd.windowId, next.id, ctx, effects);
+      return;
+    }
+
+    case 'chord.goto': {
+      const order = sortedChords(draft as State);
+      const target = cmd.index >= 8 ? order.at(-1) : order[cmd.index];
+      if (target) switchChord(draft, cmd.windowId, target.id, ctx, effects);
+      return;
+    }
+
+    case 'chord.update': {
+      const chord = draft.chords[cmd.chordId];
+      if (!chord) return;
+      const name = cmd.name?.trim().slice(0, MAX_CHORD_NAME);
+      if (name && chord.name !== name) chord.name = name;
+      if (cmd.icon && chord.icon !== cmd.icon) chord.icon = cmd.icon;
+      return;
+    }
+
+    case 'chord.delete': {
+      const order = sortedChords(draft as State);
+      const index = order.findIndex((c) => c.id === cmd.chordId);
+      if (index < 0 || order.length < 2) return;
+      const neighbor = (order[index + 1] ?? order[index - 1])!;
+      for (const win of Object.values(draft.windows)) {
+        if (win.activeChordId === cmd.chordId) switchChord(draft, win.id, neighbor.id, ctx, effects);
+        delete win.activeTab[cmd.chordId];
+      }
+      const tabs = Object.values(draft.nodes).filter((n) => n.chordId === cmd.chordId);
+      for (const node of tabs) {
+        if (node.kind === 'tab') {
+          draft.closed.unshift({ node: { ...(node as TabNode) }, windowId: Object.keys(draft.windows)[0] ?? '', closedAt: ctx.now });
+          effects.push({ e: 'view.destroy', nodeId: node.id });
+        }
+        delete draft.nodes[node.id];
+        delete draft.live[node.id];
+      }
+      if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
+      delete draft.chords[cmd.chordId];
       return;
     }
 

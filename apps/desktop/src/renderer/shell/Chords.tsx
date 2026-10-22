@@ -1,0 +1,187 @@
+/**
+ * Chords in the sidebar (DESIGN.md §3.2, §8.2): the header with inline
+ * rename, the switcher in the footer, and the color crossfade behind it all.
+ */
+import { formatKeys, shortcutById, sortedChords, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
+import type { SystemInfo } from '@chord/ipc';
+import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
+import { Plus } from 'lucide-react';
+import { motion, useIsPresent, type Transition } from 'motion/react';
+import { useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
+import { api } from './api';
+import styles from './App.module.css';
+
+/** New chords take the first icon and gradient nobody uses yet. */
+const ICONS = ['✦', '♪', '♫', '♩', '♬', '◆', '●', '▲', '★'];
+const PRESET_ORDER: PresetId[] = ['dusk', 'seaGlass', 'citrus', 'aurora', 'ember', 'fog'];
+
+const sameStops = (a: ChordThemeSpec['stops'], b: ChordThemeSpec['stops']) =>
+  a.length === b.length && a.every((s, i) => s.l === b[i]!.l && s.c === b[i]!.c && s.h === b[i]!.h);
+
+export function newChordLook(chords: Chord[]): { icon: string; theme: ChordThemeSpec } {
+  const icon = ICONS.find((i) => !chords.some((c) => c.icon === i)) ?? ICONS[chords.length % ICONS.length]!;
+  const preset =
+    PRESET_ORDER.find((p) => !chords.some((c) => sameStops(c.theme.stops, presetStops(p)))) ?? PRESET_ORDER[chords.length % PRESET_ORDER.length]!;
+  return { icon, theme: { stops: presetStops(preset), grain: 0.2, appearance: 'auto' } };
+}
+
+function gotoKeys(index: number, info: SystemInfo): string {
+  if (index > 8) return '';
+  const shortcut = shortcutById(`chord.goto${Math.min(index + 1, 9)}` as ActionId);
+  const keys = shortcut ? (info.platform === 'darwin' ? shortcut.mac : shortcut.other)[0] : undefined;
+  return keys ? formatKeys(keys, info.platform) : '';
+}
+
+/**
+ * The tint, crossfaded between chords: the new color fades in over the old
+ * one, which stays opaque underneath, so the window never thins out mid-fade.
+ */
+export function Tint({ value, transition }: { value: string; transition: Transition }) {
+  const [under, setUnder] = useState(value);
+  return (
+    <>
+      <div className={styles.tint} style={{ background: under }} />
+      {under !== value && (
+        <motion.div
+          key={value}
+          className={styles.tint}
+          style={{ background: value }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={transition}
+          onAnimationComplete={() => setUnder(value)}
+        />
+      )}
+    </>
+  );
+}
+
+const PANE_VARIANTS = {
+  enter: (dir: number) => ({ opacity: 0, x: dir * 24 }),
+  center: { opacity: 1, x: 0 },
+  exit: (dir: number) => ({ opacity: 0, x: dir * -24 }),
+};
+
+/**
+ * One chord's part of the sidebar, sliding in from the side of the switcher
+ * it sits on. While a pane slides out it's inert and hidden from assistive
+ * tech, so only the chord you switched to can be reached.
+ */
+export function ChordPane({ ref, slide, transition, children }: { ref?: Ref<HTMLDivElement>; slide: number; transition: Transition; children: ReactNode }) {
+  const present = useIsPresent();
+  return (
+    <motion.div
+      ref={ref}
+      className={styles.chordPane}
+      custom={slide}
+      variants={PANE_VARIANTS}
+      initial="enter"
+      animate="center"
+      exit="exit"
+      transition={transition}
+      inert={!present}
+      aria-hidden={present ? undefined : true}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+export function ChordHeader({ chord, renaming, onRenamed }: { chord: Chord | undefined; renaming: boolean; onRenamed(): void }) {
+  const [editing, setEditing] = useState(false);
+  const isEditing = (editing || renaming) && chord;
+  const commit = (name: string) => {
+    if (chord && name.trim() && name.trim() !== chord.name) void api.state.dispatch({ t: 'chord.update', chordId: chord.id, name });
+    setEditing(false);
+    onRenamed();
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') commit(event.currentTarget.value);
+    else if (event.key === 'Escape') {
+      setEditing(false);
+      onRenamed();
+    }
+  };
+  return (
+    <div className={styles.chordHeader}>
+      <span className={styles.chordIcon} aria-hidden>
+        {chord?.icon ?? '✦'}
+      </span>
+      {isEditing ? (
+        <input
+          key={chord.id}
+          className={styles.renameInput}
+          defaultValue={chord.name}
+          aria-label="Chord name"
+          maxLength={64}
+          spellCheck={false}
+          // Focus and select on mount, so typing replaces the name.
+          ref={(el) => {
+            if (el && document.activeElement !== el) {
+              el.focus();
+              el.select();
+            }
+          }}
+          onKeyDown={onKeyDown}
+          onBlur={(e) => commit(e.currentTarget.value)}
+        />
+      ) : (
+        <span className={styles.ellipsis} title="Double-click to rename" onDoubleClick={() => setEditing(true)}>
+          {chord?.name ?? ''}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function ChordSwitcher({
+  state,
+  windowId,
+  info,
+  pill,
+  onCreate,
+}: {
+  state: State;
+  windowId: string;
+  info: SystemInfo;
+  pill: Transition;
+  onCreate(): void;
+}) {
+  const chords = sortedChords(state);
+  const current = state.windows[windowId]?.activeChordId;
+  return (
+    <footer className={styles.footer}>
+      <div className={styles.switcher} role="tablist" aria-label="Chords">
+        {chords.map((chord, index) => {
+          const selected = chord.id === current;
+          // Each chord's icon wears its own accent, so the switcher previews every chord's color.
+          const accent = createChordTheme(chord.theme, { systemAppearance: info.appearance, material: info.material }).vars['--color-accent'];
+          const keys = gotoKeys(index, info);
+          return (
+            <button
+              key={chord.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-label={chord.name}
+              title={keys ? `${chord.name}  ${keys}` : chord.name}
+              className={styles.chordButton}
+              style={{ color: accent }}
+              onClick={() => void api.state.dispatch({ t: 'chord.activate', windowId, chordId: chord.id })}
+              onContextMenu={(e: MouseEvent) => {
+                e.preventDefault();
+                void api.menu.chord(chord.id, { x: e.clientX, y: e.clientY });
+              }}
+            >
+              {selected && <motion.span layoutId="chord-pill" className={styles.chordPill} transition={pill} />}
+              <span className={styles.chordGlyph}>{chord.icon}</span>
+            </button>
+          );
+        })}
+      </div>
+      <button type="button" className={styles.iconButton} aria-label="New chord" title="New chord" onClick={onCreate}>
+        <Plus size={16} strokeWidth={1.75} />
+      </button>
+    </footer>
+  );
+}

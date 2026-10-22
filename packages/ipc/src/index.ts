@@ -47,6 +47,16 @@ export const ActionId = z.custom<CoreActionId>((value) => typeof value === 'stri
 const id = z.string().min(1).max(64);
 const url = z.string().min(1).max(32_768);
 
+const Oklch = z.strictObject({ l: z.number().min(0).max(1), c: z.number().min(0).max(0.4), h: z.number().min(0).max(360) });
+const ChordTheme = z.strictObject({
+  stops: z.array(Oklch).min(1).max(3),
+  grain: z.number().min(0).max(1),
+  appearance: z.enum(['light', 'dark', 'auto']),
+});
+/** An emoji, a symbol, or a letter: one or two grapheme clusters at most. */
+const chordIcon = z.string().min(1).max(16);
+const chordName = z.string().max(64);
+
 /** Commands a renderer may send. Engine-only commands (tab.updated, tab.live) are not accepted from renderers. */
 export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('tab.open'), windowId: id, url, background: z.boolean().optional() }),
@@ -56,6 +66,12 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('tab.navigate'), nodeId: id, url }),
   z.object({ t: z.literal('tab.cycle'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
   z.object({ t: z.literal('window.sidebar'), windowId: id, sidebar: z.enum(['docked', 'collapsed']) }),
+  z.object({ t: z.literal('chord.create'), windowId: id, name: chordName, icon: chordIcon, theme: ChordTheme }),
+  z.object({ t: z.literal('chord.activate'), windowId: id, chordId: id }),
+  z.object({ t: z.literal('chord.cycle'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
+  z.object({ t: z.literal('chord.goto'), windowId: id, index: z.number().int().min(0).max(8) }),
+  z.object({ t: z.literal('chord.update'), chordId: id, name: chordName.optional(), icon: chordIcon.optional() }),
+  // chord.delete isn't here: it goes through main's confirmation (menu:chord).
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
 // Compile-time check: every renderer command is a real core command.
@@ -82,13 +98,7 @@ export type SettingsPatch = z.infer<typeof SettingsPatch>;
 const _settingsMatch = (p: SettingsPatch): CoreSettingsPatch => p;
 void _settingsMatch;
 
-const Oklch = z.strictObject({ l: z.number().min(0).max(1), c: z.number().min(0).max(0.4), h: z.number().min(0).max(360) });
-
-export const ChordThemePatch = z.strictObject({
-  stops: z.array(Oklch).min(1).max(3).optional(),
-  grain: z.number().min(0).max(1).optional(),
-  appearance: z.enum(['light', 'dark', 'auto']).optional(),
-});
+export const ChordThemePatch = ChordTheme.partial();
 export type ChordThemePatch = z.infer<typeof ChordThemePatch>;
 
 /** What the Settings window shows: settings, and the chord in the last-used window (for Appearance). */
@@ -147,6 +157,8 @@ export const invokeChannels = {
   'layout:anchor': { roles: ['shell'], request: Rect.nullable(), response: z.void() },
   /** Windows/Linux options button: pop the app menu below this rect. */
   'menu:app': { roles: ['shell'], request: Rect, response: z.void() },
+  /** Right-click on a chord in the switcher, at this point in the window. */
+  'menu:chord': { roles: ['shell'], request: z.object({ chordId: id, x: z.number(), y: z.number() }), response: z.void() },
   /** Right-click on a tab row, at this point in the window. */
   'menu:tab': { roles: ['shell'], request: z.object({ nodeId: id, x: z.number(), y: z.number() }), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
@@ -166,6 +178,8 @@ export interface EventPayloads {
   'state:patch': StatePatchEvent;
   'overlay:open': OverlayOpenEvent;
   'settings:changed': SettingsSnapshot;
+  /** Start renaming a chord in the sidebar (from its menu). */
+  'chord:rename': string;
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
   'settings:section': string;
 }
@@ -195,7 +209,12 @@ export interface ShellApi {
   nav: { command(action: NavAction): Promise<void> };
   overlay: { open(mode: OverlayOpen['mode']): Promise<void> };
   layout: { anchor(rect: Rect | null): Promise<void> };
-  menu: { app(anchor: Rect): Promise<void>; tab(nodeId: string, at: { x: number; y: number }): Promise<void> };
+  menu: {
+    app(anchor: Rect): Promise<void>;
+    tab(nodeId: string, at: { x: number; y: number }): Promise<void>;
+    chord(chordId: string, at: { x: number; y: number }): Promise<void>;
+  };
+  chords: { onRename(listener: (chordId: string) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
 }
 

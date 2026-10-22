@@ -75,6 +75,7 @@ function keycapFor(action: ActionId, platform: SystemInfo['platform']): string {
 function hintFor(result: Result, mode: Session['mode']): string {
   if (result.kind === 'tab') return 'Switch to tab';
   if (result.kind === 'action') return 'Run';
+  if (result.kind === 'chord') return 'Switch to chord';
   if (result.search) return 'Search';
   return mode === 'edit' ? 'Go' : 'Open';
 }
@@ -132,6 +133,8 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       else void dispatch({ t: 'tab.open', windowId, url: result.url, background });
     } else if (result.kind === 'tab') {
       void dispatch({ t: 'tab.activate', windowId, nodeId: result.tab.id });
+    } else if (result.kind === 'chord') {
+      void dispatch({ t: 'chord.activate', windowId, chordId: result.chord.id });
     }
     close();
     // Actions run after the bar closes, so focus is back on the page (print, devtools, zoom act on it).
@@ -228,11 +231,16 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                     >
                       {result.kind === 'tab' ? (
                         <Favicon url={result.tab.url} title={result.tab.title} favicon={result.tab.favicon} appearance={appearance} />
+                      ) : result.kind === 'chord' ? (
+                        <span className={styles.chordGlyph} aria-hidden>
+                          {result.chord.icon}
+                        </span>
                       ) : (
                         Icon && <Icon className={styles.resultIcon} size={16} strokeWidth={1.75} aria-hidden />
                       )}
                       <span className={styles.resultTitle}>{result.title}</span>
-                      {result.kind !== 'action' && result.detail && <span className={styles.resultDetail}>{result.detail}</span>}
+                      {(result.kind === 'open' || result.kind === 'tab') && result.detail && <span className={styles.resultDetail}>{result.detail}</span>}
+                      {result.kind === 'chord' && <span className={styles.resultDetail}>Chord</span>}
                       {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
                       {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform)}</kbd>}
                       {isSelected && (

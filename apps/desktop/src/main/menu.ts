@@ -186,6 +186,23 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
   return Menu.buildFromTemplate(template);
 }
 
+export interface ChordMenuActions {
+  rename(): void;
+  editColors(): void;
+  /** Null when this is the only chord, which can't be deleted. */
+  delete: (() => void) | null;
+}
+
+/** Right-click on a chord in the switcher. */
+export function buildChordMenu(a: ChordMenuActions): Menu {
+  return Menu.buildFromTemplate([
+    { label: 'Rename', click: a.rename },
+    { label: 'Edit colors…', click: a.editColors },
+    { type: 'separator' },
+    { label: 'Delete chord…', enabled: a.delete !== null, click: () => a.delete?.() },
+  ]);
+}
+
 export interface TabMenuActions {
   url: string;
   copyLink(): void;

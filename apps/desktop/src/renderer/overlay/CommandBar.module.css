@@ -121,6 +121,13 @@
   color: var(--color-fg-muted);
 }
 
+.chordGlyph {
+  flex: none;
+  inline-size: var(--size-favicon);
+  color: var(--color-accent);
+  text-align: center;
+}
+
 .resultTitle {
   flex: 0 1 auto;
   min-inline-size: 0;

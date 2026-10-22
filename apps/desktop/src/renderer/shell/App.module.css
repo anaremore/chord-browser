@@ -157,6 +157,14 @@ kbd {
   opacity: 1;
 }
 
+/* One chord's part of the sidebar: it slides as a unit when chords switch. */
+.chordPane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
 .chordHeader {
   display: flex;
   flex: none;
@@ -171,6 +179,20 @@ kbd {
   inline-size: var(--size-icon);
   color: var(--color-accent);
   text-align: center;
+}
+
+.renameInput {
+  flex: 1;
+  min-inline-size: 0;
+  margin-inline: calc(var(--space-1) * -1);
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-xs);
+  outline: var(--size-hairline) solid var(--color-accent);
+  background: var(--color-item-active-bg);
+  color: var(--color-fg);
+  font: var(--text-label);
+  user-select: text;
 }
 
 .divider {
@@ -290,21 +312,60 @@ kbd {
 .footer {
   display: flex;
   flex: none;
+  gap: var(--space-1);
   align-items: center;
-  justify-content: center;
   block-size: var(--size-footer);
 }
 
-.switcherPill {
+/* The chord switcher: each chord's icon in its own accent; the current one sits on a raised pill. */
+.switcher {
+  display: flex;
+  flex: 1;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 0;
+  overflow: hidden;
+}
+
+.chordButton {
+  position: relative;
   display: grid;
+  flex: none;
   place-items: center;
-  min-inline-size: var(--size-icon-button);
-  block-size: var(--size-hit-min);
+  inline-size: var(--size-icon-button);
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  opacity: 0.7;
+  transition:
+    opacity var(--duration-fade-fast) var(--ease-standard),
+    transform var(--spring-press-duration) var(--spring-press);
+}
+
+.chordButton:hover,
+.chordButton[aria-selected='true'] {
+  opacity: 1;
+}
+
+.chordButton:active {
+  transform: scale(0.92);
+}
+
+.chordPill {
+  position: absolute;
+  inset: 0;
   border-radius: var(--radius-full);
   background: var(--color-item-active-bg);
   box-shadow: var(--shadow-raised);
-  color: var(--color-accent);
-  font: var(--text-small);
+}
+
+.chordGlyph {
+  position: relative;
+  font: var(--text-title);
+  line-height: 1;
 }
 
 /* ---------- Top bar (Windows/Linux, and everywhere when collapsed) and the macOS drag gap ---------- */
