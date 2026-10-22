@@ -1,5 +1,5 @@
 import { activeTabId, sortedChords, type LiveTab, type TabNode } from '@chord/core';
-import type { SystemInfo } from '@chord/ipc';
+import type { ChordEdit, SystemInfo } from '@chord/ipc';
 import { ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig } from 'motion/react';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
@@ -116,12 +116,13 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
     previousIndex.current = chordIndex;
   }, [chordIndex]);
 
-  const [renaming, setRenaming] = useState<string | null>(null);
-  useEffect(() => api.chords.onRename(setRenaming), []);
+  const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
+  useEffect(() => api.chords.onEdit(setChordEdit), []);
   const createChord = async () => {
     await api.state.dispatch({ t: 'chord.create', windowId, name: 'New chord', ...newChordLook(sortedChords(state)) });
     // Main's patches arrive before its reply, so the mirror already shows the new chord: name it right away.
-    setRenaming(mirror.get().windows[windowId]?.activeChordId ?? null);
+    const chordId = mirror.get().windows[windowId]?.activeChordId;
+    if (chordId) setChordEdit({ chordId, field: 'name' });
   };
 
   const toggleSidebar = () => void api.action.run('view.toggleSidebar');
@@ -160,7 +161,12 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
 
           <AnimatePresence initial={false} mode="popLayout" custom={slide}>
             <ChordPane key={chord?.id} slide={slide} transition={spring('smooth', 'chordSlide')}>
-              <ChordHeader chord={chord} renaming={renaming !== null && renaming === chord?.id} onRenamed={() => setRenaming(null)} />
+              <ChordHeader
+                chord={chord}
+                info={info}
+                edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
+                onDone={() => setChordEdit(null)}
+              />
               <SidebarTabs
                 chordId={chord?.id ?? ''}
                 state={state}

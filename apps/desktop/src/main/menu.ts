@@ -191,6 +191,7 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
 
 export interface ChordMenuActions {
   rename(): void;
+  changeIcon(): void;
   editColors(): void;
   /** Null when this is the only chord, which can't be deleted. */
   delete: (() => void) | null;
@@ -200,6 +201,7 @@ export interface ChordMenuActions {
 export function buildChordMenu(a: ChordMenuActions): Menu {
   return Menu.buildFromTemplate([
     { label: 'Rename', click: a.rename },
+    { label: 'Change icon…', click: a.changeIcon },
     { label: 'Edit colors…', click: a.editColors },
     { type: 'separator' },
     { label: 'Delete chord…', enabled: a.delete !== null, click: () => a.delete?.() },

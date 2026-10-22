@@ -17,7 +17,7 @@ const api: ShellApi = {
     tab: (nodeId, at) => invoke('menu:tab', { nodeId, x: at.x, y: at.y }),
     chord: (chordId, at) => invoke('menu:chord', { chordId, x: at.x, y: at.y }),
   },
-  chords: { onRename: (listener) => subscribe('chord:rename', listener) },
+  chords: { onEdit: (listener) => subscribe('chord:edit', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
 };
 

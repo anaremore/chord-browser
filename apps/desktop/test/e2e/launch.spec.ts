@@ -336,6 +336,28 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
   }
 });
 
+test('a chord takes a custom icon: picked from the grid, or typed', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const personal = shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { name: 'Personal' });
+    await expect(personal).toContainText('✦');
+
+    await shell.getByRole('button', { name: 'Change icon' }).click();
+    const picker = shell.getByRole('dialog', { name: 'Chord icon' });
+    await picker.getByRole('button', { name: '🚀' }).click();
+    await expect(picker).toBeHidden();
+    await expect(personal).toContainText('🚀');
+
+    // Typing (or the OS emoji panel) sets whatever comes first; letters are capitalized.
+    await shell.getByRole('button', { name: 'Change icon' }).click();
+    await picker.getByRole('textbox').fill('p');
+    await expect(personal).toContainText('P');
+  } finally {
+    await app.close();
+  }
+});
+
 test('pinned tabs: pin with a key, close keeps them, and dragging reorders and pins', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {

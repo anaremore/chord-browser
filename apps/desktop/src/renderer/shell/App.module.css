@@ -166,6 +166,7 @@ kbd {
 }
 
 .chordHeader {
+  position: relative;
   display: flex;
   flex: none;
   gap: var(--space-2);
@@ -175,10 +176,104 @@ kbd {
   font: var(--text-label);
 }
 
-.chordIcon {
-  inline-size: var(--size-icon);
+/* The chord's icon: click to change it. */
+.chordIconButton {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+  margin-inline: calc(var(--space-1) * -1);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
   color: var(--color-accent);
-  text-align: center;
+  font: var(--text-title);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    transform var(--spring-press-duration) var(--spring-press);
+}
+
+.chordIconButton:hover,
+.chordIconButton[aria-expanded='true'] {
+  background: var(--color-item-hover);
+}
+
+.chordIconButton:active {
+  transform: scale(0.92);
+}
+
+/* The icon picker drops down over the tab list, inside the sidebar. */
+.iconPicker {
+  position: absolute;
+  inset-block-start: calc(100% + var(--space-1));
+  inset-inline: 0;
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-fg);
+  font: var(--text-body);
+}
+
+.iconInput {
+  block-size: var(--size-row);
+  margin-block-end: var(--space-1);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+  user-select: text;
+}
+
+.iconInput:focus-visible {
+  outline: var(--size-hairline) solid var(--color-accent);
+}
+
+.pickerTitle {
+  margin: var(--space-1) 0 0;
+  padding-inline: var(--space-1);
+  color: var(--color-fg-muted);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+}
+
+.iconGrid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+}
+
+.iconCell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-accent);
+  font: var(--text-title);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    transform var(--spring-press-duration) var(--spring-press);
+}
+
+.iconCell:hover {
+  background: var(--color-item-hover);
+  transform: scale(1.12);
+}
+
+.iconCell[aria-pressed='true'] {
+  background: var(--color-item-active-bg);
+  box-shadow: var(--shadow-raised);
 }
 
 .renameInput {

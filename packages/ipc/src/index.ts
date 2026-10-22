@@ -110,6 +110,11 @@ export interface SettingsSnapshot {
   chord: Pick<Chord, 'id' | 'name' | 'icon' | 'theme'> | null;
 }
 
+export interface ChordEdit {
+  chordId: string;
+  field: 'name' | 'icon';
+}
+
 export interface AboutInfo {
   version: string;
   electron: string;
@@ -181,8 +186,8 @@ export interface EventPayloads {
   'state:patch': StatePatchEvent;
   'overlay:open': OverlayOpenEvent;
   'settings:changed': SettingsSnapshot;
-  /** Start renaming a chord in the sidebar (from its menu). */
-  'chord:rename': string;
+  /** Start renaming a chord, or choosing its icon, in the sidebar (from its menu). */
+  'chord:edit': ChordEdit;
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
   'settings:section': string;
 }
@@ -217,7 +222,7 @@ export interface ShellApi {
     tab(nodeId: string, at: { x: number; y: number }): Promise<void>;
     chord(chordId: string, at: { x: number; y: number }): Promise<void>;
   };
-  chords: { onRename(listener: (chordId: string) => void): () => void };
+  chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
 }
 

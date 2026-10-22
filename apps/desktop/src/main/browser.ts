@@ -283,7 +283,11 @@ export class Browser {
       buildChordMenu({
         rename: () => {
           this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
-          send(w.shell.webContents, 'chord:rename', chordId);
+          send(w.shell.webContents, 'chord:edit', { chordId, field: 'name' });
+        },
+        changeIcon: () => {
+          this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
+          send(w.shell.webContents, 'chord:edit', { chordId, field: 'icon' });
         },
         editColors: () => {
           this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });

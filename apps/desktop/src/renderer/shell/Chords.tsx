@@ -1,13 +1,15 @@
 /**
  * Chords in the sidebar (DESIGN.md §3.2, §8.2): the header with inline
- * rename, the switcher in the footer, and the color crossfade behind it all.
+ * rename and the icon picker, the switcher in the footer, and the color
+ * crossfade behind it all.
  */
 import { formatKeys, shortcutById, sortedChords, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
 import { Plus } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
-import { useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
+import { firstGrapheme } from '../shared/grapheme';
 import { api } from './api';
 import styles from './App.module.css';
 
@@ -87,26 +89,123 @@ export function ChordPane({ ref, slide, transition, children }: { ref?: Ref<HTML
   );
 }
 
-export function ChordHeader({ chord, renaming, onRenamed }: { chord: Chord | undefined; renaming: boolean; onRenamed(): void }) {
+/** Symbols that read well at 16 px in every OS's fonts, then emoji for the rest of life. */
+const PICKER_SYMBOLS = ['✦', '♪', '♫', '♩', '♬', '◆', '●', '▲', '★', '♥', '☀', '☾', '✿', '❖', '⚑', '⌂', '✎', '✈', '⚡', '☂', '♞', '⚙', '✉', '☕'];
+const PICKER_EMOJI = ['💼', '🏠', '🎵', '🎨', '📚', '💡', '🚀', '🌱', '🎮', '🍳', '🧪', '💰', '🛒', '🏋️', '🐶', '❤️', '⭐', '🔥', '🌊', '🎓', '🏖️', '🎬', '📷', '🧘'];
+
+const EMOJI_PANEL: Partial<Record<SystemInfo['platform'], string>> = { win32: 'Win + .', darwin: '⌃⌘Space' };
+
+function IconPicker({ chord, info, onPick, onClose }: { chord: Chord; info: SystemInfo; onPick(icon: string): void; onClose(): void }) {
+  const root = useRef<HTMLDivElement>(null);
+  // Close on a click anywhere else, or Escape.
+  useEffect(() => {
+    const onPointer = (event: PointerEvent) => {
+      if (root.current && !root.current.contains(event.target as Node)) onClose();
+    };
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('pointerdown', onPointer, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+  const grid = (title: string, icons: string[]) => (
+    <>
+      <p className={styles.pickerTitle}>{title}</p>
+      <div className={styles.iconGrid}>
+        {icons.map((icon) => (
+          <button
+            key={icon}
+            type="button"
+            className={styles.iconCell}
+            aria-label={icon}
+            aria-pressed={icon === chord.icon}
+            onClick={() => onPick(icon)}
+          >
+            {icon}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+  const panelKeys = EMOJI_PANEL[info.platform];
+  return (
+    <div ref={root} className={styles.iconPicker} role="dialog" aria-label="Chord icon">
+      <input
+        className={styles.iconInput}
+        aria-label="Type or paste an emoji or letter"
+        placeholder={panelKeys ? `Type a letter, or ${panelKeys} for emoji` : 'Type or paste an emoji or letter'}
+        spellCheck={false}
+        autoFocus
+        onChange={(e) => {
+          const icon = firstGrapheme(e.currentTarget.value);
+          if (icon) onPick(icon);
+        }}
+      />
+      {grid('Symbols', PICKER_SYMBOLS)}
+      {grid('Emoji', PICKER_EMOJI)}
+    </div>
+  );
+}
+
+export function ChordHeader({
+  chord,
+  info,
+  edit,
+  onDone,
+}: {
+  chord: Chord | undefined;
+  info: SystemInfo;
+  /** Started from outside (a new chord, the chord menu). */
+  edit: 'name' | 'icon' | null;
+  onDone(): void;
+}) {
   const [editing, setEditing] = useState(false);
-  const isEditing = (editing || renaming) && chord;
+  const [picking, setPicking] = useState(false);
+  const isEditing = (editing || edit === 'name') && chord;
+  const isPicking = (picking || edit === 'icon') && chord;
   const commit = (name: string) => {
     if (chord && name.trim() && name.trim() !== chord.name) void api.state.dispatch({ t: 'chord.update', chordId: chord.id, name });
     setEditing(false);
-    onRenamed();
+    onDone();
+  };
+  const closePicker = () => {
+    setPicking(false);
+    onDone();
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') commit(event.currentTarget.value);
     else if (event.key === 'Escape') {
       setEditing(false);
-      onRenamed();
+      onDone();
     }
   };
   return (
     <div className={styles.chordHeader}>
-      <span className={styles.chordIcon} aria-hidden>
+      <button
+        type="button"
+        className={styles.chordIconButton}
+        aria-label="Change icon"
+        aria-expanded={Boolean(isPicking)}
+        title="Change icon"
+        onClick={() => setPicking(!isPicking)}
+      >
         {chord?.icon ?? '✦'}
-      </span>
+      </button>
+      {isPicking && (
+        <IconPicker
+          chord={chord}
+          info={info}
+          onPick={(icon) => {
+            void api.state.dispatch({ t: 'chord.update', chordId: chord.id, icon });
+            closePicker();
+          }}
+          onClose={closePicker}
+        />
+      )}
       {isEditing ? (
         <input
           key={chord.id}

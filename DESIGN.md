@@ -275,6 +275,14 @@ type ChordTheme = {
 
 **New chords** take the first gradient preset and icon that no other chord uses yet. The icons are ✦ ♪ ♫ ♩ ♬ ◆ ● ▲ ★, a nod to the name. The new chord opens empty, with its name selected so typing renames it. In the switcher, each chord's icon wears that chord's own accent, so the footer previews every chord's color.
 
+**Custom icons:** click the icon in the chord header (or right-click a chord → *Change icon…*). The picker drops down inside the sidebar with:
+
+- a field for any emoji or letter (the OS emoji panel works there: Win + . or ⌃⌘Space)
+- 24 symbols
+- 24 emoji
+
+Only the first character counts (an emoji with its modifiers is one), and letters are capitalized.
+
 ### 5.2 `createChordTheme()` — a pure, tested function
 
 1. **Resolve the appearance.** `auto` follows `nativeTheme`.
