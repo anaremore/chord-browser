@@ -706,26 +706,48 @@ interface PlatformServices {
 
 ### 14.2 Dependency automation (Renovate)
 
-- `electron` is **exempt from `minimumReleaseAge`**. Patch and minor bumps automerge once CI is green on all OSes. Majors get a manual PR.
-- Everything else waits `minimumReleaseAge: 7 days` (supply-chain buffer). Security alerts bypass it.
-- Groups: `electron` + `@electron/*`; build tooling; UI libraries. Renovate has no Electron preset, so we use `groupName` ✅.
+`renovate.json` passes `renovate-config-validator --strict` (Renovate 44.178.1) ✅. It runs on the Mend-hosted app: every 4 hours for active repos, and daily until the first Renovate PR is merged ✅.
+
+- **`electron`** has no `minimumReleaseAge` and no PR rate limits (`prConcurrentLimit`/`prHourlyLimit: 0`), and it comes first (`prPriority`).
+  - It's a group of its own, so a tooling update still in its 7-day wait can't hold it back.
+- **Electron patch and minor updates automerge** once every CI check passes. Majors get a manual PR.
+  - Renovate's own automerge treats any failed check as red, and no checks at all as pending ✅.
+  - `platformAutomerge` is off. Without a ruleset that requires the CI checks, GitHub's native auto-merge could merge before tests finish ✅.
+- **Everything else waits `minimumReleaseAge: 7 days`** (supply-chain buffer).
+  - Vulnerability-alert PRs bypass the wait: the `vulnerabilityAlerts` default sets `minimumReleaseAge: null` ✅. They need Dependabot alerts turned on for the repo.
+  - Renovate can't check release age for some update types (`pin`, `pinDigest`, `lockFileMaintenance`, …), so those are exempt. Otherwise they'd wait forever ✅.
+- **Lock file maintenance** runs weekly (before 4 am Monday). A person reviews it, because it refreshes transitive versions with no age check ✅.
+- **GitHub Actions** are pinned to commit SHAs (`helpers:pinGitHubActionDigests`, part of Renovate's `config:best-practices` ✅), and Renovate keeps the pins current.
+- **Groups:**
+  - `electron`, alone;
+  - electron tooling (electron-vite, electron-builder, electron-updater, `@electron/*`);
+  - build and lint tooling;
+  - UI libraries.
+
+  Renovate has no Electron preset, so we use `groupName` ✅.
+- The Dependency Dashboard is on, and `:configMigration` opens a PR when Renovate renames an option.
 
 ### 14.3 The 72-hour Chromium security process
 
-Electron security advisories **only cover Electron's own bugs**. Chromium fixes appear as "Backported fixes" lines in release notes, so Renovate's vulnerability alerts never fire for them ✅. Hence:
+Electron security advisories **only cover Electron's own bugs**. Chromium fixes appear only in the release notes, so vulnerability alerts never fire for them ✅. Current notes say "Backported fixes from upstream ANGLE, Chromium, …" with no CVE ids, or just "Updated Chromium to …". Hence:
 
-- **`electron-watch.yml`** runs hourly. It polls `releases.electronjs.org/releases.json` for new releases on our major. If the notes contain security backports, it opens a P0 issue, assigns the on-call maintainer, and triggers Renovate.
-- **Runbook** (`docs/SECURITY-PATCHING.md`):
+- **`electron-watch.yml`** runs hourly, at :17, because GitHub delays scheduled runs at the top of the hour ✅. The logic is in `scripts/ci/electron-watch.mjs`, with unit tests.
+  1. It reads `releases.electronjs.org/releases.json`. That file lists versions but carries no notes ✅, so the notes for each newer release on our major come from the GitHub API.
+  2. Security content means a CVE, a GHSA, a `Security:` line, a `Backported …` line, or `Updated Chromium to …`.
+  3. On a hit, it opens **one P0 issue per version**. The issue is labeled `security` + `p0` and assigned to the `SECURITY_ONCALL` repo variable (default: the owner).
+  4. It then ticks the Dependency Dashboard's "run again" checkbox, so Renovate runs now rather than within 4 hours. ⚠ Mend doesn't document that as an API.
+  5. Separately, it opens an issue 30 days before our major's end-of-life, using `schedule.json`.
+- **Runbook:** [docs/SECURITY-PATCHING.md](docs/SECURITY-PATCHING.md).
 
-| T+ | Step |
-|---|---|
-| 0 h | Electron publishes a patched release (precedent: a V8 zero-day was fixed in Chrome 2025-06-30 and Electron 37.2.0 on 2025-07-02 ✅) |
-| ≤ 1 h | Watcher opens an issue; Renovate PR is up |
-| ≤ 8 h | CI green on the full matrix (unit, E2E on macOS, Windows, Linux X11, Linux Wayland, arm64 + x64) |
-| ≤ 12 h | Tag `vX.Y.Z` → release workflow builds, signs, notarizes, and signs manifests |
-| ≤ 24 h | Publish at `stagingPercentage: 20`; Flathub PR opened; apt/rpm repos updated |
-| ≤ 48 h | Staged rollout → 100% after crash-free check (local crash logs only, since there is no telemetry; we watch issue reports) |
-| ≤ 72 h | All channels patched: GitHub/updater, Cloudsmith repos, Flathub merged |
+| T+ | Step | Today |
+|---|---|---|
+| 0 h | Electron publishes a patched release. Precedent: a V8 zero-day was fixed in Chrome on 2025-06-30 and in Electron 37.2.0 on 2025-07-02 ✅. Its notes said only "Updated Chromium to 138.0.7204.97" ✅. | |
+| ≤ 1 h | Watcher opens an issue; Renovate PR is up | Automated. If the dashboard tick doesn't take, the PR comes within 4 h. |
+| ≤ 8 h | CI green on the full matrix (unit, E2E on macOS, Windows, Linux X11, Linux Wayland, arm64 + x64); Renovate automerges | Automated |
+| ≤ 12 h | Tag `vX.Y.Z` → release workflow builds, signs, notarizes, and signs manifests | Builds only; signing is deferred (§15.2) |
+| ≤ 24 h | Publish at `stagingPercentage: 20`; Flathub PR opened; apt/rpm repos updated | Publish only; the rest arrives in Phase 3 |
+| ≤ 48 h | Staged rollout → 100% after crash-free check (local crash logs only, since there is no telemetry; we watch issue reports) | Phase 3 |
+| ≤ 72 h | All channels patched: GitHub/updater, Cloudsmith repos, Flathub merged | GitHub Release only |
 
 To pull a bad release we ship a higher version (electron-updater has no rollback ✅).
 
