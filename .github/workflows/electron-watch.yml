@@ -1,0 +1,51 @@
+name: Electron security watch
+
+# Electron reports Chromium, V8, Skia, ANGLE and PDFium fixes only in its
+# release notes, so no vulnerability alert fires for them. Every hour, look for
+# newer releases on our Electron major with security content; open a P0 issue
+# (once per version) and ask Renovate to run now.
+# ARCHITECTURE.md §14.3 · docs/SECURITY-PATCHING.md · logic in scripts/ci/electron-watch.mjs
+
+on:
+  schedule:
+    # Off the hour: GitHub delays scheduled runs most at the start of each hour.
+    # Scheduled runs use the default branch only, and GitHub disables them after
+    # 60 days without repository activity in a public repo.
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report only; open no issues and leave the Renovate dashboard alone
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  # One run at a time, so a manual run and the hourly one can't both open an issue.
+  group: electron-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Check Electron releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          # Reads Electron's release notes from the GitHub API (public, but the token lifts the rate limit).
+          GITHUB_TOKEN: ${{ github.token }}
+          # Optional repository variable: comma-separated GitHub logins to assign. Defaults to the repo owner.
+          SECURITY_ONCALL: ${{ vars.SECURITY_ONCALL }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        with:
+          script: |
+            const { run } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/electron-watch.mjs`);
+            await run({ github, context, core, dryRun: process.env.DRY_RUN === 'true' });

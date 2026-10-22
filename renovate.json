@@ -1,31 +1,53 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "minimumReleaseAge": "7 days",
+  "description": "Dependency policy: ARCHITECTURE.md §14.2. Electron security process: §14.3 and docs/SECURITY-PATCHING.md.",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests", ":configMigration", ":maintainLockFilesWeekly"],
+  "dependencyDashboard": true,
   "rangeStrategy": "pin",
+  "minimumReleaseAge": "7 days",
+  "ignoreTests": false,
+  "platformAutomerge": false,
+  "vulnerabilityAlerts": {
+    "labels": ["security"]
+  },
   "packageRules": [
     {
-      "description": "Electron ships Chromium security fixes: no waiting, automerge patch and minor once CI is green on every OS (ARCHITECTURE.md §14.2).",
-      "matchPackageNames": ["electron"],
-      "minimumReleaseAge": null,
-      "groupName": "electron",
-      "automerge": true,
-      "matchUpdateTypes": ["patch", "minor"]
+      "description": "Renovate can't check release age for these update types, so 7 days would hold them back forever. Pins only freeze what we already use; lock file maintenance PRs are reviewed by a person.",
+      "matchUpdateTypes": ["pin", "pinDigest", "lockFileMaintenance", "lockfileUpdate", "rollback", "bump", "replacement"],
+      "minimumReleaseAge": null
     },
     {
-      "description": "Electron majors need a human: breaking changes every 8 weeks.",
+      "description": "Electron ships Chromium security fixes: no waiting, no PR rate limits, first in line. Automerge patch and minor once every CI check passes (ARCHITECTURE.md §14.2).",
+      "matchPackageNames": ["electron"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "electron",
+      "minimumReleaseAge": null,
+      "prPriority": 10,
+      "prConcurrentLimit": 0,
+      "prHourlyLimit": 0,
+      "automerge": true
+    },
+    {
+      "description": "Electron majors need a person: breaking changes every 8 weeks.",
       "matchPackageNames": ["electron"],
       "matchUpdateTypes": ["major"],
       "minimumReleaseAge": null,
+      "prPriority": 5,
+      "prConcurrentLimit": 0,
+      "prHourlyLimit": 0,
       "automerge": false
     },
     {
       "groupName": "electron tooling",
-      "matchPackageNames": ["electron-vite", "electron-builder", "electron-updater", "@electron/{/,}**"]
+      "matchPackageNames": ["electron-vite", "electron-builder", "electron-updater", "@electron/**"]
     },
     {
       "groupName": "build and lint tooling",
       "matchPackageNames": ["vite", "@vitejs/**", "vitest", "eslint", "@eslint/**", "typescript-eslint", "stylelint", "stylelint-config-standard", "@playwright/test", "babel-plugin-react-compiler", "@rolldown/plugin-babel", "@babel/core"]
+    },
+    {
+      "groupName": "UI libraries",
+      "matchPackageNames": ["react", "react-dom", "@types/react", "@types/react-dom", "motion", "lucide-react", "@dnd-kit/**"]
     },
     {
       "description": "typescript-eslint supports TypeScript <6.1 (ARCHITECTURE.md §2).",
