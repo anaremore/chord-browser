@@ -56,7 +56,7 @@ Every library, API, and version below was checked on 2026-10-22. Anything not co
 | Concern | Choice | Version today | Status / notes |
 |---|---|---|---|
 | Runtime | **Electron 45** (Chromium 156, Node 24.22, V8 15.6) | 45.0.0, released 2026-10-20 | ✅ Supported lines: 45, 44, 43. Electron 46 stable is expected 2027-01-05. Chrome moved to 2-week releases, so each Electron major now jumps 4 Chromium milestones. |
-| Language | TypeScript, strict | latest stable at scaffold time | — |
+| Language | TypeScript, strict | **6.0.x** | ✅ TypeScript 7.0.2 (the Go-native compiler) is out, but typescript-eslint 8.72 supports only TS `<6.1`, and TS 7's JS API is still `unstable/*`. We revisit once typescript-eslint supports 7. |
 | UI | React 19 + React Compiler 1.0 | Compiler 1.0 stable since 2025-10-07 | ✅ for the compiler. ⚠ How it's wired into Vite 8 / plugin-react v6 (`@rolldown/plugin-babel`, or the experimental `compiler: true`) comes from community guides only; confirmed in the scaffold commit. |
 | Build | Vite 8 via **electron-vite 6.0** | 6.0.0, 2026-10-14 | ⚠ The changelog lists Electron 42–44; **Electron 45 support is unverified** and is the first thing the scaffold commit checks. It has one maintainer. Fallback: eject to plain Vite configs (main, preload, and renderer builds plus a ~100-line dev runner). Electron Forge 8's Vite plugin went stable on 2026-09-29 but brings Forge's packager, which we don't want. |
 | Packaging | **electron-builder 26.18.0** (pinned) | 26.18.0 is on the `v26` dist-tag | ✅ npm's `latest` tag still points at 26.15.3, so pin exact versions. v27 is in alpha. |
@@ -70,8 +70,9 @@ Every library, API, and version below was checked on 2026-10-22. Anything not co
 | Icons | lucide-react (ISC) | 1.61.0 | ✅ Phosphor was considered and rejected: no release in 17 months. |
 | UI typeface | **Onest** (SIL OFL), variable 100–900, `tnum` | — | ✅ See DESIGN.md §4.2. |
 | Extensions | electron-chrome-extensions | 4.9.0 | ⚠ **License is GPL-3.0 or a paid Patron License, enforced at runtime.** Decision D1. |
-| Tests | Vitest, Playwright `_electron` | — | Playwright's Electron support is still experimental. See [§15.5](#155-testing). |
-| Package manager | pnpm 10 | 10.33 locally | Electron packaging needs `node-linker=hoisted`. |
+| Tests | Vitest 5, Playwright `_electron` 1.64 | — | Playwright's Electron support is still experimental. See [§15.5](#155-testing). |
+| Lint | ESLint 10 + typescript-eslint 8.72, stylelint 17 | — | — |
+| Package manager | pnpm 10 | 10.33 locally | Electron packaging needs `node-linker=hoisted`. pnpm 10 blocks dependency install scripts by default, so `electron` must be allow-listed (`onlyBuiltDependencies`) for its binary to download. |
 
 ---
 
@@ -811,10 +812,15 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 | Visual | Playwright screenshots of shell and overlay | Uploaded as CI artifacts per OS × light/dark × 3 Space themes. Reviewed against DESIGN.md before any UI change is shown to you. |
 | Performance | Startup, command bar, and frame-time probes | Run in CI for trends. **Enforced** on reference hardware locally, since CI runners are noisy. |
 
-**What I can verify where:**
+**What gets verified where.** Windows is the primary platform, so features are built and checked there first.
 - **Windows 11:** locally on your machine (144 Hz display, good for the 120 fps target).
-- **Linux:** locally via WSL2/WSLg (Wayland, plus X11 through XWayland), and in CI on X11 and Weston.
-- **macOS:** CI only. There is no local Mac, so vibrancy, traffic-light placement, ProMotion 120 Hz (⚠ unverified in Electron), and trackpad gestures need your hands-on checks. I'll list exactly what to check after each change.
+- **Linux:**
+  - WSL2/WSLg on this machine (Wayland, plus X11 through XWayland).
+  - Your Linux VM.
+  - CI on X11 and Weston.
+- **macOS:**
+  - CI captures.
+  - Your Apple Silicon MacBook, for vibrancy, traffic-light placement, ProMotion 120 Hz (⚠ unverified in Electron) and trackpad gestures. I'll list exactly what to check after each change.
 
 ---
 

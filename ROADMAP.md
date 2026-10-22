@@ -6,6 +6,16 @@ Every milestone ends with something you can actually use, on all three operating
 
 ---
 
+## How we work (agreed 2026-10-22)
+
+- **Windows first.** Windows is your daily driver. Every feature is built and verified by hand on Windows first; macOS and Linux stay green in CI throughout.
+- **Parity at the end of each phase.** Full parity on all three OSes (the brief's rule) is required before each phase closes, so M1.6 includes a parity pass.
+- **Push to `main` after each significant change.** CI runs the full OS matrix on every push.
+- **Hands-on testing:**
+  - Windows: on this machine, with its 144 Hz display.
+  - macOS: on your Apple Silicon MacBook.
+  - Linux: in your VM, plus WSLg and CI (X11 and Wayland).
+
 ## Definition of done (every milestone)
 
 A milestone is done when all of these hold:
@@ -48,13 +58,10 @@ A milestone is done when all of these hold:
 
 ## Before we start
 
-**Blocking, needed before M1.0 begins:**
-
-| # | Question | My default if you don't mind either way |
-|---|---|---|
-| Q1 | May I push to `github.com/anaremore/chord-browser` (public)? Proposed workflow: the docs and scaffold go straight to `main`, then **one PR per milestone** so CI runs on every OS before you merge. | Yes, PR per milestone |
-| Q2 | App ID `com.chordbrowser.Chord` (from your domain). It's baked into data paths, Flatpak, and default-browser registration, so it's painful to change later. | `com.chordbrowser.Chord` |
-| Q3 | Your hardware for by-hand checks: which Mac (Apple Silicon? ProMotion? trackpad?), and do you have a Linux machine (distro, X11 or Wayland)? | I'll assume an Apple Silicon Mac and use WSL plus CI for Linux. |
+**Answered 2026-10-22:**
+- **Q1:** Push to `main` after each significant change.
+- **Q2:** App ID `com.chordbrowser.Chord`.
+- **Q3:** You test on an Apple Silicon MacBook and a Linux VM; Windows is the primary platform (see *How we work*).
 
 **Needed by a specific milestone:**
 
