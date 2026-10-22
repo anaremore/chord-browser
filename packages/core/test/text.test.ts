@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { firstGrapheme } from '../../src/renderer/shared/grapheme';
+import { firstGrapheme } from '../src';
 
 describe('firstGrapheme', () => {
   it('keeps whole emoji, including skin tones, families and flags', () => {

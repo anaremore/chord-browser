@@ -3,13 +3,12 @@
  * rename and the icon picker, the switcher in the footer, and the color
  * crossfade behind it all.
  */
-import { formatKeys, shortcutById, sortedChords, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
+import { firstGrapheme, formatKeys, shortcutById, sortedChords, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
 import { Plus } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
-import { firstGrapheme } from '../shared/grapheme';
 import { api } from './api';
 import styles from './App.module.css';
 

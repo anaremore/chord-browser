@@ -18,3 +18,6 @@ spikes/**/results/
 
 # Design QA captures (scripts/dev/qa-windows.mjs)
 .qa/
+
+# Agent worktrees and local Claude Code state
+.claude/
