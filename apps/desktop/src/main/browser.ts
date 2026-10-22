@@ -6,6 +6,7 @@ import {
   activeTab,
   activeTabId,
   markdownLink,
+  motionEnabled,
   tabsInOrder,
   zoomStep,
   type ActionId,
@@ -15,13 +16,14 @@ import {
   type TabNode,
   type WindowId,
 } from '@chord/core';
-import type { Rect } from '@chord/ipc';
+import type { Rect, SettingsSnapshot } from '@chord/ipc';
 import { app, BaseWindow, clipboard, type Menu, type Session, type WebContents } from 'electron';
 import { attachContextMenu } from './context-menu';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
 import { buildAppMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import { systemInfo } from './platform';
+import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
 import { TabManager } from './tabs';
 import { AppWindow } from './window';
@@ -38,6 +40,9 @@ export class Browser {
   readonly store: Store;
   readonly tabs: TabManager;
   private readonly windows = new Map<WindowId, AppWindow>();
+  /** The browser window used most recently: menus, Settings and links from Settings act on it. */
+  private lastWindowId: WindowId | null = null;
+  private settingsWindow: SettingsWindow | null = null;
   private recent: { windowId: WindowId; order: NodeId[]; index: number } | null = null;
   private readonly keyboard: KeyboardHandlers = {
     run: (action, contents) => this.run(action, contents),
@@ -58,6 +63,7 @@ export class Browser {
         attachContextMenu(contents, {
           surface: 'web',
           inspect: true,
+          searchEngine: () => this.store.state.settings.searchEngine,
           openTab: (url, background) => {
             const windowId = this.windowShowing(nodeId);
             if (windowId) this.store.dispatch({ t: 'tab.open', windowId, url, background });
@@ -73,6 +79,9 @@ export class Browser {
     this.store.subscribe((change) => {
       this.broadcast(change);
       this.runEffects(change.effects);
+      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows'].includes(String(p.path[0])))) {
+        this.settingsWindow.update(this.settingsSnapshot());
+      }
       options.onChange?.(change);
     });
   }
@@ -116,19 +125,27 @@ export class Browser {
       onBounds: (bounds) => this.store.dispatch({ t: 'window.bounds', windowId, bounds }),
     });
     this.windows.set(windowId, w);
+    this.lastWindowId ??= windowId;
+    w.window.on('focus', () => {
+      this.lastWindowId = windowId;
+      this.settingsWindow?.update(this.settingsSnapshot());
+    });
     for (const contents of [w.shell.webContents, w.overlay.webContents]) {
       attachShortcuts(contents, this.keyboard);
       attachContextMenu(contents, {
         surface: 'ui',
         inspect: !app.isPackaged,
+        searchEngine: () => this.store.state.settings.searchEngine,
         openTab: (url, background) => this.store.dispatch({ t: 'tab.open', windowId, url, background }),
         placement: () => ({ window: w.window, x: 0, y: 0 }),
       });
     }
     w.window.on('closed', () => {
       this.windows.delete(windowId);
+      if (this.lastWindowId === windowId) this.lastWindowId = this.windows.keys().next().value ?? null;
       if (this.windows.size === 0 && process.platform !== 'darwin') {
         this.tabs.destroyAll();
+        this.settingsWindow?.window.close();
         app.quit();
       }
     });
@@ -169,24 +186,67 @@ export class Browser {
         case 'view.destroy':
           this.tabs.destroy(effect.nodeId);
           break;
-        case 'window.layout':
-          this.windows.get(effect.windowId)?.setSidebar(effect.sidebar, !systemInfo().prefersReducedMotion);
+        case 'window.layout': {
+          const animate = motionEnabled(this.store.state.settings, 'sidebar', systemInfo().prefersReducedMotion);
+          this.windows.get(effect.windowId)?.setSidebar(effect.sidebar, animate);
           break;
+        }
       }
     }
   }
 
   /** Run an action for the window that owns this contents (keys, the shell's buttons, the command bar). */
   run(action: ActionId, contents: WebContents): boolean {
-    const w = this.windowFor(contents);
+    const w = this.windowFor(contents) ?? (contents === this.settingsWindow?.view.webContents ? this.lastWindow() : undefined);
     return w ? this.runAction(action, w) : false;
   }
 
-  /** Menu items act on the focused Chord window. */
+  /** Menu items act on the focused Chord window, or the last one used (when Settings has focus). */
   private runInFocusedWindow(action: ActionId): void {
     const focused = BaseWindow.getFocusedWindow();
-    const w = [...this.windows.values()].find((x) => x.window === focused) ?? this.windows.values().next().value;
+    const w = [...this.windows.values()].find((x) => x.window === focused) ?? this.lastWindow();
     if (w) this.runAction(action, w);
+    else if (action === 'app.settings' || action === 'app.shortcuts') this.openSettings(action === 'app.shortcuts' ? 'shortcuts' : undefined);
+  }
+
+  private lastWindow(): AppWindow | undefined {
+    return (this.lastWindowId ? this.windows.get(this.lastWindowId) : undefined) ?? this.windows.values().next().value;
+  }
+
+  settingsSnapshot(): SettingsSnapshot {
+    const state = this.store.state;
+    const model = this.lastWindowId ? state.windows[this.lastWindowId] : undefined;
+    const chord = model ? state.chords[model.activeChordId] : Object.values(state.chords)[0];
+    return {
+      settings: state.settings,
+      chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
+    };
+  }
+
+  openSettings(section?: string): void {
+    if (this.settingsWindow) {
+      this.settingsWindow.show(section);
+      return;
+    }
+    this.settingsWindow = new SettingsWindow(this.options.uiSession, this.lastWindow()?.window.getBounds(), section, () => {
+      this.settingsWindow = null;
+    });
+    attachShortcuts(this.settingsWindow.view.webContents, this.keyboard);
+    attachContextMenu(this.settingsWindow.view.webContents, {
+      surface: 'ui',
+      inspect: !app.isPackaged,
+      searchEngine: () => this.store.state.settings.searchEngine,
+      openTab: (url) => this.openUrlInLastWindow(url),
+      placement: () => (this.settingsWindow ? { window: this.settingsWindow.window, x: 0, y: 0 } : undefined),
+    });
+  }
+
+  /** A link from Settings opens as a new tab in the browser window used last, which comes forward. */
+  openUrlInLastWindow(url: string): void {
+    const w = this.lastWindow();
+    if (!w) return;
+    this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+    w.window.focus();
   }
 
   openAppMenu(contents: WebContents, anchor: Rect): void {
@@ -274,6 +334,12 @@ export class Browser {
         return true;
       case 'address.copyMarkdown':
         if (tab) clipboard.writeText(markdownLink(tab.title, tab.url));
+        return true;
+      case 'app.settings':
+        this.openSettings();
+        return true;
+      case 'app.shortcuts':
+        this.openSettings('shortcuts');
         return true;
       case 'app.devtools':
         activeContents?.toggleDevTools();

@@ -99,9 +99,52 @@ export interface ClosedTab {
   closedAt: number;
 }
 
+export type SearchEngineId = 'google' | 'duckduckgo' | 'bing' | 'brave' | 'kagi' | 'ecosia';
+
+/** Settings → Motion (DESIGN.md §6.8). Off means instant: no animation is created at all. */
+export interface MotionSettings {
+  /** Honor the OS "reduce motion" preference. */
+  followSystem: boolean;
+  /** The ⌘L address morph and the ⌘T panel entrance. */
+  commandBar: boolean;
+  /** Switching chords. */
+  chordSlide: boolean;
+  /** Pin, archive, reorder, drop settle, close collapse. */
+  tabMoves: boolean;
+  /** Collapse and dock, peek, folders. */
+  sidebar: boolean;
+  /** The theme crossfade between chords. */
+  colorBlend: boolean;
+}
+
+export interface Settings {
+  searchEngine: SearchEngineId;
+  motion: MotionSettings;
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  searchEngine: 'google',
+  motion: { followSystem: true, commandBar: true, chordSlide: true, tabMoves: true, sidebar: true, colorBlend: true },
+};
+
+/**
+ * Whether an animation runs: its switch is on, and the OS isn't asking for
+ * reduced motion (unless the user chose to ignore that). Off means instant.
+ */
+export function motionEnabled(settings: Settings, gate: Exclude<keyof MotionSettings, 'followSystem'>, osReducedMotion: boolean): boolean {
+  return settings.motion[gate] && !(settings.motion.followSystem && osReducedMotion);
+}
+
+/** A partial change to settings; nested groups merge. */
+export interface SettingsPatch {
+  searchEngine?: SearchEngineId;
+  motion?: Partial<MotionSettings>;
+}
+
 export interface State {
   /** Increments on every change, so mirrors can detect gaps. */
   version: number;
+  settings: Settings;
   chords: Record<ChordId, Chord>;
   nodes: Record<NodeId, SidebarNode>;
   windows: Record<WindowId, WindowModel>;
@@ -110,6 +153,14 @@ export interface State {
   closed: ClosedTab[];
 }
 
-export const emptyState = (): State => ({ version: 0, chords: {}, nodes: {}, windows: {}, live: {}, closed: [] });
+export const emptyState = (): State => ({
+  version: 0,
+  settings: { ...DEFAULT_SETTINGS, motion: { ...DEFAULT_SETTINGS.motion } },
+  chords: {},
+  nodes: {},
+  windows: {},
+  live: {},
+  closed: [],
+});
 
 export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false };

@@ -40,7 +40,8 @@ export const size = {
   duetWidth: 380,
   duetMin: 320,
   duetMax: 560,
-  frameInset: 8,
+  /** The bezel around the content frame: as thin as possible while the rounded corners still read. */
+  frameInset: 4,
   /** The Windows/Linux top strip and the minimal-mode bar. */
   strip: 40,
   commandBarMin: 480,
@@ -49,6 +50,16 @@ export const size = {
   resultRow: 40,
   commandBarMax: 680,
   previewWidth: 280,
+  /** Settings window: section list, readable content column, and its controls. */
+  settingsNav: 200,
+  settingsContent: 600,
+  settingRow: 52,
+  switchWidth: 36,
+  switchHeight: 20,
+  switchKnob: 16,
+  swatch: 24,
+  presetWidth: 64,
+  presetHeight: 36,
   hairline: 1,
   focusRing: 2,
 } as const;

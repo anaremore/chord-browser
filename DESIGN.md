@@ -72,7 +72,7 @@ macOS                                            Windows / Linux
 │ │example.com│ │ │                          │ │  │ │example.com│ │ │                          │ │
 │ └──────────┘ │ │                          │ │  │ └──────────┘ │ │                          │ │
 │ ✦ Personal   │ │        web page          │ │  │ ✦ Personal   │ │        web page          │ │
-│ ▸ Reading    │ │   (rounded, inset 8 px,  │ │  │ ▸ Reading    │ │                          │ │
+│ ▸ Reading    │ │   (rounded, inset 4 px,  │ │  │ ▸ Reading    │ │                          │ │
 │ ◉ Mail       │ │    soft shadow)          │ │  │ ◉ Mail       │ │                          │ │
 │ ── Clear ──  │ │                          │ │  │ ── Clear ──  │ │                          │ │
 │ + New tab    │ │                          │ │  │ + New tab    │ │                          │ │
@@ -80,11 +80,11 @@ macOS                                            Windows / Linux
 │              │ │                          │ │  │              │ │                          │ │
 │ ▣ ⤓   • ● • +│ ╰──────────────────────────╯ │  │ ▣ ⤓   • ● • +│ ╰──────────────────────────╯ │
 └──────────────┴──────────────────────────────┘  └──────────────┴──────────────────────────────┘
-  sidebar 248      frame inset: 8 top/right/bottom   frame top = strip bottom; inset 8 right/bottom
+  sidebar 248      frame inset: 4 top/right/bottom   frame top = strip bottom; inset 4 right/bottom
 ```
 
 - **Sidebar:** default 248 px, resizable 200–400. It snaps to 248 with a gentle detent when you drag within 8 px of it. It sits directly on the window material (vibrancy, Mica, or solid) with the chord tint over it.
-- **Content frame:** inset `space-2` (8 px) from the window edges. Its radius is the platform `radius-frame` token, with `shadow-frame` and a 1 px hairline. The shell draws the shadow and hairline; the web view sits inside.
+- **Content frame:** a 4 px bezel (`frame-inset`) from the window edges, as thin as it can be while the rounded corners still read. Its radius is the platform `radius-frame` token, with `shadow-frame` and a 1 px hairline. The shell draws the shadow and hairline; the web view sits inside.
 - **Top strip (Windows and Linux only):** 40 px, needed for native caption buttons via Window Controls Overlay (and Snap Layouts on Windows 11). It is not wasted space: it shows site identity and page actions, and it's the window drag region. On Linux the caption buttons can be on the left; the layout reads `env(titlebar-area-x/width)` and the sidebar header makes room.
 - **Duet panel (when open):** a second frame to the right of the content frame. Default 380 px, range 320–560, separated by an 8 px gap. It is a calm neutral surface, not tinted: chat is for reading.
 
@@ -135,7 +135,7 @@ Windows / Linux
   - Chords also respond to ⌘1–9 and to swiping the bar.
   - Ctrl+Tab cycles recently used tabs.
   - Undo toasts appear at the frame's bottom-left.
-- **The content frame keeps its 8 px inset and rounded corners.** It's the one piece of identity that never folds away.
+- **The content frame keeps its 4 px bezel and rounded corners.** It's the one piece of identity that never folds away.
 - In OS fullscreen the bar slides away too and returns when you point at the top edge.
 - Collapsed or docked is remembered per window.
 
@@ -205,7 +205,7 @@ Bundling: one variable `woff2`, preloaded. `font-display: block` is safe because
 | `size-header` | 40 | `size-favicon` | 16 |
 | `size-hit-min` | 24 (WCAG 2.2 AA target size) | `size-chord-icon` | 20 |
 | `sidebar-width` | 248 (200–400) | `duet-width` | 380 (320–560) |
-| `frame-inset` | 8 | `strip-height` (Win/Linux) | 40 |
+| `frame-inset` | 4 | `strip-height` (Win/Linux) | 40 |
 | `command-bar-width` | clamp(480, 56% of frame, 680) | `preview-width` | 280 |
 
 Only borders and focus rings may be off-grid (1 px and 2 px). Text is vertically centered in rows by layout, never by off-grid padding.

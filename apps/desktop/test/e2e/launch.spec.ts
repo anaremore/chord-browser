@@ -134,7 +134,7 @@ test('the sidebar collapses to a minimal bar and docks again', async () => {
     // The minimal bar takes over: its own toggle, and the page's domain / title.
     await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
     await expect(shell.getByRole('navigation', { name: 'Sidebar' })).toBeHidden();
-    await expect.poll(async () => (await viewBounds(app))[1]!.x).toBe(8);
+    await expect.poll(async () => (await viewBounds(app))[1]!.x).toBe(4); // the bezel (size.frameInset)
     const collapsed = (await viewBounds(app))[1]!;
     expect(collapsed.width).toBeGreaterThan(docked.width);
 
@@ -209,6 +209,41 @@ test('page-first keys reach Chord only when the page passes; reserved keys fire 
     // Ctrl+T is reserved: Chord gets it before the page, exactly once.
     await press('T');
     await expect((await pageWhere(app, isOverlay)).getByRole('dialog')).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
+test('Settings opens from the shell and its changes apply live', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
+
+    // Search engine: the command bar offers the new engine at once.
+    await settings.getByRole('radio', { name: /DuckDuckGo/ }).click();
+    await expect(settings.getByRole('radio', { name: /DuckDuckGo/ })).toHaveAttribute('aria-checked', 'true');
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('chord browser');
+    await expect(overlay.getByRole('option').first()).toContainText('Search DuckDuckGo');
+    await overlay.keyboard.press('Escape');
+
+    // Motion: a switch flips, and the shell learns which animations are off.
+    await settings.getByRole('button', { name: 'Motion' }).click();
+    const sidebarSwitch = settings.getByRole('switch', { name: 'Animate the sidebar' });
+    await sidebarSwitch.click();
+    await expect(sidebarSwitch).toHaveAttribute('aria-checked', 'false');
+    await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['motionOff'])).toContain('sidebar');
+
+    // Appearance: picking a gradient re-themes the browser window behind.
+    const tint = () => shell.evaluate(() => getComputedStyle(document.querySelector('[data-sidebar]')!).getPropertyValue('--color-tint'));
+    const before = await tint();
+    await settings.getByRole('button', { name: 'Appearance' }).click();
+    await settings.getByRole('button', { name: /Sea Glass/ }).click();
+    await expect.poll(tint).not.toBe(before);
   } finally {
     await app.close();
   }

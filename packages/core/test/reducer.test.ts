@@ -109,6 +109,22 @@ describe('reducer', () => {
     expect(t.state.windows['w1']!.sidebar).toBe('docked');
   });
 
+  it('changes settings, merging motion switches, and ignores no-op changes', () => {
+    const t = setup();
+    t.run({ t: 'settings.set', settings: { searchEngine: 'kagi', motion: { sidebar: false } } });
+    expect(t.state.settings.searchEngine).toBe('kagi');
+    expect(t.state.settings.motion).toMatchObject({ sidebar: false, tabMoves: true, followSystem: true });
+    expect(t.run({ t: 'settings.set', settings: { motion: { sidebar: false } } }).patches).toHaveLength(0);
+  });
+
+  it("updates a chord's theme and clamps grain", () => {
+    const t = setup();
+    t.run({ t: 'chord.theme', chordId: 'c1', theme: { grain: 3, appearance: 'dark' } });
+    expect(t.state.chords['c1']!.theme).toMatchObject({ grain: 1, appearance: 'dark' });
+    t.run({ t: 'chord.theme', chordId: 'c1', theme: { stops: [{ l: 0.7, c: 0.15, h: 30 }] } });
+    expect(t.state.chords['c1']!.theme.stops).toEqual([{ l: 0.7, c: 0.15, h: 30 }]);
+  });
+
   it('produces no patches (and keeps the version) for no-op updates', () => {
     const t = setup();
     t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });

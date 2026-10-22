@@ -1,4 +1,3 @@
-import { MotionConfig } from 'motion/react';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../assets/fonts/fonts.css';
@@ -15,9 +14,6 @@ const mirror = await createMirror(api.state);
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {/* Motion's default ignores the OS; "user" honors reduced motion (DESIGN.md §6.6). */}
-    <MotionConfig reducedMotion="user">
-      <App initialInfo={info} mirror={mirror} />
-    </MotionConfig>
+    <App initialInfo={info} mirror={mirror} />
   </StrictMode>,
 );

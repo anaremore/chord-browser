@@ -58,6 +58,18 @@ function registerIpc(): void {
   handle('action:run', ({ action }, sender) => {
     browser!.run(action, sender);
   });
+  handle('settings:snapshot', () => browser!.settingsSnapshot());
+  handle('settings:set', (settings) => browser!.store.dispatch({ t: 'settings.set', settings }));
+  handle('settings:theme', ({ chordId, theme }) => browser!.store.dispatch({ t: 'chord.theme', chordId, theme }));
+  handle('settings:about', () => ({
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    chromium: process.versions.chrome,
+    node: process.versions.node,
+    platform: systemInfo().platform,
+    arch: process.arch,
+  }));
+  handle('settings:openUrl', ({ url }) => browser!.openUrlInLastWindow(url));
 }
 
 if (!app.requestSingleInstanceLock()) {

@@ -77,6 +77,9 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
         submenu: [
           { role: 'about' },
           { type: 'separator' },
+          item('Settings…', 'app.settings'),
+          item('Keyboard Shortcuts', 'app.shortcuts'),
+          { type: 'separator' },
           { role: 'services' },
           { type: 'separator' },
           { role: 'hide' },
@@ -172,7 +175,10 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
       ],
     },
     { type: 'separator' },
+    item('Settings', 'app.settings'),
+    item('Keyboard shortcuts', 'app.shortcuts'),
     help,
+    { type: 'separator' },
     item('Close window', 'window.close'),
     ...(platform === 'linux' ? [item('Quit Chord', 'app.quit')] : []),
   ];

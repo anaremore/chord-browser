@@ -38,16 +38,27 @@ function frameOrigin(sidebar: SidebarMode): FrameOrigin {
 const FRAME_SPRING = springCurve(springs.smooth);
 const FRAME_TICK_MS = 1000 / 60;
 
-function uiUrl(surface: 'shell' | 'overlay'): string {
+export type UiSurface = 'shell' | 'overlay' | 'settings';
+
+/** Each surface's preload and IPC role. Internal pages share one narrow preload. */
+const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
+  shell: { preload: 'shell', role: 'shell' },
+  overlay: { preload: 'overlay', role: 'overlay' },
+  settings: { preload: 'internal', role: 'internal' },
+};
+
+function uiUrl(surface: UiSurface): string {
   const dev = process.env['ELECTRON_RENDERER_URL'];
   return dev ? `${dev}/${surface}/index.html` : `chord://${surface}/`;
 }
 
-function createUiView(uiSession: Session, surface: 'shell' | 'overlay', role: Role): WebContentsView {
+/** A view of Chord's own UI: sandboxed, on the in-memory UI session, locked to its origin. */
+export function createUiView(uiSession: Session, surface: UiSurface, hash?: string): WebContentsView {
+  const { preload, role } = SURFACES[surface];
   const view = new WebContentsView({
     webPreferences: {
       session: uiSession,
-      preload: join(import.meta.dirname, `../preload/${surface}.cjs`),
+      preload: join(import.meta.dirname, `../preload/${preload}.cjs`),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -60,7 +71,7 @@ function createUiView(uiSession: Session, surface: 'shell' | 'overlay', role: Ro
   if (!origin) throw new Error(`Bad UI URL ${url}`);
   registerCaller(view.webContents, role, [origin]);
   lockToOrigins(view.webContents, [origin]);
-  void view.webContents.loadURL(url);
+  void view.webContents.loadURL(hash ? `${url}#${encodeURIComponent(hash)}` : url);
   return view;
 }
 
@@ -88,8 +99,8 @@ export class AppWindow {
     });
     if (bounds?.maximized) this.window.maximize();
 
-    this.shell = createUiView(uiSession, 'shell', 'shell');
-    this.overlay = createUiView(uiSession, 'overlay', 'overlay');
+    this.shell = createUiView(uiSession, 'shell');
+    this.overlay = createUiView(uiSession, 'overlay');
     this.overlay.setVisible(false);
     this.window.contentView.addChildView(this.shell);
     this.window.contentView.addChildView(this.overlay);

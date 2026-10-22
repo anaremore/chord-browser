@@ -5,6 +5,8 @@
  * script-like schemes are never navigated to, and anything with a space is a search.
  */
 
+import type { SearchEngineId } from './model';
+
 export type ParsedInput = { kind: 'url'; url: string } | { kind: 'search'; query: string };
 
 /** Typed URLs with these schemes are searched instead of opened. */
@@ -45,14 +47,32 @@ export function parseInput(raw: string): ParsedInput | null {
   return { kind: 'search', query: text };
 }
 
-/** Google is the default engine (decided 2026-10-22); others come with Settings in M1.5. */
-export function searchUrl(query: string): string {
-  return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+export interface SearchEngine {
+  id: SearchEngineId;
+  name: string;
+  /** The results page; the query is appended URL-encoded. */
+  prefix: string;
+}
+
+/** Google is the default (decided 2026-10-22). Order is the order Settings lists them. */
+export const SEARCH_ENGINES: readonly SearchEngine[] = [
+  { id: 'google', name: 'Google', prefix: 'https://www.google.com/search?q=' },
+  { id: 'duckduckgo', name: 'DuckDuckGo', prefix: 'https://duckduckgo.com/?q=' },
+  { id: 'bing', name: 'Bing', prefix: 'https://www.bing.com/search?q=' },
+  { id: 'brave', name: 'Brave Search', prefix: 'https://search.brave.com/search?q=' },
+  { id: 'kagi', name: 'Kagi', prefix: 'https://kagi.com/search?q=' },
+  { id: 'ecosia', name: 'Ecosia', prefix: 'https://www.ecosia.org/search?q=' },
+];
+
+export const searchEngine = (id: SearchEngineId): SearchEngine => SEARCH_ENGINES.find((e) => e.id === id) ?? SEARCH_ENGINES[0]!;
+
+export function searchUrl(query: string, engine: SearchEngineId = 'google'): string {
+  return `${searchEngine(engine).prefix}${encodeURIComponent(query)}`;
 }
 
 /** The URL to open for typed input, or null for empty input. */
-export function resolveInput(raw: string): string | null {
+export function resolveInput(raw: string, engine: SearchEngineId = 'google'): string | null {
   const parsed = parseInput(raw);
   if (!parsed) return null;
-  return parsed.kind === 'url' ? parsed.url : searchUrl(parsed.query);
+  return parsed.kind === 'url' ? parsed.url : searchUrl(parsed.query, engine);
 }

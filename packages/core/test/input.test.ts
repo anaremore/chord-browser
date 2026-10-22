@@ -35,5 +35,7 @@ describe('parseInput', () => {
   it('searches Google by default', () => {
     expect(resolveInput('chord browser')).toBe('https://www.google.com/search?q=chord%20browser');
     expect(searchUrl('a&b')).toBe('https://www.google.com/search?q=a%26b');
+    expect(resolveInput('chord browser', 'duckduckgo')).toBe('https://duckduckgo.com/?q=chord%20browser');
+    expect(searchUrl('x', 'kagi')).toBe('https://kagi.com/search?q=x');
   });
 });

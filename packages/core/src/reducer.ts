@@ -10,9 +10,11 @@ import {
   IDLE_LIVE,
   type Bounds,
   type ChordId,
+  type ChordThemeSpec,
   type ClosedTab,
   type LiveTab,
   type NodeId,
+  type SettingsPatch,
   type State,
   type TabNode,
   type WindowId,
@@ -33,7 +35,9 @@ export type Command =
   | { t: 'tab.updated'; nodeId: NodeId; url?: string; title?: string; favicon?: string | null }
   | { t: 'tab.live'; nodeId: NodeId; live: Partial<LiveTab> }
   | { t: 'window.bounds'; windowId: WindowId; bounds: Bounds }
-  | { t: 'window.sidebar'; windowId: WindowId; sidebar: 'docked' | 'collapsed' };
+  | { t: 'window.sidebar'; windowId: WindowId; sidebar: 'docked' | 'collapsed' }
+  | { t: 'settings.set'; settings: SettingsPatch }
+  | { t: 'chord.theme'; chordId: ChordId; theme: Partial<ChordThemeSpec> };
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -227,6 +231,25 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (!win || win.sidebar === cmd.sidebar) return;
       win.sidebar = cmd.sidebar;
       effects.push({ e: 'window.layout', windowId: cmd.windowId, sidebar: cmd.sidebar });
+      return;
+    }
+
+    case 'settings.set': {
+      const { searchEngine, motion } = cmd.settings;
+      if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
+      for (const [key, value] of Object.entries(motion ?? {}) as [keyof typeof draft.settings.motion, boolean | undefined][]) {
+        if (value !== undefined && draft.settings.motion[key] !== value) draft.settings.motion[key] = value;
+      }
+      return;
+    }
+
+    case 'chord.theme': {
+      const theme = draft.chords[cmd.chordId]?.theme;
+      if (!theme) return;
+      const { stops, grain, appearance } = cmd.theme;
+      if (stops) theme.stops = stops;
+      if (grain !== undefined && theme.grain !== grain) theme.grain = Math.min(1, Math.max(0, grain));
+      if (appearance && theme.appearance !== appearance) theme.appearance = appearance;
       return;
     }
   }

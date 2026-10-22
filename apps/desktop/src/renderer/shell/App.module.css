@@ -410,6 +410,12 @@ kbd {
   inset-inline-start: var(--size-frame-inset);
 }
 
+/* Settings → Motion → "Animate the sidebar" off: collapse and dock are instant. */
+:global(:root[data-motion-off~='sidebar']) .window .sidebar,
+:global(:root[data-motion-off~='sidebar']) .window .frame {
+  transition-duration: var(--duration-instant);
+}
+
 .empty {
   display: flex;
   flex-direction: column;

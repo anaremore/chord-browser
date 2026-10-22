@@ -1,11 +1,11 @@
 import { activeTabId, formatKeys, shortcutById, tabsInOrder, type ActionId, type LiveTab, type TabNode } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
 import { ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, Plus, RotateCw, X } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
-import type { MouseEvent } from 'react';
+import { AnimatePresence, motion, MotionConfig } from 'motion/react';
+import { useEffect, type MouseEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { useMirror, type Mirror } from '../shared/mirror';
-import { spring } from '../shared/motion';
+import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
@@ -116,6 +116,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const overlayChrome = info.windowChrome.kind === 'overlay';
   const secure = active?.url.startsWith('https:') ?? false;
   const collapsed = win?.sidebar === 'collapsed';
+  const spring = springsFor(state.settings, info.prefersReducedMotion);
+  useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
 
   const dispatch = api.state.dispatch;
   const closeTab = (id: string) => void dispatch({ t: 'tab.close', windowId, nodeId: id });
@@ -125,168 +127,171 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
     void api.menu.app({ x: r.x, y: r.y, width: r.width, height: r.height });
   };
 
+  // Motion's default ignores the OS; "user" honors reduced motion (DESIGN.md §6.6) unless Settings says not to.
   return (
-    <div className={styles.window} data-sidebar={collapsed ? 'collapsed' : 'docked'} style={style}>
-      <div className={styles.backdrop} aria-hidden>
-        <div className={styles.tint} />
-        <div className={styles.grain} />
-      </div>
-
-      <nav className={styles.sidebar} aria-label="Sidebar" inert={collapsed} aria-hidden={collapsed}>
-        <header className={styles.header}>
-          <SidebarToggle collapsed={collapsed} info={info} onToggle={toggleSidebar} />
-          {!overlayChrome && <span className={styles.flex} />}
-          <NavButtons live={live} hasTab={Boolean(active)} info={info} />
-        </header>
-
-        <button
-          ref={collapsed ? undefined : anchorRef}
-          type="button"
-          className={styles.urlPill}
-          title={active?.url ?? ''}
-          onClick={() => void api.overlay.open('edit')}
-        >
-          {secure ? <Lock size={12} strokeWidth={2} aria-hidden /> : <Globe size={12} strokeWidth={2} aria-hidden />}
-          <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
-          <kbd className={styles.pillKeycap}>{keycap('address.edit', info)}</kbd>
-        </button>
-
-        <div className={styles.chordHeader}>
-          <span className={styles.chordIcon} aria-hidden>
-            {chord?.icon ?? '✦'}
-          </span>
-          <span className={styles.ellipsis}>{chord?.name ?? ''}</span>
+    <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
+      <div className={styles.window} data-sidebar={collapsed ? 'collapsed' : 'docked'} style={style}>
+        <div className={styles.backdrop} aria-hidden>
+          <div className={styles.tint} />
+          <div className={styles.grain} />
         </div>
 
-        <div className={styles.divider} role="separator" />
+        <nav className={styles.sidebar} aria-label="Sidebar" inert={collapsed} aria-hidden={collapsed}>
+          <header className={styles.header}>
+            <SidebarToggle collapsed={collapsed} info={info} onToggle={toggleSidebar} />
+            {!overlayChrome && <span className={styles.flex} />}
+            <NavButtons live={live} hasTab={Boolean(active)} info={info} />
+          </header>
 
-        <button type="button" className={`${styles.row} ${styles.newTab}`} onClick={() => void api.overlay.open('new')}>
-          <Plus {...ICON} aria-hidden />
-          <span className={styles.ellipsis}>New tab</span>
-          <kbd className={styles.rowKeycap}>{keycap('tab.new', info)}</kbd>
-        </button>
-
-        <ul className={styles.list} aria-label="Today">
-          <AnimatePresence initial={false} mode="popLayout">
-            {tabs.map((tab) => {
-              const isActive = tab.id === activeId;
-              const tabLive = state.live[tab.id];
-              return (
-                <motion.li
-                  key={tab.id}
-                  layout="position"
-                  className={styles.item}
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, x: -8 }}
-                  transition={spring('smooth', 'tabMoves')}
-                  onMouseDown={(e: MouseEvent) => {
-                    if (e.button === 1) e.preventDefault(); // no autoscroll
-                  }}
-                  onAuxClick={(e: MouseEvent) => {
-                    if (e.button === 1) closeTab(tab.id);
-                  }}
-                  onContextMenu={(e: MouseEvent) => {
-                    e.preventDefault();
-                    void api.menu.tab(tab.id, { x: e.clientX, y: e.clientY });
-                  }}
-                >
-                  {isActive && (
-                    <motion.span layoutId="active-pill" className={styles.activePill} transition={spring('snappy', 'tabMoves')} />
-                  )}
-                  <button
-                    type="button"
-                    className={`${styles.row} ${isActive ? styles.active : ''}`}
-                    aria-current={isActive ? 'page' : undefined}
-                    title={pageTitle(tab) || tab.url}
-                    onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
-                  >
-                    <Favicon
-                      url={tab.url}
-                      title={tab.title}
-                      favicon={tab.favicon}
-                      loading={Boolean(tabLive?.loading) && !tab.favicon}
-                      appearance={appearance}
-                    />
-                    <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.close}
-                    aria-label={`Close ${tab.title || 'tab'}`}
-                    title={withKeys('Close tab', 'tab.close', info)}
-                    onClick={() => closeTab(tab.id)}
-                  >
-                    <X size={14} strokeWidth={2} />
-                  </button>
-                </motion.li>
-              );
-            })}
-          </AnimatePresence>
-        </ul>
-
-        <span className={styles.flex} />
-
-        <footer className={styles.footer}>
-          <span className={styles.switcherPill} title={chord?.name} aria-label={`Chord: ${chord?.name ?? ''}`}>
-            {chord?.icon ?? '✦'}
-          </span>
-        </footer>
-      </nav>
-
-      {/* The top bar: right of the sidebar on Windows/Linux; the whole minimal bar when collapsed (DESIGN.md §3.3). */}
-      {(overlayChrome || collapsed) && (
-        <div className={styles.bar}>
-          {collapsed && (
-            <div className={styles.barLead}>
-              <SidebarToggle collapsed info={info} onToggle={toggleSidebar} />
-              <NavButtons live={live} hasTab={Boolean(active)} info={info} />
-            </div>
-          )}
           <button
-            ref={collapsed ? anchorRef : undefined}
+            ref={collapsed ? undefined : anchorRef}
             type="button"
-            className={styles.address}
+            className={styles.urlPill}
             title={active?.url ?? ''}
             onClick={() => void api.overlay.open('edit')}
           >
-            {host ? (
-              <>
-                <span className={styles.addressHost}>{host}</span>
-                {title && (
-                  <>
-                    <span className={styles.addressMuted} aria-hidden>
-                      /
-                    </span>
-                    <span className={`${styles.addressMuted} ${styles.ellipsis}`}>{title}</span>
-                  </>
-                )}
-              </>
-            ) : (
-              <span className={styles.addressMuted}>Search or enter address</span>
-            )}
+            {secure ? <Lock size={12} strokeWidth={2} aria-hidden /> : <Globe size={12} strokeWidth={2} aria-hidden />}
+            <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
+            <kbd className={styles.pillKeycap}>{keycap('address.edit', info)}</kbd>
           </button>
-          <span className={styles.flex} />
-          {overlayChrome && (
-            <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>
-              <Ellipsis {...ICON} />
-            </button>
-          )}
-        </div>
-      )}
-      {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
 
-      <div className={styles.frame}>
-        {!active && (
-          <div className={styles.empty}>
-            <p className={styles.emptyTitle}>Fresh chord, fresh start.</p>
-            <p className={styles.emptyBody}>Open a site, or search for anything.</p>
-            <button type="button" className={styles.emptyButton} onClick={() => void api.overlay.open('new')}>
-              New tab <kbd className={styles.inlineKeycap}>{keycap('tab.new', info)}</kbd>
+          <div className={styles.chordHeader}>
+            <span className={styles.chordIcon} aria-hidden>
+              {chord?.icon ?? '✦'}
+            </span>
+            <span className={styles.ellipsis}>{chord?.name ?? ''}</span>
+          </div>
+
+          <div className={styles.divider} role="separator" />
+
+          <button type="button" className={`${styles.row} ${styles.newTab}`} onClick={() => void api.overlay.open('new')}>
+            <Plus {...ICON} aria-hidden />
+            <span className={styles.ellipsis}>New tab</span>
+            <kbd className={styles.rowKeycap}>{keycap('tab.new', info)}</kbd>
+          </button>
+
+          <ul className={styles.list} aria-label="Today">
+            <AnimatePresence initial={false} mode="popLayout">
+              {tabs.map((tab) => {
+                const isActive = tab.id === activeId;
+                const tabLive = state.live[tab.id];
+                return (
+                  <motion.li
+                    key={tab.id}
+                    layout="position"
+                    className={styles.item}
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, x: -8 }}
+                    transition={spring('smooth', 'tabMoves')}
+                    onMouseDown={(e: MouseEvent) => {
+                      if (e.button === 1) e.preventDefault(); // no autoscroll
+                    }}
+                    onAuxClick={(e: MouseEvent) => {
+                      if (e.button === 1) closeTab(tab.id);
+                    }}
+                    onContextMenu={(e: MouseEvent) => {
+                      e.preventDefault();
+                      void api.menu.tab(tab.id, { x: e.clientX, y: e.clientY });
+                    }}
+                  >
+                    {isActive && (
+                      <motion.span layoutId="active-pill" className={styles.activePill} transition={spring('snappy', 'tabMoves')} />
+                    )}
+                    <button
+                      type="button"
+                      className={`${styles.row} ${isActive ? styles.active : ''}`}
+                      aria-current={isActive ? 'page' : undefined}
+                      title={pageTitle(tab) || tab.url}
+                      onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
+                    >
+                      <Favicon
+                        url={tab.url}
+                        title={tab.title}
+                        favicon={tab.favicon}
+                        loading={Boolean(tabLive?.loading) && !tab.favicon}
+                        appearance={appearance}
+                      />
+                      <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.close}
+                      aria-label={`Close ${tab.title || 'tab'}`}
+                      title={withKeys('Close tab', 'tab.close', info)}
+                      onClick={() => closeTab(tab.id)}
+                    >
+                      <X size={14} strokeWidth={2} />
+                    </button>
+                  </motion.li>
+                );
+              })}
+            </AnimatePresence>
+          </ul>
+
+          <span className={styles.flex} />
+
+          <footer className={styles.footer}>
+            <span className={styles.switcherPill} title={chord?.name} aria-label={`Chord: ${chord?.name ?? ''}`}>
+              {chord?.icon ?? '✦'}
+            </span>
+          </footer>
+        </nav>
+
+        {/* The top bar: right of the sidebar on Windows/Linux; the whole minimal bar when collapsed (DESIGN.md §3.3). */}
+        {(overlayChrome || collapsed) && (
+          <div className={styles.bar}>
+            {collapsed && (
+              <div className={styles.barLead}>
+                <SidebarToggle collapsed info={info} onToggle={toggleSidebar} />
+                <NavButtons live={live} hasTab={Boolean(active)} info={info} />
+              </div>
+            )}
+            <button
+              ref={collapsed ? anchorRef : undefined}
+              type="button"
+              className={styles.address}
+              title={active?.url ?? ''}
+              onClick={() => void api.overlay.open('edit')}
+            >
+              {host ? (
+                <>
+                  <span className={styles.addressHost}>{host}</span>
+                  {title && (
+                    <>
+                      <span className={styles.addressMuted} aria-hidden>
+                        /
+                      </span>
+                      <span className={`${styles.addressMuted} ${styles.ellipsis}`}>{title}</span>
+                    </>
+                  )}
+                </>
+              ) : (
+                <span className={styles.addressMuted}>Search or enter address</span>
+              )}
             </button>
+            <span className={styles.flex} />
+            {overlayChrome && (
+              <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>
+                <Ellipsis {...ICON} />
+              </button>
+            )}
           </div>
         )}
+        {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
+
+        <div className={styles.frame}>
+          {!active && (
+            <div className={styles.empty}>
+              <p className={styles.emptyTitle}>Fresh chord, fresh start.</p>
+              <p className={styles.emptyBody}>Open a site, or search for anything.</p>
+              <button type="button" className={styles.emptyButton} onClick={() => void api.overlay.open('new')}>
+                New tab <kbd className={styles.inlineKeycap}>{keycap('tab.new', info)}</kbd>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </MotionConfig>
   );
 }

@@ -5,12 +5,31 @@
  */
 import { formatKeys, shortcutById, type ActionId } from '@chord/core';
 import type { OverlayOpenEvent, SystemInfo } from '@chord/ipc';
-import { ArrowDown, ArrowUp, CornerDownLeft, Globe, Link, RotateCcw, Search, X } from 'lucide-react';
-import { motion } from 'motion/react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Code,
+  CornerDownLeft,
+  Globe,
+  Keyboard,
+  Link,
+  Maximize,
+  PanelLeft,
+  Printer,
+  RotateCcw,
+  RotateCw,
+  Search,
+  Settings,
+  SquareTerminal,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
+import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { useMirror, type Mirror } from '../shared/mirror';
-import { spring } from '../shared/motion';
+import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './CommandBar.module.css';
@@ -27,8 +46,20 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'tab.reopen': RotateCcw,
   'tab.close': X,
   'address.copy': Link,
+  'address.copyMarkdown': Link,
   'tab.next': ArrowDown,
   'tab.previous': ArrowUp,
+  'nav.hardReload': RotateCw,
+  'view.toggleSidebar': PanelLeft,
+  'view.zoomIn': ZoomIn,
+  'view.zoomOut': ZoomOut,
+  'view.zoomReset': Search,
+  'view.fullscreen': Maximize,
+  'page.print': Printer,
+  'page.viewSource': Code,
+  'app.devtools': SquareTerminal,
+  'app.settings': Settings,
+  'app.shortcuts': Keyboard,
 };
 
 /** Anchored panels are at least this wide, so results have room beside a narrow sidebar. */
@@ -55,6 +86,8 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   const windowId = mirror.windowId;
   const win = state.windows[windowId];
   const { style, appearance } = chordStyle(win ? state.chords[win.activeChordId] : undefined, info);
+  const spring = springsFor(state.settings, info.prefersReducedMotion);
+  useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
 
   const [session, setSession] = useState<Session | null>(null);
   const [query, setQuery] = useState('');
@@ -99,17 +132,10 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       else void dispatch({ t: 'tab.open', windowId, url: result.url, background });
     } else if (result.kind === 'tab') {
       void dispatch({ t: 'tab.activate', windowId, nodeId: result.tab.id });
-    } else if (result.action === 'tab.reopen') {
-      void dispatch({ t: 'tab.reopenClosed', windowId });
-    } else if (result.action === 'tab.close' && activeId) {
-      void dispatch({ t: 'tab.close', windowId, nodeId: activeId });
-    } else if (result.action === 'tab.next' || result.action === 'tab.previous') {
-      void dispatch({ t: 'tab.cycle', windowId, direction: result.action === 'tab.next' ? 1 : -1 });
-    } else if (result.action === 'address.copy' && activeId) {
-      const node = state.nodes[activeId];
-      if (node?.kind === 'tab') void navigator.clipboard.writeText(node.url);
     }
     close();
+    // Actions run after the bar closes, so focus is back on the page (print, devtools, zoom act on it).
+    if (result.kind === 'action') void api.action.run(result.action);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -145,81 +171,83 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   const InputIcon = query && results[0]?.kind === 'open' && !results[0].search ? Globe : Search;
 
   return (
-    <div className={styles.root} style={style}>
-      <motion.div
-        className={styles.scrim}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={spring('gentle', 'commandBar')}
-        onMouseDown={close}
-      />
-      <div className={anchored ? undefined : styles.frameArea}>
+    <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
+      <div className={styles.root} style={style}>
         <motion.div
-          key={session.openedAt}
-          className={`${styles.panel} ${anchored ? styles.anchored : styles.centered}`}
-          style={panelStyle}
-          initial={entrance}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={spring('overlay', 'commandBar')}
-          role="dialog"
-          aria-label={anchored ? 'Edit address' : 'New tab'}
-        >
-          <div className={styles.inputRow}>
-            <InputIcon className={styles.inputIcon} size={anchored ? 14 : 18} strokeWidth={1.75} aria-hidden />
-            <input
-              ref={inputRef}
-              className={styles.input}
-              value={query}
-              placeholder="Search or enter address"
-              spellCheck={false}
-              autoComplete="off"
-              aria-autocomplete="list"
-              aria-controls="command-results"
-              aria-activedescendant={results[current] ? `result-${current}` : undefined}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setSelected(0);
-              }}
-              onKeyDown={onKeyDown}
-            />
-          </div>
-          {results.length > 0 && (
-            <ul id="command-results" className={styles.results} role="listbox">
-              {results.map((result, i) => {
-                const Icon = result.kind === 'action' ? (ACTION_ICONS[result.action] ?? CornerDownLeft) : result.kind === 'open' ? (result.search ? Search : Globe) : null;
-                const isSelected = i === current;
-                return (
-                  <li
-                    key={result.key}
-                    id={`result-${i}`}
-                    role="option"
-                    aria-selected={isSelected}
-                    className={`${styles.result} ${isSelected ? styles.selected : ''}`}
-                    onMouseMove={() => i !== current && setSelected(i)}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={(e) => run(result, info.platform === 'darwin' ? e.metaKey : e.ctrlKey)}
-                  >
-                    {result.kind === 'tab' ? (
-                      <Favicon url={result.tab.url} title={result.tab.title} favicon={result.tab.favicon} appearance={appearance} />
-                    ) : (
-                      Icon && <Icon className={styles.resultIcon} size={16} strokeWidth={1.75} aria-hidden />
-                    )}
-                    <span className={styles.resultTitle}>{result.title}</span>
-                    {result.kind !== 'action' && result.detail && <span className={styles.resultDetail}>{result.detail}</span>}
-                    {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
-                    {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform)}</kbd>}
-                    {isSelected && (
-                      <span className={styles.hint}>
-                        {hintFor(result, session.mode)} <kbd className={styles.keycap}>↵</kbd>
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </motion.div>
+          className={styles.scrim}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={spring('gentle', 'commandBar')}
+          onMouseDown={close}
+        />
+        <div className={anchored ? undefined : styles.frameArea}>
+          <motion.div
+            key={session.openedAt}
+            className={`${styles.panel} ${anchored ? styles.anchored : styles.centered}`}
+            style={panelStyle}
+            initial={entrance}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={spring('overlay', 'commandBar')}
+            role="dialog"
+            aria-label={anchored ? 'Edit address' : 'New tab'}
+          >
+            <div className={styles.inputRow}>
+              <InputIcon className={styles.inputIcon} size={anchored ? 14 : 18} strokeWidth={1.75} aria-hidden />
+              <input
+                ref={inputRef}
+                className={styles.input}
+                value={query}
+                placeholder="Search or enter address"
+                spellCheck={false}
+                autoComplete="off"
+                aria-autocomplete="list"
+                aria-controls="command-results"
+                aria-activedescendant={results[current] ? `result-${current}` : undefined}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setSelected(0);
+                }}
+                onKeyDown={onKeyDown}
+              />
+            </div>
+            {results.length > 0 && (
+              <ul id="command-results" className={styles.results} role="listbox">
+                {results.map((result, i) => {
+                  const Icon = result.kind === 'action' ? (ACTION_ICONS[result.action] ?? CornerDownLeft) : result.kind === 'open' ? (result.search ? Search : Globe) : null;
+                  const isSelected = i === current;
+                  return (
+                    <li
+                      key={result.key}
+                      id={`result-${i}`}
+                      role="option"
+                      aria-selected={isSelected}
+                      className={`${styles.result} ${isSelected ? styles.selected : ''}`}
+                      onMouseMove={() => i !== current && setSelected(i)}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => run(result, info.platform === 'darwin' ? e.metaKey : e.ctrlKey)}
+                    >
+                      {result.kind === 'tab' ? (
+                        <Favicon url={result.tab.url} title={result.tab.title} favicon={result.tab.favicon} appearance={appearance} />
+                      ) : (
+                        Icon && <Icon className={styles.resultIcon} size={16} strokeWidth={1.75} aria-hidden />
+                      )}
+                      <span className={styles.resultTitle}>{result.title}</span>
+                      {result.kind !== 'action' && result.detail && <span className={styles.resultDetail}>{result.detail}</span>}
+                      {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
+                      {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform)}</kbd>}
+                      {isSelected && (
+                        <span className={styles.hint}>
+                          {hintFor(result, session.mode)} <kbd className={styles.keycap}>↵</kbd>
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </motion.div>
+        </div>
       </div>
-    </div>
+    </MotionConfig>
   );
 }

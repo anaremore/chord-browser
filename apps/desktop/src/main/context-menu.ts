@@ -3,7 +3,7 @@
  * Web pages always offer Inspect. Chord's own UI gets editing items only, plus
  * Inspect in development builds.
  */
-import { searchUrl, type ActionId, type Platform } from '@chord/core';
+import { searchEngine, searchUrl, type ActionId, type Platform, type SearchEngineId } from '@chord/core';
 import { clipboard, Menu, type BaseWindow, type ContextMenuParams, type MenuItemConstructorOptions, type WebContents } from 'electron';
 import { acceleratorFor } from './menu';
 import { platform } from './platform';
@@ -13,6 +13,8 @@ export interface ContextMenuDeps {
   surface: 'web' | 'ui';
   /** Offer Inspect (always for pages; development builds only for Chord's UI). */
   inspect: boolean;
+  /** The engine for "Search … for" on selected text. */
+  searchEngine(): SearchEngineId;
   openTab(url: string, background: boolean): void;
   /** The window showing this contents, and the view's offset in it, to place the menu where the click was. */
   placement(): { window: BaseWindow; x: number; y: number } | undefined;
@@ -78,7 +80,10 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
   } else if (params.selectionText.trim()) {
     section(
       { label: 'Copy', role: 'copy' },
-      { label: `Search Google for “${preview(params.selectionText)}”`, click: () => deps.openTab(searchUrl(params.selectionText.trim()), false) },
+      {
+        label: `Search ${searchEngine(deps.searchEngine()).name} for “${preview(params.selectionText)}”`,
+        click: () => deps.openTab(searchUrl(params.selectionText.trim(), deps.searchEngine()), false),
+      },
     );
   }
 

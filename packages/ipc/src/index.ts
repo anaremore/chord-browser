@@ -3,7 +3,17 @@
  * with the renderer roles allowed to use it and zod schemas for its payloads.
  * Main validates every request against this table; web content gets no IPC.
  */
-import { SHORTCUTS, type ActionId as CoreActionId, type Command, type State } from '@chord/core';
+import {
+  SEARCH_ENGINES,
+  SHORTCUTS,
+  type ActionId as CoreActionId,
+  type Chord,
+  type Command,
+  type SearchEngineId,
+  type Settings,
+  type SettingsPatch as CoreSettingsPatch,
+  type State,
+} from '@chord/core';
 import { z } from 'zod';
 
 export type Role = 'shell' | 'overlay' | 'popover' | 'internal';
@@ -52,6 +62,50 @@ export type RendererCommand = z.infer<typeof RendererCommand>;
 const _commandsMatch = (c: RendererCommand): Command => c;
 void _commandsMatch;
 
+const engineIds = SEARCH_ENGINES.map((e) => e.id) as [SearchEngineId, ...SearchEngineId[]];
+
+export const SettingsPatch = z.strictObject({
+  searchEngine: z.enum(engineIds).optional(),
+  motion: z
+    .strictObject({
+      followSystem: z.boolean(),
+      commandBar: z.boolean(),
+      chordSlide: z.boolean(),
+      tabMoves: z.boolean(),
+      sidebar: z.boolean(),
+      colorBlend: z.boolean(),
+    })
+    .partial()
+    .optional(),
+});
+export type SettingsPatch = z.infer<typeof SettingsPatch>;
+const _settingsMatch = (p: SettingsPatch): CoreSettingsPatch => p;
+void _settingsMatch;
+
+const Oklch = z.strictObject({ l: z.number().min(0).max(1), c: z.number().min(0).max(0.4), h: z.number().min(0).max(360) });
+
+export const ChordThemePatch = z.strictObject({
+  stops: z.array(Oklch).min(1).max(3).optional(),
+  grain: z.number().min(0).max(1).optional(),
+  appearance: z.enum(['light', 'dark', 'auto']).optional(),
+});
+export type ChordThemePatch = z.infer<typeof ChordThemePatch>;
+
+/** What the Settings window shows: settings, and the chord in the last-used window (for Appearance). */
+export interface SettingsSnapshot {
+  settings: Settings;
+  chord: Pick<Chord, 'id' | 'name' | 'icon' | 'theme'> | null;
+}
+
+export interface AboutInfo {
+  version: string;
+  electron: string;
+  chromium: string;
+  node: string;
+  platform: Platform;
+  arch: string;
+}
+
 export const Rect = z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() });
 export type Rect = z.infer<typeof Rect>;
 
@@ -97,6 +151,13 @@ export const invokeChannels = {
   'menu:tab': { roles: ['shell'], request: z.object({ nodeId: id, x: z.number(), y: z.number() }), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
+  // The Settings window (chord://settings). It sees settings and one chord's theme, not tabs.
+  'settings:snapshot': { roles: ['internal'], request: z.void(), response: z.custom<SettingsSnapshot>() },
+  'settings:set': { roles: ['internal'], request: SettingsPatch, response: z.void() },
+  'settings:theme': { roles: ['internal'], request: z.strictObject({ chordId: id, theme: ChordThemePatch }), response: z.void() },
+  'settings:about': { roles: ['internal'], request: z.void(), response: z.custom<AboutInfo>() },
+  /** Open a web link from Settings (About, help) in a new tab of the last-used window. */
+  'settings:openUrl': { roles: ['internal'], request: z.strictObject({ url: z.url({ protocol: /^https$/ }) }), response: z.void() },
 } as const satisfies Record<string, { roles: readonly Role[]; request: z.ZodType; response: z.ZodType }>;
 
 /** Main → renderer events (`webContents.send`). */
@@ -104,6 +165,9 @@ export interface EventPayloads {
   'system:changed': SystemInfo;
   'state:patch': StatePatchEvent;
   'overlay:open': OverlayOpenEvent;
+  'settings:changed': SettingsSnapshot;
+  /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
+  'settings:section': string;
 }
 
 export type InvokeChannel = keyof typeof invokeChannels;
@@ -133,6 +197,23 @@ export interface ShellApi {
   layout: { anchor(rect: Rect | null): Promise<void> };
   menu: { app(anchor: Rect): Promise<void>; tab(nodeId: string, at: { x: number; y: number }): Promise<void> };
   action: { run(action: CoreActionId): Promise<void> };
+}
+
+/** `window.chord` in the Settings window. */
+export interface SettingsApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  settings: {
+    snapshot(): Promise<SettingsSnapshot>;
+    onChange(listener: (snapshot: SettingsSnapshot) => void): () => void;
+    onSection(listener: (section: string) => void): () => void;
+    set(patch: SettingsPatch): Promise<void>;
+    theme(chordId: string, theme: ChordThemePatch): Promise<void>;
+    about(): Promise<AboutInfo>;
+    openUrl(url: string): Promise<void>;
+  };
 }
 
 /** `window.chord` in the command bar overlay. */

@@ -24,6 +24,26 @@ describe('IPC contract', () => {
     expect(schema.safeParse({ action: 42 }).success).toBe(false);
   });
 
+  it('accepts only known settings, engines and in-range themes', () => {
+    const set = invokeChannels['settings:set'].request;
+    expect(set.safeParse({ searchEngine: 'kagi', motion: { sidebar: false } }).success).toBe(true);
+    expect(set.safeParse({ searchEngine: 'evil.example' }).success).toBe(false);
+    expect(set.safeParse({ motion: { warp: true } }).success).toBe(false);
+    expect(set.safeParse({ telemetry: true }).success).toBe(false);
+    const theme = invokeChannels['settings:theme'].request;
+    expect(theme.safeParse({ chordId: 'c', theme: { grain: 0.4, appearance: 'dark' } }).success).toBe(true);
+    expect(theme.safeParse({ chordId: 'c', theme: { grain: 7 } }).success).toBe(false);
+    expect(theme.safeParse({ chordId: 'c', theme: { stops: [] } }).success).toBe(false);
+  });
+
+  it('lets Settings open only https links', () => {
+    const open = invokeChannels['settings:openUrl'].request;
+    expect(open.safeParse({ url: 'https://github.com/anaremore/chord-browser' }).success).toBe(true);
+    expect(open.safeParse({ url: 'javascript:alert(1)' }).success).toBe(false);
+    expect(open.safeParse({ url: 'file:///etc/passwd' }).success).toBe(false);
+    expect(invokeChannels['settings:set'].roles).toEqual(['internal']);
+  });
+
   it('keeps privileged channels away from the wrong roles', () => {
     expect(invokeChannels['nav:command'].roles).not.toContain('popover');
     expect(invokeChannels['overlay:open'].roles).toEqual(['shell']);

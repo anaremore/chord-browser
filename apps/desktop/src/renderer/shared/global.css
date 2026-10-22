@@ -29,11 +29,10 @@ button {
   outline-offset: calc(var(--size-focus-ring) * -1);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    transition-duration: var(--duration-instant) !important;
-    animation-duration: var(--duration-instant) !important;
-  }
+/* Reduced motion: the OS preference, unless Settings → Motion says to ignore it (shared/motion.ts). */
+:root[data-reduced-motion] *,
+:root[data-reduced-motion] *::before,
+:root[data-reduced-motion] *::after {
+  transition-duration: var(--duration-instant) !important;
+  animation-duration: var(--duration-instant) !important;
 }

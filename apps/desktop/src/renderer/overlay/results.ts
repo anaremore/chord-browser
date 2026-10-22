@@ -3,7 +3,7 @@
  * M1.1 sources: the typed address or search, open tabs, and actions. History,
  * archive and Crest's ranking arrive in M1.4.
  */
-import { parseInput, searchUrl, type ActionId, type State, type TabNode } from '@chord/core';
+import { parseInput, searchEngine, searchUrl, type ActionId, type State, type TabNode } from '@chord/core';
 import uFuzzy from '@leeoniya/ufuzzy';
 import { displayHost, pageTitle } from '../shared/site';
 
@@ -17,8 +17,20 @@ const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'tab.reopen', title: 'Reopen closed tab', words: 'reopen closed tab undo restore' },
   { action: 'tab.close', title: 'Close tab', words: 'close tab' },
   { action: 'address.copy', title: 'Copy page address', words: 'copy url address link' },
+  { action: 'address.copyMarkdown', title: 'Copy as Markdown link', words: 'copy markdown link md' },
   { action: 'tab.next', title: 'Next tab', words: 'next tab down' },
   { action: 'tab.previous', title: 'Previous tab', words: 'previous tab up' },
+  { action: 'nav.hardReload', title: 'Reload, skipping the cache', words: 'hard reload refresh cache' },
+  { action: 'view.toggleSidebar', title: 'Show or hide sidebar', words: 'toggle hide show collapse sidebar minimal' },
+  { action: 'view.zoomIn', title: 'Zoom in', words: 'zoom in bigger larger' },
+  { action: 'view.zoomOut', title: 'Zoom out', words: 'zoom out smaller' },
+  { action: 'view.zoomReset', title: 'Actual size', words: 'zoom reset actual size 100' },
+  { action: 'view.fullscreen', title: 'Full screen', words: 'full screen fullscreen' },
+  { action: 'page.print', title: 'Print', words: 'print pdf' },
+  { action: 'page.viewSource', title: 'View page source', words: 'view source html code' },
+  { action: 'app.devtools', title: 'Developer tools', words: 'developer tools devtools inspect console' },
+  { action: 'app.settings', title: 'Settings', words: 'settings preferences options' },
+  { action: 'app.shortcuts', title: 'Keyboard shortcuts', words: 'keyboard shortcuts hotkeys keys cheat sheet' },
 ];
 
 const fuzzy = new uFuzzy({ intraMode: 1 });
@@ -68,7 +80,8 @@ export function buildResults(query: string, state: State, windowId: string, mode
   if (parsed?.kind === 'url') {
     out.push({ kind: 'open', key: 'open', title: parsed.url, detail: '', url: parsed.url, search: false });
   } else if (parsed) {
-    out.push({ kind: 'open', key: 'open', title: q, detail: 'Search Google', url: searchUrl(parsed.query), search: true });
+    const engine = state.settings.searchEngine;
+    out.push({ kind: 'open', key: 'open', title: q, detail: `Search ${searchEngine(engine).name}`, url: searchUrl(parsed.query, engine), search: true });
   }
 
   // In edit mode the query starts as the current address; don't echo the tab back.
