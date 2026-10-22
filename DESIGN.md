@@ -21,6 +21,7 @@ This document is the bar every UI change is reviewed against. Values here become
 11. [Platform adaptations](#11-platform-adaptations)
 12. [Design QA](#12-design-qa)
 13. [Open design questions](#13-open-design-questions)
+14. [Keyboard shortcuts](#14-keyboard-shortcuts)
 
 ---
 
@@ -92,7 +93,7 @@ macOS                                            Windows / Linux
 | Row | Height | Contents |
 |---|---|---|
 | Header | 40 | macOS: traffic lights (≈ 68 px reserved, `trafficLightPosition` centered in the row) then back/forward/reload. Windows/Linux: app menu ≡ (native menu) then back/forward/reload. |
-| URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L opens the command bar with the URL. Hover reveals copy link · page actions. |
+| URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L edits the address **in place**: the pill becomes a text field with the URL selected, and results drop down beneath it (§7.3). Hover reveals copy link · page actions. |
 | Chord header | 28 | Chord icon (16) + name (`text-label`). Hover shows the ⋯ menu (Edit theme, Rename, Keep sign-ins separate, Delete). |
 | Pinned | 32 / row | Pinned tabs and folders, nestable; indent 12 px per level, visually capped at 4 levels. |
 | Today divider | 24 | Hairline + "Clear" (`text-micro`), which appears on hover or focus and archives all Today tabs. |
@@ -379,7 +380,7 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | **New chord** | The switcher icon pops from 0.6 → 1 (`bouncy`), the sidebar slides to the new chord, and the empty-state art blooms in (`gentle`). |
 | **Collapse sidebar** | The sidebar slides out to the left (`snappy`). Back/forward/reload and the URL pill glide up into the bar (shared layout), and the pill morphs into the address field. The page frame widens using the snapshot technique (`smooth`). Docking reverses every piece. |
 | **Sidebar peek** (collapsed) | The sidebar slides in *over* the page with `shadow-popover` (`snappy`) and slides away 300 ms after the pointer leaves. The page doesn't move. |
-| **⌘L in minimal mode** | The address field expands into the command bar: the input keeps its position and text while the panel grows down beneath it (`overlay`). |
+| **Edit the address (⌘L)** | The URL pill (or, in minimal mode, the bar's address field) becomes the input where it sits: its text and position stay put while the results panel grows down beneath it (`overlay`). With *Animate into the command bar* off (§6.8), it appears instantly. |
 | **Duet panel** | The panel slides in from the right with `overlay`. The page's frame narrows through the snapshot technique: the bitmap scales over one `smooth` spring, then the real view is placed once. |
 
 ### 6.6 Reduced motion
@@ -401,6 +402,24 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 - The Today list virtualizes beyond 150 rows; reorder animations apply only to mounted rows.
 - `will-change: transform` is set only during an animation, never at rest.
 - Every interaction in §6.5 has a scripted trace test. Long Animation Frames over 8 ms (120 Hz) or 16 ms (60 Hz) fail locally on reference hardware.
+- Input never waits for motion: a field is focused and typeable on the first frame of its entrance animation.
+
+### 6.8 Motion settings
+
+Speed beats animation. Settings → Motion lets people switch off each larger animation. Switched off means **instant** (no animation is created at all), not shortened.
+
+| Setting | Default | Covers |
+|---|---|---|
+| Follow system motion settings | On | Everything in §6.6 |
+| Animate into the command bar | On | The ⌘L address morph and the ⌘T panel entrance |
+| Slide between chords | On | The chord switch. A trackpad swipe still follows your fingers; release just snaps. |
+| Animate tab moves | On | Pin flight, archive arc, reorder make-room, drop settle, close collapse |
+| Animate the sidebar | On | Collapse and dock, peek slide-in, folder open and close |
+| Blend chord colors | On | The theme crossfade when switching chords |
+
+- **Every setting in Chord, not only motion,** shows a ↺ button beside its label when it differs from the default; clicking it restores the default.
+- **Implementation:** one `motion(name)` helper resolves the OS preference, the user's switch and the spring token to either a spring or *instant*. Components never read settings themselves. Switches take effect immediately, with no restart.
+- **Rule:** a new animation ships with its switch, or belongs to one above.
 
 ---
 
@@ -415,6 +434,7 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar` |
 | Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `DownloadsPopover` |
 | Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState` |
+| Settings and help | `SettingRow` (label, control, and a ↺ reset button shown only when the value differs from its default), `ShortcutSheet` (the cheat sheet, generated from the shortcut registry) |
 | Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
 | Duet | `DuetPanel`, `ThreadHeader` (title, provider/model chip, thread menu), `MessageList`, `AssistantMessage` (with `CitationPill`), `ToolActivityRow`, `ApprovalCard`, `Composer` (`ContextChips`, input, send), `DuetSetup` |
 | Pages | `SettingsPage`, `ArchivePage`, `RecentlyDeleted` |
@@ -444,7 +464,10 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 ### 7.3 `CommandBar`
 
 - **Size and placement:** width `command-bar-width`; top at 18% of the frame height (min 64 px); radius `radius-lg`; padding `space-2`; `surface-raised` with `shadow-modal`.
-- **Input row:** 56 px, `text-input`. Placeholder: "Search or enter address". In ⌘L mode it shows the URL, fully selected.
+- **Two placements:**
+  - **Centered** (⌘T, new tab): the size and position above.
+  - **Anchored** (⌘L, edit this tab's address): the input sits exactly over the URL pill, or over the minimal bar's address field, showing the full URL selected. The results panel drops beneath it, at least 480 px wide, extending over the page. Esc restores the address.
+- **Input row:** 56 px (centered) or the pill's own height (anchored), `text-input`. Placeholder: "Search or enter address".
 - **Results:** rows of 40 px with `radius-sm`.
   - Row anatomy: `[icon or favicon 16] [title] [— domain, fg-muted, text-small] … [chord chip if another chord] [hint]`.
   - The hint shows on the selected row only, e.g. "Switch to tab ↵".
@@ -452,6 +475,9 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 - **Sections** (`text-micro` headers, 24 px) appear only when two or more kinds are present. Order: Top hit · Tabs · Pinned · History · Archive · Actions · "Search for …".
 - **Selection** is the accent at 14% alpha (light) or 22% (dark). The highlight glides between rows (`snappy`) for arrow keys and jumps instantly while typing.
 - **Inline autocomplete:** the completed suffix is selected in the input; Tab accepts it.
+- **Where a result opens** is chosen by the Enter key: ↵ here · ⌘↵ new background tab · ⇧↵ new window · ⌥↵ split (Phase 2).
+- **Narrowing:** `@tabs`, `@pinned`, `@history`, `@archive`, `@chords`, `@actions` filter the results. A site keyword such as `yt` or `gh` followed by Tab switches to searching that site.
+- **Ranking** follows Crest's tested scoring (MPL-2.0; ported in M1.4): match position, recency, frecency, open/pinned bonuses, top-hit rules, and learning which result you pick for the same text.
 - **`HintBar`:** "↵ Open · ⌘↵ New tab · Tab Complete · Esc Close". It fades out for good after the user has used each hint 3 times, so beginners get guidance and experts get quiet.
 
 ### 7.4 `Favicon`
@@ -553,7 +579,7 @@ Triggers: two-finger swipe on the sidebar (§6.4) · ⌘/Ctrl+1–9 · clicking 
 
 ### 8.3 Command bar
 
-1. ⌘T (new) or ⌘L (current URL) opens it in under 50 ms.
+1. ⌘T opens it centered for a new tab; ⌘L opens it anchored on the address, to edit or search in place. Either way it's typeable in under 50 ms.
 2. Results paint on the same frame as each keystroke; history and archive join within 16 ms without moving rows above them.
 3. ↑/↓ move the selection; Tab completes a URL; ↵ opens (switching to an existing tab if one matches); ⌘↵ forces a new tab; Esc or a click outside closes it.
 4. Actions are first-class rows: "New chord", "Pin this tab", "Copy URL", "Clear Today", "Split with…", "Edit theme", "Toggle sidebar", "Ask Duet…" (if enabled).
@@ -564,7 +590,7 @@ Triggers: two-finger swipe on the sidebar (§6.4) · ⌘/Ctrl+1–9 · clicking 
    - Drag a sidebar row onto the page. Drop zones appear over the frame (left/right halves, top/bottom, or quadrants when 3–4 panes), filled with the accent at 12% and ringed with a 2 px accent at 50%.
    - Or use the command bar: "Split with…" and pick a tab.
 2. **On drop:** the frame divides with the snapshot technique (`smooth`). The sidebar row morphs into a `SplitRow`.
-3. **Resize** by dragging the gaps. The focused pane follows the cursor or click; ⌘⌥←/→ moves focus.
+3. **Resize** by dragging the gaps. The focused pane follows the cursor or click; ⌘⌥[ / ⌘⌥] (Ctrl+Alt+[ / ]) moves focus. (⌘⌥←/→ is taken by chord switching.)
 4. **Close a pane:** the others expand (`smooth`). A split of one dissolves back into a normal tab. Each step can be undone from a toast.
 5. Splits are saved as a unit in Pinned or Today and come back exactly as they were.
 
@@ -676,10 +702,130 @@ Every UI change gets the following before it reaches you:
 
 ## 13. Open design questions
 
-1. **Duet shortcut.** I propose ⌘E / Ctrl+E. Chrome uses Ctrl+E only for "search from the address bar", which Chord doesn't need. Safari's ⌘E is "Use selection for Find". Alternatives: ⌘⇧D / Ctrl+Shift+D.
-2. **Sidebar toggle shortcut.** ⌘S / Ctrl+S matches Arc, but it shadows "Save page". Alternative: ⌘⇧S / Ctrl+Shift+S. Also: should *peek on hover* be on by default in minimal mode? I lean yes for Arc users, with an off switch.
+1. **Duet shortcut** (Phase 2). ⌘E / Ctrl+E collides with web editors (Google Docs centers text with it), and §14 keeps Chord off keys pages depend on. Candidates to test in Phase 2: ⌘⌥D / Ctrl+Alt+D, or page-first ⌘E.
+2. **Sidebar toggle shortcut.** Proposed in §14: ⌘S / Ctrl+S, page-first (Google Docs and other editors keep their own ⌘S), with Save page on ⌘⇧S. Also: *peek on hover* on by default in minimal mode, with an off switch.
 3. **Favorites row.** Arc's favicon grid sits above the chord and is shared across chords. It isn't in the brief. Add it as a later-phase item, or leave it out?
 4. **Top strip on Windows/Linux.** Show the page title next to the domain, or only the domain (calmer)? I lean domain only, with the title on hover.
 5. **Default grain.** 0.35 (subtle paper) vs 0 (clean). I lean 0.35; it's part of the identity.
 6. **Density.** Ship a *Compact* option (28 px rows) in v1, or later?
 7. **Sounds.** None by default. Agreed?
+
+---
+
+## 14. Keyboard shortcuts
+
+Hotkeys are a first-class feature. Every action in Chord is reachable from the keyboard, and the common ones work without thinking.
+
+### 14.1 Rules
+
+1. **Chrome muscle memory first.** If Chrome has a shortcut for something Chord does, Chord uses the same keys.
+2. **Two kinds of shortcut:**
+   - **Reserved (R):** Chord always gets the key, even while a page has focus. These are the keys Chrome also refuses to give pages (new and close tab or window, tab switching), plus Chord's core keys (⌘L, ⌘1–9).
+   - **Page-first (P):** the page sees the key first. If it uses it (Google Docs' ⌘S, a web editor's ⌘D), Chord stays out of the way. If not, Chord acts.
+3. **Hands off keys web apps depend on.** Chord binds nothing to ⌘K, ⌘E, ⌘B, ⌘I, ⌘U, ⌘↵ or ⌘/ by default.
+4. **Discoverable.** Every action is in the command bar with its keycaps shown. The full cheat sheet is one shortcut away.
+5. **One registry.** `packages/core/src/shortcuts.ts` defines each shortcut once: id, macOS keys, Windows/Linux keys, kind, action. It generates the macOS menu bar, the reserved-key interceptor, keycaps, the cheat sheet, and the tables below. A test fails on any duplicate per platform. Rebinding with conflict detection comes in Phase 3.
+
+### 14.2 The map (Phase 1 unless marked)
+
+**Address and search**
+
+| Action | macOS | Windows & Linux | Kind |
+|---|---|---|---|
+| Edit the address or search, in place | ⌘L | Ctrl+L · Alt+D | R |
+| New tab (centered command bar) | ⌘T | Ctrl+T | R |
+| Copy page address | ⌘⇧C | Ctrl+Shift+C | P |
+| Copy as Markdown link | ⌘⌥⇧C | Ctrl+Alt+Shift+C | P |
+
+**Navigate**
+
+| Action | macOS | Windows & Linux | Kind |
+|---|---|---|---|
+| Back | ⌘[ · ⌘← | Alt+← | P |
+| Forward | ⌘] · ⌘→ | Alt+→ | P |
+| Reload | ⌘R | Ctrl+R · F5 | R |
+| Reload, skipping the cache | ⌘⇧R | Ctrl+Shift+R · Ctrl+F5 | R |
+| Stop loading | Esc | Esc | P |
+
+**Tabs**
+
+| Action | macOS | Windows & Linux | Kind |
+|---|---|---|---|
+| Close tab (a pinned tab unloads and stays pinned) | ⌘W | Ctrl+W · Ctrl+F4 | R |
+| Reopen closed tab | ⌘⇧T | Ctrl+Shift+T | R |
+| Recent tabs: hold ⌃ / Ctrl, press Tab to cycle | ⌃Tab · ⌃⇧Tab | Ctrl+Tab · Ctrl+Shift+Tab | R |
+| Next / previous tab in the sidebar | ⌘⌥↓ · ⌘⌥↑ | Ctrl+PageDown · Ctrl+PageUp | R |
+| Move tab down / up in the sidebar | ⌘⌥⇧↓ · ⌘⌥⇧↑ | Ctrl+Shift+PageDown · Ctrl+Shift+PageUp | R |
+| Pin / unpin tab | ⌘D | Ctrl+D | P |
+
+**Chords**
+
+| Action | macOS | Windows & Linux | Kind |
+|---|---|---|---|
+| Go to chord 1–9 | ⌘1 … ⌘9 | Ctrl+1 … Ctrl+9 | R |
+| Next / previous chord | ⌘⌥→ · ⌘⌥← | Ctrl+Alt+→ · Ctrl+Alt+← | R |
+
+**Window and view**
+
+| Action | macOS | Windows & Linux | Kind |
+|---|---|---|---|
+| New window | ⌘N | Ctrl+N | R |
+| New private window | ⌘⇧N | Ctrl+Shift+N | R |
+| Close window | ⌘⇧W | Ctrl+Shift+W | R |
+| Show / hide the sidebar (minimal mode) | ⌘S | Ctrl+S | P |
+| Find in page | ⌘F | Ctrl+F | P |
+| Find next / previous | ⌘G · ⌘⇧G | F3 · Shift+F3 | P |
+| Zoom in / out / actual size | ⌘= · ⌘− · ⌘0 | Ctrl+= · Ctrl+− · Ctrl+0 | P |
+| Full screen | ⌃⌘F | F11 | R |
+| Move focus: sidebar → page → address (→ Duet) | F6 · ⇧F6 | F6 · Shift+F6 | R |
+| Print | ⌘P | Ctrl+P | P |
+| Save page as | ⌘⇧S | Ctrl+Shift+S | P |
+
+**Chord's own pages and tools**
+
+| Action | macOS | Windows & Linux | Kind |
+|---|---|---|---|
+| Settings | ⌘, | Ctrl+, | P |
+| History and archive | ⌘Y | Ctrl+H | P |
+| Downloads | ⌘⇧J | Ctrl+J | P |
+| Keyboard shortcuts | ⌘⌥/ | Ctrl+Alt+/ | P |
+| Developer tools | ⌘⌥I | F12 · Ctrl+Shift+I | R |
+| View page source | ⌘⌥U | Ctrl+U | P |
+| Quit | ⌘Q | Ctrl+Shift+Q (Linux); Alt+F4 closes the window (Windows) | R |
+
+**Later phases**
+
+| Action | macOS | Windows & Linux | Phase |
+|---|---|---|---|
+| Show / hide Duet | to decide (§13) | to decide | 2 |
+| Focus the pane left / right in a split | ⌘⌥[ · ⌘⌥] | Ctrl+Alt+[ · Ctrl+Alt+] | 2 |
+| Peek: keep as a tab · close | ⌘↵ · Esc | Ctrl+↵ · Esc | 3 |
+| Mini window: move into a chord | ⌘↵ | Ctrl+↵ | 3 |
+
+### 14.3 Inside surfaces
+
+- **Command bar:**
+  - ↑ ↓ move; ↵ opens (switching to the tab if it's already open).
+  - ⌘↵ opens in a new background tab, ⇧↵ in a new window, ⌥↵ in a split (Phase 2).
+  - Tab accepts the inline completion, or after a site keyword (`yt`, `gh`, …) switches to searching that site.
+  - `@tabs`, `@pinned`, `@history`, `@archive`, `@chords` and `@actions` narrow results.
+  - ⇧⌫ / Shift+Delete removes the selected history suggestion (Chrome's key).
+  - ⌘C / Ctrl+C with no text selected copies the selected result's address.
+  - Esc closes; in ⌘L mode it also restores the address.
+- **Sidebar** (focused via F6 or a click):
+  - ↑ ↓ move; ← → fold and unfold folders.
+  - ↵ opens; F2 renames; ⌘⌫ / Delete closes.
+  - The Space key picks up a row, arrows move it, Space drops it, Esc cancels.
+- **Mouse:**
+  - Middle-click a tab row to close it; a pinned tab unloads.
+  - ⌘-click / Ctrl+click or middle-click a link to open it in Today in the background; add ⇧ to switch to it.
+  - ⇧-click a link to open it in a new window.
+  - Mouse back and forward buttons navigate.
+
+### 14.4 Known trade-offs
+
+- **⌘1–9 switches chords**, as the brief asks, so Chrome's "go to tab N" isn't available.
+- **Ctrl+Tab cycles recent tabs** (Arc's behavior) rather than Chrome's next-in-order. Next-in-order is on Ctrl+PageDown, and a setting can swap them.
+- **Copy page address takes Ctrl+Shift+C**, which Chrome uses to inspect elements on Windows and Linux. In Chord, open DevTools (F12) first; its element picker answers to Ctrl+Shift+C there.
+- **On GNOME, Ctrl+Alt+←/→ switches workspaces** before Chord sees it. Use Ctrl+1–9, the trackpad swipe, or rebind (Phase 3).
+- **Page-first keys depend on the page.** In Google Docs, ⌘S does Docs' thing, not the sidebar. That is deliberate: web apps keep working, and the command bar and View menu always reach the same action.

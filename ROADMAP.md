@@ -31,7 +31,11 @@ A milestone is done when all of these hold:
    - I critique those captures against DESIGN.md and fix what fails before you see anything.
    - New interactions get trace tests and a 144 Hz screen recording.
 4. **Performance budgets are checked** (ARCHITECTURE.md §1) for every surface the milestone touches.
-5. **The basics are respected in new UI:** undo for destructive actions, keyboard access, reduced motion, reduced transparency.
+5. **The basics are respected in new UI:**
+   - Undo for destructive actions.
+   - Keyboard access, with a registered shortcut where DESIGN.md §14 lists one.
+   - Reduced motion and reduced transparency.
+   - Every new animation has its switch in Settings → Motion (DESIGN.md §6.8).
 6. **You get a handoff note**:
    - What to try.
    - What to verify by hand, split by platform where behavior differs.
@@ -115,6 +119,7 @@ A milestone is done when all of these hold:
   - **S4** blur over a tab view.
   - **S6** trackpad gesture phases per OS.
   - **S7** auto picture-in-picture controls and *back to tab* routing.
+  - **S8** keyboard routing: reserved keys caught before the page, page-first keys that defer to it (DESIGN.md §14).
 
 ### M1.1 Browsing shell · → Nov 6
 
@@ -131,7 +136,8 @@ A milestone is done when all of these hold:
   - Native context menus, find in page, fullscreen.
   - Downloads, permission prompts.
   - Certificate interstitial, crash page.
-- **Command bar v0:** always mounted; URL, Google search, open tabs; ⌘T and ⌘L.
+- **Command bar v0:** always mounted; URL, Google search, open tabs. ⌘T opens it centered; **⌘L / Ctrl+L edits the address in place** in the URL pill.
+- **Keyboard:** the shortcut registry and every Phase 1 shortcut in DESIGN.md §14 that has an action by then; the rest are added as their features land. Includes the cheat sheet (⌘⌥/ / Ctrl+Alt+/).
 - **Persistence:** session restore on relaunch.
 
 ### M1.2 Sidebar · → Nov 16
@@ -161,7 +167,8 @@ A milestone is done when all of these hold:
 
 - **Unified search:**
   - Sources: open tabs in every chord, pinned tabs, history (FTS5), archive, actions.
-  - Ranking, inline autocomplete, and Google suggestions (per Q4).
+  - Ranking ported from Crest's tested scoring, with learned picks per chord. Inline autocomplete, and Google suggestions (per Q4).
+  - `@tabs`/`@history`/… filters, site keywords (`yt`+Tab), and Enter variants that choose where a result opens (DESIGN.md §7.3).
   - **Budgets measured:** under 50 ms to open, and results on the same frame as each keystroke.
 - **Archive:**
   - The auto-archive policy, per-chord idle time (default 12 h).
@@ -177,6 +184,8 @@ A milestone is done when all of these hold:
   - Security fixes applied to the Web Store installer.
   - **Acceptance suite:** Bitwarden, 1Password, Proton Pass, Dark Reader, uBO Lite smoke test.
 - **Auto picture-in-picture**, as in your Dia screenshots (ARCHITECTURE.md §9). It depends on S7.
+- **Password-manager desktop links:** let 1Password and Bitwarden extensions reach their desktop apps through native messaging. This is Crest's fix: also look in Chrome's `NativeMessagingHosts` locations, the registry on Windows.
+- **Resilience:** crashed pages reload themselves at most twice; playing, PiP and screen-sharing tabs are never slept or archived.
 - **Private windows.**
 - **Default browser** on all three OSes:
   - Windows: the NSIS include that writes the registry keys, plus a deep link to Settings.
@@ -221,7 +230,8 @@ A milestone is done when all of these hold:
 - **Electron 46 upgrade** first (stable Jan 5, 2027). It's our first major upgrade and the rehearsal for the 8-week cadence.
 - **Split view:** 2–4 panes, drag-to-split drop zones, saved as one unit in the sidebar, dividers, focus ring (DESIGN.md §7.9 and §8.4).
 - **Hover previews** for pinned tabs and folders, with the capture cache.
-- **Duet, browse mode** (ARCHITECTURE.md §11):
+- **Connect an agent** (from Crest): the Chord MCP server, reachable by the user's own Claude Code or Codex through a one-line `claude mcp add` setup, with a badge and a Stop button on every tab an agent touches.
+- **Duet, browse mode** (ARCHITECTURE.md §11), as one client of that server:
   - **Setup:** detects your `claude` / `codex`; "Sign in" runs `claude auth login` or `codex login` for you.
   - **Adapters:** Claude Code (`--restricted --tools ""`) and Codex app-server.
   - **Tools:** the Chord MCP server with context and organize tiers, approval cards, and citations that highlight the quote on the page.
@@ -232,6 +242,8 @@ A milestone is done when all of these hold:
 ## Phase 3 — Links from everywhere · February 2027
 
 - **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it.
+- **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in.
+- **Rebindable shortcuts** with conflict detection.
 - **Peek** for links clicked inside pinned tabs.
 - **Distribution:**
   - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.
@@ -251,6 +263,24 @@ A milestone is done when all of these hold:
 - **Electron 47** (around March 2027), compact density, and whatever Phase 1–3 use teaches us.
 
 ---
+
+## Borrowed from Crest
+
+[Crest](https://github.com/pauljoda/Crest) is also MPL-2.0. Ideas are reimplemented freely. Any file ported from Crest keeps the MPL-2.0 header and adds "Portions derived from Crest, © 2026 Paul Davis".
+
+| From Crest | Where it lands |
+|---|---|
+| No app token in the user agent; Chrome-style reduced version | Done (S2) |
+| Command bar scoring, top-hit and completion rules, learned picks | M1.4 |
+| `@` filters, site keywords, Enter variants | M1.4 |
+| Never sleep or archive playing/PiP/sharing tabs; at most 2 crash reloads | M1.5 |
+| Native-messaging lookup for password managers | M1.5 |
+| Per-animation switches with ↺ reset, and ↺ on every changed setting | Each animation as it ships (DESIGN.md §6.8) |
+| Connect an agent: MCP helper, chrome-devtools-mcp tool names, badge and Stop | Phase 2 |
+| Link routes, remembered chord per site | Phase 3 |
+| Import guardrails with written exemptions, AGENTS.md, append-only release notes | Process, M1.1 |
+
+Skipped on purpose: Crest Passwords (we use extensions), its 19-host blocklist, memory-pressure unloading (Electron has no pressure event), and its heraldic visual identity (trademarked).
 
 ## Schedule risks
 
