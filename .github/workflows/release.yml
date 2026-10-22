@@ -1,0 +1,170 @@
+name: Release
+
+# Unsigned preview builds (ARCHITECTURE.md §15). Every OS and architecture is
+# packaged on its own native runner, installed or opened the way a user would,
+# and smoke-tested. A `v*` tag also collects the files into a draft GitHub
+# Release; a maintainer reviews and publishes it.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package · ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x64, os: windows-latest, platform: win, arch: x64 }
+          - { name: Windows arm64, os: windows-11-arm, platform: win, arch: arm64 }
+          - { name: macOS arm64, os: macos-26, platform: mac, arch: arm64 }
+          - { name: macOS x64, os: macos-15-intel, platform: mac, arch: x64 }
+          - { name: Linux x64, os: ubuntu-24.04, platform: linux, arch: x64 }
+          - { name: Linux arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: The tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match apps/desktop/package.json version $version"
+            exit 1
+          fi
+
+      - name: Package
+        run: pnpm --filter @chord/desktop package --${{ matrix.platform }} --${{ matrix.arch }}
+
+      # Install or open each build the way a user would, then smoke-test that copy.
+      - name: Install (Windows, silent per-user)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem apps/desktop/release -Filter '*-setup.exe' | Select-Object -First 1
+          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter Chord.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Chord.exe was not installed' }
+          "Installed to $($exe.DirectoryName)"
+          "CHORD_APP=$($exe.FullName)" >> $env:GITHUB_ENV
+          "FUSES_APP=$($exe.FullName)" >> $env:GITHUB_ENV
+
+      - name: Check the ad-hoc signature (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app="$(ls -d "$PWD"/apps/desktop/release/mac*/Chord.app)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=2 "$app" 2>&1 | grep -E '^(Identifier|Format|Signature|TeamIdentifier)='
+          for dmg in apps/desktop/release/*.dmg; do hdiutil verify "$dmg"; done
+          echo "CHORD_APP=$app/Contents/MacOS/Chord" >> "$GITHUB_ENV"
+          echo "FUSES_APP=$app" >> "$GITHUB_ENV"
+
+      - name: Install the .deb (Linux)
+        if: runner.os == 'Linux'
+        # A fresh runner can still be running unattended-upgrades; wait for the dpkg lock.
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -o DPkg::Lock::Timeout=300 update
+          sudo -E apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends xvfb ./apps/desktop/release/*.deb
+          echo "CHORD_APP=/opt/Chord/chord" >> "$GITHUB_ENV"
+          echo "FUSES_APP=/opt/Chord/chord" >> "$GITHUB_ENV"
+
+      - name: Read the fuses back
+        shell: bash
+        run: npx --yes @electron/fuses@2.1.3 read --app "$FUSES_APP"
+
+      - name: Smoke test
+        if: runner.os != 'Linux'
+        run: pnpm --filter @chord/desktop test:packaged
+
+      - name: Smoke test (Linux, installed .deb)
+        if: runner.os == 'Linux'
+        # No sysctl change here: on Ubuntu 24.04 the .deb's AppArmor profile is
+        # what lets Chromium's sandbox use user namespaces.
+        run: xvfb-run -a pnpm --filter @chord/desktop test:packaged
+
+      - name: Smoke test (Linux, AppImage)
+        if: runner.os == 'Linux'
+        # An AppImage gets no AppArmor profile, so allow user namespaces as a
+        # user would have to. Extract-and-run avoids depending on FUSE.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          export CHORD_APP="$(ls "$PWD"/apps/desktop/release/*.AppImage)"
+          xvfb-run -a pnpm --filter @chord/desktop test:packaged
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v7
+        with:
+          name: chord-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*-setup.exe
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+
+      - name: Upload failure details
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failures-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/test-results/
+            apps/desktop/release/builder-debug.yml
+          if-no-files-found: ignore
+
+  release:
+    name: Draft the GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: chord-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --prerelease \
+            --title "Chord ${GITHUB_REF_NAME#v} (preview)" \
+            --generate-notes \
+            --notes "Unsigned preview build. Windows and macOS will warn before the first launch; see [Try the preview](https://github.com/${GITHUB_REPOSITORY}#try-the-preview) for what to click. Check downloads against SHA256SUMS.txt."

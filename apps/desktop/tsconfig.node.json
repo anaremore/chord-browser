@@ -7,5 +7,5 @@
     "outDir": "node_modules/.tsc/node",
     "types": ["node"]
   },
-  "include": ["electron.vite.config.ts", "playwright.config.ts", "src/main", "src/data", "src/preload", "src/renderer/shared/grapheme.ts", "test/unit"]
+  "include": ["electron.vite.config.ts", "electron-builder.config.ts", "playwright.config.ts", "playwright.packaged.config.ts", "src/main", "src/data", "src/preload", "src/renderer/shared/grapheme.ts", "test/unit"]
 }

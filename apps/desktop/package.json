@@ -3,15 +3,24 @@
   "private": true,
   "version": "0.0.0",
   "description": "Chord: a calm, colorful browser",
+  "homepage": "https://github.com/anaremore/chord-browser",
+  "author": {
+    "name": "Chord contributors"
+  },
+  "license": "MPL-2.0",
   "type": "module",
   "main": "./out/main/index.js",
+  "desktopName": "com.chordbrowser.Chord.desktop",
   "scripts": {
     "postinstall": "install-electron",
     "dev": "node scripts/electron-vite.mjs dev",
     "build": "node scripts/electron-vite.mjs build",
     "preview": "node scripts/electron-vite.mjs preview",
     "typecheck": "tsc -b tsconfig.json",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:packaged": "playwright test --config playwright.packaged.config.ts",
+    "package": "node scripts/electron-vite.mjs build && electron-builder --config electron-builder.config.ts --publish never",
+    "package:dir": "node scripts/electron-vite.mjs build && electron-builder --config electron-builder.config.ts --publish never --dir"
   },
   "devDependencies": {
     "@babel/core": "^8.0.7",
@@ -22,6 +31,7 @@
     "@vitejs/plugin-react": "6.1.2",
     "babel-plugin-react-compiler": "1.0.0",
     "electron": "45.0.0",
+    "electron-builder": "26.18.0",
     "electron-vite": "6.0.0",
     "vite": "8.3.5"
   },
