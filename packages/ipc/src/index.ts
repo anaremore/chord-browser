@@ -12,6 +12,8 @@ import {
   type SearchEngineId,
   type Settings,
   type SettingsPatch as CoreSettingsPatch,
+  type SitePermission,
+  type ChordThemeSpec,
   type State,
 } from '@chord/core';
 import { z } from 'zod';
@@ -110,6 +112,29 @@ export interface SettingsSnapshot {
   chord: Pick<Chord, 'id' | 'name' | 'icon' | 'theme'> | null;
 }
 
+/** A permission prompt in the popover. */
+export interface PermissionPrompt {
+  id: number;
+  host: string;
+  permissions: SitePermission[];
+}
+
+export interface FindState {
+  text: string;
+  matches: number;
+  /** 1-based; 0 when nothing matches. */
+  active: number;
+  /** Changes each time ⌘F is pressed: the bar refocuses and selects its text. */
+  focus: number;
+}
+
+/** Everything the popover shows: cards stack top-right over the page. */
+export interface PopoverState {
+  theme: ChordThemeSpec | null;
+  find: FindState | null;
+  permission: PermissionPrompt | null;
+}
+
 export interface ChordEdit {
   chordId: string;
   field: 'name' | 'icon';
@@ -176,6 +201,17 @@ export const invokeChannels = {
   'settings:set': { roles: ['internal'], request: SettingsPatch, response: z.void() },
   'settings:theme': { roles: ['internal'], request: z.strictObject({ chordId: id, theme: ChordThemePatch }), response: z.void() },
   'settings:about': { roles: ['internal'], request: z.void(), response: z.custom<AboutInfo>() },
+  // The popover: find bar and permission prompts, over the page (ARCHITECTURE.md §5).
+  'popover:state': { roles: ['popover'], request: z.void(), response: z.custom<PopoverState>() },
+  /** The popover's content size, so main can fit the view to its cards (0 × 0 hides it). */
+  'popover:size': { roles: ['popover'], request: z.object({ width: z.number().min(0).max(2000), height: z.number().min(0).max(2000) }), response: z.void() },
+  'find:query': { roles: ['popover'], request: z.object({ text: z.string().max(1000), forward: z.boolean() }), response: z.void() },
+  'find:close': { roles: ['popover'], request: z.void(), response: z.void() },
+  'permission:respond': {
+    roles: ['popover'],
+    request: z.object({ id: z.number().int().min(1), decision: z.enum(['allow', 'block', 'dismiss']) }),
+    response: z.void(),
+  },
   /** Open a web link from Settings (About, help) in a new tab of the last-used window. */
   'settings:openUrl': { roles: ['internal'], request: z.strictObject({ url: z.url({ protocol: /^https$/ }) }), response: z.void() },
 } as const satisfies Record<string, { roles: readonly Role[]; request: z.ZodType; response: z.ZodType }>;
@@ -186,6 +222,7 @@ export interface EventPayloads {
   'state:patch': StatePatchEvent;
   'overlay:open': OverlayOpenEvent;
   'settings:changed': SettingsSnapshot;
+  'popover:state': PopoverState;
   /** Start renaming a chord, or choosing its icon, in the sidebar (from its menu). */
   'chord:edit': ChordEdit;
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
@@ -241,6 +278,24 @@ export interface SettingsApi {
     about(): Promise<AboutInfo>;
     openUrl(url: string): Promise<void>;
   };
+}
+
+/** `window.chord` in the popover (find bar, permission prompts). */
+export interface PopoverApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  popover: {
+    state(): Promise<PopoverState>;
+    onState(listener: (state: PopoverState) => void): () => void;
+    size(width: number, height: number): Promise<void>;
+  };
+  find: {
+    query(text: string, forward: boolean): Promise<void>;
+    close(): Promise<void>;
+  };
+  permission: { respond(id: number, decision: 'allow' | 'block' | 'dismiss'): Promise<void> };
 }
 
 /** `window.chord` in the command bar overlay. */

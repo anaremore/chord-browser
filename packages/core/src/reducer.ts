@@ -14,7 +14,9 @@ import {
   type ClosedTab,
   type LiveTab,
   type NodeId,
+  type PermissionDecision,
   type Section,
+  type SitePermission,
   type SettingsPatch,
   type State,
   type TabNode,
@@ -54,7 +56,9 @@ export type Command =
   | { t: 'chord.goto'; windowId: WindowId; index: number }
   | { t: 'chord.update'; chordId: ChordId; name?: string; icon?: string }
   /** Removes a chord and its tabs (they go to recently closed). The last chord can't be deleted. */
-  | { t: 'chord.delete'; chordId: ChordId };
+  | { t: 'chord.delete'; chordId: ChordId }
+  /** Remember (or, with null, forget) a site's answer to a permission prompt. */
+  | { t: 'permission.set'; origin: string; permissions: SitePermission[]; decision: PermissionDecision | null };
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -304,8 +308,13 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.live': {
       if (!draft.nodes[cmd.nodeId]) return;
       const live = (draft.live[cmd.nodeId] ??= { ...IDLE_LIVE });
-      for (const [key, value] of Object.entries(cmd.live) as [keyof LiveTab, boolean][]) {
-        if (live[key] !== value) live[key] = value;
+      for (const [key, value] of Object.entries(cmd.live) as [keyof LiveTab, LiveTab[keyof LiveTab]][]) {
+        if (key === 'error') {
+          const error = value as LiveTab['error'];
+          if (live.error?.code !== error?.code || live.error?.url !== error?.url) live.error = error;
+        } else if (live[key] !== value) {
+          live[key] = value as boolean;
+        }
       }
       return;
     }
@@ -402,6 +411,16 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       }
       if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
       delete draft.chords[cmd.chordId];
+      return;
+    }
+
+    case 'permission.set': {
+      const site = (draft.sitePermissions[cmd.origin] ??= {});
+      for (const permission of cmd.permissions) {
+        if (cmd.decision === null) delete site[permission];
+        else if (site[permission] !== cmd.decision) site[permission] = cmd.decision;
+      }
+      if (Object.keys(site).length === 0) delete draft.sitePermissions[cmd.origin];
       return;
     }
 

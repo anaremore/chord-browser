@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import type { Chord, ChordThemeSpec, FolderNode, PersistedState, SidebarNode, TabNode, WindowModel } from '@chord/core';
+import type { Chord, ChordThemeSpec, FolderNode, PersistedState, SidebarNode, SitePermissions, TabNode, WindowModel } from '@chord/core';
 import type { WriteOp } from './index';
 import { MIGRATIONS } from './migrations';
 
@@ -97,7 +97,14 @@ export class ChordDatabase {
     const chordRows = this.sql('SELECT * FROM chord WHERE deleted_at IS NULL').all() as Row[];
     const settingRows = this.sql('SELECT key, value FROM setting').all() as Row[];
     const settings = Object.fromEntries(settingRows.map((r) => [str(r['key']), parseJson<unknown>(r['value'], null)]));
-    if (chordRows.length === 0) return Object.keys(settings).length > 0 ? { chords: [], nodes: [], windows: [], settings } : null;
+    const sitePermissions: SitePermissions = {};
+    for (const r of this.sql('SELECT origin, permission, decision FROM site_permission WHERE profile_id = ?').all(DEFAULT_PROFILE) as Row[]) {
+      (sitePermissions[str(r['origin'])] ??= {})[str(r['permission']) as keyof SitePermissions[string]] = r['decision'] === 'allow' ? 'allow' : 'block';
+    }
+    if (chordRows.length === 0) {
+      const anything = Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0;
+      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions } : null;
+    }
 
     const chords = chordRows.map(
       (r): Chord => ({
@@ -152,7 +159,7 @@ export class ChordDatabase {
       }),
     );
 
-    return { chords, nodes, windows, settings };
+    return { chords, nodes, windows, settings, sitePermissions };
   }
 
   /** One batch, all or nothing. */
@@ -162,6 +169,7 @@ export class ChordDatabase {
         if (op.k === 'chord') this.writeChord(op.id, op.value, now);
         else if (op.k === 'node') this.writeNode(op.id, op.value, now);
         else if (op.k === 'window') this.writeWindow(op.id, op.value);
+        else if (op.k === 'sitePermission') this.writeSitePermissions(op.id, op.value, now);
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
@@ -210,6 +218,19 @@ export class ChordDatabase {
        ON CONFLICT(node_id) DO UPDATE SET pinned_url = excluded.pinned_url, custom_title = excluded.custom_title, url = excluded.url,
          title = excluded.title, favicon_key = excluded.favicon_key, last_active_at = excluded.last_active_at`,
     ).run(id, node.pinnedUrl, node.customTitle, node.url, node.title, icon?.key ?? null, node.lastActiveAt);
+  }
+
+  private writeSitePermissions(origin: string, decisions: SitePermissions[string] | null, now: number): void {
+    this.sql('DELETE FROM site_permission WHERE profile_id = ? AND origin = ?').run(DEFAULT_PROFILE, origin);
+    for (const [permission, decision] of Object.entries(decisions ?? {})) {
+      this.sql('INSERT INTO site_permission (profile_id, origin, permission, decision, updated_at) VALUES (?, ?, ?, ?, ?)').run(
+        DEFAULT_PROFILE,
+        origin,
+        permission,
+        decision,
+        now,
+      );
+    }
   }
 
   private writeWindow(id: string, win: WindowModel | null): void {

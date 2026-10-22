@@ -16,13 +16,15 @@ import {
   type TabNode,
   type WindowId,
 } from '@chord/core';
-import type { Rect, SettingsSnapshot } from '@chord/ipc';
+import type { PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
 import { app, BaseWindow, clipboard, dialog, screen, type Menu, type Session, type WebContents } from 'electron';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
+import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
 import { buildAppMenu, buildChordMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
+import type { PermissionBroker } from './permissions';
 import { systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
@@ -33,6 +35,8 @@ export interface BrowserOptions {
   initial: State;
   uiSession: Session;
   profileSession(profileId: string): Session;
+  /** Answers permission requests; connected here once the store exists. */
+  permissions: PermissionBroker;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
 }
@@ -41,6 +45,9 @@ export class Browser {
   readonly store: Store;
   readonly tabs: TabManager;
   private readonly windows = new Map<WindowId, AppWindow>();
+  private readonly finders = new Map<WindowId, FindInPage>();
+  /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
+  private readonly popoverSent = new Map<WindowId, string>();
   /** The browser window used most recently: menus, Settings and links from Settings act on it. */
   private lastWindowId: WindowId | null = null;
   private settingsWindow: SettingsWindow | null = null;
@@ -61,6 +68,11 @@ export class Browser {
       windowFor: (nodeId) => this.windowShowing(nodeId),
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
+        // Whatever a page asked for is denied once it's gone or replaced by another page.
+        contents.on('did-start-navigation', (details) => {
+          if (details.isMainFrame && !details.isSameDocument) options.permissions.forgetTab(nodeId);
+        });
+        contents.once('destroyed', () => options.permissions.forgetTab(nodeId));
         attachContextMenu(contents, {
           surface: 'web',
           inspect: true,
@@ -77,9 +89,16 @@ export class Browser {
         });
       },
     });
+    options.permissions.connect({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      onChange: () => this.syncPopovers(),
+    });
     this.store.subscribe((change) => {
       this.broadcast(change);
       this.runEffects(change.effects);
+      this.syncPopovers();
       if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
@@ -105,7 +124,7 @@ export class Browser {
 
   windowFor(contents: WebContents): AppWindow | undefined {
     for (const w of this.windows.values()) {
-      if (w.shell.webContents === contents || w.overlay.webContents === contents || w.activeTabContents === contents) return w;
+      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.activeTabContents].includes(contents)) return w;
     }
     const nodeId = this.tabs.nodeFor(contents);
     const windowId = nodeId ? this.windowShowing(nodeId) : undefined;
@@ -126,6 +145,11 @@ export class Browser {
       onBounds: (bounds) => this.store.dispatch({ t: 'window.bounds', windowId, bounds }),
     });
     this.windows.set(windowId, w);
+    this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));
+    w.popover.webContents.on('did-finish-load', () => {
+      this.popoverSent.delete(windowId);
+      this.syncPopover(w);
+    });
     this.lastWindowId ??= windowId;
     w.window.on('focus', () => {
       this.lastWindowId = windowId;
@@ -143,6 +167,8 @@ export class Browser {
     }
     w.window.on('closed', () => {
       this.windows.delete(windowId);
+      this.finders.delete(windowId);
+      this.popoverSent.delete(windowId);
       if (this.lastWindowId === windowId) this.lastWindowId = this.windows.keys().next().value ?? null;
       if (this.windows.size === 0 && process.platform !== 'darwin') {
         this.tabs.destroyAll();
@@ -194,6 +220,46 @@ export class Browser {
         }
       }
     }
+  }
+
+  /** What a window's popover shows: the find bar for its page, and the active tab's permission prompt. */
+  popoverState(w: AppWindow): PopoverState {
+    const state = this.store.state;
+    const model = state.windows[w.id];
+    const find = this.finders.get(w.id);
+    return {
+      theme: model ? (state.chords[model.activeChordId]?.theme ?? null) : null,
+      find: find && find.target === w.activeTabContents ? find.state : null,
+      permission: this.options.permissions.promptFor(activeTabId(state, w.id)),
+    };
+  }
+
+  findFor(contents: WebContents): FindInPage | undefined {
+    const w = this.windowFor(contents);
+    return w ? this.finders.get(w.id) : undefined;
+  }
+
+  private syncPopovers(): void {
+    for (const w of this.windows.values()) this.syncPopover(w);
+  }
+
+  /**
+   * Keep one window's popover and frame in step with its active tab: the
+   * find bar closes when its page isn't shown any more, a page that failed or
+   * crashed is hidden behind the frame's explanation, and the popover gets
+   * fresh state only when something it shows changed.
+   */
+  private syncPopover(w: AppWindow): void {
+    const find = this.finders.get(w.id);
+    if (find?.target && find.target !== w.activeTabContents) find.close(false);
+    const id = activeTabId(this.store.state, w.id);
+    const live = id ? this.store.state.live[id] : undefined;
+    w.setTabHidden(Boolean(live?.error || live?.crashed));
+    const state = this.popoverState(w);
+    const json = JSON.stringify(state);
+    if (this.popoverSent.get(w.id) === json) return;
+    this.popoverSent.set(w.id, json);
+    send(w.popover.webContents, 'popover:state', state);
   }
 
   /** Run an action for the window that owns this contents (keys, the shell's buttons, the command bar). */
@@ -382,6 +448,19 @@ export class Browser {
         return true;
       case 'address.copyMarkdown':
         if (tab) clipboard.writeText(markdownLink(tab.title, tab.url));
+        return true;
+      case 'view.find':
+        if (activeContents) {
+          this.finders.get(w.id)?.open(activeContents);
+          w.focusPopover();
+        }
+        return true;
+      case 'view.findNext':
+      case 'view.findPrevious':
+        if (activeContents) {
+          this.finders.get(w.id)?.step(activeContents, action === 'view.findNext');
+          w.focusPopover();
+        }
         return true;
       case 'tab.pin':
         if (tab) this.store.dispatch({ t: tab.section === 'pinned' ? 'tab.unpin' : 'tab.pin', nodeId: tab.id });

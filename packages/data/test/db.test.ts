@@ -32,7 +32,7 @@ function drive(db: ChordDatabase, state: State, commands: Command[]): State {
 }
 
 /** What survives a restart: everything except engine state, closed tabs and the version. */
-const durable = (s: State) => ({ settings: s.settings, chords: s.chords, nodes: s.nodes, windows: s.windows });
+const durable = (s: State) => ({ settings: s.settings, sitePermissions: s.sitePermissions, chords: s.chords, nodes: s.nodes, windows: s.windows });
 
 const ICON = 'data:image/png;base64,iVBORw0KGgo=';
 
@@ -64,6 +64,8 @@ describe('chord-data', () => {
       { t: 'window.bounds', windowId, bounds: { x: 40, y: 50, width: 1100, height: 760, maximized: false } },
       { t: 'settings.set', settings: { searchEngine: 'duckduckgo', motion: { tabMoves: false } } },
       { t: 'chord.theme', chordId: Object.keys(state.chords)[0]!, theme: { grain: 0.45, appearance: 'dark' } },
+      { t: 'permission.set', origin: 'https://meet.test', permissions: ['camera', 'microphone'], decision: 'allow' },
+      { t: 'permission.set', origin: 'https://ads.test', permissions: ['notifications'], decision: 'block' },
     ]);
     db.close();
 
@@ -118,7 +120,7 @@ describe('chord-data', () => {
     (MIGRATIONS as string[]).push('CREATE TABLE later (id INTEGER PRIMARY KEY) STRICT;');
     try {
       const db = new ChordDatabase(file);
-      expect(db.version).toBe(2);
+      expect(db.version).toBe(MIGRATIONS.length);
       db.close();
       const backup = new DatabaseSync(`${file}.v1.bak`);
       expect(backup.prepare('PRAGMA user_version').get()).toEqual({ user_version: 1 });

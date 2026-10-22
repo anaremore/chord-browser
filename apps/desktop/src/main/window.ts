@@ -2,6 +2,7 @@
  * One Chord window (ARCHITECTURE.md §5). Views, bottom to top:
  *   shell    Chord's UI, full window, transparent
  *   tab      the active tab, inset and rounded (index 1)
+ *   popover  find bar and permission prompts: sized to its cards, at the frame's top-right
  *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L
  */
 import { join } from 'node:path';
@@ -38,12 +39,13 @@ function frameOrigin(sidebar: SidebarMode): FrameOrigin {
 const FRAME_SPRING = springCurve(springs.smooth);
 const FRAME_TICK_MS = 1000 / 60;
 
-export type UiSurface = 'shell' | 'overlay' | 'settings';
+export type UiSurface = 'shell' | 'overlay' | 'popover' | 'settings';
 
 /** Each surface's preload and IPC role. Internal pages share one narrow preload. */
 const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
   shell: { preload: 'shell', role: 'shell' },
   overlay: { preload: 'overlay', role: 'overlay' },
+  popover: { preload: 'popover', role: 'popover' },
   settings: { preload: 'internal', role: 'internal' },
 };
 
@@ -80,7 +82,12 @@ export class AppWindow {
   readonly window: BaseWindow;
   readonly shell: WebContentsView;
   readonly overlay: WebContentsView;
+  readonly popover: WebContentsView;
   private tabView: WebContentsView | null = null;
+  /** The page is hidden while the frame shows why it didn't load (or that it crashed). */
+  private tabHidden = false;
+  private popoverSize = { width: 0, height: 0 };
+  private focusPopoverWhenShown = false;
   private anchor: Rect | null = null;
   private overlayVisible = false;
   private origin: FrameOrigin;
@@ -100,9 +107,13 @@ export class AppWindow {
     if (bounds?.maximized) this.window.maximize();
 
     this.shell = createUiView(uiSession, 'shell');
+    this.popover = createUiView(uiSession, 'popover');
+    this.popover.setVisible(false);
     this.overlay = createUiView(uiSession, 'overlay');
     this.overlay.setVisible(false);
+    // Tab views go in at index 1, between the shell and the popover.
     this.window.contentView.addChildView(this.shell);
+    this.window.contentView.addChildView(this.popover);
     this.window.contentView.addChildView(this.overlay);
 
     this.layout();
@@ -126,14 +137,14 @@ export class AppWindow {
 
     const onTheme = () => {
       if (platform !== 'darwin') this.window.setTitleBarOverlay?.(titleBarOverlay());
-      for (const view of [this.shell, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
+      for (const view of [this.shell, this.popover, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
     };
     nativeTheme.on('updated', onTheme);
     this.window.on('closed', () => {
       nativeTheme.off('updated', onTheme);
       clearTimeout(boundsTimer);
       clearInterval(this.frameAnimation);
-      for (const view of [this.shell, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
+      for (const view of [this.shell, this.popover, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
     });
 
     this.shell.webContents.once('did-finish-load', () => this.window.show());
@@ -145,6 +156,7 @@ export class AppWindow {
     if (this.tabView) this.window.contentView.removeChildView(this.tabView);
     this.tabView = view;
     if (view) {
+      view.setVisible(!this.tabHidden);
       this.window.contentView.addChildView(view, 1);
       this.layout();
       if (!this.overlayVisible) view.webContents.focus();
@@ -155,6 +167,31 @@ export class AppWindow {
 
   get activeTabContents() {
     return this.tabView?.webContents ?? null;
+  }
+
+  /** Hide the page so the frame behind it can explain an error or a crash. */
+  setTabHidden(hidden: boolean): void {
+    if (this.tabHidden === hidden) return;
+    this.tabHidden = hidden;
+    this.tabView?.setVisible(!hidden);
+  }
+
+  /** The popover reports its cards' size; 0 × 0 hides it. */
+  setPopoverSize(width: number, height: number): void {
+    this.popoverSize = { width: Math.ceil(width), height: Math.ceil(height) };
+    const visible = this.popoverSize.width > 0 && this.popoverSize.height > 0;
+    this.popover.setVisible(visible);
+    this.layout();
+    if (visible && this.focusPopoverWhenShown) {
+      this.focusPopoverWhenShown = false;
+      this.popover.webContents.focus();
+    }
+  }
+
+  /** Give the popover keyboard focus (the find bar), now or as soon as it's shown. */
+  focusPopover(): void {
+    if (this.popover.getVisible()) this.popover.webContents.focus();
+    else this.focusPopoverWhenShown = true;
   }
 
   setAnchor(rect: Rect | null): void {
@@ -213,6 +250,9 @@ export class AppWindow {
     this.shell.setBounds({ x: 0, y: 0, width, height });
     this.overlay.setBounds({ x: 0, y: 0, width, height });
     this.tabView?.setBounds({ x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) });
+    // The popover hangs from the frame's top-right corner; its cards carry their own margin.
+    const { width: pw, height: ph } = this.popoverSize;
+    this.popover.setBounds({ x: Math.max(x, width - inset - pw), y, width: pw, height: ph });
   }
 
   /**

@@ -26,7 +26,12 @@ export default defineConfig({
       externalizeDeps: false,
       isolatedEntries: true,
       rolldownOptions: {
-        input: { shell: src('preload/shell.ts'), overlay: src('preload/overlay.ts'), internal: src('preload/internal.ts') },
+        input: {
+          shell: src('preload/shell.ts'),
+          overlay: src('preload/overlay.ts'),
+          popover: src('preload/popover.ts'),
+          internal: src('preload/internal.ts'),
+        },
         output: { format: 'cjs', entryFileNames: '[name].cjs' },
       },
     },
@@ -42,6 +47,7 @@ export default defineConfig({
         input: {
           shell: src('renderer/shell/index.html'),
           overlay: src('renderer/overlay/index.html'),
+          popover: src('renderer/popover/index.html'),
           settings: src('renderer/settings/index.html'),
         },
       },

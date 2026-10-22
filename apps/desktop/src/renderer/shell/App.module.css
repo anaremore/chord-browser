@@ -660,6 +660,15 @@ kbd {
   transform: scale(0.97);
 }
 
+/* The ERR_ code under a load error, for people who want it. */
+.errorCode {
+  margin: var(--space-2) 0 0;
+  color: var(--color-fg-subtle);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+  user-select: text;
+}
+
 .inlineKeycap {
   opacity: 0.75;
 }

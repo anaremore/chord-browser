@@ -101,7 +101,14 @@ export class TabManager {
       live(history());
     });
     contents.on('did-start-navigation', (details) => {
-      if (details.isMainFrame && !details.isSameDocument) dispatch({ t: 'tab.updated', nodeId, favicon: null });
+      if (!details.isMainFrame || details.isSameDocument) return;
+      dispatch({ t: 'tab.updated', nodeId, favicon: null });
+      live({ error: null });
+    });
+    // The frame explains failures instead of showing a blank page. -3 is ERR_ABORTED: the
+    // user (or the page) stopped it, which isn't an error.
+    contents.on('did-fail-load', (_event, code, _description, url, isMainFrame) => {
+      if (isMainFrame && code !== -3) live({ loading: false, error: { code, url }, ...history() });
     });
     contents.on('page-title-updated', (_event, title) => dispatch({ t: 'tab.updated', nodeId, title }));
     contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons));

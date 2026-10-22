@@ -1,0 +1,20 @@
+/** The popover's door to main: the find bar and permission prompts (ARCHITECTURE.md §8). */
+import type { PopoverApi } from '@chord/ipc';
+import { contextBridge } from 'electron';
+import { invoke, subscribe, systemApi } from './bridge';
+
+const api: PopoverApi = {
+  system: systemApi,
+  popover: {
+    state: () => invoke('popover:state'),
+    onState: (listener) => subscribe('popover:state', listener),
+    size: (width, height) => invoke('popover:size', { width, height }),
+  },
+  find: {
+    query: (text, forward) => invoke('find:query', { text, forward }),
+    close: () => invoke('find:close'),
+  },
+  permission: { respond: (id, decision) => invoke('permission:respond', { id, decision }) },
+};
+
+contextBridge.exposeInMainWorld('chord', Object.freeze(api));

@@ -10,7 +10,7 @@
     "dev": "pnpm --filter @chord/desktop dev",
     "build": "pnpm --filter @chord/desktop build",
     "typecheck": "pnpm -r --parallel typecheck",
-    "lint": "eslint . && stylelint \"**/*.css\"",
+    "lint": "eslint . && stylelint \"**/*.css\" --ignore-pattern \".claude/**\"",
     "test": "vitest run",
     "test:watch": "vitest"
   },

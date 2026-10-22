@@ -50,6 +50,8 @@ export const size = {
   resultRow: 40,
   commandBarMax: 680,
   previewWidth: 280,
+  /** Popover cards over the page: the find bar, permission prompts. */
+  popoverCard: 320,
   /** Settings window: section list, readable content column, and its controls. */
   settingsNav: 200,
   settingsContent: 600,

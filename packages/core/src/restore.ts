@@ -5,7 +5,18 @@
  * chords or tabs are dropped, settings fill in from defaults, and there is
  * always at least one chord and one window.
  */
-import { DEFAULT_SETTINGS, emptyState, type Chord, type MotionSettings, type Settings, type SidebarNode, type State, type WindowModel } from './model';
+import {
+  DEFAULT_SETTINGS,
+  emptyState,
+  type Chord,
+  type MotionSettings,
+  type Settings,
+  type SidebarNode,
+  type SitePermission,
+  type SitePermissions,
+  type State,
+  type WindowModel,
+} from './model';
 import { SEARCH_ENGINES } from './input';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
@@ -17,6 +28,21 @@ export interface PersistedState {
   windows: WindowModel[];
   /** Saved settings by key; unknown or malformed keys are ignored. */
   settings: Record<string, unknown>;
+  /** Remembered permission decisions, by origin. */
+  sitePermissions?: SitePermissions;
+}
+
+const PERMISSIONS: readonly SitePermission[] = ['camera', 'microphone', 'location', 'notifications', 'clipboard-read'];
+
+function restorePermissions(saved: SitePermissions | undefined): SitePermissions {
+  const out: SitePermissions = {};
+  for (const [origin, decisions] of Object.entries(saved ?? {})) {
+    for (const permission of PERMISSIONS) {
+      const decision = decisions[permission];
+      if (decision === 'allow' || decision === 'block') (out[origin] ??= {})[permission] = decision;
+    }
+  }
+  return out;
 }
 
 function restoreSettings(saved: Record<string, unknown>): Settings {
@@ -41,12 +67,16 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
 export function restoreState(saved: PersistedState | null, seed: SeedOptions): State {
   if (!saved || saved.chords.length === 0) {
     const fresh = seedState(seed);
-    if (saved) fresh.settings = restoreSettings(saved.settings);
+    if (saved) {
+      fresh.settings = restoreSettings(saved.settings);
+      fresh.sitePermissions = restorePermissions(saved.sitePermissions);
+    }
     return fresh;
   }
 
   const state = emptyState();
   state.settings = restoreSettings(saved.settings);
+  state.sitePermissions = restorePermissions(saved.sitePermissions);
   for (const chord of saved.chords) state.chords[chord.id] = chord;
   for (const node of saved.nodes) {
     if (!state.chords[node.chordId]) continue;

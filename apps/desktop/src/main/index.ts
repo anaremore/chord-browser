@@ -6,10 +6,11 @@ import { app, Menu, nativeTheme, session, type Session, type WebContents } from 
 import { Browser } from './browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
+import { PermissionBroker } from './permissions';
 import { Persistence } from './persistence';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
-import { configureBrowsingSession, configureUiSession, hardenAllWebContents } from './security';
+import { configureUiSession, hardenAllWebContents } from './security';
 import { chromiumUserAgent } from './user-agent';
 
 // Before `ready`: privileged schemes, identity (decides userData), sandbox for every renderer.
@@ -23,6 +24,7 @@ const HOME_URL = (!app.isPackaged && process.env['CHORD_HOME_URL']) || 'https://
 
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
+const permissions = new PermissionBroker();
 
 function senderWindow(sender: WebContents) {
   const w = browser?.windowFor(sender);
@@ -74,6 +76,11 @@ function registerIpc(): void {
     arch: process.arch,
   }));
   handle('settings:openUrl', ({ url }) => browser!.openUrlInLastWindow(url));
+  handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
+  handle('popover:size', ({ width, height }, sender) => senderWindow(sender).setPopoverSize(width, height));
+  handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
+  handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
+  handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -118,7 +125,7 @@ if (!app.requestSingleInstanceLock()) {
       let ses = profiles.get(profileId);
       if (!ses) {
         ses = session.fromPartition(profileId === 'default' ? 'persist:default' : `persist:p-${profileId}`);
-        configureBrowsingSession(ses);
+        permissions.attach(ses);
         profiles.set(profileId, ses);
       }
       return ses;
@@ -142,6 +149,7 @@ if (!app.requestSingleInstanceLock()) {
       initial,
       uiSession: ui,
       profileSession,
+      permissions,
       onChange: (change) => store.record(change.patches, change.state),
     });
     Menu.setApplicationMenu(browser.appMenu);

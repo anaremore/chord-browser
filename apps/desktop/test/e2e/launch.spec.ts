@@ -14,6 +14,7 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     '/': '<title>First page</title><a id="next" href="/second">Next</a>',
     '/second': '<title>Second page</title><p>Second</p>',
     '/third': '<title>Third page</title><p>Third</p>',
+    '/words': '<title>Words</title><p>A chord is three notes. Play the chord, then the next chord.</p>',
   };
   const server = createServer((req, res) => {
     const body = pages[req.url ?? '/'];
@@ -41,6 +42,15 @@ async function pageWhere(app: ElectronApplication, match: (url: string) => boole
 
 const isShell = (url: string) => url.startsWith('chord://shell') || url.includes('/shell/index.html');
 const isOverlay = (url: string) => url.startsWith('chord://overlay') || url.includes('/overlay/index.html');
+const isPopover = (url: string) => url.startsWith('chord://popover') || url.includes('/popover/index.html');
+
+/** Run an action from the shortcut registry the way the shell's own buttons do. */
+const runAction = (shell: Page, action: string) =>
+  shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
+
+/** Whether the active tab's view is showing (it hides while the frame explains an error). */
+const tabVisible = (app: ElectronApplication) =>
+  app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows()[0]!.contentView.children[1]!.getVisible());
 
 /** Opens the command bar the way the shell's own buttons do. (Synthetic keys can't reach Chord's shortcut router.) */
 async function openCommandBar(shell: Page, overlay: Page, mode: 'new' | 'edit') {
@@ -418,6 +428,126 @@ test('pinned tabs: pin with a key, close keeps them, and dragging reorders and p
     await expect(pinned.getByRole('listitem')).toHaveCount(1);
     await expect(today.getByRole('listitem')).toHaveCount(2);
     await expect(today.getByRole('listitem').first()).toContainText('Third page');
+  } finally {
+    await app.close();
+  }
+});
+
+test('find in page: counts matches, steps through them, and closes', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/words` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const popover = await pageWhere(app, isPopover);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Words');
+
+    await runAction(shell, 'view.find');
+    const field = popover.getByRole('textbox', { name: 'Find in page' });
+    await expect(field).toBeFocused();
+    await field.fill('chord');
+    const bar = popover.getByRole('search', { name: 'Find in page' });
+    await expect(bar).toContainText('1 of 3');
+    await field.press('Enter');
+    await expect(bar).toContainText('2 of 3');
+    await field.press('Shift+Enter');
+    await expect(bar).toContainText('1 of 3');
+    await field.fill('harmonica');
+    await expect(bar).toContainText('No matches');
+
+    await field.press('Escape');
+    await expect(bar).toBeHidden();
+  } finally {
+    await app.close();
+  }
+});
+
+test('a permission prompt asks once, and the answer is remembered for the site', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    await pageWhere(app, isShell);
+    const tab = await pageWhere(app, (url) => url.startsWith(site.origin));
+    const popover = await pageWhere(app, isPopover);
+    const ask = () => tab.evaluate(() => Notification.requestPermission());
+
+    const first = ask();
+    const prompt = popover.getByRole('alertdialog');
+    await expect(prompt).toContainText('127.0.0.1');
+    await expect(prompt).toContainText('Show notifications');
+    await prompt.getByRole('button', { name: 'Allow' }).click();
+    expect(await first).toBe('granted');
+    await expect(prompt).toBeHidden();
+
+    // Remembered: no second prompt, and the page can see it's allowed.
+    expect(await ask()).toBe('granted');
+    expect(await tab.evaluate(async () => (await navigator.permissions.query({ name: 'notifications' })).state)).toBe('granted');
+  } finally {
+    await app.close();
+  }
+});
+
+test('a page that fails to load explains why, and recovers', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    // A port that was just closed: connection refused.
+    const closed = await new Promise<number>((done) => {
+      const probe = createServer().listen(0, '127.0.0.1', () => {
+        const { port } = probe.address() as AddressInfo;
+        probe.close(() => done(port));
+      });
+    });
+    const navigate = (url: string) =>
+      app.evaluate(({ BaseWindow }, u) => void BaseWindow.getAllWindows()[0]!.contentView.children[1]!.webContents.loadURL(u).catch(() => {}), url);
+
+    await navigate(`http://127.0.0.1:${closed}/`);
+    const alert = shell.getByRole('alert');
+    await expect(alert).toContainText('can’t be reached');
+    await expect(alert).toContainText('ERR_CONNECTION_REFUSED');
+    await expect.poll(() => tabVisible(app)).toBe(false);
+
+    await navigate(`${site.origin}/second`);
+    await expect(alert).toBeHidden();
+    await expect.poll(() => tabVisible(app)).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a page that keeps crashing stops after two reloads, and Reload brings it back', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    const crash = () =>
+      app.evaluate(({ webContents }, origin) => {
+        const page = webContents.getAllWebContents().find((c) => c.getURL().startsWith(origin) && !c.isCrashed());
+        page?.forcefullyCrashRenderer();
+        return Boolean(page);
+      }, site.origin);
+    const loaded = () =>
+      app.evaluate(({ webContents }, origin) => webContents.getAllWebContents().some((c) => c.getURL().startsWith(origin) && !c.isCrashed() && !c.isLoading()), site.origin);
+    // Count crashes as main sees them, so each one registers before the next.
+    await app.evaluate(({ webContents }, origin) => {
+      const counter = globalThis as { crashes?: number };
+      counter.crashes = 0;
+      for (const c of webContents.getAllWebContents()) if (c.getURL().startsWith(origin)) c.on('render-process-gone', () => void counter.crashes!++);
+    }, site.origin);
+    const crashes = () => app.evaluate(() => (globalThis as { crashes?: number }).crashes ?? 0);
+
+    // Chord reloads a crashed page itself, twice (Crest's rule)…
+    for (let i = 1; i <= 2; i++) {
+      expect(await crash()).toBe(true);
+      await expect.poll(crashes).toBe(i);
+      await expect.poll(loaded, { timeout: 10_000 }).toBe(true);
+    }
+    // …and the third time it explains instead.
+    await crash();
+    await expect.poll(crashes).toBe(3);
+    const alert = shell.getByRole('alert');
+    await expect(alert).toContainText('This page stopped working.');
+    await alert.getByRole('button', { name: 'Reload' }).click();
+    await expect(alert).toBeHidden();
+    await expect.poll(loaded, { timeout: 10_000 }).toBe(true);
   } finally {
     await app.close();
   }

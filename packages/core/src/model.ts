@@ -85,13 +85,27 @@ export interface WindowModel {
 }
 
 /** Engine state that is shown but never persisted. */
+/** Why the page didn't load: Chromium's net error code and the address it was loading. */
+export interface LoadError {
+  code: number;
+  url: string;
+}
+
 export interface LiveTab {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   audible: boolean;
   crashed: boolean;
+  /** The main frame failed to load; the frame shows why instead of a blank page. */
+  error: LoadError | null;
 }
+
+/** Permissions a site has to ask for (ARCHITECTURE.md §9). Camera and microphone are separate decisions. */
+export type SitePermission = 'camera' | 'microphone' | 'location' | 'notifications' | 'clipboard-read';
+export type PermissionDecision = 'allow' | 'block';
+/** Remembered decisions, by site origin. */
+export type SitePermissions = Record<string, Partial<Record<SitePermission, PermissionDecision>>>;
 
 export interface ClosedTab {
   node: TabNode;
@@ -145,6 +159,7 @@ export interface State {
   /** Increments on every change, so mirrors can detect gaps. */
   version: number;
   settings: Settings;
+  sitePermissions: SitePermissions;
   chords: Record<ChordId, Chord>;
   nodes: Record<NodeId, SidebarNode>;
   windows: Record<WindowId, WindowModel>;
@@ -156,6 +171,7 @@ export interface State {
 export const emptyState = (): State => ({
   version: 0,
   settings: { ...DEFAULT_SETTINGS, motion: { ...DEFAULT_SETTINGS.motion } },
+  sitePermissions: {},
   chords: {},
   nodes: {},
   windows: {},
@@ -163,4 +179,4 @@ export const emptyState = (): State => ({
   closed: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null };

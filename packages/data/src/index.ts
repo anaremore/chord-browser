@@ -3,14 +3,16 @@
  * (ARCHITECTURE.md §6.2). Pure: main imports this; only the utility process
  * imports `@chord/data/db`, so SQLite never runs on main.
  */
-import type { Chord, PersistedState, Settings, SidebarNode, State, WindowModel } from '@chord/core';
+import type { Chord, PersistedState, Settings, SidebarNode, SitePermissions, State, WindowModel } from '@chord/core';
 
 /** The latest value of one saved entity, or null to delete it. */
 export type WriteOp =
   | { k: 'chord'; id: string; value: Chord | null }
   | { k: 'node'; id: string; value: SidebarNode | null }
   | { k: 'window'; id: string; value: WindowModel | null }
-  | { k: 'setting'; id: string; value: Settings[keyof Settings] | null };
+  | { k: 'setting'; id: string; value: Settings[keyof Settings] | null }
+  /** All of one site's remembered permission decisions. */
+  | { k: 'sitePermission'; id: string; value: SitePermissions[string] | null };
 
 /** Main → chord-data. */
 export type DataRequest =
@@ -43,6 +45,11 @@ export function opsFromPatches(patches: readonly PathPatch[], state: State): Wri
   const add = (op: WriteOp) => ops.set(opKey(op), op);
   for (const { path } of patches) {
     const [collection, id] = path;
+    if (collection === 'sitePermissions') {
+      const origins = id === undefined ? Object.keys(state.sitePermissions) : [String(id)];
+      for (const origin of origins) add({ k: 'sitePermission', id: origin, value: state.sitePermissions[origin] ?? null });
+      continue;
+    }
     if (collection === 'settings') {
       const keys = id === undefined ? (Object.keys(state.settings) as (keyof Settings)[]) : [String(id) as keyof Settings];
       for (const key of keys) add({ k: 'setting', id: key, value: state.settings[key] ?? null });
@@ -67,5 +74,6 @@ export function opsForState(state: State): WriteOp[] {
     ...Object.values(state.nodes).map((value): WriteOp => ({ k: 'node', id: value.id, value })),
     ...Object.values(state.windows).map((value): WriteOp => ({ k: 'window', id: value.id, value })),
     ...(Object.keys(state.settings) as (keyof Settings)[]).map((key): WriteOp => ({ k: 'setting', id: key, value: state.settings[key] })),
+    ...Object.entries(state.sitePermissions).map(([origin, value]): WriteOp => ({ k: 'sitePermission', id: origin, value })),
   ];
 }

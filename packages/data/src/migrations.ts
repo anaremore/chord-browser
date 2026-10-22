@@ -71,4 +71,12 @@ export const MIGRATIONS: readonly string[] = [
 
   CREATE TABLE setting (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
   `,
+  // 2: what sites were allowed or blocked (permission prompts, M1.1).
+  `
+  CREATE TABLE site_permission (
+    profile_id TEXT NOT NULL, origin TEXT NOT NULL, permission TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK (decision IN ('allow','block')), updated_at INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, origin, permission)
+  ) STRICT;
+  `,
 ];

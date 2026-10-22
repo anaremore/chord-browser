@@ -1,4 +1,4 @@
-import { activeTabId, sortedChords, type LiveTab, type TabNode } from '@chord/core';
+import { activeTabId, describeLoadError, sortedChords, type LiveTab, type LoadError, type TabNode } from '@chord/core';
 import type { ChordEdit, SystemInfo } from '@chord/ipc';
 import { ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig } from 'motion/react';
@@ -13,6 +13,29 @@ import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Cho
 import { useSystemInfo } from './hooks';
 import { keycap, withKeys } from './keys';
 import { SidebarTabs } from './Tabs';
+
+/** What the frame shows when a page didn't load (DESIGN.md §9), instead of a blank page. */
+function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadError; canGoBack: boolean; windowId: string; tabId: string }) {
+  const copy = describeLoadError(error.code, displayHost(error.url));
+  const back = () =>
+    void (canGoBack ? api.nav.command('back') : api.state.dispatch({ t: 'tab.close', windowId, nodeId: tabId }));
+  return (
+    <div className={styles.empty} role="alert" data-kind={copy.kind}>
+      <p className={styles.emptyTitle}>{copy.title}</p>
+      <p className={styles.emptyBody}>{copy.body}</p>
+      {copy.action === 'retry' ? (
+        <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
+          Try again
+        </button>
+      ) : (
+        <button type="button" className={styles.emptyButton} onClick={back}>
+          {canGoBack ? 'Go back' : 'Close tab'}
+        </button>
+      )}
+      <p className={styles.errorCode}>{copy.name}</p>
+    </div>
+  );
+}
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -225,6 +248,16 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
         {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
 
         <div className={styles.frame}>
+          {active && live?.crashed && (
+            <div className={styles.empty} role="alert">
+              <p className={styles.emptyTitle}>This page stopped working.</p>
+              <p className={styles.emptyBody}>It’s not you. Reloading usually fixes it.</p>
+              <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
+                Reload
+              </button>
+            </div>
+          )}
+          {active && !live?.crashed && live?.error && <LoadErrorState error={live.error} canGoBack={live.canGoBack} windowId={windowId} tabId={active.id} />}
           {!active && (
             <div className={styles.empty}>
               <p className={styles.emptyTitle}>Fresh chord, fresh start.</p>

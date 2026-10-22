@@ -29,13 +29,6 @@ export function lockToOrigins(contents: WebContents, origins: readonly string[])
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
 }
 
-/** Deny-by-default permissions for browsing profiles. Prompts arrive in M1.1. */
-export function configureBrowsingSession(ses: Session): void {
-  const granted = new Set(['fullscreen', 'clipboard-sanitized-write']);
-  ses.setPermissionRequestHandler((_contents, permission, callback) => callback(granted.has(permission)));
-  ses.setPermissionCheckHandler((_contents, permission) => granted.has(permission));
-}
-
 /** Chord's own UI needs no permissions at all. */
 export function configureUiSession(ses: Session): void {
   ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));

@@ -1,0 +1,168 @@
+/* Popover cards (DESIGN.md §7.1): raised surfaces over the page. Tokens only. */
+
+/* Sized by its cards, anchored top-right; the padding leaves room for their shadows. */
+.root {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-end;
+  inline-size: max-content;
+  padding: var(--space-3);
+  color: var(--color-fg);
+}
+
+.card {
+  box-sizing: border-box;
+  inline-size: var(--size-popover-card);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-popover);
+  animation: card-in var(--spring-overlay-duration) var(--spring-overlay);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--space-1) * -1));
+  }
+}
+
+.muted {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+
+.iconButton {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-fg-muted);
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+/* ---------- Find bar ---------- */
+
+.findRow {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-url-pill);
+  padding-inline: var(--space-3) var(--space-1);
+}
+
+.findInput {
+  flex: 1;
+  min-inline-size: 0;
+  padding: 0 var(--space-1);
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-fg);
+  font: var(--text-body);
+  user-select: text;
+}
+
+.count {
+  flex: none;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- Permission prompt ---------- */
+
+.permissionHead {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-2) 0 var(--space-4);
+}
+
+.permissionTitle {
+  flex: 1;
+  margin: var(--space-1) 0 0;
+  font: var(--text-body);
+}
+
+.host {
+  font: var(--text-label);
+  overflow-wrap: anywhere;
+}
+
+.permissionList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0 var(--space-4);
+  list-style: none;
+}
+
+.permissionList li {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--color-fg);
+}
+
+.permissionList svg {
+  color: var(--color-accent);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  padding: var(--space-4);
+}
+
+.primary,
+.secondary {
+  block-size: var(--size-row);
+  padding-inline: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-full);
+  font: var(--text-label);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    transform var(--spring-press-duration) var(--spring-press);
+}
+
+.primary {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+.secondary {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.secondary:hover {
+  background: var(--color-item-active-bg);
+}
+
+.primary:active,
+.secondary:active {
+  transform: scale(0.97);
+}
