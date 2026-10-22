@@ -105,3 +105,17 @@ export function springToCss(s: Spring, points = 32): { easing: string; durationM
   samples[samples.length - 1] = 1;
   return { easing: `linear(${samples.map((x) => Number(x.toFixed(4))).join(', ')})`, durationMs };
 }
+
+/**
+ * The spring as progress over time (0 → 1), for motion that CSS can't drive,
+ * like native view bounds. Matches `springToCss` so both sides move together.
+ */
+export function springCurve(s: Spring): { durationMs: number; at(tMs: number): number } {
+  const { settle } = simulateSpring(s);
+  const durationMs = Math.ceil(settle / 10) * 10;
+  const samples: number[] = [];
+  simulateSpring(s, durationMs + 1, (t, x) => {
+    if (samples.length === Math.floor(t)) samples.push(x);
+  });
+  return { durationMs, at: (t) => (t >= durationMs ? 1 : t <= 0 ? 0 : (samples[Math.floor(t)] ?? 1)) };
+}

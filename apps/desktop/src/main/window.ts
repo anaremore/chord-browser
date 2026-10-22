@@ -5,21 +5,38 @@
  *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L
  */
 import { join } from 'node:path';
-import type { Bounds, WindowId } from '@chord/core';
+import type { Bounds, WindowId, WindowModel } from '@chord/core';
 import type { OverlayOpenEvent, Rect, Role } from '@chord/ipc';
-import { size } from '@chord/tokens';
-import { BaseWindow, WebContentsView, nativeTheme, type Session } from 'electron';
+import { size, space, springCurve, springs } from '@chord/tokens';
+import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session } from 'electron';
 import { registerCaller, send } from './ipc';
 import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
 import { lockToOrigins } from './security';
 import { originOf } from './urls';
 
+export type SidebarMode = WindowModel['sidebar'];
+
 export interface AppWindowOptions {
   id: WindowId;
   uiSession: Session;
   bounds: Bounds | null;
+  sidebar: SidebarMode;
   onBounds(bounds: Bounds): void;
 }
+
+interface FrameOrigin {
+  left: number;
+  top: number;
+}
+
+/** Where the content frame starts: right of the sidebar, or just inset when it's collapsed (DESIGN.md §3.3). */
+function frameOrigin(sidebar: SidebarMode): FrameOrigin {
+  if (sidebar === 'collapsed') return { left: size.frameInset, top: size.strip };
+  return { left: size.sidebarWidth, top: platform === 'darwin' ? size.frameInset : size.strip };
+}
+
+const FRAME_SPRING = springCurve(springs.smooth);
+const FRAME_TICK_MS = 1000 / 60;
 
 function uiUrl(surface: 'shell' | 'overlay'): string {
   const dev = process.env['ELECTRON_RENDERER_URL'];
@@ -55,9 +72,12 @@ export class AppWindow {
   private tabView: WebContentsView | null = null;
   private anchor: Rect | null = null;
   private overlayVisible = false;
+  private origin: FrameOrigin;
+  private frameAnimation: ReturnType<typeof setInterval> | undefined;
 
-  constructor({ id, uiSession, bounds, onBounds }: AppWindowOptions) {
+  constructor({ id, uiSession, bounds, sidebar, onBounds }: AppWindowOptions) {
     this.id = id;
+    this.origin = frameOrigin(sidebar);
     this.window = new BaseWindow({
       ...(bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : { width: 1280, height: 820 }),
       minWidth: 720,
@@ -101,6 +121,7 @@ export class AppWindow {
     this.window.on('closed', () => {
       nativeTheme.off('updated', onTheme);
       clearTimeout(boundsTimer);
+      clearInterval(this.frameAnimation);
       for (const view of [this.shell, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
     });
 
@@ -143,18 +164,55 @@ export class AppWindow {
     (this.tabView?.webContents ?? this.shell.webContents).focus();
   }
 
-  /** The content frame: inset from the window, right of the sidebar, below the strip on Windows/Linux. */
+  /**
+   * Dock or collapse the sidebar. The page glides on the same spring the
+   * shell's CSS uses for the frame behind it, so the two move as one.
+   */
+  setSidebar(sidebar: SidebarMode, animate: boolean): void {
+    clearInterval(this.frameAnimation);
+    this.frameAnimation = undefined;
+    const to = frameOrigin(sidebar);
+    if (!animate || !this.tabView) {
+      this.origin = to;
+      this.layout();
+      return;
+    }
+    const from = this.origin;
+    const start = performance.now();
+    const step = () => {
+      const elapsed = performance.now() - start;
+      const k = FRAME_SPRING.at(elapsed);
+      this.origin = { left: from.left + (to.left - from.left) * k, top: from.top + (to.top - from.top) * k };
+      this.layout();
+      if (elapsed >= FRAME_SPRING.durationMs) {
+        clearInterval(this.frameAnimation);
+        this.frameAnimation = undefined;
+      }
+    };
+    this.frameAnimation = setInterval(step, FRAME_TICK_MS);
+    step();
+  }
+
+  /** The content frame: inset from the window, right of the sidebar (if docked), below the strip on Windows/Linux. */
   private layout(): void {
     const { width, height } = this.window.getContentBounds();
     const inset = size.frameInset;
-    const top = platform === 'darwin' ? inset : size.strip;
+    const x = Math.round(this.origin.left);
+    const y = Math.round(this.origin.top);
     this.shell.setBounds({ x: 0, y: 0, width, height });
     this.overlay.setBounds({ x: 0, y: 0, width, height });
-    this.tabView?.setBounds({
-      x: size.sidebarWidth,
-      y: top,
-      width: Math.max(0, width - size.sidebarWidth - inset),
-      height: Math.max(0, height - top - inset),
-    });
+    this.tabView?.setBounds({ x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) });
+  }
+
+  /**
+   * Pop a menu at a point (an empty rect), or below an anchor with its right
+   * edge under the anchor's (the ⋯ button, by the window's right edge).
+   * Electron can't right-align native menus, so `width` is the menu's
+   * measured width.
+   */
+  popupMenu(menu: Menu, anchor: Rect, width = 0): void {
+    const below = anchor.height > 0 ? anchor.height + space[1] : 0;
+    const x = Math.max(0, Math.round(anchor.x + anchor.width - width));
+    menu.popup({ window: this.window, x, y: Math.round(anchor.y + below) });
   }
 }

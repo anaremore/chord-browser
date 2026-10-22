@@ -99,6 +99,16 @@ describe('reducer', () => {
     expect(t.state.windows['w1']!.activeTab['c1']).toBe('id-001');
   });
 
+  it('collapses and docks the sidebar, asking main to lay the window out once per change', () => {
+    const t = setup();
+    const collapsed = t.run({ t: 'window.sidebar', windowId: 'w1', sidebar: 'collapsed' });
+    expect(t.state.windows['w1']!.sidebar).toBe('collapsed');
+    expect(collapsed.effects).toEqual([{ e: 'window.layout', windowId: 'w1', sidebar: 'collapsed' }]);
+    expect(t.run({ t: 'window.sidebar', windowId: 'w1', sidebar: 'collapsed' }).effects).toEqual([]);
+    t.run({ t: 'window.sidebar', windowId: 'w1', sidebar: 'docked' });
+    expect(t.state.windows['w1']!.sidebar).toBe('docked');
+  });
+
   it('produces no patches (and keeps the version) for no-op updates', () => {
     const t = setup();
     t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });

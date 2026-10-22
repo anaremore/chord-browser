@@ -41,7 +41,9 @@ export type Effect =
   /** Show this tab (or nothing) in the window's content frame. */
   | { e: 'view.show'; windowId: WindowId; nodeId: NodeId | null }
   | { e: 'view.navigate'; nodeId: NodeId; url: string }
-  | { e: 'view.destroy'; nodeId: NodeId };
+  | { e: 'view.destroy'; nodeId: NodeId }
+  /** The window's sidebar docked or collapsed: lay the content frame out again. */
+  | { e: 'window.layout'; windowId: WindowId; sidebar: 'docked' | 'collapsed' };
 
 export interface Context {
   now: number;
@@ -222,7 +224,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'window.sidebar': {
       const win = draft.windows[cmd.windowId];
-      if (win && win.sidebar !== cmd.sidebar) win.sidebar = cmd.sidebar;
+      if (!win || win.sidebar === cmd.sidebar) return;
+      win.sidebar = cmd.sidebar;
+      effects.push({ e: 'window.layout', windowId: cmd.windowId, sidebar: cmd.sidebar });
       return;
     }
   }

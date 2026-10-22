@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { simulateSpring, springToCss, springs, tokenCss } from '../src';
+import { simulateSpring, springCurve, springToCss, springs, tokenCss } from '../src';
 
 /** The table in DESIGN.md §6.2. If a spring changes, update the doc with it. */
 const documented = {
@@ -35,6 +35,15 @@ describe('springs', () => {
     expect(css.easing).toMatch(/, 1\)$/);
     // bouncy overshoots, so some sample must exceed 1
     expect(css.easing.split(', ').some((v) => Number.parseFloat(v.replace('linear(', '')) > 1)).toBe(true);
+  });
+
+  it('samples springs over time for native animation, matching the CSS duration', () => {
+    const curve = springCurve(springs.smooth);
+    expect(curve.durationMs).toBe(springToCss(springs.smooth).durationMs);
+    expect(curve.at(0)).toBe(0);
+    expect(curve.at(curve.durationMs)).toBe(1);
+    expect(curve.at(simulateSpring(springs.smooth).t90)).toBeGreaterThanOrEqual(0.89);
+    for (let t = 0; t <= curve.durationMs; t += 7) expect(curve.at(t)).toBeLessThan(1.01);
   });
 });
 

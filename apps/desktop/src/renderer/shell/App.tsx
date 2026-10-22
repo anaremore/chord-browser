@@ -1,8 +1,8 @@
-import { activeTabId, formatKeys, shortcutById, tabsInOrder, type ActionId, type TabNode } from '@chord/core';
+import { activeTabId, formatKeys, shortcutById, tabsInOrder, type ActionId, type LiveTab, type TabNode } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
-import { ArrowLeft, ArrowRight, Globe, Lock, Plus, RotateCw, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, Plus, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useLayoutEffect, useRef, type MouseEvent } from 'react';
+import type { MouseEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { spring } from '../shared/motion';
@@ -20,6 +20,86 @@ function keycap(id: ActionId, info: SystemInfo): string {
   return first ? formatKeys(first, info.platform) : '';
 }
 
+/** A label with its shortcut, for tooltips: "Reload  Ctrl+R". */
+function withKeys(label: string, id: ActionId, info: SystemInfo): string {
+  const keys = keycap(id, info);
+  return keys ? `${label}  ${keys}` : label;
+}
+
+/**
+ * Reports where the address sits so ⌘L can grow the command bar out of it.
+ * Re-measures on resize and after the sidebar's slide settles.
+ */
+function anchorRef(el: HTMLElement | null) {
+  if (!el) return;
+  const report = () => {
+    const r = el.getBoundingClientRect();
+    void api.layout.anchor({ x: r.x, y: r.y, width: r.width, height: r.height });
+  };
+  report();
+  const observer = new ResizeObserver(report);
+  observer.observe(el);
+  window.addEventListener('resize', report);
+  window.addEventListener('transitionend', report);
+  return () => {
+    observer.disconnect();
+    window.removeEventListener('resize', report);
+    window.removeEventListener('transitionend', report);
+  };
+}
+
+function SidebarToggle({ collapsed, info, onToggle }: { collapsed: boolean; info: SystemInfo; onToggle(): void }) {
+  return (
+    <button
+      type="button"
+      className={styles.iconButton}
+      aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'}
+      aria-expanded={!collapsed}
+      title={withKeys(collapsed ? 'Show sidebar' : 'Hide sidebar', 'view.toggleSidebar', info)}
+      onClick={onToggle}
+    >
+      <PanelLeft {...ICON} />
+    </button>
+  );
+}
+
+function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab: boolean; info: SystemInfo }) {
+  return (
+    <>
+      <button
+        type="button"
+        className={styles.iconButton}
+        aria-label="Back"
+        title={withKeys('Back', 'nav.back', info)}
+        disabled={!live?.canGoBack}
+        onClick={() => void api.nav.command('back')}
+      >
+        <ArrowLeft {...ICON} />
+      </button>
+      <button
+        type="button"
+        className={styles.iconButton}
+        aria-label="Forward"
+        title={withKeys('Forward', 'nav.forward', info)}
+        disabled={!live?.canGoForward}
+        onClick={() => void api.nav.command('forward')}
+      >
+        <ArrowRight {...ICON} />
+      </button>
+      <button
+        type="button"
+        className={styles.iconButton}
+        aria-label={live?.loading ? 'Stop' : 'Reload'}
+        title={live?.loading ? 'Stop' : withKeys('Reload', 'nav.reload', info)}
+        disabled={!hasTab}
+        onClick={() => void api.nav.command(live?.loading ? 'stop' : 'reload')}
+      >
+        {live?.loading ? <X {...ICON} /> : <RotateCw {...ICON} />}
+      </button>
+    </>
+  );
+}
+
 export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: Mirror }) {
   const info = useSystemInfo(initialInfo);
   const state = useMirror(mirror);
@@ -32,72 +112,35 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const active = activeId ? (state.nodes[activeId] as TabNode | undefined) : undefined;
   const live = activeId ? state.live[activeId] : undefined;
   const host = active ? displayHost(active.url) : '';
+  const title = active ? pageTitle(active) : '';
   const overlayChrome = info.windowChrome.kind === 'overlay';
   const secure = active?.url.startsWith('https:') ?? false;
-
-  const pillRef = useRef<HTMLButtonElement>(null);
-  useLayoutEffect(() => {
-    const el = pillRef.current;
-    if (!el) return;
-    const report = () => {
-      const r = el.getBoundingClientRect();
-      void api.layout.anchor({ x: r.x, y: r.y, width: r.width, height: r.height });
-    };
-    report();
-    const observer = new ResizeObserver(report);
-    observer.observe(el);
-    window.addEventListener('resize', report);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', report);
-    };
-  }, []);
+  const collapsed = win?.sidebar === 'collapsed';
 
   const dispatch = api.state.dispatch;
   const closeTab = (id: string) => void dispatch({ t: 'tab.close', windowId, nodeId: id });
+  const toggleSidebar = () => void api.action.run('view.toggleSidebar');
+  const openOptions = (e: MouseEvent<HTMLButtonElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    void api.menu.app({ x: r.x, y: r.y, width: r.width, height: r.height });
+  };
 
   return (
-    <div className={styles.window} style={style}>
+    <div className={styles.window} data-sidebar={collapsed ? 'collapsed' : 'docked'} style={style}>
       <div className={styles.backdrop} aria-hidden>
         <div className={styles.tint} />
         <div className={styles.grain} />
       </div>
 
-      <nav className={styles.sidebar} aria-label="Sidebar">
+      <nav className={styles.sidebar} aria-label="Sidebar" inert={collapsed} aria-hidden={collapsed}>
         <header className={styles.header}>
+          <SidebarToggle collapsed={collapsed} info={info} onToggle={toggleSidebar} />
           {!overlayChrome && <span className={styles.flex} />}
-          <button
-            type="button"
-            className={styles.iconButton}
-            aria-label="Back"
-            disabled={!live?.canGoBack}
-            onClick={() => void api.nav.command('back')}
-          >
-            <ArrowLeft {...ICON} />
-          </button>
-          <button
-            type="button"
-            className={styles.iconButton}
-            aria-label="Forward"
-            disabled={!live?.canGoForward}
-            onClick={() => void api.nav.command('forward')}
-          >
-            <ArrowRight {...ICON} />
-          </button>
-          <button
-            type="button"
-            className={styles.iconButton}
-            aria-label={live?.loading ? 'Stop' : 'Reload'}
-            title={live?.loading ? 'Stop' : `Reload  ${keycap('nav.reload', info)}`}
-            disabled={!active}
-            onClick={() => void api.nav.command(live?.loading ? 'stop' : 'reload')}
-          >
-            {live?.loading ? <X {...ICON} /> : <RotateCw {...ICON} />}
-          </button>
+          <NavButtons live={live} hasTab={Boolean(active)} info={info} />
         </header>
 
         <button
-          ref={pillRef}
+          ref={collapsed ? undefined : anchorRef}
           type="button"
           className={styles.urlPill}
           title={active?.url ?? ''}
@@ -143,6 +186,10 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
                   onAuxClick={(e: MouseEvent) => {
                     if (e.button === 1) closeTab(tab.id);
                   }}
+                  onContextMenu={(e: MouseEvent) => {
+                    e.preventDefault();
+                    void api.menu.tab(tab.id, { x: e.clientX, y: e.clientY });
+                  }}
                 >
                   {isActive && (
                     <motion.span layoutId="active-pill" className={styles.activePill} transition={spring('snappy', 'tabMoves')} />
@@ -167,7 +214,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
                     type="button"
                     className={styles.close}
                     aria-label={`Close ${tab.title || 'tab'}`}
-                    title={`Close tab  ${keycap('tab.close', info)}`}
+                    title={withKeys('Close tab', 'tab.close', info)}
                     onClick={() => closeTab(tab.id)}
                   >
                     <X size={14} strokeWidth={2} />
@@ -187,24 +234,47 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
         </footer>
       </nav>
 
-      {overlayChrome && (
-        <div className={styles.strip}>
-          {active && (
-            <button type="button" className={styles.address} onClick={() => void api.overlay.open('edit')}>
-              <span className={styles.addressHost}>{host}</span>
-              {pageTitle(active) && (
-                <>
-                  <span className={styles.addressMuted} aria-hidden>
-                    /
-                  </span>
-                  <span className={`${styles.addressMuted} ${styles.ellipsis}`}>{pageTitle(active)}</span>
-                </>
-              )}
+      {/* The top bar: right of the sidebar on Windows/Linux; the whole minimal bar when collapsed (DESIGN.md §3.3). */}
+      {(overlayChrome || collapsed) && (
+        <div className={styles.bar}>
+          {collapsed && (
+            <div className={styles.barLead}>
+              <SidebarToggle collapsed info={info} onToggle={toggleSidebar} />
+              <NavButtons live={live} hasTab={Boolean(active)} info={info} />
+            </div>
+          )}
+          <button
+            ref={collapsed ? anchorRef : undefined}
+            type="button"
+            className={styles.address}
+            title={active?.url ?? ''}
+            onClick={() => void api.overlay.open('edit')}
+          >
+            {host ? (
+              <>
+                <span className={styles.addressHost}>{host}</span>
+                {title && (
+                  <>
+                    <span className={styles.addressMuted} aria-hidden>
+                      /
+                    </span>
+                    <span className={`${styles.addressMuted} ${styles.ellipsis}`}>{title}</span>
+                  </>
+                )}
+              </>
+            ) : (
+              <span className={styles.addressMuted}>Search or enter address</span>
+            )}
+          </button>
+          <span className={styles.flex} />
+          {overlayChrome && (
+            <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>
+              <Ellipsis {...ICON} />
             </button>
           )}
         </div>
       )}
-      {!overlayChrome && <div className={styles.topDrag} />}
+      {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
 
       <div className={styles.frame}>
         {!active && (

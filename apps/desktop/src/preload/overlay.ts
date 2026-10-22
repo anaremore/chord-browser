@@ -10,6 +10,7 @@ const api: OverlayApi = {
     onOpen: (listener) => subscribe('overlay:open', listener),
     close: () => invoke('overlay:close'),
   },
+  action: { run: (action) => invoke('action:run', { action }) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

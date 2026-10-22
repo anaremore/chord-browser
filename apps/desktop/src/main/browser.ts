@@ -2,10 +2,26 @@
  * The orchestrator: owns windows, runs reducer effects against real views,
  * broadcasts patches to renderer mirrors, and carries out keyboard actions.
  */
-import { activeTab, activeTabId, tabsInOrder, type ActionId, type Effect, type NodeId, type State, type WindowId } from '@chord/core';
-import { app, type Session, type WebContents } from 'electron';
+import {
+  activeTab,
+  activeTabId,
+  markdownLink,
+  tabsInOrder,
+  zoomStep,
+  type ActionId,
+  type Effect,
+  type NodeId,
+  type State,
+  type TabNode,
+  type WindowId,
+} from '@chord/core';
+import type { Rect } from '@chord/ipc';
+import { app, BaseWindow, clipboard, type Menu, type Session, type WebContents } from 'electron';
+import { attachContextMenu } from './context-menu';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
+import { buildAppMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
+import { systemInfo } from './platform';
 import { Store, type Change } from './store';
 import { TabManager } from './tabs';
 import { AppWindow } from './window';
@@ -24,9 +40,11 @@ export class Browser {
   private readonly windows = new Map<WindowId, AppWindow>();
   private recent: { windowId: WindowId; order: NodeId[]; index: number } | null = null;
   private readonly keyboard: KeyboardHandlers = {
-    run: (action, contents) => this.runAction(action, contents),
+    run: (action, contents) => this.run(action, contents),
     onControlUp: () => this.finishRecentCycle(),
   };
+  /** The application menu (macOS menu bar; on Windows/Linux the ⋯ menu, whose accelerators stay live). */
+  readonly appMenu: Menu = buildAppMenu((action) => this.runInFocusedWindow(action));
 
   constructor(private readonly options: BrowserOptions) {
     this.store = new Store(options.initial);
@@ -35,7 +53,22 @@ export class Browser {
       dispatch: (command) => this.store.dispatch(command),
       sessionFor: (node) => options.profileSession(this.store.state.chords[node.chordId]?.profileId ?? 'default'),
       windowFor: (nodeId) => this.windowShowing(nodeId),
-      onContentsCreated: (contents) => attachShortcuts(contents, this.keyboard),
+      onContentsCreated: (contents, nodeId) => {
+        attachShortcuts(contents, this.keyboard);
+        attachContextMenu(contents, {
+          surface: 'web',
+          inspect: true,
+          openTab: (url, background) => {
+            const windowId = this.windowShowing(nodeId);
+            if (windowId) this.store.dispatch({ t: 'tab.open', windowId, url, background });
+          },
+          placement: () => {
+            const w = this.windowFor(contents);
+            const bounds = this.tabs.get(nodeId)?.getBounds();
+            return w && bounds ? { window: w.window, x: bounds.x, y: bounds.y } : undefined;
+          },
+        });
+      },
     });
     this.store.subscribe((change) => {
       this.broadcast(change);
@@ -79,11 +112,19 @@ export class Browser {
       id: windowId,
       uiSession: this.options.uiSession,
       bounds: model.bounds,
+      sidebar: model.sidebar,
       onBounds: (bounds) => this.store.dispatch({ t: 'window.bounds', windowId, bounds }),
     });
     this.windows.set(windowId, w);
-    attachShortcuts(w.shell.webContents, this.keyboard);
-    attachShortcuts(w.overlay.webContents, this.keyboard);
+    for (const contents of [w.shell.webContents, w.overlay.webContents]) {
+      attachShortcuts(contents, this.keyboard);
+      attachContextMenu(contents, {
+        surface: 'ui',
+        inspect: !app.isPackaged,
+        openTab: (url, background) => this.store.dispatch({ t: 'tab.open', windowId, url, background }),
+        placement: () => ({ window: w.window, x: 0, y: 0 }),
+      });
+    }
     w.window.on('closed', () => {
       this.windows.delete(windowId);
       if (this.windows.size === 0 && process.platform !== 'darwin') {
@@ -128,14 +169,51 @@ export class Browser {
         case 'view.destroy':
           this.tabs.destroy(effect.nodeId);
           break;
+        case 'window.layout':
+          this.windows.get(effect.windowId)?.setSidebar(effect.sidebar, !systemInfo().prefersReducedMotion);
+          break;
       }
     }
   }
 
-  private runAction(action: ActionId, contents: WebContents): boolean {
+  /** Run an action for the window that owns this contents (keys, the shell's buttons, the command bar). */
+  run(action: ActionId, contents: WebContents): boolean {
     const w = this.windowFor(contents);
-    if (!w) return false;
+    return w ? this.runAction(action, w) : false;
+  }
+
+  /** Menu items act on the focused Chord window. */
+  private runInFocusedWindow(action: ActionId): void {
+    const focused = BaseWindow.getFocusedWindow();
+    const w = [...this.windows.values()].find((x) => x.window === focused) ?? this.windows.values().next().value;
+    if (w) this.runAction(action, w);
+  }
+
+  openAppMenu(contents: WebContents, anchor: Rect): void {
+    this.windowFor(contents)?.popupMenu(this.appMenu, anchor, OPTIONS_MENU_WIDTH);
+  }
+
+  openTabMenu(contents: WebContents, nodeId: NodeId, at: { x: number; y: number }): void {
+    const w = this.windowFor(contents);
+    const node = this.store.state.nodes[nodeId];
+    if (!w || node?.kind !== 'tab') return;
+    const tab: TabNode = node;
+    w.popupMenu(
+      buildTabMenu({
+        url: tab.url,
+        copyLink: () => clipboard.writeText(tab.url),
+        copyMarkdown: () => clipboard.writeText(markdownLink(tab.title, tab.url)),
+        reload: () => this.tabs.get(nodeId)?.webContents.reload(),
+        duplicate: () => this.store.dispatch({ t: 'tab.open', windowId: w.id, url: tab.url }),
+        close: () => this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId }),
+      }),
+      { ...at, width: 0, height: 0 },
+    );
+  }
+
+  private runAction(action: ActionId, w: AppWindow): boolean {
     const active = activeTabId(this.store.state, w.id);
+    const tab = activeTab(this.store.state, w.id);
     const activeContents = w.activeTabContents;
     switch (action) {
       case 'address.edit':
@@ -172,6 +250,30 @@ export class Browser {
         return true;
       case 'view.fullscreen':
         w.window.setFullScreen(!w.window.isFullScreen());
+        return true;
+      case 'view.toggleSidebar': {
+        const sidebar = this.store.state.windows[w.id]?.sidebar === 'collapsed' ? 'docked' : 'collapsed';
+        this.store.dispatch({ t: 'window.sidebar', windowId: w.id, sidebar });
+        return true;
+      }
+      case 'view.zoomIn':
+      case 'view.zoomOut':
+        activeContents?.setZoomFactor(zoomStep(activeContents.getZoomFactor(), action === 'view.zoomIn' ? 1 : -1));
+        return true;
+      case 'view.zoomReset':
+        activeContents?.setZoomFactor(1);
+        return true;
+      case 'page.print':
+        activeContents?.print();
+        return true;
+      case 'page.viewSource':
+        if (tab && /^https?:/i.test(tab.url)) this.store.dispatch({ t: 'tab.open', windowId: w.id, url: `view-source:${tab.url}` });
+        return true;
+      case 'address.copy':
+        if (tab) clipboard.writeText(tab.url);
+        return true;
+      case 'address.copyMarkdown':
+        if (tab) clipboard.writeText(markdownLink(tab.title, tab.url));
         return true;
       case 'app.devtools':
         activeContents?.toggleDevTools();

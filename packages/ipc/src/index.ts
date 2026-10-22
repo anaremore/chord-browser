@@ -3,7 +3,7 @@
  * with the renderer roles allowed to use it and zod schemas for its payloads.
  * Main validates every request against this table; web content gets no IPC.
  */
-import type { Command, State } from '@chord/core';
+import { SHORTCUTS, type ActionId as CoreActionId, type Command, type State } from '@chord/core';
 import { z } from 'zod';
 
 export type Role = 'shell' | 'overlay' | 'popover' | 'internal';
@@ -30,6 +30,9 @@ export type SystemInfo = z.infer<typeof SystemInfo>;
 
 export const NavAction = z.enum(['back', 'forward', 'reload', 'stop']);
 export type NavAction = z.infer<typeof NavAction>;
+
+/** Any action in the shortcut registry, by id. */
+export const ActionId = z.custom<CoreActionId>((value) => typeof value === 'string' && SHORTCUTS.some((s) => s.id === value));
 
 const id = z.string().min(1).max(64);
 const url = z.string().min(1).max(32_768);
@@ -88,6 +91,12 @@ export const invokeChannels = {
   'overlay:close': { roles: ['overlay'], request: z.void(), response: z.void() },
   /** The shell reports where the URL pill / address field sits, for anchored ⌘L. */
   'layout:anchor': { roles: ['shell'], request: Rect.nullable(), response: z.void() },
+  /** Windows/Linux options button: pop the app menu below this rect. */
+  'menu:app': { roles: ['shell'], request: Rect, response: z.void() },
+  /** Right-click on a tab row, at this point in the window. */
+  'menu:tab': { roles: ['shell'], request: z.object({ nodeId: id, x: z.number(), y: z.number() }), response: z.void() },
+  /** Run an action from the shortcut registry, as if its keys were pressed. */
+  'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
 } as const satisfies Record<string, { roles: readonly Role[]; request: z.ZodType; response: z.ZodType }>;
 
 /** Main → renderer events (`webContents.send`). */
@@ -122,6 +131,8 @@ export interface ShellApi {
   nav: { command(action: NavAction): Promise<void> };
   overlay: { open(mode: OverlayOpen['mode']): Promise<void> };
   layout: { anchor(rect: Rect | null): Promise<void> };
+  menu: { app(anchor: Rect): Promise<void>; tab(nodeId: string, at: { x: number; y: number }): Promise<void> };
+  action: { run(action: CoreActionId): Promise<void> };
 }
 
 /** `window.chord` in the command bar overlay. */
@@ -135,4 +146,5 @@ export interface OverlayApi {
     onOpen(listener: (event: OverlayOpenEvent) => void): () => void;
     close(): Promise<void>;
   };
+  action: { run(action: CoreActionId): Promise<void> };
 }

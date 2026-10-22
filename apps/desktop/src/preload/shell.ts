@@ -12,6 +12,11 @@ const api: ShellApi = {
   nav: { command: (action) => invoke('nav:command', { action }) },
   overlay: { open: (mode) => invoke('overlay:open', { mode }) },
   layout: { anchor: (rect) => invoke('layout:anchor', rect) },
+  menu: {
+    app: (anchor) => invoke('menu:app', anchor),
+    tab: (nodeId, at) => invoke('menu:tab', { nodeId, x: at.x, y: at.y }),
+  },
+  action: { run: (action) => invoke('action:run', { action }) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

@@ -52,6 +52,20 @@
   flex-direction: column;
   inline-size: var(--size-sidebar-width);
   padding-inline: var(--space-2);
+  transition:
+    transform var(--spring-smooth-duration) var(--spring-smooth),
+    opacity var(--duration-fade-base) var(--ease-standard);
+}
+
+/* Collapsed: the sidebar slides out under the page as the frame glides left (DESIGN.md §3.3). */
+.window[data-sidebar='collapsed'] .sidebar {
+  visibility: hidden;
+  opacity: 0;
+  transform: translateX(calc(var(--space-6) * -1));
+  transition:
+    transform var(--spring-smooth-duration) var(--spring-smooth),
+    opacity var(--duration-fade-fast) var(--ease-exit),
+    visibility var(--duration-instant) linear var(--spring-smooth-duration);
 }
 
 .header {
@@ -293,18 +307,45 @@ kbd {
   font: var(--text-small);
 }
 
-/* ---------- Top strip (Windows/Linux) and the macOS drag gap ---------- */
+/* ---------- Top bar (Windows/Linux, and everywhere when collapsed) and the macOS drag gap ---------- */
 
-.strip {
+.bar {
   position: absolute;
   inset-block-start: 0;
   inset-inline: var(--size-sidebar-width) 0;
   box-sizing: border-box;
   display: flex;
+  gap: var(--space-1);
   align-items: center;
   block-size: var(--size-strip);
-  padding-inline-end: var(--chrome-reserved-right);
+  padding-inline-end: calc(var(--chrome-reserved-right) + var(--space-1));
   -webkit-app-region: drag;
+}
+
+.bar > button,
+.barLead > button {
+  -webkit-app-region: no-drag;
+}
+
+/* Collapsed: one bar across the window, its buttons exactly where the sidebar header had them. */
+.window[data-sidebar='collapsed'] .bar {
+  inset-inline-start: 0;
+  padding-inline-start: calc(var(--space-2) + var(--chrome-reserved-left));
+}
+
+.barLead {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  margin-inline-end: var(--space-2);
+  animation: fade-in var(--duration-fade-slow) var(--ease-standard);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .topDrag {
@@ -329,7 +370,6 @@ kbd {
   color: var(--color-fg);
   font: var(--text-body);
   white-space: nowrap;
-  -webkit-app-region: no-drag;
   transition: background-color var(--duration-fade-fast) var(--ease-standard);
 }
 
@@ -356,10 +396,18 @@ kbd {
   border-radius: var(--radius-frame);
   background: var(--color-surface);
   box-shadow: var(--shadow-frame);
+
+  /* Same spring main uses for the page's bounds, so the frame and the page move as one. */
+  transition: inset var(--spring-smooth-duration) var(--spring-smooth);
 }
 
 :global(:root[data-platform='darwin']) .frame {
   inset-block-start: var(--size-frame-inset);
+}
+
+:global(:root) .window[data-sidebar='collapsed'] .frame {
+  inset-block-start: var(--size-strip);
+  inset-inline-start: var(--size-frame-inset);
 }
 
 .empty {

@@ -1,7 +1,7 @@
 import { seedState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
-import { app, nativeTheme, session, type Session, type WebContents } from 'electron';
+import { app, Menu, nativeTheme, session, type Session, type WebContents } from 'electron';
 import { Browser } from './browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
@@ -53,6 +53,11 @@ function registerIpc(): void {
   });
   handle('overlay:close', (_request, sender) => senderWindow(sender).closeOverlay());
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
+  handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
+  handle('menu:tab', ({ nodeId, x, y }, sender) => browser!.openTabMenu(sender, nodeId, { x, y }));
+  handle('action:run', ({ action }, sender) => {
+    browser!.run(action, sender);
+  });
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -95,11 +100,12 @@ if (!app.requestSingleInstanceLock()) {
     const initial = seedState({
       now: Date.now(),
       newId: () => uuidv7(),
-      theme: { stops: defaultChordStops(accentRgb ? rgbToOklch(accentRgb) : null), grain: 0.35, appearance: 'auto' },
+      theme: { stops: defaultChordStops(accentRgb ? rgbToOklch(accentRgb) : null), grain: 0.2, appearance: 'auto' },
       homeUrl: HOME_URL,
     });
 
     browser = new Browser({ initial, uiSession: ui, profileSession });
+    Menu.setApplicationMenu(browser.appMenu);
     registerIpc();
     browser.start();
   });

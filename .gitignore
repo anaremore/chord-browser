@@ -15,3 +15,6 @@ test-results/
 playwright-report/
 .cache/
 spikes/**/results/
+
+# Design QA captures (scripts/dev/qa-windows.mjs)
+.qa/

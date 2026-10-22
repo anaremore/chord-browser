@@ -119,6 +119,101 @@ test('the command bar opens new tabs, edits the address in place, and tabs close
   }
 });
 
+/** Bounds of the window's views, bottom to top: shell, active tab, overlay. */
+const viewBounds = (app: ElectronApplication) =>
+  app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows()[0]!.contentView.children.map((v) => v.getBounds()));
+
+test('the sidebar collapses to a minimal bar and docks again', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    const docked = (await viewBounds(app))[1]!;
+
+    await shell.getByRole('button', { name: 'Hide sidebar' }).click();
+    // The minimal bar takes over: its own toggle, and the page's domain / title.
+    await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
+    await expect(shell.getByRole('navigation', { name: 'Sidebar' })).toBeHidden();
+    await expect.poll(async () => (await viewBounds(app))[1]!.x).toBe(8);
+    const collapsed = (await viewBounds(app))[1]!;
+    expect(collapsed.width).toBeGreaterThan(docked.width);
+
+    await shell.getByRole('button', { name: 'Show sidebar' }).click();
+    await expect(shell.getByRole('navigation', { name: 'Sidebar' })).toBeVisible();
+    await expect.poll(async () => (await viewBounds(app))[1]).toEqual(docked);
+  } finally {
+    await app.close();
+  }
+});
+
+test('zoom and copy actions act on the active tab', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    const run = (action: string) =>
+      shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
+    const zoom = () =>
+      app.evaluate(({ webContents }, origin) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(origin))!.getZoomFactor(), site.origin);
+
+    await run('view.zoomIn');
+    await expect.poll(zoom).toBeCloseTo(1.1);
+    await run('view.zoomOut');
+    await run('view.zoomOut');
+    await expect.poll(zoom).toBeCloseTo(0.9);
+    await run('view.zoomReset');
+    await expect.poll(zoom).toBeCloseTo(1);
+
+    await run('address.copyMarkdown');
+    expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe(`[First page](${site.origin}/)`);
+  } finally {
+    await app.close();
+  }
+});
+
+// Spike S8. Input is injected at the page with sendInputEvent, which takes the
+// same route as real keys on Windows and Linux. macOS menus need a real
+// NSEvent, which injected keys don't carry, so there it's checked by hand.
+test('page-first keys reach Chord only when the page passes; reserved keys fire once', async () => {
+  test.skip(process.platform === 'darwin', 'injected keys carry no NSEvent for the macOS menu');
+  const page = encodeURIComponent(
+    '<title>Keys</title><input autofocus><script>let take=false;' +
+      'document.addEventListener("keydown",e=>{if(take&&e.key.toLowerCase()==="s"&&e.ctrlKey){e.preventDefault();document.title="page kept it"}});' +
+      'window.takeKeys=()=>{take=true}</script>',
+  );
+  const app = await launch({ CHORD_HOME_URL: `data:text/html,${page}` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const tab = await pageWhere(app, (url) => url.startsWith('data:'));
+    const press = (key: string) =>
+      app.evaluate(({ webContents }, k) => {
+        const c = webContents.getAllWebContents().find((x) => x.getURL().startsWith('data:'))!;
+        c.focus();
+        c.sendInputEvent({ type: 'keyDown', keyCode: k, modifiers: ['control'] });
+        c.sendInputEvent({ type: 'keyUp', keyCode: k, modifiers: ['control'] });
+      }, key);
+    const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
+
+    // The page ignores Ctrl+S, so it falls through to Chord: the sidebar collapses.
+    await press('S');
+    await expect(sidebar).toBeHidden();
+    await press('S');
+    await expect(sidebar).toBeVisible();
+
+    // Once the page handles Ctrl+S itself, the page wins.
+    await tab.evaluate(() => (window as unknown as { takeKeys(): void }).takeKeys());
+    await press('S');
+    await expect.poll(() => tab.title()).toBe('page kept it');
+    await expect(sidebar).toBeVisible();
+
+    // Ctrl+T is reserved: Chord gets it before the page, exactly once.
+    await press('T');
+    await expect((await pageWhere(app, isOverlay)).getByRole('dialog')).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
 test('web content gets no Chord API; the shell does', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {

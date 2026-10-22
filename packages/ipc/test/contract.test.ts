@@ -17,6 +17,13 @@ describe('IPC contract', () => {
     expect(RendererCommand.safeParse({ t: 'tab.open', windowId: 'w', url: '' }).success).toBe(false);
   });
 
+  it('runs only actions that exist in the shortcut registry', () => {
+    const schema = invokeChannels['action:run'].request;
+    expect(schema.safeParse({ action: 'view.toggleSidebar' }).success).toBe(true);
+    expect(schema.safeParse({ action: 'app.format' }).success).toBe(false);
+    expect(schema.safeParse({ action: 42 }).success).toBe(false);
+  });
+
   it('keeps privileged channels away from the wrong roles', () => {
     expect(invokeChannels['nav:command'].roles).not.toContain('popover');
     expect(invokeChannels['overlay:open'].roles).toEqual(['shell']);
