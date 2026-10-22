@@ -9,6 +9,7 @@ import {
   DEFAULT_SETTINGS,
   emptyState,
   type Chord,
+  type Download,
   type MotionSettings,
   type Settings,
   type SidebarNode,
@@ -30,6 +31,17 @@ export interface PersistedState {
   settings: Record<string, unknown>;
   /** Remembered permission decisions, by origin. */
   sitePermissions?: SitePermissions;
+  downloads?: Download[];
+}
+
+/** Downloads cut off by quitting can't continue in a new session: they come back as interrupted. */
+function restoreDownloads(saved: Download[] | undefined): Record<string, Download> {
+  const out: Record<string, Download> = {};
+  for (const d of saved ?? []) {
+    const unfinished = d.state === 'progressing' || d.state === 'paused';
+    out[d.id] = unfinished ? { ...d, state: 'interrupted', speed: 0, endedAt: d.endedAt ?? d.startedAt } : d;
+  }
+  return out;
 }
 
 const PERMISSIONS: readonly SitePermission[] = ['camera', 'microphone', 'location', 'notifications', 'clipboard-read'];
@@ -70,6 +82,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
     if (saved) {
       fresh.settings = restoreSettings(saved.settings);
       fresh.sitePermissions = restorePermissions(saved.sitePermissions);
+      fresh.downloads = restoreDownloads(saved.downloads);
     }
     return fresh;
   }
@@ -77,6 +90,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   const state = emptyState();
   state.settings = restoreSettings(saved.settings);
   state.sitePermissions = restorePermissions(saved.sitePermissions);
+  state.downloads = restoreDownloads(saved.downloads);
   for (const chord of saved.chords) state.chords[chord.id] = chord;
   for (const node of saved.nodes) {
     if (!state.chords[node.chordId]) continue;

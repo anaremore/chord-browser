@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import type { Chord, ChordThemeSpec, FolderNode, PersistedState, SidebarNode, SitePermissions, TabNode, WindowModel } from '@chord/core';
+import type { Chord, ChordThemeSpec, Download, FolderNode, PersistedState, SidebarNode, SitePermissions, TabNode, WindowModel } from '@chord/core';
 import type { WriteOp } from './index';
 import { MIGRATIONS } from './migrations';
 
@@ -101,9 +101,24 @@ export class ChordDatabase {
     for (const r of this.sql('SELECT origin, permission, decision FROM site_permission WHERE profile_id = ?').all(DEFAULT_PROFILE) as Row[]) {
       (sitePermissions[str(r['origin'])] ??= {})[str(r['permission']) as keyof SitePermissions[string]] = r['decision'] === 'allow' ? 'allow' : 'block';
     }
+    const downloads = (this.sql('SELECT * FROM download WHERE profile_id = ?').all(DEFAULT_PROFILE) as Row[]).map(
+      (r): Download => ({
+        id: str(r['id']),
+        url: str(r['url']),
+        filename: str(r['filename']),
+        path: str(r['path']),
+        mime: str(r['mime']),
+        state: str(r['state']) as Download['state'],
+        received: num(r['received']),
+        total: num(r['total']),
+        speed: 0,
+        startedAt: num(r['started_at']),
+        endedAt: r['ended_at'] === null ? null : num(r['ended_at']),
+      }),
+    );
     if (chordRows.length === 0) {
-      const anything = Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0;
-      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions } : null;
+      const anything = Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0 || downloads.length > 0;
+      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads } : null;
     }
 
     const chords = chordRows.map(
@@ -159,7 +174,7 @@ export class ChordDatabase {
       }),
     );
 
-    return { chords, nodes, windows, settings, sitePermissions };
+    return { chords, nodes, windows, settings, sitePermissions, downloads };
   }
 
   /** One batch, all or nothing. */
@@ -170,6 +185,7 @@ export class ChordDatabase {
         else if (op.k === 'node') this.writeNode(op.id, op.value, now);
         else if (op.k === 'window') this.writeWindow(op.id, op.value);
         else if (op.k === 'sitePermission') this.writeSitePermissions(op.id, op.value, now);
+        else if (op.k === 'download') this.writeDownload(op.id, op.value);
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
@@ -231,6 +247,19 @@ export class ChordDatabase {
         now,
       );
     }
+  }
+
+  private writeDownload(id: string, d: Download | null): void {
+    if (!d) {
+      this.sql('DELETE FROM download WHERE id = ?').run(id);
+      return;
+    }
+    this.sql(
+      `INSERT INTO download (id, profile_id, url, path, filename, mime, state, received, total, started_at, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET path = excluded.path, filename = excluded.filename, state = excluded.state,
+         received = excluded.received, total = excluded.total, ended_at = excluded.ended_at`,
+    ).run(id, DEFAULT_PROFILE, d.url, d.path, d.filename, d.mime, d.state, d.received, d.total, d.startedAt, d.endedAt);
   }
 
   private writeWindow(id: string, win: WindowModel | null): void {

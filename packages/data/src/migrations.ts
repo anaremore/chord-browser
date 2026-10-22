@@ -79,4 +79,13 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (profile_id, origin, permission)
   ) STRICT;
   `,
+  // 3: the downloads list.
+  `
+  CREATE TABLE download (
+    id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, url TEXT NOT NULL, path TEXT NOT NULL,
+    filename TEXT NOT NULL, mime TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('progressing','paused','completed','cancelled','interrupted')),
+    received INTEGER NOT NULL, total INTEGER NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER
+  ) STRICT;
+  `,
 ];

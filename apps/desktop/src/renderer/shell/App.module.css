@@ -463,6 +463,76 @@ kbd {
   block-size: var(--size-footer);
 }
 
+/* ---------- Downloads button ---------- */
+
+.downloadsButton {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-icon-button);
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard);
+  -webkit-app-region: no-drag;
+}
+
+.downloadsButton:hover {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.downloadsRing {
+  position: absolute;
+  inset: 0;
+  rotate: -90deg;
+}
+
+.ringTrack,
+.ringFill {
+  fill: none;
+  stroke-width: 2;
+}
+
+.ringTrack {
+  stroke: var(--color-divider);
+}
+
+.ringFill {
+  stroke: var(--color-accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--duration-fade-slow) var(--ease-standard);
+}
+
+/* Size unknown: a quarter arc goes round instead of filling. */
+.ringFill[data-indeterminate] {
+  transform-origin: center;
+  animation: ring-spin var(--duration-spin) linear infinite;
+}
+
+@keyframes ring-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+.downloadsDot {
+  position: absolute;
+  inset-block-start: var(--space-1);
+  inset-inline-end: var(--space-1);
+  inline-size: var(--space-2);
+  block-size: var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  box-shadow: 0 0 0 var(--size-hairline) var(--color-surface);
+}
+
 /* The chord switcher: each chord's icon in its own accent; the current one sits on a raised pill. */
 .switcher {
   display: flex;

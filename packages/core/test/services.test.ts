@@ -15,6 +15,36 @@ describe('describeLoadError', () => {
   });
 });
 
+describe('downloads', () => {
+  const ctx: Context = { now: 1, newId: () => 'x' };
+  const file = (id: string, state: 'progressing' | 'completed', startedAt: number) => ({
+    id,
+    url: `https://a.test/${id}`,
+    filename: `${id}.zip`,
+    path: `C:/Downloads/${id}.zip`,
+    mime: 'application/zip',
+    state,
+    received: 5,
+    total: 10,
+    speed: 0,
+    startedAt,
+    endedAt: state === 'completed' ? startedAt + 1 : null,
+  });
+
+  it('tracks progress, clears only finished downloads, and comes back interrupted after a restart', () => {
+    let state = emptyState();
+    state = apply(state, { t: 'download.update', download: file('a', 'progressing', 1) }, ctx).state;
+    state = apply(state, { t: 'download.update', download: file('b', 'completed', 2) }, ctx).state;
+    expect(apply(state, { t: 'download.update', download: file('b', 'completed', 2) }, ctx).patches).toHaveLength(0);
+    state = apply(state, { t: 'download.clear' }, ctx).state;
+    expect(Object.keys(state.downloads)).toEqual(['a']);
+
+    const seed = { now: 1, newId: () => 'n', theme: { stops: [{ l: 0.7, c: 0.1, h: 1 }], grain: 0.2, appearance: 'auto' as const }, homeUrl: 'h' };
+    const restored = restoreState({ chords: [], nodes: [], windows: [], settings: {}, downloads: [file('a', 'progressing', 1)] }, seed);
+    expect(restored.downloads['a']).toMatchObject({ state: 'interrupted', speed: 0 });
+  });
+});
+
 describe('site permissions', () => {
   const ctx: Context = { now: 1, newId: () => 'x' };
 

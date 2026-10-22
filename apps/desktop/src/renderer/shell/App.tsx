@@ -12,6 +12,7 @@ import styles from './App.module.css';
 import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Chords';
 import { useSystemInfo } from './hooks';
 import { keycap, withKeys } from './keys';
+import { DownloadsButton, summarizeDownloads } from './Downloads';
 import { SidebarTabs } from './Tabs';
 
 /** What the frame shows when a page didn't load (DESIGN.md §9), instead of a blank page. */
@@ -139,6 +140,10 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
     previousIndex.current = chordIndex;
   }, [chordIndex]);
 
+  // Downloads finished after this show a dot on the button until the panel is opened.
+  const [downloadsSeenAt, setDownloadsSeenAt] = useState(() => Date.now());
+  const downloads = summarizeDownloads(state.downloads, downloadsSeenAt);
+  const downloadsButton = <DownloadsButton summary={downloads} onOpen={() => setDownloadsSeenAt(Date.now())} />;
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
   useEffect(() => api.chords.onEdit(setChordEdit), []);
   const createChord = async () => {
@@ -202,7 +207,14 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             </ChordPane>
           </AnimatePresence>
 
-          <ChordSwitcher state={state} windowId={windowId} info={info} pill={spring('snappy', 'chordSlide')} onCreate={() => void createChord()} />
+          <ChordSwitcher
+            state={state}
+            windowId={windowId}
+            info={info}
+            pill={spring('snappy', 'chordSlide')}
+            leading={downloadsButton}
+            onCreate={() => void createChord()}
+          />
         </nav>
 
         {/* The top bar: right of the sidebar on Windows/Linux; the whole minimal bar when collapsed (DESIGN.md §3.3). */}
@@ -238,6 +250,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               )}
             </button>
             <span className={styles.flex} />
+            {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
+            {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
             {overlayChrome && (
               <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>
                 <Ellipsis {...ICON} />

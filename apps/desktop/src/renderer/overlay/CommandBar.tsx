@@ -35,6 +35,7 @@ import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './CommandBar.module.css';
+import { DownloadsPanel } from './DownloadsPanel';
 import { buildResults, type Result } from './results';
 
 interface Session {
@@ -121,7 +122,10 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
     }
   }, [session]);
 
-  const results = useMemo(() => (session ? buildResults(query, state, windowId, session.mode) : []), [session, query, state, windowId]);
+  const results = useMemo(
+    () => (session && session.mode !== 'downloads' ? buildResults(query, state, windowId, session.mode) : []),
+    [session, query, state, windowId],
+  );
   const current = Math.min(selected, Math.max(0, results.length - 1));
 
   const close = () => {
@@ -163,6 +167,18 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   };
 
   if (!session) return null;
+
+  // The downloads panel shares the overlay: modal like the command bar, but without dimming the page.
+  if (session.mode === 'downloads') {
+    return (
+      <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
+        <div className={styles.root} style={style}>
+          <div className={styles.clearScrim} onMouseDown={close} />
+          <DownloadsPanel state={state} anchor={session.anchor} transition={spring('overlay', 'commandBar')} onClose={close} />
+        </div>
+      </MotionConfig>
+    );
+  }
 
   const anchored = session.mode === 'edit' && session.anchor !== null;
   const anchor = session.anchor;

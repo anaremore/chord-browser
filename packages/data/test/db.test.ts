@@ -32,7 +32,14 @@ function drive(db: ChordDatabase, state: State, commands: Command[]): State {
 }
 
 /** What survives a restart: everything except engine state, closed tabs and the version. */
-const durable = (s: State) => ({ settings: s.settings, sitePermissions: s.sitePermissions, chords: s.chords, nodes: s.nodes, windows: s.windows });
+const durable = (s: State) => ({
+  settings: s.settings,
+  sitePermissions: s.sitePermissions,
+  downloads: s.downloads,
+  chords: s.chords,
+  nodes: s.nodes,
+  windows: s.windows,
+});
 
 const ICON = 'data:image/png;base64,iVBORw0KGgo=';
 
@@ -66,6 +73,22 @@ describe('chord-data', () => {
       { t: 'chord.theme', chordId: Object.keys(state.chords)[0]!, theme: { grain: 0.45, appearance: 'dark' } },
       { t: 'permission.set', origin: 'https://meet.test', permissions: ['camera', 'microphone'], decision: 'allow' },
       { t: 'permission.set', origin: 'https://ads.test', permissions: ['notifications'], decision: 'block' },
+      {
+        t: 'download.update',
+        download: {
+          id: 'd1',
+          url: 'https://a.test/f.zip',
+          filename: 'f.zip',
+          path: 'C:/Downloads/f.zip',
+          mime: 'application/zip',
+          state: 'completed',
+          received: 10,
+          total: 10,
+          speed: 0,
+          startedAt: 3,
+          endedAt: 4,
+        },
+      },
     ]);
     db.close();
 

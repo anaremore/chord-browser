@@ -6,6 +6,7 @@ import { app, Menu, nativeTheme, session, type Session, type WebContents } from 
 import { Browser } from './browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
+import { DownloadManager } from './downloads';
 import { PermissionBroker } from './permissions';
 import { Persistence } from './persistence';
 import { systemInfo } from './platform';
@@ -25,6 +26,13 @@ const HOME_URL = (!app.isPackaged && process.env['CHORD_HOME_URL']) || 'https://
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
 const permissions = new PermissionBroker();
+const downloads = new DownloadManager({
+  state: () => browser!.store.state,
+  dispatch: (command) => browser!.store.dispatch(command),
+  newId: () => uuidv7(),
+  defaultSession: () => profileSession('default'),
+});
+let profileSession: (profileId: string) => Session;
 
 function senderWindow(sender: WebContents) {
   const w = browser?.windowFor(sender);
@@ -52,10 +60,12 @@ function registerIpc(): void {
     else if (action === 'reload') contents.reload();
     else if (action === 'stop') contents.stop();
   });
-  handle('overlay:open', ({ mode }, sender) => {
+  handle('overlay:open', ({ mode, anchor }, sender) => {
     const w = senderWindow(sender);
-    w.openOverlay(mode, mode === 'edit' ? browser!.activeUrl(w.id) : '');
+    w.openOverlay(mode, mode === 'edit' ? browser!.activeUrl(w.id) : '', anchor ?? null);
   });
+  handle('download:action', ({ id, action }) => downloads.run(id, action));
+  handle('downloads:openFolder', () => downloads.openFolder());
   handle('overlay:close', (_request, sender) => senderWindow(sender).closeOverlay());
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
@@ -121,11 +131,12 @@ if (!app.requestSingleInstanceLock()) {
     hardenAllWebContents();
 
     const profiles = new Map<string, Session>();
-    const profileSession = (profileId: string) => {
+    profileSession = (profileId: string) => {
       let ses = profiles.get(profileId);
       if (!ses) {
         ses = session.fromPartition(profileId === 'default' ? 'persist:default' : `persist:p-${profileId}`);
         permissions.attach(ses);
+        downloads.attach(ses);
         profiles.set(profileId, ses);
       }
       return ses;

@@ -4,13 +4,14 @@
  */
 import type { ShellApi } from '@chord/ipc';
 import { contextBridge } from 'electron';
-import { invoke, stateApi, subscribe, systemApi } from './bridge';
+import { downloadsApi, invoke, stateApi, subscribe, systemApi } from './bridge';
 
 const api: ShellApi = {
   system: systemApi,
   state: stateApi,
   nav: { command: (action) => invoke('nav:command', { action }) },
-  overlay: { open: (mode) => invoke('overlay:open', { mode }) },
+  overlay: { open: (mode, anchor) => invoke('overlay:open', anchor ? { mode, anchor } : { mode }) },
+  downloads: downloadsApi,
   layout: { anchor: (rect) => invoke('layout:anchor', rect) },
   menu: {
     app: (anchor) => invoke('menu:app', anchor),

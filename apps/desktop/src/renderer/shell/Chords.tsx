@@ -237,18 +237,22 @@ export function ChordSwitcher({
   windowId,
   info,
   pill,
+  leading,
   onCreate,
 }: {
   state: State;
   windowId: string;
   info: SystemInfo;
   pill: Transition;
+  /** The footer's left slot (the Downloads button), opposite New chord so the switcher stays centered. */
+  leading: ReactNode;
   onCreate(): void;
 }) {
   const chords = sortedChords(state);
   const current = state.windows[windowId]?.activeChordId;
   return (
     <footer className={styles.footer}>
+      {leading}
       <div className={styles.switcher} role="tablist" aria-label="Chords">
         {chords.map((chord, index) => {
           const selected = chord.id === current;

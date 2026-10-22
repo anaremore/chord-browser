@@ -9,6 +9,7 @@ import {
   type ActionId as CoreActionId,
   type Chord,
   type Command,
+  type DownloadAction,
   type SearchEngineId,
   type Settings,
   type SettingsPatch as CoreSettingsPatch,
@@ -70,6 +71,7 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('node.move'), nodeId: id, section: z.enum(['pinned', 'today']), index: z.number().int().min(0).max(10_000) }),
   z.object({ t: z.literal('tab.pin'), nodeId: id }),
   z.object({ t: z.literal('tab.unpin'), nodeId: id }),
+  z.object({ t: z.literal('download.clear') }),
   z.object({ t: z.literal('window.sidebar'), windowId: id, sidebar: z.enum(['docked', 'collapsed']) }),
   z.object({ t: z.literal('chord.create'), windowId: id, name: chordName, icon: chordIcon, theme: ChordTheme }),
   z.object({ t: z.literal('chord.activate'), windowId: id, chordId: id }),
@@ -153,14 +155,19 @@ export const Rect = z.object({ x: z.number(), y: z.number(), width: z.number(), 
 export type Rect = z.infer<typeof Rect>;
 
 export const OverlayOpen = z.object({
-  /** `new`: centered command bar for a new tab. `edit`: anchored on the address, editing the current tab. */
-  mode: z.enum(['new', 'edit']),
+  /**
+   * `new`: centered command bar for a new tab. `edit`: anchored on the address,
+   * editing the current tab. `downloads`: the downloads panel, anchored on the
+   * button that opened it (`anchor`).
+   */
+  mode: z.enum(['new', 'edit', 'downloads']),
+  anchor: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
 });
 export type OverlayOpen = z.infer<typeof OverlayOpen>;
 
 /** What main tells the overlay when it opens. */
 export interface OverlayOpenEvent {
-  mode: 'new' | 'edit';
+  mode: 'new' | 'edit' | 'downloads';
   /** Where the address sits, for the anchored placement (window coordinates). */
   anchor: Rect | null;
   /** The current tab's address, prefilled in edit mode. */
@@ -188,6 +195,12 @@ export const invokeChannels = {
   'overlay:close': { roles: ['overlay'], request: z.void(), response: z.void() },
   /** The shell reports where the URL pill / address field sits, for anchored ⌘L. */
   'layout:anchor': { roles: ['shell'], request: Rect.nullable(), response: z.void() },
+  'download:action': {
+    roles: ['shell', 'overlay'],
+    request: z.object({ id, action: z.enum(['open', 'show', 'pause', 'resume', 'cancel', 'retry', 'remove']) }),
+    response: z.void(),
+  },
+  'downloads:openFolder': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
   /** Windows/Linux options button: pop the app menu below this rect. */
   'menu:app': { roles: ['shell'], request: Rect, response: z.void() },
   /** Right-click on a chord in the switcher, at this point in the window. */
@@ -252,7 +265,8 @@ export interface ShellApi {
   };
   state: StateApi;
   nav: { command(action: NavAction): Promise<void> };
-  overlay: { open(mode: OverlayOpen['mode']): Promise<void> };
+  overlay: { open(mode: OverlayOpen['mode'], anchor?: Rect): Promise<void> };
+  downloads: DownloadsApi;
   layout: { anchor(rect: Rect | null): Promise<void> };
   menu: {
     app(anchor: Rect): Promise<void>;
@@ -261,6 +275,11 @@ export interface ShellApi {
   };
   chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
+}
+
+interface DownloadsApi {
+  run(id: string, action: DownloadAction): Promise<void>;
+  openFolder(): Promise<void>;
 }
 
 /** `window.chord` in the Settings window. */
@@ -310,4 +329,5 @@ export interface OverlayApi {
     close(): Promise<void>;
   };
   action: { run(action: CoreActionId): Promise<void> };
+  downloads: DownloadsApi;
 }

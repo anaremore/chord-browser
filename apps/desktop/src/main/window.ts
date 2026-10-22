@@ -198,11 +198,12 @@ export class AppWindow {
     this.anchor = rect;
   }
 
-  openOverlay(mode: OverlayOpenEvent['mode'], url: string): void {
+  /** `anchor` places the downloads panel by its button; ⌘L uses the address the shell reported. */
+  openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null): void {
     this.overlayVisible = true;
     this.overlay.setVisible(true);
     this.overlay.webContents.focus();
-    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : null, url });
+    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url });
   }
 
   closeOverlay(): void {

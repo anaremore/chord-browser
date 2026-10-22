@@ -101,6 +101,29 @@ export interface LiveTab {
   error: LoadError | null;
 }
 
+export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
+
+/** A file being or having been downloaded (ARCHITECTURE.md §9). */
+export interface Download {
+  id: string;
+  url: string;
+  filename: string;
+  /** Where it's saved; empty until the engine has picked a path. */
+  path: string;
+  mime: string;
+  state: DownloadState;
+  received: number;
+  /** 0 when the server didn't say. */
+  total: number;
+  /** Bytes per second while progressing. */
+  speed: number;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+/** What the downloads panel can do with one download. */
+export type DownloadAction = 'open' | 'show' | 'pause' | 'resume' | 'cancel' | 'retry' | 'remove';
+
 /** Permissions a site has to ask for (ARCHITECTURE.md §9). Camera and microphone are separate decisions. */
 export type SitePermission = 'camera' | 'microphone' | 'location' | 'notifications' | 'clipboard-read';
 export type PermissionDecision = 'allow' | 'block';
@@ -160,6 +183,7 @@ export interface State {
   version: number;
   settings: Settings;
   sitePermissions: SitePermissions;
+  downloads: Record<string, Download>;
   chords: Record<ChordId, Chord>;
   nodes: Record<NodeId, SidebarNode>;
   windows: Record<WindowId, WindowModel>;
@@ -172,6 +196,7 @@ export const emptyState = (): State => ({
   version: 0,
   settings: { ...DEFAULT_SETTINGS, motion: { ...DEFAULT_SETTINGS.motion } },
   sitePermissions: {},
+  downloads: {},
   chords: {},
   nodes: {},
   windows: {},

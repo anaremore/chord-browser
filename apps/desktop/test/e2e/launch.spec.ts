@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -15,8 +15,14 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     '/second': '<title>Second page</title><p>Second</p>',
     '/third': '<title>Third page</title><p>Third</p>',
     '/words': '<title>Words</title><p>A chord is three notes. Play the chord, then the next chord.</p>',
+    '/files': '<title>Files</title><a id="get" href="/report.bin">Get the report</a>',
   };
   const server = createServer((req, res) => {
+    if (req.url === '/report.bin') {
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="report.bin"' });
+      res.end(Buffer.alloc(300_000, 7));
+      return;
+    }
     const body = pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body ?? 'not found');
@@ -548,6 +554,39 @@ test('a page that keeps crashing stops after two reloads, and Reload brings it b
     await alert.getByRole('button', { name: 'Reload' }).click();
     await expect(alert).toBeHidden();
     await expect.poll(loaded, { timeout: 10_000 }).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
+
+test('downloads save to the Downloads folder without asking, never overwrite, and show in the panel', async () => {
+  const folder = mkdtempSync(join(tmpdir(), 'chord-dl-'));
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/files`, CHORD_DOWNLOADS_DIR: folder });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const tab = await pageWhere(app, (url) => url.startsWith(`${site.origin}/files`));
+
+    await tab.click('#get');
+    await expect(shell.getByRole('button', { name: 'Downloads, new' })).toBeVisible();
+    await tab.click('#get');
+    await expect.poll(() => readdirSync(folder).sort()).toEqual(['report (1).bin', 'report.bin']);
+    expect(statSync(join(folder, 'report.bin')).size).toBe(300_000);
+
+    await shell.getByRole('button', { name: /^Downloads/ }).click();
+    const panel = overlay.getByRole('dialog', { name: 'Downloads' });
+    await expect(panel.getByRole('listitem')).toHaveCount(2);
+    await expect(panel).toContainText('report (1).bin');
+    await expect(panel).toContainText('Done · 300 KB');
+    // Opening the panel marks them seen.
+    await overlay.keyboard.press('Escape');
+    await expect(shell.getByRole('button', { name: 'Downloads', exact: true })).toBeVisible();
+
+    // Downloaded files carry the mark of the web on Windows, so SmartScreen and Office's
+    // Protected View still apply to them.
+    if (process.platform === 'win32') {
+      expect(readFileSync(join(folder, 'report.bin:Zone.Identifier'), 'utf8')).toMatch(/ZoneId=3/);
+    }
   } finally {
     await app.close();
   }

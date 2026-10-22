@@ -19,6 +19,11 @@ export const systemApi = {
   onChange: (listener: (info: EventPayload<'system:changed'>) => void) => subscribe('system:changed', listener),
 };
 
+export const downloadsApi = {
+  run: (id: string, action: InvokeRequest<'download:action'>['action']) => invoke('download:action', { id, action }),
+  openFolder: () => invoke('downloads:openFolder'),
+};
+
 export const stateApi = {
   snapshot: () => invoke('state:snapshot'),
   onPatch: (listener: (event: EventPayload<'state:patch'>) => void) => subscribe('state:patch', listener),

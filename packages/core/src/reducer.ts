@@ -12,6 +12,7 @@ import {
   type ChordId,
   type ChordThemeSpec,
   type ClosedTab,
+  type Download,
   type LiveTab,
   type NodeId,
   type PermissionDecision,
@@ -57,6 +58,12 @@ export type Command =
   | { t: 'chord.update'; chordId: ChordId; name?: string; icon?: string }
   /** Removes a chord and its tabs (they go to recently closed). The last chord can't be deleted. */
   | { t: 'chord.delete'; chordId: ChordId }
+  /** Engine reports: a download started or moved on. */
+  | { t: 'download.update'; download: Download }
+  /** Take one download off the list (the file stays where it is). */
+  | { t: 'download.remove'; id: string }
+  /** Take every finished download off the list. */
+  | { t: 'download.clear' }
   /** Remember (or, with null, forget) a site's answer to a permission prompt. */
   | { t: 'permission.set'; origin: string; permissions: SitePermission[]; decision: PermissionDecision | null };
 
@@ -82,6 +89,8 @@ export interface Result {
 }
 
 const MAX_CLOSED = 50;
+/** Finished downloads kept in the list; older ones drop off. */
+const MAX_DOWNLOADS = 100;
 /** Longest chord name; the switcher and headers truncate well before this. */
 const MAX_CHORD_NAME = 64;
 
@@ -413,6 +422,25 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       delete draft.chords[cmd.chordId];
       return;
     }
+
+    case 'download.update': {
+      const current = draft.downloads[cmd.download.id];
+      if (current && JSON.stringify(current) === JSON.stringify(cmd.download)) return;
+      draft.downloads[cmd.download.id] = cmd.download;
+      const finished = Object.values(draft.downloads)
+        .filter((d) => d.state !== 'progressing' && d.state !== 'paused')
+        .sort((a, b) => b.startedAt - a.startedAt);
+      for (const old of finished.slice(MAX_DOWNLOADS)) delete draft.downloads[old.id];
+      return;
+    }
+
+    case 'download.remove':
+      delete draft.downloads[cmd.id];
+      return;
+
+    case 'download.clear':
+      for (const d of Object.values(draft.downloads)) if (d.state !== 'progressing' && d.state !== 'paused') delete draft.downloads[d.id];
+      return;
 
     case 'permission.set': {
       const site = (draft.sitePermissions[cmd.origin] ??= {});
