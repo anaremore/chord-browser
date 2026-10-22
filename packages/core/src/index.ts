@@ -2,6 +2,7 @@ export * from './ids';
 export * from './input';
 export * from './model';
 export * from './page';
+export * from './rank';
 export * from './reducer';
 export * from './restore';
 export * from './seed';

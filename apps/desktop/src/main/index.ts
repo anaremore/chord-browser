@@ -40,6 +40,11 @@ function senderWindow(sender: WebContents) {
   return w;
 }
 
+/** The chord the sender's window shows: command bar searches and picks are per chord. */
+function activeChordOf(sender: WebContents): string | null {
+  return browser!.store.state.windows[senderWindow(sender).id]?.activeChordId ?? null;
+}
+
 /** Renderers may only act on their own window, whatever windowId they send. */
 function scopeToWindow(command: RendererCommand, windowId: WindowId): Command {
   return 'windowId' in command ? { ...command, windowId } : command;
@@ -65,6 +70,11 @@ function registerIpc(): void {
     w.openOverlay(mode, mode === 'edit' ? browser!.activeUrl(w.id) : '', anchor ?? null);
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
+  handle('history:search', ({ query }, sender) => persistence!.search(query, activeChordOf(sender)));
+  handle('history:choose', ({ text, destination, address }, sender) => {
+    const chordId = activeChordOf(sender);
+    if (chordId) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
+  });
   handle('downloads:openFolder', () => downloads.openFolder());
   handle('overlay:close', (_request, sender) => senderWindow(sender).closeOverlay());
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
@@ -161,6 +171,7 @@ if (!app.requestSingleInstanceLock()) {
       uiSession: ui,
       profileSession,
       permissions,
+      history: (event) => store.history(event),
       onChange: (change) => store.record(change.patches, change.state),
     });
     Menu.setApplicationMenu(browser.appMenu);

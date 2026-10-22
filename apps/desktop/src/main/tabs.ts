@@ -2,7 +2,7 @@
  * TabManager (ARCHITECTURE.md §9): one WebContentsView per live tab, created
  * lazily, wired to report navigation back into the Store.
  */
-import type { Command, LiveTab, NodeId, State, TabNode, WindowId } from '@chord/core';
+import { placeKey, type Command, type LiveTab, type NodeId, type State, type TabNode, type WindowId } from '@chord/core';
 import { frameRadius } from '@chord/tokens';
 import { WebContentsView, type Session, type WebContents } from 'electron';
 import { platform } from './platform';
@@ -18,6 +18,9 @@ export interface TabManagerDeps {
   windowFor(nodeId: NodeId): WindowId | undefined;
   /** Hook for keyboard shortcuts and other per-contents wiring. */
   onContentsCreated(contents: WebContents, nodeId: NodeId): void;
+  /** A page was visited (or its title arrived): history keeps it. */
+  onVisit(url: string, title: string): void;
+  onTitle(url: string, title: string): void;
 }
 
 export class TabManager {
@@ -91,14 +94,27 @@ export class TabManager {
 
     contents.on('did-start-loading', () => live({ loading: true, crashed: false }));
     contents.on('did-stop-loading', () => live({ loading: false, ...history() }));
-    contents.on('did-navigate', (_event, url) => {
+    // History: one visit per page a tab shows. In-page navigations count when they reach a
+    // different place (pushState routing), not when only the fragment changes.
+    let visited: string | null = null;
+    const visit = (url: string) => {
+      const place = placeKey(url);
+      if (!place || place === visited || !current()) return;
+      visited = place;
+      // The title arrives with page-title-updated; at this point it may still be the last page's.
+      this.deps.onVisit(url, '');
+    };
+    contents.on('did-navigate', (_event, url, code) => {
       dispatch({ t: 'tab.updated', nodeId, url });
       live(history());
+      visited = null;
+      if (code > 0) visit(url);
     });
     contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
       if (!isMainFrame) return;
       dispatch({ t: 'tab.updated', nodeId, url });
       live(history());
+      visit(url);
     });
     contents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
@@ -110,7 +126,10 @@ export class TabManager {
     contents.on('did-fail-load', (_event, code, _description, url, isMainFrame) => {
       if (isMainFrame && code !== -3) live({ loading: false, error: { code, url }, ...history() });
     });
-    contents.on('page-title-updated', (_event, title) => dispatch({ t: 'tab.updated', nodeId, title }));
+    contents.on('page-title-updated', (_event, title) => {
+      dispatch({ t: 'tab.updated', nodeId, title });
+      if (current()) this.deps.onTitle(contents.getURL(), title);
+    });
     contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons));
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));
 

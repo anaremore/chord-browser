@@ -12,6 +12,10 @@ const api: OverlayApi = {
   },
   action: { run: (action) => invoke('action:run', { action }) },
   downloads: downloadsApi,
+  history: {
+    search: (query) => invoke('history:search', { query }),
+    choose: (text, destination, address) => invoke('history:choose', address ? { text, destination, address } : { text, destination }),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

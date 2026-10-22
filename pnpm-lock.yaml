@@ -59,9 +59,6 @@ importers:
       '@dnd-kit/react':
         specifier: 0.5.1
         version: 0.5.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      '@leeoniya/ufuzzy':
-        specifier: 1.0.19
-        version: 1.0.19
       immer:
         specifier: 11.2.9
         version: 11.2.9
@@ -436,9 +433,6 @@ packages:
 
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
-
-  '@leeoniya/ufuzzy@1.0.19':
-    resolution: {integrity: sha512-0pikDeYt0IHEUPza5RTCDXc/17S1pTrYnReEMp8Aa6k1ovzw5QdZLwicW8TjljwEZRb6oYag0xmALohrcq/yOQ==}
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -2079,8 +2073,6 @@ snapshots:
       keyv: 5.6.0
 
   '@keyv/serialize@1.1.1': {}
-
-  '@leeoniya/ufuzzy@1.0.19': {}
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:

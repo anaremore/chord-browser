@@ -24,6 +24,7 @@ import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
 import { buildAppMenu, buildChordMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
+import type { HistoryEvent } from '@chord/data';
 import type { PermissionBroker } from './permissions';
 import { systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
@@ -37,6 +38,8 @@ export interface BrowserOptions {
   profileSession(profileId: string): Session;
   /** Answers permission requests; connected here once the store exists. */
   permissions: PermissionBroker;
+  /** Where visits and page titles go (chord-data's history). */
+  history(event: HistoryEvent): void;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
 }
@@ -66,6 +69,8 @@ export class Browser {
       dispatch: (command) => this.store.dispatch(command),
       sessionFor: (node) => options.profileSession(this.store.state.chords[node.chordId]?.profileId ?? 'default'),
       windowFor: (nodeId) => this.windowShowing(nodeId),
+      onVisit: (url, title) => options.history({ k: 'visit', url, title, at: Date.now() }),
+      onTitle: (url, title) => options.history({ k: 'title', url, title }),
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
         // Whatever a page asked for is denied once it's gone or replaced by another page.

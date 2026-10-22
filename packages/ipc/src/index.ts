@@ -7,6 +7,7 @@ import {
   SEARCH_ENGINES,
   SHORTCUTS,
   type ActionId as CoreActionId,
+  type Choice,
   type Chord,
   type Command,
   type DownloadAction,
@@ -137,6 +138,12 @@ export interface PopoverState {
   permission: PermissionPrompt | null;
 }
 
+/** History pages and learned picks for a command bar query (chord-data's SearchResult). */
+export interface HistorySearch {
+  history: { url: string; title: string; visitCount: number; typedCount: number; lastVisitAt: number; frecency: number }[];
+  choices: Choice[];
+}
+
 export interface ChordEdit {
   chordId: string;
   field: 'name' | 'icon';
@@ -201,6 +208,14 @@ export const invokeChannels = {
     response: z.void(),
   },
   'downloads:openFolder': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
+  /** The command bar's history and learned picks for what was typed (in the window's chord). */
+  'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
+  /** The command bar remembers which row was picked for what was typed. */
+  'history:choose': {
+    roles: ['overlay'],
+    request: z.object({ text: z.string().max(1000), destination: z.string().min(1).max(2048), address: url.optional() }),
+    response: z.void(),
+  },
   /** Windows/Linux options button: pop the app menu below this rect. */
   'menu:app': { roles: ['shell'], request: Rect, response: z.void() },
   /** Right-click on a chord in the switcher, at this point in the window. */
@@ -330,4 +345,8 @@ export interface OverlayApi {
   };
   action: { run(action: CoreActionId): Promise<void> };
   downloads: DownloadsApi;
+  history: {
+    search(query: string): Promise<HistorySearch>;
+    choose(text: string, destination: string, address?: string): Promise<void>;
+  };
 }

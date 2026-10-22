@@ -1,15 +1,35 @@
 /**
- * What the command bar shows for a query (DESIGN.md §7.3, ARCHITECTURE.md §10).
- * M1.1 sources: the typed address or search, open tabs, and actions. History,
- * archive and Crest's ranking arrive in M1.4.
+ * What the command bar shows for a query (DESIGN.md §7.3, ARCHITECTURE.md §10):
+ * the address or search for the text, open tabs in every chord, history,
+ * other chords and actions, ranked by the signals in core/rank.ts (from
+ * Crest): how well the text matches, how often and recently a page was used,
+ * whether a tab is pinned, and what was picked before for the same text.
  */
-import { parseInput, searchEngine, searchUrl, sortedChords, type ActionId, type Chord, type State, type TabNode } from '@chord/core';
-import uFuzzy from '@leeoniya/ufuzzy';
+import {
+  abbreviationScore,
+  habit,
+  learnedPoints,
+  matchScore,
+  parseInput,
+  placeKey,
+  prefixes,
+  recencyPoints,
+  searchEngine,
+  searchUrl,
+  sortedChords,
+  usagePoints,
+  type ActionId,
+  type Chord,
+  type State,
+  type TabNode,
+} from '@chord/core';
+import type { HistorySearch } from '@chord/ipc';
 import { displayHost, pageTitle } from '../shared/site';
 
 export type Result =
   | { kind: 'open'; key: string; title: string; detail: string; url: string; search: boolean }
   | { kind: 'tab'; key: string; title: string; detail: string; tab: TabNode; chordName: string | null }
+  | { kind: 'history'; key: string; title: string; detail: string; url: string }
   | { kind: 'action'; key: string; title: string; action: ActionId }
   | { kind: 'chord'; key: string; title: string; chord: Chord };
 
@@ -36,24 +56,60 @@ const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'app.shortcuts', title: 'Keyboard shortcuts', words: 'keyboard shortcuts hotkeys keys cheat sheet' },
 ];
 
-const fuzzy = new uFuzzy({ intraMode: 1 });
-
-function fuzzyIndexes(haystack: string[], needle: string): number[] {
-  const [idxs, info, order] = fuzzy.search(haystack, needle);
-  if (info && order) return order.map((i) => info.idx[i]!);
-  return idxs ?? [];
-}
+/** The most rows of each kind, and in all. */
+const LIMIT = { tab: 5, history: 6, chord: 3, action: 3 } as const;
+const MAX_ROWS = 12;
+/** An open tab scores above the same match in history; a pinned one above that (Crest's signals). */
+const OPEN_TAB_POINTS = 150;
+const KEPT_POINTS = 100;
+/** Only a page used this much may lead with a prefix match, ahead of the typed address or search. */
+const LEADS_AT_USAGE = 120;
+const LEADS_AT_RECENCY = 100;
 
 const tabTitle = (t: TabNode) => pageTitle(t) || displayHost(t.url) || 'New tab';
 
-/** A word in the title, or the site name, starts with what was typed. */
-function strongMatch(t: TabNode, q: string): boolean {
-  const needle = q.toLowerCase();
-  const host = displayHost(t.url).toLowerCase();
-  return host.startsWith(needle) || tabTitle(t).toLowerCase().split(/[^\p{L}\p{N}]+/u).some((w) => w.startsWith(needle));
+/** "github.com/anaremore/chord-browser": the address without scheme or `www.`. */
+export function shortUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname === '/' ? '' : decodeURIComponent(u.pathname);
+    return `${u.host.replace(/^www\./, '')}${path}`;
+  } catch {
+    return url;
+  }
 }
 
-export function buildResults(query: string, state: State, windowId: string, mode: 'new' | 'edit'): Result[] {
+/** Where a row leads, as learned picks remember it: a page's place, a chord, an action. Searches aren't remembered. */
+export function destinationOf(result: Result): string | null {
+  switch (result.kind) {
+    case 'open':
+      return result.search ? null : placeKey(result.url);
+    case 'tab':
+      return placeKey(result.tab.url) ?? `tab:${result.tab.id}`;
+    case 'history':
+      return placeKey(result.url);
+    case 'chord':
+      return `chord:${result.chord.id}`;
+    case 'action':
+      return `action:${result.action}`;
+  }
+}
+
+interface Scored {
+  result: Result;
+  kind: keyof typeof LIMIT;
+  score: number;
+  mayLead: boolean;
+}
+
+export function buildResults(
+  query: string,
+  state: State,
+  windowId: string,
+  mode: 'new' | 'edit',
+  history: HistorySearch | null = null,
+  now = Date.now(),
+): Result[] {
   const q = query.trim();
   const win = state.windows[windowId];
   const activeId = win ? win.activeTab[win.activeChordId] : null;
@@ -79,33 +135,94 @@ export function buildResults(query: string, state: State, windowId: string, mode
   }
 
   const parsed = parseInput(q);
-  const out: Result[] = [];
+  let intent: Result | null = null;
   if (parsed?.kind === 'url') {
-    out.push({ kind: 'open', key: 'open', title: parsed.url, detail: '', url: parsed.url, search: false });
+    intent = { kind: 'open', key: 'open', title: parsed.url, detail: '', url: parsed.url, search: false };
   } else if (parsed) {
     const engine = state.settings.searchEngine;
-    out.push({ kind: 'open', key: 'open', title: q, detail: `Search ${searchEngine(engine).name}`, url: searchUrl(parsed.query, engine), search: true });
+    intent = { kind: 'open', key: 'open', title: q, detail: `Search ${searchEngine(engine).name}`, url: searchUrl(parsed.query, engine), search: true };
   }
 
-  // In edit mode the query starts as the current address; don't echo the tab back.
-  const candidates = tabs.filter((t) => !(mode === 'edit' && t.id === activeId));
-  const haystack = candidates.map((t) => `${tabTitle(t)} ${displayHost(t.url)}`);
-  const tabMatches = fuzzyIndexes(haystack, q).slice(0, 5).map((i) => candidates[i]!);
-  // An open tab that clearly matches beats searching for it (until M1.4's full ranking).
-  if (tabMatches[0] && parsed?.kind !== 'url' && strongMatch(tabMatches[0], q)) out.unshift(tabResult(tabMatches.shift()!));
-  out.push(...tabMatches.map(tabResult));
+  const choices = history?.choices ?? [];
+  const learned = (result: Result) => {
+    const destination = destinationOf(result);
+    return destination ? learnedPoints(choices, q, destination, now) : 0;
+  };
+  const scored: Scored[] = [];
+
+  // Open tabs, in every chord. In edit mode the query starts as the current address; don't echo it.
+  const claimed = new Set<string>();
+  for (const t of tabs) {
+    const place = placeKey(t.url);
+    if (place) claimed.add(place);
+    if (mode === 'edit' && t.id === activeId) continue;
+    const title = tabTitle(t);
+    const match = matchScore(q, title, shortUrl(t.url)) ?? abbreviationScore(q, title);
+    if (match === null) continue;
+    const result = tabResult(t);
+    const recency = recencyPoints(t.lastActiveAt, now);
+    const kept = t.section === 'pinned' ? KEPT_POINTS : 0;
+    scored.push({
+      result,
+      kind: 'tab',
+      score: match + OPEN_TAB_POINTS + recency + kept + learned(result),
+      mayLead: (prefixes(q, title) || prefixes(q, shortUrl(t.url))) && (recency >= LEADS_AT_RECENCY || kept > 0),
+    });
+  }
+
+  // History: one row per place, never one that's open as a tab or that the text itself opens.
+  if (intent && !intent.search) {
+    const place = placeKey(intent.url);
+    if (place) claimed.add(place);
+  }
+  for (const h of history?.history ?? []) {
+    const place = placeKey(h.url);
+    if (!place || claimed.has(place)) continue;
+    claimed.add(place);
+    const title = h.title || shortUrl(h.url);
+    const match = matchScore(q, title, shortUrl(h.url));
+    if (match === null) continue;
+    const result: Result = { kind: 'history', key: `history:${place}`, title, detail: shortUrl(h.url), url: h.url };
+    const usage = usagePoints(h.frecency);
+    scored.push({
+      result,
+      kind: 'history',
+      score: match + usage + learned(result),
+      mayLead: (prefixes(q, title) || prefixes(q, shortUrl(h.url))) && usage >= LEADS_AT_USAGE,
+    });
+  }
 
   // Other chords by name: how to switch when the sidebar is hidden.
-  const chords = sortedChords(state).filter((c) => c.id !== win?.activeChordId);
-  for (const i of fuzzyIndexes(chords.map((c) => c.name), q).slice(0, 3)) {
-    const chord = chords[i]!;
-    out.push({ kind: 'chord', key: `chord:${chord.id}`, title: chord.name, chord });
+  for (const chord of sortedChords(state)) {
+    if (chord.id === win?.activeChordId) continue;
+    const match = matchScore(q, chord.name) ?? abbreviationScore(q, chord.name);
+    if (match === null) continue;
+    const result: Result = { kind: 'chord', key: `chord:${chord.id}`, title: chord.name, chord };
+    scored.push({ result, kind: 'chord', score: match + learned(result), mayLead: false });
   }
 
-  const words = ACTIONS.map((a) => `${a.title} ${a.words}`);
-  for (const i of fuzzyIndexes(words, q).slice(0, 3)) {
-    const a = ACTIONS[i]!;
-    out.push({ kind: 'action', key: `action:${a.action}`, title: a.title, action: a.action });
+  for (const a of ACTIONS) {
+    const match = matchScore(q, a.title, a.words) ?? abbreviationScore(q, a.title);
+    if (match === null) continue;
+    const result: Result = { kind: 'action', key: `action:${a.action}`, title: a.title, action: a.action };
+    scored.push({ result, kind: 'action', score: match + learned(result), mayLead: false });
   }
-  return out;
+
+  // Each kind keeps its best few; then everything blends, best first.
+  const kept = (Object.keys(LIMIT) as (keyof typeof LIMIT)[]).flatMap((kind) =>
+    scored
+      .filter((s) => s.kind === kind)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, LIMIT[kind]),
+  );
+  kept.sort((a, b) => b.score - a.score);
+
+  // What leads (Return runs it): a habit for this exact text, else a well-used page the text starts.
+  // A typed address leads over a page only by habit.
+  const habitual = habit(choices, q, now);
+  const lead =
+    (habitual ? kept.find((s) => destinationOf(s.result) === habitual) : undefined) ??
+    (parsed?.kind === 'url' ? undefined : kept.find((s) => s.mayLead));
+  const rest = kept.filter((s) => s !== lead).map((s) => s.result);
+  return [...(lead ? [lead.result] : []), ...(intent ? [intent] : []), ...rest].slice(0, MAX_ROWS);
 }

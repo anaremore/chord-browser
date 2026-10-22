@@ -4,13 +4,14 @@
  * new tab (⌘T), anchored on the address for editing in place (⌘L).
  */
 import { formatKeys, shortcutById, type ActionId } from '@chord/core';
-import type { OverlayOpenEvent, SystemInfo } from '@chord/ipc';
+import type { HistorySearch, OverlayOpenEvent, SystemInfo } from '@chord/ipc';
 import {
   ArrowDown,
   ArrowUp,
   Code,
   CornerDownLeft,
   Globe,
+  History,
   Keyboard,
   Link,
   Maximize,
@@ -36,13 +37,15 @@ import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 import { DownloadsPanel } from './DownloadsPanel';
-import { buildResults, type Result } from './results';
+import { buildResults, destinationOf, type Result } from './results';
 
 interface Session {
   mode: OverlayOpenEvent['mode'];
   anchor: OverlayOpenEvent['anchor'];
   /** Changes on every open, replaying the entrance animation. */
   openedAt: number;
+  /** What the field opened with (the address, for ⌘L): a pick is only learned once the person typed. */
+  initial: string;
 }
 
 const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
@@ -81,6 +84,7 @@ function hintFor(result: Result, mode: Session['mode']): string {
   if (result.kind === 'tab') return 'Switch to tab';
   if (result.kind === 'action') return 'Run';
   if (result.kind === 'chord') return 'Switch to chord';
+  if (result.kind === 'history') return mode === 'edit' ? 'Go' : 'Open';
   if (result.search) return 'Search';
   return mode === 'edit' ? 'Go' : 'Open';
 }
@@ -103,7 +107,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   useEffect(
     () =>
       api.overlay.onOpen((event) => {
-        setSession({ mode: event.mode, anchor: event.anchor, openedAt: performance.now() });
+        setSession({ mode: event.mode, anchor: event.anchor, openedAt: performance.now(), initial: event.mode === 'edit' ? event.url : '' });
         setQuery(event.mode === 'edit' ? event.url : '');
         setSelected(0);
       }),
@@ -122,9 +126,21 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
     }
   }, [session]);
 
+  // History and learned picks come from chord-data as the person types. A reply for older text is
+  // dropped; until the new one lands, the last reply keeps rows from flickering away.
+  const [history, setHistory] = useState<HistorySearch | null>(null);
+  const searchSeq = useRef(0);
+  useEffect(() => {
+    if (!session || session.mode === 'downloads' || !query.trim()) return;
+    const seq = ++searchSeq.current;
+    void api.history.search(query.trim()).then((found) => {
+      if (seq === searchSeq.current) setHistory(found);
+    });
+  }, [session, query]);
+
   const results = useMemo(
-    () => (session && session.mode !== 'downloads' ? buildResults(query, state, windowId, session.mode) : []),
-    [session, query, state, windowId],
+    () => (session && session.mode !== 'downloads' ? buildResults(query, state, windowId, session.mode, history) : []),
+    [session, query, state, windowId, history],
   );
   const current = Math.min(selected, Math.max(0, results.length - 1));
 
@@ -136,7 +152,14 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   const run = (result: Result, background: boolean) => {
     const dispatch = api.state.dispatch;
     const activeId = win ? win.activeTab[win.activeChordId] : null;
-    if (result.kind === 'open') {
+    // Learn the pick for what was typed (Crest's learned picks), and count a typed visit.
+    const typed = query.trim();
+    const destination = destinationOf(result);
+    if (typed && typed !== session?.initial && destination) {
+      const address = result.kind === 'open' || result.kind === 'history' ? result.url : result.kind === 'tab' ? result.tab.url : undefined;
+      void api.history.choose(typed, destination, address && /^https?:/i.test(address) ? address : undefined);
+    }
+    if (result.kind === 'open' || result.kind === 'history') {
       if (session?.mode === 'edit' && activeId && !background) void dispatch({ t: 'tab.navigate', nodeId: activeId, url: result.url });
       else void dispatch({ t: 'tab.open', windowId, url: result.url, background });
     } else if (result.kind === 'tab') {
@@ -236,7 +259,16 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
             {results.length > 0 && (
               <ul id="command-results" className={styles.results} role="listbox">
                 {results.map((result, i) => {
-                  const Icon = result.kind === 'action' ? (ACTION_ICONS[result.action] ?? CornerDownLeft) : result.kind === 'open' ? (result.search ? Search : Globe) : null;
+                  const Icon =
+                  result.kind === 'action'
+                    ? (ACTION_ICONS[result.action] ?? CornerDownLeft)
+                    : result.kind === 'history'
+                      ? History
+                      : result.kind === 'open'
+                        ? result.search
+                          ? Search
+                          : Globe
+                        : null;
                   const isSelected = i === current;
                   return (
                     <li
@@ -259,7 +291,9 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                         Icon && <Icon className={styles.resultIcon} size={16} strokeWidth={1.75} aria-hidden />
                       )}
                       <span className={styles.resultTitle}>{result.title}</span>
-                      {(result.kind === 'open' || result.kind === 'tab') && result.detail && <span className={styles.resultDetail}>{result.detail}</span>}
+                      {(result.kind === 'open' || result.kind === 'tab' || result.kind === 'history') && result.detail && (
+                        <span className={styles.resultDetail}>{result.detail}</span>
+                      )}
                       {result.kind === 'chord' && <span className={styles.resultDetail}>Chord</span>}
                       {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
                       {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform)}</kbd>}

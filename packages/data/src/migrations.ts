@@ -88,4 +88,42 @@ export const MIGRATIONS: readonly string[] = [
     received INTEGER NOT NULL, total INTEGER NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER
   ) STRICT;
   `,
+  // 4: history and learned command bar picks (M1.4). One row per place (host, port, path,
+  // query); frecency is stored as the day its score falls to 1 (see core/rank.ts).
+  `
+  CREATE TABLE history_url (
+    id INTEGER PRIMARY KEY, profile_id TEXT NOT NULL, place TEXT NOT NULL,
+    url TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+    visit_count INTEGER NOT NULL DEFAULT 0, typed_count INTEGER NOT NULL DEFAULT 0,
+    last_visit_at INTEGER NOT NULL, decay_day REAL NOT NULL,
+    UNIQUE (profile_id, place)
+  ) STRICT;
+  CREATE INDEX history_recent ON history_url(profile_id, last_visit_at DESC);
+
+  CREATE TABLE history_visit (
+    id INTEGER PRIMARY KEY, url_id INTEGER NOT NULL REFERENCES history_url(id) ON DELETE CASCADE,
+    visited_at INTEGER NOT NULL, transition TEXT NOT NULL
+  ) STRICT;
+
+  CREATE VIRTUAL TABLE history_fts USING fts5(
+    title, url, content='history_url', content_rowid='id',
+    tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3 4'
+  );
+  CREATE TRIGGER history_fts_insert AFTER INSERT ON history_url BEGIN
+    INSERT INTO history_fts(rowid, title, url) VALUES (new.id, new.title, new.url);
+  END;
+  CREATE TRIGGER history_fts_delete AFTER DELETE ON history_url BEGIN
+    INSERT INTO history_fts(history_fts, rowid, title, url) VALUES ('delete', old.id, old.title, old.url);
+  END;
+  CREATE TRIGGER history_fts_update AFTER UPDATE OF title, url ON history_url BEGIN
+    INSERT INTO history_fts(history_fts, rowid, title, url) VALUES ('delete', old.id, old.title, old.url);
+    INSERT INTO history_fts(rowid, title, url) VALUES (new.id, new.title, new.url);
+  END;
+
+  CREATE TABLE palette_choice (
+    chord_id TEXT NOT NULL, text TEXT NOT NULL, destination TEXT NOT NULL,
+    uses REAL NOT NULL, last_used_at INTEGER NOT NULL,
+    PRIMARY KEY (chord_id, text, destination)
+  ) STRICT;
+  `,
 ];

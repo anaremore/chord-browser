@@ -501,6 +501,23 @@ The command bar is the overlay renderer, **always mounted and hidden**:
 
 Each query carries a sequence number; stale responses are dropped. The in-memory index is trimmed to what search needs (title, URL, chord, kind, favicon key).
 
+**As built (M1.4 ranking, `core/rank.ts`, ported from Crest with attribution):**
+- **Signals:**
+  - **Text match:** start of the text 1000, start of a word 700, inside a word 300. A word found only in the address scores 150 less, and every typed word must match. Initials and letters in order count too ("tsv" finds Toggle Split View).
+  - **Usage:** history earns `min(300, 60·log₂(1 + frecency))`.
+  - **Recency:** an open tab earns up to 200 within the hour, fading over a day.
+  - **Fixed points:** 150 for an open tab and 100 for a pinned one.
+  - **Learned picks:** per chord, up to 1000 for an exact repeat.
+- **Frecency** is stored as one number per page (`decay_day`, the day its score falls to 1). A visit adds 1, and a pick from the command bar adds another, so a typed visit counts twice. The score halves every 30 days.
+- **One row per page:** an open tab beats its history entry, and the typed address is never repeated as history. A page is keyed by host without `www.`, port, path and query.
+- **What leads (Return runs it):**
+  - a pick made twice for exactly this text, or else
+  - a pinned or recently used tab, or a well-used page (usage ≥ 120), that the text starts.
+
+  Otherwise the address or search the text spells comes first. A typed address leads over pages unless habit says otherwise.
+- **Transport:** history lives in chord-data (migration 4: `history_url`, `history_visit`, an external-content FTS5 index kept in sync by triggers, and `palette_choice`). The overlay asks through main (`history:search`), not yet over a direct MessagePort. The 50 best bm25 matches come back, and the overlay ranks them with everything else.
+- ⚠ **Not yet:** inline autocomplete, search suggestions, the archive, and Crest's calculator.
+
 ---
 
 ## 11. Duet — the assistant panel

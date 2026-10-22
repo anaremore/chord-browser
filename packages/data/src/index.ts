@@ -3,7 +3,7 @@
  * (ARCHITECTURE.md §6.2). Pure: main imports this; only the utility process
  * imports `@chord/data/db`, so SQLite never runs on main.
  */
-import type { Chord, Download, PersistedState, Settings, SidebarNode, SitePermissions, State, WindowModel } from '@chord/core';
+import type { Choice, Chord, Download, PersistedState, Settings, SidebarNode, SitePermissions, State, WindowModel } from '@chord/core';
 
 /** The latest value of one saved entity, or null to delete it. */
 export type WriteOp =
@@ -15,15 +15,42 @@ export type WriteOp =
   | { k: 'sitePermission'; id: string; value: SitePermissions[string] | null }
   | { k: 'download'; id: string; value: Download | null };
 
+/**
+ * History happenings: appended, never coalesced (every visit counts). They're
+ * written in the same transaction as the batch they arrive with.
+ */
+export type HistoryEvent =
+  | { k: 'visit'; url: string; title: string; at: number }
+  | { k: 'title'; url: string; title: string }
+  /** A command bar pick: learned for `text` in the chord, and a typed use of `address` if it has one. */
+  | { k: 'choice'; chordId: string; text: string; destination: string; address: string | null; at: number };
+
+/** A history page that matched a search, with its frecency now. */
+export interface HistoryHit {
+  url: string;
+  title: string;
+  visitCount: number;
+  typedCount: number;
+  lastVisitAt: number;
+  frecency: number;
+}
+
+export interface SearchResult {
+  history: HistoryHit[];
+  /** The chord's picks whose text starts with what was typed. */
+  choices: Choice[];
+}
+
 /** Main → chord-data. */
 export type DataRequest =
   | { id: number; type: 'open'; file: string }
-  | { id: number; type: 'write'; ops: WriteOp[] }
+  | { id: number; type: 'write'; ops: WriteOp[]; events: HistoryEvent[] }
+  | { id: number; type: 'search'; query: string; chordId: string | null; now: number }
   | { id: number; type: 'close' };
 
 /** chord-data → main. */
 export type DataResponse =
-  | { id: number; ok: true; saved?: PersistedState | null }
+  | { id: number; ok: true; saved?: PersistedState | null; search?: SearchResult }
   | { id: number; ok: false; error: string };
 
 /** The part of an Immer patch this needs. */

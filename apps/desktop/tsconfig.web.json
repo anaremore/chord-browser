@@ -9,5 +9,5 @@
     "jsx": "react-jsx",
     "types": ["vite/client"]
   },
-  "include": ["src/renderer"]
+  "include": ["src/renderer", "test/web"]
 }

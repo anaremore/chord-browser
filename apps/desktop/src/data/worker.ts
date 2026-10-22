@@ -21,8 +21,12 @@ process.parentPort.on('message', (event) => {
         break;
       case 'write':
         if (!db) throw new Error('chord-data: write before open');
-        db.write(request.ops);
+        db.write(request.ops, Date.now(), request.events);
         reply({ id: request.id, ok: true });
+        break;
+      case 'search':
+        if (!db) throw new Error('chord-data: search before open');
+        reply({ id: request.id, ok: true, search: db.search(request.query, request.chordId, request.now) });
         break;
       case 'close':
         db?.close();

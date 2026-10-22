@@ -6,7 +6,17 @@
  */
 import { join } from 'node:path';
 import type { PersistedState, State } from '@chord/core';
-import { opKey, opsForState, opsFromPatches, type DataRequest, type DataResponse, type PathPatch, type WriteOp } from '@chord/data';
+import {
+  opKey,
+  opsForState,
+  opsFromPatches,
+  type DataRequest,
+  type DataResponse,
+  type HistoryEvent,
+  type PathPatch,
+  type SearchResult,
+  type WriteOp,
+} from '@chord/data';
 import { utilityProcess, type UtilityProcess } from 'electron';
 
 const FLUSH_MS = 250;
@@ -22,6 +32,9 @@ export class Persistence {
   private readonly waiting = new Map<number, { resolve(r: DataResponse): void; reject(e: Error): void }>();
   private readonly pending = new Map<string, WriteOp>();
   private inFlight: WriteOp[] = [];
+  /** History happenings, written in order with the next batch; never coalesced. */
+  private events: HistoryEvent[] = [];
+  private inFlightEvents: HistoryEvent[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private chain: Promise<void> = Promise.resolve();
   private restarts = 0;
@@ -52,6 +65,8 @@ export class Persistence {
       // Put the interrupted batch back, unless a newer write for the same entity is already queued.
       for (const op of this.inFlight) if (!this.pending.has(opKey(op))) this.pending.set(opKey(op), op);
       this.inFlight = [];
+      this.events = [...this.inFlightEvents, ...this.events];
+      this.inFlightEvents = [];
       if (this.restarts++ >= MAX_RESTARTS) {
         console.error('chord-data keeps exiting; changes are no longer being saved');
         return;
@@ -82,6 +97,23 @@ export class Persistence {
     this.schedule();
   }
 
+  /** A visit, a late title, or a command bar pick. */
+  history(event: HistoryEvent): void {
+    if (this.closed) return;
+    this.events.push(event);
+    this.schedule();
+  }
+
+  /** History and learned picks for what was typed in the command bar. */
+  async search(query: string, chordId: string | null): Promise<SearchResult> {
+    try {
+      const response = await this.request({ type: 'search', query, chordId, now: Date.now() });
+      return response.ok && response.search ? response.search : { history: [], choices: [] };
+    } catch {
+      return { history: [], choices: [] };
+    }
+  }
+
   private schedule(): void {
     this.timer ??= setTimeout(() => void this.flush(), FLUSH_MS);
   }
@@ -91,14 +123,17 @@ export class Persistence {
     clearTimeout(this.timer);
     this.timer = undefined;
     this.chain = this.chain.then(async () => {
-      if (this.pending.size === 0) return;
+      if (this.pending.size === 0 && this.events.length === 0) return;
       this.inFlight = [...this.pending.values()];
       this.pending.clear();
+      this.inFlightEvents = this.events;
+      this.events = [];
       try {
-        const response = await this.request({ type: 'write', ops: this.inFlight });
+        const response = await this.request({ type: 'write', ops: this.inFlight, events: this.inFlightEvents });
         // A batch the database refuses would fail forever if retried; report it and move on.
         if (!response.ok) console.error('chord-data refused a write:', response.error);
         this.inFlight = [];
+        this.inFlightEvents = [];
       } catch {
         // The process died mid-write; the exit handler has requeued the batch.
       }

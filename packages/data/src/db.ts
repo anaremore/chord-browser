@@ -5,12 +5,34 @@
 import { createHash } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import type { Chord, ChordThemeSpec, Download, FolderNode, PersistedState, SidebarNode, SitePermissions, TabNode, WindowModel } from '@chord/core';
-import type { WriteOp } from './index';
+import {
+  foldChoiceText,
+  frecencyOn,
+  pickedAgain,
+  placeKey,
+  terms,
+  used,
+  type Chord,
+  type ChordThemeSpec,
+  type Choice,
+  type Download,
+  type FolderNode,
+  type PersistedState,
+  type SidebarNode,
+  type SitePermissions,
+  type TabNode,
+  type WindowModel,
+} from '@chord/core';
+import type { HistoryEvent, SearchResult, WriteOp } from './index';
 import { MIGRATIONS } from './migrations';
 
 /** The profile every chord belongs to until "Keep sign-ins separate" exists. */
 const DEFAULT_PROFILE = 'default';
+/** History rows a search ranks; the command bar shows a handful. */
+const SEARCH_LIMIT = 50;
+const MAX_CHOICES_PER_CHORD = 1000;
+/** Picks nobody repeats are forgotten after 90 days. */
+const CHOICE_LIFETIME_MS = 90 * 86_400_000;
 const SIDEBAR_WIDTH = 248;
 
 type Row = Record<string, unknown>;
@@ -47,8 +69,9 @@ export class ChordDatabase {
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
     this.migrate();
-    // Icons no tab uses any more.
+    // Icons no tab uses any more, and picks unused for their lifetime.
     this.db.exec('DELETE FROM favicon WHERE key NOT IN (SELECT favicon_key FROM tab WHERE favicon_key IS NOT NULL)');
+    this.db.prepare('DELETE FROM palette_choice WHERE last_used_at < ?').run(Date.now() - CHOICE_LIFETIME_MS);
   }
 
   private sql(text: string): StatementSync {
@@ -178,8 +201,9 @@ export class ChordDatabase {
   }
 
   /** One batch, all or nothing. */
-  write(ops: readonly WriteOp[], now = Date.now()): void {
+  write(ops: readonly WriteOp[], now = Date.now(), events: readonly HistoryEvent[] = []): void {
     this.transaction(() => {
+      for (const event of events) this.record(event);
       for (const op of ops) {
         if (op.k === 'chord') this.writeChord(op.id, op.value, now);
         else if (op.k === 'node') this.writeNode(op.id, op.value, now);
@@ -190,6 +214,102 @@ export class ChordDatabase {
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
     });
+  }
+
+  private record(event: HistoryEvent): void {
+    if (event.k === 'title') {
+      const place = placeKey(event.url);
+      if (place && event.title) {
+        this.sql('UPDATE history_url SET title = ? WHERE profile_id = ? AND place = ? AND title != ?').run(event.title, DEFAULT_PROFILE, place, event.title);
+      }
+      return;
+    }
+    if (event.k === 'visit') {
+      const id = this.use(event.url, event.title, event.at, { visit: true, typed: false });
+      if (id !== null) this.sql('INSERT INTO history_visit (url_id, visited_at, transition) VALUES (?, ?, ?)').run(id, event.at, 'link');
+      return;
+    }
+    // A pick: learned for its text, and a typed use of its address (so a typed visit counts twice).
+    if (event.address) this.use(event.address, '', event.at, { visit: false, typed: true });
+    const text = foldChoiceText(event.text);
+    if (!text) return;
+    const previous = this.sql('SELECT uses, last_used_at FROM palette_choice WHERE chord_id = ? AND text = ? AND destination = ?').get(
+      event.chordId,
+      text,
+      event.destination,
+    ) as Row | undefined;
+    const uses = pickedAgain(
+      previous ? { text, destination: event.destination, uses: num(previous['uses']), lastUsedAt: num(previous['last_used_at']) } : undefined,
+      event.at,
+    );
+    this.sql(
+      `INSERT INTO palette_choice (chord_id, text, destination, uses, last_used_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(chord_id, text, destination) DO UPDATE SET uses = excluded.uses, last_used_at = excluded.last_used_at`,
+    ).run(event.chordId, text, event.destination, uses, event.at);
+    this.sql(
+      `DELETE FROM palette_choice WHERE chord_id = ? AND rowid NOT IN
+         (SELECT rowid FROM palette_choice WHERE chord_id = ? ORDER BY last_used_at DESC LIMIT ?)`,
+    ).run(event.chordId, event.chordId, MAX_CHOICES_PER_CHORD);
+  }
+
+  /** One more use of a page: a visit, a typed pick, or both. Returns its history row, or null for non-web pages. */
+  private use(url: string, title: string, at: number, how: { visit: boolean; typed: boolean }): number | null {
+    const place = placeKey(url);
+    if (!place) return null;
+    const row = this.sql('SELECT id, url, decay_day FROM history_url WHERE profile_id = ? AND place = ?').get(DEFAULT_PROFILE, place) as Row | undefined;
+    const decay = used(row ? num(row['decay_day']) : null, at);
+    if (row) {
+      this.sql(
+        `UPDATE history_url SET url = ?, title = CASE WHEN ? = '' THEN title ELSE ? END,
+           visit_count = visit_count + ?, typed_count = typed_count + ?, last_visit_at = MAX(last_visit_at, ?), decay_day = ?
+         WHERE id = ?`,
+      ).run(how.visit ? url : (str(row['url']) || url), title, title, how.visit ? 1 : 0, how.typed ? 1 : 0, at, decay, num(row['id']));
+      return num(row['id']);
+    }
+    const result = this.sql(
+      `INSERT INTO history_url (profile_id, place, url, title, visit_count, typed_count, last_visit_at, decay_day)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(DEFAULT_PROFILE, place, url, title, how.visit ? 1 : 0, how.typed ? 1 : 0, at, decay);
+    return Number(result.lastInsertRowid);
+  }
+
+  /**
+   * History pages matching every typed word as a prefix (FTS5, best bm25
+   * first), and the chord's picks for text starting with what was typed.
+   * One letter matches nothing in history: the index starts at two.
+   */
+  search(query: string, chordId: string | null, now = Date.now()): SearchResult {
+    const words = terms(query).filter((w) => [...w].length >= 2);
+    const history =
+      words.length === 0
+        ? []
+        : (
+            this.sql(
+              `SELECT h.url, h.title, h.visit_count, h.typed_count, h.last_visit_at, h.decay_day
+                 FROM history_fts JOIN history_url h ON h.id = history_fts.rowid
+                WHERE history_fts MATCH ? AND h.profile_id = ?
+                ORDER BY bm25(history_fts) LIMIT ?`,
+            ).all(words.map((w) => `"${w.replaceAll('"', '""')}"*`).join(' '), DEFAULT_PROFILE, SEARCH_LIMIT) as Row[]
+          ).map((r) => ({
+            url: str(r['url']),
+            title: str(r['title']),
+            visitCount: num(r['visit_count']),
+            typedCount: num(r['typed_count']),
+            lastVisitAt: num(r['last_visit_at']),
+            frecency: frecencyOn(num(r['decay_day']), now),
+          }));
+    const text = foldChoiceText(query);
+    const choices: Choice[] =
+      chordId && text
+        ? (
+            this.sql(`SELECT text, destination, uses, last_used_at FROM palette_choice WHERE chord_id = ? AND substr(text, 1, ?) = ?`).all(
+              chordId,
+              text.length,
+              text,
+            ) as Row[]
+          ).map((r) => ({ text: str(r['text']), destination: str(r['destination']), uses: num(r['uses']), lastUsedAt: num(r['last_used_at']) }))
+        : [];
+    return { history, choices };
   }
 
   private writeChord(id: string, chord: Chord | null, now: number): void {

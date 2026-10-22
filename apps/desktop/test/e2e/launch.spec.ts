@@ -592,6 +592,39 @@ test('downloads save to the Downloads folder without asking, never overwrite, an
   }
 });
 
+test('history: a page you visited and closed is found again from the command bar', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/words` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today).toContainText('Words');
+
+    // Open another page so Words can be closed, then close Words.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/third`);
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('listitem').first()).toContainText('Third page');
+    await today.getByRole('listitem').filter({ hasText: 'Words' }).hover();
+    await today.getByRole('button', { name: /^Close Words/ }).click();
+    await expect(today.getByRole('listitem')).toHaveCount(1);
+
+    // Visits reach chord-data within a quarter second; then history finds it by title.
+    await expect
+      .poll(async () => {
+        await openCommandBar(shell, overlay, 'new');
+        await overlay.getByRole('textbox').fill('word');
+        await overlay.waitForTimeout(150);
+        const found = await overlay.getByRole('option').filter({ hasText: 'Words' }).count();
+        await overlay.keyboard.press('Escape');
+        return found;
+      })
+      .toBeGreaterThan(0);
+  } finally {
+    await app.close();
+  }
+});
+
 test('web content gets no Chord API; the shell does', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
