@@ -18,17 +18,17 @@ import { originOf } from './urls';
 // first page so CI never depends on the network.
 const HOME_URL = (!app.isPackaged && process.env['CHORD_HOME_URL']) || 'https://www.google.com/';
 
-export interface ChordWindowOptions {
+export interface AppWindowOptions {
   uiSession: Session;
   browsingSession: Session;
 }
 
-export class ChordWindow {
+export class AppWindow {
   readonly window: BaseWindow;
   readonly shell: WebContentsView;
   private readonly tab: WebContentsView;
 
-  constructor({ uiSession, browsingSession }: ChordWindowOptions) {
+  constructor({ uiSession, browsingSession }: AppWindowOptions) {
     this.window = new BaseWindow({
       width: 1280,
       height: 820,

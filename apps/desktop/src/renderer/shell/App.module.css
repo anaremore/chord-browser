@@ -100,17 +100,17 @@
   font: var(--text-small);
 }
 
-.spaceHeader {
+.chordHeader {
   display: flex;
   flex: none;
   gap: var(--space-2);
   align-items: center;
-  block-size: var(--size-space-header);
+  block-size: var(--size-chord-header);
   padding-inline: var(--space-2);
   font: var(--text-label);
 }
 
-.spaceIcon {
+.chordIcon {
   inline-size: var(--size-icon);
   color: var(--color-accent);
   text-align: center;

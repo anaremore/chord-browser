@@ -1,6 +1,6 @@
 /**
- * Space themes (DESIGN.md §5): a user picks 1–3 colors, a grain amount and an
- * appearance; `createSpaceTheme` turns that into every semantic color the shell
+ * Chord themes (DESIGN.md §5): a user picks 1–3 colors, a grain amount and an
+ * appearance; `createChordTheme` turns that into every semantic color the shell
  * needs, with a contrast guarantee for text.
  */
 import {
@@ -46,7 +46,7 @@ export const PRESETS = {
 
 export type PresetId = keyof typeof PRESETS;
 
-export interface SpaceThemeInput {
+export interface ChordThemeInput {
   /** 1–3 colors; extra stops are ignored. */
   stops: readonly Oklch[];
   /** Grain/noise amount, 0–1. */
@@ -55,20 +55,20 @@ export interface SpaceThemeInput {
 }
 
 export interface ThemeContext {
-  /** The OS appearance, used when the Space follows the system. */
+  /** The OS appearance, used when the chord follows the system. */
   systemAppearance: Appearance;
   /** `translucent` when an OS material (vibrancy, Mica) shows through the tint. */
   material: 'translucent' | 'solid';
 }
 
-export interface SpaceTheme {
+export interface ChordTheme {
   appearance: Appearance;
   /** Tint stops after mapping into the appearance band and the contrast guard. */
   stops: Oklch[];
   tintAlpha: number;
   /** Lowest text contrast found across the tint, for tests and diagnostics. */
   minContrast: { fg: number; fgMuted: number; accent: number };
-  /** CSS custom properties to set on the element that hosts the Space. */
+  /** CSS custom properties to set on the element that hosts the chord. */
   vars: Record<`--${string}`, string>;
 }
 
@@ -96,11 +96,11 @@ export const windowBackground: Record<Appearance, Oklch> = {
 };
 
 /**
- * A new Space's colors: the OS accent's hue at swatch lightness, so the first
- * Space feels like it belongs on this computer (DESIGN.md §5.1). Falls back to
+ * A new chord's colors: the OS accent's hue at swatch lightness, so the first
+ * chord feels like it belongs on this computer (DESIGN.md §5.1). Falls back to
  * the Dusk preset when there's no usable accent.
  */
-export function defaultSpaceStops(accent: Oklch | null): Oklch[] {
+export function defaultChordStops(accent: Oklch | null): Oklch[] {
   if (!accent || accent.c < 0.03) return presetStops('dusk');
   return [{ l: 0.72, c: Math.min(0.14, Math.max(0.08, accent.c)), h: accent.h }];
 }
@@ -141,11 +141,11 @@ function minContrastAgainst(text: Rgb, stops: readonly Oklch[], alpha: number, b
   return min;
 }
 
-export function createSpaceTheme(input: SpaceThemeInput, context: ThemeContext): SpaceTheme {
+export function createChordTheme(input: ChordThemeInput, context: ThemeContext): ChordTheme {
   const appearance = input.appearance === 'auto' ? context.systemAppearance : input.appearance;
   const light = appearance === 'light';
   const userStops = input.stops.slice(0, 3);
-  if (userStops.length === 0) throw new Error('A Space theme needs at least one color.');
+  if (userStops.length === 0) throw new Error('A chord theme needs at least one color.');
 
   const hue = circularMeanHue(userStops.map((s) => s.h));
   const fg: Oklch = light ? { l: 0.24, c: 0.02, h: hue } : { l: 0.96, c: 0.01, h: hue };

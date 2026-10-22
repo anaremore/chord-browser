@@ -46,7 +46,7 @@ A milestone is done when all of these hold:
 | **1 · Daily driver** | M1.0 Foundations | Oct 23 → Oct 30 | launch a themed Chord window that browses one page, on all three OSes |
 | | M1.1 Browsing shell | → Nov 6 | browse with real tabs, search Google from ⌘T, quit and find your tabs again |
 | | M1.2 Sidebar | → Nov 16 | pin, fold, drag, close, and undo the Arc way; collapse to the Dia-style bar |
-| | M1.3 Spaces | → Nov 23 | keep separate colorful Spaces, optionally with separate sign-ins, and swipe between them |
+| | M1.3 Chords | → Nov 23 | keep separate colorful chords, optionally with separate sign-ins, and swipe between them |
 | | M1.4 Command bar + archive | → Nov 30 | find any tab, page, or action from ⌘T; idle tabs tidy themselves away |
 | | M1.5 Extensions + essentials | → Dec 7 | use your password manager and Chrome extensions; videos pop out when you switch away; Chord is your default browser |
 | | M1.6 First run + preview | → **Mon Dec 14** | install Chord 0.1 from GitHub on any machine and switch from Arc |
@@ -68,7 +68,7 @@ A milestone is done when all of these hold:
 | # | Question | Needed by | My default |
 |---|---|---|---|
 | Q4 | Google search suggestions while typing. They make the command bar feel faster, but every keystroke goes to Google. | M1.1 | **On**, with a clear switch in Settings |
-| Q5 | Favorites: the row of app tiles at the top of the sidebar, shared across Spaces. Arc had them and your Dia screenshot shows them. | M1.2 | **Yes**, in M1.2 |
+| Q5 | Favorites: the row of app tiles at the top of the sidebar, shared across chords. Arc had them and your Dia screenshot shows them. | M1.2 | **Yes**, in M1.2 |
 | Q6 | Sidebar toggle shortcut: ⌘S / Ctrl+S (matches Arc, shadows "Save page") or ⌘⇧S / Ctrl+Shift+S | M1.2 | ⌘S, with Save page on ⌘⇧S |
 | D1 | Extension library license (ARCHITECTURE.md §16) | M1.5 | GPL-3 combined binaries; source stays MPL-2.0 |
 | D4 | DRM for Netflix and Spotify (ARCHITECTURE.md §16) | M1.6 | Stock Electron in v1, no DRM |
@@ -105,7 +105,7 @@ A milestone is done when all of these hold:
   - SECURITY.md, with a temporary contact until `security@chordbrowser.com` exists.
   - Renovate config and the `electron-watch` workflow (ARCHITECTURE.md §14).
 - **Foundations:**
-  - The `tokens` package with `createSpaceTheme()` and its 10,000-input contrast test.
+  - The `tokens` package with `createChordTheme()` and its 10,000-input contrast test.
   - The `core` reducer with undo round-trip property tests.
   - The `chord-data` utility process with `node:sqlite`, migrations, and backups.
 - **Spikes**, each about a day, with results written up in `docs/decisions/`:
@@ -147,24 +147,24 @@ A milestone is done when all of these hold:
 - **Collapse to minimal mode** (DESIGN.md §3.3), with peek-on-hover.
 - **Polish:** sidebar resize with detent; full keyboard tree navigation and keyboard drag-and-drop.
 
-### M1.3 Spaces · → Nov 23
+### M1.3 Chords · → Nov 23
 
-- **Spaces:** create, rename, reorder, delete with undo; icons.
+- **Chords:** create, rename, reorder, delete with undo; icons.
 - **ThemePicker:** wheel, swatches, presets, grain, light/dark/auto, *Surprise me*.
 - **Switching:**
   - ⌘/Ctrl+1–9 and clicking the switcher.
   - **1:1 trackpad swipe**, interruptible, on both the sidebar and the minimal bar.
   - Theme crossfade.
-- **Keep sign-ins separate:** per-Space profiles and session partitions. Moving a tab across a profile boundary is handled explicitly.
+- **Keep sign-ins separate:** per-chord profiles and session partitions. Moving a tab across a profile boundary is handled explicitly.
 
 ### M1.4 Command bar + archive · → Nov 30
 
 - **Unified search:**
-  - Sources: open tabs in every Space, pinned tabs, history (FTS5), archive, actions.
+  - Sources: open tabs in every chord, pinned tabs, history (FTS5), archive, actions.
   - Ranking, inline autocomplete, and Google suggestions (per Q4).
   - **Budgets measured:** under 50 ms to open, and results on the same frame as each keystroke.
 - **Archive:**
-  - The auto-archive policy, per-Space idle time (default 12 h).
+  - The auto-archive policy, per-chord idle time (default 12 h).
   - `chord://archive` with restore.
   - ⌘⇧T walks the archive.
 
@@ -187,7 +187,7 @@ A milestone is done when all of these hold:
 
 ### M1.6 First run + preview release · → Mon Dec 14
 
-- **First run:** the onboarding flow from DESIGN.md §8.1, under 60 s to your first Space. Empty states and a copy pass.
+- **First run:** the onboarding flow from DESIGN.md §8.1, under 60 s to your first chord. Empty states and a copy pass.
 - **Accessibility pass:**
   - Every flow completed keyboard-only.
   - Screen-reader smoke test.
@@ -202,7 +202,7 @@ A milestone is done when all of these hold:
 
 ### Phase 1 exit criteria
 
-- Every Phase 1 feature from the brief works on all targets: sidebar, pinned/Today, folders, auto-archive, Spaces, command bar, first run, collapsible sidebar. So do Chrome extensions, default-browser registration, and auto-PiP.
+- Every Phase 1 feature from the brief works on all targets: sidebar, pinned/Today, folders, auto-archive, chords, command bar, first run, collapsible sidebar. So do Chrome extensions, default-browser registration, and auto-PiP.
 - Spike S2 is resolved: Google sign-in works in Chord.
 - Performance budgets are met on reference hardware: cold launch < 1.5 s, command bar < 50 ms, 120 fps shell where the display supports it.
 - You've used it as your main browser for at least a few days without going back to Arc.
@@ -225,13 +225,13 @@ A milestone is done when all of these hold:
   - **Setup:** detects your `claude` / `codex`; "Sign in" runs `claude auth login` or `codex login` for you.
   - **Adapters:** Claude Code (`--restricted --tools ""`) and Codex app-server.
   - **Tools:** the Chord MCP server with context and organize tiers, approval cards, and citations that highlight the quote on the page.
-  - **Threads:** one per Space.
-  - **Controls:** exclusions, plus per-Space and global off.
+  - **Threads:** one per chord.
+  - **Controls:** exclusions, plus per-chord and global off.
   - Spike S5, for Codex tool restriction, runs at the start of this work.
 
 ## Phase 3 — Links from everywhere · February 2027
 
-- **Mini window** for links from other apps, promotable into a Space. On Wayland the compositor places it.
+- **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it.
 - **Peek** for links clicked inside pinned tabs.
 - **Distribution:**
   - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.
@@ -243,7 +243,7 @@ A milestone is done when all of these hold:
 ## Phase 4 — Deeper · March 2027 onward
 
 - **Duet developer mode:**
-  - Attach a project folder to a Space.
+  - Attach a project folder to a chord.
   - Console and network context from a localhost tab.
   - The provider's own file and shell tools, behind Chord's approval UI.
 - **More Duet providers:** your own API keys, and local models through OpenAI-compatible endpoints.

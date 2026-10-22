@@ -11,8 +11,13 @@ export const APP_ID = 'com.chordbrowser.Chord';
 export function configureAppIdentity(): void {
   const name = app.isPackaged ? 'Chord' : 'Chord Dev';
   app.setName(name);
-  if (process.platform === 'win32') {
-    app.setAppUserModelId(APP_ID);
+  if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
+
+  // Development only: tests and spikes run in throwaway profiles.
+  const override = process.env['CHORD_USER_DATA'];
+  if (!app.isPackaged && override) {
+    app.setPath('userData', override);
+  } else if (process.platform === 'win32') {
     // Browsers keep multi-GB profiles in Local AppData, not Roaming (ARCHITECTURE.md §7).
     const local = process.env['LOCALAPPDATA'] ?? join(app.getPath('appData'), '..', 'Local');
     app.setPath('userData', join(local, name, 'User Data'));

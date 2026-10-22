@@ -4,22 +4,22 @@ import { handle } from './ipc';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureBrowsingSession, configureUiSession, hardenAllWebContents } from './security';
-import { ChordWindow } from './window';
+import { AppWindow } from './window';
 
 // Before `ready`: privileged schemes, identity (decides userData), sandbox for every renderer.
 registerSchemes();
 configureAppIdentity();
 app.enableSandbox();
 
-const windows = new Set<ChordWindow>();
+const windows = new Set<AppWindow>();
 
-function windowForShell(contentsId: number): ChordWindow | undefined {
+function windowForShell(contentsId: number): AppWindow | undefined {
   for (const w of windows) if (w.shell.webContents.id === contentsId) return w;
   return undefined;
 }
 
-function openWindow(): ChordWindow {
-  const w = new ChordWindow({
+function openWindow(): AppWindow {
+  const w = new AppWindow({
     uiSession: session.fromPartition('chord-ui'),
     browsingSession: session.fromPartition('persist:default'),
   });
@@ -43,6 +43,12 @@ if (!app.requestSingleInstanceLock()) {
     // Development only: force an appearance for design QA captures.
     const forced = process.env['CHORD_APPEARANCE'];
     if (!app.isPackaged && (forced === 'light' || forced === 'dark')) nativeTheme.themeSource = forced;
+
+    // Spike S2 (development only): try a Chromium user agent without the
+    // Electron and app-name tokens.
+    if (!app.isPackaged && process.env['CHORD_UA'] === 'chromium') {
+      app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, '').replace(/ ChordDev\/\S+/, '');
+    }
 
     const ui = session.fromPartition('chord-ui');
     configureUiSession(ui);

@@ -1,6 +1,8 @@
+import { mkdtempSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 
 const appDir = resolve(import.meta.dirname, '../..');
@@ -25,7 +27,9 @@ function startSite(): Promise<{ server: Server; origin: string }> {
 }
 
 async function launch(env: Record<string, string>): Promise<ElectronApplication> {
-  const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), ...env };
+  // A fresh profile per launch: tests never touch a developer's real data.
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
   return electron.launch({ args: [appDir], env: childEnv, cwd: appDir });
 }

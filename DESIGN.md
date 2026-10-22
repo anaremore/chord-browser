@@ -12,7 +12,7 @@ This document is the bar every UI change is reviewed against. Values here become
 2. [Identity and voice](#2-identity-and-voice)
 3. [Layout anatomy](#3-layout-anatomy)
 4. [Tokens](#4-tokens)
-5. [Space themes](#5-space-themes)
+5. [Chord themes](#5-chord-themes)
 6. [Motion](#6-motion)
 7. [Components](#7-components)
 8. [Key flows](#8-key-flows)
@@ -32,7 +32,7 @@ Each principle has a test, so reviews can say "this fails principle 3" instead o
 |---|---|---|---|
 | 1 | **Content first** | Chrome recedes. Web pages get the most space; the sidebar is the only persistent chrome, and it can hide. | At the default window size the page gets ≥ 80% of the window width. No chrome element animates while you're reading. |
 | 2 | **Every interaction has a response** | Nothing snaps, pops, or jumps. Hover, press, drag, open, close, and arrive each get feedback within one frame and motion that explains what happened. | Record the interaction at 120 fps: no frame where an element teleports. |
-| 3 | **Personality without noise** | Color, texture, and playfulness live in the sidebar, the Space themes, and transitions. Never in the page, never in your way. | Remove the moment of delight: does the task get slower? Then it was in the way. |
+| 3 | **Personality without noise** | Color, texture, and playfulness live in the sidebar, the chord themes, and transitions. Never in the page, never in your way. | Remove the moment of delight: does the task get slower? Then it was in the way. |
 | 4 | **Fast is a feature** | Motion is for continuity, never for waiting. Typing never animates results. | Any animation that delays the user's next possible action is a bug. |
 | 5 | **Native where it counts** | Window controls, menus, shortcuts, scrolling, and text rendering follow the platform. Chord's own personality lives in the space between. | A Windows user never hunts for the close button; a Mac user never sees Ctrl. |
 | 6 | **Forgiving** | Every destructive action can be undone from a toast, and recovered later from the archive or Recently deleted. | No confirm dialogs for anything undoable. |
@@ -42,7 +42,7 @@ Each principle has a test, so reviews can say "this fails principle 3" instead o
 
 ## 2. Identity and voice
 
-**Name.** A *chord* is several notes played together, the way Spaces, tabs, and splits work together in one window. The identity stays musical but quiet. No music-note clip art.
+**Name.** A *chord* is several notes played together. Inside Chord, each set of tabs is itself a chord: the tabs are the notes, and they play together with their own color. The identity stays musical but quiet. No music-note clip art.
 
 **Mark (direction; final art to commission).** Three rounded bars of different lengths, stacked and slightly offset, like a chord on a staff and like tabs stacked in a sidebar. It is filled with Chord's signature *Dusk* gradient (Lilac → Coral) and has a monochrome version for menus and tray. It must not resemble Arc's arch, and it uses no Arc color pairings. The macOS icon ships as an Icon Composer `.icon` with layered glass for macOS 26 (electron-builder supports this).
 
@@ -54,8 +54,8 @@ Each principle has a test, so reviews can say "this fails principle 3" instead o
 - Never blame. Say "That page couldn't load", not "You entered an invalid URL".
 - A wink is welcome in empty states and onboarding. Everywhere else, be clear.
 
-**Words we use:** Space · Pinned · Today · Folder · Archive · Split · Peek · Duet · Mini window.
-**Words we avoid:** workspace, session, profile (except in Settings → Advanced), tab group, incognito (we say *private window*), AI (we say *Duet*).
+**Words we use:** chord (a set of tabs with its own color; lowercase in running text, so the app stays "Chord") · Pinned · Today · Folder · Archive · Split · Peek · Duet · Mini window.
+**Words we avoid:** space and workspace (we say *chord*), session, profile (except in Settings → Advanced), tab group, incognito (we say *private window*), AI (we say *Duet*).
 
 ---
 
@@ -82,7 +82,7 @@ macOS                                            Windows / Linux
   sidebar 248      frame inset: 8 top/right/bottom   frame top = strip bottom; inset 8 right/bottom
 ```
 
-- **Sidebar:** default 248 px, resizable 200–400. It snaps to 248 with a gentle detent when you drag within 8 px of it. It sits directly on the window material (vibrancy, Mica, or solid) with the Space tint over it.
+- **Sidebar:** default 248 px, resizable 200–400. It snaps to 248 with a gentle detent when you drag within 8 px of it. It sits directly on the window material (vibrancy, Mica, or solid) with the chord tint over it.
 - **Content frame:** inset `space-2` (8 px) from the window edges. Its radius is the platform `radius-frame` token, with `shadow-frame` and a 1 px hairline. The shell draws the shadow and hairline; the web view sits inside.
 - **Top strip (Windows and Linux only):** 40 px, needed for native caption buttons via Window Controls Overlay (and Snap Layouts on Windows 11). It is not wasted space: it shows site identity and page actions, and it's the window drag region. On Linux the caption buttons can be on the left; the layout reads `env(titlebar-area-x/width)` and the sidebar header makes room.
 - **Duet panel (when open):** a second frame to the right of the content frame. Default 380 px, range 320–560, separated by an 8 px gap. It is a calm neutral surface, not tinted: chat is for reading.
@@ -93,13 +93,13 @@ macOS                                            Windows / Linux
 |---|---|---|
 | Header | 40 | macOS: traffic lights (≈ 68 px reserved, `trafficLightPosition` centered in the row) then back/forward/reload. Windows/Linux: app menu ≡ (native menu) then back/forward/reload. |
 | URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L opens the command bar with the URL. Hover reveals copy link · page actions. |
-| Space header | 28 | Space icon (16) + name (`text-label`). Hover shows the ⋯ menu (Edit theme, Rename, Keep sign-ins separate, Delete). |
+| Chord header | 28 | Chord icon (16) + name (`text-label`). Hover shows the ⋯ menu (Edit theme, Rename, Keep sign-ins separate, Delete). |
 | Pinned | 32 / row | Pinned tabs and folders, nestable; indent 12 px per level, visually capped at 4 levels. |
 | Today divider | 24 | Hairline + "Clear" (`text-micro`), which appears on hover or focus and archives all Today tabs. |
 | New tab | 32 | "+ New tab", muted. Same as ⌘T. |
 | Today | 32 / row | New tabs arrive at the top. |
 | (flex) | — | Toasts stack here, above the footer. |
-| Footer | 44 | Archive · Downloads on the left; Space switcher in the center (icons 20 px; active one in a pill; scrolls with fade edges past ~6); + New Space on the right. |
+| Footer | 44 | Archive · Downloads on the left; chord switcher in the center (icons 20 px; active one in a pill; scrolls with fade edges past ~6); + New chord on the right. |
 
 ### 3.3 Sidebar collapsed: minimal mode
 
@@ -108,7 +108,7 @@ Every sidebar feature folds away. What remains is one 40 px bar with the basics,
 ```
 macOS
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ● ● ●  ◧  ‹ › ⟳   youtube.com / I Can't Believe What I Saw in Paris…    ✦ Duet │ ← 40 px bar, Space-tinted
+│ ● ● ●  ◧  ‹ › ⟳   youtube.com / I Can't Believe What I Saw in Paris…    ✦ Duet │ ← 40 px bar, chord-tinted
 │ ╭──────────────────────────────────────────────────────────────────────────╮ │
 │ │                                web page                                  │ │
 Windows / Linux
@@ -127,11 +127,11 @@ Windows / Linux
 | Duet | `✦ Duet` text button when Duet is enabled; absent otherwise. |
 | Window controls | Windows/Linux caption buttons (WCO). On macOS the traffic lights sit at the far left instead. |
 
-- **The bar carries the Space's tint and grain** (same generator), so you always know which Space you're in without one extra element.
-- Horizontal swipes on the bar switch Spaces exactly as on the sidebar: the tint crossfades and the address field updates.
+- **The bar carries the chord's tint and grain** (same generator), so you always know which chord you're in without one extra element.
+- Horizontal swipes on the bar switch chords exactly as on the sidebar: the tint crossfades and the address field updates.
 - **Nothing becomes unreachable when collapsed:**
-  - Tabs, pinned tabs, Spaces, the archive, and actions are all in the command bar (⌘T).
-  - Spaces also respond to ⌘1–9 and to swiping the bar.
+  - Tabs, pinned tabs, chords, the archive, and actions are all in the command bar (⌘T).
+  - Chords also respond to ⌘1–9 and to swiping the bar.
   - Ctrl+Tab cycles recently used tabs.
   - Undo toasts appear at the frame's bottom-left.
 - **The content frame keeps its 8 px inset and rounded corners.** It's the one piece of identity that never folds away.
@@ -149,7 +149,7 @@ packages/tokens/src/
   primitives.ts    raw scales (spacing, radii, neutral ramp, type sizes, springs)
   semantic.ts      roles: color.sidebar.fg, radius.row, motion.overlay, …
   platform.ts      per-OS overrides (radius.frame, size.strip, font smoothing)
-  theme.ts         createSpaceTheme(): user input → semantic color roles (§5)
+  theme.ts         createChordTheme(): user input → semantic color roles (§5)
 build → tokens.css  :root, [data-platform], [data-appearance] custom properties
        tokens.ts    typed exports for JS-driven motion and canvas drawing
        docs/tokens.md  generated reference table
@@ -183,7 +183,7 @@ Bundling: one variable `woff2`, preloaded. `font-display: block` is safe because
 | `text-micro` | 11 / 16 | 500 | +0.01 em | keycaps, badges, the divider's "Clear", footer labels |
 | `text-small` | 12 / 16 | 450 | 0 | secondary lines, toasts, URLs in results |
 | `text-body` | 13 / 20 | 450 | 0 | sidebar rows, menus, settings, Duet messages |
-| `text-label` | 13 / 20 | 600 | 0 | Space name, buttons, active row |
+| `text-label` | 13 / 20 | 600 | 0 | Chord name, buttons, active row |
 | `text-title` | 15 / 20 | 600 | −0.005 em | dialog and card titles, preview titles |
 | `text-input` | 18 / 24 | 450 | −0.01 em | command bar input |
 | `text-heading` | 24 / 32 | 600 | −0.015 em | onboarding steps, empty-state titles |
@@ -202,7 +202,7 @@ Bundling: one variable `woff2`, preloaded. `font-display: block` is safe because
 |---|---|---|---|
 | `size-row` | 32 | `size-icon-sm` / `size-icon` / `size-icon-lg` | 12 / 16 / 20 |
 | `size-header` | 40 | `size-favicon` | 16 |
-| `size-hit-min` | 24 (WCAG 2.2 AA target size) | `size-space-icon` | 20 |
+| `size-hit-min` | 24 (WCAG 2.2 AA target size) | `size-chord-icon` | 20 |
 | `sidebar-width` | 248 (200–400) | `duet-width` | 380 (320–560) |
 | `frame-inset` | 8 | `strip-height` (Win/Linux) | 40 |
 | `command-bar-width` | clamp(480, 56% of frame, 680) | `preview-width` | 280 |
@@ -227,13 +227,13 @@ Only borders and focus rings may be off-grid (1 px and 2 px). Text is vertically
 
 ### 4.5 Neutrals and roles
 
-The neutral ramp is OKLCH with a whisper of the Space hue (chroma 0.006), so grays harmonize with each theme. Lightness steps:
+The neutral ramp is OKLCH with a whisper of the chord hue (chroma 0.006), so grays harmonize with each theme. Lightness steps:
 
 | step | 0 | 50 | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 850 | 900 | 950 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | L | .995 | .975 | .955 | .92 | .86 | .74 | .62 | .52 | .42 | .32 | .27 | .22 | .17 |
 
-**Semantic color roles** (every one is generated per Space, §5):
+**Semantic color roles** (every one is generated per chord, §5):
 - `fg`, `fg-muted`, `fg-subtle`
 - `item-hover`, `item-active-bg`, `item-active-fg`
 - `divider`
@@ -245,17 +245,17 @@ The neutral ramp is OKLCH with a whisper of the Space hue (chroma 0.006), so gra
 ### 4.6 Icons and favicons
 
 - **Icons:** Lucide (ISC). 16 px at stroke 1.75 in rows, 20 px at stroke 1.5 in the footer. Active state = `fg` color plus filled variants where Lucide provides them; never color alone. Icon-only buttons always carry `aria-label` and a tooltip after 600 ms.
-- **Space icons** are user content: emoji (platform emoji font), a curated set of 48 Lucide symbols, or a single letter.
+- **Chord icons** are user content: emoji (platform emoji font), a curated set of 48 Lucide symbols, or a single letter.
 - **Favicons** are first-class. Exact fallback rules are in §7.4.
 
 ---
 
-## 5. Space themes
+## 5. Chord themes
 
 ### 5.1 What the user picks
 
 ```ts
-type SpaceTheme = {
+type ChordTheme = {
   stops: Oklch[];           // 1–3 colors chosen on the wheel or from swatches
   grain: number;            // 0–1, default 0.35
   appearance: 'light' | 'dark' | 'auto';   // auto follows the OS
@@ -270,9 +270,9 @@ type SpaceTheme = {
 
 **Gradient presets:** *Dusk* (Lilac → Coral; Chord's signature) · *Sea Glass* (Mint → Sky) · *Citrus* (Honey → Tangerine) · *Aurora* (Mint → Periwinkle → Orchid) · *Ember* (Rose → Tangerine) · *Fog* (Graphite → Periwinkle).
 
-**First Space default:** the OS accent color's hue, available on all three platforms. Chord ships the *Dusk* preset as a fallback if the accent can't be read.
+**First chord default:** the OS accent color's hue, available on all three platforms. Chord ships the *Dusk* preset as a fallback if the accent can't be read.
 
-### 5.2 `createSpaceTheme()` — a pure, tested function
+### 5.2 `createChordTheme()` — a pure, tested function
 
 1. **Resolve the appearance.** `auto` follows `nativeTheme`.
 2. **Map stops into the appearance's band** so any pick looks calm:
@@ -300,7 +300,7 @@ type SpaceTheme = {
 
 ### 5.3 Theme crossfade
 
-- Each Space's sidebar content carries its own theme variables.
+- Each chord's sidebar content carries its own theme variables.
 - The fixed chrome (header, URL pill, footer) gets `fg` interpolated in OKLCH each frame: one style write.
 - The tint itself is **two stacked tint groups** whose opacities crossfade. Compositor-only; no gradient repaint per frame.
 
@@ -329,8 +329,8 @@ Values are for Motion's `{type: 'spring', stiffness, damping, mass}`, mass 1. Th
 | `snappy` | 700 | 50 | 0.94 | 0% | 137 ms | 243 ms | active-tab pill glide, folder chevron, hover-card reposition, sidebar slide-in (hidden mode) |
 | `overlay` | 600 | 42 | 0.86 | 0.5% | 132 ms | 196 ms | command bar, Peek, toasts, Duet panel enter |
 | `smooth` | 450 | 38 | 0.90 | 0.2% | 160 ms | 256 ms | list reflow, reorder make-room, folder expand/collapse, split resize settle |
-| `bouncy` | 500 | 30 | 0.67 | 5.7% | 114 ms | 305 ms | **arrivals**: a drop settling, pin landing, new Space icon, archive "gulp" |
-| `release` | 360 | 34 | 0.90 | 0.2% | 179 ms | 287 ms | gesture release (Space swipe, sidebar resize); seeded with gesture velocity |
+| `bouncy` | 500 | 30 | 0.67 | 5.7% | 114 ms | 305 ms | **arrivals**: a drop settling, pin landing, new chord icon, archive "gulp" |
+| `release` | 360 | 34 | 0.90 | 0.2% | 179 ms | 287 ms | gesture release (chord swipe, sidebar resize); seeded with gesture velocity |
 | `gentle` | 260 | 31 | 0.96 | 0% | 230 ms | 417 ms | theme crossfade, scrims, empty-state illustrations |
 | `playful` | 220 | 14 | 0.47 | 18.5% | 140 ms | 769 ms | **decorative only**: logo strike, onboarding flourishes, "Surprise me" dice. Never on functional UI. |
 
@@ -350,17 +350,17 @@ The tokens package also emits each spring as a CSS `linear()` easing plus durati
 
 The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dark. Electron views can't blur another view's pixels by default. If spike S4 shows `View.setBackgroundBlur` works over a tab view, the command bar surface becomes 85% opaque with a 24 px blur. Otherwise it stays opaque. No fake blur.
 
-### 6.4 Space swipe (follows the trackpad 1:1)
+### 6.4 Chord swipe (follows the trackpad 1:1)
 
 | Phase | Behavior |
 |---|---|
 | **Engage** | Two-finger horizontal scroll over the sidebar once `|dx| > 8 px` and `|dx| > 1.5·|dy|` (axis lock). Vertical list scrolling is unaffected. |
-| **Track** | The Space's content panel (header, pinned, Today) moves exactly with the fingers, following the OS natural-scroll direction. The neighbor Space slides in beside it. Tint crossfade progress `p = |offset| / sidebarWidth`. The footer's switcher pill travels proportionally. |
-| **Edges** | Rubber band at the first and last Space: `shown = (1 − 1/(x·0.55/d + 1))·d`, with `d` = sidebar width. |
+| **Track** | The chord's content panel (header, pinned, Today) moves exactly with the fingers, following the OS natural-scroll direction. The neighbor chord slides in beside it. Tint crossfade progress `p = |offset| / sidebarWidth`. The footer's switcher pill travels proportionally. |
+| **Edges** | Rubber band at the first and last chord: `shown = (1 − 1/(x·0.55/d + 1))·d`, with `d` = sidebar width. |
 | **Release** | On `gestureScrollEnd` or `gestureFlingStart` from the shell view's `input-event` stream (fallback: 80 ms without wheel events). Commit if `p > 0.5` or velocity > 0.5 px/ms toward the neighbor; otherwise spring back. Uses the `release` spring seeded with the gesture's velocity. |
-| **Content** | The page swaps to the target Space's active tab **at the moment of commit**, in one frame. Pages never slide; they are too heavy to move per frame (§6.1 rule 4). |
+| **Content** | The page swaps to the target chord's active tab **at the moment of commit**, in one frame. Pages never slide; they are too heavy to move per frame (§6.1 rule 4). |
 | **Interrupt** | A new swipe during the settle catches the panel where it is. Velocity carries over, so it never jumps back to zero. |
-| **Keyboard / click** | ⌘1–9 or a switcher click plays the same transition with the `release` spring from rest. Jumping more than one Space does not slide past the in-between ones: it crossfades with a 24 px drift. |
+| **Keyboard / click** | ⌘1–9 or a switcher click plays the same transition with the `release` spring from rest. Jumping more than one chord does not slide past the in-between ones: it crossfades with a 24 px drift. |
 
 ### 6.5 Choreography of the key moments
 
@@ -376,7 +376,7 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | **Folder open/close** | Chevron rotates 90° (`snappy`). Children reveal via height (`smooth`) with a 12 ms stagger fade. The folder glyph crossfades between closed and open. |
 | **Toast** | Enters by sliding up 12 px and fading in (`overlay`); leaves with `fade-fast` and a 6 px drop. Up to 3 stack like a deck (older ones scale to 0.96, offset −6 px). |
 | **Command bar** | Scrim fades in (`fade-base`). The panel goes from scale 0.97, y −8 to rest, opacity 0 → 1 (`overlay`). On Enter it fades out in `fade-fast` *while* navigation starts. |
-| **New Space** | The switcher icon pops from 0.6 → 1 (`bouncy`), the sidebar slides to the new Space, and the empty-state art blooms in (`gentle`). |
+| **New chord** | The switcher icon pops from 0.6 → 1 (`bouncy`), the sidebar slides to the new chord, and the empty-state art blooms in (`gentle`). |
 | **Collapse sidebar** | The sidebar slides out to the left (`snappy`). Back/forward/reload and the URL pill glide up into the bar (shared layout), and the pill morphs into the address field. The page frame widens using the snapshot technique (`smooth`). Docking reverses every piece. |
 | **Sidebar peek** (collapsed) | The sidebar slides in *over* the page with `shadow-popover` (`snappy`) and slides away 300 ms after the pointer leaves. The page doesn't move. |
 | **⌘L in minimal mode** | The address field expands into the command bar: the input keeps its position and text while the panel grows down beneath it (`overlay`). |
@@ -389,7 +389,7 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | Normally | With reduced motion |
 |---|---|
 | Spatial springs (pill glide, reorder, pin flight, archive arc) | Instant position change plus a 90 ms highlight fade on the destination |
-| Space swipe | Still tracks the fingers 1:1 (direct manipulation is fine). On release it crossfades over 120 ms instead of springing. Keyboard switches crossfade. |
+| Chord swipe | Still tracks the fingers 1:1 (direct manipulation is fine). On release it crossfades over 120 ms instead of springing. Keyboard switches crossfade. |
 | Command bar, Peek, toasts | Opacity only, `fade-base` |
 | Theme crossfade | 120 ms opacity |
 | `playful` and `bouncy` flourishes | Off |
@@ -411,14 +411,14 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | Area | Components |
 |---|---|
 | Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
-| Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `SpaceHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `SidebarFooter`, `SpaceSwitcher`, `SidebarResizeHandle` |
+| Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar` |
 | Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `DownloadsPopover` |
 | Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState` |
-| Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `SpaceIconPicker` |
+| Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
 | Duet | `DuetPanel`, `ThreadHeader` (title, provider/model chip, thread menu), `MessageList`, `AssistantMessage` (with `CitationPill`), `ToolActivityRow`, `ApprovalCard`, `Composer` (`ContextChips`, input, send), `DuetSetup` |
 | Pages | `SettingsPage`, `ArchivePage`, `RecentlyDeleted` |
-| Primitives (`packages/ui`) | `Button` (primary, secondary, ghost, danger), `IconButton`, `Keycap`, `Toggle`, `Segmented`, `Slider`, `TextField`, `Favicon`, `SpaceIcon`, `Menu` (wraps native menus) |
+| Primitives (`packages/ui`) | `Button` (primary, secondary, ghost, danger), `IconButton`, `Keycap`, `Toggle`, `Segmented`, `Slider`, `TextField`, `Favicon`, `ChordIcon`, `Menu` (wraps native menus) |
 
 ### 7.2 `TabRow`
 
@@ -446,7 +446,7 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 - **Size and placement:** width `command-bar-width`; top at 18% of the frame height (min 64 px); radius `radius-lg`; padding `space-2`; `surface-raised` with `shadow-modal`.
 - **Input row:** 56 px, `text-input`. Placeholder: "Search or enter address". In ⌘L mode it shows the URL, fully selected.
 - **Results:** rows of 40 px with `radius-sm`.
-  - Row anatomy: `[icon or favicon 16] [title] [— domain, fg-muted, text-small] … [Space chip if another Space] [hint]`.
+  - Row anatomy: `[icon or favicon 16] [title] [— domain, fg-muted, text-small] … [chord chip if another chord] [hint]`.
   - The hint shows on the selected row only, e.g. "Switch to tab ↵".
   - Up to 8 visible, then the list scrolls.
 - **Sections** (`text-micro` headers, 24 px) appear only when two or more kinds are present. Order: Top hit · Tabs · Pinned · History · Archive · Actions · "Search for …".
@@ -479,7 +479,7 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 
 ### 7.7 `ThemePicker`
 
-Opened from Space ⋯ → *Edit theme*, and inline in onboarding.
+Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 
 - **ColorWheel (240 px canvas).**
   - Hue runs around the ring; chroma runs outward from the gray center. It's drawn at the current appearance's lightness band and gamut-mapped to the display (P3 where available).
@@ -506,7 +506,7 @@ Opened from Space ⋯ → *Edit theme*, and inline in onboarding.
   - The card never auto-accepts.
 - **Composer:**
   - `ContextChips` above the input. The current tab is attached by default as a visible, removable chip ("This tab · example.com"); excluded sites can never be attached.
-  - `@` opens a picker for tabs, pinned tabs, Spaces, and split panes.
+  - `@` opens a picker for tabs, pinned tabs, chords, and split panes.
   - Enter sends; Shift+Enter adds a new line.
   - Send is disabled until there's text.
 - **States:** *Off* (not shown at all) · *Intro* · *Setup* · *Ready, empty* · *Streaming* (stop button; partial text renders as it arrives with no typing animation) · *Needs approval* · *Provider error* (plain cause plus fix, e.g. "Claude Code isn't signed in. Run `claude auth login` in a terminal, then try again.").
@@ -517,7 +517,7 @@ Opened from Space ⋯ → *Edit theme*, and inline in onboarding.
 |---|---|
 | **Split view** | 2–4 panes, each its own rounded frame, separated by 8 px gaps. The focused pane gets a 2 px accent ring at 50% in the gap. Dividers are invisible until hovered, then show a 4×32 px pill (`fg` at 30%); the cursor shows the resize direction. Minimum pane width 320 px; double-click a divider to equalize. **In the sidebar** a split is one row: up to 4 favicons in a line plus a joined title ("Docs + Figma"), expandable to show its members. |
 | **Peek** | Scrim plus a card up to 88% of the frame (max 1200×900), `radius-lg`, `shadow-modal`, with a 40 px header (domain · *Open in Today* ⌘↵ · *Close* Esc). It enters from scale 0.92 at the click point (`overlay`). Promoting it grows the card into the frame (`smooth`) and the page becomes a Today tab. |
-| **Mini window** | A small window (remembers its size; default 900×640) with a 36 px bar showing the domain, **Open in ▾ [Space]**, and close. Neutral tint. Promoting it fades the window out, and the tab lands in the chosen Space's Today with the pin bloom. On Wayland the compositor places the window. |
+| **Mini window** | A small window (remembers its size; default 900×640) with a 36 px bar showing the domain, **Open in ▾ [chord]**, and close. Neutral tint. Promoting it fades the window out, and the tab lands in the chosen chord's Today with the pin bloom. On Wayland the compositor places the window. |
 | **Auto picture-in-picture** | Leave a tab while its video plays and the video pops out into a floating window over everything, including other apps. Come back and it slides home inline.<br>**The window is Chromium's native PiP window**, the same one Chrome and Dia use. Its controls appear on hover: ↖ *back to tab* (top-left), the site's origin (top-center), ✕ (top-right), play/pause with the site's skip buttons (e.g. −10 / +30), and a progress bar. Chord doesn't restyle or animate this window; the OS and Chromium own it.<br>**In the sidebar** the tab's speaker icon becomes a PiP glyph (Lucide `picture-in-picture-2`). Clicking the glyph brings the video home.<br>**Settings:** *Pop out playing videos when you switch away* (on by default), plus a per-site "Don't pop out" in the site menu.<br>Details and limits: ARCHITECTURE.md §9. |
 | **Minimal mode** (sidebar collapsed; the brief's "hidden chrome") | Specified in §3.3. Toggled by the bar's ◧ button, the sidebar's collapse button, the command bar ("Hide sidebar"), or the toggle shortcut. Peek reveal: pointing within 6 px of the left edge for 120 ms, or hovering ◧ for 300 ms. In OS fullscreen the bar itself auto-hides. |
 
@@ -525,38 +525,38 @@ Opened from Space ⋯ → *Edit theme*, and inline in onboarding.
 
 ## 8. Key flows
 
-### 8.1 First run: your first Space in under 60 seconds
+### 8.1 First run: your first chord in under 60 seconds
 
-The window opens at 1200×800, centered, with the real sidebar on the left showing a placeholder Space in the OS accent hue. Onboarding cards render in the content frame. **Every choice you make shows up in the real sidebar as you make it.** That *is* the tour.
+The window opens at 1200×800, centered, with the real sidebar on the left showing a placeholder chord in the OS accent hue. Onboarding cards render in the content frame. **Every choice you make shows up in the real sidebar as you make it.** That *is* the tour.
 
 | # | Screen | Target time | Content | Exit |
 |---|---|---|---|---|
-| 1 | Welcome | 5 s | The mark strikes in (§2). "Hi, I'm Chord." / "A calm, colorful home for everything you do on the web." | **Make your first Space** (↵) |
-| 2 | Name it | 10 s | "What's this Space for?" Text field (placeholder *Personal*) plus chips: Personal · Work · School · Side project · Home. Picking a chip fills the name and suggests an icon. The sidebar header types along. | ↵ |
-| 3 | Make it yours | 15 s | The inline `ThemePicker`. Swatches first, wheel one click away. The sidebar re-themes live; *Surprise me* is right there. | **Looks good** (↵) → **Space created** (≈ 30 s in) |
+| 1 | Welcome | 5 s | The mark strikes in (§2). "Hi, I'm Chord." / "A calm, colorful home for everything you do on the web." | **Make your first chord** (↵) |
+| 2 | Name it | 10 s | "What's this chord for?" Text field (placeholder *Personal*) plus chips: Personal · Work · School · Side project · Home. Picking a chip fills the name and suggests an icon. The sidebar header types along. | ↵ |
+| 3 | Make it yours | 15 s | The inline `ThemePicker`. Swatches first, wheel one click away. The sidebar re-themes live; *Surprise me* is right there. | **Looks good** (↵) → **Chord created** (≈ 30 s in) |
 | 4 | Pin favorites *(optional)* | 15 s | "What do you open every day?" A URL field with offline autocomplete from a small built-in list of popular domains (no network). Each one lands in the sidebar with the pin animation. | **Next** · *Skip for now* (Esc) |
 | 5 | Open links in Chord? *(optional)* | 5 s | "Links from Mail, Slack, and other apps will open here." Platform-specific outcome copy: on macOS the system asks to confirm; on Windows, "Windows will open Settings — pick Chord under Web browser"; on Linux it's set directly (Flatpak shows instructions). | **Make Chord my default** · *Not now* |
-| 6 | Three things to know | 10 s | Three cards with live keycaps: **⌘T** Search or open anything · **⌘1–9** Jump between Spaces (or swipe the sidebar) · **Drag a tab up** to pin it for good | **Start browsing** → command bar opens: "Where to?" |
+| 6 | Three things to know | 10 s | Three cards with live keycaps: **⌘T** Search or open anything · **⌘1–9** Jump between chords (or swipe the sidebar) · **Drag a tab up** to pin it for good | **Start browsing** → command bar opens: "Where to?" |
 
 - Progress shows as 6 dots: filled for required steps, hollow for optional.
 - Every optional step can be skipped with Esc.
 - Duet is **not** part of onboarding; it's opt-in later (§8.6).
 
-### 8.2 Space switching
+### 8.2 Chord switching
 
 Triggers: two-finger swipe on the sidebar (§6.4) · ⌘/Ctrl+1–9 · clicking the switcher · the command bar ("Go to Work").
 
 1. The sidebar content slides (or follows the fingers), the tint crossfades, and the switcher pill travels.
-2. At commit, the page frame shows the target Space's last-active tab, restored or lazily loaded. If that Space has no open tab, an empty state appears with the command bar hint.
-3. A screen reader hears: "Work Space, 3 pinned, 7 today."
-4. If the target Space uses a different profile, nothing extra happens visually. Sign-ins are simply different, by design.
+2. At commit, the page frame shows the target chord's last-active tab, restored or lazily loaded. If that chord has no open tab, an empty state appears with the command bar hint.
+3. A screen reader hears: "Work chord, 3 pinned, 7 today."
+4. If the target chord uses a different profile, nothing extra happens visually. Sign-ins are simply different, by design.
 
 ### 8.3 Command bar
 
 1. ⌘T (new) or ⌘L (current URL) opens it in under 50 ms.
 2. Results paint on the same frame as each keystroke; history and archive join within 16 ms without moving rows above them.
 3. ↑/↓ move the selection; Tab completes a URL; ↵ opens (switching to an existing tab if one matches); ⌘↵ forces a new tab; Esc or a click outside closes it.
-4. Actions are first-class rows: "New Space", "Pin this tab", "Copy URL", "Clear Today", "Split with…", "Edit theme", "Toggle sidebar", "Ask Duet…" (if enabled).
+4. Actions are first-class rows: "New chord", "Pin this tab", "Copy URL", "Clear Today", "Split with…", "Edit theme", "Toggle sidebar", "Ask Duet…" (if enabled).
 
 ### 8.4 Split view
 
@@ -592,7 +592,7 @@ A link clicked inside a pinned tab opens in Peek instead of replacing the pinned
 
 | Where | Title | Body | Action |
 |---|---|---|---|
-| New Space, nothing yet | Fresh Space, fresh start. | Pin the sites you live in. Everything else lands in Today and tidies itself away after 12 hours. | New tab ⌘T |
+| New chord, nothing yet | Fresh chord, fresh start. | Pin the sites you live in. Everything else lands in Today and tidies itself away after 12 hours. | New tab ⌘T |
 | Pinned section empty | — | Drag a tab here to keep it. (shown inline in `text-small`, muted) | — |
 | Archive empty | Nothing archived yet. | Tabs you haven't used in a while get tucked in here, so you can always find them again. | — |
 | No search results | No matches for "…" | — | Search the web for "…" ↵ · Open "…" as an address |
@@ -604,10 +604,10 @@ A link clicked inside a pinned tab opens in Peek instead of replacing the pinned
 - "Tab closed · Undo"
 - "Archived 4 tabs · Undo"
 - "Deleted folder 'Reading' · Undo"
-- "Deleted 'Work' Space · Undo"
+- "Deleted 'Work' chord · Undo"
 - "Moved to Personal (sign-ins differ, so it reloaded) · Undo"
 
-Empty states get a small abstract illustration in the Space's own colors (three soft shapes echoing the mark), animated once with `gentle`. They never look like stock art.
+Empty states get a small abstract illustration in the chord's own colors (three soft shapes echoing the mark), animated once with `gentle`. They never look like stock art.
 
 ---
 
@@ -616,14 +616,14 @@ Empty states get a small abstract illustration in the Space's own colors (three 
 - **Keyboard:**
   - F6 cycles regions: sidebar → page → Duet → top strip.
   - The sidebar is an ARIA `tree`: arrows move, → / ← expand and collapse, ↵ activates, ⌘⌫ closes.
-  - Space picks up a row for keyboard drag-and-drop; arrows move it, Space drops, Esc cancels.
+  - The Space key picks up a row for keyboard drag-and-drop; arrows move it, Space drops it, Esc cancels.
   - The command bar is a `combobox` controlling a `listbox`.
 - **Focus:** always visible on keyboard focus. The ring is 2 px in the OS accent with a 2 px offset (inset inside rows so it isn't clipped).
 - **Contrast:**
   - Guaranteed by the theme generator (§5.2): ≥ 4.5:1 for all text, ≥ 3:1 for UI glyphs and focus.
   - Status is never shown by color alone (icon or text too).
 - **Screen readers:**
-  - Live region announcements for toasts, Space switches, and Duet completions ("Duet finished answering").
+  - Live region announcements for toasts, chord switches, and Duet completions ("Duet finished answering").
   - Every icon button is labeled.
 - **System settings respected:**
   - Reduce motion (§6.6).
@@ -645,9 +645,9 @@ Empty states get a small abstract illustration in the Space's own colors (three 
 | App menu | Native menu bar | ≡ button opening a native menu | ≡ button opening a native menu |
 | Context menus | Native | Native | Native |
 | `radius-frame` | 12 | 8 | 12 |
-| Accent | OS accent → focus ring and the first Space | same | same (Electron 39+) |
+| Accent | OS accent → focus ring and the first chord | same | same (Electron 39+) |
 | Scrollbars | Overlay | Thin, auto-hiding in the sidebar; native in pages | Thin, auto-hiding in the sidebar; native in pages |
-| Swipe between Spaces | Trackpad, phases from Chromium | Precision touchpad (end-on-idle fallback) | libinput (end-on-idle fallback) |
+| Swipe between chords | Trackpad, phases from Chromium | Precision touchpad (end-on-idle fallback) | libinput (end-on-idle fallback) |
 
 ---
 
@@ -678,7 +678,7 @@ Every UI change gets the following before it reaches you:
 
 1. **Duet shortcut.** I propose ⌘E / Ctrl+E. Chrome uses Ctrl+E only for "search from the address bar", which Chord doesn't need. Safari's ⌘E is "Use selection for Find". Alternatives: ⌘⇧D / Ctrl+Shift+D.
 2. **Sidebar toggle shortcut.** ⌘S / Ctrl+S matches Arc, but it shadows "Save page". Alternative: ⌘⇧S / Ctrl+Shift+S. Also: should *peek on hover* be on by default in minimal mode? I lean yes for Arc users, with an off switch.
-3. **Favorites row.** Arc's favicon grid sits above the Space and is shared across Spaces. It isn't in the brief. Add it as a later-phase item, or leave it out?
+3. **Favorites row.** Arc's favicon grid sits above the chord and is shared across chords. It isn't in the brief. Add it as a later-phase item, or leave it out?
 4. **Top strip on Windows/Linux.** Show the page title next to the domain, or only the domain (calmer)? I lean domain only, with the title on hover.
 5. **Default grain.** 0.35 (subtle paper) vs 0 (clean). I lean 0.35; it's part of the identity.
 6. **Density.** Ship a *Compact* option (28 px rows) in v1, or later?

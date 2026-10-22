@@ -1,15 +1,15 @@
 import type { SystemInfo } from '@chord/ipc';
-import { createSpaceTheme, defaultSpaceStops, hexToRgb, rgbToOklch, siteColors, type SpaceTheme } from '@chord/tokens';
+import { createChordTheme, defaultChordStops, hexToRgb, rgbToOklch, siteColors, type ChordTheme } from '@chord/tokens';
 import { ArrowLeft, ArrowRight, Lock, RotateCw, X } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import styles from './App.module.css';
 import { useSystemInfo, useTabState } from './hooks';
 import { displayHost, monogram, siteHue } from './site';
 
-function spaceTheme(info: SystemInfo): SpaceTheme {
+function chordTheme(info: SystemInfo): ChordTheme {
   const accent = info.accentColor ? hexToRgb(info.accentColor) : null;
-  return createSpaceTheme(
-    { stops: defaultSpaceStops(accent ? rgbToOklch(accent) : null), grain: 0.35, appearance: 'auto' },
+  return createChordTheme(
+    { stops: defaultChordStops(accent ? rgbToOklch(accent) : null), grain: 0.35, appearance: 'auto' },
     { systemAppearance: info.appearance, material: info.material },
   );
 }
@@ -22,7 +22,7 @@ function monogramStyle(host: string, info: SystemInfo): CSSProperties {
 export function App({ initialInfo }: { initialInfo: SystemInfo }) {
   const info = useSystemInfo(initialInfo);
   const tab = useTabState();
-  const theme = spaceTheme(info);
+  const theme = chordTheme(info);
   const host = displayHost(tab.url);
   const title = tab.title || host;
   const overlayChrome = info.windowChrome.kind === 'overlay';
@@ -71,8 +71,8 @@ export function App({ initialInfo }: { initialInfo: SystemInfo }) {
           <span className={styles.ellipsis}>{host}</span>
         </div>
 
-        <div className={styles.spaceHeader}>
-          <span className={styles.spaceIcon} aria-hidden>
+        <div className={styles.chordHeader}>
+          <span className={styles.chordIcon} aria-hidden>
             ✦
           </span>
           <span>Personal</span>
@@ -96,7 +96,7 @@ export function App({ initialInfo }: { initialInfo: SystemInfo }) {
         <span className={styles.flex} />
 
         <footer className={styles.footer}>
-          <span className={styles.switcherPill} aria-label="Space: Personal">
+          <span className={styles.switcherPill} aria-label="Chord: Personal">
             ✦
           </span>
         </footer>

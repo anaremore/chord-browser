@@ -1,15 +1,15 @@
 # Chord
 
-A calm, colorful, open-source browser for people leaving Arc. Chord keeps the sidebar-first workflow: pinned tabs, Today tabs, Spaces with their own colors, a command bar for everything. It has no account, no telemetry, and no lock-in.
+A calm, colorful, open-source browser built around a vertical sidebar. Tabs live in **chords**: sets of pinned and everyday tabs, each with its own color. A command bar reaches everything. No account, no telemetry, no lock-in.
 
 Windows, macOS, and Linux (X11 and Wayland) are all first-class.
 
-> **Status: early development.** Nothing to install yet. The first preview (0.1) is planned for mid-December 2026, ahead of Arc's shutdown on December 22. See the [roadmap](ROADMAP.md).
+> **Status: early development.** Nothing to install yet. The first preview (0.1) is planned for mid-December 2026. See the [roadmap](ROADMAP.md).
 
 ## What's planned
 
 - **Vertical sidebar:** pinned tabs that remember their home page, Today tabs that tidy themselves into an archive, nestable folders, and drag-and-drop everywhere.
-- **Spaces:** separate sets of tabs, each with its own color theme and, optionally, separate sign-ins. Switch with ⌘/Ctrl+1–9 or a swipe.
+- **Chords:** separate sets of tabs, each with its own color theme and, optionally, separate sign-ins. Switch with ⌘/Ctrl+1–9 or a swipe.
 - **Command bar** (⌘/Ctrl+T): one place to search open tabs, pinned tabs, history, the archive, and actions.
 - **Minimal mode:** collapse the sidebar and Chord shrinks to one slim bar.
 - **Chrome extensions**, including password managers.

@@ -14,3 +14,4 @@ Thumbs.db
 test-results/
 playwright-report/
 .cache/
+spikes/**/results/

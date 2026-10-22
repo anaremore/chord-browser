@@ -32,7 +32,7 @@ Every library, API, and version below was checked on 2026-10-22. Anything not co
 
 ## 1. Scope
 
-**In scope**, in the priority order from the brief: vertical sidebar (pinned and Today tabs), Spaces with optional per-Space profiles, nestable folders, auto-archive, command bar, split view, mini window plus default-browser registration, Peek, and hidden-chrome mode. Hidden-chrome is now a **fully collapsible sidebar**: every sidebar feature folds away, leaving one Dia-style bar with basic controls and a combined `domain / title` field (DESIGN.md §3.3). Two additions:
+**In scope**, in the priority order from the brief: vertical sidebar (pinned and Today tabs), chords with optional per-chord profiles, nestable folders, auto-archive, command bar, split view, mini window plus default-browser registration, Peek, and hidden-chrome mode. Hidden-chrome is now a **fully collapsible sidebar**: every sidebar feature folds away, leaving one Dia-style bar with basic controls and a combined `domain / title` field (DESIGN.md §3.3). Two additions:
 
 - **Duet**, an opt-in right-side assistant panel. It uses your own Claude Code or Codex install ([§11](#11-duet--the-assistant-panel)).
 - **Extensions**, needed for password managers ([§12](#12-extensions)).
@@ -106,7 +106,7 @@ chord-browser/
 │  ├─ core/                     pure domain model: entities, commands, reducer, policies
 │  ├─ ipc/                      channel contract, zod schemas, typed client/server helpers
 │  ├─ db/                       schema, migrations, prepared queries
-│  ├─ tokens/                   design tokens → CSS vars + TS; Space theme generator
+│  ├─ tokens/                   design tokens → CSS vars + TS; chord theme generator
 │  └─ ui/                       shared React primitives (Button, Keycap, Favicon, Toast…)
 ├─ build/                       electron-builder config, NSIS include, entitlements, AppArmor
 ├─ flatpak/                     Flathub manifest (built from source)
@@ -208,24 +208,24 @@ Verified constraints and how they shape this:
 
 `@chord/core` is pure TypeScript (no Electron, no DOM). It defines:
 
-- **Entities:** `Profile`, `Space`, `Node` (folder | tab | split), `WindowState`, `ArchiveItem`, `Settings`.
+- **Entities:** `Profile`, `Chord`, `Node` (folder | tab | split), `WindowState`, `ArchiveItem`, `Settings`.
 - **Commands:** a discriminated union describing user intent.
 - **`apply(state, command, ctx) → { state, patches, inverse, effects }`**, built on Immer's `produceWithPatches`.
-- **Policies:** auto-archive eligibility, ordering (fractional ranks), the profile-boundary rule for moving tabs across Spaces, and frecency.
+- **Policies:** auto-archive eligibility, ordering (fractional ranks), the profile-boundary rule for moving tabs across chords, and frecency.
 
 ```ts
 type Command =
-  | { t: 'tab.open'; spaceId: SpaceId; url: string; at?: Position; activate?: boolean }
+  | { t: 'tab.open'; chordId: ChordId; url: string; at?: Position; activate?: boolean }
   | { t: 'tab.activate'; nodeId: NodeId }
   | { t: 'tab.close'; nodeId: NodeId }          // pinned → unload; today → archive('closed')
   | { t: 'tab.pin'; nodeId: NodeId; at: Position }
   | { t: 'tab.unpin'; nodeId: NodeId; at?: Position }
   | { t: 'tab.resetToPinned'; nodeId: NodeId }
-  | { t: 'node.move'; nodeId: NodeId; to: Position }   // Position = {spaceId, section, parentId, rank}
+  | { t: 'node.move'; nodeId: NodeId; to: Position }   // Position = {chordId, section, parentId, rank}
   | { t: 'folder.create' | 'folder.rename' | 'folder.toggle' | 'folder.delete'; /* … */ }
-  | { t: 'space.create' | 'space.update' | 'space.delete' | 'space.reorder'; /* … */ }
-  | { t: 'space.activate'; windowId: WindowId; spaceId: SpaceId }
-  | { t: 'today.clear'; spaceId: SpaceId }
+  | { t: 'chord.create' | 'chord.update' | 'chord.delete' | 'chord.reorder'; /* … */ }
+  | { t: 'chord.activate'; windowId: WindowId; chordId: ChordId }
+  | { t: 'today.clear'; chordId: ChordId }
   | { t: 'archive.restore'; archiveId: ArchiveId }
   | { t: 'split.create' | 'split.resize' | 'split.dissolve'; /* … */ }
   | { t: 'undo'; token: UndoToken };
@@ -251,7 +251,7 @@ Live-only fields are never persisted: loading, audible, crashed, the attached-vi
 Every destructive command returns inverse patches plus an `UndoToken`. A toast holds the token for 6 s (paused while hovered); undo replays the inverse. Behind the toast, data is also soft-retained:
 
 - Closed Today tabs go to the archive (`reason='closed'`) with their navigation history, which `webContents.navigationHistory.restore()` brings back ✅.
-- Deleted folders and Spaces are soft-deleted (`deleted_at`) and kept 30 days. They can be restored from Settings → Recently deleted.
+- Deleted folders and chords are soft-deleted (`deleted_at`) and kept 30 days. They can be restored from Settings → Recently deleted.
 - Reopen-closed-tab (⌘⇧T) walks the same archive.
 
 ---
@@ -281,26 +281,26 @@ CREATE TABLE profile (
   is_default INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE space (
+CREATE TABLE chord (
   id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profile(id),
   name TEXT NOT NULL,
   icon TEXT NOT NULL,                          -- {kind:'emoji'|'symbol'|'letter', value}
-  theme TEXT NOT NULL,                         -- SpaceTheme {stops[1..3], grain, appearance}
+  theme TEXT NOT NULL,                         -- ChordTheme {stops[1..3], grain, appearance}
   rank TEXT NOT NULL,
-  duet_enabled INTEGER NOT NULL DEFAULT 1,     -- per-Space opt-out (global switch in settings)
+  duet_enabled INTEGER NOT NULL DEFAULT 1,     -- per-chord opt-out (global switch in settings)
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER
 ) STRICT;
 
 -- The sidebar tree. Folders only in 'pinned'; splits in either section; tabs anywhere.
 CREATE TABLE node (
-  id TEXT PRIMARY KEY, space_id TEXT NOT NULL REFERENCES space(id),
+  id TEXT PRIMARY KEY, chord_id TEXT NOT NULL REFERENCES chord(id),
   parent_id TEXT REFERENCES node(id),          -- NULL = section root
   section TEXT NOT NULL CHECK (section IN ('pinned','today')),
   kind TEXT NOT NULL CHECK (kind IN ('folder','tab','split')),
   rank TEXT NOT NULL,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER
 ) STRICT;
-CREATE INDEX node_children ON node(space_id, section, parent_id, rank) WHERE deleted_at IS NULL;
+CREATE INDEX node_children ON node(chord_id, section, parent_id, rank) WHERE deleted_at IS NULL;
 
 CREATE TABLE folder (
   node_id TEXT PRIMARY KEY REFERENCES node(id),
@@ -326,17 +326,17 @@ CREATE TABLE split (
 CREATE TABLE window_state (
   id TEXT PRIMARY KEY,
   bounds TEXT NOT NULL,                        -- {x,y,w,h,displayId,maximized,fullscreen}
-  active_space_id TEXT REFERENCES space(id),
+  active_chord_id TEXT REFERENCES chord(id),
   sidebar_width INTEGER NOT NULL,
   sidebar_mode TEXT NOT NULL DEFAULT 'docked' CHECK (sidebar_mode IN ('docked','collapsed')),
   duet_width INTEGER,                          -- NULL = panel closed
-  active_tab_by_space TEXT NOT NULL DEFAULT '{}'
+  active_tab_by_chord TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
 
 CREATE TABLE archive_item (
-  id TEXT PRIMARY KEY, space_id TEXT NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL,
+  id TEXT PRIMARY KEY, chord_id TEXT NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL,
   favicon_key TEXT, nav_state BLOB,
-  reason TEXT NOT NULL CHECK (reason IN ('auto','closed','cleared','folder-deleted','space-deleted')),
+  reason TEXT NOT NULL CHECK (reason IN ('auto','closed','cleared','folder-deleted','chord-deleted')),
   archived_at INTEGER NOT NULL, restored_at INTEGER
 ) STRICT;
 CREATE INDEX archive_recent ON archive_item(archived_at DESC);
@@ -380,7 +380,7 @@ CREATE TABLE setting (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;   -- zo
 
 -- Duet (§11)
 CREATE TABLE duet_thread (
-  id TEXT PRIMARY KEY, space_id TEXT REFERENCES space(id),
+  id TEXT PRIMARY KEY, chord_id TEXT REFERENCES chord(id),
   provider TEXT NOT NULL,                      -- 'claude-code' | 'codex' | later: 'anthropic-api' | 'openai-api' | 'local'
   model TEXT, provider_session_id TEXT,        -- for resume
   mode TEXT NOT NULL DEFAULT 'browse' CHECK (mode IN ('browse','developer')),
@@ -401,9 +401,9 @@ CREATE TABLE duet_site_rule (
 
 **Migrations** are forward-only numbered SQL files, each run in a transaction. Before every migration, and as a daily rolling copy (keep 3), we take a backup with `VACUUM INTO`. A failed migration restores the backup and opens in a read-only "something went wrong" state rather than losing data.
 
-**Profiles.** Spaces share the default profile unless "Keep sign-ins separate" is on. That creates a profile with its own persistent partition: cookies, storage, cache, extensions. Moving a tab to a Space with a **different profile** recreates it in the target session and reloads it, because a WebContents can't change session. The UI says so before the drop completes.
+**Profiles.** Chords share the default profile unless "Keep sign-ins separate" is on. That creates a profile with its own persistent partition: cookies, storage, cache, extensions. Moving a tab to a chord with a **different profile** recreates it in the target session and reloads it, because a WebContents can't change session. The UI says so before the drop completes.
 
-**Auto-archive.** A main-process timer runs every 5 minutes and on `powerMonitor` `resume`. It archives Today tabs whose `last_active_at` is older than the Space's threshold (12 h by default; 24 h, 7 d, 30 d, or never). It skips tabs that are audible, visible in any window, part of a split, or playing media. Archived items are kept 30 days by default.
+**Auto-archive.** A main-process timer runs every 5 minutes and on `powerMonitor` `resume`. It archives Today tabs whose `last_active_at` is older than the chord's threshold (12 h by default; 24 h, 7 d, 30 d, or never). It skips tabs that are audible, visible in any window, part of a split, or playing media. Archived items are kept 30 days by default.
 
 ---
 
@@ -462,7 +462,7 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
 | **Find in page** | `webContents.findInPage`, with a small find bar in the overlay anchored to the frame's top-right. |
 | **Fullscreen** | `enter-html-full-screen` hides the shell chrome and gives the tab view the full window bounds. |
 | **Crashes** | `render-process-gone` → a friendly "This page stopped" state in the frame with Reload. |
-| **Auto picture-in-picture** | When you leave a tab whose video is playing (switch tab or Space, or collapse into another page), the video pops out into a floating player, like Dia. **Mechanism:**<br>1. TabManager attaches the incoming tab's view *on top* immediately, so the switch is never delayed.<br>2. In the outgoing tab's isolated world, `executeJavaScript(…, userGesture = true)` calls `requestPictureInPicture()` on the largest playing, visible `<video>`. `userGesture` lifts the user-activation requirement (Electron docs).<br>3. The outgoing view detaches when that promise settles, or after 300 ms.<br>4. Returning to the tab calls `document.exitPictureInPicture()`, so the video continues inline.<br>**Why Chord does it itself:** Chrome's auto-PiP (Chrome 134+, browser-initiated behind a flag from 142) lives in Chrome's browser layer, which Electron doesn't ship.<br>**The floating window** is Chromium's own video PiP window, the same one Chrome and Dia show. Its hover controls (back to tab, origin, close, play/pause, the site's Media Session seek/track buttons, progress bar) come with the engine. ✅ Electron builds video PiP unconditionally (flag removed in PR #38620; PiP fixes as recent as PR #54612).<br>⚠ **Unverified (spike S7):** exactly which controls Electron 45's PiP window shows, and whether *back to tab* reaches Chord through `WebContents` activation. Chord can't restyle that window; a custom player would need Document Picture-in-Picture, which Electron doesn't support (#39633).<br>**Skipped when:** the video is muted and never audible; it's smaller than 200×112; it has `disablePictureInPicture`; another PiP is already open; or the site is on the user's "don't pop out" list.<br>On Wayland the compositor places the PiP window. |
+| **Auto picture-in-picture** | When you leave a tab whose video is playing (switch tab or chord, or collapse into another page), the video pops out into a floating player, like Dia. **Mechanism:**<br>1. TabManager attaches the incoming tab's view *on top* immediately, so the switch is never delayed.<br>2. In the outgoing tab's isolated world, `executeJavaScript(…, userGesture = true)` calls `requestPictureInPicture()` on the largest playing, visible `<video>`. `userGesture` lifts the user-activation requirement (Electron docs).<br>3. The outgoing view detaches when that promise settles, or after 300 ms.<br>4. Returning to the tab calls `document.exitPictureInPicture()`, so the video continues inline.<br>**Why Chord does it itself:** Chrome's auto-PiP (Chrome 134+, browser-initiated behind a flag from 142) lives in Chrome's browser layer, which Electron doesn't ship.<br>**The floating window** is Chromium's own video PiP window, the same one Chrome and Dia show. Its hover controls (back to tab, origin, close, play/pause, the site's Media Session seek/track buttons, progress bar) come with the engine. ✅ Electron builds video PiP unconditionally (flag removed in PR #38620; PiP fixes as recent as PR #54612).<br>⚠ **Unverified (spike S7):** exactly which controls Electron 45's PiP window shows, and whether *back to tab* reaches Chord through `WebContents` activation. Chord can't restyle that window; a custom player would need Document Picture-in-Picture, which Electron doesn't support (#39633).<br>**Skipped when:** the video is muted and never audible; it's smaller than 200×112; it has `disablePictureInPicture`; another PiP is already open; or the site is on the user's "don't pop out" list.<br>On Wayland the compositor places the PiP window. |
 | **Context menus** | Native `Menu.popup()` built from the `context-menu` params. This is platform-correct, accessible, and avoids overlay z-order problems. |
 | **Internal pages** | `chord://settings` and `chord://archive` are served by `protocol.handle` from inside the asar, with CSP `default-src 'self'; img-src 'self' chord-favicon:; style-src 'self'; script-src 'self'`. React sets styles through the CSSOM, so no `'unsafe-inline'` is needed. |
 | **Search engine** | **Google by default** (decided 2026-10-22); DuckDuckGo, Bing, Kagi, Ecosia and custom engines selectable in Settings and from the command bar. Search suggestions while typing send keystrokes to the engine; their default is open question Q2 in ROADMAP.md. |
@@ -484,13 +484,13 @@ The command bar is the overlay renderer, **always mounted and hidden**:
 
 | Source | Where it lives | Latency |
 |---|---|---|
-| Open tabs (all Spaces), pinned tabs, folders, Spaces | In-memory index in the overlay, updated from state patches | uFuzzy, about 0.15 ms per 5k items ⇒ painted the same frame |
-| Actions ("New Space", "Pin this tab", "Copy URL", "Archive Today", "Split with…") | Static registry in the overlay | same frame |
+| Open tabs (all chords), pinned tabs, folders, chords | In-memory index in the overlay, updated from state patches | uFuzzy, about 0.15 ms per 5k items ⇒ painted the same frame |
+| Actions ("New chord", "Pin this tab", "Copy URL", "Archive Today", "Split with…") | Static registry in the overlay | same frame |
 | History, archive, Duet threads | chord-data FTS5 prefix query, `LIMIT 20`, ranked by `bm25 × frecency`, over the overlay's direct `MessagePort` | target ≤ 5 ms p95; merges in without reflowing rows above it |
 | Inline URL autocompletion | Top host match from history (typed_count-weighted) | same frame |
 | Web search row | Always last ("Search for “…”"); first if nothing else matches strongly | same frame |
 
-Each query carries a sequence number; stale responses are dropped. The in-memory index is trimmed to what search needs (title, URL, Space, kind, favicon key).
+Each query carries a sequence number; stale responses are dropped. The in-memory index is trimmed to what search needs (title, URL, chord, kind, favicon key).
 
 ---
 
@@ -575,7 +575,7 @@ All flags were verified against the CLI reference on 2026-10-22.
 
 | Tier | Tools | Approval |
 |---|---|---|
-| 0 · Context | `tabs.list` (current Space; other Spaces only if the user allows), `tab.read` (attached or user-allowed tabs; markdown or text; ranged), `tab.screenshot`, `history.search`, `archive.search`, `page.highlight(tabId, quote)` (scrolls to the quote and marks it) | None, but scoped to what the user attached or allowed |
+| 0 · Context | `tabs.list` (current chord; other chords only if the user allows), `tab.read` (attached or user-allowed tabs; markdown or text; ranged), `tab.screenshot`, `history.search`, `archive.search`, `page.highlight(tabId, quote)` (scrolls to the quote and marks it) | None, but scoped to what the user attached or allowed |
 | 1 · Organize | `tab.open` (Peek or Today), `folder.create`, `node.move`, `tab.archive`, `space.create` | Approval card per call; "Allow for this thread" available |
 | 2 · Act on pages (later) | click, type, fill | Approval per action, always. Disabled on excluded sites. |
 | Developer mode | `devtools.console`, `devtools.network` (CDP via `webContents.debugger`, only for tabs the user attaches), `tab.reload`; plus the provider's normal file and shell tools in the chosen project folder | Provider's own permission flow, routed to Chord's approval UI |
@@ -596,7 +596,7 @@ Page content is **untrusted input** handed to an agent that may hold tools.
 - **Exclusions:**
   - Private windows and `duet_site_rule = 'never'` origins can never be read.
   - Pages with a focused password field are skipped.
-  - Each Space has a Duet off switch.
+  - Each chord has a Duet off switch.
   - The **global off** removes the panel, menus, and shortcut, and chord-agent is never spawned.
 - **Visibility:**
   - Context chips show exactly what will be sent with each message.
@@ -668,7 +668,7 @@ interface PlatformServices {
 | Default browser | `Info.plist` URL schemes + `app.setAsDefaultProtocolClient`. ⚠ Electron calls the deprecated `LSSetDefaultHandlerForURLScheme`; whether the system "Keep Safari / Use Chord" prompt appears is unverified (spike S3). Fallback: a small native helper calling `NSWorkspace setDefaultApplicationAtURL`. | Installer writes `Capabilities` + `URLAssociations` + `RegisteredApplications` (HKCU) and calls `SHChangeNotify`. In-app "Make default" opens `ms-settings:defaultapps?registeredAppUser=Chord`. Programmatic default is impossible (UCPD protects UserChoice) ✅. | `.desktop` declares `x-scheme-handler/http(s)` + `text/html`; Electron's API uses GIO (`g_app_info_set_as_default_for_type`) ✅. We also run `xdg-settings set default-web-browser` when available. Flatpak shows instructions (no portal found). |
 | Links from other apps | `open-url` (registered before `ready`) ✅ | `second-instance`, reading `additionalData` rather than argv (argv can be reordered) ✅ | same as Windows |
 | Window placement | free | free | **Wayland can't set positions or read the global cursor** ✅. The mini window uses compositor placement there, and Peek's origin comes from the last in-page mouse-down (`input-event`), which works everywhere. |
-| Space swipe phases | `webContents.on('input-event')` `gestureScrollBegin/Update/End` on the shell view gives real phases ✅ (the old `scroll-touch-*` events were removed in 23). ⚠ Phase quality on Windows precision touchpads and libinput is unverified; fallback is end-on-idle (DESIGN.md §6.4). | | |
+| Chord swipe phases | `webContents.on('input-event')` `gestureScrollBegin/Update/End` on the shell view gives real phases ✅ (the old `scroll-touch-*` events were removed in 23). ⚠ Phase quality on Windows precision touchpads and libinput is unverified; fallback is end-on-idle (DESIGN.md §6.4). | | |
 
 ---
 
@@ -809,7 +809,7 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 | Unit | Vitest | `@chord/core` reducer and policies (property tests for ordering and undo round-trips), `@chord/tokens` (contrast guarantees across random themes), `@chord/db` migrations and queries against real SQLite |
 | Component | Vitest + Testing Library | sidebar tree keyboard navigation, command bar ranking |
 | E2E | Playwright `_electron` 1.64 (experimental) | ✅ Verified in M1.0: `app.windows()` returns both the tab and the `chord://shell/` page inside `WebContentsView`s, and tests drive them directly. `browserWindow(page)` fails for `BaseWindow`, so we don't use it. Tests set `CHORD_HOME_URL` (dev builds only) so they never need the network. A **test-only** IPC for querying state arrives with the Store in M1.1. |
-| Visual | Playwright screenshots of shell and overlay | Uploaded as CI artifacts per OS × light/dark × 3 Space themes. Reviewed against DESIGN.md before any UI change is shown to you. |
+| Visual | Playwright screenshots of shell and overlay | Uploaded as CI artifacts per OS × light/dark × 3 chord themes. Reviewed against DESIGN.md before any UI change is shown to you. |
 | Performance | Startup, command bar, and frame-time probes | Run in CI for trends. **Enforced** on reference hardware locally, since CI runners are noisy. |
 
 **What gets verified where.** Windows is the primary platform, so features are built and checked there first.
