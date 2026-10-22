@@ -1,3 +1,5 @@
+<p align="center"><img src="apps/desktop/build/icon.png" width="128" height="128" alt=""></p>
+
 # Chord
 
 A calm, colorful, open-source browser built around a vertical sidebar. Tabs live in **chords**: sets of pinned and everyday tabs, each with its own color. A command bar reaches everything. No account, no telemetry, no lock-in.

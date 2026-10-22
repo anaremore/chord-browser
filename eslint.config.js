@@ -4,7 +4,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig([
-  { ignores: ['**/out/**', '**/dist/**', '**/release/**', '**/node_modules/**', '**/coverage/**', '**/test-results/**', '.claude/**'] },
+  { ignores: ['**/out/**', '**/dist/**', '**/release/**', '**/node_modules/**', '**/coverage/**', '**/test-results/**', '.claude/**', '.qa/**'] },
   js.configs.recommended,
   tseslint.configs.recommended,
   {
