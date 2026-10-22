@@ -179,6 +179,8 @@ export interface OverlayOpenEvent {
   anchor: Rect | null;
   /** The current tab's address, prefilled in edit mode. */
   url: string;
+  /** Which opening this is: a close for an earlier one is ignored (it can arrive after a newer open). */
+  seq: number;
 }
 
 export interface StateSnapshot {
@@ -199,7 +201,7 @@ export const invokeChannels = {
   'cmd:dispatch': { roles: ['shell', 'overlay'], request: RendererCommand, response: z.void() },
   'nav:command': { roles: ['shell', 'overlay'], request: z.object({ action: NavAction }), response: z.void() },
   'overlay:open': { roles: ['shell'], request: OverlayOpen, response: z.void() },
-  'overlay:close': { roles: ['overlay'], request: z.void(), response: z.void() },
+  'overlay:close': { roles: ['overlay'], request: z.object({ seq: z.number().int() }), response: z.void() },
   /** The shell reports where the URL pill / address field sits, for anchored ⌘L. */
   'layout:anchor': { roles: ['shell'], request: Rect.nullable(), response: z.void() },
   'download:action': {
@@ -341,7 +343,7 @@ export interface OverlayApi {
   state: StateApi;
   overlay: {
     onOpen(listener: (event: OverlayOpenEvent) => void): () => void;
-    close(): Promise<void>;
+    close(seq: number): Promise<void>;
   };
   action: { run(action: CoreActionId): Promise<void> };
   downloads: DownloadsApi;

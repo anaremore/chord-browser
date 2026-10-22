@@ -8,7 +8,7 @@ const api: OverlayApi = {
   state: stateApi,
   overlay: {
     onOpen: (listener) => subscribe('overlay:open', listener),
-    close: () => invoke('overlay:close'),
+    close: (seq) => invoke('overlay:close', { seq }),
   },
   action: { run: (action) => invoke('action:run', { action }) },
   downloads: downloadsApi,

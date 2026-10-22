@@ -76,7 +76,7 @@ function registerIpc(): void {
     if (chordId) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
   });
   handle('downloads:openFolder', () => downloads.openFolder());
-  handle('overlay:close', (_request, sender) => senderWindow(sender).closeOverlay());
+  handle('overlay:close', ({ seq }, sender) => senderWindow(sender).closeOverlay(seq));
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
   handle('menu:tab', ({ nodeId, x, y }, sender) => browser!.openTabMenu(sender, nodeId, { x, y }));

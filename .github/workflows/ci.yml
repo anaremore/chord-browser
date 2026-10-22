@@ -62,8 +62,14 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt-get -o DPkg::Lock::Timeout=300 update
-          sudo -E apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends xvfb weston
+          # Runner images ship Xvfb, so X11 jobs skip apt entirely (it has hung for 10+ minutes).
+          # Only the Wayland job installs Weston.
+          if ! command -v Xvfb >/dev/null; then NEED="xvfb"; fi
+          if [ "${{ matrix.display }}" = "wayland" ]; then NEED="$NEED weston"; fi
+          if [ -n "$NEED" ]; then
+            sudo -E apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+            sudo -E apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends $NEED
+          fi
           # Ubuntu 24.04 blocks the unprivileged user namespaces Chromium's
           # sandbox needs. Allow them on the test runner so E2E keeps the
           # sandbox on (packages ship an AppArmor profile instead).

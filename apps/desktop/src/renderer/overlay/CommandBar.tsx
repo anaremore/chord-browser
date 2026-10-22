@@ -46,6 +46,8 @@ interface Session {
   openedAt: number;
   /** What the field opened with (the address, for ⌘L): a pick is only learned once the person typed. */
   initial: string;
+  /** Main's number for this opening; closing names it. */
+  seq: number;
 }
 
 const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
@@ -107,7 +109,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   useEffect(
     () =>
       api.overlay.onOpen((event) => {
-        setSession({ mode: event.mode, anchor: event.anchor, openedAt: performance.now(), initial: event.mode === 'edit' ? event.url : '' });
+        setSession({ mode: event.mode, anchor: event.anchor, openedAt: performance.now(), initial: event.mode === 'edit' ? event.url : '', seq: event.seq });
         setQuery(event.mode === 'edit' ? event.url : '');
         setSelected(0);
       }),
@@ -145,8 +147,8 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   const current = Math.min(selected, Math.max(0, results.length - 1));
 
   const close = () => {
+    if (session) void api.overlay.close(session.seq);
     setSession(null);
-    void api.overlay.close();
   };
 
   const run = (result: Result, background: boolean) => {

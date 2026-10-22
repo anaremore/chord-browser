@@ -90,6 +90,7 @@ export class AppWindow {
   private focusPopoverWhenShown = false;
   private anchor: Rect | null = null;
   private overlayVisible = false;
+  private overlaySeq = 0;
   private origin: FrameOrigin;
   private frameAnimation: ReturnType<typeof setInterval> | undefined;
 
@@ -203,11 +204,12 @@ export class AppWindow {
     this.overlayVisible = true;
     this.overlay.setVisible(true);
     this.overlay.webContents.focus();
-    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url });
+    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq });
   }
 
-  closeOverlay(): void {
-    if (!this.overlayVisible) return;
+  /** `seq` is the opening being closed; a close for an earlier one (racing a newer open) is ignored. */
+  closeOverlay(seq = this.overlaySeq): void {
+    if (!this.overlayVisible || seq !== this.overlaySeq) return;
     this.overlayVisible = false;
     this.overlay.setVisible(false);
     (this.tabView?.webContents ?? this.shell.webContents).focus();
