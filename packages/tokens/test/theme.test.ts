@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DANGER,
   PRESETS,
+  contrast,
   createChordTheme,
+  oklchToRgb,
   presetStops,
   type Appearance,
   type Oklch,
@@ -33,7 +36,8 @@ describe('createChordTheme', () => {
         c: random() * 0.37,
         h: random() * 360,
       }));
-      const context = contexts[i % contexts.length]!;
+      // Any Contrast and Window tint setting keeps the guarantee.
+      const context = { ...contexts[i % contexts.length]!, contrast: random(), glass: random() };
       const appearance = (['light', 'dark', 'auto'] as const)[Math.floor(random() * 3)]!;
       const theme = createChordTheme({ stops, grain: random(), appearance }, context);
       expect(theme.minContrast.fg, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(4.5);
@@ -69,6 +73,15 @@ describe('createChordTheme', () => {
     const dark = createChordTheme({ stops: presetStops('fog'), grain: 1, appearance: 'dark' }, ctx);
     expect(light.vars['--grain-opacity']).toBe('0.200');
     expect(dark.vars['--grain-opacity']).toBe('0.280');
+  });
+
+  it('keeps the danger red readable on the lightest and darkest surfaces', () => {
+    for (let h = 0; h < 360; h += 15) {
+      const lightSurfaces = [{ l: 0.975, c: 0.006, h }, { l: 1, c: 0, h }];
+      const darkSurfaces = [{ l: 0.21, c: 0.006, h }, { l: 0.25, c: 0.008, h }];
+      for (const s of lightSurfaces) expect(contrast(oklchToRgb(DANGER.light), oklchToRgb(s))).toBeGreaterThanOrEqual(4.5);
+      for (const s of darkSurfaces) expect(contrast(oklchToRgb(DANGER.dark), oklchToRgb(s))).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it('rejects a theme without colors', () => {

@@ -1,4 +1,5 @@
 import type { Download } from './model';
+import { validTheme } from './restore';
 
 /** Sizes the way file managers show them: "980 KB", "12.3 MB", "1.2 GB". */
 export function formatBytes(bytes: number): string {
@@ -44,4 +45,28 @@ export function describeDownload(d: Download): string {
 export function firstGrapheme(text: string): string {
   const first = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text.trim())][0]?.segment ?? '';
   return /^\p{L}$/u.test(first) ? first.toLocaleUpperCase() : first;
+}
+
+/**
+ * A theme as text to share: plain JSON, readable in a chat message.
+ * `{"chordTheme":1,"name":"Dusk","stops":[{"l":0.72,"c":0.12,"h":300}],"grain":0.2}`
+ */
+export function themeCode(theme: { name: string; stops: readonly { l: number; c: number; h: number }[]; grain: number }): string {
+  const round = (n: number) => Math.round(n * 1000) / 1000;
+  return JSON.stringify({ chordTheme: 1, name: theme.name, stops: theme.stops.map((s) => ({ l: round(s.l), c: round(s.c), h: round(s.h) })), grain: round(theme.grain) });
+}
+
+/** The theme in a pasted code (surrounding text is ignored), or null if there isn't a valid one. */
+export function parseThemeCode(text: string): { name: string; stops: { l: number; c: number; h: number }[]; grain: number } | null {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const data = JSON.parse(text.slice(start, end + 1)) as { chordTheme?: unknown; name?: unknown; stops?: unknown; grain?: unknown };
+    if (data.chordTheme !== 1) return null;
+    const theme = validTheme({ id: 'imported', name: typeof data.name === 'string' ? data.name : 'Imported', stops: data.stops, grain: data.grain });
+    return theme ? { name: theme.name, stops: theme.stops, grain: theme.grain } : null;
+  } catch {
+    return null;
+  }
 }

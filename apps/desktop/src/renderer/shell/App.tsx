@@ -121,7 +121,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const windowId = mirror.windowId;
   const win = state.windows[windowId];
   const chord = win ? state.chords[win.activeChordId] : undefined;
-  const { style, appearance } = chordStyle(chord, info);
+  const { style, appearance } = chordStyle(chord, info, state.settings.interface);
   const activeId = activeTabId(state, windowId);
   const active = activeId ? (state.nodes[activeId] as TabNode | undefined) : undefined;
   const live = activeId ? state.live[activeId] : undefined;

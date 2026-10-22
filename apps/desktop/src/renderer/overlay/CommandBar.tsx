@@ -99,7 +99,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   const state = useMirror(mirror);
   const windowId = mirror.windowId;
   const win = state.windows[windowId];
-  const { style, appearance } = chordStyle(win ? state.chords[win.activeChordId] : undefined, info);
+  const { style, appearance } = chordStyle(win ? state.chords[win.activeChordId] : undefined, info, state.settings.interface);
   const spring = springsFor(state.settings, info.prefersReducedMotion);
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
 

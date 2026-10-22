@@ -9,18 +9,18 @@ import {
   SHORTCUTS,
   formatKeys,
   keysFor,
-  type ChordThemeSpec,
   type MotionSettings,
   type Shortcut,
 } from '@chord/core';
-import type { AboutInfo, ChordThemePatch, SettingsSnapshot, SystemInfo } from '@chord/ipc';
-import { PRESETS, SWATCHES, cssOklch, presetStops, type PresetId, type SwatchId } from '@chord/tokens';
-import { Check, Info, Keyboard, Palette, RotateCcw, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
+import type { AboutInfo, SettingsSnapshot, SystemInfo } from '@chord/ipc';
+import { Check, Info, Keyboard, Palette, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
+import { AppearanceSection } from './Appearance';
+import { ResetButton, Row, SectionHeader, Switch } from './controls';
 import styles from './Settings.module.css';
 
 const SECTIONS = [
@@ -40,66 +40,6 @@ const initialSection = (): SectionId => {
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const REPO_URL = 'https://github.com/anaremore/chord-browser';
-
-/* ---------- Controls ---------- */
-
-function ResetButton({ visible, onReset }: { visible: boolean; onReset(): void }) {
-  return (
-    <button
-      type="button"
-      className={styles.reset}
-      aria-label="Reset to default"
-      title="Reset to default"
-      data-visible={visible || undefined}
-      tabIndex={visible ? 0 : -1}
-      onClick={onReset}
-    >
-      <RotateCcw size={13} strokeWidth={2} />
-    </button>
-  );
-}
-
-function Switch({ checked, label, onChange }: { checked: boolean; label: string; onChange(value: boolean): void }) {
-  return (
-    <button type="button" role="switch" aria-checked={checked} aria-label={label} className={styles.switch} onClick={() => onChange(!checked)}>
-      <span className={styles.knob} />
-    </button>
-  );
-}
-
-function Segmented<T extends string>({ value, options, label, onChange }: { value: T; options: { value: T; label: string }[]; label: string; onChange(value: T): void }) {
-  return (
-    <div className={styles.segmented} role="radiogroup" aria-label={label}>
-      {options.map((o) => (
-        <button key={o.value} type="button" role="radio" aria-checked={o.value === value} className={styles.segment} onClick={() => onChange(o.value)}>
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Row({ label, description, control, changed, onReset }: { label: string; description?: string; control: ReactNode; changed?: boolean; onReset?(): void }) {
-  return (
-    <div className={styles.row}>
-      <div className={styles.rowText}>
-        <span className={styles.rowLabel}>{label}</span>
-        {description && <span className={styles.rowDescription}>{description}</span>}
-      </div>
-      {onReset && <ResetButton visible={Boolean(changed)} onReset={onReset} />}
-      {control}
-    </div>
-  );
-}
-
-function SectionHeader({ title, description }: { title: string; description: string }) {
-  return (
-    <header className={styles.sectionHeader}>
-      <h1 className={styles.sectionTitle}>{title}</h1>
-      <p className={styles.sectionDescription}>{description}</p>
-    </header>
-  );
-}
 
 /* ---------- Sections ---------- */
 
@@ -127,98 +67,6 @@ function General({ snapshot }: { snapshot: SettingsSnapshot }) {
             {e.id === engine && <Check className={styles.check} size={16} strokeWidth={2.25} aria-hidden />}
           </button>
         ))}
-      </div>
-    </>
-  );
-}
-
-const sameStops = (a: readonly { l: number; c: number; h: number }[], b: readonly { l: number; c: number; h: number }[]) =>
-  a.length === b.length && a.every((s, i) => s.l === b[i]!.l && s.c === b[i]!.c && s.h === b[i]!.h);
-
-const titleCase = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
-
-function Appearance({ snapshot }: { snapshot: SettingsSnapshot }) {
-  const chord = snapshot.chord;
-  if (!chord) return <SectionHeader title="Appearance" description="Open a window to edit its chord's colors." />;
-  const theme = chord.theme;
-  const setTheme = (patch: ChordThemePatch) => void api.settings.theme(chord.id, patch);
-  const gradient = (ids: readonly SwatchId[]) => `linear-gradient(160deg, ${ids.map((id) => cssOklch(SWATCHES[id])).join(', ')})`;
-  return (
-    <>
-      <SectionHeader
-        title="Appearance"
-        description={`Colors for the ${chord.name} chord. Every chord has its own, so you always know where you are.`}
-      />
-      <h2 className={styles.groupTitle}>Gradients</h2>
-      <div className={styles.presets}>
-        {(Object.keys(PRESETS) as PresetId[]).map((id) => {
-          const selected = sameStops(theme.stops, presetStops(id));
-          return (
-            <button key={id} type="button" className={styles.preset} aria-pressed={selected} onClick={() => setTheme({ stops: presetStops(id) })}>
-              <span className={styles.presetChip} style={{ backgroundImage: gradient(PRESETS[id]) }} />
-              <span className={styles.presetName}>{titleCase(id)}</span>
-            </button>
-          );
-        })}
-      </div>
-      <h2 className={styles.groupTitle}>Colors</h2>
-      <div className={styles.swatches}>
-        {(Object.keys(SWATCHES) as SwatchId[]).map((id) => {
-          const swatch = SWATCHES[id];
-          const selected = sameStops(theme.stops, [swatch]);
-          return (
-            <button
-              key={id}
-              type="button"
-              className={styles.swatch}
-              aria-pressed={selected}
-              aria-label={titleCase(id)}
-              title={titleCase(id)}
-              style={{ backgroundColor: cssOklch(swatch) }}
-              onClick={() => setTheme({ stops: [{ ...swatch }] })}
-            />
-          );
-        })}
-      </div>
-      <div className={styles.group}>
-        <Row
-          label="Light or dark"
-          description="System follows your computer's setting."
-          changed={theme.appearance !== 'auto'}
-          onReset={() => setTheme({ appearance: 'auto' })}
-          control={
-            <Segmented<ChordThemeSpec['appearance']>
-              label="Light or dark"
-              value={theme.appearance}
-              options={[
-                { value: 'auto', label: 'System' },
-                { value: 'light', label: 'Light' },
-                { value: 'dark', label: 'Dark' },
-              ]}
-              onChange={(appearance) => setTheme({ appearance })}
-            />
-          }
-        />
-        <Row
-          label="Grain"
-          description="A soft paper texture over the color."
-          changed={theme.grain !== 0.2}
-          onReset={() => setTheme({ grain: 0.2 })}
-          control={
-            <span className={styles.slider}>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={5}
-                aria-label="Grain"
-                value={Math.round(theme.grain * 100)}
-                onChange={(e) => setTheme({ grain: Number(e.target.value) / 100 })}
-              />
-              <output className={styles.sliderValue}>{Math.round(theme.grain * 100)}%</output>
-            </span>
-          }
-        />
       </div>
     </>
   );
@@ -364,7 +212,7 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
   useEffect(() => api.settings.onSection((s) => isSection(s) && setSection(s)), []);
   useEffect(() => applyMotion(snapshot.settings, info.prefersReducedMotion), [snapshot.settings, info.prefersReducedMotion]);
 
-  const { style } = chordStyle(snapshot.chord, info);
+  const { style } = chordStyle(snapshot.chord, info, snapshot.settings.interface);
   const spring = springsFor(snapshot.settings, info.prefersReducedMotion);
 
   return (
@@ -411,7 +259,7 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               transition={spring('snappy', 'commandBar')}
             >
               {section === 'general' && <General snapshot={snapshot} />}
-              {section === 'appearance' && <Appearance snapshot={snapshot} />}
+              {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
               {section === 'shortcuts' && <Shortcuts info={info} />}
               {section === 'about' && <About about={about} />}

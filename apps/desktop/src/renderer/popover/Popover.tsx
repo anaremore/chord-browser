@@ -130,7 +130,7 @@ export function Popover({ initialInfo, initialState }: { initialInfo: SystemInfo
     return () => observer.disconnect();
   }, [hasCards]);
 
-  const { style } = chordStyle(state.theme ? { theme: state.theme } : null, info);
+  const { style } = chordStyle(state.theme ? { theme: state.theme } : null, info, state.interface);
   return (
     <div ref={root} className={styles.root} style={style}>
       {state.find && <FindBar find={state.find} />}

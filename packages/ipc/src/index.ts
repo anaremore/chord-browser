@@ -9,6 +9,8 @@ import {
   type ActionId as CoreActionId,
   type Choice,
   type Chord,
+  type CustomTheme,
+  type InterfaceSettings,
   type Command,
   type DownloadAction,
   type SearchEngineId,
@@ -56,6 +58,15 @@ const ChordTheme = z.strictObject({
   stops: z.array(Oklch).min(1).max(3),
   grain: z.number().min(0).max(1),
   appearance: z.enum(['light', 'dark', 'auto']),
+  themeId: z.string().max(64).nullable().optional(),
+});
+
+/** A theme in the library (Settings → Appearance). */
+export const CustomThemeSchema = z.strictObject({
+  id: z.string().min(1).max(64),
+  name: z.string().max(40),
+  stops: z.array(Oklch).min(1).max(3),
+  grain: z.number().min(0).max(1),
 });
 /** An emoji, a symbol, or a letter: one or two grapheme clusters at most. */
 const chordIcon = z.string().min(1).max(16);
@@ -91,6 +102,8 @@ const engineIds = SEARCH_ENGINES.map((e) => e.id) as [SearchEngineId, ...SearchE
 
 export const SettingsPatch = z.strictObject({
   searchEngine: z.enum(engineIds).optional(),
+  colorScheme: z.enum(['system', 'light', 'dark']).optional(),
+  interface: z.strictObject({ contrast: z.number().min(0).max(1), glass: z.number().min(0).max(1) }).partial().optional(),
   motion: z
     .strictObject({
       followSystem: z.boolean(),
@@ -135,6 +148,7 @@ export interface FindState {
 /** Everything the popover shows: cards stack top-right over the page. */
 export interface PopoverState {
   theme: ChordThemeSpec | null;
+  interface: InterfaceSettings;
   find: FindState | null;
   permission: PermissionPrompt | null;
 }
@@ -239,6 +253,10 @@ export const invokeChannels = {
   'settings:set': { roles: ['internal'], request: SettingsPatch, response: z.void() },
   'settings:theme': { roles: ['internal'], request: z.strictObject({ chordId: id, theme: ChordThemePatch }), response: z.void() },
   'settings:about': { roles: ['internal'], request: z.void(), response: z.custom<AboutInfo>() },
+  'settings:saveTheme': { roles: ['internal'], request: z.strictObject({ theme: CustomThemeSchema }), response: z.void() },
+  'settings:deleteTheme': { roles: ['internal'], request: z.strictObject({ id: z.string().min(1).max(64) }), response: z.void() },
+  /** Put text on the clipboard (Chord's own pages have no clipboard permission of their own). */
+  'settings:copyText': { roles: ['internal'], request: z.strictObject({ text: z.string().max(10_000) }), response: z.void() },
   // The popover: find bar and permission prompts, over the page (ARCHITECTURE.md §5).
   'popover:state': { roles: ['popover'], request: z.void(), response: z.custom<PopoverState>() },
   /** The popover's content size, so main can fit the view to its cards (0 × 0 hides it). */
@@ -321,6 +339,9 @@ export interface SettingsApi {
     onSection(listener: (section: string) => void): () => void;
     set(patch: SettingsPatch): Promise<void>;
     theme(chordId: string, theme: ChordThemePatch): Promise<void>;
+    saveTheme(theme: CustomTheme): Promise<void>;
+    deleteTheme(id: string): Promise<void>;
+    copyText(text: string): Promise<void>;
     about(): Promise<AboutInfo>;
     openUrl(url: string): Promise<void>;
   };

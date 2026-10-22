@@ -18,7 +18,27 @@ export interface Oklch {
 export interface ChordThemeSpec {
   stops: Oklch[];
   grain: number;
+  /** `auto` follows Settings → Appearance → Color scheme. */
   appearance: 'light' | 'dark' | 'auto';
+  /** The library theme this came from (`preset:dusk`, or a custom theme's id), so editing it updates the chord. */
+  themeId?: string | null;
+}
+
+/** A theme the person made (or imported), in Settings → Appearance. */
+export interface CustomTheme {
+  id: string;
+  name: string;
+  stops: Oklch[];
+  grain: number;
+}
+
+export type ColorScheme = 'system' | 'light' | 'dark';
+
+/** Settings → Appearance → Interface, each 0–1 with 0.5 the default. */
+export interface InterfaceSettings {
+  contrast: number;
+  /** How much color covers the window material ("Window tint"). */
+  glass: number;
 }
 
 /** A set of tabs with its own color: what other browsers call a space. */
@@ -157,12 +177,27 @@ export interface MotionSettings {
 export interface Settings {
   searchEngine: SearchEngineId;
   motion: MotionSettings;
+  /** Light, dark, or the computer's setting; also what web pages see as their color scheme. */
+  colorScheme: ColorScheme;
+  interface: InterfaceSettings;
+  themes: CustomTheme[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   searchEngine: 'google',
   motion: { followSystem: true, commandBar: true, chordSlide: true, tabMoves: true, sidebar: true, colorBlend: true },
+  colorScheme: 'system',
+  interface: { contrast: 0.5, glass: 0.5 },
+  themes: [],
 };
+
+/** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
+export const defaultSettings = (): Settings => ({
+  ...DEFAULT_SETTINGS,
+  motion: { ...DEFAULT_SETTINGS.motion },
+  interface: { ...DEFAULT_SETTINGS.interface },
+  themes: [],
+});
 
 /**
  * Whether an animation runs: its switch is on, and the OS isn't asking for
@@ -176,6 +211,8 @@ export function motionEnabled(settings: Settings, gate: Exclude<keyof MotionSett
 export interface SettingsPatch {
   searchEngine?: SearchEngineId;
   motion?: Partial<MotionSettings>;
+  colorScheme?: ColorScheme;
+  interface?: Partial<InterfaceSettings>;
 }
 
 export interface State {
@@ -202,7 +239,7 @@ export interface DeletedChord {
 
 export const emptyState = (): State => ({
   version: 0,
-  settings: { ...DEFAULT_SETTINGS, motion: { ...DEFAULT_SETTINGS.motion } },
+  settings: defaultSettings(),
   sitePermissions: {},
   downloads: {},
   chords: {},

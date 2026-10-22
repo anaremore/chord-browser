@@ -65,3 +65,33 @@ describe('site permissions', () => {
     expect(state.sitePermissions).toEqual({ 'https://a.test': { camera: 'allow' } });
   });
 });
+
+describe('themes and appearance settings', () => {
+  const ctx: Context = { now: 1, newId: () => 'x' };
+  const seed = { now: 1, newId: () => 'n', theme: { stops: [{ l: 0.7, c: 0.1, h: 1 }], grain: 0.2, appearance: 'auto' as const }, homeUrl: 'h' };
+
+  it('saves custom themes, and chords made from one follow its edits', () => {
+    let state = restoreState(null, seed);
+    const chordId = Object.keys(state.chords)[0]!;
+    const theme = { id: 't1', name: 'Mine', stops: [{ l: 0.7, c: 0.12, h: 40 }], grain: 0.3 };
+    state = apply(state, { t: 'theme.save', theme }, ctx).state;
+    state = apply(state, { t: 'chord.theme', chordId, theme: { stops: theme.stops, grain: theme.grain, themeId: 't1' } }, ctx).state;
+    state = apply(state, { t: 'theme.save', theme: { ...theme, stops: [{ l: 0.7, c: 0.12, h: 200 }] } }, ctx).state;
+    expect(state.chords[chordId]!.theme.stops[0]!.h).toBe(200);
+    state = apply(state, { t: 'theme.delete', id: 't1' }, ctx).state;
+    expect(state.settings.themes).toEqual([]);
+    expect(state.chords[chordId]!.theme).toMatchObject({ themeId: null, stops: [{ h: 200 }] });
+  });
+
+  it('clamps interface settings and restores only valid themes', () => {
+    let state = restoreState(null, seed);
+    state = apply(state, { t: 'settings.set', settings: { colorScheme: 'dark', interface: { contrast: 2 } } }, ctx).state;
+    expect(state.settings).toMatchObject({ colorScheme: 'dark', interface: { contrast: 1, glass: 0.5 } });
+    const restored = restoreState(
+      { chords: [], nodes: [], windows: [], settings: { colorScheme: 'sepia', themes: [{ id: 'a', name: 'A', stops: [{ l: 0.5, c: 0.1, h: 10 }], grain: 0.2 }, { id: 'b', stops: [] }] } },
+      seed,
+    );
+    expect(restored.settings.colorScheme).toBe('system');
+    expect(restored.settings.themes.map((t) => t.id)).toEqual(['a']);
+  });
+});

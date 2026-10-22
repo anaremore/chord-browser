@@ -529,6 +529,23 @@ Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
   - Each handle is a focusable 2D control. Arrow keys change hue; Shift+arrows change chroma.
   - `aria-valuetext` names the nearest swatch, e.g. "Close to Coral, vivid".
 
+**Settings → Appearance** is the theme library. It has three parts:
+
+- **Color scheme:** System, Light or Dark.
+  - Each choice is a miniature Chord window drawn by the real generator.
+  - System is split on the diagonal.
+  - This sets the app's appearance, and web pages' `prefers-color-scheme` follows it. A chord can still keep itself light or dark.
+- **Themes:** the presets, then your own, as cards.
+  - Each card shows two orbs, the theme as light and as dark mode draw it.
+  - Clicking a card applies it to the current chord, and the chord remembers which theme it came from. Editing a theme updates every chord that uses it. Deleting a theme leaves those chords' colors as they are.
+  - If a chord's colors match no theme, a **Current colors** card leads, with *Save as a theme*.
+  - Hover actions: copy the theme code (portable JSON), and Duplicate (presets) or Edit (your own).
+  - *Create theme* and *Import* (paste a code) open an inline panel, never a dialog.
+  - Delete lives in the editor and asks a second time in place.
+- **Interface:** two sliders, both defaulting to 50%. Neither can push text below 4.5:1.
+  - **Contrast:** how strongly dividers, hovers and secondary text stand out.
+  - **Window tint:** how much color covers the OS material.
+
 ### 7.8 `DuetPanel`
 
 - **Frame:** a `surface` frame (`radius-frame`, `shadow-frame`).

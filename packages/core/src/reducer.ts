@@ -12,6 +12,7 @@ import {
   type ChordId,
   type ChordThemeSpec,
   type ClosedTab,
+  type CustomTheme,
   type Download,
   type LiveTab,
   type NodeId,
@@ -66,6 +67,10 @@ export type Command =
   | { t: 'download.remove'; id: string }
   /** Take every finished download off the list. */
   | { t: 'download.clear' }
+  /** Add or change a custom theme; chords made from it follow. */
+  | { t: 'theme.save'; theme: CustomTheme }
+  /** Remove a custom theme; chords using it keep their colors. */
+  | { t: 'theme.delete'; id: string }
   /** Remember (or, with null, forget) a site's answer to a permission prompt. */
   | { t: 'permission.set'; origin: string; permissions: SitePermission[]; decision: PermissionDecision | null };
 
@@ -93,6 +98,9 @@ export interface Result {
 const MAX_CLOSED = 50;
 /** Deleted chords kept for Undo this session. */
 const MAX_DELETED_CHORDS = 5;
+/** The most custom themes kept. */
+const MAX_THEMES = 100;
+const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 /** Finished downloads kept in the list; older ones drop off. */
 const MAX_DOWNLOADS = 100;
 /** Longest chord name; the switcher and headers truncate well before this. */
@@ -347,11 +355,38 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'settings.set': {
-      const { searchEngine, motion } = cmd.settings;
+      const { searchEngine, motion, colorScheme } = cmd.settings;
       if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
+      if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
       for (const [key, value] of Object.entries(motion ?? {}) as [keyof typeof draft.settings.motion, boolean | undefined][]) {
         if (value !== undefined && draft.settings.motion[key] !== value) draft.settings.motion[key] = value;
       }
+      for (const [key, value] of Object.entries(cmd.settings.interface ?? {}) as [keyof typeof draft.settings.interface, number | undefined][]) {
+        if (value !== undefined && draft.settings.interface[key] !== clamp01(value)) draft.settings.interface[key] = clamp01(value);
+      }
+      return;
+    }
+
+    case 'theme.save': {
+      const theme: CustomTheme = { ...cmd.theme, name: cmd.theme.name.trim().slice(0, 40) || 'Untitled', grain: clamp01(cmd.theme.grain) };
+      const index = draft.settings.themes.findIndex((t) => t.id === theme.id);
+      if (index >= 0) draft.settings.themes[index] = theme;
+      else if (draft.settings.themes.length < MAX_THEMES) draft.settings.themes.push(theme);
+      else return;
+      // Chords made from this theme follow its edits.
+      for (const chord of Object.values(draft.chords)) {
+        if (chord.theme.themeId !== theme.id) continue;
+        chord.theme.stops = theme.stops;
+        chord.theme.grain = theme.grain;
+      }
+      return;
+    }
+
+    case 'theme.delete': {
+      const index = draft.settings.themes.findIndex((t) => t.id === cmd.id);
+      if (index < 0) return;
+      draft.settings.themes.splice(index, 1);
+      for (const chord of Object.values(draft.chords)) if (chord.theme.themeId === cmd.id) chord.theme.themeId = null;
       return;
     }
 
@@ -467,10 +502,11 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'chord.theme': {
       const theme = draft.chords[cmd.chordId]?.theme;
       if (!theme) return;
-      const { stops, grain, appearance } = cmd.theme;
+      const { stops, grain, appearance, themeId } = cmd.theme;
       if (stops) theme.stops = stops;
-      if (grain !== undefined && theme.grain !== grain) theme.grain = Math.min(1, Math.max(0, grain));
+      if (grain !== undefined && theme.grain !== grain) theme.grain = clamp01(grain);
       if (appearance && theme.appearance !== appearance) theme.appearance = appearance;
+      if (themeId !== undefined && theme.themeId !== themeId) theme.themeId = themeId;
       return;
     }
   }

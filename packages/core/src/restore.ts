@@ -6,9 +6,11 @@
  * always at least one chord and one window.
  */
 import {
-  DEFAULT_SETTINGS,
+  defaultSettings,
   emptyState,
   type Chord,
+  type CustomTheme,
+  type Oklch,
   type Download,
   type MotionSettings,
   type Settings,
@@ -57,8 +59,31 @@ function restorePermissions(saved: SitePermissions | undefined): SitePermissions
   return out;
 }
 
+const isUnit = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+const isOklch = (v: unknown): v is Oklch => {
+  if (!v || typeof v !== 'object') return false;
+  const o = v as Oklch;
+  return isUnit(o.l) && typeof o.c === 'number' && o.c >= 0 && o.c <= 0.4 && typeof o.h === 'number' && o.h >= 0 && o.h <= 360;
+};
+
+/** Saved custom themes that still make sense (1–3 valid colors, a name, an id). */
+export function validTheme(v: unknown): CustomTheme | null {
+  const t = v as Partial<CustomTheme> | null;
+  if (!t || typeof t.id !== 'string' || !t.id || typeof t.name !== 'string' || !Array.isArray(t.stops)) return null;
+  if (t.stops.length < 1 || t.stops.length > 3 || !t.stops.every(isOklch) || !isUnit(t.grain)) return null;
+  return { id: t.id, name: t.name.slice(0, 40), stops: t.stops.map((s) => ({ l: s.l, c: s.c, h: s.h })), grain: t.grain };
+}
+
 function restoreSettings(saved: Record<string, unknown>): Settings {
-  const settings: Settings = { ...DEFAULT_SETTINGS, motion: { ...DEFAULT_SETTINGS.motion } };
+  const settings = defaultSettings();
+  const scheme = saved['colorScheme'];
+  if (scheme === 'system' || scheme === 'light' || scheme === 'dark') settings.colorScheme = scheme;
+  const ui = saved['interface'] as Record<string, unknown> | undefined;
+  if (ui && typeof ui === 'object') {
+    if (isUnit(ui['contrast'])) settings.interface.contrast = ui['contrast'];
+    if (isUnit(ui['glass'])) settings.interface.glass = ui['glass'];
+  }
+  if (Array.isArray(saved['themes'])) settings.themes = saved['themes'].map(validTheme).filter((t): t is CustomTheme => t !== null);
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
   const motion = saved['motion'];

@@ -259,12 +259,53 @@ test('Settings opens from the shell and its changes apply live', async () => {
     await expect(sidebarSwitch).toHaveAttribute('aria-checked', 'false');
     await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['motionOff'])).toContain('sidebar');
 
-    // Appearance: picking a gradient re-themes the browser window behind.
-    const tint = () => shell.evaluate(() => getComputedStyle(document.querySelector('[data-sidebar]')!).getPropertyValue('--color-tint'));
+    // Appearance: picking a theme re-themes the browser window behind.
+    const shellVar = (name: string) => shell.evaluate((n) => getComputedStyle(document.querySelector('[data-sidebar]')!).getPropertyValue(n), name);
+    const tint = () => shellVar('--color-tint');
     const before = await tint();
     await settings.getByRole('button', { name: 'Appearance' }).click();
-    await settings.getByRole('button', { name: /Sea Glass/ }).click();
+    const seaGlass = settings.getByRole('button', { name: 'Sea Glass', exact: true });
+    await seaGlass.click();
+    await expect(seaGlass).toHaveAttribute('aria-pressed', 'true');
     await expect.poll(tint).not.toBe(before);
+
+    // Color scheme: Dark turns the whole browser dark.
+    const schemes = settings.getByRole('radiogroup', { name: 'Color scheme' });
+    await schemes.getByRole('radio', { name: 'Dark' }).click();
+    await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe('dark');
+    await schemes.getByRole('radio', { name: 'Light' }).click();
+    await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe('light');
+
+    // A theme of your own: made here, it goes straight onto the chord.
+    await settings.getByRole('button', { name: 'Create theme' }).click();
+    await settings.getByRole('textbox', { name: 'Theme name' }).fill('Late Night');
+    await settings.getByRole('radio', { name: 'Orchid' }).click();
+    await settings.getByRole('region', { name: 'New theme' }).getByRole('button', { name: 'Create theme' }).click();
+    const lateNight = settings.getByRole('button', { name: 'Late Night', exact: true });
+    await expect(lateNight).toHaveAttribute('aria-pressed', 'true');
+    await expect(seaGlass).toHaveAttribute('aria-pressed', 'false');
+
+    // Importing a theme code adds it to the library and applies it.
+    await settings.getByRole('button', { name: 'Import' }).click();
+    const code = settings.getByRole('textbox', { name: 'Theme code' });
+    await code.fill('not a theme');
+    await expect(settings.getByText('That isn’t a theme code.')).toBeVisible();
+    await code.fill(JSON.stringify({ chordTheme: 1, name: 'Pasted', stops: [{ l: 0.72, c: 0.12, h: 150 }, { l: 0.72, c: 0.12, h: 220 }], grain: 0.3 }));
+    await settings.getByRole('button', { name: 'Add theme' }).click();
+    await expect(settings.getByRole('button', { name: 'Pasted', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+    // Deleting asks twice, in place; the chord keeps its colors.
+    const tintBeforeDelete = await tint();
+    await settings.getByRole('button', { name: 'Edit Pasted' }).click();
+    await settings.getByRole('button', { name: 'Delete', exact: true }).click();
+    await settings.getByRole('button', { name: 'Delete for good?' }).click();
+    await expect(settings.getByRole('button', { name: 'Pasted', exact: true })).toHaveCount(0);
+    expect(await tint()).toBe(tintBeforeDelete);
+
+    // Interface → Contrast: dividers in the window behind get stronger.
+    const divider = await shellVar('--color-divider');
+    await settings.getByRole('slider', { name: 'Contrast' }).fill('100');
+    await expect.poll(() => shellVar('--color-divider')).not.toBe(divider);
   } finally {
     await app.close();
   }
@@ -287,6 +328,14 @@ test('a relaunch restores tabs, the sidebar and settings', async () => {
     const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
     await settings.getByRole('radio', { name: /Kagi/ }).click();
     await expect(settings.getByRole('radio', { name: /Kagi/ })).toHaveAttribute('aria-checked', 'true');
+    // A theme of your own, on this chord, and a dark color scheme.
+    await settings.getByRole('button', { name: 'Appearance' }).click();
+    await settings.getByRole('button', { name: 'Import' }).click();
+    await settings.getByRole('textbox', { name: 'Theme code' }).fill(JSON.stringify({ chordTheme: 1, name: 'Kept', stops: [{ l: 0.72, c: 0.12, h: 40 }], grain: 0.1 }));
+    await settings.getByRole('button', { name: 'Add theme' }).click();
+    await expect(settings.getByRole('button', { name: 'Kept', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await settings.getByRole('radiogroup', { name: 'Color scheme' }).getByRole('radio', { name: 'Dark' }).click();
+    await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe('dark');
   } finally {
     await app.close();
   }
@@ -307,6 +356,12 @@ test('a relaunch restores tabs, the sidebar and settings', async () => {
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type('chord browser');
     await expect(overlay.getByRole('option').first()).toContainText('Search Kagi');
+    await overlay.keyboard.press('Escape');
+    await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe('dark');
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
+    await settings.getByRole('button', { name: 'Appearance' }).click();
+    await expect(settings.getByRole('button', { name: 'Kept', exact: true })).toHaveAttribute('aria-pressed', 'true');
   } finally {
     await app.close();
   }

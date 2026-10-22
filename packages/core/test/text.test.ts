@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeDownload, firstGrapheme, formatBytes, type Download } from '../src';
+import { describeDownload, firstGrapheme, formatBytes, parseThemeCode, themeCode, type Download } from '../src';
 
 describe('firstGrapheme', () => {
   it('keeps whole emoji, including skin tones, families and flags', () => {
@@ -49,5 +49,18 @@ describe('download text', () => {
     expect(describeDownload(d({ state: 'completed', total: 2_100_000 }))).toBe('Done · 2.1 MB');
     expect(describeDownload(d({ state: 'interrupted' }))).toBe('Failed');
     expect(describeDownload(d({ state: 'paused', received: 1_000_000, total: 4_000_000 }))).toBe('Paused · 1.0 MB of 4.0 MB');
+  });
+});
+
+describe('theme codes', () => {
+  it('round-trips a theme through shareable JSON, ignoring text around it', () => {
+    const theme = { name: 'Dusk', stops: [{ l: 0.72, c: 0.12, h: 300 }, { l: 0.72, c: 0.14, h: 30 }], grain: 0.2 };
+    expect(parseThemeCode(`Try my theme: ${themeCode(theme)} !`)).toEqual(theme);
+  });
+
+  it('refuses anything that is not a valid theme', () => {
+    expect(parseThemeCode('{"chordTheme":1,"name":"x","stops":[],"grain":0.2}')).toBeNull();
+    expect(parseThemeCode('{"name":"x","stops":[{"l":0.5,"c":0.1,"h":10}],"grain":0.2}')).toBeNull();
+    expect(parseThemeCode('not json')).toBeNull();
   });
 });

@@ -234,6 +234,7 @@ export class Browser {
     const find = this.finders.get(w.id);
     return {
       theme: model ? (state.chords[model.activeChordId]?.theme ?? null) : null,
+      interface: state.settings.interface,
       find: find && find.target === w.activeTabContents ? find.state : null,
       permission: this.options.permissions.promptFor(activeTabId(state, w.id)),
     };

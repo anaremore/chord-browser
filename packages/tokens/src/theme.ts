@@ -42,6 +42,10 @@ export const PRESETS = {
   aurora: ['mint', 'periwinkle', 'orchid'],
   ember: ['rose', 'tangerine'],
   fog: ['graphite', 'periwinkle'],
+  lagoon: ['lagoon', 'periwinkle'],
+  meadow: ['moss', 'honey'],
+  bloom: ['rose', 'lilac'],
+  harbor: ['graphite', 'lagoon'],
 } as const satisfies Record<string, readonly SwatchId[]>;
 
 export type PresetId = keyof typeof PRESETS;
@@ -59,6 +63,20 @@ export interface ThemeContext {
   systemAppearance: Appearance;
   /** `translucent` when an OS material (vibrancy, Mica) shows through the tint. */
   material: 'translucent' | 'solid';
+  /**
+   * Settings → Appearance → Contrast, 0–1 (0.5 is the default): how strongly
+   * dividers, hover states and secondary text stand apart. Text never drops
+   * below 4.5:1 either way.
+   */
+  contrast?: number;
+  /** Settings → Appearance → Window tint, 0–1 (0.5 is the default): how much color covers the window material. */
+  glass?: number;
+}
+
+/** 0–1 around a 0.5 midpoint: below it moves from `low` to `mid`, above it from `mid` to `high`. */
+function around(t: number, low: number, mid: number, high: number): number {
+  const x = Math.min(1, Math.max(0, t));
+  return x <= 0.5 ? low + (mid - low) * (x / 0.5) : mid + (high - mid) * ((x - 0.5) / 0.5);
 }
 
 export interface ChordTheme {
@@ -71,6 +89,12 @@ export interface ChordTheme {
   /** CSS custom properties to set on the element that hosts the chord. */
   vars: Record<`--${string}`, string>;
 }
+
+/** Errors and destructive actions: one red per appearance, at ≥ 4.5:1 on every surface. */
+export const DANGER: Record<Appearance, Oklch> = {
+  light: { l: 0.53, c: 0.19, h: 25 },
+  dark: { l: 0.74, c: 0.15, h: 25 },
+};
 
 export function presetStops(id: PresetId): Oklch[] {
   return PRESETS[id].map((swatch) => ({ ...SWATCHES[swatch] }));
@@ -153,14 +177,20 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
   if (userStops.length === 0) throw new Error('A chord theme needs at least one color.');
 
   const hue = circularMeanHue(userStops.map((s) => s.h));
+  const strength = context.contrast ?? 0.5;
   const fg: Oklch = light ? { l: 0.24, c: 0.02, h: hue } : { l: 0.96, c: 0.01, h: hue };
-  const fgMuted: Oklch = light ? { l: 0.42, c: 0.02, h: hue } : { l: 0.78, c: 0.015, h: hue };
-  const fgSubtle: Oklch = light ? { l: 0.56, c: 0.015, h: hue } : { l: 0.64, c: 0.012, h: hue };
+  // More contrast pulls secondary text toward the main text color; less lets it recede.
+  const fgMuted: Oklch = light
+    ? { l: around(strength, 0.45, 0.42, 0.34), c: 0.02, h: hue }
+    : { l: around(strength, 0.75, 0.78, 0.86), c: 0.015, h: hue };
+  const fgSubtle: Oklch = light
+    ? { l: around(strength, 0.6, 0.56, 0.48), c: 0.015, h: hue }
+    : { l: around(strength, 0.6, 0.64, 0.72), c: 0.012, h: hue };
   const base: Oklch = light ? { l: 0.975, c: 0.006, h: hue } : { l: 0.22, c: 0.006, h: hue };
   const surface: Oklch = light ? { l: 0.995, c: 0.003, h: hue } : { l: 0.21, c: 0.006, h: hue };
   const surfaceRaised: Oklch = light ? { l: 1, c: 0, h: hue } : { l: 0.25, c: 0.008, h: hue };
 
-  const tintAlpha = light ? 0.72 : 0.8;
+  const tintAlpha = around(context.glass ?? 0.5, light ? 0.45 : 0.55, light ? 0.72 : 0.8, 0.96);
   const backdrop = oklchToRgb(context.material === 'translucent' ? WORST_MATERIAL[appearance] : base);
   const fgRgb = oklchToRgb(fg);
   const mutedRgb = oklchToRgb(fgMuted);
@@ -211,11 +241,12 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
       '--color-fg': cssOklch(fg),
       '--color-fg-muted': cssOklch(fgMuted),
       '--color-fg-subtle': cssOklch(fgSubtle),
-      '--color-item-hover': cssOklch(fg, light ? 0.06 : 0.07),
-      '--color-item-active-bg': light ? 'oklch(1 0 0 / 0.78)' : 'oklch(1 0 0 / 0.1)',
-      '--color-divider': cssOklch(fg, 0.1),
+      '--color-item-hover': cssOklch(fg, around(strength, light ? 0.04 : 0.05, light ? 0.06 : 0.07, light ? 0.1 : 0.12)),
+      '--color-item-active-bg': light ? 'oklch(1 0 0 / 0.78)' : `oklch(1 0 0 / ${around(strength, 0.08, 0.1, 0.15).toFixed(3)})`,
+      '--color-divider': cssOklch(fg, around(strength, 0.06, 0.1, 0.18)),
       '--color-accent': cssOklch(accent),
       '--color-accent-fg': accentFg,
+      '--color-danger': cssOklch(DANGER[appearance]),
       /** Selected rows in lists like the command bar. */
       '--color-selection': cssOklch(accent, light ? 0.14 : 0.22),
       '--color-surface': cssOklch(surface),

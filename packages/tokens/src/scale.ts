@@ -60,8 +60,12 @@ export const size = {
   switchHeight: 20,
   switchKnob: 16,
   swatch: 24,
-  presetWidth: 64,
-  presetHeight: 36,
+  /** Settings → Appearance: a theme's light and dark orbs, the narrowest theme card, and the color-scheme previews. */
+  orb: 40,
+  themeCard: 144,
+  schemePreview: 104,
+  /** Settings → Appearance → the theme editor's sliders. */
+  sliderWidth: 200,
   hairline: 1,
   focusRing: 2,
 } as const;

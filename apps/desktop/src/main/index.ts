@@ -2,7 +2,7 @@ import { restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { join } from 'node:path';
-import { app, Menu, nativeTheme, session, type Session, type WebContents } from 'electron';
+import { app, clipboard, Menu, nativeTheme, session, type Session, type WebContents } from 'electron';
 import { Browser } from './browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
@@ -96,6 +96,9 @@ function registerIpc(): void {
     arch: process.arch,
   }));
   handle('settings:openUrl', ({ url }) => browser!.openUrlInLastWindow(url));
+  handle('settings:saveTheme', ({ theme }) => browser!.store.dispatch({ t: 'theme.save', theme }));
+  handle('settings:deleteTheme', ({ id }) => browser!.store.dispatch({ t: 'theme.delete', id }));
+  handle('settings:copyText', ({ text }) => clipboard.writeText(text));
   handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
   handle('popover:size', ({ width, height }, sender) => senderWindow(sender).setPopoverSize(width, height));
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
@@ -127,7 +130,8 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(async () => {
     // Development only: force an appearance for design QA captures.
     const forced = process.env['CHORD_APPEARANCE'];
-    if (!app.isPackaged && (forced === 'light' || forced === 'dark')) nativeTheme.themeSource = forced;
+    const forcedAppearance = forced === 'light' || forced === 'dark' ? forced : null;
+    if (!app.isPackaged && forcedAppearance) nativeTheme.themeSource = forcedAppearance;
 
     // Standard Chromium user agent (decision S2). Development builds can set
     // CHORD_UA=electron to compare against Electron's default.
@@ -175,6 +179,15 @@ if (!app.requestSingleInstanceLock()) {
       onChange: (change) => store.record(change.patches, change.state),
     });
     Menu.setApplicationMenu(browser.appMenu);
+    // Settings → Appearance → Color scheme is Chromium's own theme source, so web pages'
+    // prefers-color-scheme follows it, as in Chrome. Development's CHORD_APPEARANCE wins.
+    const followScheme = () => {
+      if (app.isPackaged || !forcedAppearance) nativeTheme.themeSource = browser!.store.state.settings.colorScheme;
+    };
+    followScheme();
+    browser.store.subscribe((change) => {
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
+    });
     registerIpc();
     browser.start();
   });
