@@ -31,6 +31,7 @@ jobs:
   e2e:
     name: E2E · ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -54,9 +55,14 @@ jobs:
 
       - name: Linux display servers
         if: runner.os == 'Linux'
+        # A fresh runner can still be running unattended-upgrades; wait for
+        # the dpkg lock rather than hang, and never prompt.
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb weston
+          sudo -E apt-get -o DPkg::Lock::Timeout=300 update
+          sudo -E apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends xvfb weston
           # Ubuntu 24.04 blocks the unprivileged user namespaces Chromium's
           # sandbox needs. Allow them on the test runner so E2E keeps the
           # sandbox on (packages ship an AppArmor profile instead).
