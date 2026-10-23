@@ -28,7 +28,7 @@ import { WebStore } from './extensions/webstore';
 import { observeContextMenusForTests } from './context-menu';
 import { PermissionBroker } from './permissions';
 import { ScreenShareBroker } from './screen-share';
-import { applySpellcheck } from './spellcheck';
+import { applySpellcheck, setDictionarySource } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo } from './platform';
@@ -277,6 +277,8 @@ if (!app.requestSingleInstanceLock()) {
       app.userAgentFallback = chromiumUserAgent(app.userAgentFallback, app.getName());
     }
 
+    // No dictionary downloads until the saved settings say whether Google-free mode is on.
+    setDictionarySource(true);
     const ui = session.fromPartition('chord-ui');
     configureUiSession(ui);
     handleChordProtocol(ui);
@@ -328,6 +330,7 @@ if (!app.requestSingleInstanceLock()) {
       platform,
     });
     if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
+    setDictionarySource(initial.settings.googleFree);
     // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
     await removeUnusedPartitions(app.getPath('userData'), new Set(Object.values(initial.chords).map((c) => c.profileId)));
 
@@ -371,11 +374,14 @@ if (!app.requestSingleInstanceLock()) {
     followScheme();
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
-      // Spelling settings (and where dictionaries come from) apply to every profile's session at once.
+      // Spelling settings (and where dictionaries come from) apply to every profile's session at once,
+      // and to Chord's own: its text fields are checked too, so in Google-free mode they mustn't download.
       if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'spellcheck' || p.path[1] === 'googleFree'))) {
-        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck, change.state.settings.googleFree);
+        for (const ses of [ui, ...profiles.values()]) applySpellcheck(ses, change.state.settings.spellcheck, change.state.settings.googleFree);
       }
     });
+    // Before any of Chord's own pages loads (a text field there is what starts a dictionary download).
+    applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
     duet = new DuetService(browser, persistence, app.getPath('userData'));
     browser.duet = duet;
     registerIpc();

@@ -6,7 +6,7 @@
  * and replaced, primed with a summary, when it doesn't.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   children,
@@ -897,7 +897,10 @@ export class DuetService {
     const id = thread.providerSessionId;
     if (!id || !/^[A-Za-z0-9-]{8,80}$/.test(id)) return;
     if (thread.provider === 'claude') {
-      const folder = join(claudeConfigDir(), 'projects', claudeProjectFolder(join(this.root, 'empty')));
+      // Claude names the folder after its working directory as the OS reports it: with symlinks
+      // resolved (on macOS the temp and other folders sit under /private).
+      const cwd = join(this.root, 'empty');
+      const folder = join(claudeConfigDir(), 'projects', claudeProjectFolder(await realpath(cwd).catch(() => cwd)));
       await rm(join(folder, `${id}.jsonl`), { force: true }).catch(() => undefined);
       await rm(join(folder, id), { recursive: true, force: true }).catch(() => undefined);
       return;
