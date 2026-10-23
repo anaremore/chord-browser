@@ -38,7 +38,7 @@ It needs Docker. On Windows that's Docker Engine in a WSL 2 distro, with your us
 - **Where things go:** on Docker's own disk (on Windows, WSL's), never in Windows' temp folder. The copy of your tree, its `node_modules`, the build, and the test profiles in the run's temp folder (`test/run-temp.ts`) all live in the run's container. The caches are Docker volumes. Only the results come back to your tree.
 - **Cleaning up:** a run removes its own container, even when stopped with Ctrl+C, and removes any container a killed run left behind that has been stopped for 10 minutes. To free the space: `docker volume rm chord-e2e-pnpm-store chord-e2e-electron-cache`, and `docker image rm` the tags `docker image ls chord-e2e-runner` lists.
 - **The sandbox stays on.** Chromium's sandbox needs unprivileged user namespaces, so the container runs as an ordinary user with no capabilities, with Docker's seccomp profile (which blocks namespaces) turned off. `scripts/e2e-linux/run.mjs` says why that's the choice.
-- **No core dumps.** WSL 2 copies every Linux crash dump, a container's included, to `%TEMP%\wsl-crashes` on Windows, and a renderer's can be gigabytes, so the container turns them off.
+- **No core dumps.** WSL 2 copies every Linux crash dump, a container's included, to `%TEMP%\wsl-crashes` on Windows, and a renderer's can be gigabytes, so the container turns them off. CI's Linux jobs turn them off too: the tests crash pages on purpose, and writing a renderer's core hung the test that did it.
 
 What the container can't tell you is how Chord behaves on Windows or macOS. It runs what CI's Linux jobs run and skips what they skip:
 
@@ -46,7 +46,6 @@ What the container can't tell you is how Chord behaves on Windows or macOS. It r
 | --- | --- | --- | --- |
 | `updates.spec.ts`, both tests | skipped | skipped | Windows only: the dev build downloads through the installer path |
 | `duet.spec.ts` › Claude Code inside WSL is offered in Setup | skipped | skipped | Windows only, and only with `CHORD_E2E_WSL=1` (it needs WSL with Node in the default distro) |
-| `launch.spec.ts` › a page that keeps crashing stops after two reloads | skipped | skipped | Forced renderer crashes hang on Linux. The crash page in `a11y.spec.ts`'s browser-window audit is left out on Linux for the same reason |
 | `launch.spec.ts` › page-first keys reach Chord only when the page passes; a changed page-first shortcut reaches Chord through the rebuilt menu | runs | skipped | Menu accelerators need an active window, and headless Weston has none (also skipped on macOS) |
 | `web.spec.ts` › screen sharing goes through Chord's picker | runs | skipped | Headless Weston has no screen to capture (also skipped on macOS) |
 | `keyboard.spec.ts` | runs | partly | Which view has OS focus isn't checked: Weston never activates a window |

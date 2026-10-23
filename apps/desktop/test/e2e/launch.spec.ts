@@ -1279,9 +1279,6 @@ test('a page that fails to load explains why, and recovers', async () => {
 });
 
 test('a page that keeps crashing stops after two reloads, and Reload brings it back', async () => {
-  // ⚠ Times out on every Linux runner (X11 and Wayland, x64 and arm64) and hangs app.close();
-  // the cause isn't known yet. Crash handling itself is covered on Windows and macOS.
-  test.skip(process.platform === 'linux', 'forced renderer crashes hang on Linux CI; under investigation');
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);

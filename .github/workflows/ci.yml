@@ -95,6 +95,10 @@ jobs:
       - name: E2E (X11, Xvfb with openbox)
         if: matrix.display == 'x11'
         run: |
+          # No core dumps: the tests crash pages on purpose, and writing a renderer's core (apport, on
+          # Ubuntu runners) takes long enough to hang the test that does it.
+          echo "core_pattern: $(cat /proc/sys/kernel/core_pattern)"
+          ulimit -c 0
           xvfb-run -a sh -c '
             ready="$(mktemp -u)"
             openbox --startup "touch $ready" &
@@ -112,6 +116,8 @@ jobs:
           for i in $(seq 1 50); do [ -S "$XDG_RUNTIME_DIR/wayland-chord" ] && break; sleep 0.1; done
           unset DISPLAY
           export WAYLAND_DISPLAY=wayland-chord XDG_SESSION_TYPE=wayland
+          # No core dumps (see the X11 step).
+          ulimit -c 0
           pnpm --filter @chord/desktop test:e2e
 
       - name: E2E
