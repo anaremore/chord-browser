@@ -26,8 +26,8 @@ export interface TabManagerDeps {
   /** Hook for keyboard shortcuts and other per-contents wiring. */
   onContentsCreated(contents: WebContents, nodeId: NodeId): void;
   /** A page was visited (or its title arrived): history keeps it. */
-  onVisit(url: string, title: string): void;
-  onTitle(url: string, title: string): void;
+  onVisit(url: string, title: string, nodeId: NodeId): void;
+  onTitle(url: string, title: string, nodeId: NodeId): void;
   /** A page opened a popup window (sign-in, payment): wire its context menu. */
   onPopupCreated(contents: WebContents, openerNodeId: NodeId): void;
 }
@@ -197,7 +197,7 @@ export class TabManager {
       if (!place || place === visited || !current()) return;
       visited = place;
       // The title arrives with page-title-updated; at this point it may still be the last page's.
-      this.deps.onVisit(url, '');
+      this.deps.onVisit(url, '', nodeId);
     };
     contents.on('did-navigate', (_event, url, code) => {
       dispatch({ t: 'tab.updated', nodeId, url });
@@ -223,7 +223,7 @@ export class TabManager {
     });
     contents.on('page-title-updated', (_event, title) => {
       dispatch({ t: 'tab.updated', nodeId, title });
-      if (current()) this.deps.onTitle(contents.getURL(), title);
+      if (current()) this.deps.onTitle(contents.getURL(), title, nodeId);
     });
     contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons));
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));

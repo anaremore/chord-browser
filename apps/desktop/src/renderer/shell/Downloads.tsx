@@ -20,8 +20,8 @@ export interface DownloadsSummary {
   unseen: boolean;
 }
 
-export function summarizeDownloads(downloads: Record<string, Download>, seenAt: number): DownloadsSummary {
-  const list = Object.values(downloads);
+/** `list`: the downloads this window shows (a private window lists only its own). */
+export function summarizeDownloads(list: readonly Download[], seenAt: number): DownloadsSummary {
   const active = list.filter((d) => d.state === 'progressing' || d.state === 'paused');
   const sized = active.filter((d) => d.total > 0);
   const total = sized.reduce((sum, d) => sum + d.total, 0);

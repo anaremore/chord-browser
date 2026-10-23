@@ -1,5 +1,5 @@
 /** Read-only queries over State, shared by main and renderers. */
-import type { ChordId, NodeId, Section, SidebarNode, State, TabNode, WindowId } from './model';
+import type { Chord, ChordId, Download, NodeId, Section, SidebarNode, State, TabNode, WindowId } from './model';
 
 /** Rank order; ties (possible after reopening a closed tab) fall back to ID, which is time-ordered. */
 const byRank = (a: SidebarNode, b: SidebarNode) =>
@@ -26,8 +26,40 @@ export function tabsInOrder(state: State, chordId: ChordId): TabNode[] {
   return out;
 }
 
-export function sortedChords(state: State) {
-  return Object.values(state.chords).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
+/** Your chords in switcher order. A private window's own chord is never among them. */
+export function sortedChords(state: State): Chord[] {
+  return Object.values(state.chords)
+    .filter((c) => !c.private)
+    .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
+}
+
+export const isPrivateWindow = (state: State, windowId: WindowId): boolean => Boolean(state.windows[windowId]?.private);
+export const isPrivateChord = (state: State, chordId: ChordId): boolean => Boolean(state.chords[chordId]?.private);
+
+/** The chords a window can see and switch between: a private window only its own. */
+export function chordsFor(state: State, windowId: WindowId): Chord[] {
+  const win = state.windows[windowId];
+  if (win?.private) {
+    const own = state.chords[win.activeChordId];
+    return own ? [own] : [];
+  }
+  return sortedChords(state);
+}
+
+/** The downloads a window lists: a private window's own, or everything not from a private window. */
+export function downloadsFor(state: State, windowId: WindowId): Download[] {
+  const priv = isPrivateWindow(state, windowId);
+  return Object.values(state.downloads).filter((d) => (priv ? d.privateWindow === windowId : !d.privateWindow));
+}
+
+/**
+ * Where ⌘⇧T reopens from in this window: the newest closed tab on its side
+ * (a private window's own, or none of any private window's). -1 if none.
+ */
+export function reopenableIndex(state: State, windowId: WindowId): number {
+  const win = state.windows[windowId];
+  if (!win) return -1;
+  return state.closed.findIndex((c) => (win.private ? c.node.chordId === win.activeChordId : !isPrivateChord(state, c.node.chordId)));
 }
 
 export function activeTabId(state: State, windowId: WindowId): NodeId | null {
@@ -42,7 +74,7 @@ export function activeTab(state: State, windowId: WindowId): TabNode | null {
   return node?.kind === 'tab' ? node : null;
 }
 
-/** Which windows currently show this tab. */
+/** Which windows currently show this tab (at most one: a tab shows in one window at a time). */
 export function windowsShowing(state: State, nodeId: NodeId): WindowId[] {
   return Object.values(state.windows)
     .filter((w) => w.activeTab[w.activeChordId] === nodeId)

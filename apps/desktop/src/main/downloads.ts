@@ -6,7 +6,7 @@
  */
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
-import type { Command, Download, DownloadAction, State } from '@chord/core';
+import type { Command, Download, DownloadAction, State, WindowId } from '@chord/core';
 import { app, shell, type DownloadItem, type Session } from 'electron';
 import { safeFilename, uniquePath } from './files';
 
@@ -32,7 +32,8 @@ export class DownloadManager {
 
   constructor(private readonly deps: DownloadDeps) {}
 
-  attach(session: Session): void {
+  /** `privateWindow`: the session is that private window's, so its downloads are listed only there and never saved. */
+  attach(session: Session, privateWindow: WindowId | null = null): void {
     session.on('will-download', (_event, item) => {
       const id = this.deps.newId();
       item.setSavePath(uniquePath(downloadsDir(), safeFilename(item.getFilename()), existsSync));
@@ -41,7 +42,8 @@ export class DownloadManager {
       const report = (ended = false) => {
         clearTimeout(timer);
         timer = undefined;
-        this.deps.dispatch({ t: 'download.update', download: this.snapshot(id, item, ended) });
+        const download = this.snapshot(id, item, ended);
+        this.deps.dispatch({ t: 'download.update', download: privateWindow ? { ...download, privateWindow } : download });
       };
       item.on('updated', () => {
         timer ??= setTimeout(() => report(), REPORT_MS);

@@ -3,10 +3,10 @@
  * rename and the icon picker, the switcher in the footer, and the color
  * crossfade behind it all.
  */
-import { DEFAULT_PROFILE, firstGrapheme, formatKeys, shortcutById, sortedChords, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
+import { DEFAULT_PROFILE, chordsFor, firstGrapheme, formatKeys, shortcutById, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
-import { KeyRound, Plus } from 'lucide-react';
+import { EyeOff, KeyRound, Plus } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { api } from './api';
@@ -182,6 +182,17 @@ export function ChordHeader({
       onDone();
     }
   };
+  // A private window's chord: nothing to rename or recolor, and it says what it is.
+  if (chord?.private) {
+    return (
+      <div className={styles.chordHeader}>
+        <span className={styles.privateGlyph} aria-hidden>
+          <EyeOff size={14} strokeWidth={2} />
+        </span>
+        <span className={styles.ellipsis}>{chord.name}</span>
+      </div>
+    );
+  }
   return (
     <div className={styles.chordHeader}>
       <button
@@ -251,9 +262,11 @@ export function ChordSwitcher({
   pill: Transition;
   /** The footer's left slot (the Downloads button), opposite New chord so the switcher stays centered. */
   leading: ReactNode;
-  onCreate(): void;
+  /** Null in a private window, which can't make chords. */
+  onCreate: (() => void) | null;
 }) {
-  const chords = sortedChords(state);
+  // A private window shows only its own chord; no other window ever shows that one.
+  const chords = chordsFor(state, windowId);
   const current = state.windows[windowId]?.activeChordId;
   const strip = useRef<HTMLDivElement>(null);
   // More chords than fit: the strip scrolls sideways (no scrollbar), fading at whichever edge hides some.
@@ -315,14 +328,18 @@ export function ChordSwitcher({
               }}
             >
               {selected && <motion.span layoutId="chord-pill" className={styles.chordPill} transition={pill} />}
-              <span className={styles.chordGlyph}>{chord.icon}</span>
+              {chord.private ? <EyeOff className={styles.chordGlyph} size={14} strokeWidth={2} aria-hidden /> : <span className={styles.chordGlyph}>{chord.icon}</span>}
             </button>
           );
         })}
       </div>
-      <button type="button" className={styles.iconButton} aria-label="New chord" title="New chord" onClick={onCreate}>
-        <Plus size={16} strokeWidth={1.75} />
-      </button>
+      {onCreate ? (
+        <button type="button" className={styles.iconButton} aria-label="New chord" title="New chord" onClick={onCreate}>
+          <Plus size={16} strokeWidth={1.75} />
+        </button>
+      ) : (
+        <span className={styles.iconButton} aria-hidden />
+      )}
     </footer>
   );
 }
