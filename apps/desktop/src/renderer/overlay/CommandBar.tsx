@@ -14,6 +14,7 @@ import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { Favicon } from '../shared/Favicon';
+import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { afterNextPaint, fromEpoch, measureSince } from '../shared/perf';
@@ -129,9 +130,8 @@ function suggestionEngine(scope: Scope | null): SearchEngineId | undefined | nul
   return scope.kind === 'keyword' ? (scope.keyword.engine ?? null) : null;
 }
 
-export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: Mirror }) {
-  const [info, setInfo] = useState(initialInfo);
-  useEffect(() => api.system.onChange(setInfo), []);
+export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo>; mirror: Mirror }) {
+  const info = useLive(infoSource);
   const state = useMirror(mirror);
   const windowId = mirror.windowId;
   const win = state.windows[windowId];

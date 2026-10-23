@@ -17,6 +17,7 @@ import type { ChordEdit, DuetView, SystemInfo } from '@chord/ipc';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, INSTANT, reducedMotionMode, springsFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
@@ -24,7 +25,6 @@ import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './App.module.css';
 import { ChordHeader, ChordPane, ChordSwitcher, GhostPane, newChordLook, Tint } from './Chords';
-import { useSystemInfo } from './hooks';
 import { ShortcutsProvider, useKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
 import { DuetPanel } from './Duet';
@@ -36,6 +36,7 @@ import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
 import { Announcer, announce } from './announce';
 import { cycleRegion, trackRegions } from './regions';
+import type { ToastStore } from './toast-store';
 import { useChordSwipe, type PaneMotion } from './useChordSwipe';
 import { usePreviewHover } from './usePreviewHover';
 
@@ -224,8 +225,8 @@ function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab:
   );
 }
 
-export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: Mirror }) {
-  const info = useSystemInfo(initialInfo);
+export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInfo>; mirror: Mirror; toasts: ToastStore }) {
+  const info = useLive(infoSource);
   const state = useMirror(mirror);
   const windowId = mirror.windowId;
   const win = state.windows[windowId];
@@ -506,7 +507,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
                 })}
               </div>
 
-              {(!collapsed || peeking) && <Toasts transition={spring('overlay', 'sidebar')} compact={false} undoKeys={!collapsed} mac={info.platform === 'darwin'} />}
+              {(!collapsed || peeking) && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} undoKeys={!collapsed} mac={info.platform === 'darwin'} />}
 
               {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
 
@@ -564,7 +565,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               <span className={styles.flex} />
               {(inTitleBar || collapsed) && <ExtensionButtons bar={extensionsBar} puzzleOnly={!inTitleBar} />}
               {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
-              {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact undoKeys mac={info.platform === 'darwin'} />}
+              {collapsed && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact undoKeys mac={info.platform === 'darwin'} />}
               {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
               {duet?.enabled && (
                 <button

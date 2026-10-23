@@ -7,6 +7,7 @@ import type { PreviewCard, SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
 import { Folder } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLive, type Live } from '../shared/live';
 import { Favicon } from '../shared/Favicon';
 import { displayHost } from '../shared/site';
 import { chordStyle } from '../shared/theme';
@@ -65,10 +66,9 @@ function FolderPreview({ card, appearance }: { card: FolderCard; appearance: App
   );
 }
 
-export function Preview({ initialInfo }: { initialInfo: SystemInfo }) {
-  const [info, setInfo] = useState(initialInfo);
+export function Preview({ info: infoSource }: { info: Live<SystemInfo> }) {
+  const info = useLive(infoSource);
   const [card, setCard] = useState<PreviewCard | null>(null);
-  useEffect(() => api.system.onChange(setInfo), []);
   useEffect(() => api.preview.onCard(setCard), []);
   const root = useRef<HTMLDivElement>(null);
 

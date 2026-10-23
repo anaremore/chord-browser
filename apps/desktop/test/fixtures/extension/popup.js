@@ -5,4 +5,5 @@
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   document.getElementById('tab').textContent = `Active tab: ${tab ? tab.title : 'none'}`;
 })();
-document.getElementById('close').addEventListener('click', () => window.close());
+// Closes just after the click, not inside it: closing mid-click races the test's own click bookkeeping.
+document.getElementById('close').addEventListener('click', () => setTimeout(() => window.close(), 50));

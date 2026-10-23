@@ -6,7 +6,7 @@
  * and replaced, primed with a summary, when it doesn't.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   children,
@@ -1005,12 +1005,19 @@ export class DuetService {
     const id = thread.providerSessionId;
     if (!id || !/^[A-Za-z0-9-]{8,80}$/.test(id)) return;
     if (thread.provider === 'claude') {
-      const folder = join(claudeConfigDir(), 'projects', claudeProjectFolder(join(this.root, 'empty')));
-      await rm(join(folder, `${id}.jsonl`), { force: true }).catch(() => undefined);
-      await rm(join(folder, id), { recursive: true, force: true }).catch(() => undefined);
-      // Claude Code inside WSL keeps its sessions in the distro.
+      // Claude names the folder after its working directory as the OS reports it: on macOS and Linux
+      // with symlinks resolved (macOS's temp and other folders sit under /private); on Windows as
+      // given (a short 8.3 name stays short). The session id is exact, so both places are safe to try.
+      const cwd = join(this.root, 'empty');
+      const resolved = await realpath(cwd).catch(() => cwd);
+      for (const dir of new Set([cwd, resolved])) {
+        const folder = join(claudeConfigDir(), 'projects', claudeProjectFolder(dir));
+        await rm(join(folder, `${id}.jsonl`), { force: true }).catch(() => undefined);
+        await rm(join(folder, id), { recursive: true, force: true }).catch(() => undefined);
+      }
+      // Claude Code inside WSL keeps its sessions in the distro, under the distro's path to the same folder.
       const wsl = (this.launches.claude ?? this.inWsl.claude?.launch)?.wsl;
-      if (wsl) await removeInWsl(wsl, wslClaudeSessionPaths(wsl, join(this.root, 'empty'), id));
+      if (wsl) await removeInWsl(wsl, wslClaudeSessionPaths(wsl, cwd, id));
       return;
     }
     if (!this.statuses.codex) await this.refreshProviders('never');
