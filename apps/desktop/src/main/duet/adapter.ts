@@ -6,7 +6,7 @@
  * server and no token to leak; the process is the thread's scope.
  */
 import { execFile } from 'node:child_process';
-import type { DuetProvider, DuetToolSpec } from '@chord/core';
+import type { DuetContextUsage, DuetProvider, DuetToolSpec } from '@chord/core';
 import type { Launch } from './detect';
 
 export interface ToolOutput {
@@ -31,6 +31,8 @@ export interface SessionEvents {
   /** A tool call. Resolves when Chord has an answer, which may wait on an approval card. */
   onTool(name: string, args: Record<string, unknown>): Promise<ToolOutput>;
   onTurnEnd(outcome: { status: 'done' | 'interrupted' | 'error'; error?: ProviderError }): void;
+  /** How full the model's context is, when the CLI reports both the tokens and the window. */
+  onUsage?(usage: DuetContextUsage): void;
   /** The process ended. `resume-failed` means the stored session is gone: start over with a summary. */
   onExit(error: ProviderError | null): void;
 }

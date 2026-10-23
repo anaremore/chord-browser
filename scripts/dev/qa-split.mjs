@@ -6,7 +6,7 @@
 //   node ../../scripts/dev/qa-split.mjs <out-dir> [light|dark]
 /* global document, window -- used inside Playwright page callbacks */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron } from '@playwright/test';
@@ -19,9 +19,11 @@ const captureScript = resolve(import.meta.dirname, 'capture-window.ps1');
 // Nothing listens on the discard port: the pane shows Chord's own "can't connect" state.
 const UNREACHABLE = 'http://127.0.0.1:9/';
 
+// A throwaway profile, removed when the script ends.
+const profile = mkdtempSync(join(tmpdir(), 'chord-qa-'));
 const env = {
   ...process.env,
-  CHORD_USER_DATA: mkdtempSync(join(tmpdir(), 'chord-qa-')),
+  CHORD_USER_DATA: profile,
   CHORD_APPEARANCE: appearance,
   CHORD_HOME_URL: 'chord://archive/',
 };
@@ -30,11 +32,14 @@ delete env.ELECTRON_RUN_AS_NODE;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const capture = (name) => {
   const file = join(outDir, `${appearance}-${name}.png`);
-  execFileSync('pwsh', ['-NoProfile', '-File', captureScript, '-Title', 'Chord', '-Out', file], { stdio: 'inherit' });
+  // This Chord's window only: the Chord you browse with has the same title.
+  execFileSync('pwsh', ['-NoProfile', '-File', captureScript, '-Title', 'Chord', '-ProcessId', String(chordPid), '-Out', file], { stdio: 'inherit' });
   console.log(file);
 };
 
 const app = await electron.launch({ args: [appDir, '--no-first-run'], env, cwd: appDir });
+// Chord's main process owns its windows (app.process() is Playwright's launcher).
+const chordPid = await app.evaluate(() => process.pid);
 try {
   let shell;
   for (let i = 0; i < 100 && !shell; i++) {
@@ -94,5 +99,6 @@ try {
   await shell.mouse.up();
 } finally {
   await app.close();
+  rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
 }
 console.log('captures in', outDir);
