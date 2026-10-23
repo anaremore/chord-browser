@@ -391,47 +391,44 @@ function FolderRow({ folder, index, depth, ctx, drag }: { folder: FolderNode; in
         void api.menu.tab(folder.id, { x: e.clientX, y: e.clientY });
       }}
     >
-      {renaming === folder.id ? (
-        <div className={styles.row}>
-          <ChevronRight className={styles.chevron} data-open={open || undefined} size={12} strokeWidth={2} aria-hidden />
-          <Glyph className={styles.rowGlyph} size={16} strokeWidth={1.75} aria-hidden />
-          <input
-            className={styles.folderInput}
-            defaultValue={folder.title}
-            aria-label="Folder name"
-            maxLength={64}
-            spellCheck={false}
-            // Focus and select on mount, so typing replaces the name.
-            ref={(el) => {
-              if (el && document.activeElement !== el) {
-                el.focus();
-                el.select();
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') commit(e.currentTarget.value);
-              else if (e.key === 'Escape') setRenaming(null);
-            }}
-            onBlur={(e) => commit(e.currentTarget.value)}
-          />
-        </div>
-      ) : (
-        <button
-          ref={handleRef}
-          type="button"
-          className={styles.row}
-          data-row="folder"
-          data-id={folder.id}
-          data-parent={folder.parentId ?? undefined}
-          aria-expanded={open}
-          title={folder.title}
-          onClick={toggle}
-          onDoubleClick={() => setRenaming(folder.id)}
-        >
-          <ChevronRight className={styles.chevron} data-open={open || undefined} size={12} strokeWidth={2} aria-hidden />
-          <Glyph className={styles.rowGlyph} size={16} strokeWidth={1.75} aria-hidden />
-          <span className={styles.ellipsis}>{folder.title}</span>
-        </button>
+      {/* The button is always there: it's the drag handle, and dnd-kit keeps whatever it first found. */}
+      <button
+        ref={handleRef}
+        type="button"
+        className={styles.row}
+        data-row="folder"
+        data-id={folder.id}
+        data-parent={folder.parentId ?? undefined}
+        aria-expanded={open}
+        title={folder.title}
+        onClick={toggle}
+        onDoubleClick={() => setRenaming(folder.id)}
+      >
+        <ChevronRight className={styles.chevron} data-open={open || undefined} size={12} strokeWidth={2} aria-hidden />
+        <Glyph className={styles.rowGlyph} size={16} strokeWidth={1.75} aria-hidden />
+        <span className={styles.ellipsis}>{folder.title}</span>
+      </button>
+      {renaming === folder.id && (
+        // Over the title, where the name is typed.
+        <input
+          className={styles.folderInput}
+          defaultValue={folder.title}
+          aria-label="Folder name"
+          maxLength={64}
+          spellCheck={false}
+          // Focus and select on mount, so typing replaces the name.
+          ref={(el) => {
+            if (el && document.activeElement !== el) {
+              el.focus();
+              el.select();
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit(e.currentTarget.value);
+            else if (e.key === 'Escape') setRenaming(null);
+          }}
+          onBlur={(e) => commit(e.currentTarget.value)}
+        />
       )}
     </motion.li>
   );
@@ -497,7 +494,7 @@ export function FavoritesRow({ state, windowId, activeId, appearance }: { state:
   const chordId = state.windows[windowId]?.activeChordId;
   if (favorites.length === 0) return active?.type === 'tab' ? <FavoritesDropZone /> : null;
   return (
-    <ul className={styles.favorites} aria-label="Favorites">
+    <FavoritesList>
       {favorites.map((favorite, index) => (
         <FavoriteTile
           key={favorite.id}
@@ -508,6 +505,16 @@ export function FavoritesRow({ state, windowId, activeId, appearance }: { state:
           windowId={windowId}
         />
       ))}
+    </FavoritesList>
+  );
+}
+
+/** The row of tiles. A tab dropped anywhere on it, not just on a tile, becomes a favorite at the end. */
+function FavoritesList({ children: tiles }: { children: ReactNode }) {
+  const { ref } = useDroppable({ id: FAVORITES_ZONE, type: 'favorites', accept: 'tab', collisionPriority: CollisionPriority.Low });
+  return (
+    <ul ref={ref} className={styles.favorites} aria-label="Favorites">
+      {tiles}
     </ul>
   );
 }

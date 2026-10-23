@@ -467,13 +467,19 @@ kbd {
   transform: rotate(90deg);
 }
 
+/* Renaming: laid over the folder's title (the row's padding, chevron, glyph and gaps come before it). */
 .folderInput {
-  flex: 1;
+  position: absolute;
+  inset-block: var(--space-1);
+  inset-inline: calc(var(--space-2) * 5 + var(--space-3) * var(--depth, 0)) var(--space-2);
+  z-index: var(--z-sticky);
   min-inline-size: 0;
-  padding: 0;
+  padding-inline: var(--space-1);
   border: 0;
+  border-radius: var(--radius-xs);
   outline: 0;
-  background: transparent;
+  background: var(--color-surface-raised);
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
   color: var(--color-fg);
   font: var(--text-body);
 }
