@@ -162,6 +162,42 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
   }
 });
 
+test('a row moves with the keyboard: Space picks it up, arrows move it, Space drops it, Esc puts it back', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const { shell, today } = await setUp(app, ['/second', '/third']);
+    const titles = () => today.locator('[data-row]').evaluateAll((rows) => rows.map((r) => r.getAttribute('title')));
+    expect(await titles()).toEqual(['Third page', 'Second page', 'First page']);
+
+    // First page, up two places.
+    await today.getByRole('button', { name: 'First page', exact: true }).focus();
+    await shell.keyboard.press('Space');
+    await expect(today.getByRole('listitem').filter({ hasText: 'First page' })).toHaveAttribute('data-dragging', 'true');
+    await shell.keyboard.press('ArrowUp');
+    await expect.poll(titles).toEqual(['Third page', 'First page', 'Second page']);
+    await shell.keyboard.press('ArrowUp');
+    await expect.poll(titles).toEqual(['First page', 'Third page', 'Second page']);
+    await shell.keyboard.press('Space');
+    await expect(today.getByRole('listitem').filter({ hasText: 'First page' })).not.toHaveAttribute('data-dragging', 'true');
+    // Picking it up didn't open it.
+    await expect(today.getByRole('button', { name: 'First page', exact: true })).not.toHaveAttribute('aria-current', 'page');
+
+    // Esc puts a row back where it was.
+    await today.getByRole('button', { name: 'Second page', exact: true }).focus();
+    await shell.keyboard.press('Space');
+    await shell.keyboard.press('ArrowUp');
+    await expect.poll(titles).toEqual(['First page', 'Second page', 'Third page']);
+    await shell.keyboard.press('Escape');
+    await expect.poll(titles).toEqual(['First page', 'Third page', 'Second page']);
+
+    // Enter opens the focused row.
+    await shell.keyboard.press('Enter');
+    await expect(today.getByRole('button', { name: 'Second page', exact: true })).toHaveAttribute('aria-current', 'page');
+  } finally {
+    await app.close();
+  }
+});
+
 test('Favorites: added by action or by dragging, shared by chords, and a favorite switches to its tab or opens it', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {

@@ -112,21 +112,10 @@ export function SidebarDnd({ state, chordId, children: content }: { state: State
     <DragContext.Provider value={drag}>
       <DragDropProvider
         sensors={(defaults) => [
+          // The keyboard moves rows its own way (treeKeys below), so dnd-kit's keyboard sensor stays out.
           ...defaults.filter((sensor) => sensor !== PointerSensor && sensor !== KeyboardSensor),
           // A few pixels of travel before a drag starts, so clicks stay clicks.
           PointerSensor.configure({ activationConstraints: () => [new PointerActivationConstraints.Distance({ value: 4 })] }),
-          // Space picks a row up, arrows move it, Space drops it, Esc cancels (DESIGN.md §14.3). Enter still opens.
-          KeyboardSensor.configure({
-            keyboardCodes: {
-              start: ['Space'],
-              cancel: ['Escape'],
-              end: ['Space', 'Tab'],
-              up: ['ArrowUp'],
-              down: ['ArrowDown'],
-              left: ['ArrowLeft'],
-              right: ['ArrowRight'],
-            },
-          }),
         ]}
         onDragStart={(event) => {
           const source = event.operation.source;
@@ -246,6 +235,16 @@ export function SidebarDnd({ state, chordId, children: content }: { state: State
 interface RowDrag {
   dragging: boolean;
   projected: Drop | null;
+  /** The row picked up with the keyboard (Space), if any. */
+  moving: string | null;
+}
+
+/** A row picked up with Space, and where it was, so Esc can put it back. */
+interface Moving {
+  id: string;
+  section: Section;
+  parentId: string | null;
+  index: number;
 }
 
 interface RowContext {
@@ -279,6 +278,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
   const { dragging, projected } = drag;
   const { state, windowId, activeId, info, appearance, spring } = ctx;
   const isActive = tab.id === activeId;
+  const lifted = isDragging || drag.moving === tab.id;
   const live = state.live[tab.id];
   const pinned = section === 'pinned';
   const away = pinned && awayFromHome(tab);
@@ -296,7 +296,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
       layout={dragging ? false : 'position'}
       className={styles.item}
       style={indent(shownDepth)}
-      data-dragging={isDragging || undefined}
+      data-dragging={lifted || undefined}
       data-drop-target={(dragging && isDropTarget && !isDragging) || undefined}
       initial={{ opacity: 0, scale: 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
@@ -380,7 +380,7 @@ function FolderRow({ folder, index, depth, ctx, drag }: { folder: FolderNode; in
       layout={dragging ? false : 'position'}
       className={styles.item}
       style={indent(shownDepth)}
-      data-dragging={isDragging || undefined}
+      data-dragging={(isDragging || drag.moving === folder.id) || undefined}
       data-drop-target={(dragging && isDropTarget && !isDragging) || undefined}
       initial={{ opacity: 0, scale: 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
@@ -434,11 +434,15 @@ function FolderRow({ folder, index, depth, ctx, drag }: { folder: FolderNode; in
   );
 }
 
-/** Where to drop a tab to pin it while nothing is pinned yet. */
+/**
+ * Where to drop a tab to pin it while nothing is pinned yet: laid over the
+ * Today divider, so the rows don't jump down when a drag begins (with the
+ * keyboard they'd land somewhere else).
+ */
 function PinnedDropZone() {
   const { ref, isDropTarget } = useDroppable({ id: PINNED_ZONE, type: 'section', accept: ROW_ACCEPTS, collisionPriority: CollisionPriority.Low });
   return (
-    <div ref={ref} className={styles.pinZone} data-over={isDropTarget || undefined}>
+    <div ref={ref} className={`${styles.pinZone} ${styles.pinZoneOver}`} data-over={isDropTarget || undefined}>
       Drop here to pin
     </div>
   );
@@ -521,12 +525,60 @@ function FavoritesList({ children: tiles }: { children: ReactNode }) {
 
 /* ---------- Keyboard: the sidebar as a tree (DESIGN.md §14.3) ---------- */
 
-function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: { state: State; windowId: string; info: SystemInfo; setRenaming(id: string): void }) {
+interface TreeKeys {
+  state: State;
+  windowId: string;
+  info: SystemInfo;
+  /** A pointer drag is under way. */
+  dragging: boolean;
+  moving: Moving | null;
+  setMoving(moving: Moving | null): void;
+  setRenaming(id: string): void;
+}
+
+/**
+ * With a row picked up (Space), ↑ ↓ move it among its siblings, committed as
+ * it goes; Space or Enter drops it, Esc puts it back where it was (DESIGN.md §14.3).
+ */
+function moveKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys, moving: Moving): void {
+  const node = ctx.state.nodes[moving.id];
+  if (!node) return ctx.setMoving(null);
+  const list = event.currentTarget;
+  // React may move the row's element to reorder the list, which takes the focus away: give it back.
+  const move = (index: number, parentId = node.parentId, section = node.section) =>
+    void api.state
+      .dispatch({ t: 'node.move', nodeId: node.id, section, index, parentId })
+      .then(() => list.querySelector<HTMLElement>(`[data-row][data-id="${CSS.escape(node.id)}"]`)?.focus());
+  switch (event.key) {
+    case 'ArrowUp':
+    case 'ArrowDown': {
+      event.preventDefault();
+      const siblings = children(ctx.state, node.chordId, node.section, node.parentId);
+      const at = siblings.findIndex((s) => s.id === node.id);
+      const to = at + (event.key === 'ArrowUp' ? -1 : 1);
+      if (to >= 0 && to < siblings.length) move(to);
+      return;
+    }
+    case ' ':
+    case 'Enter':
+      event.preventDefault();
+      return ctx.setMoving(null);
+    case 'Escape':
+      event.preventDefault();
+      move(moving.index, moving.parentId, moving.section);
+      return ctx.setMoving(null);
+    case 'Tab':
+      return ctx.setMoving(null);
+  }
+}
+
+function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys) {
   const row = (event.target as HTMLElement).closest<HTMLElement>('[data-row]');
-  if (!row || event.altKey) return;
+  if (!row || event.altKey || ctx.dragging) return;
+  const id = row.dataset['id']!;
+  if (ctx.moving) return moveKeys(event, ctx, ctx.moving);
   const rows = [...event.currentTarget.querySelectorAll<HTMLElement>('[data-row]')];
   const at = rows.indexOf(row);
-  const id = row.dataset['id']!;
   const node = ctx.state.nodes[id];
   const focus = (el: HTMLElement | undefined) => {
     if (!el) return;
@@ -554,6 +606,14 @@ function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: { state: State; window
       if (node?.kind === 'folder' && !node.collapsed) void api.state.dispatch({ t: 'folder.toggle', nodeId: id, collapsed: true });
       else if (row.dataset['parent']) rows.find((r) => r.dataset['id'] === row.dataset['parent'])?.focus();
       return;
+    case ' ': {
+      // Pick the row up (and don't click it when Space comes back up).
+      if (!node) return;
+      event.preventDefault();
+      const index = children(ctx.state, node.chordId, node.section, node.parentId).findIndex((s) => s.id === id);
+      ctx.setMoving({ id, section: node.section, parentId: node.parentId, index });
+      return;
+    }
     case 'F2':
       if (node?.kind === 'folder') {
         event.preventDefault();
@@ -578,7 +638,8 @@ function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: { state: State; window
 
 export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 'setRenaming'> & { chordId: ChordId }) {
   const { active, projected } = useDrag();
-  const drag: RowDrag = { dragging: active !== null, projected };
+  const [moving, setMoving] = useState<Moving | null>(null);
+  const drag: RowDrag = { dragging: active !== null, projected, moving: moving?.id ?? null };
   const [renaming, setRenaming] = useState<string | null>(null);
   useEffect(() => api.sidebar.onRename(({ nodeId }) => setRenaming(nodeId)), []);
   const ctx: RowContext = { ...rest, renaming, setRenaming };
@@ -594,18 +655,22 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
   };
 
   return (
-    <div className={styles.tree} onKeyDown={(e) => treeKeys(e, { state, windowId: rest.windowId, info, setRenaming })}>
-      {pinned.length > 0 ? (
+    <div
+      className={styles.tree}
+      onKeyDown={(e) => treeKeys(e, { state, windowId: rest.windowId, info, dragging: active !== null, moving, setMoving, setRenaming })}
+      // A click drops a row picked up with the keyboard.
+      onPointerDown={() => moving && setMoving(null)}
+    >
+      {pinned.length > 0 && (
         <ul className={styles.pinnedList} aria-label="Pinned">
           <AnimatePresence initial={false} mode="popLayout">
             {pinned.map(row)}
           </AnimatePresence>
         </ul>
-      ) : (
-        active && active.type !== 'favorite' && <PinnedDropZone />
       )}
 
       <div className={styles.divider}>
+        {pinned.length === 0 && active && active.type !== 'favorite' && <PinnedDropZone />}
         <span className={styles.hairline} role="separator" />
         {today.length > 0 && (
           <button type="button" className={styles.clear} title="Archive every Today tab" onClick={() => void api.action.run('today.clear')}>
