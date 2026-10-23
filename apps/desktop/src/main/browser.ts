@@ -27,7 +27,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
+import type { ArchiveSnapshot, GesturePhase, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
 import { app, BaseWindow, BrowserWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
@@ -76,6 +76,13 @@ export interface BrowserOptions {
     publisherKeyHash?: string;
   };
 }
+
+/** Trackpad scroll phases forwarded to the shell, for the chord swipe. */
+const GESTURE_PHASES: Partial<Record<string, GesturePhase>> = {
+  gestureScrollBegin: 'begin',
+  gestureScrollEnd: 'end',
+  gestureFlingStart: 'fling',
+};
 
 export class Browser {
   readonly store: Store;
@@ -311,6 +318,12 @@ export class Browser {
     w.shell.webContents.on('did-finish-load', () => {
       this.extensions.forget(windowId);
       this.extensions.sync();
+    });
+    // The chord swipe's phases (DESIGN.md §6.4): the renderer sees only wheel events, which
+    // don't say when the fingers lift. Where the OS sends none, the shell ends on idle.
+    w.shell.webContents.on('input-event', (_event, input) => {
+      const phase = GESTURE_PHASES[input.type];
+      if (phase) send(w.shell.webContents, 'gesture:phase', phase);
     });
     this.lastWindowId ??= windowId;
     w.window.on('focus', () => {
@@ -721,7 +734,8 @@ export class Browser {
         editColors: () => {
           this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
           this.lastWindowId = w.id;
-          this.openSettings('appearance');
+          // Appearance, with the chord's colors open on the wheel.
+          this.openSettings('appearance/colors');
         },
         separateSignIns: chord.profileId !== DEFAULT_PROFILE,
         toggleSeparateSignIns: () => this.toggleSeparateSignIns(w, chordId),

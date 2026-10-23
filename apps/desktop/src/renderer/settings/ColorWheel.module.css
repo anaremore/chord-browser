@@ -1,0 +1,55 @@
+/* The theme editor's color wheel (DESIGN.md §7.7). Tokens only; the wheel itself is painted on a canvas. */
+
+.wheel {
+  position: relative;
+  flex: none;
+  inline-size: var(--size-color-wheel);
+  block-size: var(--size-color-wheel);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.canvas {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  border-radius: var(--radius-full);
+  box-shadow: 0 0 0 var(--size-hairline) var(--color-divider);
+}
+
+/* 24 px circles with a 2 px ring in the card's color, centered on their point by the inline transform. */
+.handle {
+  position: absolute;
+  inset-block-start: calc(var(--size-swatch) / -2);
+  inset-inline-start: calc(var(--size-swatch) / -2);
+  inline-size: var(--size-swatch);
+  block-size: var(--size-swatch);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  box-shadow:
+    0 0 0 var(--size-focus-ring) var(--color-surface-raised),
+    var(--shadow-raised);
+  cursor: grab;
+  transition:
+    scale var(--spring-bouncy-duration) var(--spring-bouncy),
+    opacity var(--duration-fade-fast) var(--ease-standard);
+}
+
+.handle[data-selected] {
+  z-index: var(--z-raised);
+  box-shadow:
+    0 0 0 var(--size-focus-ring) var(--color-surface-raised),
+    0 0 0 calc(var(--size-focus-ring) * 2) var(--color-fg),
+    var(--shadow-raised);
+}
+
+.handle:active {
+  cursor: grabbing;
+}
+
+/* Dragged off the wheel: let go here and it's removed. */
+.handle[data-leaving] {
+  opacity: 0.6;
+  scale: 0.5;
+}

@@ -142,7 +142,12 @@ const WORST_MATERIAL: Record<Appearance, Oklch> = {
   dark: { l: 0.28, c: 0, h: 0 },
 };
 
-function mapToBand(stop: Oklch, appearance: Appearance): Oklch {
+/**
+ * A picked color as the tint shows it in one appearance, before the contrast
+ * guard: light mode lifts it pale, dark mode sinks it deep. The theme
+ * editor's color wheel is drawn with this.
+ */
+export function mapToBand(stop: Oklch, appearance: Appearance): Oklch {
   const c = Math.min(Math.max(stop.c, 0), 0.16);
   return appearance === 'light'
     ? { l: 0.94 - 0.5 * c, c: 0.7 * c, h: stop.h }

@@ -38,10 +38,13 @@ const SECTIONS = [
 type SectionId = (typeof SECTIONS)[number]['id'];
 
 const isSection = (value: string): value is SectionId => SECTIONS.some((s) => s.id === value);
-const initialSection = (): SectionId => {
-  const hash = decodeURIComponent(location.hash.slice(1));
-  return isSection(hash) ? hash : 'general';
+/** A section, or `appearance/colors`: Appearance with the chord's colors open in the theme editor. */
+const parseSection = (value: string): { section: SectionId; colors: boolean } | null => {
+  const [id, sub] = value.split('/');
+  return id && isSection(id) ? { section: id, colors: id === 'appearance' && sub === 'colors' } : null;
 };
+const initialHash = () => parseSection(decodeURIComponent(location.hash.slice(1)));
+const initialSection = (): SectionId => initialHash()?.section ?? 'general';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const REPO_URL = 'https://github.com/anaremore/chord-browser';
@@ -423,7 +426,18 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
   const [section, setSection] = useState<SectionId>(initialSection);
   useEffect(() => api.system.onChange(setInfo), []);
   useEffect(() => api.settings.onChange(setSnapshot), []);
-  useEffect(() => api.settings.onSection((s) => isSection(s) && setSection(s)), []);
+  // Each "Edit colors…" from a chord's menu is a new request to open the editor.
+  const [editColors, setEditColors] = useState(() => (initialHash()?.colors ? 1 : 0));
+  useEffect(
+    () =>
+      api.settings.onSection((value) => {
+        const parsed = parseSection(value);
+        if (!parsed) return;
+        setSection(parsed.section);
+        if (parsed.colors) setEditColors((n) => n + 1);
+      }),
+    [],
+  );
   useEffect(() => applyMotion(snapshot.settings, info.prefersReducedMotion), [snapshot.settings, info.prefersReducedMotion]);
 
   const { style } = chordStyle(snapshot.chord, info, snapshot.settings.interface);
@@ -473,7 +487,7 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               transition={spring('snappy', 'commandBar')}
             >
               {section === 'general' && <General snapshot={snapshot} info={info} />}
-              {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} />}
+              {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} editColors={editColors} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'shortcuts' && <Shortcuts info={info} />}
