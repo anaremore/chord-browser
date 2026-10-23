@@ -83,8 +83,9 @@ modules:
           install -Dm644 apps/desktop/build/icons/${size}x${size}.png ${FLATPAK_DEST}/share/icons/hicolor/${size}x${size}/apps/${FLATPAK_ID}.png;
         done
       # Release builds are a GPL-3.0-only combined work (ARCHITECTURE.md §16, D1).
+      # Apache-2.0 is pdf.js's, which Duet reads PDFs with.
       - install -Dm644 LICENSE ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}/LICENSE
-      - install -Dm644 LICENSES/GPL-3.0.txt LICENSES/MPL-2.0.txt -t ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}
+      - install -Dm644 LICENSES/GPL-3.0.txt LICENSES/MPL-2.0.txt LICENSES/Apache-2.0.txt -t ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}
     sources:
       # This checkout. A Flathub manifest uses the release tag instead:
       #   type: git, url: https://github.com/anaremore/chord-browser.git, tag: vX.Y.Z, commit: <sha>

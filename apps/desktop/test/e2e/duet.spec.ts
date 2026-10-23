@@ -5,7 +5,7 @@
  * and deletion of the provider's copy can be checked on disk.
  */
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -356,6 +356,62 @@ test('Duet: Claude Code inside WSL is offered in Setup, answers through wsl.exe,
   }
 });
 
+/**
+ * The window as the user sees it. The shell and each tab are separate views,
+ * so the shell's own screenshot has a hole where the tab sits: the tab's own
+ * screenshot is drawn there (clipped to the frame's corners), in the shell, by
+ * a canvas. Only Chord's own pages are captured. `crop` (CSS pixels) cuts a
+ * part out, drawn `zoom` times larger.
+ */
+async function windowPicture(app: ElectronApplication, shell: Page, tab: Page, options: { crop?: { x: number; y: number; width: number; height: number }; zoom?: number } = {}): Promise<Buffer> {
+  const bounds = await app.evaluate(({ BaseWindow }, url) => {
+    const find = (views: Electron.View[], x: number, y: number): Electron.Rectangle | null => {
+      for (const view of views) {
+        const b = view.getBounds();
+        const contents = (view as Partial<Electron.WebContentsView>).webContents;
+        if (contents && !contents.isDestroyed() && contents.getURL() === url) return { ...b, x: x + b.x, y: y + b.y };
+        const inner = find(view.children, x + b.x, y + b.y);
+        if (inner) return inner;
+      }
+      return null;
+    };
+    for (const win of BaseWindow.getAllWindows()) {
+      const found = find(win.contentView.children, 0, 0);
+      if (found) return found;
+    }
+    return null;
+  }, tab.url());
+  expect(bounds).not.toBeNull();
+  await shell.evaluate(() => document.fonts.ready);
+  const [base, page] = await Promise.all([shell.screenshot({ scale: 'css' }), tab.screenshot({ scale: 'css' })]);
+  const png = await shell.evaluate(
+    async ({ base, page, at, crop, zoom }) => {
+      const bitmap = (b64: string) => createImageBitmap(new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], { type: 'image/png' }));
+      const [shellImage, tabImage] = await Promise.all([bitmap(base), bitmap(page)]);
+      const whole = new OffscreenCanvas(shellImage.width, shellImage.height);
+      const ctx = whole.getContext('2d')!;
+      ctx.drawImage(shellImage, 0, 0);
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(at.x, at.y, at.width, at.height, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--radius-frame')) || 0);
+      ctx.clip();
+      ctx.drawImage(tabImage, at.x, at.y, at.width, at.height);
+      ctx.restore();
+      const area = crop ?? { x: 0, y: 0, width: whole.width, height: whole.height };
+      const out = new OffscreenCanvas(Math.round(area.width * zoom), Math.round(area.height * zoom));
+      const octx = out.getContext('2d')!;
+      octx.imageSmoothingQuality = 'high';
+      octx.drawImage(whole, area.x, area.y, area.width, area.height, 0, 0, out.width, out.height);
+      const bytes = new Uint8Array(await (await out.convertToBlob({ type: 'image/png' })).arrayBuffer());
+      let text = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(text);
+    },
+    { base: base.toString('base64'), page: page.toString('base64'), at: bounds!, crop: options.crop ?? null, zoom: options.zoom ?? 1 },
+  );
+  return Buffer.from(png, 'base64');
+}
+
 for (const appearance of ['light', 'dark'] as const) {
   test(`Duet: captures a PDF citation and the context meter in ${appearance}`, async () => {
     const app = await launch(fresh(), '/login', { CHORD_APPEARANCE: appearance });
@@ -363,19 +419,44 @@ for (const appearance of ['light', 'dark'] as const) {
       const shell = await shellOf(app);
       await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe(appearance);
       await expect.poll(async () => (await openUrls(app)).some((u) => u.endsWith('/guide.pdf')), { timeout: 20_000 }).toBe(true);
+      // As a user would: the PDF is open (Chromium's viewer done loading, its zoom set) before Duet opens beside it.
+      await expect
+        .poll(
+          () =>
+            app.evaluate(({ webContents }) => {
+              const tab = webContents.getAllWebContents().find((w) => w.getURL().endsWith('/guide.pdf'));
+              return Boolean(tab && !tab.isLoading() && tab.mainFrame.framesInSubtree.some((f) => f.url.startsWith('chrome-extension://')));
+            }),
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+      await new Promise((r) => setTimeout(r, 1000));
       const panel = await openDuet(shell);
       await setUp(panel);
       await send(panel, 'What does this PDF say about triads?');
-      await expect(panel.getByRole('button', { name: /^Source 1, page 2:/ })).toBeVisible();
+      const pill = panel.getByRole('button', { name: /^Source 1, page 2:/ });
+      await expect(pill).toBeVisible();
       const meter = panel.getByRole('meter', { name: 'Context used' });
-      await meter.hover();
-      await shell.evaluate(() => document.fonts.ready);
-      await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-4-pdf-and-context.png`) });
-      // The tab's own page: the viewer at the quote's page, the quote marked.
-      await panel.getByRole('button', { name: /^Source 1, page 2:/ }).click();
+      await expect(meter).toHaveAttribute('aria-valuenow', '62');
+      // Following the citation: the viewer finds the quote on page 2 and marks it.
+      await app.evaluate(({ webContents }) => {
+        const pdf = webContents.getAllWebContents().find((w) => w.getURL().endsWith('/guide.pdf'))!;
+        pdf.on('found-in-page', (_e, result) => ((globalThis as { found?: number }).found = result.matches));
+      });
+      await pill.click();
+      await expect.poll(() => app.evaluate(() => (globalThis as { found?: number }).found ?? 0)).toBe(1);
+      // At rest: the pointer off the pill and the meter, the viewer done scrolling to the match.
+      await shell.mouse.move(120, 400);
+      await new Promise((r) => setTimeout(r, 600));
       const viewer = app.windows().find((p) => p.url().endsWith('/guide.pdf'))!;
-      await new Promise((r) => setTimeout(r, 1000));
-      await viewer.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-5-pdf-citation-opened.png`) });
+      mkdirSync(capturesDir, { recursive: true });
+      const name = (step: string) => resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-${step}.png`);
+      writeFileSync(name('4-pdf-citation-and-context'), await windowPicture(app, shell, viewer));
+      // Close up: the header's meter and the reply's "1 · p. 2", twice as large.
+      const box = (await panel.boundingBox())!;
+      const reply = (await panel.getByText(/Triads sound bright\./).boundingBox())!;
+      const crop = { x: box.x, y: box.y, width: box.width, height: reply.y + reply.height + 16 - box.y };
+      writeFileSync(name('5-context-meter-and-citation-closeup'), await windowPicture(app, shell, viewer, { crop, zoom: 2 }));
     } finally {
       await app.close();
     }

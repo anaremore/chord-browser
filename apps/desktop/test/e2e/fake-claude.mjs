@@ -25,7 +25,11 @@ if (args[0] === '--version') {
   process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.309'} (Claude Code)\n`);
   process.exit(0);
 }
-if (args[0] === 'auth' && process.env.CLAUDE_CONFIG_DIR) appendFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'auth-asked'), `${args.join(' ')}\n`);
+// Logged where the tests can see it; the folder may not exist yet (inside WSL it's a fresh /tmp one).
+if (args[0] === 'auth' && process.env.CLAUDE_CONFIG_DIR) {
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true });
+  appendFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'auth-asked'), `${args.join(' ')}\n`);
+}
 if (args[0] === 'auth' && args[1] === 'status') {
   process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }));
   process.exit(0);

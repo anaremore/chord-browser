@@ -144,5 +144,7 @@ describe('Duet: context meter', () => {
   it('says what each provider does when the context fills up', () => {
     expect(contextLabel('claude', { used: 124_000, window: 200_000 })).toBe('62% of context used. When it fills up, Claude Code compacts the conversation automatically and carries on.');
     expect(contextLabel('codex', { used: 1, window: 100 })).toMatch(/^1% of context used\. When it fills up, Codex compacts/);
+    // A first answer against a 1,000,000-token window (Claude Code 2.1.309's own report): some used, rounds to 0.
+    expect(contextLabel('claude', { used: 3984, window: 1_000_000 })).toMatch(/^Under 1% of context used\. /);
   });
 });

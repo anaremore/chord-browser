@@ -305,13 +305,18 @@ export function contextPercent(usage: DuetContextUsage): number {
   return Math.max(0, Math.min(100, Math.round((usage.used / usage.window) * 100)));
 }
 
-/** The meter's tooltip: how full the context is, and what the provider does when it's full. */
+/**
+ * The meter's tooltip: how full the context is, and what the provider does
+ * when it's full. A chat that has used some but rounds to 0% (common with a
+ * 1,000,000-token window) says "Under 1%", not "0%".
+ */
 export function contextLabel(provider: DuetProvider, usage: DuetContextUsage): string {
   const next =
     provider === 'claude'
       ? 'When it fills up, Claude Code compacts the conversation automatically and carries on.'
       : 'When it fills up, Codex compacts the conversation automatically and carries on.';
-  return `${contextPercent(usage)}% of context used. ${next}`;
+  const percent = contextPercent(usage);
+  return `${percent === 0 && usage.used > 0 ? 'Under 1%' : `${percent}%`} of context used. ${next}`;
 }
 
 /** Any other tool result: JSON, marked untrusted when it holds text pages control (titles). */
