@@ -1,13 +1,22 @@
 /** Display helpers for page addresses. */
 
+/** Hosts already worked out: a list of tabs asks for the same few again on every redraw, and parsing a URL isn't free. */
+const hosts = new Map<string, string>();
+const MAX_HOSTS = 1000;
+
 /** `https://www.example.com/a` → `example.com`. */
 export function displayHost(url: string): string {
+  let host = hosts.get(url);
+  if (host !== undefined) return host;
   try {
-    const host = new URL(url).hostname;
-    return host.startsWith('www.') ? host.slice(4) : host;
+    host = new URL(url).hostname;
+    if (host.startsWith('www.')) host = host.slice(4);
   } catch {
-    return '';
+    host = '';
   }
+  if (hosts.size >= MAX_HOSTS) hosts.clear();
+  hosts.set(url, host);
+  return host;
 }
 
 /**

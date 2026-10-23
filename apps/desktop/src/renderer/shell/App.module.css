@@ -420,6 +420,85 @@ kbd {
   scrollbar-width: thin;
 }
 
+/* Today: its rows scroll, and rows on their way out are drawn over them, where they were (Tabs.tsx). */
+.todayBox {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+/*
+ * Stands in for rows a windowed Today doesn't mount (DESIGN.md §6.7). Never a scroll anchor:
+ * its height changes as the list scrolls.
+ */
+.gap {
+  flex: none;
+  overflow-anchor: none;
+}
+
+.exits {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Pinned, and its rows on their way out over it (it shrinks at once, so they aren't clipped to it). */
+.pinnedBox {
+  position: relative;
+  flex: none;
+}
+
+.pinnedExits {
+  position: absolute;
+  inset: 0 0 auto;
+  pointer-events: none;
+}
+
+/* A row leaving its list (closed, pinned or archived), animating out where it was (Tabs.tsx, playExit). */
+.exits > .exitRow,
+.pinnedExits > .exitRow {
+  position: absolute;
+  inset-inline: 0;
+  block-size: var(--size-row);
+  will-change: transform, opacity;
+}
+
+/* Its favicon is flying to the Archive button: the row's own copy is gone. */
+.exitRow[data-flying] .row > :first-child {
+  visibility: hidden;
+}
+
+/* The archive arc's favicons in flight (ArchiveArc.tsx), over everything in the window. */
+.flights {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-toast);
+  pointer-events: none;
+}
+
+.flight {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-icon);
+  block-size: var(--size-icon);
+  margin-block-start: calc(var(--size-icon) / -2);
+  margin-inline-start: calc(var(--size-icon) / -2);
+  will-change: transform, opacity;
+}
+
+/* Reduced motion: the Archive button lights up and fades in 90 ms instead (DESIGN.md §6.6). */
+.archiveFlash {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--color-selection);
+  pointer-events: none;
+}
+
 .item {
   position: relative;
   flex: none;

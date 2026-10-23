@@ -320,7 +320,7 @@ test('launch: from main entry to a usable window', async () => {
   const seeded = await launch({ CHORD_PERF_TABS: '200', CHORD_PERF_VISITS: String(VISITS) }, profile);
   try {
     const shell = await pageWhere(seeded, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem')).toHaveCount(201, { timeout: 20_000 });
+    await expect(todaySize(shell.getByRole('tree', { name: 'Today' }))).toHaveAttribute('aria-setsize', '201', { timeout: 20_000 });
   } finally {
     await seeded.close();
   }
@@ -409,6 +409,57 @@ async function interaction(s: Session, name: string, steps: Step[], traced?: (ev
       medianFrameIntervalMs: round(median(intervals)),
     },
   });
+}
+
+/**
+ * Today's size: above 150 rows the list is windowed (DESIGN.md §6.7), so only
+ * rows near the view are in the DOM, but every row says how many there are.
+ */
+const todaySize = (today: Locator) => today.getByRole('treeitem').first();
+
+/**
+ * Counts what the archive arc draws (DESIGN.md §6.5), from just before a
+ * Clear: rows drawn again as they leave (`[data-exit]`), favicons flying to
+ * the Archive button (`[data-flight]`), and the most of both at once (§6.7:
+ * under 50 nodes animating).
+ */
+const watchArc = (shell: Page) =>
+  shell.evaluate(() => {
+    const arc = { exits: 0, flights: 0, now: 0, peak: 0 };
+    (window as unknown as { arc: typeof arc }).arc = arc;
+    const count = (nodes: NodeList, by: number) => {
+      for (const node of nodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        const exits = node.matches('[data-exit]') ? 1 : node.querySelectorAll('[data-exit]').length;
+        const flights = node.matches('[data-flight]') ? 1 : node.querySelectorAll('[data-flight]').length;
+        if (by > 0) {
+          arc.exits += exits;
+          arc.flights += flights;
+        }
+        arc.now += by * (exits + flights);
+        arc.peak = Math.max(arc.peak, arc.now);
+      }
+    };
+    new MutationObserver((records) => {
+      for (const r of records) {
+        count(r.addedNodes, 1);
+        count(r.removedNodes, -1);
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+const arcSeen = (shell: Page) => shell.evaluate(() => (window as unknown as { arc: { exits: number; flights: number; peak: number } }).arc);
+
+/** What a Clear drew: with motion, on-screen rows leave and up to six favicons fly; without, nothing animates. */
+async function expectArc(shell: Page, motion: 'on' | 'off') {
+  const arc = await arcSeen(shell);
+  if (motion === 'on') {
+    expect(arc.exits, 'rows that were on screen animate out').toBeGreaterThan(0);
+    expect(arc.flights, 'favicons fly to the Archive button, at most six').toBeGreaterThan(0);
+    expect(arc.flights).toBeLessThanOrEqual(6);
+    expect(arc.peak, 'under 50 nodes animate at once').toBeLessThan(50);
+  } else {
+    expect(arc).toMatchObject({ exits: 0, flights: 0 });
+  }
 }
 
 const runAction = (shell: Page, action: string) =>
@@ -625,7 +676,7 @@ for (const tabs of [20, 200]) {
         const today = shell.getByRole('tree', { name: 'Today' });
         const pinned = shell.getByRole('tree', { name: 'Pinned' });
         const todayRows = today.locator('[data-row="tab"]');
-        await expect(today.getByRole('treeitem')).toHaveCount(tabs + 1, { timeout: 20_000 });
+        await expect(todaySize(today)).toHaveAttribute('aria-setsize', String(tabs + 1), { timeout: 20_000 });
         await bringToFront(app, shell);
         await setMotion(app, shell, overlay, motion === 'on');
         environment ??= await readEnvironment(app, shell);
@@ -841,34 +892,49 @@ for (const tabs of [20, 200]) {
         await expect(chordTab(0)).toHaveAttribute('aria-selected', 'true');
         await settle();
 
-        // Clear Today: every row goes to the archive at once; Undo brings them back.
-        const count = await todayRows.count();
+        // Clear Today: every row goes to the archive at once, the ones on screen with the archive arc
+        // (DESIGN.md §6.5); Undo brings them back.
+        const count = await todaySize(today).getAttribute('aria-setsize');
         const clear = shell.getByRole('button', { name: 'Clear', exact: true });
-        await interaction(s, 'Clear Today', [
-          {
-            setup: async () => {
-              await shell.getByRole('separator').first().hover();
-              at = await centerOf(clear);
+        const clearToday = (name: string, scrolled: boolean) =>
+          interaction(s, name, [
+            {
+              setup: async () => {
+                // From the end of the list: in a windowed one, the rows on screen were never mounted at the start.
+                if (scrolled) await today.evaluate((list) => list.scrollTo({ top: list.scrollHeight }));
+                await shell.getByRole('separator').first().hover();
+                at = await centerOf(clear);
+                await settle();
+                await watchArc(shell);
+              },
+              act: async () => {
+                await shell.mouse.click(at.x, at.y);
+                await settle();
+              },
+              verify: async () => {
+                await expect(todayRows).toHaveCount(0);
+                await expectArc(shell, motion);
+              },
             },
-            act: async () => {
-              await shell.mouse.click(at.x, at.y);
-              await settle();
-            },
-            verify: () => expect(todayRows).toHaveCount(0),
-          },
-        ]);
+          ]);
+        const undo = shell.getByRole('button', { name: 'Undo' });
+        await clearToday('Clear Today', false);
         await interaction(s, 'Undo Clear Today', [
           {
             setup: async () => {
-              at = await centerOf(shell.getByRole('button', { name: 'Undo' }));
+              at = await centerOf(undo);
             },
             act: async () => {
               await shell.mouse.click(at.x, at.y);
               await settle();
             },
-            verify: () => expect(todayRows).toHaveCount(count),
+            verify: () => expect(todaySize(today)).toHaveAttribute('aria-setsize', count!),
           },
         ]);
+        await clearToday('Clear Today, scrolled to the end', true);
+        await undo.click();
+        await expect(todaySize(today)).toHaveAttribute('aria-setsize', count!);
+        await settle();
 
         // History and the archive together: cleared again, so the archive holds the whole list.
         await shell.getByRole('separator').first().hover();

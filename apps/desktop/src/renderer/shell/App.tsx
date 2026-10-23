@@ -18,16 +18,17 @@ import { durations } from '@chord/tokens';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
-import { applyMotion, INSTANT, reducedMotionMode, springsFor } from '../shared/motion';
+import { applyMotion, INSTANT, motionMode, reducedMotionMode, springsFor } from '../shared/motion';
 import { inNextFrame, noteRender } from '../shared/frames';
 import { markRender } from '../shared/perf';
 import { displayHost, pageTitle } from '../shared/site';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './App.module.css';
+import { ArchiveButton, ArchiveFlights } from './ArchiveArc';
 import { ChordHeader, ChordPane, ChordSwitcher, GhostPane, newChordLook, Tint } from './Chords';
 import { ShortcutsProvider, useKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
@@ -272,7 +273,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   // With the sidebar collapsed, the minimal bar keeps just the puzzle piece in sidebar mode.
   const extensionsBar = useExtensionsBar();
   const inTitleBar = state.settings.extensionButtons === 'titleBar';
-  const spring = springsFor(state.settings, info.prefersReducedMotion);
+  // The same function until the motion settings change: every sidebar row gets it, and redraws when it changes.
+  const spring = useMemo(() => springsFor(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
+  const tabMotion = motionMode(state.settings, info.prefersReducedMotion, 'tabMoves');
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
   // Keycaps follow your shortcut changes; App provides them to everything below.
   const keycap = (id: ActionId) => keycapFor(id, info.platform, state.settings.shortcuts);
@@ -291,11 +294,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const downloadsButton = <DownloadsButton summary={downloads} onOpen={() => setDownloadsSeenAt(Date.now())} />;
   const archiveKeys = keycap('app.history');
   const archiveLabel = archiveKeys ? `Archive  ${archiveKeys}` : 'Archive';
-  const archiveButton = (
-    <button type="button" className={styles.downloadsButton} aria-label="Archive" title={archiveLabel} onClick={() => void api.action.run('app.history')}>
-      <Archive {...ICON} />
-    </button>
-  );
+  // Archived rows' favicons fly here (DESIGN.md §6.5).
+  const archiveButton = <ArchiveButton title={archiveLabel} onClick={() => void api.action.run('app.history')} />;
   // Duet's panel for this window (DESIGN.md §7.8): main pushes what it shows.
   const [duet, setDuet] = useState<DuetView | null>(null);
   useEffect(() => {
@@ -498,6 +498,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                         info={info}
                         appearance={appearance}
                         spring={spring}
+                        tabMotion={tabMotion}
                       />
                     </DuetReadTabs.Provider>
                   </ChordPane>
@@ -517,6 +518,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                           info={info}
                           appearance={appearance}
                           spring={spring}
+                          tabMotion={tabMotion}
                         />
                       </GhostPane>
                     )
@@ -651,6 +653,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
               {duetOpen && <DuetPanel key="duet" view={duet} windowId={windowId} info={info} slide={duetSlide} />}
             </AnimatePresence>
           )}
+          <ArchiveFlights />
           <Announcer />
 
           {/* Split view's drop zones, over the page while a tab is dragged (Tabs.tsx draws them here). */}

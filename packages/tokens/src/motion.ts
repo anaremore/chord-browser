@@ -37,6 +37,10 @@ export const durations = {
   fadeFast: 90,
   fadeBase: 140,
   fadeSlow: 220,
+  /** An archived row's favicon flying to the footer's Archive button (DESIGN.md §6.5). */
+  archiveArc: 280,
+  /** Between one archived row's flight and the next (DESIGN.md §6.1 rule 7: at most 12 ms, for at most 6). */
+  stagger: 12,
   hoverIntent: 500,
   tooltip: 600,
   springLoad: 600,

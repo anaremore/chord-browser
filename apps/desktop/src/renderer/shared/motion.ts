@@ -24,6 +24,18 @@ export function springsFor(settings: Settings, osReducedMotion: boolean): Spring
 }
 
 /**
+ * How a group animates: fully; `reduced` when the OS asks for reduced motion
+ * (DESIGN.md §6.6: no spatial springs, a short highlight on the destination
+ * instead); or `off`, switched off in Settings (§6.8: instant, no animation at all).
+ */
+export type MotionMode = 'on' | 'reduced' | 'off';
+
+export function motionMode(settings: Settings, osReducedMotion: boolean, gate: MotionGate): MotionMode {
+  if (!settings.motion[gate]) return 'off';
+  return settings.motion.followSystem && osReducedMotion ? 'reduced' : 'on';
+}
+
+/**
  * The same switches for CSS: `data-reduced-motion` turns every transition
  * off (global.css), and `data-motion-off` lists the switched-off groups.
  */

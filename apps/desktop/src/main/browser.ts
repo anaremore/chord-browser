@@ -618,7 +618,10 @@ export class Browser {
   private broadcast(change: Change): void {
     if (change.patches.length === 0) return;
     const event = { version: change.state.version, patches: change.patches };
+    // Archived rows leave the sidebar their own way (DESIGN.md §6.5): the shell hears which, before they go.
+    const archived = change.effects.flatMap((e) => (e.e === 'archive.save' && e.tab.reason !== 'closed' ? [e.nodeId] : []));
     for (const w of this.windows.values()) {
+      if (archived.length > 0) send(w.shell.webContents, 'sidebar:archived', { nodeIds: archived });
       send(w.shell.webContents, 'state:patch', event);
       send(w.overlay.webContents, 'state:patch', event);
     }
