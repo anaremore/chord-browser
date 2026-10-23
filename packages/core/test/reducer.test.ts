@@ -61,14 +61,6 @@ describe('reducer', () => {
     expect(t.state.settings.spellcheck).toEqual({ enabled: false, language: 'fr' });
   });
 
-  it('sets the interface size to one of its sizes, and ignores anything else', () => {
-    const t = setup();
-    t.run({ t: 'settings.set', settings: { uiScale: 1.25 } });
-    expect(t.state.settings.uiScale).toBe(1.25);
-    expect(t.run({ t: 'settings.set', settings: { uiScale: 1.3 as never } }).patches).toHaveLength(0);
-    expect(t.state.settings.uiScale).toBe(1.25);
-  });
-
   it('gives new chords their own sign-ins when Settings says so', () => {
     const t = setup();
     const theme = { stops: [{ l: 0.72, c: 0.12, h: 30 }], grain: 0.2, appearance: 'auto' as const };

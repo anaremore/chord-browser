@@ -55,7 +55,7 @@ import { Previews } from './previews';
 import type { ScreenShareBroker } from './screen-share';
 import { SiteZoom } from './site-zoom';
 import { spellcheckLanguages } from './spellcheck';
-import { setUiScale, systemInfo } from './platform';
+import { systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
 import { TabManager } from './tabs';
@@ -168,8 +168,6 @@ export class Browser {
   constructor(private readonly options: BrowserOptions) {
     this.store = new Store(options.initial);
     setShortcutOverrides(this.store.state.settings.shortcuts);
-    // Before any window: Chord's own views open at the interface size (DESIGN.md §10).
-    setUiScale(this.store.state.settings.uiScale);
     this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
     this.tabs = new TabManager({
       state: () => this.store.state,
@@ -393,7 +391,6 @@ export class Browser {
         setShortcutOverrides(change.state.settings.shortcuts);
         this.applyAppMenu();
       }
-      setUiScale(change.state.settings.uiScale);
       if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions', 'sitePermissions', 'linkRoutes'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }

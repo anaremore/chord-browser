@@ -4,10 +4,9 @@
  * browsing sessions entirely, and matches each OS's preferences convention.
  */
 import type { SettingsSnapshot } from '@chord/ipc';
-import { size } from '@chord/tokens';
 import { BaseWindow, nativeTheme, type Session, type WebContentsView } from 'electron';
 import { send } from './ipc';
-import { applyMaterial, onUiScale, platform, systemInfo, titleBarOverlay, trafficLightPosition, windowChromeOptions } from './platform';
+import { applyMaterial, platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
 import { createUiView } from './window';
 
 const WIDTH = 860;
@@ -47,13 +46,7 @@ export class SettingsWindow {
       send(this.view.webContents, 'system:changed', systemInfo());
     };
     nativeTheme.on('updated', onTheme);
-    const stopScale = onUiScale(() => {
-      if (this.window.isDestroyed()) return;
-      if (platform === 'darwin') this.window.setWindowButtonPosition(trafficLightPosition(size.header, 16));
-      onTheme();
-    });
     this.window.on('closed', () => {
-      stopScale();
       nativeTheme.off('updated', onTheme);
       if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
       onClosed();

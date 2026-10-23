@@ -14,7 +14,6 @@ import {
   MIN_ZOOM,
   SIDEBAR_WIDTH,
   extensionKey,
-  isUiScale,
   type Chord,
   type CustomTheme,
   type Favorite,
@@ -187,7 +186,6 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   if (saved['externalLinks'] === 'mini' || saved['externalLinks'] === 'tab') settings.externalLinks = saved['externalLinks'];
   settings.miniWindowSize = restoreMiniSize(saved['miniWindowSize']);
   if (typeof saved['pagePreviews'] === 'boolean') settings.pagePreviews = saved['pagePreviews'];
-  if (isUiScale(saved['uiScale'])) settings.uiScale = saved['uiScale'];
   const spellcheck = saved['spellcheck'] as Record<string, unknown> | undefined;
   if (spellcheck && typeof spellcheck === 'object') {
     if (typeof spellcheck['enabled'] === 'boolean') settings.spellcheck.enabled = spellcheck['enabled'];

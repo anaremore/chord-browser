@@ -35,39 +35,8 @@ function captionSymbolColor(forced: ForcedAppearance): string {
   return appearance(forced) === 'dark' ? rgbToHex(oklchToRgb({ l: 0.96, c: 0, h: 0 })) : rgbToHex(oklchToRgb({ l: 0.24, c: 0, h: 0 }));
 }
 
-let scale = 1;
-const scaleListeners = new Set<() => void>();
-
-/**
- * Chord's interface size (Settings → Appearance, DESIGN.md §10): the zoom of
- * every view of Chord's own UI. Geometry from those views is in their CSS
- * pixels, so main multiplies by this to place native views, menus and the
- * caption controls.
- */
-export const uiScale = (): number => scale;
-
-/** Change the interface size; windows and UI views listening re-lay themselves out. */
-export function setUiScale(next: number): void {
-  if (next === scale) return;
-  scale = next;
-  for (const listener of [...scaleListeners]) listener();
-}
-
-/** Called when the interface size changes; returns the unsubscribe. */
-export function onUiScale(listener: () => void): () => void {
-  scaleListeners.add(listener);
-  return () => scaleListeners.delete(listener);
-}
-
-/** A transparent overlay lets the window material show behind the caption buttons, in a strip as tall as Chord's. */
-export const titleBarOverlay = (forced: ForcedAppearance = null, barHeight: number = size.strip) => ({
-  color: '#00000000',
-  symbolColor: captionSymbolColor(forced),
-  height: Math.round(barHeight * scale),
-});
-
-/** macOS: the traffic lights, centered in a bar this tall (in Chord's UI units). */
-export const trafficLightPosition = (barHeight: number, x: number) => ({ x, y: Math.round((barHeight * scale - 12) / 2) });
+/** A transparent overlay lets the window material show behind the caption buttons. */
+export const titleBarOverlay = (forced: ForcedAppearance = null) => ({ color: '#00000000', symbolColor: captionSymbolColor(forced), height: size.strip });
 
 export function usesTranslucentMaterial(): boolean {
   if (nativeTheme.prefersReducedTransparency) return false;
@@ -95,7 +64,7 @@ export function windowChromeOptions(forced: ForcedAppearance = null): BaseWindow
     return {
       ...windowIcon(),
       titleBarStyle: 'hidden',
-      trafficLightPosition: trafficLightPosition(size.header, 16),
+      trafficLightPosition: { x: 16, y: (size.header - 12) / 2 },
       ...(usesTranslucentMaterial()
         ? { vibrancy: 'sidebar', visualEffectState: 'followWindow' }
         : { backgroundColor: backgroundHex(forced) }),
@@ -112,8 +81,8 @@ export function windowChromeOptions(forced: ForcedAppearance = null): BaseWindow
 /** A mini window (DESIGN.md §7.9): the same material, with the caption controls in its 36 px bar. */
 export function miniWindowChromeOptions(): BaseWindowConstructorOptions {
   const options = windowChromeOptions();
-  if (platform === 'darwin') return { ...options, trafficLightPosition: trafficLightPosition(size.miniBar, 12) };
-  return { ...options, titleBarOverlay: titleBarOverlay(null, size.miniBar) };
+  if (platform === 'darwin') return { ...options, trafficLightPosition: { x: 12, y: (size.miniBar - 12) / 2 } };
+  return { ...options, titleBarOverlay: { ...titleBarOverlay(), height: size.miniBar } };
 }
 
 function accentColor(): string | null {
@@ -136,12 +105,11 @@ export function systemInfo(): SystemInfo {
     material: usesTranslucentMaterial() ? 'translucent' : 'solid',
     windowChrome:
       platform === 'darwin'
-        ? { kind: 'traffic-lights', reservedWidth: Math.ceil(TRAFFIC_LIGHTS_WIDTH / scale) }
+        ? { kind: 'traffic-lights', reservedWidth: TRAFFIC_LIGHTS_WIDTH }
         : {
             kind: 'overlay',
             height: size.strip,
-            // The caption buttons keep their size; in the shell's CSS pixels they take less room at larger sizes.
-            reservedWidth: Math.ceil((platform === 'win32' ? WIN_CAPTION_WIDTH : LINUX_CAPTION_WIDTH) / scale),
+            reservedWidth: platform === 'win32' ? WIN_CAPTION_WIDTH : LINUX_CAPTION_WIDTH,
             side: 'right',
           },
   };

@@ -58,11 +58,6 @@ export interface CustomTheme {
 export type ColorScheme = 'system' | 'light' | 'dark';
 
 /** Settings → Appearance → Interface, each 0–1 with 0.5 the default. */
-/** The sizes Chord's own interface comes in (DESIGN.md §10: 90–150%), as zoom factors. */
-export const UI_SCALES = [0.9, 1, 1.1, 1.25, 1.5] as const;
-export type UiScale = (typeof UI_SCALES)[number];
-export const isUiScale = (value: unknown): value is UiScale => UI_SCALES.includes(value as UiScale);
-
 export interface InterfaceSettings {
   contrast: number;
   /** How much color covers the window material ("Window tint"). */
@@ -312,8 +307,6 @@ export interface Settings {
   /** Light, dark, or the computer's setting; also what web pages see as their color scheme. */
   colorScheme: ColorScheme;
   interface: InterfaceSettings;
-  /** Chord's sidebar, bars, menus and Settings at this size (Settings → Appearance). Pages keep their own zoom. */
-  uiScale: UiScale;
   themes: CustomTheme[];
   extensionButtons: ExtensionButtons;
   /** Searches from the engine while typing in the command bar (ROADMAP Q4: on, with a switch). Typed addresses never go out. */
@@ -394,7 +387,6 @@ export const DEFAULT_SETTINGS: Settings = {
   motion: { followSystem: true, commandBar: true, chordSlide: true, tabMoves: true, sidebar: true, colorBlend: true },
   colorScheme: 'system',
   interface: { contrast: 0.5, glass: 0.5 },
-  uiScale: 1,
   themes: [],
   extensionButtons: 'sidebar',
   searchSuggestions: true,
@@ -438,7 +430,6 @@ export interface SettingsPatch {
   motion?: Partial<MotionSettings>;
   colorScheme?: ColorScheme;
   interface?: Partial<InterfaceSettings>;
-  uiScale?: UiScale;
   extensionButtons?: ExtensionButtons;
   searchSuggestions?: boolean;
   checkForUpdates?: boolean;
