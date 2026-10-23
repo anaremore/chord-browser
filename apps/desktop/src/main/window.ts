@@ -764,6 +764,8 @@ export class AppWindow {
    */
   setPeek(open: boolean): void {
     if (this.peeking === open || this.window.isDestroyed()) return;
+    // A frame snapshot's pictures stand in for the pages, above the sidebar: the pages come back, under it.
+    if (open) this.snapshots.finish();
     const raised = this.shellRaised;
     this.peeking = open;
     this.hidePreview();
@@ -779,7 +781,11 @@ export class AppWindow {
     if (this.lifted === on || this.window.isDestroyed()) return;
     const raised = this.shellRaised;
     this.lifted = on;
-    if (on) this.hidePreview();
+    if (on) {
+      this.hidePreview();
+      // The drop zones go over the pages themselves, not over a frame snapshot's pictures of them.
+      this.snapshots.finish();
+    }
     if (raised !== this.shellRaised) this.placeShell();
   }
 

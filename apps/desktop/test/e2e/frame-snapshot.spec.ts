@@ -14,6 +14,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { paneRects } from '@chord/core';
+import { springCurve, springs } from '@chord/tokens';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
@@ -90,7 +91,7 @@ type Which = 'first' | 'private';
 
 /**
  * From now on, notes in main each move of each page in the window's frame
- * (`setBounds`: where to, and whether the page had the keyboard), and counts
+ * (`setBounds`: where to, when, and whether the page had the keyboard), and counts
  * its pictures (`capturePage`). Optionally makes its pictures fail or never come.
  */
 async function watch(app: ElectronApplication, which: Which = 'first', capture: 'real' | 'fail' | 'hang' = 'real'): Promise<void> {
@@ -102,7 +103,7 @@ async function watch(app: ElectronApplication, which: Which = 'first', capture: 
       }
       interface Snap {
         moves: Record<string, number>;
-        rects: Record<string, { x: number; y: number; width: number; height: number; focused: boolean }[]>;
+        rects: Record<string, { x: number; y: number; width: number; height: number; focused: boolean; at: number }[]>;
         captures: number;
       }
       const w = BaseWindow.getAllWindows().find((x) => x.getTitle() === (which === 'private' ? 'Chord (private window)' : 'Chord'))!;
@@ -116,7 +117,7 @@ async function watch(app: ElectronApplication, which: Which = 'first', capture: 
         own['chordSetBounds'] = setBounds;
         v.setBounds = (b) => {
           g.snap.moves[url] = (g.snap.moves[url] ?? 0) + 1;
-          (g.snap.rects[url] ??= []).push({ ...b, focused: v.webContents.isFocused() });
+          (g.snap.rects[url] ??= []).push({ ...b, focused: v.webContents.isFocused(), at: Date.now() });
           setBounds(b);
         };
         const contents = v.webContents as unknown as Record<string, unknown>;
@@ -136,7 +137,7 @@ async function watch(app: ElectronApplication, which: Which = 'first', capture: 
 
 interface Watched {
   moves: Record<string, number>;
-  rects: Record<string, { x: number; y: number; width: number; height: number; focused: boolean }[]>;
+  rects: Record<string, { x: number; y: number; width: number; height: number; focused: boolean; at: number }[]>;
   captures: number;
 }
 const watched = (app: ElectronApplication) => app.evaluate(() => (globalThis as unknown as { snap: Watched }).snap);
@@ -358,6 +359,37 @@ test('a key typed into the page brings it back at once', async () => {
     expect(placed).toEqual({ before: placed.width - 1, after: 4, width: placed.width });
     await expect(tab.locator('#field')).toHaveValue('k');
     expect(Object.values((await watched(app)).moves)).toEqual([2]);
+  } finally {
+    await app.close();
+  }
+});
+
+test('peeking the sidebar while the page glides brings the page back at once, under the sidebar', async () => {
+  const app = await launch();
+  try {
+    const { shell } = await ready(app);
+    await setMotion(app, shell, true);
+    const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
+    // The picture glides slowly here, so the peek surely comes while it does.
+    await shell.evaluate(() => document.documentElement.style.setProperty('--spring-smooth-duration', '3000ms'));
+    await watch(app);
+    await shell.mouse.move(300, 300);
+    const gliding = shell.waitForFunction(() => [...document.querySelectorAll('canvas')].some((c) => c.style.transform !== ''), undefined, { polling: 'raf' });
+    await runAction(shell, 'view.toggleSidebar');
+    await gliding;
+
+    // The pointer reaches the window's left edge: the sidebar slides in over the page, which is back in place.
+    const edgeAt = Date.now();
+    await shell.mouse.move(1, 300, { steps: 6 });
+    await expect(sidebar).toBeVisible();
+    await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(4);
+    const [away, back] = (await watched(app)).rects[`${site.origin}/`]!;
+    expect(back).toMatchObject({ x: 4 });
+    // Back with the peek, not when main would have brought it back anyway (the shell never said the picture arrived).
+    const fallbackAt = away!.at + springCurve(springs.smooth).durationMs + 300;
+    expect(fallbackAt - edgeAt).toBeGreaterThan(250);
+    expect(back!.at - edgeAt).toBeLessThan(250);
+    await expect.poll(() => picturesNow(shell)).toBe(0);
   } finally {
     await app.close();
   }
