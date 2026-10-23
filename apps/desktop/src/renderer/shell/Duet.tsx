@@ -651,11 +651,26 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
                 </button>
               </li>
             ))}
+          {!view.chordOff && (
+            <li>
+              <button type="button" role="menuitem" className={styles.menuItem} onClick={() => {
+                  act({ do: 'chordOff', off: true });
+                  setMenu(null);
+                }}>
+                Turn off in this chord
+              </button>
+            </li>
+          )}
         </ul>
       )}
 
       {view.chordOff ? (
-        <p className={styles.centerNote}>Duet is off in this chord. Turn it back on in Settings → Duet.</p>
+        <div className={styles.centerNote}>
+          <p>Duet is off in this chord. It can’t read this chord’s tabs from other chords either.</p>
+          <button type="button" className={styles.secondary} onClick={() => act({ do: 'chordOff', off: false })}>
+            Turn on in this chord
+          </button>
+        </div>
       ) : !view.provider ? (
         <div className={styles.intro}>
           <p className={styles.introTitle}>Meet Duet.</p>

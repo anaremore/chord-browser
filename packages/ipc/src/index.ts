@@ -402,6 +402,8 @@ export const DuetAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('toggle'), open: z.boolean().optional() }),
   z.object({ do: z.literal('dismissFirstUse') }),
   z.object({ do: z.literal('setup'), provider: DuetProviderSchema }),
+  /** Duet off (or back on) in the window's current chord. */
+  z.object({ do: z.literal('chordOff'), off: z.boolean() }),
   z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }),
   z.object({ do: z.literal('refresh') }),
   z.object({ do: z.literal('send'), text: z.string().min(1).max(50_000) }),

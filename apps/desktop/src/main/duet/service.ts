@@ -246,7 +246,7 @@ export class DuetService {
   }
 
   private readable(node: TabNode): boolean {
-    return !this.isPrivateChord(node.chordId) && !isNeverReadable(node.url, this.settings.neverSites);
+    return !this.isPrivateChord(node.chordId) && !this.settings.offChords.includes(node.chordId) && !isNeverReadable(node.url, this.settings.neverSites);
   }
 
   /** The chips above the composer: the current tab (unless removed), then anything added. */
@@ -337,6 +337,14 @@ export class DuetService {
         break;
       case 'setup':
         this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { provider: action.provider } } });
+        break;
+      case 'chordOff':
+        if (chordId) {
+          const off = new Set(this.settings.offChords);
+          if (action.off) off.add(chordId);
+          else off.delete(chordId);
+          this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { offChords: [...off] } } });
+        }
         break;
       case 'signIn': {
         const status = this.statuses[action.provider] ?? (await detect(action.provider));
@@ -452,7 +460,7 @@ export class DuetService {
 
   private async send(windowId: WindowId, state: ThreadState, text: string, reuse?: DuetAttachment[]): Promise<void> {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || this.settings.offChords.includes(state.chordId)) return;
     if (state.streaming) {
       // Follow-ups wait their turn instead of being refused (they show as queued).
       state.queue.push(trimmed);

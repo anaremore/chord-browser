@@ -228,6 +228,14 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     await expect(panel.getByText(/This tab · 127\.0\.0\.1/)).toHaveCount(0);
     await send(panel, 'list my tabs');
     await expect(panel.getByText('I can see 0 tabs.')).toBeVisible();
+
+    // Off in this chord: no composer until it's turned back on, from the panel itself.
+    await panel.getByRole('button', { name: 'Chats' }).click();
+    await panel.getByRole('menuitem', { name: 'Turn off in this chord' }).click();
+    await expect(panel.getByText(/Duet is off in this chord/)).toBeVisible();
+    await expect(panel.getByRole('textbox', { name: 'Message Duet' })).toHaveCount(0);
+    await panel.getByRole('button', { name: 'Turn on in this chord' }).click();
+    await expect(panel.getByRole('textbox', { name: 'Message Duet' })).toBeVisible();
   } finally {
     await app.close();
   }
