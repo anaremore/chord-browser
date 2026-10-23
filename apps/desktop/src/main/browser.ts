@@ -315,11 +315,14 @@ export class Browser {
     });
     this.windows.set(windowId, w);
     this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));
+    // A load can finish after its window has closed (quitting right after launch): only an open window syncs.
     w.popover.webContents.on('did-finish-load', () => {
+      if (this.windows.get(windowId) !== w) return;
       this.popoverSent.delete(windowId);
       this.syncPopover(w);
     });
     w.shell.webContents.on('did-finish-load', () => {
+      if (this.windows.get(windowId) !== w) return;
       this.extensions.forget(windowId);
       this.extensions.sync();
     });
