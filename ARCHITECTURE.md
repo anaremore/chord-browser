@@ -967,7 +967,7 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 | **D2** | Duet provider access | **Decided:** no provider agreement. Users run `claude auth login` / `codex login` themselves, as with T3 Code (§11.1). |
 | **D3** | Code signing | **Deferred:** open source first, unsigned builds, with the consequences handled in §15.2. Signing becomes roadmap Phase 4. |
 | **D4** | DRM (Netflix, Spotify, Disney+) | **Open; needed by M1.6.** (a) Stock Electron: no Widevine, fastest security patches. (b) castLabs ECS: Widevine on macOS/Windows, none on Linux. Its latest stable is 44.5.1+wvcus (2026-10-03) while upstream 44 is at 44.9.3, so it trails on patches. **Recommendation: (a) for v1**, with honest copy. |
-| **D5** | Ad blocking | Open; not needed until Phase 3. Built-in Ghostery engine (MPL-2.0, opt-in) vs none. uBO Lite needs `declarativeNetRequest`, which Electron lacks. |
+| **D5** | Ad blocking | **Decided 2026-10-22: none built in.** Users who want it install uBlock Origin Lite from the Web Store. Spike S9 showed Electron 45 does support `declarativeNetRequest`, and uBO Lite blocks ads in Chord. |
 | **D6** | Default search engine | **Decided:** Google; others selectable. |
 | **D7** | Phishing and malware protection | Open; not needed until Phase 3. Safe Browsing v5 Local List (non-commercial terms, attribution) vs none. |
 | **D8** | Duet timing | **Proposed in ROADMAP.md:** Phase 2, browse mode first; developer mode in Phase 4. |
