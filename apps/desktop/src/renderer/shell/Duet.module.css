@@ -236,14 +236,41 @@
 }
 
 .scope {
+  display: flex;
+  flex: 1;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+}
+
+.scopeOption {
   flex: 1;
   min-inline-size: 0;
   block-size: var(--size-hit-min);
+  padding-inline: var(--space-2);
+  overflow: hidden;
   border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--color-item-hover);
-  color: var(--color-fg);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-fg-muted);
   font: var(--text-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.scopeOption:hover {
+  color: var(--color-fg);
+}
+
+.scopeOption[aria-checked='true'] {
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
 }
 
 .empty {

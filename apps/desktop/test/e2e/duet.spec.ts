@@ -224,7 +224,7 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     const add = settings.getByRole('textbox', { name: 'Add a site Duet never reads' });
     await add.fill('127.0.0.1');
     await add.press('Enter');
-    await panel.getByRole('combobox', { name: 'What Duet can read' }).selectOption('all');
+    await panel.getByRole('radiogroup', { name: 'What Duet can read' }).getByRole('radio', { name: 'All tabs' }).click();
     await expect(panel.getByText(/This tab · 127\.0\.0\.1/)).toHaveCount(0);
     await send(panel, 'list my tabs');
     await expect(panel.getByText('I can see 0 tabs.')).toBeVisible();

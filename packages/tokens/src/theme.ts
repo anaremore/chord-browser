@@ -85,7 +85,7 @@ export interface ChordTheme {
   stops: Oklch[];
   tintAlpha: number;
   /** Lowest text contrast found across the tint, for tests and diagnostics. */
-  minContrast: { fg: number; fgMuted: number; accent: number };
+  minContrast: { fg: number; fgMuted: number; accent: number; accentFg: number };
   /** CSS custom properties to set on the element that hosts the chord. */
   vars: Record<`--${string}`, string>;
 }
@@ -224,8 +224,23 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
     accent = { ...accent, l: light ? accent.l - 0.02 : accent.l + 0.02 };
     accentContrast = contrast(oklchToRgb(accent), surfaceRgb);
   }
+  // Text on the accent (primary buttons): white in light themes, a dark ink in the accent's hue in
+  // dark ones (the theme's own text color is light there, and light-on-light fails). The accent
+  // darkens or lightens until that text reads; either way it moves away from the surface, which
+  // only raises its own contrast.
   const white = oklchToRgb({ l: 1, c: 0, h: 0 });
-  const accentFg = contrast(white, oklchToRgb(accent)) >= TEXT_MIN_CONTRAST ? 'oklch(1 0 0)' : cssOklch(fg);
+  const ink: Oklch = { l: 0.2, c: Math.min(0.04, accent.c), h: accent.h };
+  const inkRgb = oklchToRgb(ink);
+  let accentRgb = oklchToRgb(accent);
+  for (let i = 0; i < 20 && contrast(light ? white : inkRgb, accentRgb) < TEXT_MIN_CONTRAST; i++) {
+    accent = { ...accent, l: light ? accent.l - 0.02 : accent.l + 0.02 };
+    accentRgb = oklchToRgb(accent);
+  }
+  accentContrast = contrast(accentRgb, surfaceRgb);
+  const onWhite = contrast(white, accentRgb);
+  const onInk = contrast(inkRgb, accentRgb);
+  const accentFg = onWhite >= TEXT_MIN_CONTRAST || onWhite >= onInk ? 'oklch(1 0 0)' : cssOklch(ink);
+  const accentFgContrast = accentFg === 'oklch(1 0 0)' ? onWhite : onInk;
 
   const tint = (s: Oklch) => cssOklch(s, tintAlpha);
   const [a, b, c] = stops as [Oklch, Oklch?, Oklch?];
@@ -239,7 +254,7 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
     appearance,
     stops,
     tintAlpha,
-    minContrast: { fg: fgMin, fgMuted: mutedMin, accent: accentContrast },
+    minContrast: { fg: fgMin, fgMuted: mutedMin, accent: accentContrast, accentFg: accentFgContrast },
     vars: {
       '--color-tint': tintCss,
       '--color-base': context.material === 'translucent' ? 'transparent' : cssOklch(base),
