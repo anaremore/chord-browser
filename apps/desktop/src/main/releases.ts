@@ -14,6 +14,8 @@ export const RELEASES_PAGE = 'https://github.com/anaremore/chord-browser/release
 
 export interface Release {
   version: string;
+  /** The tag as GitHub has it (`v0.2.0`): its files download from that folder. */
+  tag: string;
   name: string;
   url: string;
 }
@@ -68,7 +70,7 @@ export function newerRelease(reply: unknown, current: string): Release | null {
     if (compareVersions(plain, current) <= 0) continue;
     if (best && compareVersions(plain, best.version) <= 0) continue;
     const name = typeof item['name'] === 'string' && item['name'].trim() ? item['name'].trim() : `Chord ${plain}`;
-    best = { version: plain, name, url };
+    best = { version: plain, tag: tag.trim(), name, url };
   }
   return best;
 }

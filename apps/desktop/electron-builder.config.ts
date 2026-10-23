@@ -30,8 +30,11 @@ const config: Configuration = {
   npmRebuild: false,
   // Arch is always in the name, so every build of a version can share one release.
   artifactName: '${productName}-${version}-${os}-${arch}.${ext}',
-  // The updater (and its manifests) arrives later (ARCHITECTURE.md §14.4).
-  publish: null,
+  // Where updates come from (ARCHITECTURE.md §14.4). Builds never publish themselves (the scripts
+  // pass --publish never; the release workflow uploads), but this makes electron-builder write
+  // each installer's manifest (latest*.yml) and the app's app-update.yml. Chord reads the
+  // manifests through its own signature-checking provider (src/main/update-installer.ts).
+  publish: { provider: 'github', owner: 'anaremore', repo: 'chord-browser' },
 
   // ARCHITECTURE.md §14.1. Flipped right before signing. electron-builder
   // 26.18 bundles @electron/fuses 1.8, which doesn't know WasmTrapHandlers;

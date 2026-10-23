@@ -35,6 +35,7 @@ import { platform, systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
 import { Suggestions } from './suggestions';
+import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
 import { chromiumUserAgent } from './user-agent';
 
@@ -74,9 +75,12 @@ let profileSession: (profileId: string) => Session;
 const updates = new UpdateChecker({
   enabled: () => browser?.store.state.settings.checkForUpdates ?? false,
   onAvailable: (release) => browser?.announce(`update:${release.version}`, `${release.name} is out`, { label: 'What’s new', url: release.url }),
+  onReady: (release) => browser?.announceUpdateReady(`update:${release.version}`, `${release.name} is ready`),
+  installer: new UpdateInstaller(),
 });
 const suggestions = new Suggestions({
-  enabled: () => browser?.store.state.settings.searchSuggestions ?? false,
+  // Google-free mode never searches with Google (core enforces it); this is the backstop.
+  enabled: () => (browser?.store.state.settings.searchSuggestions ?? false) && !(browser?.store.state.settings.googleFree && browser.store.state.settings.searchEngine === 'google'),
   engine: () => browser?.store.state.settings.searchEngine ?? 'google',
 });
 
@@ -186,6 +190,7 @@ function registerIpc(): void {
   handle('settings:defaultBrowser', () => defaultBrowserStatus());
   handle('settings:updateStatus', () => updates.status());
   handle('settings:checkForUpdates', () => updates.checkNow());
+  handle('update:restart', () => updates.restart());
   handle('settings:makeDefaultBrowser', async () => {
     await makeDefaultBrowser();
     return defaultBrowserStatus();
@@ -298,7 +303,8 @@ if (!app.requestSingleInstanceLock()) {
         permissions.attach(ses, priv ? profileId : null);
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
         screenShare.attach(ses);
-        applySpellcheck(ses, browser?.store.state.settings.spellcheck ?? DEFAULT_SETTINGS.spellcheck);
+        const settings = browser?.store.state.settings ?? DEFAULT_SETTINGS;
+        applySpellcheck(ses, settings.spellcheck, settings.googleFree);
         profiles.set(profileId, ses);
       }
       return ses;
@@ -376,9 +382,9 @@ if (!app.requestSingleInstanceLock()) {
     followScheme();
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
-      // Spelling settings apply to every profile's session at once.
-      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'spellcheck')) {
-        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck);
+      // Spelling settings (and where dictionaries come from) apply to every profile's session at once.
+      if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'spellcheck' || p.path[1] === 'googleFree'))) {
+        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck, change.state.settings.googleFree);
       }
     });
     duet = new DuetService(browser, persistence, app.getPath('userData'));

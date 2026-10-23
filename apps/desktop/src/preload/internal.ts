@@ -27,6 +27,7 @@ const api: SettingsApi = {
     makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),
     updateStatus: () => invoke('settings:updateStatus'),
     checkForUpdates: () => invoke('settings:checkForUpdates'),
+    restartToUpdate: () => invoke('update:restart'),
     about: () => invoke('settings:about'),
     openUrl: (url) => invoke('settings:openUrl', { url }),
   },

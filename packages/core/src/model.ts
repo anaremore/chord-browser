@@ -302,6 +302,13 @@ export interface Settings {
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
   shortcuts: ShortcutOverrides;
   spellcheck: SpellcheckSettings;
+  /**
+   * Chord itself never contacts Google (docs/decisions/S10-google-free.md): a
+   * non-Google search engine (so its suggestions aren't Google's either),
+   * spelling only with dictionaries already downloaded, and no background
+   * Web Store update checks. Pages you visit can still load from Google.
+   */
+  googleFree: boolean;
   /** Duet, the chat panel (ARCHITECTURE.md §11). */
   duet: DuetSettings;
   /** Where links from other apps open (Chord as the default browser): a mini window, or a new tab. */
@@ -322,6 +329,9 @@ export interface LinkRoute {
   chordId: ChordId;
   createdAt: number;
 }
+
+/** What Google-free mode searches with until you pick another (any engine but Google). */
+export const GOOGLE_FREE_ENGINE: SearchEngineId = 'duckduckgo';
 
 /** Spelling in text fields (ARCHITECTURE.md §9). */
 export interface SpellcheckSettings {
@@ -362,6 +372,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoPip: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
+  googleFree: false,
   duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
   externalLinks: 'mini',
   miniWindowSize: null,
@@ -403,6 +414,7 @@ export interface SettingsPatch {
   spellcheck?: Partial<SpellcheckSettings>;
   externalLinks?: ExternalLinks;
   miniWindowSize?: { width: number; height: number } | null;
+  googleFree?: boolean;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
   duet?: Partial<DuetSettings>;
