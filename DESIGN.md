@@ -528,7 +528,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 - 40 px tall, `radius-md`, `surface-raised`, `shadow-popover`.
 - Anatomy: `[icon] [message text-small] … [Undo — text-label, accent] [⌘Z keycap when the shell has focus]`.
 - Announced through a polite live region.
-- *As built (M1.6):* the stack is the one live region (each toast is announced once, as it arrives), and each Undo is described by its toast's message. The clock pauses while a toast has focus, as on hover. ⌘Z / Ctrl+Z, while the shell has focus and no text field does, presses the newest toast's Undo.
+- *As built (M1.6):* the stack is the one live region (each toast is announced once, as it arrives), and each Undo is described by its toast's message. ⌘Z / Ctrl+Z, while the shell has focus and no text field does, presses the newest toast's Undo. Up to three stack as the deck in §6.5: older ones tuck behind the newest, each 6 px higher and 4% smaller, with only their top edge showing. Hovering the stack, or moving focus into it, fans them out upward over the tabs (the sidebar doesn't jump), so every toast's buttons can be reached; every clock pauses while the deck is open. `test/e2e/toasts.spec.ts`.
 
 ### 7.6 `HoverPreview`
 

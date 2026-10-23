@@ -753,13 +753,18 @@ kbd {
 
 /* ---------- Toasts ---------- */
 
-/* Above the footer, newest at the bottom, nearest the switcher. */
+/*
+ * Above the footer, newest at the bottom, nearest the switcher. A deck
+ * (DESIGN.md §6.5): Toasts.tsx places each card and sets the stack's height.
+ * Its own stacking context, above the tabs it fans out over.
+ */
 .toasts {
-  display: flex;
+  position: relative;
+  z-index: 1;
   flex: none;
-  flex-direction: column-reverse;
-  gap: var(--space-2);
+  box-sizing: content-box;
   padding-block-end: var(--space-2);
+  isolation: isolate;
 }
 
 /* In the minimal bar: just the newest, inline. */
@@ -786,6 +791,30 @@ kbd {
 .toastsInline .toast {
   min-block-size: var(--size-icon-button);
   box-shadow: var(--shadow-raised);
+}
+
+.toasts .toast {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: var(--space-2);
+}
+
+/* Behind the one in front only its top edge shows: its words stay out of sight until the deck fans out. */
+.toasts .toast > * {
+  transition: opacity var(--duration-fade-fast) var(--ease-standard);
+}
+
+.toasts .toast[data-behind] > * {
+  opacity: 0;
+}
+
+/* Fanned out, the gap under each toast still counts as the deck, so crossing it doesn't fold it. */
+.toasts[data-open] .toast::after {
+  position: absolute;
+  inset-block-start: 100%;
+  inset-inline: 0;
+  block-size: var(--space-2);
+  content: '';
 }
 
 .toastMessage {
