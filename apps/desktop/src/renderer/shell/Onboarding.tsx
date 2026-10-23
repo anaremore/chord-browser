@@ -9,7 +9,9 @@ import { PRESETS, SWATCHES, cssOklch, presetStops, type PresetId, type SwatchId 
 import { Check, Dices } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useRoving } from '../shared/a11y';
 import type { SpringFor } from '../shared/motion';
+import { announce } from './announce';
 import { api } from './api';
 import { useKeys } from './keys';
 import styles from './Onboarding.module.css';
@@ -42,6 +44,7 @@ const NOTES = [
 ] as const;
 
 const titleCase = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+const RADIOS = { items: '[role="radio"]', current: '[aria-checked="true"]', activate: true } as const;
 const PRESET_GRAIN = 0.2;
 
 function Mark({ spring }: { spring: SpringFor }) {
@@ -123,6 +126,9 @@ function NameStep({ chord, onNext }: { chord: Chord; onNext(): void }) {
 function ThemeStep({ chord, onNext }: { chord: Chord; onNext(): void }) {
   const apply = (theme: Partial<ChordThemeSpec>) => void api.state.dispatch({ t: 'chord.theme', chordId: chord.id, theme });
   const usePreset = (id: PresetId) => apply({ stops: presetStops(id), grain: PRESET_GRAIN, themeId: `preset:${id}` });
+  // Each group is one Tab stop; arrow keys pick within it (WAI-ARIA radio group).
+  const presetsGroup = useRoving<HTMLDivElement>(RADIOS);
+  const swatchesGroup = useRoving<HTMLDivElement>(RADIOS);
   const surprise = () => {
     const presets = Object.keys(PRESETS) as PresetId[];
     const others = presets.filter((id) => chord.theme.themeId !== `preset:${id}`);
@@ -132,7 +138,7 @@ function ThemeStep({ chord, onNext }: { chord: Chord; onNext(): void }) {
     <>
       <h1 className={styles.title}>Make it yours.</h1>
       <p className={styles.body}>Pick the colors for {chord.name}. Watch the sidebar.</p>
-      <div className={styles.presets} role="radiogroup" aria-label="Theme">
+      <div ref={presetsGroup.ref} className={styles.presets} role="radiogroup" aria-label="Theme" onKeyDown={presetsGroup.onKeyDown}>
         {(Object.keys(PRESETS) as PresetId[]).map((id) => (
           <button
             key={id}
@@ -147,7 +153,7 @@ function ThemeStep({ chord, onNext }: { chord: Chord; onNext(): void }) {
           />
         ))}
       </div>
-      <div className={styles.swatches} role="radiogroup" aria-label="One color">
+      <div ref={swatchesGroup.ref} className={styles.swatches} role="radiogroup" aria-label="One color" onKeyDown={swatchesGroup.onKeyDown}>
         {(Object.keys(SWATCHES) as SwatchId[]).map((id) => (
           <button
             key={id}
@@ -317,8 +323,15 @@ export function Onboarding({ chord, windowId, info, spring }: { chord: Chord; wi
     void api.overlay.open('new');
   };
 
-  // Each step starts on its field, or its main button.
-  useEffect(() => card.current?.querySelector<HTMLElement>('input, button[data-primary]')?.focus(), [current.step]);
+  // Each step starts on its field, or its main button, and screen readers hear which step it is. The
+  // card is keyed by step, so this runs as each new card arrives (after the old one has gone).
+  const arrived = (el: HTMLDivElement | null) => {
+    card.current = el;
+    if (!el) return;
+    el.querySelector<HTMLElement>('input, button[data-primary]')?.focus();
+    const heading = el.querySelector('h1')?.textContent;
+    if (index > 0 && heading) announce(`${heading} Step ${index + 1} of ${steps.length}.`);
+  };
   // ↵ is always the main action (fields handle their own), and Esc skips an optional step.
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape' && current.optional) {
@@ -331,11 +344,11 @@ export function Onboarding({ chord, windowId, info, spring }: { chord: Chord; wi
   };
 
   return (
-    <div className={styles.stage} role="dialog" aria-modal="false" aria-label="Welcome to Chord" onKeyDown={onKeyDown}>
+    <div className={styles.stage} role="dialog" aria-modal="false" aria-label="Welcome to Chord" aria-describedby="onboarding-step" onKeyDown={onKeyDown} data-page-state>
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={current.step}
-          ref={card}
+          ref={arrived}
           className={styles.card}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -359,7 +372,7 @@ export function Onboarding({ chord, windowId, info, spring }: { chord: Chord; wi
           {current.step === 'tips' && <TipsStep info={info} onDone={finish} />}
         </motion.div>
       </AnimatePresence>
-      <ol className={styles.dots} aria-label={`Step ${index + 1} of ${steps.length}`}>
+      <ol id="onboarding-step" className={styles.dots} aria-label={`Step ${index + 1} of ${steps.length}`}>
         {steps.map((s, i) => (
           <li key={s.step} className={styles.dot} data-optional={s.optional || undefined} data-current={i === index || undefined} data-done={i < index || undefined} />
         ))}

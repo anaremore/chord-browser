@@ -598,7 +598,10 @@ export const invokeChannels = {
   'cmd:dispatch': { roles: ['shell', 'overlay'], request: RendererCommand, response: z.void() },
   'nav:command': { roles: ['shell', 'overlay'], request: z.object({ action: NavAction }), response: z.void() },
   'overlay:open': { roles: ['shell'], request: OverlayOpen, response: z.void() },
-  'overlay:close': { roles: ['overlay'], request: z.object({ seq: z.number().int() }), response: z.void() },
+  /** `dismissed`: Esc or a click outside, rather than a pick (the keyboard goes back where it came from). */
+  'overlay:close': { roles: ['overlay'], request: z.object({ seq: z.number().int(), dismissed: z.boolean().optional() }), response: z.void() },
+  /** F6 (DESIGN.md §10): the shell moves the keyboard to the page, the find bar or permission prompt, or itself. */
+  'focus:move': { roles: ['shell'], request: z.strictObject({ to: z.enum(['page', 'popover', 'shell']) }), response: z.void() },
   /** The command bar has started and listens for openings (a new window opens it as soon as it is). */
   'overlay:ready': { roles: ['overlay'], request: z.void(), response: z.void() },
   /** The shell reports where the URL pill / address field sits, for anchored ⌘L. */
@@ -745,6 +748,8 @@ export interface EventPayloads {
   /** What the hover preview shows, or null to clear it. */
   'preview:card': PreviewCard | null;
   'toast:show': Toast;
+  /** F6 or ⇧F6 (DESIGN.md §10): move the keyboard to the next or previous region, starting from `from`. */
+  'focus:region': FocusRegionEvent;
   /** The shell's trackpad gesture phases, for the chord swipe's release (DESIGN.md §6.4). */
   'gesture:phase': GesturePhase;
   /** Start renaming a chord, or choosing its icon, in the sidebar (from its menu). */
@@ -833,6 +838,18 @@ export interface ShellApi {
   preview: { hover(target: PreviewTarget): Promise<void> };
   /** Launch timing: the sidebar is ready to use, then painted. */
   perf: { shell(milestone: 'ready' | 'painted'): Promise<void> };
+  /** F6's regions (DESIGN.md §10): main says where the keyboard is; the shell picks the next region. */
+  focus: {
+    onRegion(listener: (event: FocusRegionEvent) => void): () => void;
+    move(to: 'page' | 'popover' | 'shell'): Promise<void>;
+  };
+}
+
+/** F6 or ⇧F6: which way, where the keyboard is now, and whether a find bar or prompt shows over the page. */
+export interface FocusRegionEvent {
+  direction: 1 | -1;
+  from: 'shell' | 'popover' | 'page';
+  popover: boolean;
 }
 
 interface DownloadsApi {
@@ -963,7 +980,8 @@ export interface OverlayApi {
     onDismiss(listener: (seq: number) => void): () => void;
     /** The window's launch is over: warming up for the first opening won't slow it down. */
     onWarm(listener: () => void): () => void;
-    close(seq: number): Promise<void>;
+    /** `dismissed`: Esc or a click outside, so the keyboard goes back where it was. */
+    close(seq: number, dismissed?: boolean): Promise<void>;
     /** Listening now: main may open the command bar. */
     ready(): Promise<void>;
   };

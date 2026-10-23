@@ -116,7 +116,8 @@ export class AutoPip {
     const nodeId = this.deps.nodeFor(contents);
     const node = nodeId ? this.deps.state().nodes[nodeId] : undefined;
     if (!nodeId || node?.kind !== 'tab' || isInternalUrl(node.url)) return;
-    if (!this.deps.state().settings.autoPip || this.popped || contents.isDestroyed()) return;
+    // A crashed page has no frames to ask (reading mainFrame throws), and no video playing.
+    if (!this.deps.state().settings.autoPip || this.popped || contents.isDestroyed() || contents.isCrashed()) return;
     void this.popOut(nodeId, contents);
   }
 
@@ -131,7 +132,13 @@ export class AutoPip {
   private async popOut(nodeId: NodeId, contents: WebContents): Promise<void> {
     const heard = this.heard.has(nodeId);
     // Most pages have one frame; an embedded player (a video in an article) is in a frame of its own.
-    const frames = contents.mainFrame.framesInSubtree;
+    // Its renderer can go away at any moment (a crash, a reload): then there's nothing to pop out.
+    let frames: WebFrameMain[];
+    try {
+      frames = contents.mainFrame.framesInSubtree;
+    } catch {
+      return;
+    }
     const areas = await Promise.all(frames.map((frame) => this.run(contents, frame, SCAN(heard), false).then(Number)));
     // Something on the page is already in PiP (you started it yourself): leave it alone.
     if (areas.some((area) => area < 0)) return;

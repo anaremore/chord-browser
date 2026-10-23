@@ -94,7 +94,7 @@ test('a signed update downloads in the background and waits for a restart', asyn
   try {
     const shell = await pageWhere(app, isShell);
     // The toast offers the restart; it isn't pressed, since that would run the installer.
-    const toast = shell.getByRole('status').filter({ hasText: 'Chord 99.0.0 is ready' });
+    const toast = shell.getByRole('group').filter({ hasText: 'Chord 99.0.0 is ready' });
     await expect(toast).toBeVisible({ timeout: 20_000 });
     await expect(toast.getByRole('button', { name: 'Restart to update' })).toBeVisible();
 
@@ -113,7 +113,7 @@ test('a manifest signed with another key is never installed: Chord only says the
   const app = await launch(publicPem(stranger.publicKey));
   try {
     const shell = await pageWhere(app, isShell);
-    const toast = shell.getByRole('status').filter({ hasText: 'Chord 99.0.0 is out' });
+    const toast = shell.getByRole('group').filter({ hasText: 'Chord 99.0.0 is out' });
     await expect(toast).toBeVisible({ timeout: 20_000 });
     await expect(toast.getByRole('button', { name: 'What’s new' })).toBeVisible();
     await expect(shell.getByText('Chord 99.0.0 is ready')).toHaveCount(0);

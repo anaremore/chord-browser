@@ -8,7 +8,7 @@
 import type { ExtensionAction, ExtensionsBarState, Rect } from '@chord/ipc';
 import { Pin, PinOff, Puzzle, Settings } from 'lucide-react';
 import { motion, type Transition } from 'motion/react';
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 
@@ -17,8 +17,11 @@ const EDGE = 8;
 
 const nameOf = (action: ExtensionAction) => action.title.split('\n')[0] || 'Extension';
 
-export function ExtensionsPanel({ anchor, transition, onClose }: { anchor: Rect | null; transition: Transition; onClose(): void }) {
+export function ExtensionsPanel({ anchor, transition, onClose }: { anchor: Rect | null; transition: Transition; onClose(dismissed?: boolean): void }) {
   const [bar, setBar] = useState<ExtensionsBarState | null>(null);
+  // Opened, the list has the keyboard: screen readers hear its name, and Tab goes through it.
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => panel.current?.focus(), []);
   useEffect(() => {
     let live = true;
     void api.extensions.state().then((state) => live && setBar(state));
@@ -28,7 +31,7 @@ export function ExtensionsPanel({ anchor, transition, onClose }: { anchor: Rect 
   }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onClose(true);
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -53,13 +56,16 @@ export function ExtensionsPanel({ anchor, transition, onClose }: { anchor: Rect 
 
   return (
     <motion.div
+      ref={panel}
       className={styles.downloadsPanel}
       style={style}
       initial={{ opacity: 0, y: below ? -4 : 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={transition}
       role="dialog"
+      aria-modal="true"
       aria-label="Extensions"
+      tabIndex={-1}
     >
       <header className={styles.downloadsHeader}>
         <span className={styles.downloadsTitle}>Extensions</span>

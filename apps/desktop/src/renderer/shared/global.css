@@ -29,10 +29,37 @@ button {
   outline-offset: calc(var(--size-focus-ring) * -1);
 }
 
+/* Read by screen readers, not shown: live announcements and longer descriptions. */
+.sr-only {
+  position: absolute;
+  inline-size: var(--size-hairline);
+  block-size: var(--size-hairline);
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* Reduced motion: the OS preference, unless Settings → Motion says to ignore it (shared/motion.ts). */
 :root[data-reduced-motion] *,
 :root[data-reduced-motion] *::before,
 :root[data-reduced-motion] *::after {
   transition-duration: var(--duration-instant) !important;
   animation-duration: var(--duration-instant) !important;
+}
+
+/*
+ * Windows High Contrast (forced colors, DESIGN.md §10): tints off, system colors on. A focus ring
+ * is drawn in the system's text color; surfaces that float get an edge, since shadows are gone.
+ */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: CanvasText;
+  }
+
+  /* Fields draw their focus as a shadow, which forced colors remove: they get the ring back. */
+  :root input:focus-visible,
+  :root textarea:focus-visible,
+  :root select:focus-visible {
+    outline: var(--size-focus-ring) solid CanvasText;
+  }
 }

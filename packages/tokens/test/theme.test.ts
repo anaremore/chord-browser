@@ -6,6 +6,7 @@ import {
   createChordTheme,
   oklchToRgb,
   presetStops,
+  siteColors,
   type Appearance,
   type Oklch,
   type PresetId,
@@ -28,7 +29,7 @@ const contexts: ThemeContext[] = (['light', 'dark'] as Appearance[]).flatMap((sy
 );
 
 describe('createChordTheme', () => {
-  it('keeps text at ≥ 4.5:1, the accent at ≥ 3:1 and text on the accent at ≥ 4.5:1 for 10,000 random themes', () => {
+  it('keeps text (subtle text and the accent as text too) at ≥ 4.5:1, text on the accent at ≥ 4.5:1 and focus rings at ≥ 3:1 for 10,000 random themes', () => {
     const random = mulberry32(0xc0ffee);
     for (let i = 0; i < 10_000; i++) {
       const stops: Oklch[] = Array.from({ length: 1 + Math.floor(random() * 3) }, () => ({
@@ -36,14 +37,18 @@ describe('createChordTheme', () => {
         c: random() * 0.37,
         h: random() * 360,
       }));
-      // Any Contrast and Window tint setting keeps the guarantee.
-      const context = { ...contexts[i % contexts.length]!, contrast: random(), glass: random() };
+      // Any Contrast and Window tint setting keeps the guarantee, whatever the OS accent (or none).
+      const focus = random() < 0.2 ? null : { l: random(), c: random() * 0.3, h: random() * 360 };
+      const context = { ...contexts[i % contexts.length]!, contrast: random(), glass: random(), focus };
       const appearance = (['light', 'dark', 'auto'] as const)[Math.floor(random() * 3)]!;
       const theme = createChordTheme({ stops, grain: random(), appearance }, context);
       expect(theme.minContrast.fg, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(4.5);
       expect(theme.minContrast.fgMuted, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(4.5);
-      expect(theme.minContrast.accent).toBeGreaterThanOrEqual(3);
+      expect(theme.minContrast.fgSubtle, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(4.5);
+      expect(theme.minContrast.accent, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(4.5);
       expect(theme.minContrast.accentFg, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(4.5);
+      expect(theme.minContrast.focusRing, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(3);
+      expect(theme.vars['--color-focus-ring']).toMatch(/^oklch\(/);
     }
   });
 
@@ -82,6 +87,12 @@ describe('createChordTheme', () => {
       const darkSurfaces = [{ l: 0.21, c: 0.006, h }, { l: 0.25, c: 0.008, h }];
       for (const s of lightSurfaces) expect(contrast(oklchToRgb(DANGER.light), oklchToRgb(s))).toBeGreaterThanOrEqual(4.5);
       for (const s of darkSurfaces) expect(contrast(oklchToRgb(DANGER.dark), oklchToRgb(s))).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('gives fallback favicons a letter at ≥ 4.5:1 on its square, at every hue', () => {
+    for (const appearance of ['light', 'dark'] as const) {
+      for (let h = 0; h < 360; h += 3) expect(siteColors(h, appearance).contrast, `${appearance} ${h}`).toBeGreaterThanOrEqual(4.5);
     }
   });
 

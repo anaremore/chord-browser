@@ -25,6 +25,7 @@
     "package:dir": "node scripts/electron-vite.mjs build && electron-builder --config electron-builder.config.ts --publish never --dir"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@babel/core": "^8.0.7",
     "@playwright/test": "1.64.1",
     "@rolldown/plugin-babel": "0.2.4",

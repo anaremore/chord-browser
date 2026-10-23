@@ -58,7 +58,7 @@ export function ColorWheel({
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const area = useRef<HTMLDivElement>(null);
-  const handles = useRef<(HTMLButtonElement | null)[]>([]);
+  const handles = useRef<(HTMLDivElement | null)[]>([]);
   const [drag, setDrag] = useState<{ index: number; leaving: boolean; point: { x: number; y: number } | null } | null>(null);
 
   useEffect(() => {
@@ -105,7 +105,7 @@ export function ColorWheel({
     setDrag(null);
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
     if ((event.key === 'Delete' || event.key === 'Backspace') && stops.length > 1) {
       event.preventDefault();
       const next = stops.filter((_, i) => i !== index);
@@ -131,17 +131,22 @@ export function ColorWheel({
       onPointerCancel={() => setDrag(null)}
     >
       <canvas ref={canvas} className={styles.canvas} aria-hidden />
+      <span id="wheel-keys" className="sr-only">
+        Arrow keys turn the hue; Shift and the arrow keys make it more or less vivid. Page Up and Page Down take bigger steps. Delete removes the color.
+      </span>
       {stops.map((stop, index) => {
         const leaving = drag?.index === index && drag.leaving;
         const p = leaving && drag.point ? drag.point : colorToPoint(stop, SIZE);
         return (
-          <button
+          // A 2D control: a slider for its hue, with Shift for vividness (DESIGN.md §7.7).
+          <div
             key={index}
             ref={(el) => {
               handles.current[index] = el;
             }}
-            type="button"
             role="slider"
+            tabIndex={0}
+            aria-describedby="wheel-keys"
             data-index={index}
             data-selected={index === active || undefined}
             data-leaving={leaving || undefined}

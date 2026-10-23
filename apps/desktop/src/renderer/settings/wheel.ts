@@ -19,6 +19,8 @@ export const REMOVE_RADIUS = 1.25;
 /** Arrow keys turn the hue this far; Shift+arrows change chroma by this much. */
 export const HUE_STEP = 5;
 export const CHROMA_STEP = 0.01;
+/** Page Up / Page Down move this many hue steps. */
+export const HUE_PAGE = 6;
 
 const toRad = (deg: number) => (deg * Math.PI) / 180;
 const wrap = (deg: number) => ((deg % 360) + 360) % 360;
@@ -69,6 +71,9 @@ export function removesOnRelease(distance: number, count: number): boolean {
 
 /** Arrow keys on a handle: ←/↓ and →/↑ turn the hue; with Shift they change chroma. */
 export function stepColor(color: Oklch, key: string, shift: boolean): Oklch | null {
+  // Page Up and Page Down take bigger steps around the wheel (WAI-ARIA slider).
+  const page = key === 'PageUp' ? 1 : key === 'PageDown' ? -1 : 0;
+  if (page) return { ...color, l: PICK_L, h: wrap(Math.round(color.h + page * HUE_STEP * HUE_PAGE)) };
   const sign = key === 'ArrowRight' || key === 'ArrowUp' ? 1 : key === 'ArrowLeft' || key === 'ArrowDown' ? -1 : 0;
   if (!sign) return null;
   if (shift) return { ...color, l: PICK_L, c: Math.min(MAX_CHROMA, Math.max(0, Math.round((color.c + sign * CHROMA_STEP) * 1000) / 1000)) };

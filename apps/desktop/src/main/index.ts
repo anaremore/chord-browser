@@ -123,7 +123,7 @@ function registerIpc(): void {
   });
   handle('overlay:open', ({ mode, anchor }, sender) => {
     const w = senderWindow(sender);
-    w.openOverlay(mode, mode === 'edit' ? browser!.activeUrl(w.id) : '', anchor ?? null);
+    w.openOverlay(mode, mode === 'edit' ? browser!.activeUrl(w.id) : '', anchor ?? null, 'shell');
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
   handle('history:search', ({ query }, sender) =>
@@ -135,7 +135,8 @@ function registerIpc(): void {
     if (chordId && !fromPrivateWindow(sender)) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
   });
   handle('downloads:openFolder', () => downloads.openFolder());
-  handle('overlay:close', ({ seq }, sender) => browser!.closeOverlay(sender, seq));
+  handle('overlay:close', ({ seq, dismissed }, sender) => browser!.closeOverlay(sender, seq, dismissed));
+  handle('focus:move', ({ to }, sender) => senderWindow(sender).focusRegion(to));
   handle('peek:expand', (_request, sender) => browser!.expandPeek(sender));
   // A mini window's bar (DESIGN.md §7.9): each acts on the mini window it's in.
   handle('mini:state', (_request, sender) => {
