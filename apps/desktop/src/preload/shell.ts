@@ -44,6 +44,7 @@ const api: ShellApi = {
   defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
   share: { stop: (nodeId) => invoke('share:stop', { nodeId }) },
   preview: { hover: (target) => invoke('preview:hover', target) },
+  perf: { shell: (milestone) => invoke('perf:shell', { milestone }) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

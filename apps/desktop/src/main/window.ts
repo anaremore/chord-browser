@@ -14,6 +14,7 @@ import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc'
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
 import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session, type WebContents } from 'electron';
 import { registerCaller, send } from './ipc';
+import { epochNow, markLaunch } from './perf';
 import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
 import { lockToOrigins } from './security';
 import { originOf } from './urls';
@@ -140,7 +141,9 @@ export class AppWindow {
   /** Toasts wait for the shell to load: one sent earlier (an update found at launch) would be lost. */
   private shellLoaded = false;
   private pendingToasts: Toast[] = [];
-  private pendingOpen: { mode: OverlayOpenEvent['mode']; url: string; anchor: Rect | null } | null = null;
+  private pendingOpen: { mode: OverlayOpenEvent['mode']; url: string; anchor: Rect | null; requestedAt: number } | null = null;
+  /** The shell has painted its first frame: the window's launch is over. */
+  private shellPainted = false;
   readonly isPrivate: boolean;
   private origin: FrameOrigin;
   private frameAnimation: ReturnType<typeof setInterval> | undefined;
@@ -224,9 +227,13 @@ export class AppWindow {
       for (const view of [this.shell, this.popover, this.preview, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
     });
 
+    markLaunch('windowCreated');
     // Quitting right after launch can close the window before its shell has loaded.
     this.shell.webContents.once('did-finish-load', () => {
-      if (!this.window.isDestroyed()) this.window.show();
+      markLaunch('shellLoaded');
+      if (this.window.isDestroyed()) return;
+      this.window.show();
+      markLaunch('windowShown');
     });
     this.shell.webContents.on('did-start-loading', () => {
       this.shellLoaded = false;
@@ -331,7 +338,7 @@ export class AppWindow {
     // Esc and ⌘↵ work from the first frame; the page takes focus once it's in the card.
     this.overlay.webContents.focus();
     this.peekSeq = ++this.overlaySeq;
-    send(this.overlay.webContents, 'overlay:open', { mode: 'peek', anchor: null, url: info.url, seq: this.peekSeq, peek: this.peekState() });
+    send(this.overlay.webContents, 'overlay:open', { mode: 'peek', anchor: null, url: info.url, seq: this.peekSeq, peek: this.peekState(), requestedAt: epochNow() });
     clearTimeout(this.peekTimer);
     this.peekTimer = setTimeout(() => {
       if (this.peekView !== view || this.window.isDestroyed()) return;
@@ -581,19 +588,22 @@ export class AppWindow {
     this.anchor = rect;
   }
 
-  /** `anchor` places the downloads panel by its button; ⌘L uses the address the shell reported. */
-  openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null): void {
+  /**
+   * `anchor` places the downloads panel by its button; ⌘L uses the address the shell reported.
+   * `requestedAt` is when the opening was asked for: the command bar's open budget counts from it.
+   */
+  openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null, requestedAt = epochNow()): void {
     this.closeFloating();
     this.hidePreview();
     if (!this.overlayReady) {
       // A brand-new window: the command bar opens as soon as it's listening.
-      this.pendingOpen = { mode, url, anchor };
+      this.pendingOpen = { mode, url, anchor, requestedAt };
       return;
     }
     this.overlayVisible = true;
     this.overlay.setVisible(true);
     this.overlay.webContents.focus();
-    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq });
+    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq, requestedAt });
   }
 
   /** The command bar has started and listens for openings (it says so after every load). */
@@ -601,7 +611,19 @@ export class AppWindow {
     this.overlayReady = true;
     const pending = this.pendingOpen;
     this.pendingOpen = null;
-    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor);
+    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, pending.requestedAt);
+    else if (this.shellPainted) send(this.overlay.webContents, 'overlay:warm', null);
+  }
+
+  /**
+   * The shell painted its first frame. Only now may the command bar warm up
+   * for its first opening (CommandBar.tsx): doing it alongside the shell's
+   * start would slow the launch.
+   */
+  markShellPainted(): void {
+    if (this.shellPainted) return;
+    this.shellPainted = true;
+    if (this.overlayReady) send(this.overlay.webContents, 'overlay:warm', null);
   }
 
   /** `seq` is the opening being closed; a close for an earlier one (racing a newer open) is ignored. */

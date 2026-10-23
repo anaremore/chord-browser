@@ -285,7 +285,10 @@ test('page-first keys reach Chord only when the page passes; reserved keys fire 
     const shell = await pageWhere(app, isShell);
     const tab = await pageWhere(app, (url) => url.startsWith('data:'));
     // Focus moves asynchronously (slowly on Linux CI), so wait until the page has it before typing.
+    // The page can load and take focus before the window is shown (once the shell has loaded), and
+    // menu accelerators only fire for an active window: wait for that too.
     const press = async (key: string) => {
+      await expect.poll(() => app.evaluate(({ BaseWindow }) => BaseWindow.getFocusedWindow() !== null)).toBe(true);
       await app.evaluate(({ webContents }) => webContents.getAllWebContents().find((x) => x.getURL().startsWith('data:'))!.focus());
       await expect.poll(() => tab.evaluate(() => document.hasFocus())).toBe(true);
       await app.evaluate(({ webContents }, k) => {

@@ -12,10 +12,12 @@ import type { HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@ch
 import { AppWindow, Archive, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, MessagesSquare, PanelLeft, Pin, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
+import { flushSync } from 'react-dom';
 import { Favicon } from '../shared/Favicon';
 import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
+import { afterNextPaint, fromEpoch, measureSince } from '../shared/perf';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './CommandBar.module.css';
@@ -29,12 +31,35 @@ interface Session {
   anchor: OverlayOpenEvent['anchor'];
   /** Changes on every open, replaying the entrance animation. */
   openedAt: number;
+  /** When main was asked to open (epoch ms): the open budget counts from here to the first painted frame. */
+  requestedAt: number;
   /** What the field opened with (the address, for ⌘L): a pick is only learned once the person typed. */
   initial: string;
   /** Main's number for this opening; closing names it. */
   seq: number;
   /** Peek's page and card, when the overlay is Peek's chrome. */
   peek?: PeekState;
+  /** Not an opening: the unseen warm-up render while the overlay is still hidden (see below). */
+  warm?: boolean;
+}
+
+/** What the warm-up "types": enough to fill the results with each kind of row. */
+const WARM_QUERY = 'a';
+/** How long the warm-up stays rendered: long enough for its history reply to arrive and render. */
+const WARM_MS = 400;
+
+/**
+ * A keystroke being timed (ARCHITECTURE.md §1): results from memory should be
+ * on screen in the very next frame, history and the archive within 16 ms.
+ */
+interface Keystroke {
+  query: string;
+  /** The input event's timestamp. */
+  at: number;
+  /** A frame has started since: results committed after this missed the keystroke's frame. */
+  frameBegan: boolean;
+  /** When results for it were committed to the DOM, once they were. */
+  committed: number | null;
 }
 
 /** Whether the overlay is the command bar, in any of its modes (rather than a panel or Peek's chrome). */
@@ -118,13 +143,20 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   /** Whether the last edit may complete: typing at the end does; deleting never brings back what was deleted. */
   const [mayComplete, setMayComplete] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** Whether a real opening has come (the warm-up only runs before one), and whether the warm-up is showing. */
+  const opened = useRef(false);
+  const warming = useRef(false);
 
   useEffect(() => {
     const stop = api.overlay.onOpen((event) => {
+      opened.current = true;
+      warming.current = false;
+      searched.current = null;
       setSession({
         mode: event.mode,
         anchor: event.anchor,
         openedAt: performance.now(),
+        requestedAt: event.requestedAt,
         initial: event.mode === 'edit' ? event.url : '',
         seq: event.seq,
         ...(event.peek ? { peek: event.peek } : {}),
@@ -144,9 +176,43 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     };
   }, []);
 
+  // The first opening shouldn't pay for this process's first fonts, styles and code paths (about
+  // 40 ms on the reference PC; the open budget is 50, ARCHITECTURE.md §1). So once main says the
+  // window is up, while the overlay is still hidden, the bar renders once, unseen, with a query
+  // (which also warms the history search), then goes again. A real opening simply replaces it.
+  // Not sooner: alongside the shell's start it slows the launch. Not at idle: a hidden page gets
+  // no idle time, so that would wait for the first opening itself.
+  useEffect(() => {
+    let done: ReturnType<typeof setTimeout> | undefined;
+    const stop = api.overlay.onWarm(() => {
+      if (opened.current || warming.current) return;
+      performance.mark('chord:command-bar-warm');
+      warming.current = true;
+      setSession({ mode: 'new', anchor: null, openedAt: performance.now(), requestedAt: 0, initial: WARM_QUERY, seq: -1, warm: true });
+      setQuery(WARM_QUERY);
+      done = setTimeout(() => {
+        if (!warming.current) return;
+        warming.current = false;
+        searchSeq.current++; // a reply still on its way is dropped
+        setSession(null);
+        setQuery('');
+        setHistory(null);
+      }, WARM_MS);
+    });
+    return () => {
+      stop();
+      clearTimeout(done);
+    };
+  }, []);
+
   // Typeable on the first frame (DESIGN.md §6.7): focus before the entrance animation runs.
   useLayoutEffect(() => {
     if (!session) return;
+    // The warm-up only needs laying out (that loads the fonts); nothing is focused or timed.
+    if (session.warm) {
+      inputRef.current?.getBoundingClientRect();
+      return;
+    }
     const input = inputRef.current;
     input?.focus();
     if (session.mode === 'edit' && input) {
@@ -154,6 +220,12 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
       // Show where the address starts, not where it ends.
       input.scrollLeft = 0;
     }
+    // The open budget: from the request in main to this opening's first frame (and on to its paint).
+    if (!isCommandBar(session)) return;
+    const { requestedAt, openedAt, mode } = session;
+    const start = fromEpoch(requestedAt);
+    const committed = performance.now();
+    afterNextPaint((frameAt) => measureSince('chord:command-bar-open', start, { mode, received: openedAt - start, committed: committed - start, frame: frameAt - start }));
   }, [session]);
 
   // History and learned picks come from chord-data as the person types. A reply for older text is
@@ -174,13 +246,29 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     };
   }, [duetFilter, query]);
   const searchSeq = useRef(0);
+  const keystroke = useRef<Keystroke | null>(null);
+  /** The reply that answers the timed keystroke: when its search went out, and how long chord-data took. */
+  const historyReply = useRef<{ keystroke: Keystroke; sent: number; roundTrip: number } | null>(null);
+  /** The text the latest search asked about, so a keystroke's own search isn't asked again after it renders. */
+  const searched = useRef<string | null>(null);
   const historyFilter = scope?.kind === 'filter' && (scope.filter === 'history' || scope.filter === 'archive');
-  useEffect(() => {
-    if (!isCommandBar(session) || (!query.trim() && !historyFilter)) return;
+  const wantsHistory = (text: string) => isCommandBar(session) && (text.trim() !== '' || historyFilter);
+  const searchHistory = (text: string, typed: Keystroke | null) => {
     const seq = ++searchSeq.current;
-    void api.history.search(query.trim()).then((found) => {
-      if (seq === searchSeq.current) setHistory(found);
+    searched.current = text;
+    const sent = performance.now();
+    void api.history.search(text.trim()).then((found) => {
+      if (seq !== searchSeq.current) return;
+      if (typed) historyReply.current = { keystroke: typed, sent: sent - typed.at, roundTrip: performance.now() - sent };
+      // Rendered now, in the reply's own task: left to the scheduler, it can miss the next frame
+      // and arrive one frame late (the history budget is 16 ms, ARCHITECTURE.md §1).
+      flushSync(() => setHistory(found));
     });
+  };
+  // Opening, a filter, an address to edit: what's in the field is asked about. (Typing asks in its
+  // own handler, before the rows from memory render, so the reply's trip overlaps that work.)
+  useEffect(() => {
+    if (wantsHistory(query) && searched.current !== query) searchHistory(query, null);
   }, [session, query, historyFilter]);
 
   // The engine's suggestions (Settings → General), after a pause in typing. Typed addresses are never
@@ -233,6 +321,31 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     const input = inputRef.current;
     if (input && completion && document.activeElement === input) input.setSelectionRange(query.length, query.length + completion.length);
   }, [query, completion]);
+
+  // Keystroke budgets: rows from memory are in the DOM before the keystroke's frame begins; the
+  // history and archive reply follows within 16 ms. Each is measured to its first painted frame.
+  useLayoutEffect(() => {
+    const typed = keystroke.current;
+    if (typed && typed.query === query && typed.committed === null) {
+      const committed = performance.now();
+      typed.committed = committed;
+      const detail = { query, rows: results.length, sameFrame: !typed.frameBegan, committed: committed - typed.at };
+      afterNextPaint((frameAt) => measureSince('chord:keystroke', typed.at, { ...detail, frame: frameAt - typed.at }));
+    }
+    const reply = historyReply.current;
+    if (reply && reply.keystroke.query === query) {
+      historyReply.current = null;
+      const committed = performance.now();
+      const detail = {
+        query,
+        rows: results.filter((r) => r.kind === 'history' || r.kind === 'archive').length,
+        sent: reply.sent,
+        roundTrip: reply.roundTrip,
+        committed: committed - reply.keystroke.at,
+      };
+      afterNextPaint((frameAt) => measureSince('chord:keystroke-history', reply.keystroke.at, { ...detail, frame: frameAt - reply.keystroke.at }));
+    }
+  }, [results, query]);
 
   const close = () => {
     if (session) void api.overlay.close(session.seq);
@@ -389,7 +502,8 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
 
   return (
     <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
-      <div className={styles.root} style={style}>
+      {/* The warm-up is laid out but never seen, focused or announced. */}
+      <div className={`${styles.root} ${session.warm ? styles.warming : ''}`} style={style} aria-hidden={session.warm || undefined} inert={session.warm}>
         <motion.div
           className={styles.scrim}
           initial={{ opacity: 0 }}
@@ -405,7 +519,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
             initial={entrance}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             transition={spring('overlay', 'commandBar')}
-            role="dialog"
+            role={session.warm ? undefined : 'dialog'}
             aria-label={anchored ? 'Edit address' : 'New tab'}
           >
             <div className={styles.inputRow}>
@@ -437,6 +551,13 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                 onChange={(e) => {
                   const native = e.nativeEvent as InputEvent;
                   const input = e.target;
+                  const typed: Keystroke = { query: input.value, at: e.timeStamp, frameBegan: false, committed: null };
+                  keystroke.current = typed;
+                  requestAnimationFrame(() => {
+                    typed.frameBegan = true;
+                  });
+                  // History is asked first, so its reply travels while the rows from memory render.
+                  if (wantsHistory(input.value)) searchHistory(input.value, typed);
                   // Completion follows typing at the end of the text, never a deletion or an edit in the middle.
                   setMayComplete(Boolean(native.inputType?.startsWith('insert')) && !native.isComposing && input.selectionStart === input.value.length);
                   setQuery(input.value);

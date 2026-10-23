@@ -208,7 +208,9 @@ test('macOS: a build the keychain has never seen loads pages without asking', as
   const copy = join(mkdtempSync(join(tmpdir(), 'chord-resigned-')), 'Chord.app');
   execFileSync('cp', ['-Rc', resolve(executable, '../../..'), copy]);
   execFileSync('plutil', ['-insert', 'ChordTestBuild', '-string', randomUUID(), join(copy, 'Contents', 'Info.plist')]);
-  execFileSync('codesign', ['--force', '--sign', '-', '--preserve-metadata=entitlements,flags', copy]);
+  // Not the flags: on a Developer ID build they include the hardened runtime, whose library
+  // validation would refuse an ad-hoc app loading frameworks signed by Chord's team.
+  execFileSync('codesign', ['--force', '--sign', '-', '--preserve-metadata=entitlements', copy]);
   try {
     // One build after the other in the same account, as an update would run them.
     for (const build of [executable, join(copy, 'Contents', 'MacOS', 'Chord')]) {

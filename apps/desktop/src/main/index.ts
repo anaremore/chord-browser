@@ -1,3 +1,5 @@
+// First, so launch timing starts before any other module runs (ARCHITECTURE.md §1).
+import { launchTimings, markLaunch } from './perf';
 import {
   ARCHIVE_AFTER_MS,
   DEFAULT_SETTINGS,
@@ -30,6 +32,7 @@ import { PermissionBroker } from './permissions';
 import { ScreenShareBroker } from './screen-share';
 import { applySpellcheck, setDictionarySource } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
+import { seedForPerformance } from './perf-seed';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
@@ -54,8 +57,8 @@ app.enableSandbox();
 // first page so CI never depends on the network.
 const HOME_URL = (!app.isPackaged && process.env['CHORD_HOME_URL']) || 'https://www.google.com/';
 
-/** Development and tests only: a duration in ms from the environment, for archiving and sleeping in seconds rather than hours. */
-function devMs(name: string): number | null {
+/** Development and tests only: a positive number from the environment (durations in ms, to archive and sleep in seconds rather than hours; counts, for performance runs). */
+function devNumber(name: string): number | null {
   const value = app.isPackaged ? NaN : Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? value : null;
 }
@@ -145,6 +148,11 @@ function registerIpc(): void {
   handle('mini:copyLink', (_request, sender) => browser!.minis.copyLink(sender));
   handle('overlay:ready', (_request, sender) => senderWindow(sender).markOverlayReady());
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
+  handle('perf:shell', ({ milestone }, sender) => {
+    markLaunch(milestone === 'ready' ? 'shellReady' : 'shellPainted');
+    // The window is up: its command bar may warm up for its first opening now.
+    if (milestone === 'painted') senderWindow(sender).markShellPainted();
+  });
   handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
   handle('menu:tab', ({ nodeId, x, y }, sender) => browser!.openTabMenu(sender, nodeId, { x, y }));
   handle('menu:favorite', ({ favoriteId, x, y }, sender) => browser!.openFavoriteMenu(sender, favoriteId, { x, y }));
@@ -279,6 +287,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   void app.whenReady().then(async () => {
+    markLaunch('ready');
     showDevelopmentDockIcon();
     // Development only: force an appearance for design QA captures.
     const forced = process.env['CHORD_APPEARANCE'];
@@ -329,6 +338,7 @@ if (!app.requestSingleInstanceLock()) {
 
     // Session restore: what chord-data saved, repaired; or a first chord in the OS accent color.
     const opened = await Persistence.open(join(app.getPath('userData'), 'chord.db'));
+    markLaunch('restored');
     persistence = opened.persistence;
     const accent = systemInfo().accentColor;
     const accentRgb = accent ? hexToRgb(accent) : null;
@@ -343,7 +353,15 @@ if (!app.requestSingleInstanceLock()) {
       // Saved shortcut changes this OS keeps for itself are dropped.
       platform,
     });
-    if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
+    if (!opened.saved || opened.saved.chords.length === 0) {
+      // Development and performance runs only: a full sidebar and a used history to measure against.
+      const perfTabs = devNumber('CHORD_PERF_TABS') ?? 0;
+      const perfVisits = devNumber('CHORD_PERF_VISITS') ?? 0;
+      if (perfTabs || perfVisits) {
+        seedForPerformance(initial, { tabs: perfTabs, visits: perfVisits, homeUrl: HOME_URL, newId: () => uuidv7(), history: (event) => opened.persistence.history(event) });
+      }
+      persistence.recordAll(initial);
+    }
     setDictionarySource(initial.settings.googleFree);
     // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
     await removeUnusedPartitions(app.getPath('userData'), new Set(Object.values(initial.chords).map((c) => c.profileId)));
@@ -362,9 +380,9 @@ if (!app.requestSingleInstanceLock()) {
       history: (event) => store.history(event),
       archive: { entry: (which) => store.archiveEntry(which) },
       idle: {
-        checkMs: devMs('CHORD_IDLE_CHECK_MS') ?? IDLE_CHECK_MS,
-        archiveAfterMs: (setting) => (setting === 'never' ? null : (devMs('CHORD_ARCHIVE_AFTER_MS') ?? ARCHIVE_AFTER_MS[setting])),
-        sleepAfterMs: devMs('CHORD_SLEEP_AFTER_MS') ?? SLEEP_AFTER_MS,
+        checkMs: devNumber('CHORD_IDLE_CHECK_MS') ?? IDLE_CHECK_MS,
+        archiveAfterMs: (setting) => (setting === 'never' ? null : (devNumber('CHORD_ARCHIVE_AFTER_MS') ?? ARCHIVE_AFTER_MS[setting])),
+        sleepAfterMs: devNumber('CHORD_SLEEP_AFTER_MS') ?? SLEEP_AFTER_MS,
       },
       onChange: (change) => store.record(change.patches, change.state),
       releaseProfile,
@@ -400,12 +418,13 @@ if (!app.requestSingleInstanceLock()) {
     browser.duet = duet;
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
-    // right-click menu, read without opening a native menu.
+    // right-click menu, read without opening a native menu; and launch timing.
     if (dev('CHORD_E2E_HOOKS')) {
       // Right-click menus are read, not shown: their labels, newest last, by page.
       const contextMenus = new Map<number, ObservedItem[]>();
       observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
+        launch: () => launchTimings(),
         contextMenu: (contentsId: number) => contextMenus.get(contentsId)?.map((item) => item.label) ?? null,
         /** Choose an item in a page's last right-click menu, as clicking it would. */
         chooseContextMenuItem: (contentsId: number, label: string) => contextMenus.get(contentsId)?.find((item) => item.label === label)?.choose(),

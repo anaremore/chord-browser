@@ -9,6 +9,7 @@ const api: OverlayApi = {
   overlay: {
     onOpen: (listener) => subscribe('overlay:open', listener),
     onDismiss: (listener) => subscribe('overlay:dismiss', ({ seq }) => listener(seq)),
+    onWarm: (listener) => subscribe('overlay:warm', () => listener()),
     close: (seq) => invoke('overlay:close', { seq }),
     ready: () => invoke('overlay:ready'),
   },
