@@ -1464,10 +1464,11 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
     await expect(archive.getByRole('list', { name: 'Today' })).toBeVisible();
     await expect(bringBack).toBeVisible();
 
-    // Search narrows by title or address.
+    // Search narrows by title or address. (Not by "third": Third page, out of sight since the archive
+    // opened, may have been tidied away too by now, at this test's short limit.)
     const search = archive.getByRole('textbox', { name: 'Search the archive' });
-    await search.fill('third');
-    await expect(archive.getByText('Nothing in the archive matches “third”.')).toBeVisible();
+    await search.fill('nowhere');
+    await expect(archive.getByText('Nothing in the archive matches “nowhere”.')).toBeVisible();
     await search.fill('seco');
     await expect(bringBack).toBeVisible();
 
