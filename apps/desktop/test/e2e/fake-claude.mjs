@@ -1,0 +1,118 @@
+// A stand-in for Claude Code in Duet's E2E tests: it speaks the same stream-json protocol, calls
+// Chord's tools over the control channel, keeps "session files" under CLAUDE_CONFIG_DIR the way
+// Claude does (projects/<cwd as dashes>/<session>.jsonl), and logs how it was launched to
+// CLAUDE_CONFIG_DIR/fake-log.jsonl. Started by Duet through CHORD_DUET_CLAUDE (development only).
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+
+process.on('uncaughtException', (e) => {
+  process.stderr.write(String(e?.stack ?? e));
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => {
+  process.stderr.write(String(e?.stack ?? e));
+  process.exit(1);
+});
+
+const args = process.argv.slice(2);
+const flag = (name) => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+if (args[0] === '--version') {
+  process.stdout.write('2.1.309 (Claude Code)\n');
+  process.exit(0);
+}
+if (args[0] === 'auth' && args[1] === 'status') {
+  process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }));
+  process.exit(0);
+}
+
+const config = process.env.CLAUDE_CONFIG_DIR;
+const projects = join(config, 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
+mkdirSync(projects, { recursive: true });
+const resume = flag('--resume');
+const session = resume ?? flag('--session-id');
+const instructions = flag('--append-system-prompt-file');
+appendFileSync(
+  join(config, 'fake-log.jsonl'),
+  `${JSON.stringify({ resume: resume ?? null, session, summary: instructions ? readFileSync(instructions, 'utf8').includes('summary of it') : false, restricted: args.includes('--restricted'), tools: flag('--tools') })}\n`,
+);
+const sessionFile = join(projects, `${session}.jsonl`);
+if (resume && !existsSync(sessionFile)) {
+  process.stderr.write(`No conversation found with session ID: ${resume}\n`);
+  process.exit(1);
+}
+
+const write = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+let next = 0;
+const waiting = new Map();
+let interrupted = false;
+let inited = false;
+
+const callTool = (name, input) =>
+  new Promise((resolve) => {
+    const id = `fake-${++next}`;
+    waiting.set(id, resolve);
+    write({ type: 'control_request', request_id: id, request: { subtype: 'mcp_message', server_name: 'chord', message: { jsonrpc: '2.0', id: next, method: 'tools/call', params: { name, arguments: input } } } });
+  });
+const toolText = (response) => response?.mcp_response?.result?.content?.[0]?.text ?? '';
+const say = async (text, slow = false) => {
+  for (const word of text.split(/(?<= )/)) {
+    if (interrupted) return false;
+    write({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: word } }, session_id: session });
+    if (slow) await new Promise((r) => setTimeout(r, 25));
+  }
+  return true;
+};
+const finish = (ok) => {
+  appendFileSync(sessionFile, `${JSON.stringify({ at: Date.now() })}\n`);
+  if (ok) write({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: session });
+  else write({ type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_streaming', session_id: session });
+};
+
+async function turn(text) {
+  interrupted = false;
+  const ref = /Attached: tab (t\d+)/.exec(text)?.[1];
+  if (/long/i.test(text)) return finish(await say(Array.from({ length: 400 }, (_, i) => `word${i} `).join(''), true));
+  if (/summar/i.test(text) && ref) {
+    const page = JSON.parse(toolText(await callTool('read_tab', { tab_id: ref })) || '{}');
+    const quote = String(page.content ?? '').split(/\s+/).slice(0, 4).join(' ');
+    return finish(await say(`Here is the gist. [[${ref}:"${quote}"]]`));
+  }
+  if (/secret/i.test(text) && ref) {
+    const page = JSON.parse(toolText(await callTool('read_tab', { tab_id: ref })) || '{}');
+    return finish(await say(`The page says: ${page.content ?? page.refused ?? ''}`));
+  }
+  if (/list/i.test(text)) {
+    const listed = toolText(await callTool('list_tabs', {}));
+    return finish(await say(listed.includes('refused') ? 'You said no.' : `I can see ${(JSON.parse(listed).data?.tabs ?? []).length} tabs.`));
+  }
+  return finish(await say('Hello from the fake.'));
+}
+
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const m = JSON.parse(line);
+  if (m.type === 'control_request' && m.request.subtype === 'initialize') {
+    return write({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { commands: [] } } });
+  }
+  if (m.type === 'control_request' && m.request.subtype === 'interrupt') {
+    interrupted = true;
+    return write({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
+  }
+  if (m.type === 'control_response') {
+    const resolve = waiting.get(m.response.request_id);
+    waiting.delete(m.response.request_id);
+    return resolve?.(m.response.response);
+  }
+  if (m.type === 'user') {
+    if (!inited) {
+      inited = true;
+      write({ type: 'system', subtype: 'init', session_id: session, tools: ['mcp__chord__read_tab'], capabilities: ['interrupt_receipt_v1'], claude_code_version: '2.1.309' });
+    }
+    void turn(m.message.content.map((c) => c.text).join(''));
+  }
+});
+process.stdin.on('end', () => process.exit(0));
+writeFileSync(join(config, 'fake-alive'), String(process.pid));

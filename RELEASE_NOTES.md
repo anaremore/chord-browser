@@ -2,6 +2,16 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## Next · Phase 2 (unreleased)
+
+**Duet.** Press ⌘E / Ctrl+E, or click ✦ Duet, for a chat beside the page.
+- It uses your own Claude Code or Codex app and subscription. Chord never sees your sign-in; *Sign in* opens a terminal where the app signs you in.
+- Ask about the page you're on (it's attached for you), or `@` another tab. Duet asks before it reads anything else, unless you let it read your chord or all your tabs.
+- Answers cite their sources with numbered pills; click one to jump to the quote.
+- It reads what's on the page, never what you type into forms, and never private windows or sites you add to *Never read* in Settings → Duet.
+- Chats stay with each chord, survive a restart, and turn up under `@duet` in the command bar. Export one as Markdown, delete one (the app's own copy goes too), or have Chord keep them for 30 or 90 days.
+- Duet only chats and reads; it doesn't move or close your tabs. Turn it off for one chord, or everywhere.
+
 ## 0.1.0 · preview (unreleased)
 
 The first public preview: a calm, colorful browser for people leaving Arc. Builds aren't code-signed yet: see [Try the preview](README.md#try-the-preview) for the first-launch steps on each OS.

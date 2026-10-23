@@ -41,6 +41,7 @@ export type ActionId =
   | 'chord.previous'
   | 'chord.delete'
   | 'chord.separateSignIns'
+  | 'duet.toggle'
   | 'window.new'
   | 'window.newPrivate'
   | 'window.close'
@@ -113,6 +114,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // No keys: deleting is a deliberate act, from the chord's menu or the command bar.
   s('chord.delete', 'Delete this chord', 'page-first', []),
   s('chord.separateSignIns', 'Keep sign-ins separate for this chord', 'page-first', []),
+  // Duet (DESIGN.md §13.1): page-first, so web editors that use ⌘E / Ctrl+E keep it; Chrome uses these keys too.
+  s('duet.toggle', 'Show or hide Duet', 'page-first', ['Mod+E']),
   // Window and view
   s('window.new', 'New window', 'reserved', ['Mod+N']),
   s('window.newPrivate', 'New private window', 'reserved', ['Mod+Shift+N']),
