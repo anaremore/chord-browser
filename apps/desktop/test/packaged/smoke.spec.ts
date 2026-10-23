@@ -216,9 +216,13 @@ test('macOS: a build the keychain has never seen loads pages without asking', as
     for (const build of [executable, join(copy, 'Contents', 'MacOS', 'Chord')]) {
       const app = await start(build, mkdtempSync(join(tmpdir(), 'chord-packaged-')), ['--single-argument', `${site.origin}/keychain`]);
       try {
-        const shell = await pageWhere(app.browser, isShell);
+        // Launched for a link, Chord opens it in a mini window (DESIGN.md §7.9), not its own window.
+        const bar = await pageWhere(app.browser, isMini);
         const tab = await pageWhere(app.browser, (url) => url === `${site.origin}/keychain`);
         await expect.poll(() => tab.title()).toBe('Smoke page');
+        // Quitting goes through Chord's window: "Open in" brings it back, with the page as a tab.
+        await bar.getByRole('button', { name: /^Open in/ }).click();
+        const shell = await pageWhere(app.browser, isShell);
         await quit(app, shell);
       } catch (error) {
         app.child.kill();
