@@ -32,7 +32,10 @@ export const PREPARE_TIMEOUT_MS = 200;
 /** If the shell never says the pictures arrived, the pages come back anyway. */
 const MOVE_TIMEOUT_MS = springCurve(springs.smooth).durationMs + 300;
 
-/** What the snapshot needs from its window. */
+/**
+ * What the snapshot needs from its window. Rects are the layout's, in the
+ * shell's CSS pixels (what it draws the pictures with), not window pixels.
+ */
 export interface FrameHost {
   /** Tell the shell (frame:snapshot). */
   tell(event: FrameSnapshotEvent): void;
@@ -58,8 +61,11 @@ interface Transition {
  * all but its top-left pixel past the window's bottom-right corner. A view
  * entirely outside its window is hidden by Chromium (it stops painting and
  * loses focus); this one stays shown, so it keeps the keyboard and paints at
- * its new size, ready to come back. The one pixel left sits in the window's
- * rounded corner (Windows 11, macOS), where it isn't drawn.
+ * its new size, ready to come back. The one pixel left inside is the page's
+ * own top-left corner, which its rounded corner (`setBorderRadius`, the frame
+ * radius on every platform) cuts away, so nothing of it shows, whatever the
+ * window's corners. In window pixels, both `rect` and `window`: it's where
+ * the view is placed.
  */
 export function offscreen(rect: Rect, window: { width: number; height: number }): Rect {
   return { x: window.width - 1, y: window.height - 1, width: rect.width, height: rect.height };

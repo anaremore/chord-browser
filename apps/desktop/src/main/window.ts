@@ -206,9 +206,14 @@ export class AppWindow {
     this.window.contentView.addChildView(this.preview);
     this.window.contentView.addChildView(this.overlay);
 
+    // The snapshot's rects are the layout's, in the shell's CSS pixels: the shell draws the pictures with them.
     this.snapshots = new FrameSnapshots({
       tell: (event) => send(this.shell.webContents, 'frame:snapshot', event),
-      panes: () => this.panes.map((view) => ({ view, rect: view.getBounds() })),
+      panes: () => {
+        const frame = this.frameRect();
+        const rects = this.paneRectsIn(frame);
+        return this.panes.map((view, i) => ({ view, rect: rects[i] ?? frame }));
+      },
       canSnapshot: () => this.canSnapshot(),
       targets: () => this.paneRectsIn(this.frameRect()),
       layout: () => this.layout(),
@@ -839,17 +844,19 @@ export class AppWindow {
   private layout(): void {
     if (this.window.isDestroyed()) return;
     const { width: windowWidth, height } = this.window.getContentBounds();
-    place(this.shell, { x: 0, y: 0, width: windowWidth, height });
-    place(this.overlay, { x: 0, y: 0, width: windowWidth, height });
+    const whole = { x: 0, y: 0, width: windowWidth, height };
+    place(this.shell, whole);
+    place(this.overlay, whole);
     const frame = this.frameRect();
     // The shell draws each pane's frame with the same math (DESIGN.md §7.9: 8 px gaps).
     const rects = this.paneRectsIn(frame);
     // While a frame snapshot's pictures move, the pages wait out of sight at the size they're going to be.
     const away = this.snapshots.active;
     this.panes.forEach((view, i) => {
-      const rect = rects[i] ?? frame;
-      if (this.pageFullScreen && view === this.tabView) place(view, { x: 0, y: 0, width: windowWidth, height });
-      else place(view, away ? offscreen(rect, { width: windowWidth, height }) : rect);
+      // The pane's rect in window pixels: the one place a page's rect leaves the layout's units (the shell's CSS pixels).
+      const at = rects[i] ?? frame;
+      if (this.pageFullScreen && view === this.tabView) place(view, whole);
+      else place(view, away ? offscreen(at, whole) : at);
     });
     this.showPopover();
     const { width: pw, height: ph } = this.popoverSize;

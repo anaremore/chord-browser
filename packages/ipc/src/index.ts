@@ -786,7 +786,7 @@ export interface EventPayloads {
   'frame:snapshot': FrameSnapshotEvent;
 }
 
-/** One page's picture: where it is, in window coordinates, and its pixels (RGBA, `width` × `height`, device pixels). */
+/** One page's picture: where it is, in the shell's CSS pixels, and its pixels (RGBA, `width` × `height`, device pixels). */
 export interface SnapshotPane {
   rect: Rect;
   width: number;
