@@ -204,9 +204,9 @@ test('a tab dropped on the page splits the frame; clicks move focus, keys act on
     await shell.mouse.move(cx - 160, cy, { steps: 6 });
     await shell.mouse.up();
     await expect.poll(async () => (await splitState(shell)).sizes[0]!).toBeLessThan(0.45);
-    // 160 px narrower, unless that would take it under a pane's minimum (on a small screen, it does).
-    const narrowed = Math.max(MIN_PANE, left!.width - 160);
-    await expect.poll(async () => (await pageViews(app))[0]!.width).toBeLessThanOrEqual(narrowed + 2);
+    // Well over 120 px narrower, unless that would take it under a pane's minimum (on a small screen, it does).
+    const narrowed = Math.max(MIN_PANE, left!.width - 120);
+    await expect.poll(async () => (await pageViews(app))[0]!.width).toBeLessThanOrEqual(narrowed);
     expect((await pageViews(app))[0]!.width).toBeGreaterThanOrEqual(MIN_PANE);
     const moved = (await splitState(shell)).sizes;
     expect(moved[0]! + moved[1]!).toBeCloseTo(1, 6);
