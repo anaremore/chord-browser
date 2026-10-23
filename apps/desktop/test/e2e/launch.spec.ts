@@ -269,8 +269,28 @@ test('page-first keys reach Chord only when the page passes; reserved keys fire 
     // Chord is up: the page is a tab in the sidebar.
     await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Keys');
 
+    // DEBUG (CI): what main and the shell see around the first key.
+    const debug = async (label: string) => {
+      const main = await app.evaluate(({ BaseWindow, webContents }) => ({
+        windows: BaseWindow.getAllWindows().map((w) => ({ id: w.id, focused: w.isFocused(), visible: w.isVisible() })),
+        focusedWindow: BaseWindow.getFocusedWindow()?.id ?? null,
+        focusedContents: webContents.getFocusedWebContents()?.getURL().slice(0, 40) ?? null,
+      }));
+      const dom = await shell.evaluate(() => ({
+        hidden: document.querySelector('nav[aria-label="Sidebar"]')?.getAttribute('aria-hidden'),
+        rows: document.querySelectorAll('[aria-label="Today"] li').length,
+        tabs: document.querySelectorAll('[aria-label="Chords"] [role="tab"]').length,
+      }));
+      console.log(`DEBUG ${label} ${JSON.stringify({ main, dom })}`);
+    };
+    await debug('before');
+
     // The page ignores Ctrl+S, so it falls through to Chord: the sidebar collapses.
     await press('S');
+    for (let i = 0; i < 6; i++) {
+      await debug(`after+${i * 200}ms`);
+      await shell.waitForTimeout(200);
+    }
     await expect(sidebar).toBeHidden();
     await press('S');
     await expect(sidebar).toBeVisible();
