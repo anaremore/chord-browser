@@ -196,6 +196,12 @@ const config: Configuration = {
       CFBundleDocumentTypes: [
         { CFBundleTypeName: 'HTML document', CFBundleTypeRole: 'Viewer', LSHandlerRank: 'Alternate', LSItemContentTypes: ['public.html', 'public.xhtml'] },
       ],
+      // What macOS shows when a site you allowed asks for these. Electron's own strings name "this app"
+      // and it has none for location, so sites asking where you are would get nothing.
+      NSCameraUsageDescription: 'Sites you allow can use your camera, for video calls and the like.',
+      NSMicrophoneUsageDescription: 'Sites you allow can use your microphone, for calls and voice notes.',
+      NSLocationUsageDescription: 'Sites you allow can see roughly where you are, for maps and local results.',
+      NSLocationWhenInUseUsageDescription: 'Sites you allow can see roughly where you are, for maps and local results.',
     },
   },
 
