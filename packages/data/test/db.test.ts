@@ -36,6 +36,7 @@ const durable = (s: State) => ({
   settings: s.settings,
   sitePermissions: s.sitePermissions,
   downloads: s.downloads,
+  extensions: s.extensions,
   chords: s.chords,
   nodes: s.nodes,
   windows: s.windows,
@@ -99,6 +100,36 @@ describe('chord-data', () => {
     // Two tabs share one stored icon.
     db.close();
     expect(count('favicon')).toBe(1);
+  });
+
+  it('remembers installed extensions per profile, and forgets removed ones', () => {
+    const db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const ext = (profileId: string, id: string, version: string) => ({
+      id,
+      profileId,
+      name: 'uBlock Origin Lite',
+      version,
+      source: 'store' as const,
+      path: `C:/Chord/Extensions/${profileId}/${id}/${version}_0`,
+      notifiedVersion: null,
+      pinned: true,
+      installedAt: 1,
+      updatedAt: 2,
+    });
+    const ubol = 'ddkjiahejlhfcafbddmgiahcphecmpfh';
+    state = drive(db, state, [
+      { t: 'extension.record', extension: ext('default', ubol, '2026.1013.1') },
+      { t: 'extension.record', extension: ext('work', ubol, '2026.1013.1') },
+      { t: 'extension.record', extension: { ...ext('default', ubol, '2026.1021.1354'), notifiedVersion: '2026.1013.1' } },
+      { t: 'extension.forget', profileId: 'work', id: ubol },
+      { t: 'extension.pin', profileId: 'default', id: ubol, pinned: false },
+    ]);
+    const saved = db.load();
+    db.close();
+    expect(saved?.extensions).toEqual([{ ...ext('default', ubol, '2026.1021.1354'), notifiedVersion: '2026.1013.1', pinned: false }]);
+    expect(restoreState(saved, { now: 9, newId: ctx.newId, theme: state.chords[Object.keys(state.chords)[0]!]!.theme, homeUrl: 'x' }).extensions).toEqual(state.extensions);
   });
 
   it('deletes closed tabs and unused icons', () => {

@@ -25,6 +25,12 @@ const api: SettingsApi = {
     about: () => invoke('settings:about'),
     openUrl: (url) => invoke('settings:openUrl', { url }),
   },
+  extensions: {
+    install: (input) => invoke('extensions:install', { input }),
+    remove: (profileId, id) => invoke('extensions:remove', { profileId, id }),
+    options: (profileId, id) => invoke('extensions:options', { profileId, id }),
+    update: () => invoke('extensions:update'),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

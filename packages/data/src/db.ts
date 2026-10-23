@@ -20,6 +20,7 @@ import {
   type ChordThemeSpec,
   type Choice,
   type Download,
+  type InstalledExtension,
   type FolderNode,
   type PersistedState,
   type SidebarNode,
@@ -177,9 +178,23 @@ export class ChordDatabase {
         endedAt: r['ended_at'] === null ? null : num(r['ended_at']),
       }),
     );
+    const extensions = (this.sql('SELECT * FROM extension').all() as Row[]).map(
+      (r): InstalledExtension => ({
+        id: str(r['id']),
+        profileId: str(r['profile_id']),
+        name: str(r['name']),
+        version: str(r['version']),
+        source: r['source'] === 'unpacked' ? 'unpacked' : 'store',
+        path: str(r['path']),
+        notifiedVersion: strOrNull(r['notified_version']),
+        pinned: num(r['pinned']) !== 0,
+        installedAt: num(r['installed_at']),
+        updatedAt: num(r['updated_at']),
+      }),
+    );
     if (chordRows.length === 0) {
-      const anything = Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0 || downloads.length > 0;
-      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads } : null;
+      const anything = Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0 || downloads.length > 0 || extensions.length > 0;
+      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads, extensions } : null;
     }
 
     const chords = chordRows.map(
@@ -235,7 +250,7 @@ export class ChordDatabase {
       }),
     );
 
-    return { chords, nodes, windows, settings, sitePermissions, downloads };
+    return { chords, nodes, windows, settings, sitePermissions, downloads, extensions };
   }
 
   /** One batch, all or nothing. */
@@ -248,6 +263,7 @@ export class ChordDatabase {
         else if (op.k === 'window') this.writeWindow(op.id, op.value);
         else if (op.k === 'sitePermission') this.writeSitePermissions(op.id, op.value, now);
         else if (op.k === 'download') this.writeDownload(op.id, op.value);
+        else if (op.k === 'extension') this.writeExtension(op.id, op.value);
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
@@ -508,6 +524,21 @@ export class ChordDatabase {
        ON CONFLICT(id) DO UPDATE SET path = excluded.path, filename = excluded.filename, state = excluded.state,
          received = excluded.received, total = excluded.total, ended_at = excluded.ended_at`,
     ).run(id, DEFAULT_PROFILE, d.url, d.path, d.filename, d.mime, d.state, d.received, d.total, d.startedAt, d.endedAt);
+  }
+
+  /** `key` is `extensionKey(profileId, id)`; a deletion only has the key to go on. */
+  private writeExtension(key: string, e: InstalledExtension | null): void {
+    if (!e) {
+      const split = key.lastIndexOf(':');
+      this.sql('DELETE FROM extension WHERE profile_id = ? AND id = ?').run(key.slice(0, split), key.slice(split + 1));
+      return;
+    }
+    this.sql(
+      `INSERT INTO extension (profile_id, id, name, version, source, path, notified_version, pinned, installed_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(profile_id, id) DO UPDATE SET name = excluded.name, version = excluded.version, source = excluded.source,
+         path = excluded.path, notified_version = excluded.notified_version, pinned = excluded.pinned, updated_at = excluded.updated_at`,
+    ).run(e.profileId, e.id, e.name, e.version, e.source, e.path, e.notifiedVersion, e.pinned ? 1 : 0, e.installedAt, e.updatedAt);
   }
 
   private writeWindow(id: string, win: WindowModel | null): void {

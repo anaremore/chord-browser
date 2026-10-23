@@ -1,0 +1,105 @@
+/* Extension buttons, the sidebar's shelf, and "Add to Chord" (ARCHITECTURE.md §12). Tokens only; badge colors come from extensions, inline. */
+
+/* A slim row just above the sidebar's footer: pinned buttons, the puzzle piece at the end. */
+.shelf {
+  display: flex;
+  flex: none;
+  gap: var(--space-0);
+  align-items: center;
+  margin-block-end: var(--space-1);
+  padding-block-start: var(--space-1);
+  box-shadow: 0 calc(var(--size-hairline) * -1) 0 var(--color-divider);
+}
+
+.flex {
+  flex: 1;
+}
+
+.group {
+  display: flex;
+  flex: none;
+  gap: var(--space-0);
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.action {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-icon-button);
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard),
+    transform var(--spring-press-duration) var(--spring-press);
+}
+
+.action:hover {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.action:active {
+  transform: scale(0.94);
+}
+
+.icon {
+  inline-size: var(--size-icon);
+  block-size: var(--size-icon);
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/* The badge sits on the icon's lower right, like Chrome's, and never wider than the button. */
+.badge {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  box-sizing: border-box;
+  max-inline-size: var(--size-icon-button);
+  min-inline-size: var(--size-icon-sm);
+  padding-inline: calc(var(--space-1) / 2);
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  background: var(--color-accent);
+  box-shadow: 0 0 0 var(--size-hairline) var(--color-surface);
+  color: var(--color-accent-fg);
+  font: var(--text-glyph);
+  letter-spacing: var(--text-glyph-tracking);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.add {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-icon-button);
+  margin-inline-end: var(--space-1);
+  padding-inline: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font: var(--text-label);
+  white-space: nowrap;
+  transition:
+    opacity var(--duration-fade-fast) var(--ease-standard),
+    transform var(--spring-press-duration) var(--spring-press);
+}
+
+.add:disabled {
+  opacity: 0.6;
+}
+
+.add:active:not(:disabled) {
+  transform: scale(0.96);
+}

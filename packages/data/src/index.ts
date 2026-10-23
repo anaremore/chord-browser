@@ -9,6 +9,7 @@ import type {
   Choice,
   Chord,
   Download,
+  InstalledExtension,
   PersistedState,
   Settings,
   SidebarNode,
@@ -25,7 +26,9 @@ export type WriteOp =
   | { k: 'setting'; id: string; value: Settings[keyof Settings] | null }
   /** All of one site's remembered permission decisions. */
   | { k: 'sitePermission'; id: string; value: SitePermissions[string] | null }
-  | { k: 'download'; id: string; value: Download | null };
+  | { k: 'download'; id: string; value: Download | null }
+  /** One installed extension, by `extensionKey(profileId, id)`. */
+  | { k: 'extension'; id: string; value: InstalledExtension | null };
 
 /**
  * A tab's back/forward history as Electron gives it (`navigationHistory`):
@@ -124,6 +127,11 @@ export function opsFromPatches(patches: readonly PathPatch[], state: State): Wri
       for (const downloadId of ids) add({ k: 'download', id: downloadId, value: state.downloads[downloadId] ?? null });
       continue;
     }
+    if (collection === 'extensions') {
+      const keys = id === undefined ? Object.keys(state.extensions) : [String(id)];
+      for (const key of keys) add({ k: 'extension', id: key, value: state.extensions[key] ?? null });
+      continue;
+    }
     if (collection === 'sitePermissions') {
       const origins = id === undefined ? Object.keys(state.sitePermissions) : [String(id)];
       for (const origin of origins) add({ k: 'sitePermission', id: origin, value: state.sitePermissions[origin] ?? null });
@@ -155,5 +163,6 @@ export function opsForState(state: State): WriteOp[] {
     ...(Object.keys(state.settings) as (keyof Settings)[]).map((key): WriteOp => ({ k: 'setting', id: key, value: state.settings[key] })),
     ...Object.entries(state.sitePermissions).map(([origin, value]): WriteOp => ({ k: 'sitePermission', id: origin, value })),
     ...Object.values(state.downloads).map((value): WriteOp => ({ k: 'download', id: value.id, value })),
+    ...Object.entries(state.extensions).map(([key, value]): WriteOp => ({ k: 'extension', id: key, value })),
   ];
 }

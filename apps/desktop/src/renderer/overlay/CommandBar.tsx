@@ -47,6 +47,7 @@ import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 import { DownloadsPanel } from './DownloadsPanel';
+import { ExtensionsPanel } from './ExtensionsPanel';
 import { buildResults, completionFor, destinationOf, scopeFor, scopeLabel, type Filter, type Result, type Scope } from './results';
 
 interface Session {
@@ -174,7 +175,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   const searchSeq = useRef(0);
   const historyFilter = scope?.kind === 'filter' && (scope.filter === 'history' || scope.filter === 'archive');
   useEffect(() => {
-    if (!session || session.mode === 'downloads' || (!query.trim() && !historyFilter)) return;
+    if (!session || session.mode === 'downloads' || session.mode === 'extensions' || (!query.trim() && !historyFilter)) return;
     const seq = ++searchSeq.current;
     void api.history.search(query.trim()).then((found) => {
       if (seq === searchSeq.current) setHistory(found);
@@ -220,7 +221,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   );
 
   const results = useMemo(
-    () => (session && session.mode !== 'downloads' ? buildResults(query, state, windowId, session.mode, history, Date.now(), { scope, suggestions }) : []),
+    () => (session && session.mode !== 'downloads' && session.mode !== 'extensions' ? buildResults(query, state, windowId, session.mode, history, Date.now(), { scope, suggestions }) : []),
     [session, query, state, windowId, history, scope, suggestions],
   );
   const current = Math.min(selected, Math.max(0, results.length - 1));
@@ -326,13 +327,17 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
 
   if (!session) return null;
 
-  // The downloads panel shares the overlay: modal like the command bar, but without dimming the page.
-  if (session.mode === 'downloads') {
+  // The downloads and extensions panels share the overlay: modal like the command bar, but without dimming the page.
+  if (session.mode === 'downloads' || session.mode === 'extensions') {
     return (
       <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
         <div className={styles.root} style={style}>
           <div className={styles.clearScrim} onMouseDown={close} />
-          <DownloadsPanel state={state} anchor={session.anchor} transition={spring('overlay', 'commandBar')} onClose={close} />
+          {session.mode === 'downloads' ? (
+            <DownloadsPanel state={state} anchor={session.anchor} transition={spring('overlay', 'commandBar')} onClose={close} />
+          ) : (
+            <ExtensionsPanel key={session.openedAt} anchor={session.anchor} transition={spring('overlay', 'commandBar')} onClose={close} />
+          )}
         </div>
       </MotionConfig>
     );

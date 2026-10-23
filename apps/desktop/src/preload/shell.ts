@@ -21,6 +21,13 @@ const api: ShellApi = {
   chords: { onEdit: (listener) => subscribe('chord:edit', listener) },
   toasts: { onShow: (listener) => subscribe('toast:show', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
+  extensions: {
+    state: () => invoke('extensions:state'),
+    onState: (listener) => subscribe('extensions:state', listener),
+    activate: (id, anchor) => invoke('extension:activate', { id, anchor }),
+    menu: (id, at) => invoke('extension:menu', { id, x: at.x, y: at.y }),
+    install: (input) => invoke('extensions:install', { input }),
+  },
   defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
 };
 

@@ -69,7 +69,7 @@ Every library, API, and version below was checked on 2026-10-22. Anything not co
 | Fuzzy match | @leeoniya/ufuzzy (MIT) | 1.0.19 | ✅ About 0.15 ms per search over 5k items (extrapolated from the author's benchmark; we'll measure). |
 | Icons | lucide-react (ISC) | 1.61.0 | ✅ Phosphor was considered and rejected: no release in 17 months. |
 | UI typeface | **Onest** (SIL OFL), variable 100–900, `tnum` | — | ✅ See DESIGN.md §4.2. |
-| Extensions | electron-chrome-extensions | 4.9.0 | ⚠ **License is GPL-3.0 or a paid Patron License, enforced at runtime.** Decision D1. |
+| Extensions | electron-chrome-extensions, the iamEvanYT fork, **vendored** as `packages/chrome-extensions` | 4.9.5 (fork commit `25cf4d7`) | ✅ Used under GPL-3.0 (decision D1); Chord's changes are listed in its CHORD-CHANGES.md. See [§12](#12-extensions). |
 | Tests | Vitest 5, Playwright `_electron` 1.64 | — | Playwright's Electron support is still experimental. See [§15.5](#155-testing). |
 | Lint | ESLint 10 + typescript-eslint 8.72, stylelint 17 | — | — |
 | Package manager | pnpm 10 | 10.33 locally | Electron packaging needs the hoisted layout (`nodeLinker: hoisted` in `pnpm-workspace.yaml`). Electron 45 no longer has an install script (verified in its package.json), so pnpm 10's build-script allow-list doesn't apply to it. |
@@ -441,7 +441,7 @@ As built (`core/idle.ts`, `main/idle.ts`):
 1. **One preload per trust role:** shell, overlay, popover, internal. Each exposes a frozen `window.chord` object through `contextBridge` with explicit methods. Raw `ipcRenderer` is never exposed.
 2. **Every channel is declared once** in `@chord/ipc/contract.ts`: name, allowed roles, zod request and response schemas. Both sides import the same contract, so types and runtime validation can't drift.
 3. **Main checks the sender on every message.** `event.sender.id` must be registered under an allowed role, `event.senderFrame` must be the main frame, and `senderFrame.url` must be the expected `chord://<surface>` origin. Unknown channels are dropped and logged; payloads over 256 KB are rejected. Large data (attachments, screenshots) moves by reference ID, never inline.
-4. **Web content gets nothing:** no preload, no IPC. Extension pages get only what electron-chrome-extensions injects ([§12](#12-extensions)).
+4. **Web content gets nothing:** no preload, no IPC. The exception is the extension library's preload: it runs in every page of a profile that has extensions, and does nothing outside extension pages and extensions' isolated worlds. Extension pages get only what it injects ([§12](#12-extensions)).
 5. **Electron 45 constraint:** sandboxed preloads no longer have the `events`, `timers`, `url`, or `Buffer` modules, so preloads are written against browser APIs only.
 
 **Transports:**
@@ -496,7 +496,7 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
 | **Internal pages** | `chord://settings` and `chord://archive` are served by `protocol.handle` from inside the asar, with CSP `default-src 'self'; img-src 'self' chord-favicon:; style-src 'self'; script-src 'self'`. React sets styles through the CSSOM, so no `'unsafe-inline'` is needed. |
 | **Search engine** | **Google by default** (decided 2026-10-22); DuckDuckGo, Bing, Kagi, Ecosia and custom engines selectable in Settings and from the command bar. Search suggestions while typing send keystrokes to the engine; their default is open question Q2 in ROADMAP.md. |
 | **User agent** | **Decided (S2):** the standard Chromium user agent, Electron's default minus the `Electron/…` and app-name tokens (`src/main/user-agent.ts`). Client-hint brands still say `Chromium`, so we don't claim to be Google Chrome. ✅ Google sign-in works by hand on Windows with this UA, and also with Electron's default. Automated (Playwright) sign-in is always blocked, because Google flags debugger-driven browsers. ⚠ Still to check by hand: Microsoft, Apple, GitHub, Cloudflare Turnstile, and Google on macOS/Linux. Electron sends no `Sec-CH-UA` on navigations (PR #53519). See docs/decisions/S2-google-signin.md. |
-| **Private windows** | Non-persistent partition, no history writes, no extensions (the library doesn't support in-memory sessions), Duet unavailable. |
+| **Private windows** | Non-persistent partition, no history writes, no extensions (Electron refuses to load extensions into an in-memory session), Duet unavailable. |
 | **`session.webRequest`** | **Chord core does not use it.** Hooking it silently stops extensions' `chrome.webRequest` listeners from firing (electron-chrome-extensions README; also seen in Flow Browser #153). Header and policy needs go through other hooks. This constrains the built-in ad-blocker option in [§12](#12-extensions). |
 
 ---
@@ -678,32 +678,39 @@ Duet becomes one client of that same server. Unlike Crest, Duet keeps per-call a
 
 ## 12. Extensions
 
-Verified state of the art:
+Chrome extension support is a **Phase 1 requirement** (decided 2026-10-22), built in M1.5 on spike S9 ([docs/decisions/S9-extensions.md](docs/decisions/S9-extensions.md)). Verified state (Electron 45, Chromium 156):
 
-- **Electron's built-in support** (`session.extensions.loadExtension`, moved in 36) covers only `devtools.*`, `scripting`, `webRequest`, partial `extension`/`management`/`runtime`/`tabs`, and `storage.local`.
-  - No `action` popups, `contextMenus`, `windows`, `cookies`, `commands`, or **`declarativeNetRequest`**.
-  - Unpacked extensions only, reloaded every launch.
-  - The docs call full Chrome compatibility a non-goal.
-- **electron-chrome-extensions 4.9.0** fills most gaps: `action`, `contextMenus`, `windows`, `cookies`, and much of `tabs`. `commands` is still missing.
-  - MV3 works from Electron 35.
-  - It is **GPL-3.0 or a "Patron License"**, a paid GitHub sponsorship whose `checkLicense()` throws at runtime without an accepted license.
-  - It has one maintainer and 31 open issues.
-  - Multi-session needs our own work (#117).
-  - Password-manager reports are mixed:
-    - 1Password: popup issues (#172), and #185 likely still affects it.
-    - Bitwarden: the autofill context menu got stuck (fix claimed, unverified).
-    - Proton Pass: popup clipped (#177).
-- **electron-chrome-web-store 0.13.0** (MIT) installs from the Chrome Web Store but has **unpatched security bugs upstream**: a lookalike-host check and an unvalidated uninstall path. Both are fixed in the `iamEvanYT` fork.
+- **Electron's built-in support** (`session.extensions`) loads unpacked MV3 extensions, runs their service workers and content scripts, and covers `scripting`, `webRequest`, partial `extension`/`management`/`runtime`/`tabs`, `storage.local`, and **`declarativeNetRequest`**, which is present and enforcing.
+  - Gaps: no `action` popups, `contextMenus`, `windows`, `cookies` or `commands`; no Web Store installer.
+  - Electron skips Chrome's install step, so `runtime.onInstalled` never fires and manifest-enabled rulesets aren't turned on. Chord does both itself (below).
+  - Electron refuses to load extensions into in-memory sessions.
+  - Alone, it runs only 2 of S9's 6 test extensions.
+- **The library:** electron-chrome-extensions, the iamEvanYT fork (4.9.5), **vendored** as `packages/chrome-extensions`.
+  - It fills the gaps, and mirrors its APIs onto the native `browser` namespace that Chromium 148+ also exposes.
+  - It runs all 6 test extensions.
+  - Its `checkLicense()` needs only a declared license string (`'GPL-3.0'`), not a key. Chord uses it under GPL-3.0 (decision D1).
+  - Chord's changes are listed in its `CHORD-CHANGES.md`. One upstream bug fix: `queueAndSendEvent()` now waits for the *target* extension's listener.
+- **Issues worth knowing:** #172 (MV3 workers broke in Electron 40), #184 (breakage in 42+), #185 (an extension iframe inside a page can't reach its worker), #177 (Proton Pass popup sizing, fixed by Chord's own popups).
 
-**Why a library at all, when Chord is Chromium-powered?** Electron ships Chromium's rendering engine and extension *loader*. It does not ship most of Chrome's browser layer, which is where `chrome.tabs`, `chrome.action`, `chrome.contextMenus`, the toolbar, and the Web Store installer live. A browser built on Electron has to supply those, and electron-chrome-extensions is the maintained implementation.
+**How Chord integrates it:**
+- **`ExtensionHost`** (`main/extensions/host.ts`) is the seam: one per profile that has extensions, and the only code that touches the library. Another implementation (the Patron License, or our own) only replaces this file.
+  - The library's frame preload runs in every page of a profile with extensions (§8 notes the exception).
+- **Tabs and windows:** `chrome.tabs` maps onto TabManager's pages (tab ID = `webContents.id`); pinned and index come from the sidebar. `chrome.windows` maps onto Chord windows; `windows.create({type: 'popup'})` opens a small window on the profile. Unloaded tabs aren't visible to extensions.
+- **Context menus:** extensions' items join the page's native menu, before Inspect.
+- **Popups:** a view on the profile session inside the window, sized like Chrome's (25×25 to 800×600) beside its button. It closes on Esc, a click elsewhere in Chord, or a tab or layout change, and stays open when focus leaves Chord.
+  - Electron 45's `enablePreferredSizeMode` doesn't survive the cross-process navigation into an extension's process. So a script in Chord's own isolated world reports the page's size instead (`main/extensions/sizer.ts`).
+- **Toolbar:** pinned extensions' buttons sit in the sidebar's shelf, or in the title bar by choice (DESIGN.md §3). The puzzle piece lists them all.
+- **Web Store installer** (`main/extensions/crx.ts`, `webstore.ts`) is Chord's own, because electron-chrome-web-store verifies no signatures.
+  - It asks Google's update service, downloads over HTTPS, and checks the announced SHA-256.
+  - It verifies CRX3 as Chromium's `crx_verifier.cc` does: every signature, the developer key against the ID, and the store's publisher key.
+  - It unpacks with a traversal-safe, size-limited ZIP reader, and writes the developer key into the manifest so the store ID holds.
+  - Updates are checked a minute after launch, then every 5 hours, and roll back if a new version won't load.
+- **The install step:** on install or update, Chord sends `runtime.onInstalled` (once per version, remembered across crashes) and, on first install, enables the manifest's rulesets through the library's worker preload.
+- **Saved state:** installs, versions and pins live in chord-data's `extension` table, per profile.
 
-**Plan.** Chrome extension support is a **Phase 1 requirement** (decided 2026-10-22). The license choice is decision D1.
-- Integrate behind an `ExtensionHost` interface, one instance per profile session.
-- Use the CWS installer with the fork's security fixes applied, or vendor those fixes.
-- Contribute fixes upstream.
-- **Acceptance suite:** Bitwarden, 1Password, Proton Pass, Dark Reader, a uBO Lite smoke test, and a reading-list extension, each covering popup, context menu, autofill, and multi-profile.
-- **Ad blocking.** uBO Lite depends on `declarativeNetRequest`, which Electron doesn't list as supported. So realistic blocking is either the built-in **@ghostery/adblocker-electron** (MPL-2.0, 2.20.1, active), which hooks `session.webRequest` and would mute extensions' `webRequest` listeners, or none. Decision D5.
-- **Electron #54685** (open on 44 and 45): loading or removing an extension with `webRequest`/`declarativeNetRequest` permissions breaks later `session.fetch` on that session. Our favicon fetches use `session.fetch`, so we'll need a workaround: fetch favicons through `net.request` with the session's cookies.
+**Ad blocking.** uBO Lite's `declarativeNetRequest` blocking works (S9). Decision D5 can now consider it alongside the Ghostery engine.
+
+**Electron #54685** (`session.fetch` breaking after extensions load) didn't reproduce on Windows with `persist:` partitions, which is Chord's favicon path. Recheck on macOS.
 
 ---
 

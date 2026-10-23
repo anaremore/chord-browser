@@ -32,6 +32,9 @@ export default defineConfig({
           popover: src('preload/popover.ts'),
           internal: src('preload/internal.ts'),
           archive: src('preload/archive.ts'),
+          // The extension library's preload (GPL-3.0, packages/chrome-extensions): extension
+          // pages and workers, and every page of a profile that has extensions (ARCHITECTURE.md §12).
+          extensions: resolve(import.meta.dirname, '../../packages/chrome-extensions/src/preload.ts'),
         },
         output: { format: 'cjs', entryFileNames: '[name].cjs' },
       },

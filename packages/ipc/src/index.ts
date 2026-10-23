@@ -95,6 +95,8 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('chord.goto'), windowId: id, index: z.number().int().min(0).max(8) }),
   z.object({ t: z.literal('chord.update'), chordId: id, name: chordName.optional(), icon: chordIcon.optional() }),
   z.object({ t: z.literal('chord.restore'), windowId: id, chordId: id }),
+  z.object({ t: z.literal('extension.pin'), profileId: id, id: z.string().regex(/^[a-p]{32}$/), pinned: z.boolean() }),
+  z.object({ t: z.literal('extension.restore'), profileId: id, id: z.string().regex(/^[a-p]{32}$/) }),
   // First run (DESIGN.md §8.1) themes the chord being made, and finishes; the shell can't change other settings.
   z.object({ t: z.literal('chord.theme'), chordId: id, theme: ChordTheme.partial() }),
   z.object({ t: z.literal('settings.set'), settings: z.strictObject({ onboarded: z.literal(true) }) }),
@@ -116,6 +118,7 @@ export const SettingsPatch = z.strictObject({
   archiveAfter: z.enum(archiveAfterIds).optional(),
   sleepTabs: z.boolean().optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
+  extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
   searchSuggestions: z.boolean().optional(),
   checkForUpdates: z.boolean().optional(),
   separateSignIns: z.boolean().optional(),
@@ -139,6 +142,21 @@ void _settingsMatch;
 export const ChordThemePatch = ChordTheme.partial();
 export type ChordThemePatch = z.infer<typeof ChordThemePatch>;
 
+/** An installed extension, as Settings → Extensions lists it. */
+export interface ExtensionInfo {
+  id: string;
+  profileId: string;
+  name: string;
+  version: string;
+  source: 'store' | 'unpacked';
+  description: string;
+  /** PNG data URL, or null when it has no icon. */
+  icon: string | null;
+  hasOptions: boolean;
+  /** Loaded and running in this session. */
+  loaded: boolean;
+}
+
 /**
  * The update check's last answer (Settings → About). `unavailable` in
  * development builds, which aren't released; `idle` before the first check.
@@ -154,13 +172,45 @@ export type UpdateStatus =
 export const DefaultBrowserStatus = z.enum(['default', 'not-default', 'unavailable']);
 export type DefaultBrowserStatus = z.infer<typeof DefaultBrowserStatus>;
 
-/** What the Settings window shows: settings, and the chord in the last-used window (for Appearance). */
+/** What the Settings window shows: settings, the chord in the last-used window (for Appearance), every chord, and extensions. */
 export interface SettingsSnapshot {
   settings: Settings;
   chord: Pick<Chord, 'id' | 'name' | 'icon' | 'theme'> | null;
   /** Every chord in switcher order, for Settings → General → Sign-ins. */
   chords: Pick<Chord, 'id' | 'name' | 'icon' | 'profileId'>[];
+  extensions: ExtensionInfo[];
 }
+
+/** One extension's toolbar button, for the window's current tab. */
+export interface ExtensionAction {
+  id: string;
+  profileId: string;
+  /** Shown in the shelf (or title bar); the rest are in the extensions list. */
+  pinned: boolean;
+  title: string;
+  badgeText: string;
+  /** CSS color, or null for the default. */
+  badgeColor: string | null;
+  /** PNG data URL at 2× the button's icon size, or null. */
+  icon: string | null;
+}
+
+/** The extension buttons a window shows (ARCHITECTURE.md §12). */
+export interface ExtensionsBarState {
+  /** Every extension with a button, pinned or not, in a stable order. */
+  actions: ExtensionAction[];
+  /** How many extensions the window's profile has, with a button or without (the shelf shows when there are any). */
+  installed: number;
+  /** The tab shows a Chrome Web Store page for an extension that isn't installed: offer "Add to Chord". */
+  offer: { id: string } | null;
+  /** Being installed right now, from "Add to Chord". */
+  installing: string | null;
+}
+
+/** How an install went. */
+export type InstallResult = { ok: true; name: string } | { ok: false; error: string };
+
+const extensionId = z.string().regex(/^[a-p]{32}$/);
 
 /** A permission prompt in the popover. */
 export interface PermissionPrompt {
@@ -236,14 +286,14 @@ export const OverlayOpen = z.object({
    * editing the current tab. `downloads`: the downloads panel, anchored on the
    * button that opened it (`anchor`).
    */
-  mode: z.enum(['new', 'edit', 'downloads']),
+  mode: z.enum(['new', 'edit', 'downloads', 'extensions']),
   anchor: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
 });
 export type OverlayOpen = z.infer<typeof OverlayOpen>;
 
 /** What main tells the overlay when it opens. */
 export interface OverlayOpenEvent {
-  mode: 'new' | 'edit' | 'downloads';
+  mode: 'new' | 'edit' | 'downloads' | 'extensions';
   /** Where the address sits, for the anchored placement (window coordinates). */
   anchor: Rect | null;
   /** The current tab's address, prefilled in edit mode. */
@@ -315,6 +365,21 @@ export const invokeChannels = {
   'menu:tab': { roles: ['shell'], request: z.object({ nodeId: id, x: z.number(), y: z.number() }), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
+  // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
+  'extensions:state': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<ExtensionsBarState>() },
+  /** Click an extension's button (or its row in the list): its popup opens under `anchor` (window coordinates). */
+  'extension:activate': { roles: ['shell', 'overlay'], request: z.strictObject({ id: extensionId, anchor: Rect }), response: z.void() },
+  /** Settings → Extensions, from the list or a button's menu. */
+  'extensions:manage': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
+  /** Right-click an extension's button, at this point in the window. */
+  'extension:menu': { roles: ['shell'], request: z.strictObject({ id: extensionId, x: z.number(), y: z.number() }), response: z.void() },
+  /** Install from the Chrome Web Store: an extension ID or a store page's address. Into the profile of the caller's chord. */
+  'extensions:install': { roles: ['shell', 'internal'], request: z.strictObject({ input: z.string().min(1).max(2048) }), response: z.custom<InstallResult>() },
+  'extensions:remove': { roles: ['internal'], request: z.strictObject({ profileId: id, id: extensionId }), response: z.void() },
+  /** Open an extension's options page in a new tab of the last-used window. */
+  'extensions:options': { roles: ['internal'], request: z.strictObject({ profileId: id, id: extensionId }), response: z.void() },
+  /** Check the Chrome Web Store for newer versions now; resolves with how many were updated. */
+  'extensions:update': { roles: ['internal'], request: z.void(), response: z.custom<number>() },
   // The Settings window (chord://settings). It sees settings and one chord's theme, not tabs.
   'settings:snapshot': { roles: ['internal'], request: z.void(), response: z.custom<SettingsSnapshot>() },
   'settings:set': { roles: ['internal'], request: SettingsPatch, response: z.void() },
@@ -357,6 +422,7 @@ export interface EventPayloads {
   'chord:edit': ChordEdit;
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
   'settings:section': string;
+  'extensions:state': ExtensionsBarState;
   /** The archive gained or lost entries: the archive page lists them again. */
   'archive:changed': null;
   'archive:snapshot': ArchiveSnapshot;
@@ -396,6 +462,13 @@ export interface ShellApi {
   chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
+  extensions: {
+    state(): Promise<ExtensionsBarState>;
+    onState(listener: (state: ExtensionsBarState) => void): () => void;
+    activate(id: string, anchor: Rect): Promise<void>;
+    menu(id: string, at: { x: number; y: number }): Promise<void>;
+    install(input: string): Promise<InstallResult>;
+  };
   /** First run's "Open links in Chord?" (DESIGN.md §8.1). */
   defaultBrowser: { status(): Promise<DefaultBrowserStatus>; make(): Promise<DefaultBrowserStatus> };
 }
@@ -431,6 +504,12 @@ export interface SettingsApi {
     checkForUpdates(): Promise<UpdateStatus>;
     about(): Promise<AboutInfo>;
     openUrl(url: string): Promise<void>;
+  };
+  extensions: {
+    install(input: string): Promise<InstallResult>;
+    remove(profileId: string, id: string): Promise<void>;
+    options(profileId: string, id: string): Promise<void>;
+    update(): Promise<number>;
   };
 }
 
@@ -484,6 +563,11 @@ export interface OverlayApi {
   history: {
     search(query: string): Promise<HistorySearch>;
     choose(text: string, destination: string, address?: string): Promise<void>;
+  };
+  extensions: {
+    state(): Promise<ExtensionsBarState>;
+    activate(id: string, anchor: Rect): Promise<void>;
+    manage(): Promise<void>;
   };
   search: {
     /** What the engine suggests for the text; a newer call cancels an older one. */

@@ -16,7 +16,7 @@ import {
   type Shortcut,
 } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Check, Info, Keyboard, Palette, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Check, Info, Keyboard, Palette, Puzzle, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
@@ -24,12 +24,14 @@ import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import { AppearanceSection } from './Appearance';
 import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
+import { ExtensionsSection } from './Extensions';
 import styles from './Settings.module.css';
 
 const SECTIONS = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'motion', label: 'Motion', icon: Sparkles },
+  { id: 'extensions', label: 'Extensions', icon: Puzzle },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
 ] as const;
@@ -386,6 +388,11 @@ function About({ about, snapshot }: { about: AboutInfo; snapshot: SettingsSnapsh
         <Row label="Electron" control={<span className={styles.value}>{about.electron}</span>} />
         <Row label="Platform" control={<span className={styles.value}>{`${about.platform} · ${about.arch}`}</span>} />
         <Row label="License" description="Free and open source. No accounts, no telemetry." control={<span className={styles.value}>MIT</span>} />
+        <Row
+          label="This build"
+          description="Includes electron-chrome-extensions, which is GPL-3.0, so Chord’s release builds are distributed under GPL-3.0. Chord’s own source stays MIT."
+          control={<span className={styles.value}>GPL-3.0</span>}
+        />
       </div>
       <div className={styles.links}>
         <button type="button" className={styles.linkButton} onClick={() => void api.settings.openUrl(REPO_URL)}>
@@ -459,6 +466,7 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               {section === 'general' && <General snapshot={snapshot} info={info} />}
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
+              {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'shortcuts' && <Shortcuts info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}
             </motion.div>

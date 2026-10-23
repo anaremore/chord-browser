@@ -13,6 +13,7 @@ import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Cho
 import { useSystemInfo } from './hooks';
 import { keycap, withKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
+import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { Onboarding } from './Onboarding';
 import { SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
@@ -133,6 +134,10 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const overlayChrome = info.windowChrome.kind === 'overlay';
   const secure = active?.url.startsWith('https:') ?? false;
   const collapsed = win?.sidebar === 'collapsed';
+  // Extension buttons: the sidebar's shelf by default, or the title bar (Settings → Extensions).
+  // With the sidebar collapsed, the minimal bar keeps just the puzzle piece in sidebar mode.
+  const extensionsBar = useExtensionsBar();
+  const inTitleBar = state.settings.extensionButtons === 'titleBar';
   const spring = springsFor(state.settings, info.prefersReducedMotion);
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
 
@@ -183,6 +188,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             <SidebarToggle collapsed={collapsed} info={info} onToggle={toggleSidebar} />
             {!overlayChrome && <span className={styles.flex} />}
             <NavButtons live={live} hasTab={Boolean(active)} info={info} />
+            {/* macOS has no title bar beside a docked sidebar: its header row is the title bar. */}
+            {inTitleBar && !overlayChrome && <ExtensionButtons bar={extensionsBar} puzzleOnly={false} />}
           </header>
 
           <button
@@ -224,6 +231,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           </AnimatePresence>
 
           {!collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
+
+          {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
 
           <ChordSwitcher
             state={state}
@@ -273,6 +282,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               )}
             </button>
             <span className={styles.flex} />
+            {(inTitleBar || collapsed) && <ExtensionButtons bar={extensionsBar} puzzleOnly={!inTitleBar} />}
             {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
             {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
             {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}

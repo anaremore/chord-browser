@@ -4,7 +4,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig([
-  { ignores: ['**/out/**', '**/dist/**', '**/release/**', '**/node_modules/**', '**/coverage/**', '**/test-results/**', '**/.cache/**', '.claude/**', '.qa/**'] },
+  { ignores: ['**/out/**', '**/dist/**', '**/release/**', '**/node_modules/**', '**/coverage/**', '**/test-results/**', '**/.cache/**', '.claude/**', '.qa/**', 'packages/chrome-extensions/src/**', 'packages/chrome-extensions/types/**'] },
   js.configs.recommended,
   tseslint.configs.recommended,
   {
@@ -26,8 +26,13 @@ export default defineConfig([
     },
   },
   {
-    files: ['**/scripts/**/*.{js,mjs}', 'spikes/**/*.{js,mjs}', '*.config.{js,ts}', 'apps/*/*.config.ts'],
+    files: ['**/scripts/**/*.{js,mjs}', 'spikes/**/*.{js,mjs}', '*.config.{js,ts}', 'apps/*/*.config.ts', 'packages/chrome-extensions/*.mjs'],
     languageOptions: { globals: globals.node },
+  },
+  {
+    // The test extension runs in Chrome's extension environment.
+    files: ['apps/desktop/test/fixtures/extension/**/*.js'],
+    languageOptions: { globals: { ...globals.browser, chrome: 'readonly' } },
   },
   {
     // The domain core and design tokens must stay free of Electron and DOM.

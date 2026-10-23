@@ -100,6 +100,7 @@ macOS                                            Windows / Linux
 | New tab | 32 | "+ New tab", muted. Same as ⌘T. |
 | Today | 32 / row | New tabs arrive at the top. |
 | (flex) | — | Toasts stack here, above the footer. |
+| Extensions shelf | 32 | Only when the chord's profile has extensions: pinned extensions' buttons (16 px icons in 28 px hit areas, with badges and tooltips), then the puzzle piece, which lists every extension with a pin toggle. A popup opens beside its button. Hidden when Settings puts extension buttons in the title bar. Right-click a button: the extension's items, Options, Unpin, Remove (with Undo), Manage in Settings. |
 | Footer | 44 | Archive · Downloads on the left; chord switcher in the center (icons 20 px; active one in a pill; scrolls with fade edges past ~6); + New chord on the right. |
 
 ### 3.3 Sidebar collapsed: minimal mode
@@ -124,7 +125,7 @@ Windows / Linux
 | Address field | `domain / title`: domain in `fg`, the slash and title in `fg-muted`, one line, truncated at the end. Click or ⌘L and the field *grows into* the command bar in place (shared-element morph), with the URL selected. Hover shows the site-info icon. |
 | Drag region | Everything not interactive drags the window. Double-click follows the platform (maximize on Windows/Linux; the macOS title-bar preference). |
 | Downloads | Present only while a download is active or just finished. |
-| Extension actions | Pinned extension buttons (later phase). |
+| Extension actions | Only the puzzle piece, which lists every extension, so popups stay one click away while the header stays clean. With Settings → Extensions → "Show extension buttons: In the title bar", the pinned buttons sit here too: before ⋯ on Windows/Linux, and in the sidebar's header row on macOS (its title bar) while the sidebar is docked. |
 | Duet | `✦ Duet` text button when Duet is enabled; absent otherwise. |
 | Window controls | Windows/Linux caption buttons (WCO). On macOS the traffic lights sit at the far left instead. |
 
@@ -440,9 +441,9 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Area | Components |
 |---|---|
 | Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
-| Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
+| Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar` |
-| Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `DownloadsPopover` |
+| Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
 | Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState` |
 | Settings and help | `SettingRow` (label, control, and a ↺ reset button shown only when the value differs from its default), `ShortcutSheet` (the cheat sheet, generated from the shortcut registry) |
 | Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
