@@ -36,7 +36,7 @@ import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
 import type { ArchiveSnapshot, GesturePhase, PopoverState, PreviewTarget, Rect, SettingsSnapshot } from '@chord/ipc';
 import { size } from '@chord/tokens';
 import { join } from 'node:path';
-import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, webContents, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
@@ -63,6 +63,15 @@ import { AppWindow, createUiView } from './window';
 
 /** Histories of tabs archived this session, kept in memory so ⌘⇧T doesn't wait on the database. */
 const MAX_REMEMBERED_HISTORIES = 100;
+
+/** Whether two addresses share an origin (a pinned tab that left its site shows ↩). Unparseable counts as the same. */
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return true;
+  }
+}
 
 export interface BrowserOptions {
   initial: State;
@@ -719,7 +728,9 @@ export class Browser {
 
   /** Run an action for the window that owns this contents (keys, the shell's buttons, the command bar). */
   run(action: ActionId, contents: WebContents): boolean {
-    const w = this.windowFor(contents) ?? (contents === this.settingsWindow?.view.webContents ? this.lastWindow() : undefined);
+    const own = this.windowFor(contents);
+    if (own) return this.runAction(action, own, contents);
+    const w = contents === this.settingsWindow?.view.webContents ? this.lastWindow() : undefined;
     if (w) return this.runAction(action, w);
     // A mini window: its own few (close, back, reload…); app-wide ones act on the last normal window.
     // The rest stay the page's.
@@ -737,7 +748,7 @@ export class Browser {
   private runInFocusedWindow(action: ActionId): void {
     const focused = BaseWindow.getFocusedWindow();
     const w = [...this.windows.values()].find((x) => x.window === focused) ?? this.lastWindow();
-    if (w) this.runAction(action, w);
+    if (w) this.runAction(action, w, webContents.getFocusedWebContents());
     else if (action === 'app.settings' || action === 'app.shortcuts') this.openSettings(action === 'app.shortcuts' ? 'shortcuts' : undefined);
     // macOS, with every window closed: ⌘N and ⌘⇧N still make one.
     else if (action === 'window.new' || action === 'window.newPrivate') this.newWindow({ private: action === 'window.newPrivate' });
@@ -902,11 +913,11 @@ export class Browser {
   }
 
   /** Close the overlay for this opening; Peek's closes Peek. */
-  closeOverlay(contents: WebContents, seq: number): void {
+  closeOverlay(contents: WebContents, seq: number, dismissed = false): void {
     const w = this.windowFor(contents);
     if (!w) return;
     if (w.peekOverlaySeq === seq) this.peeks.close(w);
-    else w.closeOverlay(seq);
+    else w.closeOverlay(seq, dismissed);
   }
 
   /** Peek's "Open in Today", from its header. */
@@ -997,6 +1008,8 @@ export class Browser {
           .filter((c) => c.id !== tab.chordId)
           .map((c) => ({ id: c.id, label: `${c.icon}  ${c.name}`, signInsDiffer: c.profileId !== from?.profileId })),
         moveTo: (chordId) => this.moveToChord(w, nodeId, chordId),
+        stopSharing: state.live[nodeId]?.sharing ? () => void this.options.screenShare.stop(nodeId) : null,
+        backToPinned: tab.pinnedUrl && tab.section === 'pinned' && !sameOrigin(tab.url, tab.pinnedUrl) ? () => this.store.dispatch({ t: 'tab.navigate', nodeId, url: tab.pinnedUrl! }) : null,
       }),
       { ...at, width: 0, height: 0 },
     );
@@ -1208,21 +1221,31 @@ export class Browser {
     });
   }
 
-  private runAction(action: ActionId, w: AppWindow): boolean {
+  /** `source`: the contents the key or click came from (F6 starts there; Esc on the command bar goes back there). */
+  private runAction(action: ActionId, w: AppWindow, source: WebContents | null = null): boolean {
     const active = activeTabId(this.store.state, w.id);
     const tab = activeTab(this.store.state, w.id);
     // While Peek is open, page actions (back, reload, find, zoom, print, copy) act on its page.
     const peek = this.peeks.contents(w);
     const activeContents = peek ?? w.activeTabContents;
+    const from = w.focusSource(source) === 'shell' ? 'shell' : 'page';
     switch (action) {
       case 'address.edit':
         this.peeks.close(w);
-        w.openOverlay('edit', this.activeUrl(w.id));
+        w.openOverlay('edit', this.activeUrl(w.id), null, from);
         return true;
       case 'tab.new':
         this.peeks.close(w);
-        w.openOverlay('new', '');
+        w.openOverlay('new', '', null, from);
         return true;
+      case 'view.focusNextRegion':
+      case 'view.focusPreviousRegion': {
+        // The command bar and Peek are modal: F6 stays out of them.
+        const at = w.focusSource(source);
+        if (at === 'overlay' || peek) return true;
+        send(w.shell.webContents, 'focus:region', { direction: action === 'view.focusNextRegion' ? 1 : -1, from: at, popover: w.popoverShown });
+        return true;
+      }
       case 'tab.close':
         // ⌘W closes Peek first, as Esc does.
         if (peek) this.peeks.close(w);
@@ -1319,7 +1342,7 @@ export class Browser {
         return true;
       case 'split.with':
         // Pick what opens beside the current tab; with nothing shown there's nothing to split.
-        if (active) w.openOverlay('split', '');
+        if (active) w.openOverlay('split', '', null, from);
         return true;
       case 'split.focusNext':
       case 'split.focusPrevious':

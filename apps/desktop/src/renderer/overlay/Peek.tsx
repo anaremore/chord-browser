@@ -78,8 +78,9 @@ export function PeekChrome({
             Open in Today
             <kbd className={styles.keycap}>{keys.open}</kbd>
           </button>
-          <button type="button" className={styles.action} onClick={onClose} aria-label="Close Peek" title={`Close (${keys.close})`}>
+          <button type="button" className={styles.action} onClick={onClose} title={`Close (${keys.close})`}>
             <X size={14} strokeWidth={2} aria-hidden />
+            <span className="sr-only">Close Peek</span>
             <kbd className={styles.keycap}>{keys.close}</kbd>
           </button>
         </div>

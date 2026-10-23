@@ -372,3 +372,27 @@
 .hint .keycap {
   margin-inline-start: 0;
 }
+
+/* ---------- Windows High Contrast (DESIGN.md §10) ---------- */
+
+@media (forced-colors: active) {
+  .selected {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .selected * {
+    color: inherit;
+  }
+
+  .panel,
+  .downloadsPanel {
+    border: var(--size-hairline) solid CanvasText;
+  }
+}
+
+/* The panel itself takes focus when it opens (for its name); its ring would only be noise. */
+.downloadsPanel:focus-visible {
+  outline: none;
+}

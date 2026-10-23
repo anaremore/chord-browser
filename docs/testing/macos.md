@@ -79,6 +79,15 @@ Use the packaged app: either `apps/desktop/release/mac-arm64/Chord.app`, or the 
    - Check it over a full-screen app and across Spaces.
 10. **Updates:** after installing a newer build over an older one, macOS may ask about *Chord Safe Storage* in the keychain. Always Allow should work, and your tabs should still be there.
 11. **Camera, microphone and location:** allow a site's request in Chord (a Meet test call, then a map's *show my location*). macOS asks once for each, in Chord's words ("Sites you allow can…"), and the site works after you allow it.
+12. **Accessibility** (DESIGN.md §10). Turn on VoiceOver (⌘F5), and keep Full Keyboard Access off unless noted:
+    - **F6** from a page lands on the tab on screen in the sidebar; VoiceOver says "Today, tree" or "Pinned, tree", the tab's title, "selected", and "1 of 3"; ⇧F6 goes back.
+    - In the tree: ↑ ↓ read each row, → / ← open and close a folder (VoiceOver says expanded or collapsed), Space then ↓ then Space moves a row and VoiceOver says where it went.
+    - **⌘T:** VoiceOver says "New tab, dialog", then the field; ↓ reads each result as it becomes active, without leaving the field; Esc puts you back where you were.
+    - **Chords:** switching (⌘2, or ← → on the switcher) is announced: "Work chord, 3 pinned, 7 today".
+    - **A toast** (Clear Today): read once, on its own; ⌘Z undoes it.
+    - **Settings:** each switch is read with its description; ↺ is named for its setting; radio groups are one Tab stop with arrow keys.
+    - **Duet:** a reply isn't read word by word while it streams; "Duet finished answering." is; a card asking to read more is announced, and ⌘↵ in the message field allows it.
+    - **System Settings → Accessibility → Display:** Reduce motion makes chord switches and the command bar appear without moving; Reduce transparency makes the sidebar solid while Chord runs, with no restart; Increase contrast leaves every text readable.
 
 ## Reporting
 

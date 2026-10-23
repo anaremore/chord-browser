@@ -155,7 +155,7 @@ test('browses, and the shell drives navigation over IPC', async () => {
   try {
     const shell = await pageWhere(app, isShell);
     const tab = await pageWhere(app, (url) => url.startsWith(site.origin));
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
 
     await expect(shell.getByText('Personal')).toBeVisible();
     await expect(today).toContainText('First page');
@@ -177,7 +177,7 @@ test('the command bar opens new tabs, edits the address in place, and tabs close
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('First page');
 
     // New tab: type an address, press Enter.
@@ -186,16 +186,16 @@ test('the command bar opens new tabs, edits the address in place, and tabs close
     await expect(overlay.getByRole('option').first()).toContainText(`${site.origin}/third`);
     await overlay.keyboard.press('Enter');
     await expect(overlay.getByRole('dialog')).toBeHidden();
-    await expect(today.getByRole('listitem')).toHaveCount(2);
-    await expect(today.getByRole('listitem').first()).toContainText('Third page'); // new tabs land on top
+    await expect(today.getByRole('treeitem')).toHaveCount(2);
+    await expect(today.getByRole('treeitem').first()).toContainText('Third page'); // new tabs land on top
 
     // Edit in place: the current address is prefilled; navigate this tab.
     await openCommandBar(shell, overlay, 'edit');
-    await expect(overlay.getByRole('textbox')).toHaveValue(`${site.origin}/third`);
-    await overlay.getByRole('textbox').fill(`${site.origin}/second`);
+    await expect(overlay.getByRole('combobox')).toHaveValue(`${site.origin}/third`);
+    await overlay.getByRole('combobox').fill(`${site.origin}/second`);
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('listitem').first()).toContainText('Second page');
-    await expect(today.getByRole('listitem')).toHaveCount(2);
+    await expect(today.getByRole('treeitem').first()).toContainText('Second page');
+    await expect(today.getByRole('treeitem')).toHaveCount(2);
 
     // Typing part of an open tab's title offers to switch to it, first.
     await openCommandBar(shell, overlay, 'new');
@@ -205,10 +205,10 @@ test('the command bar opens new tabs, edits the address in place, and tabs close
     await expect(overlay.getByRole('dialog')).toBeHidden();
 
     // Close the top tab from its close button; the other remains and becomes active.
-    await today.getByRole('listitem').first().hover();
-    await today.getByRole('button', { name: /^Close/ }).first().click();
-    await expect(today.getByRole('listitem')).toHaveCount(1);
-    await expect(today.getByRole('button', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
+    await today.getByRole('treeitem').first().hover();
+    await today.locator('[aria-label^="Close"]').first().click();
+    await expect(today.getByRole('treeitem')).toHaveCount(1);
+    await expect(today.getByRole('treeitem', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
   } finally {
     await app.close();
   }
@@ -222,7 +222,7 @@ test('the sidebar collapses to a minimal bar and docks again', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     const docked = (await viewBounds(app))[1]!;
 
     await shell.getByRole('button', { name: 'Hide sidebar' }).click();
@@ -245,7 +245,7 @@ test('zoom and copy actions act on the active tab', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     const run = (action: string) =>
       shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
     const zoom = () =>
@@ -323,7 +323,7 @@ test('Settings opens from the shell and its changes apply live', async () => {
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
     const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
 
@@ -406,7 +406,7 @@ test('a page without a usable icon shows its monogram, never a broken image', as
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('No icon');
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/bad-icon`);
@@ -528,7 +528,7 @@ test('first run: name, colors and pins land in the real sidebar, and it never co
     const site1 = welcome.getByRole('textbox', { name: 'A site you open every day' });
     await site1.fill(`${site.origin}/second`);
     await site1.press('Enter');
-    await expect(shell.getByRole('list', { name: 'Pinned', exact: true })).toContainText('Second page');
+    await expect(shell.getByRole('tree', { name: 'Pinned', exact: true })).toContainText('Second page');
     await welcome.getByRole('button', { name: /^Next/ }).click();
 
     // A development build can't be the default browser, so that step is skipped.
@@ -544,7 +544,7 @@ test('first run: name, colors and pins land in the real sidebar, and it never co
   app = await launch({}, profile, { firstRun: true });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     await expect(shell.getByRole('dialog', { name: 'Welcome to Chord' })).toHaveCount(0);
   } finally {
     await app.close();
@@ -560,15 +560,15 @@ test('a playing video pops out when you switch away, and comes home when you ret
     const pip = () => video.evaluate(() => document.pictureInPictureElement?.id ?? null);
     const paused = () => video.evaluate(() => document.querySelector('video')!.paused);
     await expect.poll(() => video.evaluate(() => document.querySelector('video')!.currentTime)).toBeGreaterThan(0.3);
-    const today = shell.getByRole('list', { name: 'Today' });
-    const row = (name: string) => today.getByRole('button', { name, exact: true });
+    const today = shell.getByRole('tree', { name: 'Today' });
+    const row = (name: string) => today.getByRole('treeitem', { name, exact: true });
 
     // Switching to another tab pops the video out, and its row says so.
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/second`);
     await overlay.keyboard.press('Enter');
     await expect.poll(pip).toBe('v');
-    const bringBack = shell.getByRole('button', { name: 'Bring the video back' });
+    const bringBack = shell.locator('[aria-label="Bring the video back"]');
     await expect(bringBack).toBeVisible();
 
     // The glyph brings it home: its tab is shown and the video plays on, inline.
@@ -620,7 +620,7 @@ test('a muted background video stays in its page when you switch away', async ()
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/second`);
     await overlay.keyboard.press('Enter');
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Second page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Second page');
     await shell.waitForTimeout(800);
     expect(await video.evaluate(() => document.pictureInPictureElement)).toBeNull();
   } finally {
@@ -634,7 +634,7 @@ test('several windows: ⌘N opens one, a tab moves between them, and both come b
   try {
     const shell1 = await pageWhere(app, isShell);
     const overlay1 = await pageWhere(app, isOverlay);
-    await expect(shell1.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell1.getByRole('tree', { name: 'Today' })).toContainText('First page');
 
     // ⌘N: a second window on the same chord, with the command bar open and nothing shown yet.
     await runAction(shell1, 'window.new');
@@ -644,7 +644,7 @@ test('several windows: ⌘N opens one, a tab moves between them, and both come b
     await expect(shell2.getByText('Fresh chord, fresh start.')).toBeVisible();
     await overlay2.keyboard.type(`${site.origin}/second`);
     await overlay2.keyboard.press('Enter');
-    const row = (shell: Page, name: string) => shell.getByRole('list', { name: 'Today' }).getByRole('button', { name, exact: true });
+    const row = (shell: Page, name: string) => shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem', { name, exact: true });
     await expect(row(shell2, 'Second page')).toHaveAttribute('aria-current', 'page');
     // Both windows list the chord's tabs; each shows its own.
     await expect(row(shell1, 'Second page')).toBeVisible();
@@ -703,7 +703,7 @@ test('a private window keeps to itself: no shared sign-ins, no history, and noth
     await expect.poll(() => app.windows().find((p) => p.url() === `${site.origin}/secret-login`)?.title()).toBe('Secret set');
     await openCommandBar(privateShell, privateOverlay, 'new');
     await visitIn(privateOverlay, '/third');
-    await expect(privateShell.getByRole('list', { name: 'Today' })).toContainText('Third page');
+    await expect(privateShell.getByRole('tree', { name: 'Today' })).toContainText('Third page');
 
     // The normal window's command bar finds nothing of it: no open tab, no history.
     await openCommandBar(shell, overlay, 'new');
@@ -725,8 +725,8 @@ test('a private window keeps to itself: no shared sign-ins, no history, and noth
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('No secret');
-    await expect(shell.getByRole('list', { name: 'Today' })).not.toContainText('Third page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('No secret');
+    await expect(shell.getByRole('tree', { name: 'Today' })).not.toContainText('Third page');
     expect(app.windows().filter((p) => isShell(p.url()))).toHaveLength(1);
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type('Third');
@@ -745,7 +745,7 @@ test('closing tabs while they load never trips an error in main', async () => {
       await openCommandBar(shell, overlay, 'new');
       await overlay.keyboard.type(`${site.origin}/slow?${i}`);
       await overlay.keyboard.press('Enter');
-      await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Slow page');
+      await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Slow page');
       await runAction(shell, 'tab.close');
     }
     // Give a torn-down page time to fire its last events; failOnMainErrors checks what main logged.
@@ -786,10 +786,11 @@ test('every shortcut can be changed: recorded in Settings, applied live, moved o
 
     // Record a new key for New tab: the row, the sidebar's keycap and the menus all follow.
     await row('tab.new').getByRole('button', { name: /^Change .+ for New tab$/ }).click();
-    await expect(row('tab.new').getByRole('button', { name: /^Press the new keys for New tab/ })).toBeFocused();
+    await expect(row('tab.new').getByRole('button', { name: 'Press keys…' })).toBeFocused();
+    await expect(row('tab.new').getByRole('button', { name: 'Press keys…' })).toHaveAccessibleDescription(/^The new keys for New tab/);
     await settings.keyboard.press('ControlOrMeta+Alt+KeyJ');
     await expect(row('tab.new').getByRole('button', { name: `Change ${caps.ctrlAltJ} for New tab` })).toBeVisible();
-    await expect(row('tab.new').getByRole('button', { name: 'Reset to default' })).toBeVisible();
+    await expect(row('tab.new').getByRole('button', { name: 'Reset New tab to its default keys' })).toBeVisible();
     await expect(shell.getByText(caps.ctrlAltJ).first()).toBeVisible();
 
     // The old key no longer opens a tab; the new one does (through main's router, as a real key would).
@@ -837,7 +838,7 @@ test('every shortcut can be changed: recorded in Settings, applied live, moved o
     await expect(row('tab.new').getByRole('button', { name: `Change ${caps.ctrlF} for New tab` })).toBeVisible();
 
     // ↺ puts one action back; "Reset all" (asked twice, in place) puts back the rest.
-    await row('tab.new').getByRole('button', { name: 'Reset to default' }).click();
+    await row('tab.new').getByRole('button', { name: 'Reset New tab to its default keys' }).click();
     await expect(row('tab.new').getByRole('button', { name: `Change ${caps.ctrlT} for New tab` })).toBeVisible();
     await settings.getByRole('button', { name: 'Reset all' }).click();
     await settings.getByRole('button', { name: 'Reset every shortcut?' }).click();
@@ -893,12 +894,12 @@ test('a relaunch restores tabs, the sidebar and settings', async () => {
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('First page');
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/third`);
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('listitem').first()).toContainText('Third page');
+    await expect(today.getByRole('treeitem').first()).toContainText('Third page');
     await shell.getByRole('button', { name: 'Hide sidebar' }).click();
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
     const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
@@ -923,10 +924,10 @@ test('a relaunch restores tabs, the sidebar and settings', async () => {
     // Same tabs, same order, same active tab; the sidebar is still collapsed.
     await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
     await shell.getByRole('button', { name: 'Show sidebar' }).click();
-    const today = shell.getByRole('list', { name: 'Today' });
-    await expect(today.getByRole('listitem')).toHaveCount(2);
-    await expect(today.getByRole('listitem').first()).toContainText('Third page');
-    await expect(today.getByRole('button', { name: 'Third page', exact: true })).toHaveAttribute('aria-current', 'page');
+    const today = shell.getByRole('tree', { name: 'Today' });
+    await expect(today.getByRole('treeitem')).toHaveCount(2);
+    await expect(today.getByRole('treeitem').first()).toContainText('Third page');
+    await expect(today.getByRole('treeitem', { name: 'Third page', exact: true })).toHaveAttribute('aria-current', 'page');
     await expect.poll(() => app.windows().some((p) => p.url() === `${site.origin}/third`)).toBe(true);
     // Settings came back too.
     await openCommandBar(shell, overlay, 'new');
@@ -951,7 +952,7 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
     const run = (action: string) =>
       shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
     const chords = shell.getByRole('tablist', { name: 'Chords' });
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
 
     // A new chord starts empty, with its name ready to type over.
     await shell.getByRole('button', { name: 'New chord' }).click();
@@ -965,11 +966,11 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/third`);
     await overlay.keyboard.press('Enter');
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Third page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Third page');
 
     // Back to Personal from the switcher: its tab is still there, and Work's isn't.
     await chords.getByRole('tab', { name: 'Personal' }).click();
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('First page');
     await expect(today).not.toContainText('Third page');
 
@@ -986,10 +987,10 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
     await run('chord.goto2');
     await run('chord.delete');
     await expect(chords.getByRole('tab', { name: 'Work' })).toHaveCount(0);
-    const toast = shell.getByRole('status').filter({ hasText: 'Deleted “Work”' });
+    const toast = shell.getByRole('group').filter({ hasText: 'Deleted “Work”' });
     await toast.getByRole('button', { name: 'Undo' }).click();
     await expect(chords.getByRole('tab', { name: 'Work' })).toHaveAttribute('aria-selected', 'true');
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Third page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Third page');
   } finally {
     await app.close();
   }
@@ -1053,30 +1054,30 @@ test('pinned tabs: pin with a key, close keeps them, and dragging reorders and p
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
-    const pinned = shell.getByRole('list', { name: 'Pinned' });
+    const today = shell.getByRole('tree', { name: 'Today' });
+    const pinned = shell.getByRole('tree', { name: 'Pinned' });
     await expect(today).toContainText('First page');
     for (const path of ['second', 'third']) {
       await openCommandBar(shell, overlay, 'new');
       await overlay.keyboard.type(`${site.origin}/${path}`);
       await overlay.keyboard.press('Enter');
-      await expect(today.getByRole('listitem').first()).toContainText(path === 'second' ? 'Second page' : 'Third page');
+      await expect(today.getByRole('treeitem').first()).toContainText(path === 'second' ? 'Second page' : 'Third page');
     }
 
     // ⌘D / Ctrl+D pins the active tab.
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('tab.pin'));
-    await expect(pinned.getByRole('listitem')).toHaveCount(1);
+    await expect(pinned.getByRole('treeitem')).toHaveCount(1);
     await expect(pinned).toContainText('Third page');
-    await expect(today.getByRole('listitem')).toHaveCount(2);
+    await expect(today.getByRole('treeitem')).toHaveCount(2);
 
     // Closing a pinned tab unloads it; it stays pinned.
-    await pinned.getByRole('listitem').first().hover();
-    await pinned.getByRole('button', { name: /^Close/ }).click();
-    await expect(pinned.getByRole('listitem')).toHaveCount(1);
-    await expect(pinned.getByRole('button', { name: 'Third page', exact: true })).not.toHaveAttribute('aria-current', 'page');
+    await pinned.getByRole('treeitem').first().hover();
+    await pinned.locator('[aria-label^="Close"]').click();
+    await expect(pinned.getByRole('treeitem')).toHaveCount(1);
+    await expect(pinned.getByRole('treeitem', { name: 'Third page', exact: true })).not.toHaveAttribute('aria-current', 'page');
     // It reads as unloaded, and stays that way once the page has gone.
     await shell.waitForTimeout(800);
-    await expect(pinned.getByRole('button', { name: 'Third page', exact: true })).toHaveAttribute('data-unloaded', 'true');
+    await expect(pinned.getByRole('treeitem', { name: 'Third page', exact: true })).toHaveAttribute('data-unloaded', 'true');
 
     // Drag First page (bottom of Today) above Second page.
     const drag = async (from: Locator, to: Locator, offsetY: number) => {
@@ -1091,23 +1092,23 @@ test('pinned tabs: pin with a key, close keeps them, and dragging reorders and p
       await shell.mouse.move(b.x + b.width / 2 + 1, b.y + offsetY, { steps: 2 });
       await shell.mouse.up();
     };
-    await drag(today.getByRole('listitem').nth(1), today.getByRole('listitem').first(), 4);
-    await expect(today.getByRole('listitem').first()).toContainText('First page');
+    await drag(today.getByRole('treeitem').nth(1), today.getByRole('treeitem').first(), 4);
+    await expect(today.getByRole('treeitem').first()).toContainText('First page');
     // A new drag can't start while the last one's drop animation is still settling.
     await shell.waitForTimeout(600);
 
     // Drag Second page up into Pinned, below Third page.
-    await drag(today.getByRole('listitem').nth(1), pinned.getByRole('listitem').first(), 28);
-    await expect(pinned.getByRole('listitem')).toHaveCount(2);
-    await expect(pinned.getByRole('listitem').nth(1)).toContainText('Second page');
-    await expect(today.getByRole('listitem')).toHaveCount(1);
+    await drag(today.getByRole('treeitem').nth(1), pinned.getByRole('treeitem').first(), 28);
+    await expect(pinned.getByRole('treeitem')).toHaveCount(2);
+    await expect(pinned.getByRole('treeitem').nth(1)).toContainText('Second page');
+    await expect(today.getByRole('treeitem')).toHaveCount(1);
 
     // And back down: dropping a pinned tab on a Today row unpins it there.
     await shell.waitForTimeout(600);
-    await drag(pinned.getByRole('listitem').first(), today.getByRole('listitem').first(), 4);
-    await expect(pinned.getByRole('listitem')).toHaveCount(1);
-    await expect(today.getByRole('listitem')).toHaveCount(2);
-    await expect(today.getByRole('listitem').first()).toContainText('Third page');
+    await drag(pinned.getByRole('treeitem').first(), today.getByRole('treeitem').first(), 4);
+    await expect(pinned.getByRole('treeitem')).toHaveCount(1);
+    await expect(today.getByRole('treeitem')).toHaveCount(2);
+    await expect(today.getByRole('treeitem').first()).toContainText('Third page');
   } finally {
     await app.close();
   }
@@ -1118,7 +1119,7 @@ test('find in page: counts matches, steps through them, and closes', async () =>
   try {
     const shell = await pageWhere(app, isShell);
     const popover = await pageWhere(app, isPopover);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Words');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Words');
 
     await runAction(shell, 'view.find');
     const field = popover.getByRole('textbox', { name: 'Find in page' });
@@ -1204,7 +1205,7 @@ test('a page that fails to load explains why, and recovers', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     // A port that was just closed: connection refused.
     const closed = await new Promise<number>((done) => {
       const probe = createServer().listen(0, '127.0.0.1', () => {
@@ -1239,7 +1240,7 @@ test('a page that keeps crashing stops after two reloads, and Reload brings it b
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     const crash = () =>
       app.evaluate(({ webContents }, origin) => {
         const page = webContents.getAllWebContents().find((c) => c.getURL().startsWith(origin) && !c.isCrashed());
@@ -1315,23 +1316,23 @@ test('history: a page you visited and closed is found again from the command bar
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('Words');
 
     // Open another page so Words can be closed, then close Words.
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/third`);
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('listitem').first()).toContainText('Third page');
-    await today.getByRole('listitem').filter({ hasText: 'Words' }).hover();
-    await today.getByRole('button', { name: /^Close Words/ }).click();
-    await expect(today.getByRole('listitem')).toHaveCount(1);
+    await expect(today.getByRole('treeitem').first()).toContainText('Third page');
+    await today.getByRole('treeitem').filter({ hasText: 'Words' }).hover();
+    await today.locator('[aria-label^="Close Words"]').click();
+    await expect(today.getByRole('treeitem')).toHaveCount(1);
 
     // Visits reach chord-data within a quarter second; then history finds it by title.
     await expect
       .poll(async () => {
         await openCommandBar(shell, overlay, 'new');
-        await overlay.getByRole('textbox').fill('word');
+        await overlay.getByRole('combobox').fill('word');
         await overlay.waitForTimeout(150);
         const found = await overlay.getByRole('option').filter({ hasText: 'Words' }).count();
         await overlay.keyboard.press('Escape');
@@ -1350,7 +1351,7 @@ test('sleeping: a tab hidden long enough frees its page, and wakes where it was'
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('Long page');
     const long = await pageWhere(app, (url) => url === `${site.origin}/long`);
     await long.evaluate(() => window.scrollTo(0, 1500));
@@ -1360,10 +1361,10 @@ test('sleeping: a tab hidden long enough frees its page, and wakes where it was'
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/second`);
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('listitem').first()).toContainText('Second page');
+    await expect(today.getByRole('treeitem').first()).toContainText('Second page');
 
     // Hidden past the limit: its page closes, and its row says it's asleep.
-    const row = today.getByRole('button', { name: 'Long page', exact: true });
+    const row = today.getByRole('treeitem', { name: 'Long page', exact: true });
     await expect(row).toHaveAttribute('data-asleep', 'true', { timeout: 10_000 });
     await expect.poll(() => app.windows().some((p) => p.url() === `${site.origin}/long`)).toBe(false);
 
@@ -1383,7 +1384,7 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('First page');
     // Give the first tab some history: First → Second.
     const first = await pageWhere(app, (url) => url === `${site.origin}/`);
@@ -1393,10 +1394,10 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/third`);
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('listitem').first()).toContainText('Third page');
+    await expect(today.getByRole('treeitem').first()).toContainText('Third page');
 
     // Unused past the limit: Second page goes to the archive; the tab on screen stays.
-    await expect(today.getByRole('listitem')).toHaveCount(1, { timeout: 10_000 });
+    await expect(today.getByRole('treeitem')).toHaveCount(1, { timeout: 10_000 });
     await expect(today).toContainText('Third page');
 
     // The command bar's @archive lists it, newest first, before anything is typed.
@@ -1429,19 +1430,19 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
     await expect(bringBack).toHaveCount(0);
 
     // With its history: Back goes to the first page.
-    await today.getByRole('button', { name: 'Second page', exact: true }).click();
+    await today.getByRole('treeitem', { name: 'Second page', exact: true }).click();
     const second = await pageWhere(app, (url) => url === `${site.origin}/second`);
     await expect.poll(() => second.evaluate(() => history.length)).toBe(2);
 
     // ⌘⇧T: what you close comes back in place.
-    await today.getByRole('listitem').filter({ hasText: 'Second page' }).hover();
-    await today.getByRole('button', { name: /^Close Second page/ }).click();
+    await today.getByRole('treeitem').filter({ hasText: 'Second page' }).hover();
+    await today.locator('[aria-label^="Close Second page"]').click();
     await expect(today).not.toContainText('Second page');
     await runAction(shell, 'tab.reopen');
     await expect(today).toContainText('Second page');
     // Close it again, to reopen after a restart.
-    await today.getByRole('listitem').filter({ hasText: 'Second page' }).hover();
-    await today.getByRole('button', { name: /^Close Second page/ }).click();
+    await today.getByRole('treeitem').filter({ hasText: 'Second page' }).hover();
+    await today.locator('[aria-label^="Close Second page"]').click();
     await expect(today).not.toContainText('Second page');
   } finally {
     await app.close();
@@ -1451,7 +1452,7 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
   app = await launch({}, profile);
   try {
     const shell = await pageWhere(app, isShell);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     // (Everything else hidden for a second was tidied away last time, at this test's short limit.)
     await expect(today).toBeAttached();
     await expect(today).not.toContainText('Second page');
@@ -1472,7 +1473,7 @@ test('the command bar completes an address inline; Backspace never brings it bac
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('First page');
     // A recent tab on a host nothing else starts with.
     const port = new URL(site.origin).port;
@@ -1480,10 +1481,10 @@ test('the command bar completes an address inline; Backspace never brings it bac
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`http://${full}`);
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('listitem').first()).toContainText('Second page');
+    await expect(today.getByRole('treeitem').first()).toContainText('Second page');
 
     await openCommandBar(shell, overlay, 'new');
-    const field = overlay.getByRole('textbox');
+    const field = overlay.getByRole('combobox');
     await overlay.keyboard.type('loc');
     await expect(field).toHaveValue(full);
     expect(await selection(field)).toEqual([3, full.length]);
@@ -1509,15 +1510,15 @@ test('site keywords and @filters narrow the command bar to a chip', async () => 
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('First page');
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/third`);
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('listitem').first()).toContainText('Third page');
+    await expect(today.getByRole('treeitem').first()).toContainText('Third page');
 
     await openCommandBar(shell, overlay, 'new');
-    const field = overlay.getByRole('textbox');
+    const field = overlay.getByRole('combobox');
     const chip = overlay.getByTestId('scope-chip');
     // yt, then Tab: the bar searches YouTube.
     await overlay.keyboard.type('yt');
@@ -1546,7 +1547,7 @@ test('site keywords and @filters narrow the command bar to a chip', async () => 
     await expect(overlay.getByRole('option')).toHaveCount(1);
     await expect(overlay.getByRole('option').first()).toContainText('First page');
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('button', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(today.getByRole('treeitem', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
 
     // `@` lists the filters; Return on one narrows to it.
     await openCommandBar(shell, overlay, 'new');
@@ -1565,7 +1566,7 @@ test('search suggestions come in under local results; addresses are never sent, 
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type('chord');
     const options = overlay.getByRole('option');
@@ -1580,10 +1581,10 @@ test('search suggestions come in under local results; addresses are never sent, 
     expect(suggestionsAsked.length).toBeLessThan(3);
 
     // Neither does a filter being typed, or an address.
-    await overlay.getByRole('textbox').fill('@hist');
+    await overlay.getByRole('combobox').fill('@hist');
     await overlay.waitForTimeout(400);
     expect(suggestionsAsked.some((q) => q.startsWith('@'))).toBe(false);
-    await overlay.getByRole('textbox').fill('example.com/private/path');
+    await overlay.getByRole('combobox').fill('example.com/private/path');
     await overlay.waitForTimeout(400);
     expect(suggestionsAsked.some((q) => q.includes('example.com'))).toBe(false);
     await overlay.keyboard.press('Escape');
@@ -1610,7 +1611,7 @@ test('a newer release is announced once, in a toast, and in Settings → About',
   try {
     const shell = await pageWhere(app, isShell);
     // The draft (9.0.0) never counts; 0.2.0 is newer than a development build's 0.0.0.
-    await expect(shell.getByRole('status').filter({ hasText: 'Chord 0.2.0 is out' })).toBeVisible({ timeout: 10_000 });
+    await expect(shell.getByRole('group').filter({ hasText: 'Chord 0.2.0 is out' })).toBeVisible({ timeout: 10_000 });
     await expect(shell.getByRole('button', { name: 'What’s new' })).toBeVisible();
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
@@ -1645,7 +1646,7 @@ for (const appearance of ['light', 'dark'] as const) {
     const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_APPEARANCE: appearance });
     try {
       const shell = await pageWhere(app, isShell);
-      await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+      await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
       await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe(appearance);
       await shell.evaluate(() => document.fonts.ready);
       await shell.screenshot({ path: resolve(capturesDir, `shell-${process.platform}-${process.arch}-${appearance}.png`) });
