@@ -172,6 +172,7 @@ export const SettingsPatch = z.strictObject({
   extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
   searchSuggestions: z.boolean().optional(),
   checkForUpdates: z.boolean().optional(),
+  googleFree: z.boolean().optional(),
   separateSignIns: z.boolean().optional(),
   spellcheck: z
     .strictObject({ enabled: z.boolean(), language: z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/).nullable() })
@@ -236,6 +237,9 @@ export type UpdateStatus =
   | { state: 'checking' }
   | { state: 'current'; checkedAt: number }
   | { state: 'available'; checkedAt: number; version: string; url: string }
+  /** Installing itself (Windows installer, AppImage): downloading in the background, then waiting for a restart. */
+  | { state: 'downloading'; checkedAt: number; version: string; url: string; percent: number }
+  | { state: 'ready'; checkedAt: number; version: string; url: string }
   | { state: 'failed'; checkedAt: number };
 
 export const DefaultBrowserStatus = z.enum(['default', 'not-default', 'unavailable']);
@@ -361,7 +365,8 @@ export type GesturePhase = 'begin' | 'end' | 'fling';
 export interface Toast {
   id: string;
   message: string;
-  action?: { label: string; command: RendererCommand };
+  /** Most run a command in the shell's store (Undo); "Restart to update" asks main to install. */
+  action?: { label: string; command: RendererCommand } | { label: string; update: 'restart' };
 }
 
 export interface ChordEdit {
@@ -590,6 +595,8 @@ export const invokeChannels = {
   'settings:makeDefaultBrowser': { roles: ['internal', 'shell'], request: z.void(), response: DefaultBrowserStatus },
   'settings:updateStatus': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
   'settings:checkForUpdates': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
+  // "Restart to update", from Settings → About or the update's toast.
+  'update:restart': { roles: ['internal', 'shell'], request: z.void(), response: z.void() },
   // Settings → Site permissions: change one decision (null asks again next time), or forget a site.
   'settings:sitePermission': {
     roles: ['internal'],
@@ -689,6 +696,8 @@ export interface ShellApi {
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
   gestures: { onPhase(listener: (phase: GesturePhase) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
+  /** "Restart to update" from a toast. */
+  updates: { restart(): Promise<void> };
   extensions: {
     state(): Promise<ExtensionsBarState>;
     onState(listener: (state: ExtensionsBarState) => void): () => void;
@@ -738,6 +747,8 @@ export interface SettingsApi {
     /** The update check's last answer, and asking again now. */
     updateStatus(): Promise<UpdateStatus>;
     checkForUpdates(): Promise<UpdateStatus>;
+    /** Install the downloaded update and reopen Chord. */
+    restartToUpdate(): Promise<void>;
     about(): Promise<AboutInfo>;
     /** Settings → Duet: which providers are installed and signed in; sign in; clear all chats. */
     duet(request: { do: 'detect' } | { do: 'signIn'; provider: DuetProvider } | { do: 'clearAll' }): Promise<DuetProviderInfo[]>;

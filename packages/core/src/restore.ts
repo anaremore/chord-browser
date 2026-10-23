@@ -9,6 +9,7 @@ import {
   defaultSettings,
   type ArchiveAfter,
   emptyState,
+  GOOGLE_FREE_ENGINE,
   MAX_ZOOM,
   MIN_ZOOM,
   SIDEBAR_WIDTH,
@@ -166,6 +167,8 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   }
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
+  if (typeof saved['googleFree'] === 'boolean') settings.googleFree = saved['googleFree'];
+  if (settings.googleFree && settings.searchEngine === 'google') settings.searchEngine = GOOGLE_FREE_ENGINE;
   const motion = saved['motion'];
   if (motion && typeof motion === 'object') {
     for (const key of Object.keys(settings.motion) as (keyof MotionSettings)[]) {

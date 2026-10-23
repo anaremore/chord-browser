@@ -442,14 +442,19 @@ export class Extensions {
     }
     for (const e of Object.values(this.deps.state().extensions)) void this.finishInstall(e);
     this.deps.changed();
-    this.updateTimer = setTimeout(() => void this.checkForUpdates().finally(() => this.scheduleUpdates()), FIRST_UPDATE_CHECK_MS);
+    this.updateTimer = setTimeout(() => void this.scheduledUpdateCheck().finally(() => this.scheduleUpdates()), FIRST_UPDATE_CHECK_MS);
     this.updateTimer.unref?.();
   }
 
   private scheduleUpdates(): void {
     clearTimeout(this.updateTimer);
-    this.updateTimer = setTimeout(() => void this.checkForUpdates().finally(() => this.scheduleUpdates()), UPDATE_INTERVAL_MS);
+    this.updateTimer = setTimeout(() => void this.scheduledUpdateCheck().finally(() => this.scheduleUpdates()), UPDATE_INTERVAL_MS);
     this.updateTimer.unref?.();
+  }
+
+  /** The Web Store is Google's: Google-free mode skips the background checks (installing is still up to you). */
+  private async scheduledUpdateCheck(): Promise<void> {
+    if (!this.deps.state().settings.googleFree) await this.checkForUpdates();
   }
 
   stop(): void {
