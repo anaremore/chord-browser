@@ -71,8 +71,9 @@ Releases come only from CI, from a `v*` tag (§15.3). ⚠ `release.yml` is new; 
 
 - [ ] Bump the patch `version` in `apps/desktop/package.json` and commit: `chore(release): vA.B.C`.
 - [ ] Tag that commit `vA.B.C` and push the tag. The release workflow builds every platform and uploads a **draft** GitHub Release.
+- [ ] Approve the `release` environment twice: first for the builds (they read the signing secrets), then for the draft.
 - [ ] Write the release notes: "Security: updates Electron to X (Chromium Y)". Link the Electron release and the P0 issue.
-- **Not built yet:** signing, notarization, and Ed25519 manifest signing (§14.4, §15.2). Today's builds are unsigned.
+- Code signing and notarization run by themselves once their secrets are in `release` ([releasing/signing.md](releasing/signing.md)). Until then, builds are unsigned. If a build that should be signed isn't, the release stops; fix the secret and re-run the failed jobs.
 
 ### By T+24 h: published
 
@@ -146,6 +147,7 @@ Installed copies on Windows and the AppImage install an update only when its man
    - Under *Deployment protection rules*, tick **Required reviewers** and add yourself.
    - Under *Deployment branches and tags*, choose **Selected branches and tags** and add the tag rule `v*`.
    - Do this before the next tag: a workflow that names an environment that doesn't exist creates it with no protection.
+   - The code-signing certificates go in this environment too ([releasing/signing.md](releasing/signing.md)).
 2. **Make the key pair.** From the repository root, run `node apps/desktop/scripts/update-key.mjs`. It prints a public key, a fingerprint and a private key, and writes nothing to disk.
 3. **Store the private key.** In the `release` environment, under *Environment secrets → Add environment secret*:
    - Name: `CHORD_UPDATE_SIGNING_KEY`.

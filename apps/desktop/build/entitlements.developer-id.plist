@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Chord.app's entitlements under the hardened runtime, for Developer ID builds only
+  (electron-builder.config.ts, ARCHITECTURE.md §15.2). Ad-hoc builds don't use this file: it is
+  deliberately not named entitlements.mac.plist, which electron-builder would apply to them too.
+
+  Kept minimal, the way Chrome's own app-entitlements.plist is. Each entry is something Chord does:
+  - allow-jit: V8 compiles JavaScript and WebAssembly to machine code (MAP_JIT). Electron
+    won't run under the hardened runtime without it.
+  - device.camera, device.audio-input: sites you allow can use the camera and microphone
+    (src/main/permissions.ts). Without these the hardened runtime refuses, and macOS never asks.
+  - personal-information.location: sites you allow can ask where you are (permissions.ts).
+
+  Not here, on purpose:
+  - Screen sharing: macOS has no entitlement for it. Screen Recording is a privacy permission
+    you grant in System Settings, and macOS 15+ shows its own picker (src/main/screen-share.ts).
+  - Keychain: cookie encryption keeps its key in the login keychain (Chord Safe Storage), which
+    needs no entitlement. The item trusts the app's designated requirement, which for a Developer
+    ID is the team and bundle ID, so it stays the same across updates and macOS stops asking.
+    keychain-access-groups would need a provisioning profile and buys Chord nothing.
+  - Bluetooth, USB, printing: Chord denies Web Bluetooth and WebUSB, and printing needs no
+    entitlement outside the App Sandbox.
+  - disable-library-validation, allow-unsigned-executable-memory: every framework is signed with
+    the same team, and Chord loads no unsigned code.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
+  </dict>
+</plist>

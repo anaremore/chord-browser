@@ -1,0 +1,28 @@
+<!--
+  Microsoft Store (MSIX) only: electron-builder inserts this into AppxManifest.xml's
+  <Extensions> (electron-builder.config.ts, appx.customExtensionsPath). It is the packaged
+  equivalent of build/installer.nsh: web links and .html files, so Windows' Default apps can
+  offer Chord. Links arrive after Chromium's single-argument switch, as with the installer, so
+  a crafted link can't add switches of its own (src/main/os-links.ts).
+  Draft: unverified until the first Store build is installed and tried (docs/releasing/signing.md).
+-->
+<uap3:Extension Category="windows.protocol" xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3">
+  <uap3:Protocol Name="http" Parameters="--single-argument %1">
+    <uap:DisplayName>Chord</uap:DisplayName>
+  </uap3:Protocol>
+</uap3:Extension>
+<uap3:Extension Category="windows.protocol" xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3">
+  <uap3:Protocol Name="https" Parameters="--single-argument %1">
+    <uap:DisplayName>Chord</uap:DisplayName>
+  </uap3:Protocol>
+</uap3:Extension>
+<uap3:Extension Category="windows.fileTypeAssociation" xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3">
+  <uap3:FileTypeAssociation Name="html" Parameters="--single-argument %1">
+    <uap:DisplayName>HTML document</uap:DisplayName>
+    <uap:SupportedFileTypes>
+      <uap:FileType>.htm</uap:FileType>
+      <uap:FileType>.html</uap:FileType>
+      <uap:FileType>.xhtml</uap:FileType>
+    </uap:SupportedFileTypes>
+  </uap3:FileTypeAssociation>
+</uap3:Extension>
