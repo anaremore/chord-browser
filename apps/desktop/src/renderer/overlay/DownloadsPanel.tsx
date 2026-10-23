@@ -7,7 +7,7 @@ import { describeDownload, downloadsFor, type Download, type DownloadAction, typ
 import type { Rect } from '@chord/ipc';
 import { File, FolderOpen, Pause, Play, RotateCcw, X } from 'lucide-react';
 import { motion, type Transition } from 'motion/react';
-import { useEffect, type CSSProperties } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 
@@ -84,11 +84,15 @@ export function DownloadsPanel({
   windowId: string;
   anchor: Rect | null;
   transition: Transition;
-  onClose(): void;
+  /** `dismissed`: Esc, so the keyboard goes back to the button that opened it. */
+  onClose(dismissed?: boolean): void;
 }) {
+  // Opened, the panel has the keyboard: screen readers hear its name, and Tab goes through it.
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => panel.current?.focus(), []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onClose(true);
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -109,13 +113,16 @@ export function DownloadsPanel({
 
   return (
     <motion.div
+      ref={panel}
       className={styles.downloadsPanel}
       style={style}
       initial={{ opacity: 0, y: below ? -4 : 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={transition}
       role="dialog"
+      aria-modal="true"
       aria-label="Downloads"
+      tabIndex={-1}
     >
       <header className={styles.downloadsHeader}>
         <span className={styles.downloadsTitle}>Downloads</span>

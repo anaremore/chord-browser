@@ -147,14 +147,14 @@ test.afterAll(() => site.server.close());
 async function setUp(app: ElectronApplication, paths: string[]) {
   const shell = await pageWhere(app, isShell);
   const overlay = await pageWhere(app, isOverlay);
-  const today = shell.getByRole('list', { name: 'Today' });
+  const today = shell.getByRole('tree', { name: 'Today' });
   await expect(today).toContainText('First page');
   for (const path of paths) {
     await shell.evaluate(() => (window as unknown as Chord).chord.overlay.open('new'));
     await expect(overlay.getByRole('dialog')).toBeVisible();
     await overlay.keyboard.type(`${site.origin}${path}`);
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('listitem').first()).toContainText(new RegExp(path.slice(1), 'i'));
+    await expect(today.getByRole('treeitem').first()).toContainText(new RegExp(path.slice(1), 'i'));
   }
   return { shell, overlay, today };
 }
@@ -171,7 +171,7 @@ test('a tab dropped on the page splits the frame; clicks move focus, keys act on
     expect(frame).toBeDefined();
 
     // Drop "First page" on the right of the page: it opens beside "Second page".
-    await drag(shell, today.getByRole('listitem').filter({ hasText: 'First page' }), { x: frame!.x + frame!.width - 60, y: frame!.y + frame!.height / 2 });
+    await drag(shell, today.getByRole('treeitem').filter({ hasText: 'First page' }), { x: frame!.x + frame!.width - 60, y: frame!.y + frame!.height / 2 });
     await expect.poll(async () => (await splitState(shell)).panes).toEqual(['Second page', 'First page']);
     expect(await splitState(shell)).toMatchObject({ active: 'First page', direction: 'row', sizes: [0.5, 0.5] });
     // Both pages are on screen, side by side, 8 px apart, filling the frame.
@@ -182,7 +182,7 @@ test('a tab dropped on the page splits the frame; clicks move focus, keys act on
     expect(right!.x + right!.width).toBe(frame!.x + frame!.width);
     expect(Math.abs(left!.width - right!.width)).toBeLessThanOrEqual(1);
     // In the sidebar it's one row, with its titles joined; the focused pane has the ring.
-    await expect(today.getByRole('button', { name: 'Split: Second page + First page' })).toHaveAttribute('aria-current', 'page');
+    await expect(today.getByRole('treeitem', { name: 'Split: Second page + First page' })).toHaveAttribute('aria-current', 'page');
     const ids = (await splitState(shell)).ids;
     await expect(shell.locator(`[data-pane="${ids['First page']}"]`)).toHaveAttribute('data-focused');
 
@@ -241,13 +241,13 @@ test('the tab menu and "Split with…" split too; dragging a pane out or Separat
     const { shell, overlay, today } = await setUp(app, ['/second', '/third']);
 
     // Right-click → Open in split: beside the page on screen.
-    await clickMenuItem(app, () => today.getByRole('button', { name: 'First page', exact: true }).click({ button: 'right' }), 'Open in split');
+    await clickMenuItem(app, () => today.getByRole('treeitem', { name: 'First page', exact: true }).click({ button: 'right' }), 'Open in split');
     await expect.poll(async () => (await splitState(shell)).panes).toEqual(['Third page', 'First page']);
 
     // "Split with…" (its shortcut is in the registry): the command bar picks what opens beside it.
     await runAction(shell, 'split.with');
     await expect(overlay.getByRole('dialog')).toBeVisible();
-    await expect(overlay.getByRole('textbox')).toHaveAttribute('placeholder', 'Split with a tab or a page');
+    await expect(overlay.getByRole('combobox')).toHaveAttribute('placeholder', 'Split with a tab or a page');
     await overlay.keyboard.type('second');
     await expect(overlay.getByRole('option').first()).toContainText('Second page');
     await overlay.keyboard.press('Enter');
@@ -260,14 +260,14 @@ test('the tab menu and "Split with…" split too; dragging a pane out or Separat
     await expect.poll(async () => (await splitState(shell)).active).toBe('First page');
 
     // Opened, the split lists its tabs; dragging one out to the sidebar takes it out of the split.
-    const splitRow = today.getByRole('button', { name: /^Split: / });
+    const splitRow = today.getByRole('treeitem', { name: /^Split: / });
     await splitRow.hover();
     await shell.locator('[data-split-toggle]').click();
-    await expect(today.getByRole('listitem')).toHaveCount(4);
+    await expect(today.getByRole('treeitem')).toHaveCount(4);
     const splitBox = (await splitRow.boundingBox())!;
     await drag(shell, shell.locator('[data-row="tab"][data-parent]').filter({ hasText: 'Second page' }), { x: splitBox.x + splitBox.width / 2, y: splitBox.y + splitBox.height - 4 });
     await expect.poll(async () => (await splitState(shell)).panes).toEqual(['Third page', 'First page']);
-    await expect(today.getByRole('button', { name: 'Second page', exact: true })).toBeVisible();
+    await expect(today.getByRole('treeitem', { name: 'Second page', exact: true })).toBeVisible();
     await expect.poll(async () => (await pageViews(app)).length).toBe(2);
 
     // Separate: every pane its own tab again, and Undo joins them back as they were.
@@ -279,7 +279,7 @@ test('the tab menu and "Split with…" split too; dragging a pane out or Separat
     await expect.poll(async () => (await pageViews(app)).length).toBe(2);
 
     // Dragging out one of the last two dissolves the split.
-    const again = (await today.getByRole('button', { name: 'Second page', exact: true }).boundingBox())!;
+    const again = (await today.getByRole('treeitem', { name: 'Second page', exact: true }).boundingBox())!;
     await drag(shell, shell.locator('[data-row="tab"][data-parent]').filter({ hasText: 'First page' }), { x: again.x + again.width / 2, y: again.y + again.height - 4 });
     await expect.poll(async () => (await splitState(shell)).splits).toBe(0);
     await expect.poll(async () => (await pageViews(app)).length).toBe(1);
@@ -309,8 +309,8 @@ test('a split comes back after a relaunch, exactly as it was', async () => {
   app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
   try {
     const shell = await pageWhere(app, isShell);
-    const today = shell.getByRole('list', { name: 'Today' });
-    await expect(today.getByRole('button', { name: 'Split: Second page + First page' })).toBeVisible();
+    const today = shell.getByRole('tree', { name: 'Today' });
+    await expect(today.getByRole('treeitem', { name: 'Split: Second page + First page' })).toBeVisible();
     expect(await splitState(shell)).toMatchObject({ panes: ['Second page', 'First page'], direction: 'column', sizes: [0.3, 0.7] });
     // Stacked, the first pane about 30% of the frame.
     await expect.poll(async () => (await pageViews(app)).length).toBe(2);

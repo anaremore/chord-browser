@@ -84,9 +84,9 @@ test('a pinned tab previews the last picture of its page; Settings → Privacy t
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const pinned = shell.getByRole('list', { name: 'Pinned', exact: true });
+    const pinned = shell.getByRole('tree', { name: 'Pinned', exact: true });
     await open(shell, overlay, `${site.origin}/colors`);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Colors');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Colors');
     await runAction(shell, 'tab.pin');
     await expect(pinned).toContainText('Colors');
 
@@ -95,7 +95,7 @@ test('a pinned tab previews the last picture of its page; Settings → Privacy t
     await expect.poll(() => pictures(profile).length, { timeout: 10_000 }).toBe(1);
 
     // Resting on its row shows the card beside the sidebar, after the hover delay.
-    await pinned.getByRole('button', { name: 'Colors', exact: true }).hover();
+    await pinned.getByRole('treeitem', { name: 'Colors', exact: true }).hover();
     const preview = await pageWhere(app, isPreview);
     const card = preview.getByRole('tooltip');
     await expect(card).toBeVisible();
@@ -108,7 +108,7 @@ test('a pinned tab previews the last picture of its page; Settings → Privacy t
     // Beside the sidebar, never over it (the view would take the pointer from its rows and its edge).
     const sidebar = await shell.evaluate(() => document.querySelector('nav')!.getBoundingClientRect().right);
     expect(placed.x).toBeGreaterThanOrEqual(Math.floor(sidebar));
-    const row = (await pinned.getByRole('button', { name: 'Colors', exact: true }).boundingBox())!;
+    const row = (await pinned.getByRole('treeitem', { name: 'Colors', exact: true }).boundingBox())!;
     expect(Math.abs(placed.y + 24 - row.y)).toBeLessThanOrEqual(2);
 
     // Moving off the row puts it away.
@@ -124,7 +124,7 @@ test('a pinned tab previews the last picture of its page; Settings → Privacy t
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
     await expect.poll(() => pictures(profile).length).toBe(0);
-    await pinned.getByRole('button', { name: 'Colors', exact: true }).hover();
+    await pinned.getByRole('treeitem', { name: 'Colors', exact: true }).hover();
     await shell.waitForTimeout(900);
     expect((await previewView(app))?.visible).toBe(false);
   } finally {
@@ -138,9 +138,9 @@ test('a folder previews its first tabs; a page never pictured shows its icon on 
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const pinned = shell.getByRole('list', { name: 'Pinned', exact: true });
+    const pinned = shell.getByRole('tree', { name: 'Pinned', exact: true });
     await open(shell, overlay, `${site.origin}/third`);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Third page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Third page');
     await runAction(shell, 'folder.new');
     const folder = pinned.locator('[data-row="folder"]');
     await expect(folder).toHaveCount(1);
@@ -156,7 +156,7 @@ test('a folder previews its first tabs; a page never pictured shows its icon on 
     await expect(card).toContainText('Third page');
 
     // Straight on to the tab inside: the card swaps at once, without waiting again.
-    await pinned.getByRole('button', { name: 'Third page', exact: true }).hover();
+    await pinned.getByRole('treeitem', { name: 'Third page', exact: true }).hover();
     await expect(card).toContainText('Opened', { timeout: 400 });
     // It's on screen, so it hasn't been pictured yet: its icon stands in on the tint.
     if (pictures(profile).length === 0) await expect(card.locator('[data-fallback]')).toBeVisible();
@@ -170,7 +170,7 @@ test('a private window is never pictured', async () => {
   const app = await launch(profile);
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     await runAction(shell, 'window.newPrivate');
     await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
     // Its command bar loads after its shell.

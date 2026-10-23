@@ -9,7 +9,7 @@
  */
 import { keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
 import type { HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
-import { AppWindow, Archive, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, MessagesSquare, PanelLeft, Pin, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, MessagesSquare, PanelLeft, Pin, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
@@ -95,6 +95,10 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'app.devtools': SquareTerminal,
   'app.settings': Settings,
   'chord.delete': Trash2,
+  'split.with': Columns2,
+  'split.separate': Columns2,
+  'split.focusNext': Columns2,
+  'split.focusPrevious': Columns2,
   'app.shortcuts': Keyboard,
 };
 
@@ -347,10 +351,12 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     }
   }, [results, query]);
 
-  const close = () => {
-    if (session) void api.overlay.close(session.seq);
+  /** `dismissed`: Esc or a click outside, so the keyboard goes back where it came from (main). */
+  const close = (dismissed?: boolean) => {
+    if (session) void api.overlay.close(session.seq, dismissed === true);
     setSession(null);
   };
+  const dismiss = () => close(true);
 
   const enterScope = (next: Scope) => {
     setScope(next);
@@ -410,7 +416,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     const caretAtEnd = input.selectionStart === input.value.length || (completion !== '' && input.selectionStart === query.length);
     if (event.key === 'Escape') {
       event.preventDefault();
-      close();
+      dismiss();
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       if (results.length === 0) return;
@@ -461,7 +467,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
             info={info}
             transition={spring('gentle', 'commandBar')}
             enter={spring('overlay', 'commandBar')}
-            onClose={close}
+            onClose={dismiss}
           />
         </div>
       </MotionConfig>
@@ -473,7 +479,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     return (
       <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
         <div className={styles.root} style={style}>
-          <div className={styles.clearScrim} onMouseDown={close} />
+          <div className={styles.clearScrim} onMouseDown={dismiss} />
           {session.mode === 'downloads' ? (
             <DownloadsPanel state={state} windowId={windowId} anchor={session.anchor} transition={spring('overlay', 'commandBar')} onClose={close} />
           ) : (
@@ -509,7 +515,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={spring('gentle', 'commandBar')}
-          onMouseDown={close}
+          onMouseDown={dismiss}
         />
         <div className={anchored ? undefined : styles.frameArea}>
           <motion.div
@@ -520,7 +526,8 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
             animate={{ opacity: 1, scale: 1, y: 0 }}
             transition={spring('overlay', 'commandBar')}
             role={session.warm ? undefined : 'dialog'}
-            aria-label={anchored ? 'Edit address' : 'New tab'}
+            aria-modal={session.warm ? undefined : true}
+            aria-label={anchored ? 'Edit address' : session.mode === 'split' ? 'Split with' : 'New tab'}
           >
             <div className={styles.inputRow}>
               {scope && label && ScopeIcon ? (
@@ -545,6 +552,11 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                 aria-label={placeholder}
                 spellCheck={false}
                 autoComplete="off"
+                // A combobox controlling the results (DESIGN.md §10): ↑ ↓ move the active option, which
+                // screen readers follow through aria-activedescendant while typing stays in the field.
+                role="combobox"
+                aria-expanded={results.length > 0}
+                aria-haspopup="listbox"
                 aria-autocomplete="both"
                 aria-controls="command-results"
                 aria-activedescendant={results[current] ? `result-${current}` : undefined}
@@ -567,7 +579,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
               />
             </div>
             {results.length > 0 && (
-              <ul id="command-results" className={styles.results} role="listbox">
+              <ul id="command-results" className={styles.results} role="listbox" aria-label="Results">
                 {results.map((result, i) => {
                   const Icon =
                     result.kind === 'action'

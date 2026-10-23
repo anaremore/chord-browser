@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS, SEARCH_ENGINES } from '@chord/core';
 import type { SettingsSnapshot } from '@chord/ipc';
 import { Check } from 'lucide-react';
 import { api } from './api';
-import { Row, SectionHeader, Switch } from './controls';
+import { RadioGroup, Row, SectionHeader, Switch } from './controls';
 import styles from './Settings.module.css';
 
 export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
@@ -31,7 +31,7 @@ export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
       {googleFree && (
         <>
           <h2 className={styles.groupTitle}>Search with</h2>
-          <div className={styles.group} role="radiogroup" aria-label="Search with">
+          <RadioGroup className={styles.group} label="Search with">
             {SEARCH_ENGINES.filter((e) => e.id !== 'google').map((e) => (
               <button
                 key={e.id}
@@ -46,7 +46,7 @@ export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
                 {e.id === searchEngine && <Check className={styles.check} size={16} strokeWidth={2.25} aria-hidden />}
               </button>
             ))}
-          </div>
+          </RadioGroup>
           <h2 className={styles.groupTitle}>Also changed</h2>
           <div className={styles.group}>
             <Row

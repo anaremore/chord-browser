@@ -15,7 +15,7 @@ import { api } from './api';
 import { DuetSettings } from './DuetSettings';
 import { AppearanceSection } from './Appearance';
 import { ShortcutsSection } from './Shortcuts';
-import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
+import { RadioGroup, ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import { ExtensionsSection } from './Extensions';
 import { PrivacySection } from './Privacy';
 import styles from './Settings.module.css';
@@ -102,7 +102,7 @@ function SignIns({ snapshot }: { snapshot: SettingsSnapshot }) {
     <>
       <h2 className={styles.groupTitle}>
         Sign-ins
-        <ResetButton visible={settings.separateSignIns !== DEFAULT_SETTINGS.separateSignIns} onReset={() => void api.settings.set({ separateSignIns: DEFAULT_SETTINGS.separateSignIns })} />
+        <ResetButton label="Reset Sign-ins to default" visible={settings.separateSignIns !== DEFAULT_SETTINGS.separateSignIns} onReset={() => void api.settings.set({ separateSignIns: DEFAULT_SETTINGS.separateSignIns })} />
       </h2>
       <div className={styles.group}>
         <Row
@@ -135,9 +135,9 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
       <SectionHeader title="General" description="How Chord searches, which chords share sign-ins, and whether it opens your links." />
       <h2 className={styles.groupTitle}>
         Search engine
-        <ResetButton visible={engine !== DEFAULT_SETTINGS.searchEngine && !googleFree} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
+        <ResetButton label="Reset Search engine to default" visible={engine !== DEFAULT_SETTINGS.searchEngine && !googleFree} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
       </h2>
-      <div className={styles.group} role="radiogroup" aria-label="Search engine">
+      <RadioGroup className={styles.group} label="Search engine">
         {SEARCH_ENGINES.map((e) => (
           <button
             key={e.id}
@@ -154,7 +154,7 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
             {e.id === engine && <Check className={styles.check} size={16} strokeWidth={2.25} aria-hidden />}
           </button>
         ))}
-      </div>
+      </RadioGroup>
       <div className={`${styles.group} ${styles.groupAfter}`}>
         <Row
           label="Search suggestions"

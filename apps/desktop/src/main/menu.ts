@@ -248,6 +248,12 @@ export interface TabMenuActions {
   /** The other chords, for "Move to"; `signInsDiffer` notes the reload. */
   moveTargets: { id: string; label: string; signInsDiffer: boolean }[];
   moveTo(chordId: string): void;
+  /**
+   * What the row's own buttons do, for the keyboard (Shift+F10, the menu key):
+   * null when the row doesn't show them.
+   */
+  stopSharing: (() => void) | null;
+  backToPinned: (() => void) | null;
 }
 
 /** Right-click on a tab row in the sidebar. */
@@ -257,7 +263,12 @@ export function buildTabMenu(a: TabMenuActions): Menu {
     label: c.signInsDiffer ? `${c.label} (other sign-ins)` : c.label,
     click: () => a.moveTo(c.id),
   }));
+  const rowButtons: MenuItemConstructorOptions[] = [
+    ...(a.stopSharing ? [{ label: 'Stop sharing your screen', click: () => a.stopSharing?.() }] : []),
+    ...(a.backToPinned ? [{ label: 'Back to pinned page', click: () => a.backToPinned?.() }] : []),
+  ];
   return Menu.buildFromTemplate([
+    ...(rowButtons.length > 0 ? [...rowButtons, { type: 'separator' as const }] : []),
     { label: 'Copy link', enabled: web, click: a.copyLink },
     { label: 'Copy as Markdown link', enabled: web, click: a.copyMarkdown },
     { type: 'separator' },

@@ -215,10 +215,11 @@ Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every 
 ### M1.6 First run + preview release · → Mon Dec 14
 
 - **First run:** the onboarding flow from DESIGN.md §8.1, under 60 s to your first chord. Empty states and a copy pass.
-- **Accessibility pass:**
-  - Every flow completed keyboard-only.
-  - Screen-reader smoke test.
-  - Reduced motion, reduced transparency, Windows High Contrast.
+- **Accessibility pass:** ✅ automated (DESIGN.md §10 *As built*, ARCHITECTURE.md §15.5).
+  - Every flow completed keyboard-only: first run, tabs (F6 into the sidebar, move, reorder, pin, fold, close), chords, the command bar, Settings (change and reset), Duet, split view. `keyboard.spec.ts`.
+  - Screen-reader structure checked by aria snapshots; axe clean (serious and critical) on every surface, light and dark, four themes. `a11y.spec.ts`.
+  - Reduced motion (both ways), reduced transparency (wired to `nativeTheme.prefersReducedTransparency`, live), Windows High Contrast (`forced-colors`, with captures).
+  - ⏳ By hand: a screen-reader smoke test with Narrator (Windows), VoiceOver (macOS, docs/testing/macos.md) and Orca (Linux); real Windows High Contrast themes; Text scaling (shell zoom 90–150%) isn't built yet.
 - **Full design QA sweep** across the capture matrix.
 - **Unsigned packaging** (ARCHITECTURE.md §15.2):
   - macOS: universal `.dmg` + `.zip`. ⚠ Verify the ad-hoc signature that Apple Silicon needs.

@@ -78,7 +78,7 @@ test('a Google-free session contacts no Google host on its own', async () => {
     const shell = await pageWhere(second, isShell);
     const overlay = await pageWhere(second, isOverlay);
     const tab = await pageWhere(second, (url) => url.startsWith(site.origin));
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Local page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Local page');
     // Spelling runs on the text field.
     await tab.getByRole('textbox', { name: 'Notes' }).click();
     await tab.keyboard.type(' en meer fouten');
