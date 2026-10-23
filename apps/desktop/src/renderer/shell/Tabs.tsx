@@ -16,7 +16,7 @@ import { DragDropProvider, useDroppable } from '@dnd-kit/react';
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
-import { Archive, Plus, Undo2, X } from 'lucide-react';
+import { Archive, PictureInPicture2, Plus, Undo2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useState, type MouseEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
@@ -62,6 +62,8 @@ function TabRow({ tab, index, section, ctx }: { tab: TabNode; index: number; sec
   const asleep = !live && !isActive;
   // An unloaded pinned tab has nothing to close, so it shows no ×.
   const unloaded = pinned && asleep;
+  // Its video popped out when you switched away (auto picture-in-picture).
+  const popped = Boolean(live?.pip);
   const dispatch = api.state.dispatch;
   const close = () => void dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
   return (
@@ -95,6 +97,7 @@ function TabRow({ tab, index, section, ctx }: { tab: TabNode; index: number; sec
         // A pinned tab that hasn't been opened yet reads quieter (DESIGN.md §7.2).
         data-unloaded={unloaded || undefined}
         data-asleep={asleep || undefined}
+        data-pip={popped || undefined}
         aria-current={isActive ? 'page' : undefined}
         title={pageTitle(tab) || tab.url}
         onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
@@ -107,6 +110,17 @@ function TabRow({ tab, index, section, ctx }: { tab: TabNode; index: number; sec
         )}
         <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
       </button>
+      {popped && (
+        <button
+          type="button"
+          className={styles.pip}
+          aria-label="Bring the video back"
+          title="Bring the video back"
+          onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
+        >
+          <PictureInPicture2 size={14} strokeWidth={2} />
+        </button>
+      )}
       {away ? (
         <button
           type="button"

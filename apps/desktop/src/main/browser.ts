@@ -25,6 +25,7 @@ import {
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
 import type { ArchiveSnapshot, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
 import { app, BaseWindow, BrowserWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
+import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
 import { Extensions } from './extensions';
@@ -83,6 +84,7 @@ export class Browser {
   private settingsWindow: SettingsWindow | null = null;
   private recent: { windowId: WindowId; order: NodeId[]; index: number } | null = null;
   readonly idle: IdleKeeper;
+  private readonly autoPip: AutoPip;
   private readonly archivedHistory = new Map<string, NavState | null>();
   /** Archive entries being restored, so a double click brings a tab back once. */
   private readonly restoring = new Set<string>();
@@ -108,6 +110,7 @@ export class Browser {
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
         this.extensions.tabCreated(contents, nodeId);
+        this.autoPip.attach(contents, nodeId);
         // Whatever a page asked for is denied once it's gone or replaced by another page.
         contents.on('did-start-navigation', (details) => {
           if (details.isMainFrame && !details.isSameDocument) options.permissions.forgetTab(nodeId);
@@ -173,6 +176,23 @@ export class Browser {
       dispatch: (command) => this.store.dispatch(command),
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       onChange: () => this.syncPopovers(),
+    });
+    this.autoPip = new AutoPip({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      contents: (nodeId) => this.tabs.get(nodeId)?.webContents,
+      loaded: () => this.tabs.loaded(),
+      isShown: (nodeId) => [...this.windows.values()].some((w) => w.activeTabContents !== null && w.activeTabContents === this.tabs.get(nodeId)?.webContents),
+      // "Back to tab" in the PiP window: the tab comes forward in its window.
+      bringBack: (nodeId) => {
+        const windowId = this.windowShowing(nodeId);
+        const w = windowId ? this.windows.get(windowId) : undefined;
+        if (!w) return;
+        this.store.dispatch({ t: 'tab.activate', windowId: w.id, nodeId });
+        if (w.window.isMinimized()) w.window.restore();
+        w.window.focus();
+      },
     });
     this.idle = new IdleKeeper(
       {
@@ -307,8 +327,13 @@ export class Browser {
           break;
         case 'view.show': {
           const w = this.windows.get(effect.windowId);
-          w?.showTab(effect.nodeId ? (this.tabs.ensure(effect.nodeId) ?? null) : null);
-          if (w) this.extensions.tabShown(w);
+          if (!w) break;
+          const outgoing = w.activeTabContents;
+          w.showTab(effect.nodeId ? (this.tabs.ensure(effect.nodeId) ?? null) : null);
+          this.extensions.tabShown(w);
+          // Auto picture-in-picture: the tab you left may pop its video out; the one you're on takes it back.
+          if (outgoing && outgoing !== w.activeTabContents && !outgoing.isDestroyed()) this.autoPip.left(outgoing);
+          if (effect.nodeId) this.autoPip.returned(effect.nodeId);
           break;
         }
         case 'view.navigate': {

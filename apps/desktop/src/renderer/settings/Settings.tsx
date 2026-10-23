@@ -192,6 +192,15 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
             <Switch label="Sleep tabs you're not using" checked={snapshot.settings.sleepTabs} onChange={(sleepTabs) => void api.settings.set({ sleepTabs })} />
           }
         />
+        <Row
+          label="Pop out playing videos when you switch away"
+          description="A video you're watching keeps playing in a small window over everything. Come back to its tab and it slides home."
+          changed={snapshot.settings.autoPip !== DEFAULT_SETTINGS.autoPip}
+          onReset={() => void api.settings.set({ autoPip: DEFAULT_SETTINGS.autoPip })}
+          control={
+            <Switch label="Pop out playing videos when you switch away" checked={snapshot.settings.autoPip} onChange={(autoPip) => void api.settings.set({ autoPip })} />
+          }
+        />
       </div>
 
       <SignIns snapshot={snapshot} />

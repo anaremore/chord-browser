@@ -124,6 +124,7 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
   for (const key of ['searchSuggestions', 'checkForUpdates'] as const) {
     if (typeof saved[key] === 'boolean') settings[key] = saved[key];
   }
+  if (typeof saved['autoPip'] === 'boolean') settings.autoPip = saved['autoPip'];
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
   const motion = saved['motion'];

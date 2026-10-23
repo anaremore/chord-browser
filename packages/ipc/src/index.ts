@@ -117,6 +117,7 @@ export const SettingsPatch = z.strictObject({
   searchEngine: z.enum(engineIds).optional(),
   archiveAfter: z.enum(archiveAfterIds).optional(),
   sleepTabs: z.boolean().optional(),
+  autoPip: z.boolean().optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
   extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
   searchSuggestions: z.boolean().optional(),

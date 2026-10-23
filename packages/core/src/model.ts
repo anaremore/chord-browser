@@ -130,6 +130,8 @@ export interface LiveTab {
   crashed: boolean;
   /** The main frame failed to load; the frame shows why instead of a blank page. */
   error: LoadError | null;
+  /** Chord popped the page's video out into picture-in-picture (auto PiP, ARCHITECTURE.md §9). */
+  pip: boolean;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -253,6 +255,8 @@ export interface Settings {
   archiveAfter: ArchiveAfter;
   /** Background tabs unused for an hour free their memory, and wake when shown again. */
   sleepTabs: boolean;
+  /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
+  autoPip: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -268,6 +272,7 @@ export const DEFAULT_SETTINGS: Settings = {
   onboarded: true,
   archiveAfter: '12h',
   sleepTabs: true,
+  autoPip: true,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -299,6 +304,7 @@ export interface SettingsPatch {
   onboarded?: boolean;
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
+  autoPip?: boolean;
 }
 
 export interface State {
@@ -345,4 +351,4 @@ export const emptyState = (): State => ({
   deletedChords: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false };
