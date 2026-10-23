@@ -16,6 +16,8 @@ export interface ContextMenuDeps {
   /** The engine for "Search … for" on selected text. */
   searchEngine(): SearchEngineId;
   openTab(url: string, background: boolean): void;
+  /** "Open link in Peek" (DESIGN.md §8.5): offered while the page is a tab shown in a window. */
+  peek?: { available(): boolean; open(url: string, at: { x: number; y: number }): void };
   /** The window showing this contents, and the view's offset in it, to place the menu where the click was. */
   placement(): { window: BaseWindow; x: number; y: number } | undefined;
   /** Items extensions added for what was clicked (ARCHITECTURE.md §12). */
@@ -56,6 +58,7 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
     section(
       { label: 'Open link in new tab', click: () => deps.openTab(params.linkURL, false) },
       { label: 'Open link in background tab', click: () => deps.openTab(params.linkURL, true) },
+      ...(deps.peek?.available() ? [{ label: 'Open link in Peek', click: () => deps.peek!.open(params.linkURL, { x: params.x, y: params.y }) }] : []),
       { label: 'Copy link address', click: () => clipboard.writeText(params.linkURL) },
     );
   }
@@ -124,8 +127,14 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
  * End-to-end tests only (index.ts sets it behind CHORD_E2E_HOOKS): sees each
  * menu's labels instead of a native menu opening on the screen.
  */
-let observeForTests: ((contents: WebContents, labels: string[]) => void) | null = null;
-export function observeContextMenusForTests(observer: (contents: WebContents, labels: string[]) => void): void {
+/** A menu item as tests see it: its label, and what choosing it does. */
+export interface ObservedItem {
+  label: string;
+  choose(): void;
+}
+
+let observeForTests: ((contents: WebContents, items: ObservedItem[]) => void) | null = null;
+export function observeContextMenusForTests(observer: (contents: WebContents, items: ObservedItem[]) => void): void {
   observeForTests = observer;
 }
 
@@ -134,7 +143,12 @@ export function attachContextMenu(contents: WebContents, deps: ContextMenuDeps):
     const items = buildContextMenu(contents, params, deps);
     if (items.length === 0) return;
     if (observeForTests) {
-      observeForTests(contents, items.filter((item) => item.type !== 'separator').map((item) => item.label ?? ''));
+      observeForTests(
+        contents,
+        items
+          .filter((item) => item.type !== 'separator')
+          .map((item) => ({ label: item.label ?? '', choose: () => (item.click as (() => void) | undefined)?.() })),
+      );
       return;
     }
     // At the click (or the focused element, from the keyboard), not wherever the pointer is.

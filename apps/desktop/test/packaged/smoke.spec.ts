@@ -70,10 +70,11 @@ async function start(executable: string, profile: string, args: string[] = []): 
   return { child, browser: await chromium.connectOverCDP(endpoint), exited };
 }
 
+const pages = (browser: Browser) => browser.contexts().flatMap((c) => c.pages());
+
 async function pageWhere(browser: Browser, match: (url: string) => boolean): Promise<Page> {
-  const pages = () => browser.contexts().flatMap((c) => c.pages());
-  await expect.poll(() => pages().some((p) => match(p.url())), { timeout: 20_000 }).toBe(true);
-  return pages().find((p) => match(p.url()))!;
+  await expect.poll(() => pages(browser).some((p) => match(p.url())), { timeout: 20_000 }).toBe(true);
+  return pages(browser).find((p) => match(p.url()))!;
 }
 
 /** Quits the way ⌘Q / Ctrl+Q does, so chord-data flushes before exit. */
@@ -91,6 +92,7 @@ async function quit(app: Running, shell: Page): Promise<void> {
 const isShell = (url: string) => url === 'chord://shell/';
 const isOverlay = (url: string) => url.startsWith('chord://overlay/');
 const isSettings = (url: string) => url.startsWith('chord://settings/');
+const isMini = (url: string) => url.startsWith('chord://mini/');
 
 let site: { server: Server; origin: string };
 test.beforeAll(async () => {
@@ -161,20 +163,32 @@ test('the packaged app browses, opens Settings, and restores tabs after a relaun
   }
 });
 
-test('links handed over by the OS open as tabs, at launch and in a running Chord', async () => {
+test('links handed over by the OS open in mini windows, at launch and in a running Chord', async () => {
   const executable = packagedExecutable();
   const profile = mkdtempSync(join(tmpdir(), 'chord-packaged-'));
   // The way the Windows registration launches Chord (build/installer.nsh).
   const app = await start(executable, profile, ['--single-argument', `${site.origin}/from-launch`]);
   try {
-    const shell = await pageWhere(app.browser, isShell);
+    // Launched for a link: its mini window, and nothing else (DESIGN.md §7.9).
+    await pageWhere(app.browser, isMini);
     await pageWhere(app.browser, (url) => url === `${site.origin}/from-launch`);
+    expect(pages(app.browser).some((p) => isShell(p.url()))).toBe(false);
 
-    // A second launch with the same profile hands its link to the running Chord and exits.
+    // A second launch with the same profile hands its link to the running Chord and exits: another mini window.
     const second = spawn(executable, [`--user-data-dir=${profile}`, ...keychainArgs, '--single-argument', `${site.origin}/from-second`], { env: childEnv(), stdio: 'ignore' });
     const code = await new Promise<number | null>((done) => second.once('exit', (c) => done(c)));
     expect(code).toBe(0);
     await pageWhere(app.browser, (url) => url === `${site.origin}/from-second`);
+    await expect.poll(() => pages(app.browser).filter((p) => isMini(p.url())).length).toBe(2);
+
+    // "Open in" moves a mini window's page into a chord: Chord's window comes back with it as a tab.
+    const bars = pages(app.browser).filter((p) => isMini(p.url()));
+    const urlOf = (bar: Page) => bar.evaluate(() => (window as unknown as { chord: { mini: { state(): Promise<{ url: string }> } } }).chord.mini.state().then((s) => s.url));
+    const bar = (await urlOf(bars[0]!)) === `${site.origin}/from-second` ? bars[0]! : bars[1]!;
+    await bar.getByRole('button', { name: /^Open in/ }).click();
+    const shell = await pageWhere(app.browser, isShell);
+    await expect(shell.getByRole('list', { name: 'Today' }).getByRole('listitem').first()).toContainText('Smoke page');
+    await expect.poll(() => pages(app.browser).filter((p) => isMini(p.url())).length).toBe(1);
 
     // A packaged build can be the default browser, so Settings offers it (not clicked here: that asks the OS).
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));

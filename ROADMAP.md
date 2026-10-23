@@ -206,7 +206,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
   - Windows: the NSIS include that writes the registry keys, plus a deep link to Settings.
   - macOS: `Info.plist` and the system prompt.
   - Linux: `.desktop` plus GIO and `xdg-settings`.
-  - For now, links from other apps open in the active window; the mini window arrives in Phase 3.
+  - Links from other apps open in a mini window (Phase 2, below); Settings → General can make them tabs instead.
 - **`chord://settings`:** search engine, auto-archive, appearance, PiP, extensions, default browser, update channel.
 - **Rebindable shortcuts** with conflict detection (moved up from Phase 3 at your request, 2026-10-23). **Done:** every action's keys can be changed in Settings → Keyboard shortcuts (DESIGN.md §14.1).
 
@@ -245,8 +245,8 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 
 - **Electron 46 upgrade** as soon as it's stable (Jan 5, 2027). It's our first major upgrade and the rehearsal for the 8-week cadence.
 - **Split view:** 2–4 panes, drag-to-split drop zones, saved as one unit in the sidebar, dividers, focus ring (DESIGN.md §7.9 and §8.4).
-- **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it. *(Moved up from Phase 3 on 2026-10-22: Chord can already be your default browser.)*
-- **Peek** for links clicked inside pinned tabs. *(Moved up from Phase 3 on 2026-10-22.)*
+- **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it. *(Moved up from Phase 3 on 2026-10-22: Chord can already be your default browser.)* **Built 2026-10-23** (DESIGN.md §7.9).
+- **Peek** for links clicked inside pinned tabs. *(Moved up from Phase 3 on 2026-10-22.)* **Built 2026-10-23**, with *Open link in Peek* in any tab's menu, private windows included (DESIGN.md §8.5).
 - **Hover previews** for pinned tabs and folders, with the capture cache. *(Built 2026-10-23: ARCHITECTURE.md §9, with a switch in Settings → Privacy.)*
 - **Duet: conversations on the fly, optionally reading the browser** (ARCHITECTURE.md §11). Scope set 2026-10-22: *"basic chat is enough"*.
   - **Setup:** detects your `claude` / `codex`; "Sign in" runs `claude auth login` or `codex login` for you.
@@ -259,7 +259,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 
 ## Phase 3 — Links from everywhere · February 2027
 
-- **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in.
+- **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in. **Built 2026-10-23**, with the mini window: routes apply to links from other apps and to the command bar, and Chord offers a route rather than making one (DESIGN.md §8.5).
 - **Distribution:**
   - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.
   - **Cloudsmith** apt and dnf repos, GPG-signed.
@@ -303,7 +303,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 | Native-messaging lookup for password managers | M1.5 |
 | Per-animation switches with ↺ reset, and ↺ on every changed setting | Each animation as it ships (DESIGN.md §6.8) |
 | Connect an agent: MCP helper, chrome-devtools-mcp tool names, badge and Stop | Parked |
-| Link routes, remembered chord per site | Phase 3 |
+| Link routes, remembered chord per site | Done (2026-10-23, with the mini window) |
 | Import guardrails with written exemptions, AGENTS.md, append-only release notes | Process, M1.1 |
 
 Skipped on purpose: Crest Passwords (we use extensions), its 19-host blocklist, memory-pressure unloading (Electron has no pressure event), and its heraldic visual identity (trademarked).

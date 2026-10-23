@@ -18,6 +18,7 @@ import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import { ExtensionsSection } from './Extensions';
 import { PrivacySection } from './Privacy';
 import styles from './Settings.module.css';
+import { Links } from './Links';
 import { SitesSection, Spelling } from './Sites';
 
 const SECTIONS = [
@@ -70,7 +71,7 @@ function DefaultBrowser({ platform }: { platform: SystemInfo['platform'] }) {
         {status === 'default' && (
           <Row
             label="Chord is your default browser"
-            description="Links from other apps open here, in the window you used last."
+            description="Links from other apps open in Chord, the way you chose under Links."
             control={<Check className={styles.check} size={16} strokeWidth={2.25} aria-hidden />}
           />
         )}
@@ -205,6 +206,7 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
         />
       </div>
 
+      <Links snapshot={snapshot} />
       <SignIns snapshot={snapshot} />
       <Spelling snapshot={snapshot} info={info} />
       <DefaultBrowser platform={info.platform} />

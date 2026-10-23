@@ -9,11 +9,14 @@ import {
   children,
   chordsFor,
   DEFAULT_PROFILE,
+  hostOf,
   isInternalUrl,
   isPrivateChord,
   markdownLink,
   motionEnabled,
   reopenableIndex,
+  routeFor,
+  routeHost,
   shownTabs,
   sortedChords,
   splitMembers,
@@ -44,6 +47,8 @@ import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
 import { setShortcutOverrides } from './shortcut-overrides';
 import { IdleKeeper, type IdleTiming } from './idle';
+import { MiniWindows } from './mini-window';
+import { liveOf, Peeks } from './peek';
 import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
 import { Previews } from './previews';
@@ -134,6 +139,15 @@ export class Browser {
   private quitting = false;
   /** The Settings view while it records a shortcut: main acts on none of its keys until it's done. */
   private recordingIn: WebContents | null = null;
+  /** Peek over each window (DESIGN.md §8.5), and the mini windows links from other apps open in (§7.9). */
+  readonly peeks: Peeks;
+  readonly minis: MiniWindows;
+  /** How often a site's pages went to each chord this session, for offering a link route (never silently). */
+  private readonly routeHints = new Map<string, Map<string, number>>();
+  /** Sites a route was offered for this session: one offer each. */
+  private readonly routeOffered = new Set<string>();
+  /** Windows opened for a page that's on its way (a mini window's): they don't open the command bar. */
+  private readonly quietWindows = new Set<WindowId>();
   private readonly keyboard: KeyboardHandlers = {
     run: (action, contents) => this.run(action, contents),
     onControlUp: () => this.finishRecentCycle(),
@@ -189,16 +203,34 @@ export class Browser {
           inspect: true,
           searchEngine: () => this.store.state.settings.searchEngine,
           openTab: (url, background) => {
+            // A mini window's links open in mini windows of their own.
+            if (this.minis.has(nodeId)) return this.minis.show(url);
             const windowId = this.windowShowing(nodeId);
             if (windowId) this.store.dispatch({ t: 'tab.open', windowId, url, background });
           },
+          // Any tab can open a link in Peek this way, a private window's too (it has no pinned tabs);
+          // Peek's own page and mini windows can't, until they're tabs.
+          peek: {
+            available: () => this.tabs.get(nodeId)?.webContents === contents && this.windowFor(contents)?.activeTabContents === contents,
+            open: (url, at) => {
+              const w = this.windowFor(contents);
+              if (w && w.activeTabContents === contents) this.peeks.show(w, nodeId, url, at);
+            },
+          },
           placement: () => {
-            const w = this.windowFor(contents);
-            const bounds = this.tabs.get(nodeId)?.getBounds();
-            return w && bounds ? { window: w.window, x: bounds.x, y: bounds.y } : undefined;
+            const owner = this.windowFor(contents)?.window ?? this.minis.windowFor(contents);
+            const bounds = (this.tabs.get(nodeId) ?? this.tabs.getFloating(nodeId))?.getBounds();
+            return owner && bounds ? { window: owner, x: bounds.x, y: bounds.y } : undefined;
           },
           extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
         });
+      },
+      onPeek: (openerNodeId, url, origin) => {
+        const windowId = this.windowShowing(openerNodeId);
+        const w = windowId ? this.windows.get(windowId) : undefined;
+        // Peek opens over the window showing the pinned tab; a background one just gets a new tab.
+        if (w && w.activeTabContents && w.activeTabContents === this.tabs.get(openerNodeId)?.webContents) this.peeks.show(w, openerNodeId, url, origin);
+        else if (windowId) this.store.dispatch({ t: 'tab.open', windowId, url, background: true });
       },
       onPopupCreated: (contents, openerNodeId) => {
         attachContextMenu(contents, {
@@ -216,6 +248,39 @@ export class Browser {
           },
         });
       },
+    });
+    const sessionForChord = (chordId: string) => options.profileSession(this.store.state.chords[chordId]?.profileId ?? DEFAULT_PROFILE);
+    this.peeks = new Peeks({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      tabs: this.tabs,
+      sessionFor: sessionForChord,
+      animates: () => motionEnabled(this.store.state.settings, 'commandBar', systemInfo().prefersReducedMotion),
+      adopted: (contents, nodeId) => this.extensions.tabCreated(contents, nodeId),
+      changed: () => this.syncPopovers(),
+    });
+    this.minis = new MiniWindows({
+      state: () => this.store.state,
+      tabs: this.tabs,
+      uiSession: options.uiSession,
+      sessionFor: sessionForChord,
+      defaultChord: () => {
+        const last = this.lastNormalWindow();
+        return (last && this.store.state.windows[last.id]?.activeChordId) || (sortedChords(this.store.state)[0]?.id ?? null);
+      },
+      chords: () => sortedChords(this.store.state).map((c) => ({ id: c.id, name: c.name, icon: c.icon })),
+      promote: (nodeId, chordId, page) => this.promoteMini(nodeId, chordId, page),
+      wire: (bar) => {
+        attachShortcuts(bar, this.keyboard);
+        attachContextMenu(bar, {
+          surface: 'ui',
+          inspect: !app.isPackaged,
+          searchEngine: () => this.store.state.settings.searchEngine,
+          openTab: (url) => this.openUrlInLastWindow(url),
+          placement: () => undefined,
+        });
+      },
+      rememberSize: (width, height) => this.store.dispatch({ t: 'settings.set', settings: { miniWindowSize: { width, height } } }),
     });
     this.extensions = new Extensions({
       state: () => this.store.state,
@@ -317,9 +382,10 @@ export class Browser {
         setShortcutOverrides(change.state.settings.shortcuts);
         this.applyAppMenu();
       }
-      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions', 'sitePermissions'].includes(String(p.path[0])))) {
+      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions', 'sitePermissions', 'linkRoutes'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
+      if (change.patches.some((p) => p.path[0] === 'chords')) this.minis.refresh();
       if (change.patches.some((p) => p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'interface'))) {
         for (const contents of this.archivePages()) send(contents, 'archive:snapshot', this.archiveSnapshot(contents));
       }
@@ -361,7 +427,9 @@ export class Browser {
     return node ? isPrivateChord(this.store.state, node.chordId) : false;
   }
 
+  /** Chord launched again without a link: its first window comes forward (or its windows come back, if only mini windows were open). */
   focusFirstWindow(): void {
+    if (this.windows.size === 0) this.start();
     const [first] = this.windows.values();
     if (!first) return;
     if (first.window.isMinimized()) first.window.restore();
@@ -374,7 +442,7 @@ export class Browser {
 
   windowFor(contents: WebContents): AppWindow | undefined {
     for (const w of this.windows.values()) {
-      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.preview.webContents, ...w.paneContents].includes(contents)) return w;
+      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.preview.webContents, w.peekContents, ...w.paneContents].includes(contents)) return w;
     }
     const nodeId = this.tabs.nodeFor(contents);
     const windowId = nodeId ? this.windowShowing(nodeId) : undefined;
@@ -441,9 +509,12 @@ export class Browser {
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
       this.extensions.forget(windowId);
+      this.peeks.forget(windowId);
+      this.quietWindows.delete(windowId);
       if (this.lastWindowId === windowId) this.lastWindowId = this.windows.keys().next().value ?? null;
       this.windowClosed(windowId);
-      if (this.windows.size === 0 && process.platform !== 'darwin') {
+      // A mini window still open keeps Chord running; closing it then quits (window-all-closed).
+      if (this.windows.size === 0 && this.minis.count === 0 && process.platform !== 'darwin') {
         this.idle.stop();
         this.tabs.destroyAll();
         this.settingsWindow?.window.close();
@@ -476,6 +547,8 @@ export class Browser {
 
   /** The window showing a tab (alone or as a split's pane), else one on its chord, else one on its side of the private line. */
   private windowShowing(nodeId: NodeId): WindowId | undefined {
+    const peeking = this.peeks.windowOf(nodeId);
+    if (peeking) return peeking;
     const models = Object.values(this.store.state.windows);
     const showing = models.find((m) => shownTabs(this.store.state, m.id).includes(nodeId));
     if (showing) return showing.id;
@@ -501,7 +574,10 @@ export class Browser {
           break;
         case 'view.show': {
           const w = this.windows.get(effect.windowId);
-          if (w) this.showPanes(w);
+          if (!w) break;
+          // Peek belongs to the page it came from: another tab, pane or chord closes it.
+          this.peeks.close(w);
+          this.showPanes(w);
           break;
         }
         case 'view.navigate': {
@@ -540,7 +616,7 @@ export class Browser {
           break;
         }
         case 'window.open':
-          if (!this.windows.has(effect.windowId)) this.openWindow(effect.windowId, { commandBar: true });
+          if (!this.windows.has(effect.windowId)) this.openWindow(effect.windowId, { commandBar: !this.quietWindows.has(effect.windowId) });
           break;
       }
     }
@@ -595,10 +671,11 @@ export class Browser {
     const state = this.store.state;
     const model = state.windows[w.id];
     const find = this.finders.get(w.id);
+    const shown = this.peeks.contents(w) ?? w.activeTabContents;
     return {
       theme: model ? (state.chords[model.activeChordId]?.theme ?? null) : null,
       interface: state.settings.interface,
-      find: find && find.target === w.activeTabContents ? find.state : null,
+      find: find && find.target === shown ? find.state : null,
       permission: this.options.permissions.promptFor(activeTabId(state, w.id)),
       share: this.options.screenShare.promptFor(activeTabId(state, w.id)),
     };
@@ -621,8 +698,8 @@ export class Browser {
    */
   private syncPopover(w: AppWindow): void {
     const find = this.finders.get(w.id);
-    // Find works on the focused pane; it closes when focus moves to another one.
-    if (find?.target && find.target !== w.activeTabContents) find.close(false);
+    // Find works on the focused pane, or Peek's page over it; it closes when focus moves elsewhere.
+    if (find?.target && find.target !== (this.peeks.contents(w) ?? w.activeTabContents)) find.close(false);
     const state = this.store.state;
     // The frame explains errors and crashes (pane by pane), and holds first run's cards, instead of the page.
     const onboarding = !state.settings.onboarded && !w.isPrivate;
@@ -643,7 +720,17 @@ export class Browser {
   /** Run an action for the window that owns this contents (keys, the shell's buttons, the command bar). */
   run(action: ActionId, contents: WebContents): boolean {
     const w = this.windowFor(contents) ?? (contents === this.settingsWindow?.view.webContents ? this.lastWindow() : undefined);
-    return w ? this.runAction(action, w) : false;
+    if (w) return this.runAction(action, w);
+    // A mini window: its own few (close, back, reload…); app-wide ones act on the last normal window.
+    // The rest stay the page's.
+    if (this.minis.forContents(contents)) {
+      if (this.minis.run(action, contents)) return true;
+      if (action === 'app.quit') app.quit();
+      else if (action.startsWith('app.') || action.startsWith('window.new')) this.runInFocusedWindow(action);
+      else return false;
+      return true;
+    }
+    return false;
   }
 
   /** Menu items act on the focused Chord window, or the last one used (when Settings has focus). */
@@ -684,6 +771,7 @@ export class Browser {
       chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId })),
       sitePermissions: state.sitePermissions,
       spellcheckLanguages: spellcheckLanguages(),
+      linkRoutes: Object.values(state.linkRoutes).sort((a, b) => a.host.localeCompare(b.host)),
     };
   }
 
@@ -721,17 +809,116 @@ export class Browser {
     });
   }
 
-  /** Links from other apps (Chord as the default browser): new tabs in the normal window used last, which comes forward. */
+  /**
+   * Links from other apps (Chord as the default browser). A link route sends
+   * its site straight to its chord, as a tab. Otherwise it opens in a mini
+   * window (Settings → General, the default) or as a tab in the normal window
+   * used last. Never into a private window.
+   */
   openExternalUrls(urls: readonly string[]): void {
-    // macOS keeps running with every window closed; a link brings one back.
-    if (this.windows.size === 0) this.start();
-    // Never into a private window: with only private ones open, a link gets a new window.
-    if (!this.lastNormalWindow()) this.newWindow();
-    const w = this.lastNormalWindow();
+    const state = this.store.state;
+    const tabs: { url: string; chordId: string | null }[] = [];
+    for (const url of urls) {
+      const routed = routeFor(state, url);
+      if (!routed && state.settings.externalLinks === 'mini') this.minis.show(url);
+      else tabs.push({ url, chordId: routed });
+    }
+    if (tabs.length === 0) return;
+    const w = this.normalWindowForLinks();
     if (!w) return;
-    for (const url of urls) this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+    for (const { url, chordId } of tabs) {
+      if (chordId && chordId !== this.store.state.windows[w.id]?.activeChordId) this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
+      this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+    }
     if (w.window.isMinimized()) w.window.restore();
     w.window.focus();
+  }
+
+  /** The normal window links go to: the one used last, after bringing windows back (macOS keeps running without any). */
+  private normalWindowForLinks({ quiet = false } = {}): AppWindow | undefined {
+    if (this.windows.size === 0) this.start();
+    if (!this.lastNormalWindow()) {
+      const id = this.newWindow();
+      if (quiet) this.quietWindows.add(id);
+    }
+    return this.lastNormalWindow();
+  }
+
+  /**
+   * "Open in" from a mini window: its page becomes the top tab of `chordId`
+   * in a normal window (one already on that chord, else the one used last,
+   * which switches to it). With the same sign-ins the live page moves,
+   * history and all; with different ones it opens again there.
+   */
+  private promoteMini(nodeId: NodeId, chordId: string, page: WebContents): void {
+    const state = this.store.state;
+    const chord = state.chords[chordId];
+    if (!chord || chord.private) return;
+    const url = page.getURL();
+    const onChord = [...this.windows.values()].find((x) => !x.isPrivate && state.windows[x.id]?.activeChordId === chordId);
+    const w = onChord ?? this.normalWindowForLinks({ quiet: true });
+    if (!w) return;
+    if (page.session === this.options.profileSession(chord.profileId)) {
+      const view = this.tabs.adopt(nodeId);
+      if (view) {
+        this.store.dispatch({ t: 'tab.adopt', windowId: w.id, nodeId, chordId, url, title: page.getTitle(), live: liveOf(page) });
+        this.extensions.tabCreated(page, nodeId);
+      }
+    } else {
+      this.tabs.closeFloating(nodeId);
+      if (this.store.state.windows[w.id]?.activeChordId !== chordId) this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
+      this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+      send(w.shell.webContents, 'toast:show', { id: `mini-moved:${nodeId}`, message: `Opened in ${chord.name} (sign-ins differ, so it loaded again)` });
+    }
+    if (w.window.isMinimized()) w.window.restore();
+    w.window.focus();
+    const offer = this.routeOffer(url, chordId, w);
+    if (offer) {
+      send(w.shell.webContents, 'toast:show', {
+        id: `route-offer:${offer}`,
+        message: `Always open ${offer} in ${chord.name}?`,
+        action: { label: 'Always', command: { t: 'linkRoute.set', host: offer, chordId } },
+      });
+    }
+  }
+
+  /**
+   * Learning which chord a site belongs in (from Crest), as an offer, never
+   * silently: the second time this session a site's page goes to the same
+   * chord (from a mini window, or moved there), Chord asks once whether its
+   * links should always open there. Returns the site to ask about, if it's time.
+   */
+  private routeOffer(url: string, chordId: string, w: AppWindow): string | null {
+    const host = routeHost(hostOf(url) ?? '');
+    const chord = this.store.state.chords[chordId];
+    if (!host || !chord || chord.private || w.isPrivate || this.routeOffered.has(host) || this.store.state.linkRoutes[host]) return null;
+    const counts = this.routeHints.get(host) ?? new Map<string, number>();
+    const seen = (counts.get(chordId) ?? 0) + 1;
+    counts.set(chordId, seen);
+    this.routeHints.set(host, counts);
+    if (seen < 2) return null;
+    this.routeOffered.add(host);
+    return host;
+  }
+
+  /** Close the overlay for this opening; Peek's closes Peek. */
+  closeOverlay(contents: WebContents, seq: number): void {
+    const w = this.windowFor(contents);
+    if (!w) return;
+    if (w.peekOverlaySeq === seq) this.peeks.close(w);
+    else w.closeOverlay(seq);
+  }
+
+  /** Peek's "Open in Today", from its header. */
+  expandPeek(contents: WebContents): void {
+    const w = this.windowFor(contents);
+    if (w) this.peeks.expand(w);
+  }
+
+  /** Settings → General → Link routes: send a site to a chord, or stop. */
+  setLinkRoute(host: string, chordId: string | null): void {
+    if (chordId) this.store.dispatch({ t: 'linkRoute.set', host, chordId });
+    else this.store.dispatch({ t: 'linkRoute.delete', host });
   }
 
   /** A link from Settings opens as a new tab in the normal window used last, which comes forward. */
@@ -867,10 +1054,13 @@ export class Browser {
     const place = { section: tab.section, parentId: tab.parentId, rank: tab.rank };
     const reloads = state.chords[from]?.profileId !== to.profileId;
     this.store.dispatch({ t: 'node.moveToChord', nodeId, chordId });
+    const offer = this.routeOffer(tab.url, chordId, w);
     send(w.shell.webContents, 'toast:show', {
       id: `tab-moved:${nodeId}`,
       message: reloads ? `Moved to ${to.name} (sign-ins differ, so it reloaded)` : `Moved to ${to.name}`,
       action: { label: 'Undo', command: { t: 'node.moveToChord', nodeId, chordId: from, place } },
+      // The second move of a site's page to this chord: offer a route on the same toast.
+      ...(offer ? { also: { message: `Always open ${offer} here?`, action: { label: 'Always', command: { t: 'linkRoute.set', host: offer, chordId } } } } : {}),
     });
   }
 
@@ -1021,16 +1211,22 @@ export class Browser {
   private runAction(action: ActionId, w: AppWindow): boolean {
     const active = activeTabId(this.store.state, w.id);
     const tab = activeTab(this.store.state, w.id);
-    const activeContents = w.activeTabContents;
+    // While Peek is open, page actions (back, reload, find, zoom, print, copy) act on its page.
+    const peek = this.peeks.contents(w);
+    const activeContents = peek ?? w.activeTabContents;
     switch (action) {
       case 'address.edit':
+        this.peeks.close(w);
         w.openOverlay('edit', this.activeUrl(w.id));
         return true;
       case 'tab.new':
+        this.peeks.close(w);
         w.openOverlay('new', '');
         return true;
       case 'tab.close':
-        if (active) this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId: active });
+        // ⌘W closes Peek first, as Esc does.
+        if (peek) this.peeks.close(w);
+        else if (active) this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId: active });
         return true;
       case 'tab.reopen':
         // This session's closed tabs keep their place; after that, the archive remembers what you closed.
@@ -1088,7 +1284,8 @@ export class Browser {
         if (tab && /^https?:/i.test(tab.url)) this.store.dispatch({ t: 'tab.open', windowId: w.id, url: `view-source:${tab.url}` });
         return true;
       case 'address.copy':
-        if (tab) clipboard.writeText(tab.url);
+        if (peek) clipboard.writeText(peek.getURL());
+        else if (tab) clipboard.writeText(tab.url);
         return true;
       case 'address.copyMarkdown':
         if (tab) clipboard.writeText(markdownLink(tab.title, tab.url));

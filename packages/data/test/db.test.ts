@@ -204,6 +204,30 @@ describe('chord-data', () => {
     db.close();
   });
 
+  it('keeps link routes across a restart, and forgets one that was removed', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const chordId = Object.keys(state.chords)[0]!;
+    state = drive(db, state, [
+      { t: 'linkRoute.set', host: 'github.com', chordId },
+      { t: 'linkRoute.set', host: 'linear.app', chordId },
+    ]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect(
+      db
+        .load()!
+        .linkRoutes!.map((r) => r.host)
+        .sort(),
+    ).toEqual(['github.com', 'linear.app']);
+    drive(db, state, [{ t: 'linkRoute.delete', host: 'github.com' }]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect(db.load()!.linkRoutes).toEqual([{ host: 'linear.app', chordId, createdAt: expect.any(Number) }]);
+    db.close();
+  });
+
   it('keeps favorites (with their icons), folders and the sidebar width across a restart', () => {
     let db = new ChordDatabase(file);
     let state = seed();
