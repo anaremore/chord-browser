@@ -22,6 +22,10 @@ export function watchForMainErrors(app: ElectronApplication): ElectronApplicatio
     mainErrors.push(log.slice(at, at + 2000));
     log = '';
   });
+  // A crash (rather than a quit) says so, instead of only "Target page, context or browser has been closed".
+  app.process().once('exit', (code, signal) => {
+    if (code !== 0 || signal) mainErrors.push(`Chord's main process exited with code ${code}, signal ${signal}. Its last output:\n${log}`);
+  });
   return app;
 }
 
