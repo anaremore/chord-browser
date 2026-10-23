@@ -104,6 +104,7 @@ function registerIpc(): void {
   handle('extensions:state', (_request, sender) => browser!.extensions.barState(senderWindow(sender)));
   handle('extension:activate', ({ id, anchor }, sender) => browser!.extensions.activate(senderWindow(sender), id, anchor));
   handle('extension:menu', ({ id, x, y }, sender) => browser!.extensions.menu(senderWindow(sender), id, { x, y }));
+  handle('extensions:overflow', ({ ids, anchor }, sender) => browser!.extensions.overflow(senderWindow(sender), ids, anchor));
   handle('extensions:install', ({ input }, sender) => {
     // Into the profile of the chord the caller's window shows (Settings: the last-used window's).
     const w = browser!.windowFor(sender) ?? browser!.lastBrowserWindow();

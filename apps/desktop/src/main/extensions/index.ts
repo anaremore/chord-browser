@@ -339,6 +339,28 @@ export class Extensions {
     w.popupMenu(Menu.buildFromTemplate(items), { x: at.x, y: at.y, width: 0, height: 0 });
   }
 
+  /** The buttons that didn't fit: a menu of them under the overflow button; picking one clicks it there. */
+  overflow(w: AppWindow, ids: readonly string[], anchor: Rect): void {
+    const host = this.host(this.profileOfWindow(w), false);
+    if (!host) return;
+    const tab = w.activeTabContents && !w.activeTabContents.isDestroyed() ? w.activeTabContents : null;
+    const items: MenuItemConstructorOptions[] = host
+      .actions(tab)
+      .filter((a) => ids.includes(a.extensionId))
+      .map((a) => {
+        const icon = host.icon(a.extensionId, tab, 16);
+        const name = a.title.split(/\r?\n/)[0] || 'Extension';
+        return {
+          label: a.badgeText ? `${name} (${a.badgeText})` : name,
+          ...(icon ? { icon: nativeImage.createFromDataURL(icon) } : {}),
+          click: () => this.activate(w, a.extensionId, anchor),
+        };
+      });
+    if (items.length === 0) return;
+    items.push({ type: 'separator' }, { label: 'Manage extensions…', click: () => this.deps.openSettings('extensions') });
+    w.popupMenu(Menu.buildFromTemplate(items), anchor);
+  }
+
   private optionsUrl(ext: Electron.Extension): string | null {
     const manifest = ext.manifest as ManifestShape;
     const page = manifest.options_ui?.page ?? manifest.options_page;

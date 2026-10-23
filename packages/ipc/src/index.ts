@@ -295,6 +295,8 @@ export const invokeChannels = {
   'extension:activate': { roles: ['shell'], request: z.strictObject({ id: extensionId, anchor: Rect }), response: z.void() },
   /** Right-click an extension's button, at this point in the window. */
   'extension:menu': { roles: ['shell'], request: z.strictObject({ id: extensionId, x: z.number(), y: z.number() }), response: z.void() },
+  /** The extensions that didn't fit, as a menu under this button; picking one clicks it. */
+  'extensions:overflow': { roles: ['shell'], request: z.strictObject({ ids: z.array(extensionId).max(200), anchor: Rect }), response: z.void() },
   /** Install from the Chrome Web Store: an extension ID or a store page's address. Into the profile of the caller's chord. */
   'extensions:install': { roles: ['shell', 'internal'], request: z.strictObject({ input: z.string().min(1).max(2048) }), response: z.custom<InstallResult>() },
   'extensions:remove': { roles: ['internal'], request: z.strictObject({ profileId: id, id: extensionId }), response: z.void() },
@@ -380,6 +382,7 @@ export interface ShellApi {
     onState(listener: (state: ExtensionsBarState) => void): () => void;
     activate(id: string, anchor: Rect): Promise<void>;
     menu(id: string, at: { x: number; y: number }): Promise<void>;
+    overflow(ids: string[], anchor: Rect): Promise<void>;
     install(input: string): Promise<InstallResult>;
   };
 }

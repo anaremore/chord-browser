@@ -24,6 +24,9 @@ export interface ExtensionPopupOptions {
   onClosed(reason: 'blur' | 'other'): void;
 }
 
+/** How far outside the window a popup waits while it measures itself. */
+const OFFSTAGE_GAP = 100;
+
 export class ExtensionPopup implements FloatingView {
   readonly view: WebContentsView;
   readonly extensionId: string;
@@ -50,20 +53,20 @@ export class ExtensionPopup implements FloatingView {
     this.view.setBorderRadius(radius.md);
     // Chrome's popups are white until the page paints its own background.
     this.view.setBackgroundColor('#ffffff');
-    this.view.setVisible(false);
+    // A hidden view never lays out, so it would never report a size. Until it
+    // has, it lays out at full size just outside the window, where it can't be seen.
+    this.view.setBounds({ x: -POPUP_MAX.width - OFFSTAGE_GAP, y: 0, ...POPUP_MAX });
     host.showFloating(this);
-    // Lay out at full size while hidden, so the page measures itself at a realistic width.
-    this.place();
 
     const contents = this.view.webContents;
     contents.on('preferred-size-changed', (_event, preferred) => {
+      console.log('TEMP preferred', JSON.stringify(preferred), this.shown);
       this.size = popupSize(preferred, this.host.frameBounds);
-      this.place();
       this.show();
     });
-    // Pages that never report a size still appear.
+    // Pages that never report a size still appear, at full size.
     contents.once('did-finish-load', () => {
-      this.showTimer = setTimeout(() => this.show(), 250);
+      this.showTimer = setTimeout(() => this.show(), 400);
     });
     contents.on('blur', () => {
       // Focus moved within Chord (a click on the sidebar or the page): close. Focus left
@@ -103,11 +106,13 @@ export class ExtensionPopup implements FloatingView {
     this.view.setBounds({ x, y, ...this.size });
   }
 
+  /** Move into place at the measured size (again whenever the page's size changes). */
   private show(): void {
-    if (this.closed || this.shown) return;
-    this.shown = true;
+    if (this.closed) return;
     clearTimeout(this.showTimer);
-    this.view.setVisible(true);
+    this.place();
+    if (this.shown) return;
+    this.shown = true;
     this.view.webContents.focus();
   }
 

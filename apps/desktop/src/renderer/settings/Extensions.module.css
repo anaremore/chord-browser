@@ -1,0 +1,152 @@
+/* Settings → Extensions. Tokens only. */
+
+.add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.input {
+  flex: 1;
+  min-inline-size: 0;
+  block-size: var(--size-url-pill);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-body);
+}
+
+.input:focus-visible {
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+}
+
+.primary,
+.quiet {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: var(--text-label);
+  white-space: nowrap;
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard),
+    opacity var(--duration-fade-fast) var(--ease-standard);
+}
+
+.primary {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+.quiet {
+  background: transparent;
+  color: var(--color-fg-muted);
+}
+
+.primary:disabled,
+.quiet:disabled {
+  opacity: 0.4;
+}
+
+.quiet:hover:not(:disabled) {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.quiet[data-danger] {
+  color: var(--color-danger);
+}
+
+/* Room for the status line, so the form doesn't jump when it appears. */
+.status {
+  flex-basis: 100%;
+  min-block-size: var(--space-4);
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.status[data-kind='error'] {
+  color: var(--color-danger);
+}
+
+.updates .status {
+  flex-basis: auto;
+}
+
+.hint,
+.empty {
+  margin: var(--space-1) 0 0;
+  padding-inline: var(--space-1);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: calc(var(--space-1) / 2);
+}
+
+.listHead {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.updates {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin-block-start: var(--space-4);
+}
+
+.icon {
+  flex: none;
+  inline-size: var(--size-icon-lg);
+  block-size: var(--size-icon-lg);
+  object-fit: contain;
+}
+
+.iconFallback {
+  flex: none;
+  color: var(--color-fg-subtle);
+}
+
+.version {
+  margin-inline-start: var(--space-2);
+  color: var(--color-fg-subtle);
+  font: var(--text-small);
+}
+
+.tag {
+  margin-inline-start: var(--space-2);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-item-hover);
+  color: var(--color-fg-muted);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+}
+
+/* Two lines at most: store descriptions can run long. */
+.description {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}

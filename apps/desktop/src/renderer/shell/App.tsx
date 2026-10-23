@@ -13,6 +13,7 @@ import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Cho
 import { useSystemInfo } from './hooks';
 import { keycap, withKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
+import { ExtensionButtons, useExtensionsBar } from './Extensions';
 import { SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
 
@@ -130,6 +131,9 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const overlayChrome = info.windowChrome.kind === 'overlay';
   const secure = active?.url.startsWith('https:') ?? false;
   const collapsed = win?.sidebar === 'collapsed';
+  // Extension buttons live in the top bar when there is one, else beside the URL pill.
+  const barShown = overlayChrome || collapsed;
+  const extensionsBar = useExtensionsBar();
   const spring = springsFor(state.settings, info.prefersReducedMotion);
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
 
@@ -176,17 +180,20 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             <NavButtons live={live} hasTab={Boolean(active)} info={info} />
           </header>
 
-          <button
-            ref={collapsed ? undefined : anchorRef}
-            type="button"
-            className={styles.urlPill}
-            title={active?.url ?? ''}
-            onClick={() => void api.overlay.open('edit')}
-          >
-            {secure ? <Lock size={12} strokeWidth={2} aria-hidden /> : <Globe size={12} strokeWidth={2} aria-hidden />}
-            <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
-            <kbd className={styles.pillKeycap}>{keycap('address.edit', info)}</kbd>
-          </button>
+          <div className={styles.urlRow}>
+            <button
+              ref={collapsed ? undefined : anchorRef}
+              type="button"
+              className={styles.urlPill}
+              title={active?.url ?? ''}
+              onClick={() => void api.overlay.open('edit')}
+            >
+              {secure ? <Lock size={12} strokeWidth={2} aria-hidden /> : <Globe size={12} strokeWidth={2} aria-hidden />}
+              <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
+              <kbd className={styles.pillKeycap}>{keycap('address.edit', info)}</kbd>
+            </button>
+            {!barShown && <ExtensionButtons bar={extensionsBar} max={3} />}
+          </div>
 
           <AnimatePresence initial={false} mode="popLayout" custom={slide}>
             <ChordPane key={chord?.id} slide={slide} transition={spring('smooth', 'chordSlide')}>
@@ -253,6 +260,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               )}
             </button>
             <span className={styles.flex} />
+            <ExtensionButtons bar={extensionsBar} max={5} />
             {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
             {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
             {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
