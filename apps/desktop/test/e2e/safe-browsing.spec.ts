@@ -262,6 +262,8 @@ test('a private window is checked as well, and keeps nothing', async () => {
     await answerOffer(app, true);
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('window.newPrivate'));
     await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
+    // Its command bar loads after its shell.
+    await expect.poll(() => app.windows().filter((p) => isOverlay(p.url())).length).toBe(2);
     const privateShell = app.windows().filter((p) => isShell(p.url()))[1]!;
     const privateOverlay = app.windows().filter((p) => isOverlay(p.url()))[1]!;
     await expect(privateOverlay.getByRole('dialog')).toBeVisible();
