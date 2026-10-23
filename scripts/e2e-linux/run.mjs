@@ -200,24 +200,26 @@ async function main() {
     return 0;
   }
 
+  // Every spawn has windowsHide: started without a console (an editor's task, a background shell),
+  // each wsl.exe and git would flash a console window of its own.
   /** docker, through WSL on Windows. */
   const dockerCommand = (args) => (onWindows ? wsl(['docker', ...args]) : ['docker', args]);
   /** A short docker command: its output, or null when it fails. */
   const docker = (args, { quiet = false } = {}) => {
     const [command, argv] = dockerCommand(args);
-    const result = spawnSync(command, argv, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', quiet ? 'pipe' : 'inherit'] });
+    const result = spawnSync(command, argv, { encoding: 'utf8', maxBuffer: 64 << 20, windowsHide: true, stdio: ['ignore', 'pipe', quiet ? 'pipe' : 'inherit'] });
     return result.status === 0 ? result.stdout.trim() : null;
   };
   /** Where Docker sees a host path: under /mnt in WSL. */
   const dockerPath = (path) => {
     if (!onWindows) return path;
     const [command, argv] = wsl(['wslpath', '-a', path]);
-    const result = spawnSync(command, argv, { encoding: 'utf8' });
+    const result = spawnSync(command, argv, { encoding: 'utf8', windowsHide: true });
     if (result.status !== 0) fail(`WSL can't see ${path}: ${result.stderr.trim()}`);
     return result.stdout.trim();
   };
   const git = (args) => {
-    const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 256 << 20 });
+    const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 256 << 20, windowsHide: true });
     if (result.status !== 0) fail(`git ${args.join(' ')} failed: ${result.stderr.trim()}`);
     return result.stdout;
   };
@@ -247,7 +249,7 @@ async function main() {
   if (options.rebuild || !haveImage()) {
     log(`Building ${image} (once per change to scripts/e2e-linux/Dockerfile)`);
     const [command, argv] = dockerCommand(['build', ...(options.rebuild ? ['--pull', '--no-cache'] : []), '--build-arg', `PNPM_VERSION=${pnpmVersion}`, '--tag', image, '-']);
-    if (spawnSync(command, argv, { input: dockerfile, stdio: ['pipe', 'inherit', 'inherit'] }).status !== 0) {
+    if (spawnSync(command, argv, { input: dockerfile, windowsHide: true, stdio: ['pipe', 'inherit', 'inherit'] }).status !== 0) {
       // Two runs that start together both build; the one that tags second fails with "already exists".
       if (!haveImage()) fail(`Building ${image} failed`);
       log(`Another run built ${image} first`);
@@ -298,7 +300,7 @@ async function main() {
   const where = options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)';
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
   const [command, argv] = dockerCommand(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright }));
-  const child = spawn(command, argv, { stdio: ['pipe', 'inherit', 'inherit'] });
+  const child = spawn(command, argv, { windowsHide: true, stdio: ['pipe', 'inherit', 'inherit'] });
   child.stdin.on('error', () => {}); // The container can exit (a bad image, say) before reading it all.
   child.stdin.end(tar);
   const code = await new Promise((done) => child.on('close', (status, signal) => done(signal ? 128 : (status ?? 1))));
