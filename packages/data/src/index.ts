@@ -9,6 +9,7 @@ import type {
   Choice,
   Chord,
   Download,
+  Favorite,
   InstalledExtension,
   PersistedState,
   Settings,
@@ -27,6 +28,7 @@ export type WriteOp =
   /** All of one site's remembered permission decisions. */
   | { k: 'sitePermission'; id: string; value: SitePermissions[string] | null }
   | { k: 'download'; id: string; value: Download | null }
+  | { k: 'favorite'; id: string; value: Favorite | null }
   /** One installed extension, by `extensionKey(profileId, id)`. */
   | { k: 'extension'; id: string; value: InstalledExtension | null };
 
@@ -159,6 +161,11 @@ export function opsFromPatches(patches: readonly PathPatch[], state: State): Wri
       for (const origin of origins) add({ k: 'sitePermission', id: origin, value: state.sitePermissions[origin] ?? null });
       continue;
     }
+    if (collection === 'favorites') {
+      const ids = id === undefined ? Object.keys(state.favorites) : [String(id)];
+      for (const favoriteId of ids) add({ k: 'favorite', id: favoriteId, value: state.favorites[favoriteId] ?? null });
+      continue;
+    }
     if (collection === 'settings') {
       const keys = id === undefined ? (Object.keys(state.settings) as (keyof Settings)[]) : [String(id) as keyof Settings];
       for (const key of keys) add({ k: 'setting', id: key, value: state.settings[key] ?? null });
@@ -185,6 +192,7 @@ export function opsForState(state: State): WriteOp[] {
     ...(Object.keys(state.settings) as (keyof Settings)[]).map((key): WriteOp => ({ k: 'setting', id: key, value: state.settings[key] })),
     ...Object.entries(state.sitePermissions).map(([origin, value]): WriteOp => ({ k: 'sitePermission', id: origin, value })),
     ...Object.values(state.downloads).map((value): WriteOp => ({ k: 'download', id: value.id, value })),
+    ...Object.values(state.favorites).map((value): WriteOp => ({ k: 'favorite', id: value.id, value })),
     ...Object.entries(state.extensions).map(([key, value]): WriteOp => ({ k: 'extension', id: key, value })),
   ];
   return ops.filter((op) => !isPrivate(op, state));

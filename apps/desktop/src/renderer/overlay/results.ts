@@ -85,6 +85,9 @@ const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'app.history', title: 'Archive', words: 'archive archived history closed tabs' },
   { action: 'tab.close', title: 'Close tab', words: 'close tab' },
   { action: 'tab.pin', title: 'Pin or unpin tab', words: 'pin unpin tab keep' },
+  { action: 'tab.favorite', title: 'Add this tab to Favorites', words: 'add favorite favorites star bookmark tile' },
+  { action: 'folder.new', title: 'New folder with this tab', words: 'new folder group organize pinned' },
+  { action: 'today.clear', title: 'Clear Today', words: 'clear today archive tidy close all tabs' },
   { action: 'address.copy', title: 'Copy page address', words: 'copy url address link' },
   { action: 'address.copyMarkdown', title: 'Copy as Markdown link', words: 'copy markdown link md' },
   { action: 'tab.next', title: 'Next tab', words: 'next tab down' },
@@ -100,6 +103,7 @@ const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'page.viewSource', title: 'View page source', words: 'view source html code' },
   { action: 'app.devtools', title: 'Developer tools', words: 'developer tools devtools inspect console' },
   { action: 'chord.delete', title: 'Delete this chord', words: 'delete remove chord space' },
+  { action: 'chord.separateSignIns', title: 'Keep sign-ins separate for this chord', words: 'sign ins separate accounts cookies profile login' },
   { action: 'app.settings', title: 'Settings', words: 'settings preferences options' },
   { action: 'app.shortcuts', title: 'Keyboard shortcuts', words: 'keyboard shortcuts hotkeys keys cheat sheet' },
 ];

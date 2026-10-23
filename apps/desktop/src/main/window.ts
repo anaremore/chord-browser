@@ -23,6 +23,7 @@ export interface AppWindowOptions {
   uiSession: Session;
   bounds: Bounds | null;
   sidebar: SidebarMode;
+  sidebarWidth: number;
   /** A private window: always dark, and titled so in the taskbar and window switcher. */
   private?: boolean;
   onBounds(bounds: Bounds): void;
@@ -34,9 +35,9 @@ interface FrameOrigin {
 }
 
 /** Where the content frame starts: right of the sidebar, or just inset when it's collapsed (DESIGN.md §3.3). */
-function frameOrigin(sidebar: SidebarMode): FrameOrigin {
+function frameOrigin(sidebar: SidebarMode, sidebarWidth: number): FrameOrigin {
   if (sidebar === 'collapsed') return { left: size.frameInset, top: size.strip };
-  return { left: size.sidebarWidth, top: platform === 'darwin' ? size.frameInset : size.strip };
+  return { left: sidebarWidth, top: platform === 'darwin' ? size.frameInset : size.strip };
 }
 
 const FRAME_SPRING = springCurve(springs.smooth);
@@ -110,12 +111,14 @@ export class AppWindow {
   readonly isPrivate: boolean;
   private origin: FrameOrigin;
   private frameAnimation: ReturnType<typeof setInterval> | undefined;
+  /** Minimal mode's peek: the shell sits above the page so the sidebar can float over it. */
+  private peeking = false;
   private floating: FloatingView | null = null;
 
-  constructor({ id, uiSession, bounds, sidebar, private: isPrivate = false, onBounds }: AppWindowOptions) {
+  constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds }: AppWindowOptions) {
     this.id = id;
     this.isPrivate = isPrivate;
-    this.origin = frameOrigin(sidebar);
+    this.origin = frameOrigin(sidebar, sidebarWidth);
     const forced = isPrivate ? 'dark' : null;
     this.window = new BaseWindow({
       ...(bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : { width: 1280, height: 820 }),
@@ -185,7 +188,8 @@ export class AppWindow {
     this.tabView = view;
     if (view) {
       view.setVisible(!this.tabHidden);
-      this.window.contentView.addChildView(view, 1);
+      // Just above the shell; or, while the sidebar peeks over the page, just below it.
+      this.window.contentView.addChildView(view, this.peeking ? 0 : 1);
       this.layout();
       if (!this.overlayVisible) view.webContents.focus();
     } else if (!this.overlayVisible) {
@@ -257,14 +261,16 @@ export class AppWindow {
   }
 
   /**
-   * Dock or collapse the sidebar. The page glides on the same spring the
-   * shell's CSS uses for the frame behind it, so the two move as one.
+   * Dock, collapse or resize the sidebar. The page glides on the same spring
+   * the shell's CSS uses for the frame behind it, so the two move as one;
+   * resizing follows the pointer without animating.
    */
-  setSidebar(sidebar: SidebarMode, animate: boolean): void {
+  setSidebar(sidebar: SidebarMode, width: number, animate: boolean): void {
     this.closeFloating();
     clearInterval(this.frameAnimation);
     this.frameAnimation = undefined;
-    const to = frameOrigin(sidebar);
+    if (sidebar === 'docked') this.setPeek(false);
+    const to = frameOrigin(sidebar, width);
     if (!animate || !this.tabView) {
       this.origin = to;
       this.layout();
@@ -284,6 +290,20 @@ export class AppWindow {
     };
     this.frameAnimation = setInterval(step, FRAME_TICK_MS);
     step();
+  }
+
+  /**
+   * Minimal mode's sidebar peek (DESIGN.md §3.3, §6.5): the shell is lifted
+   * above the page while the sidebar floats over it, and goes back below when
+   * it slides away. The page itself never moves.
+   */
+  setPeek(open: boolean): void {
+    if (this.peeking === open || this.window.isDestroyed()) return;
+    this.peeking = open;
+    const root = this.window.contentView;
+    root.removeChildView(this.shell);
+    // Above the page, below the popover and the command bar; or back at the bottom.
+    root.addChildView(this.shell, open ? root.children.indexOf(this.popover) : 0);
   }
 
   /** Float a view over the page, below the command bar. Whatever floated before closes. */

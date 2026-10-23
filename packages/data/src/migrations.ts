@@ -163,4 +163,11 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (profile_id, id)
   ) STRICT;
   `,
+  // 7: the Favorites row (M1.2): sites every chord shares, in order. Icons live in favicon.
+  `
+  CREATE TABLE favorite (
+    id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+    favicon_key TEXT, rank TEXT NOT NULL, created_at INTEGER NOT NULL
+  ) STRICT;
+  `,
 ];

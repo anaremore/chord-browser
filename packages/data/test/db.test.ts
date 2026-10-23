@@ -167,6 +167,33 @@ describe('chord-data', () => {
     expect(count('profile')).toBe(1);
   });
 
+  it('keeps favorites (with their icons), folders and the sidebar width across a restart', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const windowId = Object.keys(state.windows)[0]!;
+    const chordId = Object.keys(state.chords)[0]!;
+    const tabId = Object.values(state.nodes)[0]!.id;
+    state = drive(db, state, [
+      { t: 'tab.updated', nodeId: tabId, favicon: ICON },
+      { t: 'favorite.add', favoriteId: 'fav-1', nodeId: tabId },
+      { t: 'folder.create', folderId: 'folder-1', chordId, title: 'Reading', tabId },
+      { t: 'folder.toggle', nodeId: 'folder-1', collapsed: true },
+      { t: 'window.sidebarWidth', windowId, width: 320 },
+    ]);
+    db.close();
+    db = new ChordDatabase(file);
+    const saved = db.load()!;
+    expect(saved.favorites).toEqual([state.favorites['fav-1']]);
+    expect(saved.favorites![0]!.favicon).toBe(ICON);
+    expect(saved.nodes.find((n) => n.id === 'folder-1')).toMatchObject({ kind: 'folder', title: 'Reading', collapsed: true });
+    expect(saved.nodes.find((n) => n.id === tabId)).toMatchObject({ parentId: 'folder-1', section: 'pinned' });
+    expect(saved.windows[0]!.sidebarWidth).toBe(320);
+    drive(db, state, [{ t: 'favorite.remove', favoriteId: 'fav-1' }]);
+    db.close();
+    expect(count('favorite')).toBe(0);
+  });
+
   it('rolls back a batch that breaks a constraint, keeping what was there', () => {
     const db = new ChordDatabase(file);
     const state = seed();
@@ -181,6 +208,50 @@ describe('chord-data', () => {
     ).toThrow();
     expect((db.load()!.nodes[0] as TabNode).title).toBe('');
     db.close();
+  });
+
+  it('upgrades a version-6 profile (extensions, no Favorites yet) to 7, keeping everything', () => {
+    // A profile as the build before Favorites left it: migrations 1-6, a chord and an installed extension.
+    const v6 = new DatabaseSync(file);
+    for (const migration of MIGRATIONS.slice(0, 6)) v6.exec(migration);
+    v6.exec('PRAGMA user_version = 6');
+    const theme = JSON.stringify({ stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' });
+    v6.prepare('INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      'c1', 'default', 'Personal', '✦', theme, 'a0', 0, 0,
+    );
+    v6.prepare(
+      `INSERT INTO extension (profile_id, id, name, version, source, path, notified_version, pinned, installed_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('default', 'cjpalhdlnbpafiamejdnhcphjbkeiagm', 'uBlock Origin Lite', '2026.10.1', 'store', '/extensions/ubol', '2026.10.1', 1, 1000, 1000);
+    v6.close();
+
+    const db = new ChordDatabase(file);
+    expect(db.version).toBe(MIGRATIONS.length);
+    const saved = db.load()!;
+    expect(saved.chords.map((c) => c.name)).toEqual(['Personal']);
+    expect(saved.extensions).toEqual([
+      {
+        id: 'cjpalhdlnbpafiamejdnhcphjbkeiagm',
+        profileId: 'default',
+        name: 'uBlock Origin Lite',
+        version: '2026.10.1',
+        source: 'store',
+        path: '/extensions/ubol',
+        notifiedVersion: '2026.10.1',
+        pinned: true,
+        installedAt: 1000,
+        updatedAt: 1000,
+      },
+    ]);
+    expect(saved.favorites).toEqual([]);
+    // The new table takes favorites.
+    db.write([{ k: 'favorite', id: 'fav-1', value: { id: 'fav-1', url: 'https://mail.test/', title: 'Mail', favicon: ICON, rank: 'a0', createdAt: 5 } }]);
+    expect(db.load()!.favorites!.map((f) => f.url)).toEqual(['https://mail.test/']);
+    db.close();
+    // And the version-6 copy was kept.
+    const backup = new DatabaseSync(`${file}.v6.bak`);
+    expect(backup.prepare('PRAGMA user_version').get()).toEqual({ user_version: 6 });
+    backup.close();
   });
 
   it('backs up the previous version before migrating', () => {

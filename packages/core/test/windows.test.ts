@@ -30,7 +30,7 @@ function setup() {
   const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' as const };
   state.chords['c1'] = { id: 'c1', profileId: 'default', name: 'Personal', icon: '✦', theme, rank: 'a0', createdAt: 0 };
   state.chords['c2'] = { id: 'c2', profileId: 'default', name: 'Work', icon: '♪', theme, rank: 'a1', createdAt: 0 };
-  state.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: null }, sidebar: 'docked', bounds: { x: 100, y: 80, width: 1200, height: 800, maximized: false } };
+  state.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: null }, sidebar: 'docked', sidebarWidth: 248, bounds: { x: 100, y: 80, width: 1200, height: 800, maximized: false } };
   const run = (cmd: Command) => {
     const result = apply(state, cmd, ctx);
     state = result.state;
@@ -204,7 +204,7 @@ describe('restoring windows', () => {
   it('gives a tab to one window only, and never brings back a private window', () => {
     const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' as const };
     const tab = { kind: 'tab' as const, id: 't1', chordId: 'c1', section: 'today' as const, parentId: null, rank: 'a0', url: 'https://a.test/', title: 'A', pinnedUrl: null, customTitle: null, favicon: null, lastActiveAt: 1, createdAt: 1 };
-    const win = (id: string, extra = {}) => ({ id, activeChordId: 'c1', activeTab: { c1: 't1' }, sidebar: 'docked' as const, bounds: null, ...extra });
+    const win = (id: string, extra = {}) => ({ id, activeChordId: 'c1', activeTab: { c1: 't1' }, sidebar: 'docked' as const, sidebarWidth: 248, bounds: null, ...extra });
     const state = restoreState(
       {
         chords: [
