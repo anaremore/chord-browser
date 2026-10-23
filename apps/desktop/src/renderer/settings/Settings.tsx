@@ -19,6 +19,7 @@ import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, Upd
 import { Check, Info, Keyboard, Palette, Puzzle, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
+import { useLive, type Live } from '../shared/live';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
@@ -417,12 +418,10 @@ function About({ about, snapshot }: { about: AboutInfo; snapshot: SettingsSnapsh
 
 /* ---------- Window ---------- */
 
-export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo: SystemInfo; initialSnapshot: SettingsSnapshot; about: AboutInfo }) {
-  const [info, setInfo] = useState(initialInfo);
-  const [snapshot, setSnapshot] = useState(initialSnapshot);
+export function Settings({ info: infoSource, snapshot: snapshotSource, about }: { info: Live<SystemInfo>; snapshot: Live<SettingsSnapshot>; about: AboutInfo }) {
+  const info = useLive(infoSource);
+  const snapshot = useLive(snapshotSource);
   const [section, setSection] = useState<SectionId>(initialSection);
-  useEffect(() => api.system.onChange(setInfo), []);
-  useEffect(() => api.settings.onChange(setSnapshot), []);
   useEffect(() => api.settings.onSection((s) => isSection(s) && setSection(s)), []);
   useEffect(() => applyMotion(snapshot.settings, info.prefersReducedMotion), [snapshot.settings, info.prefersReducedMotion]);
 

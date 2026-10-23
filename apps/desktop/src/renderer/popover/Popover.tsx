@@ -7,6 +7,7 @@ import type { SitePermission } from '@chord/core';
 import type { FindState, PermissionPrompt, PopoverState, SystemInfo } from '@chord/ipc';
 import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, MapPin, Mic, Search, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useLive, type Live } from '../shared/live';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './Popover.module.css';
@@ -108,11 +109,9 @@ function PermissionCard({ prompt }: { prompt: PermissionPrompt }) {
   );
 }
 
-export function Popover({ initialInfo, initialState }: { initialInfo: SystemInfo; initialState: PopoverState }) {
-  const [info, setInfo] = useState(initialInfo);
-  const [state, setState] = useState(initialState);
-  useEffect(() => api.system.onChange(setInfo), []);
-  useEffect(() => api.popover.onState(setState), []);
+export function Popover({ info: infoSource, state: stateSource }: { info: Live<SystemInfo>; state: Live<PopoverState> }) {
+  const info = useLive(infoSource);
+  const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
   const hasCards = Boolean(state.find || state.permission);
 

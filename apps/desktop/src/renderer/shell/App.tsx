@@ -3,6 +3,7 @@ import type { ChordEdit, SystemInfo } from '@chord/ipc';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig } from 'motion/react';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
@@ -10,7 +11,6 @@ import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './App.module.css';
 import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Chords';
-import { useSystemInfo } from './hooks';
 import { keycap, withKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
@@ -117,8 +117,8 @@ function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab:
   );
 }
 
-export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: Mirror }) {
-  const info = useSystemInfo(initialInfo);
+export function App({ info: infoSource, mirror }: { info: Live<SystemInfo>; mirror: Mirror }) {
+  const info = useLive(infoSource);
   const state = useMirror(mirror);
   const windowId = mirror.windowId;
   const win = state.windows[windowId];
