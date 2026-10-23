@@ -52,6 +52,10 @@ export const size = {
   previewWidth: 280,
   /** Popover cards over the page: the find bar, permission prompts. */
   popoverCard: 320,
+  /** A mini window (DESIGN.md §7.9): its bar, and its size until you resize one. */
+  miniBar: 36,
+  miniWidth: 900,
+  miniHeight: 640,
   /** Settings window: section list, readable content column, and its controls. */
   settingsNav: 200,
   settingsContent: 600,

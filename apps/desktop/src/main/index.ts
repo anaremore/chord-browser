@@ -23,7 +23,7 @@ import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
 import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
-import { observeContextMenusForTests } from './context-menu';
+import { observeContextMenusForTests, type ObservedItem } from './context-menu';
 import { PermissionBroker } from './permissions';
 import { ScreenShareBroker } from './screen-share';
 import { applySpellcheck } from './spellcheck';
@@ -125,7 +125,17 @@ function registerIpc(): void {
     if (chordId && !fromPrivateWindow(sender)) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
   });
   handle('downloads:openFolder', () => downloads.openFolder());
-  handle('overlay:close', ({ seq }, sender) => senderWindow(sender).closeOverlay(seq));
+  handle('overlay:close', ({ seq }, sender) => browser!.closeOverlay(sender, seq));
+  handle('peek:expand', (_request, sender) => browser!.expandPeek(sender));
+  // A mini window's bar (DESIGN.md §7.9): each acts on the mini window it's in.
+  handle('mini:state', (_request, sender) => {
+    const state = browser!.minis.stateFor(sender);
+    if (!state) throw new Error('No mini window for this sender');
+    return state;
+  });
+  handle('mini:promote', (_request, sender) => browser!.minis.promote(sender));
+  handle('mini:chooseChord', (anchor, sender) => browser!.minis.chooseChord(sender, anchor));
+  handle('mini:copyLink', (_request, sender) => browser!.minis.copyLink(sender));
   handle('overlay:ready', (_request, sender) => senderWindow(sender).markOverlayReady());
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
@@ -188,6 +198,7 @@ function registerIpc(): void {
     browser!.store.dispatch({ t: 'permission.set', origin, permissions: [permission], decision }),
   );
   handle('settings:forgetSite', ({ origin }) => browser!.store.dispatch({ t: 'permission.forget', origin }));
+  handle('settings:linkRoute', ({ host, chordId }) => browser!.setLinkRoute(host, chordId));
   handle('archive:snapshot', (_request, sender) => browser!.archiveSnapshot(sender));
   handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
   handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
@@ -352,10 +363,12 @@ if (!app.requestSingleInstanceLock()) {
     // right-click menu, read without opening a native menu.
     if (dev('CHORD_E2E_HOOKS')) {
       // Right-click menus are read, not shown: their labels, newest last, by page.
-      const contextMenus = new Map<number, string[]>();
-      observeContextMenusForTests((contents, labels) => contextMenus.set(contents.id, labels));
+      const contextMenus = new Map<number, ObservedItem[]>();
+      observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
-        contextMenu: (contentsId: number) => contextMenus.get(contentsId) ?? null,
+        contextMenu: (contentsId: number) => contextMenus.get(contentsId)?.map((item) => item.label) ?? null,
+        /** Choose an item in a page's last right-click menu, as clicking it would. */
+        chooseContextMenuItem: (contentsId: number, label: string) => contextMenus.get(contentsId)?.find((item) => item.label === label)?.choose(),
         extensionMenuLabels: (contentsId: number, params: Partial<ContextMenuParams>) => {
           const contents = webContents.fromId(contentsId);
           return contents ? browser!.extensions.contextMenuItems(contents, params as ContextMenuParams).map((item) => item.label) : [];
@@ -364,8 +377,9 @@ if (!app.requestSingleInstanceLock()) {
     }
     // Extensions load before any page does, so their content scripts reach restored tabs.
     await browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean));
-    browser.start();
+    // Launched to open a link: just its mini window, quickly; your windows come back when you want them.
     if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
+    else browser.start();
     updates.start();
   });
 

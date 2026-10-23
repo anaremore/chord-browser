@@ -302,6 +302,23 @@ export interface Settings {
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
   shortcuts: ShortcutOverrides;
   spellcheck: SpellcheckSettings;
+  /** Where links from other apps open (Chord as the default browser): a mini window, or a new tab. */
+  externalLinks: ExternalLinks;
+  /** The mini window's size, as you last left it; null until you resize one (DESIGN.md §7.9). */
+  miniWindowSize: { width: number; height: number } | null;
+}
+
+export type ExternalLinks = 'mini' | 'tab';
+
+/**
+ * A link route (from Crest): links to this site, from other apps or typed in
+ * the command bar, open in this chord. `host` matches itself and its
+ * subdomains (`github.com` covers `gist.github.com`).
+ */
+export interface LinkRoute {
+  host: string;
+  chordId: ChordId;
+  createdAt: number;
 }
 
 /** Spelling in text fields (ARCHITECTURE.md §9). */
@@ -327,6 +344,8 @@ export const DEFAULT_SETTINGS: Settings = {
   autoPip: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
+  externalLinks: 'mini',
+  miniWindowSize: null,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -362,6 +381,8 @@ export interface SettingsPatch {
   sleepTabs?: boolean;
   autoPip?: boolean;
   spellcheck?: Partial<SpellcheckSettings>;
+  externalLinks?: ExternalLinks;
+  miniWindowSize?: { width: number; height: number } | null;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
 }
@@ -393,6 +414,8 @@ export interface State {
   deletedFolders: DeletedFolder[];
   /** Page zoom you chose for a site, by host (1 isn't stored). Shared by every chord, like permissions. */
   siteZoom: Record<string, number>;
+  /** Link routes, by host. */
+  linkRoutes: Record<string, LinkRoute>;
 }
 
 export interface DeletedFolder {
@@ -424,6 +447,7 @@ export const emptyState = (): State => ({
   favorites: {},
   deletedFolders: [],
   siteZoom: {},
+  linkRoutes: {},
 });
 
 export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false };

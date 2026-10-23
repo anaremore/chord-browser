@@ -11,6 +11,7 @@ import type {
   Download,
   Favorite,
   InstalledExtension,
+  LinkRoute,
   PersistedState,
   Settings,
   SidebarNode,
@@ -32,7 +33,8 @@ export type WriteOp =
   /** One installed extension, by `extensionKey(profileId, id)`. */
   | { k: 'extension'; id: string; value: InstalledExtension | null }
   /** A site's page zoom, by host. */
-  | { k: 'siteZoom'; id: string; value: number | null };
+  | { k: 'siteZoom'; id: string; value: number | null }
+  | { k: 'linkRoute'; id: string; value: LinkRoute | null };
 
 /**
  * A tab's back/forward history as Electron gives it (`navigationHistory`):
@@ -158,6 +160,11 @@ export function opsFromPatches(patches: readonly PathPatch[], state: State): Wri
       for (const key of keys) add({ k: 'extension', id: key, value: state.extensions[key] ?? null });
       continue;
     }
+    if (collection === 'linkRoutes') {
+      const hosts = id === undefined ? Object.keys(state.linkRoutes) : [String(id)];
+      for (const host of hosts) add({ k: 'linkRoute', id: host, value: state.linkRoutes[host] ?? null });
+      continue;
+    }
     if (collection === 'siteZoom') {
       const hosts = id === undefined ? Object.keys(state.siteZoom) : [String(id)];
       for (const host of hosts) add({ k: 'siteZoom', id: host, value: state.siteZoom[host] ?? null });
@@ -202,6 +209,7 @@ export function opsForState(state: State): WriteOp[] {
     ...Object.values(state.favorites).map((value): WriteOp => ({ k: 'favorite', id: value.id, value })),
     ...Object.entries(state.extensions).map(([key, value]): WriteOp => ({ k: 'extension', id: key, value })),
     ...Object.entries(state.siteZoom).map(([host, value]): WriteOp => ({ k: 'siteZoom', id: host, value })),
+    ...Object.values(state.linkRoutes).map((value): WriteOp => ({ k: 'linkRoute', id: value.host, value })),
   ];
   return ops.filter((op) => !isPrivate(op, state));
 }

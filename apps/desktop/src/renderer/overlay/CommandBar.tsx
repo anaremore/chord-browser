@@ -8,7 +8,7 @@
  * engine's suggestions slot in under the local rows when they arrive.
  */
 import { keycapFor, parseInput, type ActionId, type SearchEngineId } from '@chord/core';
-import type { HistorySearch, OverlayOpenEvent, SystemInfo } from '@chord/ipc';
+import type { HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
 import {
   AppWindow,
   Archive,
@@ -48,6 +48,7 @@ import { api } from './api';
 import styles from './CommandBar.module.css';
 import { DownloadsPanel } from './DownloadsPanel';
 import { ExtensionsPanel } from './ExtensionsPanel';
+import { PeekChrome } from './Peek';
 import { buildResults, completionFor, destinationOf, scopeFor, scopeLabel, type Filter, type Result, type Scope } from './results';
 
 interface Session {
@@ -59,7 +60,12 @@ interface Session {
   initial: string;
   /** Main's number for this opening; closing names it. */
   seq: number;
+  /** Peek's page and card, when the overlay is Peek's chrome. */
+  peek?: PeekState;
 }
+
+/** Whether the overlay is the command bar (rather than a panel or Peek's chrome). */
+const isCommandBar = (session: Session | null): session is Session & { mode: 'new' | 'edit' } => session?.mode === 'new' || session?.mode === 'edit';
 
 /**
  * Where a result opens (DESIGN.md §7.3): ↵ here (this tab when editing its
@@ -139,16 +145,27 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
 
   useEffect(() => {
     const stop = api.overlay.onOpen((event) => {
-      setSession({ mode: event.mode, anchor: event.anchor, openedAt: performance.now(), initial: event.mode === 'edit' ? event.url : '', seq: event.seq });
+      setSession({
+        mode: event.mode,
+        anchor: event.anchor,
+        openedAt: performance.now(),
+        initial: event.mode === 'edit' ? event.url : '',
+        seq: event.seq,
+        ...(event.peek ? { peek: event.peek } : {}),
+      });
       setQuery(event.mode === 'edit' ? event.url : '');
       setSelected(0);
       setScope(null);
       setMayComplete(false);
       setSuggested(null);
     });
+    const stopDismiss = api.overlay.onDismiss((seq) => setSession((current) => (current?.seq === seq ? null : current)));
     // Listening: an opening that waited for this (a brand-new window's) comes now.
     void api.overlay.ready();
-    return stop;
+    return () => {
+      stop();
+      stopDismiss();
+    };
   }, []);
 
   // Typeable on the first frame (DESIGN.md §6.7): focus before the entrance animation runs.
@@ -170,7 +187,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   const searchSeq = useRef(0);
   const historyFilter = scope?.kind === 'filter' && (scope.filter === 'history' || scope.filter === 'archive');
   useEffect(() => {
-    if (!session || session.mode === 'downloads' || session.mode === 'extensions' || (!query.trim() && !historyFilter)) return;
+    if (!isCommandBar(session) || (!query.trim() && !historyFilter)) return;
     const seq = ++searchSeq.current;
     void api.history.search(query.trim()).then((found) => {
       if (seq === searchSeq.current) setHistory(found);
@@ -186,8 +203,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   useEffect(() => {
     const text = query.trim();
     const wanted =
-      session &&
-      session.mode !== 'downloads' &&
+      isCommandBar(session) &&
       state.settings.searchSuggestions &&
       engineForSuggestions !== null &&
       text !== session.initial &&
@@ -216,7 +232,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   );
 
   const results = useMemo(
-    () => (session && session.mode !== 'downloads' && session.mode !== 'extensions' ? buildResults(query, state, windowId, session.mode, history, Date.now(), { scope, suggestions }) : []),
+    () => (isCommandBar(session) ? buildResults(query, state, windowId, session.mode, history, Date.now(), { scope, suggestions }) : []),
     [session, query, state, windowId, history, scope, suggestions],
   );
   const current = Math.min(selected, Math.max(0, results.length - 1));
@@ -258,7 +274,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
     }
     if (result.kind === 'open' || result.kind === 'history') {
       if (session?.mode === 'edit' && activeId && where === 'here') void dispatch({ t: 'tab.navigate', nodeId: activeId, url: result.url });
-      else void dispatch({ t: 'tab.open', windowId, url: result.url, background: where === 'background' });
+      else void dispatch({ t: 'tab.open', windowId, url: result.url, background: where === 'background', route: true });
     } else if (result.kind === 'tab') {
       void dispatch({ t: 'tab.activate', windowId, nodeId: result.tab.id });
     } else if (result.kind === 'chord') {
@@ -321,6 +337,23 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   };
 
   if (!session) return null;
+
+  if (session.mode === 'peek' && session.peek) {
+    return (
+      <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
+        <div className={styles.root} style={style}>
+          <PeekChrome
+            key={session.openedAt}
+            initial={session.peek}
+            info={info}
+            transition={spring('gentle', 'commandBar')}
+            enter={spring('overlay', 'commandBar')}
+            onClose={close}
+          />
+        </div>
+      </MotionConfig>
+    );
+  }
 
   // The downloads and extensions panels share the overlay: modal like the command bar, but without dimming the page.
   if (session.mode === 'downloads' || session.mode === 'extensions') {

@@ -8,6 +8,7 @@ const api: OverlayApi = {
   state: stateApi,
   overlay: {
     onOpen: (listener) => subscribe('overlay:open', listener),
+    onDismiss: (listener) => subscribe('overlay:dismiss', ({ seq }) => listener(seq)),
     close: (seq) => invoke('overlay:close', { seq }),
     ready: () => invoke('overlay:ready'),
   },
@@ -26,6 +27,10 @@ const api: OverlayApi = {
     suggest: (query, engine) => invoke('search:suggest', engine ? { query, engine } : { query }),
   },
   archive: { restore: (archiveId) => invoke('archive:restore', { archiveId }) },
+  peek: {
+    onState: (listener) => subscribe('peek:state', listener),
+    expand: () => invoke('peek:expand'),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

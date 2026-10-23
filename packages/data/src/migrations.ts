@@ -177,4 +177,12 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (profile_id, host)
   ) STRICT;
   `,
+  // 11: link routes (from Crest): a site's links open in a chord. A route to a chord that's gone is
+  // dropped at restore. Numbered after Duet's (9) and split view's (10), which land separately; it
+  // only adds its own table, if it isn't there yet, so where it runs in the sequence doesn't matter.
+  `
+  CREATE TABLE IF NOT EXISTS link_route (
+    host TEXT PRIMARY KEY, chord_id TEXT NOT NULL, created_at INTEGER NOT NULL
+  ) STRICT;
+  `,
 ];

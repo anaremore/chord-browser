@@ -4,12 +4,13 @@
  *   tab      the active tab, inset and rounded (index 1)
  *   popover  find bar and permission prompts: sized to its cards, at the frame's top-right
  *   floating an extension's popup, under its button (at most one)
- *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L
+ *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L (and Peek's scrim and header)
+ *   peek     Peek's page, in the card the overlay draws (DESIGN.md §7.9)
  */
 import { join } from 'node:path';
 import type { Bounds, WindowId, WindowModel } from '@chord/core';
-import type { OverlayOpenEvent, Rect, Role } from '@chord/ipc';
-import { frameRadius, size, space, springCurve, springs } from '@chord/tokens';
+import type { OverlayOpenEvent, PeekState, Rect, Role } from '@chord/ipc';
+import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
 import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session } from 'electron';
 import { registerCaller, send } from './ipc';
 import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
@@ -43,7 +44,7 @@ function frameOrigin(sidebar: SidebarMode, sidebarWidth: number): FrameOrigin {
 const FRAME_SPRING = springCurve(springs.smooth);
 const FRAME_TICK_MS = 1000 / 60;
 
-export type UiSurface = 'shell' | 'overlay' | 'popover' | 'settings' | 'archive';
+export type UiSurface = 'shell' | 'overlay' | 'popover' | 'settings' | 'archive' | 'mini';
 
 /** A view that floats over the page until something else happens (an extension's popup). */
 export interface FloatingView {
@@ -61,7 +62,15 @@ const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
   popover: { preload: 'popover', role: 'popover' },
   settings: { preload: 'internal', role: 'internal' },
   archive: { preload: 'archive', role: 'archive' },
+  mini: { preload: 'mini', role: 'mini' },
 };
+
+/** Peek's card: up to 88% of the content frame, at most 1200 × 900, centered in it (DESIGN.md §7.9). */
+const PEEK_SHARE = 0.88;
+const PEEK_MAX = { width: 1200, height: 900 } as const;
+
+/** What a Peek shows, apart from where its card is (main works that out from the window). */
+export type PeekInfo = Omit<PeekState, 'card'>;
 
 function uiUrl(surface: UiSurface): string {
   const dev = process.env['ELECTRON_RENDERER_URL'];
@@ -116,6 +125,11 @@ export class AppWindow {
   /** The page is in HTML fullscreen (a video): it covers the whole window, above Chord's own views. */
   private pageFullScreen = false;
   private floating: FloatingView | null = null;
+  /** Peek: its page, and what its chrome in the overlay shows. */
+  private peekView: WebContentsView | null = null;
+  private peek: PeekInfo | null = null;
+  private peekSeq = 0;
+  private peekTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds }: AppWindowOptions) {
     this.id = id;
@@ -169,6 +183,7 @@ export class AppWindow {
     nativeTheme.on('updated', onTheme);
     this.window.on('closed', () => {
       this.closeFloating();
+      clearTimeout(this.peekTimer);
       nativeTheme.off('updated', onTheme);
       clearTimeout(boundsTimer);
       clearInterval(this.frameAnimation);
@@ -206,6 +221,136 @@ export class AppWindow {
 
   get activeTabContents() {
     return this.tabView?.webContents ?? null;
+  }
+
+  /* ---------- Peek (DESIGN.md §7.9, §8.5) ---------- */
+
+  /** Peek's page, while one is open. */
+  get peekContents() {
+    return this.peek ? (this.peekView?.webContents ?? null) : null;
+  }
+
+  /** Which opening of the overlay is Peek's, so a close for it (overlay:close) closes the Peek. */
+  get peekOverlaySeq(): number | null {
+    return this.peek ? this.peekSeq : null;
+  }
+
+  /**
+   * Open Peek over the frame: the overlay draws the scrim and the card's
+   * header, growing from the click; the page goes into the card once the
+   * card has landed (`delayMs`), so it never pops in ahead of it.
+   */
+  openPeek(view: WebContentsView, info: PeekInfo, delayMs: number): void {
+    if (!this.overlayReady || this.window.isDestroyed()) return;
+    this.closeFloating();
+    this.peek = info;
+    this.peekView = view;
+    view.setBorderRadius(radius.lg);
+    // The find bar goes above Peek's page, at its card's corner.
+    const root = this.window.contentView;
+    root.removeChildView(this.popover);
+    root.addChildView(this.popover);
+    this.overlayVisible = true;
+    this.overlay.setVisible(true);
+    // Esc and ⌘↵ work from the first frame; the page takes focus once it's in the card.
+    this.overlay.webContents.focus();
+    this.peekSeq = ++this.overlaySeq;
+    send(this.overlay.webContents, 'overlay:open', { mode: 'peek', anchor: null, url: info.url, seq: this.peekSeq, peek: this.peekState() });
+    clearTimeout(this.peekTimer);
+    this.peekTimer = setTimeout(() => {
+      if (this.peekView !== view || this.window.isDestroyed()) return;
+      root.addChildView(view, root.children.indexOf(this.popover));
+      this.layout();
+      view.webContents.focus();
+    }, delayMs);
+    this.layout();
+  }
+
+  /** The page moved on (address, title): Peek's header follows. */
+  updatePeek(info: Partial<PeekInfo>): void {
+    if (!this.peek) return;
+    this.peek = { ...this.peek, ...info };
+    send(this.overlay.webContents, 'peek:state', this.peekState());
+  }
+
+  /** Take Peek's page out of the window (it closes, or becomes a tab) and put the overlay away. */
+  closePeek(): WebContentsView | null {
+    const view = this.peekView;
+    clearTimeout(this.peekTimer);
+    if (this.peek) send(this.overlay.webContents, 'overlay:dismiss', { seq: this.peekSeq });
+    this.peek = null;
+    this.peekView = null;
+    if (this.window.isDestroyed()) return view;
+    const root = this.window.contentView;
+    if (view && root.children.includes(view)) root.removeChildView(view);
+    root.removeChildView(this.popover);
+    root.addChildView(this.popover, root.children.indexOf(this.overlay));
+    if (this.overlayVisible) {
+      this.overlayVisible = false;
+      this.overlay.setVisible(false);
+    }
+    this.layout();
+    (this.tabView?.webContents ?? this.shell.webContents).focus();
+    return view;
+  }
+
+  /**
+   * "Open in Today": Peek's page grows from its card to the frame (`smooth`),
+   * then `done` makes it the tab. With motion off it's immediate.
+   */
+  growPeekToFrame(animate: boolean, done: () => void): void {
+    const view = this.peekView;
+    if (!view || !this.peek || this.window.isDestroyed()) return done();
+    clearTimeout(this.peekTimer);
+    const root = this.window.contentView;
+    if (!root.children.includes(view)) root.addChildView(view, root.children.indexOf(this.popover));
+    const from = this.peekPageRect();
+    const to = this.frameRect();
+    if (!animate) return done();
+    const start = performance.now();
+    const timer = setInterval(() => {
+      if (this.window.isDestroyed() || view.webContents.isDestroyed()) {
+        clearInterval(timer);
+        return;
+      }
+      const elapsed = performance.now() - start;
+      const k = FRAME_SPRING.at(elapsed);
+      view.setBounds({
+        x: Math.round(from.x + (to.x - from.x) * k),
+        y: Math.round(from.y + (to.y - from.y) * k),
+        width: Math.round(from.width + (to.width - from.width) * k),
+        height: Math.round(from.height + (to.height - from.height) * k),
+      });
+      if (elapsed >= FRAME_SPRING.durationMs) {
+        clearInterval(timer);
+        done();
+      }
+    }, FRAME_TICK_MS);
+  }
+
+  private peekState(): PeekState {
+    return { ...this.peek!, card: this.peekCard() };
+  }
+
+  /** The content frame, in window coordinates. */
+  private frameRect(): Rect {
+    const { width, height } = this.window.getContentBounds();
+    const x = Math.round(this.origin.left);
+    const y = Math.round(this.origin.top);
+    return { x, y, width: Math.max(0, width - x - size.frameInset), height: Math.max(0, height - y - size.frameInset) };
+  }
+
+  private peekCard(): Rect {
+    const frame = this.frameRect();
+    const width = Math.round(Math.min(frame.width * PEEK_SHARE, PEEK_MAX.width));
+    const height = Math.round(Math.min(frame.height * PEEK_SHARE, PEEK_MAX.height));
+    return { x: Math.round(frame.x + (frame.width - width) / 2), y: Math.round(frame.y + (frame.height - height) / 2), width, height };
+  }
+
+  /** Peek's page: the card below its 40 px header. */
+  private peekPageRect(): Rect {
+    const card = this.peekCard();
+    return { x: card.x, y: card.y + size.header, width: card.width, height: Math.max(0, card.height - size.header) };
   }
 
   /**
@@ -292,6 +437,8 @@ export class AppWindow {
   /** `seq` is the opening being closed; a close for an earlier one (racing a newer open) is ignored. */
   closeOverlay(seq = this.overlaySeq): void {
     if (!this.overlayVisible || seq !== this.overlaySeq) return;
+    // Peek's chrome closes with Peek (Browser does both).
+    if (this.peek && seq === this.peekSeq) return;
     this.overlayVisible = false;
     this.overlay.setVisible(false);
     (this.tabView?.webContents ?? this.shell.webContents).focus();
@@ -379,7 +526,15 @@ export class AppWindow {
     if (this.pageFullScreen) this.tabView?.setBounds({ x: 0, y: 0, width, height });
     else this.tabView?.setBounds({ x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) });
     // The popover hangs from the frame's top-right corner; its cards carry their own margin.
+    // With Peek open it hangs from the card's, below its header, over Peek's page.
     const { width: pw, height: ph } = this.popoverSize;
+    if (this.peek) {
+      const page = this.peekPageRect();
+      this.popover.setBounds({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph });
+      if (this.peekView && this.window.contentView.children.includes(this.peekView)) this.peekView.setBounds(page);
+      send(this.overlay.webContents, 'peek:state', this.peekState());
+      return;
+    }
     this.popover.setBounds({ x: Math.max(x, width - inset - pw), y, width: pw, height: ph });
   }
 
