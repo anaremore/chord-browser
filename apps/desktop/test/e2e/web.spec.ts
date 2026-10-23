@@ -126,16 +126,26 @@ test('a misspelled word offers suggestions and Add to dictionary at the top of t
     await tab.keyboard.type('teh ');
     const id = (await contentsId(app, `${site.origin}/spell`))!;
     const menu = () => app.evaluate((_electron, contents) => (globalThis as unknown as { chordTestHooks: { contextMenu(id: number): string[] | null } }).chordTestHooks.contextMenu(contents), id);
-    // Spelling is checked as you type (the first time, after the dictionary loads).
+    // Spelling is checked as you type, once the dictionary has loaded (the first time, it downloads);
+    // text typed before that isn't checked again, so type the word again until it is.
     await expect
       .poll(
         async () => {
+          await tab.locator('#t').fill('');
+          await tab.locator('#t').pressSequentially('teh ');
           await tab.locator('#t').click({ button: 'right', position: { x: 24, y: 24 } });
           return menu();
         },
-        { timeout: 30_000 },
+        { timeout: 30_000, intervals: [500, 1000] },
       )
-      .toEqual(expect.arrayContaining(['the', 'Add to dictionary']));
+      .toEqual(expect.arrayContaining(['the', 'Add to dictionary']))
+      .catch(async (error: Error) => {
+        const spelling = await app.evaluate(({ webContents }, contents) => {
+          const ses = webContents.fromId(contents)!.session;
+          return { enabled: ses.isSpellCheckerEnabled(), languages: ses.getSpellCheckerLanguages(), available: ses.availableSpellCheckerLanguages.length };
+        }, id);
+        throw new Error(`${error.message}\nSpelling in the tab's session: ${JSON.stringify(spelling)}`);
+      });
     const labels = (await menu())!;
     expect(labels.indexOf('Add to dictionary')).toBeLessThan(labels.indexOf('Inspect'));
   } finally {
