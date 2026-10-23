@@ -38,10 +38,24 @@ function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, 
   return shell.evaluate(
     async ({ deltas, gapMs, over }) => {
       const target = document.querySelector(over) ?? document.querySelector('[data-swipe-area]');
+      // DIAGNOSTIC (temporary): what each event met.
+      const track = document.querySelector('[data-swiping]') ?? target?.closest('[class*="paneTrack"]');
+      const log: string[] = [
+        `reduced=${document.documentElement.hasAttribute('data-reduced-motion')} vis=${document.visibilityState} focus=${document.hasFocus()} track=${(target?.closest('[class*="paneTrack"]') as HTMLElement | null)?.clientWidth} panes=${document.querySelectorAll('[aria-label="Sidebar"] [aria-label="Today"]').length} inert=${Boolean(target?.closest('[inert]'))} track0=${Boolean(track)}`,
+      ];
+      let last = performance.now();
       for (const d of deltas) {
-        target!.dispatchEvent(new WheelEvent('wheel', { deltaX: d.x, deltaY: d.y ?? 0, deltaMode: 0, bubbles: true, cancelable: true }));
+        const event = new WheelEvent('wheel', { deltaX: d.x, deltaY: d.y ?? 0, deltaMode: 0, bubbles: true, cancelable: true });
+        const t0 = performance.now();
+        target!.dispatchEvent(event);
+        const t1 = performance.now();
+        const panes = document.querySelectorAll('[aria-label="Sidebar"] [aria-label="Today"]').length;
+        const swiping = document.querySelector('[data-swiping]') ? 's' : '-';
+        log.push(`${Math.round(t0 - last)}+${Math.round(t1 - t0)}${target!.isConnected ? '' : 'X'}${event.defaultPrevented ? 'p' : 'n'}${swiping}${panes}`);
+        last = t1;
         await new Promise((r) => setTimeout(r, gapMs));
       }
+      return log.join(' ');
     },
     { deltas, gapMs, over },
   );
@@ -78,8 +92,8 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
     // A slow swipe past half the width: the next chord comes in beside the current one, and wins.
     const swiping = swipe(shell, steps(32, 6), 16);
     await expect.poll(() => paneCount(shell)).toBeGreaterThan(1);
-    await swiping;
-    await selected('Work');
+    const swipeLog = await swiping;
+    await expect(chords.getByRole('tab', { name: 'Work' }), `DIAGNOSTIC ${swipeLog}`).toHaveAttribute('aria-selected', 'true');
     await expect.poll(() => paneCount(shell)).toBe(1);
     expect(await tint()).not.toBe(personalTint);
 
