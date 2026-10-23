@@ -2,6 +2,7 @@ import { StrictMode, useLayoutEffect, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../assets/fonts/fonts.css';
 import '../shared/global.css';
+import { nextFrame } from '../shared/frames';
 import { createMirror } from '../shared/mirror';
 import { afterNextPaint } from '../shared/perf';
 import { applySystem } from '../shared/system';
@@ -11,7 +12,8 @@ import { App } from './App';
 const info = await api.system.info();
 applySystem(info);
 api.system.onChange(applySystem);
-const mirror = await createMirror(api.state);
+// Patches render once a frame, however many arrive in it (a tab switch sends several).
+const mirror = await createMirror(api.state, { notify: nextFrame });
 
 let reported = false;
 /**

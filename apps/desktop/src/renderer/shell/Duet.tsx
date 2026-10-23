@@ -13,6 +13,7 @@
 import { DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, splitCitations, type DuetMessage, type DuetProvider, type DuetScope } from '@chord/core';
 import type { DuetAction, DuetView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
+import { motion, type Transition } from 'motion/react';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { api } from './api';
 import styles from './Duet.module.css';
@@ -528,7 +529,10 @@ function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
 
 /* ---------- The panel ---------- */
 
-export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string; info: SystemInfo }) {
+/** Off the window's right edge: where the panel slides in from and out to (DESIGN.md §6.5). */
+const OFF_RIGHT = { x: '110%' };
+
+export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId: string; info: SystemInfo; slide: { enter: Transition; exit: Transition } }) {
   const [menu, setMenu] = useState<'thread' | 'model' | 'scope' | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [seed, setSeed] = useState({ text: '', n: 0 });
@@ -541,7 +545,13 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
   const thread = view.thread;
 
   return (
-    <aside className={styles.panel} aria-label="Duet">
+    <motion.aside
+      className={styles.panel}
+      aria-label="Duet"
+      initial={OFF_RIGHT}
+      animate={{ x: 0, transition: slide.enter }}
+      exit={{ ...OFF_RIGHT, transition: slide.exit }}
+    >
       <header className={styles.header}>
         {renaming && thread?.id ? (
           <input
@@ -734,6 +744,6 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
           <Composer view={view} providerName={providerName} draftSeed={seed} />
         </>
       )}
-    </aside>
+    </motion.aside>
   );
 }

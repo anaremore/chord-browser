@@ -105,6 +105,8 @@ export class DuetService {
   private drafts: Record<string, string> = {};
   private recent = new Map<string, { id: string; title: string; lastUsedAt: number }[]>();
   private pushTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Windows whose panel was just opened or closed: their next push slides it, and the page's frame glides. */
+  private readonly toggled = new Set<WindowId>();
   private firstUseSeen = false;
   private readonly root: string;
 
@@ -156,6 +158,7 @@ export class DuetService {
 
   forgetWindow(windowId: WindowId): void {
     this.panels.delete(windowId);
+    this.toggled.delete(windowId);
   }
 
   private chordOf(windowId: WindowId): string | null {
@@ -315,8 +318,10 @@ export class DuetService {
       const view = await this.view(w.id);
       // The window may have closed while its view was built.
       if (w.window.isDestroyed()) continue;
-      w.setDuetWidth(view.enabled && view.open ? this.browser.duetWidth : 0);
-      send(w.shell.webContents, 'duet:state', view);
+      // Opening or closing the panel slides it while the page's frame narrows or widens by its snapshot
+      // (DESIGN.md §6.5); a panel restored at launch, or Duet turned off, just changes.
+      const animate = this.toggled.delete(w.id) && this.browser.animates('sidebar');
+      w.setDuet(view.enabled && view.open ? this.browser.duetWidth : 0, () => send(w.shell.webContents, 'duet:state', view), animate);
     }
   }
 
@@ -327,7 +332,9 @@ export class DuetService {
     switch (action.do) {
       case 'toggle': {
         const panel = this.panel(windowId);
-        panel.open = action.open ?? !panel.open;
+        const open = action.open ?? !panel.open;
+        if (open !== panel.open) this.toggled.add(windowId);
+        panel.open = open;
         if (panel.open) void this.refreshProviders();
         break;
       }

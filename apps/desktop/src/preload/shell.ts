@@ -16,6 +16,8 @@ const api: ShellApi = {
     anchor: (rect) => invoke('layout:anchor', rect),
     peek: (open) => invoke('layout:peek', { open }),
     lift: (lifted) => invoke('layout:lift', { lifted }),
+    onSnapshot: (listener) => subscribe('frame:snapshot', listener),
+    snapshot: (seq, phase) => invoke('layout:snapshot', { seq, phase }),
   },
   menu: {
     app: (anchor) => invoke('menu:app', anchor),

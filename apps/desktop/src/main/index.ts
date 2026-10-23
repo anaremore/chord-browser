@@ -110,7 +110,10 @@ function registerIpc(): void {
   handle('system:info', () => systemInfo());
   handle('state:snapshot', (_request, sender) => ({ windowId: senderWindow(sender).id, state: browser!.store.state }));
   handle('cmd:dispatch', (command, sender) => {
-    browser!.store.dispatch(scopeToWindow(command, senderWindow(sender).id));
+    const w = senderWindow(sender);
+    // Docking and collapsing picture the page first, so its frame can glide (ARCHITECTURE.md §5).
+    if (command.t === 'window.sidebar') return browser!.setSidebar(w, command.sidebar);
+    browser!.store.dispatch(scopeToWindow(command, w.id));
   });
   handle('nav:command', ({ action }, sender) => {
     const contents = senderWindow(sender).activeTabContents;
@@ -160,6 +163,7 @@ function registerIpc(): void {
   handle('sidebar:deleteFolder', ({ nodeId }, sender) => browser!.deleteFolder(senderWindow(sender), nodeId));
   handle('layout:peek', ({ open }, sender) => browser!.setPeek(sender, open));
   handle('layout:lift', ({ lifted }, sender) => browser!.setLifted(sender, lifted));
+  handle('layout:snapshot', ({ seq, phase }, sender) => senderWindow(sender).ackSnapshot(seq, phase));
   handle('menu:chord', ({ chordId, x, y }, sender) => browser!.openChordMenu(sender, chordId, { x, y }));
   handle('action:run', ({ action }, sender) => {
     browser!.run(action, sender);

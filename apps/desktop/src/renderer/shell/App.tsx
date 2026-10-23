@@ -14,11 +14,13 @@ import {
   type TabNode,
 } from '@chord/core';
 import type { ChordEdit, DuetView, SystemInfo } from '@chord/ipc';
+import { durations } from '@chord/tokens';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, INSTANT, reducedMotionMode, springsFor } from '../shared/motion';
+import { markRender } from '../shared/perf';
 import { displayHost, pageTitle } from '../shared/site';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
@@ -30,6 +32,7 @@ import { DownloadsButton, summarizeDownloads } from './Downloads';
 import { DuetPanel } from './Duet';
 import { DuetReadTabs } from './duet-context';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
+import { FrameSnapshots } from './FrameSnapshot';
 import { Onboarding } from './Onboarding';
 import { SplitPanes, useElementSize } from './Split';
 import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
@@ -223,6 +226,8 @@ function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab:
 }
 
 export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: Mirror }) {
+  // Every commit is marked: the perf spec checks a frame holds at most one.
+  useLayoutEffect(markRender);
   const info = useSystemInfo(initialInfo);
   const state = useMirror(mirror);
   const windowId = mirror.windowId;
@@ -287,6 +292,9 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
     return api.duet.onState(setDuet);
   }, []);
   const duetOpen = Boolean(duet?.enabled && duet.open);
+  // The panel slides in on `overlay` and out a little quicker (DESIGN.md §6.1, §6.5), with the sidebar's motion switch.
+  const duetEnter = spring('overlay', 'sidebar');
+  const duetSlide = { enter: duetEnter, exit: duetEnter === INSTANT ? INSTANT : { duration: durations.fadeBase / 1000, ease: 'easeIn' as const } };
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
   useEffect(() => api.chords.onEdit(setChordEdit), []);
   const createChord = async () => {
@@ -599,7 +607,14 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               </>
             )}
           </div>
-          {duetOpen && duet && <DuetPanel view={duet} windowId={windowId} info={info} />}
+          {/* The pages' pictures while the frame changes size (ARCHITECTURE.md §5). */}
+          <FrameSnapshots />
+          {/* A panel already open when the shell starts is just there; opening and closing slide it. */}
+          {duet && (
+            <AnimatePresence initial={false}>
+              {duetOpen && <DuetPanel key="duet" view={duet} windowId={windowId} info={info} slide={duetSlide} />}
+            </AnimatePresence>
+          )}
           {/* Split view's drop zones, over the page while a tab is dragged (Tabs.tsx draws them here). */}
           <div ref={setDropHost} className={styles.dropLayer} aria-hidden={!lifted || undefined} />
         </div>

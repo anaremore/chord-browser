@@ -13,6 +13,7 @@ import { paneRects, type Bounds, type SplitDirection, type WindowId, type Window
 import type { OverlayOpenEvent, PeekState, Rect, Role } from '@chord/ipc';
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
 import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session, type WebContents } from 'electron';
+import { FrameSnapshots, offscreen } from './frame-snapshot';
 import { registerCaller, send } from './ipc';
 import { epochNow, markLaunch } from './perf';
 import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
@@ -77,6 +78,16 @@ const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
   archive: { preload: 'archive', role: 'archive' },
   mini: { preload: 'mini', role: 'mini' },
 };
+
+/**
+ * Put a view at `rect`, unless it's there already. Every move of a page makes
+ * it lay itself out again, so pages move only when they really go somewhere.
+ */
+function place(view: WebContentsView, rect: Rect): void {
+  const to = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
+  const now = view.getBounds();
+  if (now.x !== to.x || now.y !== to.y || now.width !== to.width || now.height !== to.height) view.setBounds(to);
+}
 
 /** Peek's card: up to 88% of the content frame, at most 1200 × 900, centered in it (DESIGN.md §7.9). */
 const PEEK_SHARE = 0.88;
@@ -143,7 +154,8 @@ export class AppWindow {
   private shellPainted = false;
   readonly isPrivate: boolean;
   private origin: FrameOrigin;
-  private frameAnimation: ReturnType<typeof setInterval> | undefined;
+  /** The frame changes size by its pages' snapshot (ARCHITECTURE.md §5), never by moving them every frame. */
+  private readonly snapshots: FrameSnapshots;
   /** Minimal mode's peek: the shell sits above the page so the sidebar can float over it. */
   private peeking = false;
   /** A tab is being dragged from the sidebar: the shell sits above the pages to show split drop zones. */
@@ -158,6 +170,8 @@ export class AppWindow {
   private peekTimer: ReturnType<typeof setTimeout> | undefined;
   /** Duet's panel on the right (0 when closed): the page's frame ends before it, with a gap. */
   private duetWidth = 0;
+  /** Duet's openings and closings waiting for their frame change, oldest first. */
+  private readonly duetChanges: { width: number; publish(): void }[] = [];
 
   constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds }: AppWindowOptions) {
     this.id = id;
@@ -187,6 +201,13 @@ export class AppWindow {
     this.window.contentView.addChildView(this.preview);
     this.window.contentView.addChildView(this.overlay);
 
+    this.snapshots = new FrameSnapshots({
+      tell: (event) => send(this.shell.webContents, 'frame:snapshot', event),
+      panes: () => this.panes.map((view) => ({ view, rect: view.getBounds() })),
+      canSnapshot: () => this.canSnapshot(),
+      targets: () => this.paneRectsIn(this.frameRect()),
+      layout: () => this.layout(),
+    });
     this.layout();
     let boundsTimer: ReturnType<typeof setTimeout> | undefined;
     const reportBounds = () => {
@@ -201,6 +222,8 @@ export class AppWindow {
     this.window.on('resize', () => {
       this.closeFloating();
       this.hidePreview();
+      // A frame snapshot's pictures are going to where the frame was: the pages come back at once.
+      this.snapshots.finish();
       this.layout();
       reportBounds();
     });
@@ -218,7 +241,7 @@ export class AppWindow {
       clearTimeout(this.peekTimer);
       nativeTheme.off('updated', onTheme);
       clearTimeout(boundsTimer);
-      clearInterval(this.frameAnimation);
+      this.snapshots.dispose();
       clearInterval(this.previewAnimation);
       for (const view of [this.shell, this.popover, this.preview, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
     });
@@ -253,6 +276,8 @@ export class AppWindow {
    * shell's empty state shows through.
    */
   showTabs(views: readonly WebContentsView[], focused: number, layout: PaneLayout | null): void {
+    // Pages coming or going while a frame snapshot moves: the pictures are of the old ones, so they're done.
+    this.snapshots.finish();
     const next = views.slice(0, 4);
     const focus = next[focused] ?? next[0] ?? null;
     const focusChanged = focus !== this.tabView;
@@ -438,6 +463,7 @@ export class AppWindow {
    */
   setPageFullScreen(on: boolean): void {
     if (this.pageFullScreen === on || this.window.isDestroyed() || !this.tabView) return;
+    this.snapshots.finish();
     if (!on) return this.leavePageFullScreen();
     this.pageFullScreen = true;
     this.closeFloating();
@@ -464,16 +490,26 @@ export class AppWindow {
 
   /** Hide these pages so the frame behind them can explain an error or a crash. */
   setHiddenPanes(hidden: ReadonlySet<WebContents>): void {
-    this.hiddenPanes = new Set(this.panes.filter((v) => hidden.has(v.webContents)));
+    const next = new Set(this.panes.filter((v) => hidden.has(v.webContents)));
+    // A page failed or crashed while its picture moved: the frame explains it now.
+    if (next.size !== this.hiddenPanes.size || [...next].some((v) => !this.hiddenPanes.has(v))) this.snapshots.finish();
+    this.hiddenPanes = next;
     for (const view of this.panes) view.setVisible(!this.hiddenPanes.has(view));
   }
 
   /** The popover reports its cards' size; 0 × 0 hides it. */
   setPopoverSize(width: number, height: number): void {
     this.popoverSize = { width: Math.ceil(width), height: Math.ceil(height) };
-    const visible = this.popoverSize.width > 0 && this.popoverSize.height > 0;
-    this.popover.setVisible(visible);
     this.layout();
+  }
+
+  /**
+   * The popover shows while it has cards, except while a frame snapshot moves
+   * (it hangs from a page that's out of sight). Shown, it takes focus if asked to.
+   */
+  private showPopover(): void {
+    const visible = this.popoverSize.width > 0 && this.popoverSize.height > 0 && !this.snapshots.active;
+    if (this.popover.getVisible() !== visible) this.popover.setVisible(visible);
     if (visible && this.focusPopoverWhenShown) {
       this.focusPopoverWhenShown = false;
       this.popover.webContents.focus();
@@ -602,36 +638,42 @@ export class AppWindow {
   }
 
   /**
-   * Dock, collapse or resize the sidebar. The page glides on the same spring
-   * the shell's CSS uses for the frame behind it, so the two move as one;
-   * resizing follows the pointer without animating.
+   * The sidebar docked, collapsed or resized: the frame starts somewhere
+   * else, and the page goes there at once. Docking and collapsing glide
+   * because they come through `changeFrame`; resizing follows the pointer.
    */
-  setSidebar(sidebar: SidebarMode, width: number, animate: boolean): void {
+  setSidebar(sidebar: SidebarMode, width: number): void {
     this.closeFloating();
     this.hidePreview();
-    clearInterval(this.frameAnimation);
-    this.frameAnimation = undefined;
+    // A resize while the pictures glide: the pages come back and follow the pointer.
+    if (!this.snapshots.inChange) this.snapshots.finish();
     if (sidebar === 'docked') this.setPeek(false);
-    const to = frameOrigin(sidebar, width);
-    if (!animate || !this.tabView) {
-      this.origin = to;
-      this.layout();
-      return;
-    }
-    const from = this.origin;
-    const start = performance.now();
-    const step = () => {
-      const elapsed = performance.now() - start;
-      const k = FRAME_SPRING.at(elapsed);
-      this.origin = { left: from.left + (to.left - from.left) * k, top: from.top + (to.top - from.top) * k };
-      this.layout();
-      if (elapsed >= FRAME_SPRING.durationMs) {
-        clearInterval(this.frameAnimation);
-        this.frameAnimation = undefined;
-      }
-    };
-    this.frameAnimation = setInterval(step, FRAME_TICK_MS);
-    step();
+    this.origin = frameOrigin(sidebar, width);
+    this.layout();
+  }
+
+  /**
+   * Change the frame's size with `change` (it docks the sidebar, say). With
+   * `animate`, by the snapshot technique (ARCHITECTURE.md §5): the pages are
+   * pictured first, so `change` may run a moment later. Changes run in order.
+   */
+  changeFrame(change: () => void, animate: boolean): void {
+    this.snapshots.change(change, animate);
+  }
+
+  /** The shell painted a snapshot's pictures (`shown`), or they arrived (`moved`). */
+  ackSnapshot(seq: number, phase: 'shown' | 'moved'): void {
+    this.snapshots.ack(seq, phase);
+  }
+
+  /**
+   * Whether the frame's pages can be pictured for a snapshot: the window is
+   * on screen with its shell up, and every page in the frame shows (none is
+   * fullscreen, or hidden behind an error).
+   */
+  private canSnapshot(): boolean {
+    if (this.window.isDestroyed() || !this.window.isVisible() || this.window.isMinimized()) return false;
+    return this.shellPainted && this.panes.length > 0 && !this.pageFullScreen && this.hiddenPanes.size === 0;
   }
 
   /**
@@ -692,43 +734,60 @@ export class AppWindow {
     return { width, height, frameTop: Math.round(this.origin.top) };
   }
 
-  /** Duet's panel opened (its width) or closed (0). The page makes room for it. */
-  setDuetWidth(width: number): void {
-    if (this.duetWidth === width) return;
-    this.duetWidth = width;
-    this.closeFloating();
-    this.layout();
+  /**
+   * Duet's panel opens (its width) or closes (0), and the page makes room for
+   * it: with `animate`, by the frame's snapshot while the panel slides in
+   * (DESIGN.md §6.5). `publish` tells the shell what the panel shows; it's
+   * held back while the frame's change waits for its pictures, so the panel
+   * and the page move together.
+   */
+  setDuet(width: number, publish: () => void, animate: boolean): void {
+    const waiting = this.duetChanges.at(-1);
+    if (waiting ? waiting.width === width : this.duetWidth === width) {
+      // Nothing changes size: what the panel shows goes now, or with the change it waits for.
+      if (waiting) waiting.publish = publish;
+      else publish();
+      return;
+    }
+    const next = { width, publish };
+    this.duetChanges.push(next);
+    this.changeFrame(() => {
+      this.duetChanges.splice(this.duetChanges.indexOf(next), 1);
+      this.duetWidth = next.width;
+      this.closeFloating();
+      next.publish();
+    }, animate);
   }
 
   /** The content frame: inset from the window, right of the sidebar (if docked), below the strip on Windows/Linux. */
   private layout(): void {
+    if (this.window.isDestroyed()) return;
     const { width: windowWidth, height } = this.window.getContentBounds();
-    // With Duet open, the frame ends before its panel and the gap between them.
-    const width = this.duetWidth > 0 ? Math.max(0, windowWidth - this.duetWidth - space[2]) : windowWidth;
-    const inset = size.frameInset;
-    const x = Math.round(this.origin.left);
-    const y = Math.round(this.origin.top);
-    this.shell.setBounds({ x: 0, y: 0, width: windowWidth, height });
-    this.overlay.setBounds({ x: 0, y: 0, width: windowWidth, height });
-    const frame = { x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) };
+    place(this.shell, { x: 0, y: 0, width: windowWidth, height });
+    place(this.overlay, { x: 0, y: 0, width: windowWidth, height });
+    const frame = this.frameRect();
     // The shell draws each pane's frame with the same math (DESIGN.md §7.9: 8 px gaps).
     const rects = this.paneRectsIn(frame);
+    // While a frame snapshot's pictures move, the pages wait out of sight at the size they're going to be.
+    const away = this.snapshots.active;
     this.panes.forEach((view, i) => {
-      if (this.pageFullScreen && view === this.tabView) view.setBounds({ x: 0, y: 0, width: windowWidth, height });
-      else view.setBounds(rects[i] ?? frame);
+      const rect = rects[i] ?? frame;
+      if (this.pageFullScreen && view === this.tabView) place(view, { x: 0, y: 0, width: windowWidth, height });
+      else place(view, away ? offscreen(rect, { width: windowWidth, height }) : rect);
     });
+    this.showPopover();
     const { width: pw, height: ph } = this.popoverSize;
     // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.
     if (this.peek) {
       const page = this.peekPageRect();
-      this.popover.setBounds({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph });
-      if (this.peekView && this.window.contentView.children.includes(this.peekView)) this.peekView.setBounds(page);
+      place(this.popover, { x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph });
+      if (this.peekView && this.window.contentView.children.includes(this.peekView)) place(this.peekView, page);
       send(this.overlay.webContents, 'peek:state', this.peekState());
       return;
     }
     // The popover (find, permission prompts) hangs from the focused pane's top-right corner; its cards carry their own margin.
     const pane = rects[this.focusedPane] ?? frame;
-    this.popover.setBounds({ x: Math.max(pane.x, pane.x + pane.width - pw), y: pane.y, width: pw, height: ph });
+    place(this.popover, { x: Math.max(pane.x, pane.x + pane.width - pw), y: pane.y, width: pw, height: ph });
   }
 
   /**

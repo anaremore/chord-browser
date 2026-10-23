@@ -20,11 +20,31 @@ export interface Mirror {
   subscribe(listener: () => void): () => void;
 }
 
-export async function createMirror(source: StateSource): Promise<Mirror> {
+export interface MirrorOptions {
+  /**
+   * When subscribers hear of a change. Patches apply as they arrive, so
+   * `get()` is always current; the shell tells React once a frame
+   * (shared/frames.ts), however many patches came in it. By default, at once.
+   */
+  notify?: (tell: () => void) => void;
+}
+
+export async function createMirror(source: StateSource, { notify = (tell) => tell() }: MirrorOptions = {}): Promise<Mirror> {
   const listeners = new Set<() => void>();
   let state: State;
   let pending: StatePatchEvent[] = [];
   let syncing = true;
+  let told = true;
+
+  const tell = () => {
+    told = true;
+    for (const l of listeners) l();
+  };
+  const changed = () => {
+    if (!told) return;
+    told = false;
+    notify(tell);
+  };
 
   const resync = async () => {
     syncing = true;
@@ -34,7 +54,7 @@ export async function createMirror(source: StateSource): Promise<Mirror> {
     for (const event of pending) if (event.version > state.version) state = applyPatches(state, event.patches as Patch[]);
     pending = [];
     syncing = false;
-    for (const l of listeners) l();
+    changed();
     return snap.windowId;
   };
 
@@ -49,7 +69,7 @@ export async function createMirror(source: StateSource): Promise<Mirror> {
       return;
     }
     state = applyPatches(state, event.patches as Patch[]);
-    for (const l of listeners) l();
+    changed();
   });
 
   const windowId = await resync();
