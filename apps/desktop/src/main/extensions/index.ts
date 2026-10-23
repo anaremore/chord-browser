@@ -7,6 +7,7 @@
 import {
   activeTabId,
   extensionKey,
+  isPrivateProfile,
   tabsInOrder,
   type Command,
   type InstalledExtension,
@@ -484,6 +485,8 @@ export class Extensions {
    * install step. `input` is an ID or a store page's address.
    */
   install(profileId: string, input: string, windowId?: WindowId): Promise<InstallResult> {
+    // Electron can't load extensions into a private window's in-memory session, and nothing there is kept.
+    if (isPrivateProfile(profileId)) return Promise.resolve({ ok: false, error: 'Extensions can’t be added in a private window.' });
     const id = extensionIdFrom(input);
     if (!id) return Promise.resolve({ ok: false, error: 'That isn’t a Chrome Web Store extension or its ID.' });
     const key = extensionKey(profileId, id);

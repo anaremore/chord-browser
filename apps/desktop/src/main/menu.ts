@@ -95,6 +95,8 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
         label: 'File',
         submenu: [
           item('New Tab', 'tab.new'),
+          item('New Window', 'window.new'),
+          item('New Private Window', 'window.newPrivate'),
           item('Reopen Closed Tab', 'tab.reopen'),
           { type: 'separator' },
           item('Close Tab', 'tab.close'),
@@ -152,6 +154,8 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
   // (never shown as a bar) so its accelerators work.
   const template: MenuItemConstructorOptions[] = [
     item('New tab', 'tab.new'),
+    item('New window', 'window.new'),
+    item('New private window', 'window.newPrivate'),
     item('Reopen closed tab', 'tab.reopen'),
     { type: 'separator' },
     item('Show or hide sidebar', 'view.toggleSidebar'),
@@ -223,6 +227,8 @@ export function buildChordMenu(a: ChordMenuActions): Menu {
 export interface TabMenuActions {
   url: string;
   pinned: boolean;
+  /** False in a private window, where nothing pins. */
+  canPin: boolean;
   togglePin(): void;
   copyLink(): void;
   copyMarkdown(): void;
@@ -238,7 +244,7 @@ export function buildTabMenu(a: TabMenuActions): Menu {
     { label: 'Copy link', enabled: web, click: a.copyLink },
     { label: 'Copy as Markdown link', enabled: web, click: a.copyMarkdown },
     { type: 'separator' },
-    { label: a.pinned ? 'Unpin tab' : 'Pin tab', accelerator: acceleratorFor('tab.pin'), click: a.togglePin },
+    { label: a.pinned ? 'Unpin tab' : 'Pin tab', accelerator: acceleratorFor('tab.pin'), enabled: a.canPin, click: a.togglePin },
     { label: 'Reload', click: a.reload },
     { label: 'Duplicate', click: a.duplicate },
     { type: 'separator' },

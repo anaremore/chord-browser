@@ -206,7 +206,7 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'dragging'> &
         }
       }}
     >
-      {pinned.length > 0 ? list('pinned', pinned, 'Pinned') : dragging && <PinnedDropZone />}
+      {pinned.length > 0 ? list('pinned', pinned, 'Pinned') : dragging && !state.windows[rest.windowId]?.private && <PinnedDropZone />}
 
       <div className={styles.divider} role="separator" />
 

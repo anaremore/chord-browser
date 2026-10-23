@@ -1,4 +1,4 @@
-import { activeTabId, describeLoadError, isInternalUrl, sortedChords, type LiveTab, type LoadError, type TabNode } from '@chord/core';
+import { activeTabId, chordsFor, describeLoadError, downloadsFor, isInternalUrl, sortedChords, type LiveTab, type LoadError, type TabNode } from '@chord/core';
 import type { ChordEdit, SystemInfo } from '@chord/ipc';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig } from 'motion/react';
@@ -123,6 +123,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const windowId = mirror.windowId;
   const win = state.windows[windowId];
   const chord = win ? state.chords[win.activeChordId] : undefined;
+  // A private window: its own chord only, no pinning, no archive, and nothing kept.
+  const isPrivate = Boolean(win?.private);
   const { style, appearance } = chordStyle(chord, info, state.settings.interface);
   const activeId = activeTabId(state, windowId);
   const active = activeId ? (state.nodes[activeId] as TabNode | undefined) : undefined;
@@ -142,7 +144,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
 
   // Which way the sidebar slides when switching chords: toward the new chord's place in the switcher.
-  const chordIndex = chord ? sortedChords(state).findIndex((c) => c.id === chord.id) : 0;
+  const chordIndex = chord ? chordsFor(state, windowId).findIndex((c) => c.id === chord.id) : 0;
   const previousIndex = useRef(chordIndex);
   const slide = chordIndex >= previousIndex.current ? 1 : -1;
   useEffect(() => {
@@ -151,7 +153,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
 
   // Downloads finished after this show a dot on the button until the panel is opened.
   const [downloadsSeenAt, setDownloadsSeenAt] = useState(() => Date.now());
-  const downloads = summarizeDownloads(state.downloads, downloadsSeenAt);
+  const downloads = summarizeDownloads(downloadsFor(state, windowId), downloadsSeenAt);
   const downloadsButton = <DownloadsButton summary={downloads} onOpen={() => setDownloadsSeenAt(Date.now())} />;
   const archiveLabel = withKeys('Archive', 'app.history', info);
   const archiveButton = (
@@ -241,11 +243,11 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             pill={spring('snappy', 'chordSlide')}
             leading={
               <>
-                {archiveButton}
+                {!isPrivate && archiveButton}
                 {downloadsButton}
               </>
             }
-            onCreate={() => void createChord()}
+            onCreate={isPrivate ? null : () => void createChord()}
           />
         </nav>
 
@@ -296,7 +298,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
         {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
 
         <div className={styles.frame}>
-          {!state.settings.onboarded && chord ? (
+          {!state.settings.onboarded && chord && !isPrivate ? (
             <Onboarding chord={chord} windowId={windowId} info={info} spring={spring} />
           ) : (
             <>
@@ -312,8 +314,17 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               {active && !live?.crashed && live?.error && <LoadErrorState error={live.error} canGoBack={live.canGoBack} windowId={windowId} tabId={active.id} />}
               {!active && (
                 <div className={styles.empty}>
-                  <p className={styles.emptyTitle}>Fresh chord, fresh start.</p>
-                  <p className={styles.emptyBody}>Open a site, or search for anything.</p>
+                  {isPrivate ? (
+                    <>
+                      <p className={styles.emptyTitle}>This window is private.</p>
+                      <p className={styles.emptyBody}>Chord won’t remember the sites you visit in this window. Files you download are kept.</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className={styles.emptyTitle}>Fresh chord, fresh start.</p>
+                      <p className={styles.emptyBody}>Open a site, or search for anything.</p>
+                    </>
+                  )}
                   <button type="button" className={styles.emptyButton} onClick={() => void api.overlay.open('new')}>
                     New tab <kbd className={styles.inlineKeycap}>{keycap('tab.new', info)}</kbd>
                   </button>
