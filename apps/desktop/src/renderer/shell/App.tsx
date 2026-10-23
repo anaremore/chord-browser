@@ -14,15 +14,15 @@ import {
 } from '@chord/core';
 import type { ChordEdit, SystemInfo } from '@chord/ipc';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
-import { AnimatePresence, MotionConfig } from 'motion/react';
+import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useMirror, type Mirror } from '../shared/mirror';
-import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
+import { applyMotion, INSTANT, reducedMotionMode, springsFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './App.module.css';
-import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Chords';
+import { ChordHeader, ChordPane, ChordSwitcher, GhostPane, newChordLook, Tint } from './Chords';
 import { useSystemInfo } from './hooks';
 import { ShortcutsProvider, useKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
@@ -30,6 +30,7 @@ import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extension
 import { Onboarding } from './Onboarding';
 import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
+import { useChordSwipe, type PaneMotion } from './useChordSwipe';
 
 /** What the frame shows when a page didn't load (DESIGN.md §9), instead of a blank page. */
 function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadError; canGoBack: boolean; windowId: string; tabId: string }) {
@@ -294,6 +295,23 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   }, [peek]);
   const peeking = collapsed && peek;
 
+  // The chord swipe (DESIGN.md §6.4): two fingers sideways on the sidebar or the minimal bar.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const swipe = useChordSwipe({
+    root: rootRef,
+    track: trackRef,
+    windowId,
+    chordIds: chordsFor(state, windowId).map((c) => c.id),
+    currentId: chord?.id,
+    panes: !collapsed || peeking,
+    release: spring('release', 'chordSlide'),
+    reduced: info.prefersReducedMotion && state.settings.motion.followSystem,
+    blend: state.settings.motion.colorBlend,
+  });
+  const paneMotion: PaneMotion = swipe.paneMotion ?? { kind: 'slide', dir: slide };
+  const tintOf = (chordId: string) => String(chordStyle(state.chords[chordId], info, state.settings.interface).style['--color-tint' as keyof CSSProperties] ?? '');
+
   const toggleSidebar = () => void api.action.run('view.toggleSidebar');
   const openOptions = (e: MouseEvent<HTMLButtonElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -305,6 +323,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
     <ShortcutsProvider value={state.settings.shortcuts}>
       <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
         <div
+          ref={rootRef}
           className={styles.window}
           data-sidebar={collapsed ? 'collapsed' : 'docked'}
           data-peek={peeking || undefined}
@@ -312,7 +331,9 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
         >
           <div className={styles.backdrop} aria-hidden>
-            <Tint value={String(style['--color-tint' as keyof typeof style] ?? '')} transition={spring('gentle', 'colorBlend')} />
+            {/* A swipe blends the neighbor's tint in as the fingers move, so its switch needn't crossfade again. */}
+            <Tint value={String(style['--color-tint' as keyof typeof style] ?? '')} transition={swipe.tintInstant ? INSTANT : spring('gentle', 'colorBlend')} />
+            {swipe.blendId && <motion.div className={styles.tint} style={{ background: tintOf(swipe.blendId), opacity: swipe.blend }} />}
             <div className={styles.grain} />
           </div>
 
@@ -336,6 +357,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           <nav
             className={styles.sidebar}
             aria-label="Sidebar"
+            data-swipe-area
             inert={collapsed && !peeking}
             aria-hidden={(collapsed && !peeking) || undefined}
             onPointerEnter={() => peeking && keepPeek()}
@@ -375,25 +397,47 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             <SidebarDnd state={state} chordId={chord?.id ?? ''}>
               {!isPrivate && <FavoritesRow state={state} windowId={windowId} activeId={activeId} appearance={appearance} />}
 
-              <AnimatePresence initial={false} mode="popLayout" custom={slide}>
-                <ChordPane key={chord?.id} slide={slide} transition={spring('smooth', 'chordSlide')}>
-                  <ChordHeader
-                    chord={chord}
-                    info={info}
-                    edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
-                    onDone={() => setChordEdit(null)}
-                  />
-                  <SidebarTabs
-                    chordId={chord?.id ?? ''}
-                    state={state}
-                    windowId={windowId}
-                    activeId={activeId}
-                    info={info}
-                    appearance={appearance}
-                    spring={spring}
-                  />
-                </ChordPane>
-              </AnimatePresence>
+              <div ref={trackRef} className={styles.paneTrack} data-swiping={swipe.ghosts.length > 0 || swipe.paneMotion !== null || undefined}>
+                <AnimatePresence initial={false} mode="popLayout" custom={paneMotion}>
+                  <ChordPane key={chord?.id} motion={paneMotion} x={swipe.xFor(chord?.id ?? '')} transition={spring('smooth', 'chordSlide')}>
+                    <ChordHeader
+                      chord={chord}
+                      info={info}
+                      edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
+                      onDone={() => setChordEdit(null)}
+                    />
+                    <SidebarTabs
+                      chordId={chord?.id ?? ''}
+                      state={state}
+                      windowId={windowId}
+                      activeId={activeId}
+                      info={info}
+                      appearance={appearance}
+                      spring={spring}
+                    />
+                  </ChordPane>
+                </AnimatePresence>
+                {/* The neighbors a swipe brings in beside the current chord. */}
+                {swipe.ghosts.map(({ id }) => {
+                  const neighbor = state.chords[id];
+                  return (
+                    neighbor && (
+                      <GhostPane key={`ghost-${id}`} x={swipe.xFor(id)}>
+                        <ChordHeader chord={neighbor} info={info} edit={null} onDone={() => {}} />
+                        <SidebarTabs
+                          chordId={id}
+                          state={state}
+                          windowId={windowId}
+                          activeId={win?.activeTab[id] ?? null}
+                          info={info}
+                          appearance={appearance}
+                          spring={spring}
+                        />
+                      </GhostPane>
+                    )
+                  );
+                })}
+              </div>
 
               {(!collapsed || peeking) && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
 
@@ -418,7 +462,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
 
           {/* The top bar: right of the sidebar on Windows/Linux; the whole minimal bar when collapsed (DESIGN.md §3.3). */}
           {(overlayChrome || collapsed) && (
-            <div className={styles.bar}>
+            <div className={styles.bar} data-swipe-area={collapsed || undefined}>
               {collapsed && (
                 <div className={styles.barLead}>
                   <SidebarToggle collapsed info={info} onToggle={toggleSidebar} onHover={hoverToggle} />

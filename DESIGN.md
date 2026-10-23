@@ -383,6 +383,13 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | **Interrupt** | A new swipe during the settle catches the panel where it is. Velocity carries over, so it never jumps back to zero. |
 | **Keyboard / click** | ⌘1–9 or a switcher click plays the same transition with the `release` spring from rest. Jumping more than one chord does not slide past the in-between ones: it crossfades with a 24 px drift. |
 
+*As built* (`shell/swipe.ts`, `shell/useChordSwipe.ts`):
+- **Interrupt:** a swipe that starts during a spring-back catches the pane where it is, with its velocity. During a commit's settle (about 300 ms), new input waits.
+- **Momentum:** what arrives after a release is ignored until it pauses for 120 ms, or the OS reports a new gesture.
+- **Flick back:** a release past half the width that is flicked back faster than 0.5 px/ms springs back instead of committing.
+- **Mouse tilt wheel or Shift+wheel:** line-based deltas, or a first step of 50 px or more, switch one chord per notch with the usual slide. Repeats while held are ignored.
+- **Switcher pill:** it moves at the commit, not proportionally while tracking.
+
 ### 6.5 Choreography of the key moments
 
 | Moment | Motion (distinct for each, so close ≠ archive ≠ pin) |
@@ -538,6 +545,17 @@ Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 - **Accessible:**
   - Each handle is a focusable 2D control. Arrow keys change hue; Shift+arrows change chroma.
   - `aria-valuetext` names the nearest swatch, e.g. "Close to Coral, vivid".
+
+*As built* (Settings → Appearance's theme editor, `settings/ColorWheel.tsx`, `settings/wheel.ts`):
+- **Drawing:** the wheel is drawn with the generator's own band mapping (`mapToBand`), so dark mode's wheel is as deep as dark tints are.
+- **Handles:** hue is 0° at the top, growing clockwise. Picked colors are stored at the swatches' display lightness.
+- **Removing a color:** let go of a handle 1.25 radii out. Delete or Backspace on a focused handle removes it too.
+- **Replaced:** the wheel replaces the hue and vividness sliders. Swatches and grain stay beside it.
+- **Surprise me:**
+  - It's in the editor and on the themes header.
+  - It picks neighbors on the wheel, or now and then a split complement.
+  - On the header it re-colors the chord directly, leaving a "Current colors" card to save.
+- **Edit colors…:** the chord menu's item opens the editor on the chord's colors, or on its own theme.
 
 **Settings → Appearance** is the theme library. It has three parts:
 

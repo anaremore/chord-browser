@@ -283,6 +283,9 @@ export interface ArchiveSnapshot {
 }
 
 /** A short-lived note in the sidebar, usually with Undo (DESIGN.md §7.5). */
+/** A trackpad scroll gesture starting, ending, or ending in a fling (momentum follows). */
+export type GesturePhase = 'begin' | 'end' | 'fling';
+
 export interface Toast {
   id: string;
   message: string;
@@ -456,6 +459,8 @@ export interface EventPayloads {
   'settings:changed': SettingsSnapshot;
   'popover:state': PopoverState;
   'toast:show': Toast;
+  /** The shell's trackpad gesture phases, for the chord swipe's release (DESIGN.md §6.4). */
+  'gesture:phase': GesturePhase;
   /** Start renaming a chord, or choosing its icon, in the sidebar (from its menu). */
   'chord:edit': ChordEdit;
   /** Start renaming a folder in the sidebar (a new one, or from its menu). */
@@ -511,6 +516,7 @@ export interface ShellApi {
   };
   chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
+  gestures: { onPhase(listener: (phase: GesturePhase) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
   extensions: {
     state(): Promise<ExtensionsBarState>;
