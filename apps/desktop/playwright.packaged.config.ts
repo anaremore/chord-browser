@@ -4,6 +4,8 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: 'test/packaged',
   outputDir: 'test-results/packaged',
+  // One temp folder per run, removed when it ends: profiles never pile up.
+  globalSetup: './test/run-temp.ts',
   timeout: 120_000,
   workers: 1,
   reporter: process.env['CI'] ? [['list'], ['github']] : 'list',
