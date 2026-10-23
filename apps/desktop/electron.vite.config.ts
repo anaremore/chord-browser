@@ -7,16 +7,18 @@ const src = (path: string) => resolve(import.meta.dirname, 'src', path);
 
 export default defineConfig({
   main: {
-    // Google's Safe Browsing API key (ARCHITECTURE.md §14.1), from the environment at build time: the
+    // Google's Safe Browsing API key (ARCHITECTURE.md §14.5), from the environment at build time: the
     // release workflow passes the `release` environment's secret. Without it Safe Browsing is unavailable.
     define: { __CHORD_SAFE_BROWSING_KEY__: JSON.stringify(process.env['CHORD_SAFE_BROWSING_KEY'] ?? '') },
     // Bundle everything (workspace packages are TypeScript sources); only
-    // electron and Node built-ins stay external. Three entries: main itself,
-    // chord-data's utility process (ARCHITECTURE.md §4), and Safe Browsing's worker thread.
+    // electron and Node built-ins stay external. Four entries: main itself,
+    // chord-data's utility process (ARCHITECTURE.md §4), the PDF reader
+    // Duet starts for each PDF it reads (§11.4; pdf.js stays out of main),
+    // and Safe Browsing's worker thread (§14.5).
     build: {
       externalizeDeps: false,
       rolldownOptions: {
-        input: { index: src('main/index.ts'), data: src('data/worker.ts'), 'safe-browsing': src('main/safe-browsing/worker.ts') },
+        input: { index: src('main/index.ts'), data: src('data/worker.ts'), pdf: src('pdf/worker.ts'), 'safe-browsing': src('main/safe-browsing/worker.ts') },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },
       },

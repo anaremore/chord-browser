@@ -20,7 +20,6 @@ import { delimiter, join } from 'node:path';
 import { app, clipboard, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
-import { openSignIn } from './duet/detect';
 import { DuetService } from './duet/service';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { configureAppIdentity } from './identity';
@@ -248,8 +247,7 @@ function registerIpc(): void {
   handle('duet:openHit', ({ chordId, threadId }, sender) => duet!.openHit(senderWindow(sender).id, chordId, threadId));
   handle('settings:duet', async (request) => {
     if (request.do === 'signIn') {
-      const status = duet!.providerStatuses.find((s) => s.provider === request.provider) ?? (await duet!.refreshProviders()).find((s) => s.provider === request.provider);
-      if (status?.path) openSignIn(request.provider, status.path);
+      await duet!.signIn(request.provider);
       return duet!.providerStatuses;
     }
     if (request.do === 'clearAll') {

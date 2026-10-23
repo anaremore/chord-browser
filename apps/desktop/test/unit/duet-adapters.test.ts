@@ -6,11 +6,11 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { DUET_TOOLS } from '@chord/core';
+import { DUET_TOOLS, type DuetContextUsage } from '@chord/core';
 import { describe, expect, it } from 'vitest';
 import type { ProviderError, SessionEvents, SessionOptions, ToolOutput } from '../../src/main/duet/adapter';
-import { ClaudeSession, claudeArgs, claudeError } from '../../src/main/duet/claude';
-import { CodexSession, codexArgs, codexError } from '../../src/main/duet/codex';
+import { ClaudeSession, claudeArgs, claudeContextUsage, claudeError } from '../../src/main/duet/claude';
+import { CodexSession, codexArgs, codexContextUsage, codexError } from '../../src/main/duet/codex';
 
 const fakeClaude = resolve(import.meta.dirname, '../e2e/fake-claude.mjs');
 const fakeCodex = resolve(import.meta.dirname, 'fixtures/fake-codex.mjs');
@@ -33,7 +33,14 @@ function options(script: string, extra: Partial<SessionOptions> = {}): SessionOp
 }
 
 function recorder(tool: (name: string, args: Record<string, unknown>) => ToolOutput = () => ({ text: '{"content":"from chord"}' })) {
-  const seen = { text: '', tools: [] as { name: string; args: Record<string, unknown> }[], ends: [] as { status: string; error?: ProviderError }[], exits: [] as (ProviderError | null)[], session: '' };
+  const seen = {
+    text: '',
+    tools: [] as { name: string; args: Record<string, unknown> }[],
+    ends: [] as { status: string; error?: ProviderError }[],
+    exits: [] as (ProviderError | null)[],
+    session: '',
+    usage: [] as DuetContextUsage[],
+  };
   let ended: () => void = () => undefined;
   const turnEnded = () => new Promise<void>((done) => (ended = done));
   const events: SessionEvents = {
@@ -47,6 +54,7 @@ function recorder(tool: (name: string, args: Record<string, unknown>) => ToolOut
       seen.ends.push(outcome);
       ended();
     },
+    onUsage: (usage) => seen.usage.push(usage),
     onExit: (error) => {
       seen.exits.push(error);
       ended();
@@ -74,7 +82,41 @@ describe('Claude Code adapter', () => {
     expect(seen.text).toBe('Here is the gist. [[t1:"Chords are three notes"]]');
     expect(seen.ends).toEqual([{ status: 'done' }]);
     expect(seen.session).toBe('11111111-2222-4333-8444-555555555555');
+    // The result's usage feeds the context meter: 124,000 of a 200,000-token window.
+    expect(seen.usage).toEqual([{ used: 124_000, window: 200_000 }]);
     session.close();
+  });
+
+  it('reads how full the context is from the result, as 2.1.309 reports it', () => {
+    // Shapes copied from a real 2.1.309 run (haiku), trimmed.
+    const result = {
+      type: 'result',
+      usage: {
+        input_tokens: 2,
+        cache_creation_input_tokens: 420,
+        cache_read_input_tokens: 2527,
+        output_tokens: 6,
+        iterations: [
+          { input_tokens: 3, cache_creation_input_tokens: 400, cache_read_input_tokens: 1000, output_tokens: 50, type: 'message' },
+          { input_tokens: 2, cache_creation_input_tokens: 420, cache_read_input_tokens: 2527, output_tokens: 6, type: 'message' },
+        ],
+      },
+      modelUsage: {
+        'claude-haiku-5-5': { inputTokens: 1175, outputTokens: 181, cacheReadInputTokens: 3176, cacheCreationInputTokens: 2677, contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+      },
+    };
+    // The last request of the turn is what's in the context now.
+    expect(claudeContextUsage(result, 'claude-haiku-5-5')).toEqual({ used: 2955, window: 1_000_000 });
+    // Without iterations, the last message's usage (from its message_delta).
+    const { iterations: _, ...flat } = result.usage;
+    expect(claudeContextUsage({ ...result, usage: flat }, 'claude-haiku-5-5', { input_tokens: 10, cache_read_input_tokens: 90, output_tokens: 5 })).toEqual({ used: 105, window: 1_000_000 });
+    // Two models (a background helper): only the chat's own model's window counts.
+    const two = { ...result, modelUsage: { ...result.modelUsage, 'claude-sonnet-5': { contextWindow: 200_000 } } };
+    expect(claudeContextUsage(two, 'claude-sonnet-5')?.window).toBe(200_000);
+    expect(claudeContextUsage(two, 'unknown-model')).toBeNull();
+    // No window reported: no meter, never a guess.
+    expect(claudeContextUsage({ ...result, modelUsage: { 'claude-haiku-5-5': { inputTokens: 1 } } }, 'claude-haiku-5-5')).toBeNull();
+    expect(claudeContextUsage({ type: 'result', usage: result.usage }, 'claude-haiku-5-5')).toBeNull();
   });
 
   it('stops a reply with the control-channel interrupt', async () => {
@@ -121,7 +163,17 @@ describe('Codex adapter', () => {
     expect(seen.text).toBe('tool:page text file:decline');
     expect(seen.ends).toEqual([{ status: 'done' }]);
     expect(seen.session).toBe('thr_fake');
+    expect(seen.usage).toEqual([{ used: 25_840, window: 258_400 }]);
     session.close();
+  });
+
+  it('reads how full the context is from thread/tokenUsage/updated (0.160.1’s schema)', () => {
+    const breakdown = (totalTokens: number) => ({ totalTokens, inputTokens: totalTokens - 100, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 0 });
+    const params = { threadId: 'thr', turnId: 'turn', tokenUsage: { total: breakdown(90_000), last: breakdown(30_000), modelContextWindow: 272_000 } };
+    expect(codexContextUsage(params)).toEqual({ used: 30_000, window: 272_000 });
+    // The window is nullable: then there's no meter.
+    expect(codexContextUsage({ ...params, tokenUsage: { ...params.tokenUsage, modelContextWindow: null } })).toBeNull();
+    expect(codexContextUsage({ threadId: 'thr' })).toBeNull();
   });
 
   it('stops a turn that produces anything outside browse mode (the tripwire)', async () => {

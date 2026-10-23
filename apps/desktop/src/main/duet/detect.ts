@@ -11,13 +11,9 @@ import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import type { DuetProvider } from '@chord/core';
 import { app } from 'electron';
+import { defaultWslDistro, probeWsl, quoteWindowsArg, spawnSpec, wslLaunch, wslSignInArgs, wslTarget, type Launch, type WslTarget } from './launch';
 
-/** What a provider needs to run: the binary, plus a prefix when it's a development fake run by Node. */
-export interface Launch {
-  command: string;
-  prefix: string[];
-  env: NodeJS.ProcessEnv;
-}
+export type { Launch } from './launch';
 
 export interface ProviderStatus {
   provider: DuetProvider;
@@ -30,7 +26,17 @@ export interface ProviderStatus {
   billing: 'subscription' | 'api-key' | 'other' | null;
   /** Older than Chord's minimum: Duet warns but still tries (research §4.3: warn, don't block). */
   tooOld: boolean;
+  /** Installed only inside WSL (Windows): the distro it runs in. */
+  wsl: string | null;
 }
+
+/** A provider as detected: its status (shown in Setup and Settings), and how to start it (main only: never sent to a page). */
+export interface Detected {
+  status: ProviderStatus;
+  launch: Launch | null;
+}
+
+export const notInstalled = (provider: DuetProvider): ProviderStatus => ({ provider, installed: false, path: null, version: null, signedIn: null, billing: null, tooOld: false, wsl: null });
 
 /** research §11: the flags Duet uses arrived by these versions. */
 export const MIN_VERSION: Record<DuetProvider, string> = { claude: '2.1.268', codex: '0.160.0' };
@@ -118,7 +124,24 @@ function devOverride(provider: DuetProvider): string | null {
   return process.env[provider === 'claude' ? 'CHORD_DUET_CLAUDE' : 'CHORD_DUET_CODEX'] || null;
 }
 
+/**
+ * Development: run this inside WSL instead of the CLI found there, e.g.
+ * `CHORD_DUET_CLAUDE_WSL="node /mnt/c/…/fake-claude.mjs"`, or just `claude`
+ * to use the WSL install on a computer that also has a Windows one.
+ */
+function devWslArgv(provider: DuetProvider): string[] | null {
+  if (app.isPackaged) return null;
+  const value = process.env[provider === 'claude' ? 'CHORD_DUET_CLAUDE_WSL' : 'CHORD_DUET_CODEX_WSL']?.trim();
+  return value ? value.split(/\s+/) : null;
+}
+
+/** Whether to look inside WSL for a provider not found on Windows (never when a development override points elsewhere). */
+export function mayBeInWsl(provider: DuetProvider): boolean {
+  return process.platform === 'win32' && (devWslArgv(provider) !== null || devOverride(provider) === null);
+}
+
 export async function findBinary(provider: DuetProvider): Promise<string | null> {
+  if (devWslArgv(provider)) return null;
   const override = devOverride(provider);
   if (override) return existsSync(override) ? override : null;
   for (const dir of await searchPath()) {
@@ -143,21 +166,53 @@ export function launchFor(path: string, env: NodeJS.ProcessEnv = process.env): L
 }
 
 function run(launch: Launch, args: string[], timeout = 15000): Promise<{ code: number; stdout: string }> {
+  const spec = spawnSpec(launch, args);
   return new Promise((done) => {
-    const child = execFile(launch.command, [...launch.prefix, ...args], { env: launch.env, timeout, windowsHide: true, maxBuffer: 1 << 20 }, (error, stdout) =>
+    const child = execFile(spec.command, spec.args, { env: spec.env, timeout, windowsHide: true, maxBuffer: 1 << 20 }, (error, stdout) =>
       done({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: String(stdout) }),
     );
     child.stdin?.end();
   });
 }
 
-export async function detect(provider: DuetProvider): Promise<ProviderStatus> {
+/** The provider installed on this computer itself (not WSL: see detectInWsl). */
+export async function detect(provider: DuetProvider): Promise<Detected> {
   const path = await findBinary(provider);
-  const none: ProviderStatus = { provider, installed: false, path: null, version: null, signedIn: null, billing: null, tooOld: false };
-  if (!path) return none;
-  const launch = launchFor(path);
+  if (!path) return { status: notInstalled(provider), launch: null };
+  return check(provider, launchFor(path), path);
+}
+
+/**
+ * Claude Code or Codex installed only inside the default WSL distro
+ * (Windows). The distro comes from the registry, so with no WSL nothing
+ * starts and nothing shows; otherwise one probe, with a timeout, looks for
+ * every provider asked for. Each one found runs through wsl.exe from then on.
+ * Null when WSL didn't answer (as opposed to answering "not here").
+ */
+export async function detectInWsl(providers: readonly DuetProvider[], distro?: string | null): Promise<Detected[] | null> {
+  const name = distro === undefined ? await defaultWslDistro() : distro;
+  if (!name || providers.length === 0) return [];
+  const probe = await probeWsl(name);
+  if (!probe) return null;
+  const found: Detected[] = [];
+  for (const provider of providers) {
+    const argv = devWslArgv(provider) ?? (probe.bins[provider] ? [probe.bins[provider]] : null);
+    if (argv) found.push(await check(provider, wslLaunch(wslTarget(probe, argv)), argv.join(' '), probe.distro));
+  }
+  return found;
+}
+
+/** A WSL install remembered from an earlier look: its last status, launched through wsl.exe again. */
+export function rememberedInWsl(status: ProviderStatus, target: WslTarget): Detected {
+  return { status: { ...status, wsl: target.distro }, launch: wslLaunch(target) };
+}
+
+async function check(provider: DuetProvider, launch: Launch, path: string, wsl: string | null = null): Promise<Detected> {
   const version = parseVersion((await run(launch, ['--version'])).stdout);
-  const status: ProviderStatus = { ...none, installed: true, path, version, tooOld: version ? compareVersions(version, MIN_VERSION[provider]) < 0 : false };
+  const status: ProviderStatus = { ...notInstalled(provider), installed: true, path, version, tooOld: version ? compareVersions(version, MIN_VERSION[provider]) < 0 : false, wsl };
+  // Claude Code 1.x has no `auth` command: `claude auth status` would start a session with that as its prompt.
+  // An old one is reported as needing an update, sign-in unknown (seen with 1.0.34 inside WSL).
+  if (provider === 'claude' && status.tooOld) return { status, launch };
   if (provider === 'claude') {
     // Exit 0 when signed in. Only authMethod is read; the JSON can hold account details, never logged.
     const auth = await run(launch, ['auth', 'status']);
@@ -174,12 +229,21 @@ export async function detect(provider: DuetProvider): Promise<ProviderStatus> {
     status.signedIn = auth.code === 0;
     status.billing = status.signedIn ? 'subscription' : null;
   }
-  return status;
+  return { status, launch };
 }
 
 /** "Sign in": the provider's own login, in a terminal. Chord never sees the result, only the next status. */
-export function openSignIn(provider: DuetProvider, path: string): void {
+export function openSignIn(provider: DuetProvider, launch: Launch): void {
   const args = provider === 'claude' ? ['auth', 'login'] : ['login'];
+  if (launch.wsl) {
+    // Inside WSL, through the user's login shell, in a console window of its own.
+    const wslArgs = wslSignInArgs(launch.wsl, args);
+    if (!wslArgs) return;
+    const line = `start "Sign in" ${[launch.command, ...wslArgs].map(quoteWindowsArg).join(' ')}`;
+    spawn('cmd.exe', ['/d', '/s', '/c', line], { windowsVerbatimArguments: true, detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    return;
+  }
+  const path = launch.prefix.at(-1) ?? launch.command;
   const command = `"${path}" ${args.join(' ')}`;
   if (process.platform === 'win32') {
     spawn('cmd.exe', ['/d', '/s', '/c', `start "Sign in" ${command}`], { windowsVerbatimArguments: true, detached: true, stdio: 'ignore', windowsHide: true }).unref();

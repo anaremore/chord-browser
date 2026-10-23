@@ -20,6 +20,7 @@ Chord's warnings about suspected phishing, malware and unwanted software come fr
 | [Electron](https://www.electronjs.org/) and [Chromium](https://www.chromium.org/) | MIT, and Chromium's own licenses (BSD-3-Clause and others) | Each release's `LICENSE` and `LICENSES.chromium.html`, next to the executable |
 | electron-chrome-extensions (the iamEvanYT fork), vendored as `packages/chrome-extensions` | GPL-3.0-only | [GPL-3.0.txt](GPL-3.0.txt); Chord's changes are in its CHORD-CHANGES.md |
 | Crest's command bar ranking, adapted in `packages/core/src/rank.ts` | MPL-2.0 | [MPL-2.0.txt](MPL-2.0.txt) |
+| [pdf.js](https://mozilla.github.io/pdf.js/), Duet's PDF reader (`out/main/pdf.js`) | Apache-2.0 | [Apache-2.0.txt](Apache-2.0.txt) |
 | [Onest](https://github.com/googlefonts/onest), Chord's typeface | SIL Open Font License 1.1 | `OFL.txt` beside the fonts |
 
 Other libraries bundled into Chord's own code (React, Motion, lucide-react, zod, immer, dnd-kit, fractional-indexing, uFuzzy and their dependencies) keep their MIT, ISC or CC0 licenses, listed in `pnpm-lock.yaml`.

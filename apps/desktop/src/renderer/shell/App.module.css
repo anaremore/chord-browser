@@ -487,6 +487,9 @@ kbd {
   display: flex;
   gap: var(--space-2);
   align-items: center;
+
+  /* Padding inside the 100%: otherwise the row overflows its item and clips its end (titles, Duet's marker). */
+  box-sizing: border-box;
   inline-size: 100%;
   block-size: var(--size-row);
   padding-inline: calc(var(--space-2) + var(--space-3) * var(--depth, 0)) var(--space-2);
@@ -1297,9 +1300,12 @@ kbd {
   opacity: 0.75;
 }
 
-/* The bar's Duet button (DESIGN.md §3.1: "✦ Duet" when Duet is on). */
+/* The bar's Duet button (DESIGN.md §3.1): Duet's icon and name, when Duet is on. */
 .duetButton {
+  display: inline-flex;
   flex: none;
+  gap: var(--space-1);
+  align-items: center;
   block-size: var(--size-icon-button);
   padding-inline: var(--space-2);
   border: 0;

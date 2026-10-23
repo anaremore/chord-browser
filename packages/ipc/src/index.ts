@@ -17,6 +17,7 @@ import {
   type LinkRoute,
   type Command,
   type DownloadAction,
+  type DuetContextUsage,
   type DuetHit,
   type DuetMessage,
   type DuetProvider,
@@ -580,6 +581,8 @@ export interface DuetProviderInfo {
   signedIn: boolean | null;
   billing: 'subscription' | 'api-key' | 'other' | null;
   tooOld: boolean;
+  /** Installed only inside WSL: the distro it runs in ("Claude Code in WSL (Ubuntu)"). */
+  wsl: string | null;
 }
 
 /** What one window's Duet panel shows (pushed as `duet:state`). */
@@ -604,6 +607,10 @@ export interface DuetView {
   readTabIds: string[];
   error: { kind: string; message: string } | null;
   draft: string;
+  /** How full the chat's context is, when the provider's CLI reports it (null hides the meter). */
+  context: DuetContextUsage | null;
+  /** Providers Setup is still looking for inside WSL (Windows). */
+  lookingInWsl: DuetProvider[];
 }
 
 /** Renderer → main requests (`ipcRenderer.invoke`). */

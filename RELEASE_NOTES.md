@@ -11,6 +11,11 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 - It reads what's on the page, never what you type into forms, and never private windows or sites you add to *Never read* in Settings → Duet.
 - Chats stay with each chord, survive a restart, and turn up under `@duet` in the command bar. Export one as Markdown, delete one (the app's own copy goes too), or have Chord keep them for 30 or 90 days.
 - Duet only chats and reads; it doesn't move or close your tabs. Turn it off for one chord, or everywhere.
+- It reads PDFs open in a tab too, and its citations say which page (*1 · p. 3*). Up to 25 MB and the first 200 pages.
+- On Windows, Claude Code or Codex installed only inside WSL works too: Setup offers *Claude Code in WSL (Ubuntu)*.
+- A small pie beside the chat's title shows how much of the model's context the chat has used, when your app reports it.
+
+**Licenses.** Duet's PDF reading uses pdf.js, under the Apache License 2.0; its text ships with every build.
 
 ## 0.1.0 · preview (unreleased)
 

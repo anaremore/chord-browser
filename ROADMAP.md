@@ -258,7 +258,7 @@ Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every 
   - **Threads:** one per chord, kept by Chord and resumed across restarts.
   - **Controls:** exclusions per site, plus per-chord and global off.
   - No organize actions: Duet reads, it doesn't rearrange your tabs.
-  - **Built** (ARCHITECTURE.md §11 as built; spikes S10 pass, S5 partly verified). Still to do: reading PDFs, the panel's slide-in animation, Claude Code or Codex installed only inside WSL.
+  - **Built** (ARCHITECTURE.md §11 as built; spikes S10 pass, S5 partly verified). **Built 2026-10-23:** reading PDFs (with page citations), a context meter, and Claude Code or Codex installed only inside WSL. Still to do: the panel's slide-in animation.
 
 ## Phase 3 — Links from everywhere · February 2027
 
