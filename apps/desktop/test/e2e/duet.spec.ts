@@ -167,8 +167,9 @@ test('Duet: set up, ask about the page with a citation, gate reads, stop, and re
     const overlay = app.windows().find((p) => p.url().startsWith('chord://overlay') || p.url().includes('/overlay/index.html'))!;
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
     await expect(overlay.getByRole('dialog')).toBeVisible();
-    await overlay.keyboard.type('@duet');
-    await overlay.keyboard.press('Enter');
+    // The space sets the filter itself; Enter on a half-typed one raced the results on a slow machine.
+    await overlay.keyboard.type('@duet ');
+    await expect(overlay.getByTestId('scope-chip')).toHaveText('Duet chats');
     await overlay.keyboard.type('gist');
     await expect(overlay.getByRole('option').first()).toContainText('Summarize this page');
   } finally {

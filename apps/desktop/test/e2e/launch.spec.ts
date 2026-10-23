@@ -1333,7 +1333,8 @@ test('downloads save to the Downloads folder without asking, never overwrite, an
     const tab = await pageWhere(app, (url) => url.startsWith(`${site.origin}/files`));
 
     await tab.click('#get');
-    await expect(shell.getByRole('button', { name: 'Downloads, new' })).toBeVisible();
+    // The badge waits on the download starting, which a busy CI machine can take a while over.
+    await expect(shell.getByRole('button', { name: 'Downloads, new' })).toBeVisible({ timeout: 15_000 });
     await tab.click('#get');
     await expect.poll(() => readdirSync(folder).sort()).toEqual(['report (1).bin', 'report.bin']);
     expect(statSync(join(folder, 'report.bin')).size).toBe(300_000);
