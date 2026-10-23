@@ -23,6 +23,8 @@ export type Signing = 'none' | 'developer-id' | 'artifact-signing' | 'certificat
 const SIGNING_MODES: readonly string[] = ['none', 'developer-id', 'artifact-signing', 'certificate'];
 
 const BUILD = join(import.meta.dirname, 'build');
+/** The .rpm's post-install script, run on install and on upgrade. */
+const RPM_AFTER_INSTALL = join(BUILD, 'linux', 'rpm-after-install.sh');
 
 const valueOf = (env: Env, name: string): string | undefined => env[name]?.trim() || undefined;
 
@@ -207,7 +209,7 @@ const config: Configuration = {
   },
 
   linux: {
-    target: ['AppImage', 'deb'],
+    target: ['AppImage', 'deb', 'rpm'],
     executableName: 'chord',
     // Every hicolor size, 16–512 px, each installed as is.
     icon: 'build/icons',
@@ -225,6 +227,35 @@ const config: Configuration = {
     // Debian package names are lowercase.
     packageName: 'chord',
     packageCategory: 'web',
+  },
+  // Fedora, RHEL and derivatives. Same package name as the .deb, so the dnf repository
+  // (docs/releasing/linux-repos.md) takes over a copy installed by hand.
+  rpm: {
+    packageName: 'chord',
+    vendor: 'Chord contributors',
+    // rpm's Group tag. Fedora no longer uses it; fpm would write "default".
+    packageCategory: 'Applications/Internet',
+    // electron-builder's script with one change; the file says what and why.
+    afterInstall: RPM_AFTER_INSTALL,
+    fpm: [
+      // chrome-sandbox is setuid root in the package itself, as in Google Chrome's rpm: the sandbox
+      // then works even where user namespaces are off, and `rpm -V` agrees.
+      // The path is electron-builder's install folder, /opt/<productName>.
+      '--rpm-attr',
+      '4755,root,root:/opt/Chord/chrome-sandbox',
+      // The package owns its folders too, so uninstalling leaves no empty ones behind.
+      '--directories',
+      '/opt/Chord',
+      // Without an upgrade script, fpm runs the old package's after-remove script on every
+      // upgrade, after the new one's install script, and that deletes /usr/bin/chord. With one,
+      // after-remove runs only when Chord is uninstalled.
+      '--after-upgrade',
+      RPM_AFTER_INSTALL,
+      // No /usr/lib/.build-id links: every app on the same Electron release ships the same
+      // binaries, so two such packages would claim the same links and refuse to install together.
+      '--rpm-rpmbuild-define',
+      '_build_id_links none',
+    ],
   },
   toolsets: {
     // The static AppImage runtime (electron-builder calls it beta): the

@@ -97,6 +97,20 @@ jobs:
             echo "::warning::CHORD_SAFE_BROWSING_KEY isn't set, so this build has no Safe Browsing: Settings → Privacy shows it as unavailable (ARCHITECTURE.md §14.5)."
           fi
 
+      # electron-builder makes the .rpm with the fpm it downloads (it has one for x64 and arm64),
+      # and fpm needs rpmbuild.
+      - name: Install rpmbuild (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          if ! command -v rpmbuild > /dev/null; then
+            sudo -E apt-get -o DPkg::Lock::Timeout=300 update
+            sudo -E apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends rpm
+          fi
+          rpmbuild --version
+
       - name: Package
         if: env.CHORD_SIGNING == 'none'
         env:
@@ -255,6 +269,8 @@ jobs:
         run: |
           sudo -E apt-get -o DPkg::Lock::Timeout=300 update
           sudo -E apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends xvfb ./apps/desktop/release/*.deb
+          # electron-builder's script makes it setuid only where user namespaces don't work.
+          stat -c '%A %U:%G %n' /opt/Chord/chrome-sandbox
           echo "CHORD_APP=/opt/Chord/chord" >> "$GITHUB_ENV"
           echo "FUSES_APP=/opt/Chord/chord" >> "$GITHUB_ENV"
 
@@ -310,6 +326,13 @@ jobs:
           export CHORD_APP="$(ls "$PWD"/apps/desktop/release/*.AppImage)"
           xvfb-run -a pnpm --filter @chord/desktop test:packaged
 
+      # The .rpm installed with dnf in a Fedora container, its files checked, and the same smoke
+      # test run there, on Chromium's setuid sandbox helper (the script says how and why).
+      - name: Smoke test (Linux, .rpm in Fedora)
+        if: runner.os == 'Linux'
+        timeout-minutes: 20
+        run: scripts/ci/rpm-smoke.sh apps/desktop/release/*.rpm
+
       - name: Upload the build
         uses: actions/upload-artifact@v7
         with:
@@ -321,6 +344,7 @@ jobs:
             apps/desktop/release/*.zip
             apps/desktop/release/*.AppImage
             apps/desktop/release/*.deb
+            apps/desktop/release/*.rpm
             apps/desktop/release/latest-win-*.yml
             apps/desktop/release/latest-linux*.yml
 
