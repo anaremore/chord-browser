@@ -126,4 +126,16 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (chord_id, text, destination)
   ) STRICT;
   `,
+  // 5: Chrome extensions installed in each profile (M1.5). notified_version is the version the
+  // extension was last told about through runtime.onInstalled (Electron skips Chrome's install step).
+  `
+  CREATE TABLE extension (
+    profile_id TEXT NOT NULL, id TEXT NOT NULL,
+    name TEXT NOT NULL, version TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('store','unpacked')), path TEXT NOT NULL,
+    notified_version TEXT,
+    installed_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, id)
+  ) STRICT;
+  `,
 ];

@@ -1,13 +1,14 @@
 import { restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
-import { join } from 'node:path';
-import { app, clipboard, Menu, nativeTheme, session, type Session, type WebContents } from 'electron';
+import { delimiter, join } from 'node:path';
+import { app, clipboard, Menu, nativeTheme, net, session, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
 import { DownloadManager } from './downloads';
+import { WebStore } from './extensions/webstore';
 import { PermissionBroker } from './permissions';
 import { Persistence } from './persistence';
 import { systemInfo } from './platform';
@@ -100,6 +101,20 @@ function registerIpc(): void {
   handle('settings:saveTheme', ({ theme }) => browser!.store.dispatch({ t: 'theme.save', theme }));
   handle('settings:deleteTheme', ({ id }) => browser!.store.dispatch({ t: 'theme.delete', id }));
   handle('settings:copyText', ({ text }) => clipboard.writeText(text));
+  handle('extensions:state', (_request, sender) => browser!.extensions.barState(senderWindow(sender)));
+  handle('extension:activate', ({ id, anchor }, sender) => browser!.extensions.activate(senderWindow(sender), id, anchor));
+  handle('extension:menu', ({ id, x, y }, sender) => browser!.extensions.menu(senderWindow(sender), id, { x, y }));
+  handle('extensions:install', ({ input }, sender) => {
+    // Into the profile of the chord the caller's window shows (Settings: the last-used window's).
+    const w = browser!.windowFor(sender) ?? browser!.lastBrowserWindow();
+    const state = browser!.store.state;
+    const chordId = w ? state.windows[w.id]?.activeChordId : undefined;
+    const profileId = (chordId ? state.chords[chordId]?.profileId : undefined) ?? 'default';
+    return browser!.extensions.install(profileId, input, browser!.windowFor(sender) ? w?.id : undefined);
+  });
+  handle('extensions:remove', ({ profileId, id }) => browser!.extensions.remove(profileId, id));
+  handle('extensions:options', ({ profileId, id }) => browser!.extensions.openOptions(profileId, id));
+  handle('extensions:update', () => browser!.extensions.checkForUpdates());
   handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
   handle('popover:size', ({ width, height }, sender) => senderWindow(sender).setPopoverSize(width, height));
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
@@ -172,6 +187,10 @@ if (!app.requestSingleInstanceLock()) {
     if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
 
     const store = persistence;
+    // Development and tests only (ignored when packaged): a stand-in Web Store and its signing key,
+    // and unpacked extension folders to load, like Chrome's --load-extension.
+    const dev = (name: string) => (app.isPackaged ? undefined : process.env[name] || undefined);
+    const publisherKeyHash = dev('CHORD_WEBSTORE_PUBLISHER_KEY_HASH');
     browser = new Browser({
       initial,
       uiSession: ui,
@@ -179,6 +198,16 @@ if (!app.requestSingleInstanceLock()) {
       permissions,
       history: (event) => store.history(event),
       onChange: (change) => store.record(change.patches, change.state),
+      extensions: {
+        root: join(app.getPath('userData'), 'Extensions'),
+        preloadPath: join(import.meta.dirname, '../preload/extensions.cjs'),
+        webStore: new WebStore({
+          fetch: (url, init) => net.fetch(url, init),
+          prodversion: process.versions.chrome,
+          ...(dev('CHORD_WEBSTORE_UPDATE_URL') ? { updateUrl: dev('CHORD_WEBSTORE_UPDATE_URL')! } : {}),
+        }),
+        ...(publisherKeyHash ? { publisherKeyHash } : {}),
+      },
     });
     Menu.setApplicationMenu(browser.appMenu);
     // Settings → Appearance → Color scheme is Chromium's own theme source, so web pages'
@@ -191,6 +220,8 @@ if (!app.requestSingleInstanceLock()) {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
     });
     registerIpc();
+    // Extensions load before any page does, so their content scripts reach restored tabs.
+    await browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean));
     browser.start();
   });
 

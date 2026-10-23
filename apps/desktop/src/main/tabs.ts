@@ -33,6 +33,11 @@ export class TabManager {
     return this.views.get(nodeId);
   }
 
+  /** Every tab that has a page, and its contents. */
+  *entries(): IterableIterator<[NodeId, WebContents]> {
+    for (const [id, view] of this.views) if (!view.webContents.isDestroyed()) yield [id, view.webContents];
+  }
+
   nodeFor(contents: WebContents): NodeId | undefined {
     for (const [id, view] of this.views) if (view.webContents === contents) return id;
     return undefined;

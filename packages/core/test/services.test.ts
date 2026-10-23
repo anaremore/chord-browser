@@ -45,6 +45,37 @@ describe('downloads', () => {
   });
 });
 
+describe('extensions', () => {
+  const ctx: Context = { now: 1, newId: () => 'x' };
+  const ID = 'nngceckbapebfimnlniiiahkandclblb';
+  const ext = { id: ID, profileId: 'default', name: 'Bitwarden', version: '1.0', source: 'store' as const, path: '/e', notifiedVersion: null, installedAt: 1, updatedAt: 1 };
+
+  it('records installs per profile and forgets removals', () => {
+    let state = emptyState();
+    state = apply(state, { t: 'extension.record', extension: ext }, ctx).state;
+    state = apply(state, { t: 'extension.record', extension: { ...ext, profileId: 'work' } }, ctx).state;
+    expect(Object.keys(state.extensions).sort()).toEqual([`default:${ID}`, `work:${ID}`]);
+    expect(apply(state, { t: 'extension.record', extension: ext }, ctx).patches).toHaveLength(0);
+    state = apply(state, { t: 'extension.forget', profileId: 'work', id: ID }, ctx).state;
+    expect(Object.keys(state.extensions)).toEqual([`default:${ID}`]);
+  });
+
+  it('restores only well-formed installs', () => {
+    const seed = { now: 1, newId: () => 'n', theme: { stops: [{ l: 0.7, c: 0.1, h: 1 }], grain: 0.2, appearance: 'auto' as const }, homeUrl: 'h' };
+    const restored = restoreState(
+      {
+        chords: [],
+        nodes: [],
+        windows: [],
+        settings: {},
+        extensions: [ext, { ...ext, id: 'not-an-id' }, { ...ext, profileId: 'work', source: 'sideloaded' as 'store' }, { ...ext, profileId: 'p2', path: '' }],
+      },
+      seed,
+    );
+    expect(Object.values(restored.extensions)).toEqual([ext]);
+  });
+});
+
 describe('site permissions', () => {
   const ctx: Context = { now: 1, newId: () => 'x' };
 

@@ -20,6 +20,8 @@ import type { PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
 import { app, BaseWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
+import { Extensions } from './extensions';
+import type { WebStore } from './extensions/webstore';
 import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
@@ -42,11 +44,22 @@ export interface BrowserOptions {
   history(event: HistoryEvent): void;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
+  /** Chrome extensions (ARCHITECTURE.md §12). */
+  extensions: {
+    /** Where Web Store extensions are unpacked. */
+    root: string;
+    /** The extension library's preload, as built. */
+    preloadPath: string;
+    webStore: WebStore;
+    /** Development and tests only: the key packages must be signed with instead of the Web Store's. */
+    publisherKeyHash?: string;
+  };
 }
 
 export class Browser {
   readonly store: Store;
   readonly tabs: TabManager;
+  readonly extensions: Extensions;
   private readonly windows = new Map<WindowId, AppWindow>();
   private readonly finders = new Map<WindowId, FindInPage>();
   /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
@@ -73,6 +86,7 @@ export class Browser {
       onTitle: (url, title) => options.history({ k: 'title', url, title }),
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
+        this.extensions.tabCreated(contents, nodeId);
         // Whatever a page asked for is denied once it's gone or replaced by another page.
         contents.on('did-start-navigation', (details) => {
           if (details.isMainFrame && !details.isSameDocument) options.permissions.forgetTab(nodeId);
@@ -91,8 +105,31 @@ export class Browser {
             const bounds = this.tabs.get(nodeId)?.getBounds();
             return w && bounds ? { window: w.window, x: bounds.x, y: bounds.y } : undefined;
           },
+          extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
         });
       },
+    });
+    this.extensions = new Extensions({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      profileSession: (profileId) => options.profileSession(profileId),
+      root: options.extensions.root,
+      preloadPath: options.extensions.preloadPath,
+      webStore: options.extensions.webStore,
+      ...(options.extensions.publisherKeyHash ? { publisherKeyHash: options.extensions.publisherKeyHash } : {}),
+      windows: () => this.windows.values(),
+      windowById: (windowId) => this.windows.get(windowId),
+      lastWindow: () => this.lastWindow(),
+      windowOfNode: (nodeId) => this.windowShowing(nodeId),
+      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      liveTabs: () => this.tabs.entries(),
+      ensureTab: (nodeId) => this.tabs.ensure(nodeId)?.webContents,
+      toast: (windowId, message) => {
+        const w = this.windows.get(windowId);
+        if (w) send(w.shell.webContents, 'toast:show', { id: `extension:${Date.now()}`, message });
+      },
+      openSettings: (section) => this.openSettings(section),
+      changed: () => this.settingsWindow?.update(this.settingsSnapshot()),
     });
     options.permissions.connect({
       state: () => this.store.state,
@@ -104,7 +141,8 @@ export class Browser {
       this.broadcast(change);
       this.runEffects(change.effects);
       this.syncPopovers();
-      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows'].includes(String(p.path[0])))) {
+      this.extensions.sync();
+      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
       options.onChange?.(change);
@@ -155,6 +193,10 @@ export class Browser {
       this.popoverSent.delete(windowId);
       this.syncPopover(w);
     });
+    w.shell.webContents.on('did-finish-load', () => {
+      this.extensions.forget(windowId);
+      this.extensions.sync();
+    });
     this.lastWindowId ??= windowId;
     w.window.on('focus', () => {
       this.lastWindowId = windowId;
@@ -174,6 +216,7 @@ export class Browser {
       this.windows.delete(windowId);
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
+      this.extensions.forget(windowId);
       if (this.lastWindowId === windowId) this.lastWindowId = this.windows.keys().next().value ?? null;
       if (this.windows.size === 0 && process.platform !== 'darwin') {
         this.tabs.destroyAll();
@@ -183,6 +226,7 @@ export class Browser {
     });
     const active = activeTabId(this.store.state, windowId);
     w.showTab(active ? (this.tabs.ensure(active) ?? null) : null);
+    this.extensions.tabShown(w);
     return w;
   }
 
@@ -209,9 +253,12 @@ export class Browser {
         case 'view.ensure':
           this.tabs.ensure(effect.nodeId);
           break;
-        case 'view.show':
-          this.windows.get(effect.windowId)?.showTab(effect.nodeId ? (this.tabs.ensure(effect.nodeId) ?? null) : null);
+        case 'view.show': {
+          const w = this.windows.get(effect.windowId);
+          w?.showTab(effect.nodeId ? (this.tabs.ensure(effect.nodeId) ?? null) : null);
+          if (w) this.extensions.tabShown(w);
           break;
+        }
         case 'view.navigate':
           this.tabs.navigate(effect.nodeId, effect.url);
           break;
@@ -282,6 +329,11 @@ export class Browser {
     else if (action === 'app.settings' || action === 'app.shortcuts') this.openSettings(action === 'app.shortcuts' ? 'shortcuts' : undefined);
   }
 
+  /** The browser window used most recently (Settings acts on it). */
+  lastBrowserWindow(): AppWindow | undefined {
+    return this.lastWindow();
+  }
+
   private lastWindow(): AppWindow | undefined {
     return (this.lastWindowId ? this.windows.get(this.lastWindowId) : undefined) ?? this.windows.values().next().value;
   }
@@ -293,6 +345,7 @@ export class Browser {
     return {
       settings: state.settings,
       chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
+      extensions: this.extensions.infos(),
     };
   }
 

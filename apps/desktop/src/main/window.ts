@@ -3,6 +3,7 @@
  *   shell    Chord's UI, full window, transparent
  *   tab      the active tab, inset and rounded (index 1)
  *   popover  find bar and permission prompts: sized to its cards, at the frame's top-right
+ *   floating an extension's popup, under its button (at most one)
  *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L
  */
 import { join } from 'node:path';
@@ -40,6 +41,12 @@ const FRAME_SPRING = springCurve(springs.smooth);
 const FRAME_TICK_MS = 1000 / 60;
 
 export type UiSurface = 'shell' | 'overlay' | 'popover' | 'settings';
+
+/** A view that floats over the page until something else happens (an extension's popup). */
+export interface FloatingView {
+  readonly view: WebContentsView;
+  close(): void;
+}
 
 /** Each surface's preload and IPC role. Internal pages share one narrow preload. */
 const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
@@ -93,6 +100,7 @@ export class AppWindow {
   private overlaySeq = 0;
   private origin: FrameOrigin;
   private frameAnimation: ReturnType<typeof setInterval> | undefined;
+  private floating: FloatingView | null = null;
 
   constructor({ id, uiSession, bounds, sidebar, onBounds }: AppWindowOptions) {
     this.id = id;
@@ -129,6 +137,7 @@ export class AppWindow {
       }, 400);
     };
     this.window.on('resize', () => {
+      this.closeFloating();
       this.layout();
       reportBounds();
     });
@@ -142,6 +151,7 @@ export class AppWindow {
     };
     nativeTheme.on('updated', onTheme);
     this.window.on('closed', () => {
+      this.closeFloating();
       nativeTheme.off('updated', onTheme);
       clearTimeout(boundsTimer);
       clearInterval(this.frameAnimation);
@@ -154,6 +164,7 @@ export class AppWindow {
   /** Show a tab's view in the content frame (or nothing: the shell's empty state shows through). */
   showTab(view: WebContentsView | null): void {
     if (this.tabView === view) return;
+    this.closeFloating();
     if (this.tabView) this.window.contentView.removeChildView(this.tabView);
     this.tabView = view;
     if (view) {
@@ -201,6 +212,7 @@ export class AppWindow {
 
   /** `anchor` places the downloads panel by its button; ⌘L uses the address the shell reported. */
   openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null): void {
+    this.closeFloating();
     this.overlayVisible = true;
     this.overlay.setVisible(true);
     this.overlay.webContents.focus();
@@ -220,6 +232,7 @@ export class AppWindow {
    * shell's CSS uses for the frame behind it, so the two move as one.
    */
   setSidebar(sidebar: SidebarMode, animate: boolean): void {
+    this.closeFloating();
     clearInterval(this.frameAnimation);
     this.frameAnimation = undefined;
     const to = frameOrigin(sidebar);
@@ -242,6 +255,31 @@ export class AppWindow {
     };
     this.frameAnimation = setInterval(step, FRAME_TICK_MS);
     step();
+  }
+
+  /** Float a view over the page, below the command bar. Whatever floated before closes. */
+  showFloating(floating: FloatingView): void {
+    this.closeFloating();
+    this.floating = floating;
+    this.window.contentView.addChildView(floating.view, this.window.contentView.children.indexOf(this.overlay));
+  }
+
+  /** Take a floating view off the window (it closed itself). */
+  releaseFloating(floating: FloatingView): void {
+    if (this.floating === floating) this.floating = null;
+    if (!this.window.isDestroyed()) this.window.contentView.removeChildView(floating.view);
+  }
+
+  closeFloating(): void {
+    const floating = this.floating;
+    this.floating = null;
+    floating?.close();
+  }
+
+  /** The window's content area and the page frame within it, for placing floating views. */
+  get frameBounds(): { width: number; height: number; frameTop: number } {
+    const { width, height } = this.window.getContentBounds();
+    return { width, height, frameTop: Math.round(this.origin.top) };
   }
 
   /** The content frame: inset from the window, right of the sidebar (if docked), below the strip on Windows/Linux. */

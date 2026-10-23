@@ -8,12 +8,14 @@ import { generateKeyBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
 import {
   IDLE_LIVE,
+  extensionKey,
   type Bounds,
   type ChordId,
   type ChordThemeSpec,
   type ClosedTab,
   type CustomTheme,
   type Download,
+  type InstalledExtension,
   type LiveTab,
   type NodeId,
   type PermissionDecision,
@@ -67,6 +69,10 @@ export type Command =
   | { t: 'download.remove'; id: string }
   /** Take every finished download off the list. */
   | { t: 'download.clear' }
+  /** Engine reports: an extension was installed, updated, or told so (main only). */
+  | { t: 'extension.record'; extension: InstalledExtension }
+  /** An extension was removed from a profile (main only). */
+  | { t: 'extension.forget'; profileId: string; id: string }
   /** Add or change a custom theme; chords made from it follow. */
   | { t: 'theme.save'; theme: CustomTheme }
   /** Remove a custom theme; chords using it keep their colors. */
@@ -487,6 +493,18 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'download.clear':
       for (const d of Object.values(draft.downloads)) if (d.state !== 'progressing' && d.state !== 'paused') delete draft.downloads[d.id];
+      return;
+
+    case 'extension.record': {
+      const key = extensionKey(cmd.extension.profileId, cmd.extension.id);
+      const current = draft.extensions[key];
+      if (current && JSON.stringify(current) === JSON.stringify(cmd.extension)) return;
+      draft.extensions[key] = cmd.extension;
+      return;
+    }
+
+    case 'extension.forget':
+      delete draft.extensions[extensionKey(cmd.profileId, cmd.id)];
       return;
 
     case 'permission.set': {

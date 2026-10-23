@@ -123,11 +123,52 @@ void _settingsMatch;
 export const ChordThemePatch = ChordTheme.partial();
 export type ChordThemePatch = z.infer<typeof ChordThemePatch>;
 
-/** What the Settings window shows: settings, and the chord in the last-used window (for Appearance). */
+/** An installed extension, as Settings → Extensions lists it. */
+export interface ExtensionInfo {
+  id: string;
+  profileId: string;
+  name: string;
+  version: string;
+  source: 'store' | 'unpacked';
+  description: string;
+  /** PNG data URL, or null when it has no icon. */
+  icon: string | null;
+  hasOptions: boolean;
+  /** Loaded and running in this session. */
+  loaded: boolean;
+}
+
+/** What the Settings window shows: settings, the chord in the last-used window (for Appearance), and extensions. */
 export interface SettingsSnapshot {
   settings: Settings;
   chord: Pick<Chord, 'id' | 'name' | 'icon' | 'theme'> | null;
+  extensions: ExtensionInfo[];
 }
+
+/** One extension's toolbar button, for the window's current tab. */
+export interface ExtensionAction {
+  id: string;
+  title: string;
+  badgeText: string;
+  /** CSS color, or null for the default. */
+  badgeColor: string | null;
+  /** PNG data URL at 2× the button's icon size, or null. */
+  icon: string | null;
+}
+
+/** The extension buttons a window shows (ARCHITECTURE.md §12). */
+export interface ExtensionsBarState {
+  actions: ExtensionAction[];
+  /** The tab shows a Chrome Web Store page for an extension that isn't installed: offer "Add to Chord". */
+  offer: { id: string } | null;
+  /** Being installed right now, from "Add to Chord". */
+  installing: string | null;
+}
+
+/** How an install went. */
+export type InstallResult = { ok: true; name: string } | { ok: false; error: string };
+
+const extensionId = z.string().regex(/^[a-p]{32}$/);
 
 /** A permission prompt in the popover. */
 export interface PermissionPrompt {
@@ -248,6 +289,19 @@ export const invokeChannels = {
   'menu:tab': { roles: ['shell'], request: z.object({ nodeId: id, x: z.number(), y: z.number() }), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
+  // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
+  'extensions:state': { roles: ['shell'], request: z.void(), response: z.custom<ExtensionsBarState>() },
+  /** Click an extension's button: its popup opens under `anchor` (window coordinates). */
+  'extension:activate': { roles: ['shell'], request: z.strictObject({ id: extensionId, anchor: Rect }), response: z.void() },
+  /** Right-click an extension's button, at this point in the window. */
+  'extension:menu': { roles: ['shell'], request: z.strictObject({ id: extensionId, x: z.number(), y: z.number() }), response: z.void() },
+  /** Install from the Chrome Web Store: an extension ID or a store page's address. Into the profile of the caller's chord. */
+  'extensions:install': { roles: ['shell', 'internal'], request: z.strictObject({ input: z.string().min(1).max(2048) }), response: z.custom<InstallResult>() },
+  'extensions:remove': { roles: ['internal'], request: z.strictObject({ profileId: id, id: extensionId }), response: z.void() },
+  /** Open an extension's options page in a new tab of the last-used window. */
+  'extensions:options': { roles: ['internal'], request: z.strictObject({ profileId: id, id: extensionId }), response: z.void() },
+  /** Check the Chrome Web Store for newer versions now; resolves with how many were updated. */
+  'extensions:update': { roles: ['internal'], request: z.void(), response: z.custom<number>() },
   // The Settings window (chord://settings). It sees settings and one chord's theme, not tabs.
   'settings:snapshot': { roles: ['internal'], request: z.void(), response: z.custom<SettingsSnapshot>() },
   'settings:set': { roles: ['internal'], request: SettingsPatch, response: z.void() },
@@ -284,6 +338,7 @@ export interface EventPayloads {
   'chord:edit': ChordEdit;
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
   'settings:section': string;
+  'extensions:state': ExtensionsBarState;
 }
 
 export type InvokeChannel = keyof typeof invokeChannels;
@@ -320,6 +375,13 @@ export interface ShellApi {
   chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
+  extensions: {
+    state(): Promise<ExtensionsBarState>;
+    onState(listener: (state: ExtensionsBarState) => void): () => void;
+    activate(id: string, anchor: Rect): Promise<void>;
+    menu(id: string, at: { x: number; y: number }): Promise<void>;
+    install(input: string): Promise<InstallResult>;
+  };
 }
 
 interface DownloadsApi {
@@ -344,6 +406,12 @@ export interface SettingsApi {
     copyText(text: string): Promise<void>;
     about(): Promise<AboutInfo>;
     openUrl(url: string): Promise<void>;
+  };
+  extensions: {
+    install(input: string): Promise<InstallResult>;
+    remove(profileId: string, id: string): Promise<void>;
+    options(profileId: string, id: string): Promise<void>;
+    update(): Promise<number>;
   };
 }
 

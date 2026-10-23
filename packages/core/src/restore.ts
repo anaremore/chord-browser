@@ -8,10 +8,12 @@
 import {
   defaultSettings,
   emptyState,
+  extensionKey,
   type Chord,
   type CustomTheme,
   type Oklch,
   type Download,
+  type InstalledExtension,
   type MotionSettings,
   type Settings,
   type SidebarNode,
@@ -34,6 +36,7 @@ export interface PersistedState {
   /** Remembered permission decisions, by origin. */
   sitePermissions?: SitePermissions;
   downloads?: Download[];
+  extensions?: InstalledExtension[];
 }
 
 /** Downloads cut off by quitting can't continue in a new session: they come back as interrupted. */
@@ -42,6 +45,30 @@ function restoreDownloads(saved: Download[] | undefined): Record<string, Downloa
   for (const d of saved ?? []) {
     const unfinished = d.state === 'progressing' || d.state === 'paused';
     out[d.id] = unfinished ? { ...d, state: 'interrupted', speed: 0, endedAt: d.endedAt ?? d.startedAt } : d;
+  }
+  return out;
+}
+
+const EXTENSION_ID = /^[a-p]{32}$/;
+
+/** Installed extensions that still make sense; anything malformed is dropped (and simply not loaded). */
+export function restoreExtensions(saved: readonly InstalledExtension[] | undefined): Record<string, InstalledExtension> {
+  const out: Record<string, InstalledExtension> = {};
+  for (const e of saved ?? []) {
+    if (!e || !EXTENSION_ID.test(e.id) || typeof e.profileId !== 'string' || !e.profileId) continue;
+    if (e.source !== 'store' && e.source !== 'unpacked') continue;
+    if (typeof e.path !== 'string' || !e.path || typeof e.version !== 'string' || !e.version) continue;
+    out[extensionKey(e.profileId, e.id)] = {
+      id: e.id,
+      profileId: e.profileId,
+      name: typeof e.name === 'string' ? e.name : e.id,
+      version: e.version,
+      source: e.source,
+      path: e.path,
+      notifiedVersion: typeof e.notifiedVersion === 'string' ? e.notifiedVersion : null,
+      installedAt: Number.isFinite(e.installedAt) ? e.installedAt : 0,
+      updatedAt: Number.isFinite(e.updatedAt) ? e.updatedAt : 0,
+    };
   }
   return out;
 }
@@ -108,6 +135,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
       fresh.settings = restoreSettings(saved.settings);
       fresh.sitePermissions = restorePermissions(saved.sitePermissions);
       fresh.downloads = restoreDownloads(saved.downloads);
+      fresh.extensions = restoreExtensions(saved.extensions);
     }
     return fresh;
   }
@@ -116,6 +144,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   state.settings = restoreSettings(saved.settings);
   state.sitePermissions = restorePermissions(saved.sitePermissions);
   state.downloads = restoreDownloads(saved.downloads);
+  state.extensions = restoreExtensions(saved.extensions);
   for (const chord of saved.chords) state.chords[chord.id] = chord;
   for (const node of saved.nodes) {
     if (!state.chords[node.chordId]) continue;
