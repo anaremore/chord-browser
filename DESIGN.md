@@ -535,7 +535,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 
 - **ColorWheel (240 px canvas).**
-  - Hue runs around the ring; chroma runs outward from the gray center. It's drawn at the current appearance's lightness band and gamut-mapped to the display (P3 where available).
+  - Hue runs around the ring; chroma runs outward from the gray center. It's drawn at the swatches' display lightness in both appearances. In the dark band it was too muddy to pick from. The orbs and the live sidebar show how each appearance draws the tint.
   - Up to 3 handles: 24 px circles with a 2 px white ring and `shadow-raised`.
   - Click an empty spot to move the nearest handle.
   - **+** adds a handle at +40° (analogous).
