@@ -85,9 +85,27 @@ async function setUp(app: ElectronApplication, paths: string[], origin = () => s
   return { shell, overlay, today, pinned: shell.getByRole('list', { name: 'Pinned' }) };
 }
 
+/**
+ * Where a row is once it has stopped moving. Rows glide into place (a folder
+ * opening reveals its tabs with a spring), so a box read mid-glide sends a
+ * drag somewhere the row no longer is.
+ */
+async function settledBox(target: Locator) {
+  let last = await target.boundingBox();
+  await expect
+    .poll(async () => {
+      const box = await target.boundingBox();
+      const still = box !== null && last !== null && box.x === last.x && box.y === last.y && box.height === last.height;
+      last = box;
+      return still;
+    }, { intervals: [100] })
+    .toBe(true);
+  return last!;
+}
+
 /** Drag with the mouse the way a hand does: pick up, travel, settle, let go. */
 async function drag(shell: Page, from: Locator, to: { x: number; y: number }) {
-  const a = (await from.boundingBox())!;
+  const a = await settledBox(from);
   await shell.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
   await shell.mouse.down();
   await shell.mouse.move(a.x + a.width / 2, a.y + a.height / 2 + 6, { steps: 4 });
@@ -100,7 +118,7 @@ async function drag(shell: Page, from: Locator, to: { x: number; y: number }) {
 }
 
 const point = async (target: Locator, dy: number, dx = 0) => {
-  const b = (await target.boundingBox())!;
+  const b = await settledBox(target);
   return { x: b.x + b.width / 2 + dx, y: b.y + dy };
 };
 

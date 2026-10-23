@@ -941,6 +941,16 @@ test('many chords: the switcher scrolls sideways with the wheel and keeps the cu
       );
     }
     await expect(strip.getByRole('tab')).toHaveCount(12);
+    // DEBUG: what the strip hears.
+    await strip.evaluate((el) => {
+      const log: string[] = ((window as unknown as { __wheelLog: string[] }).__wheelLog = []);
+      el.addEventListener('wheel', (e) => log.push(`wheel dy=${(e as WheelEvent).deltaY} t=${Math.round(performance.now())} scroll=${el.scrollLeft}`), { capture: true });
+      el.addEventListener('scroll', () => log.push(`scroll ${el.scrollLeft} t=${Math.round(performance.now())}`));
+      window.addEventListener('wheel', (e) => log.push(`window wheel target=${(e.target as HTMLElement).tagName}.${(e.target as HTMLElement).className}`), { capture: true });
+      let frames = 0;
+      const tick = () => { frames++; (window as unknown as { __frames: number }).__frames = frames; requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+    });
     const metrics = () => strip.evaluate((el) => ({ scroll: el.scrollLeft, overflow: el.scrollWidth - el.clientWidth, fade: el.dataset['fade'] }));
     // The newest chord is current and scrolled into view, at the end.
     await expect.poll(async () => (await metrics()).overflow).toBeGreaterThan(0);
@@ -960,7 +970,13 @@ test('many chords: the switcher scrolls sideways with the wheel and keeps the cu
     await shell.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     const before = (await metrics()).scroll;
     await shell.mouse.wheel(0, -200);
-    await expect.poll(async () => (await metrics()).scroll).toBeLessThan(before);
+    try {
+      await expect.poll(async () => (await metrics()).scroll).toBeLessThan(before);
+    } catch (error) {
+      const hit = await shell.evaluate(([x, y]) => { const e = document.elementFromPoint(x!, y!); return `${e?.tagName}.${e?.className} role=${e?.getAttribute('role')}`; }, [box.x + box.width / 2, box.y + box.height / 2]);
+      console.log(`DEBUGWHEEL before=${before} hit=${hit} box=${JSON.stringify(box)} vis=${await shell.evaluate(() => document.visibilityState)} frames=${await shell.evaluate(() => (window as unknown as { __frames: number }).__frames)} log=${JSON.stringify(await shell.evaluate(() => (window as unknown as { __wheelLog: string[] }).__wheelLog))}`);
+      throw error;
+    }
   } finally {
     await app.close();
   }
