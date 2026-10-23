@@ -4,6 +4,7 @@
  * everywhere: the window behind this one re-themes as you pick.
  */
 import {
+  DEFAULT_PROFILE,
   DEFAULT_SETTINGS,
   SEARCH_ENGINES,
   SHORTCUTS,
@@ -89,11 +90,43 @@ function DefaultBrowser({ platform }: { platform: SystemInfo['platform'] }) {
   );
 }
 
+/** Which chords share sign-ins (DESIGN.md: "Keep sign-ins separate", never "profile"). */
+function SignIns({ snapshot }: { snapshot: SettingsSnapshot }) {
+  const { settings, chords } = snapshot;
+  return (
+    <>
+      <h2 className={styles.groupTitle}>
+        Sign-ins
+        <ResetButton visible={settings.separateSignIns !== DEFAULT_SETTINGS.separateSignIns} onReset={() => void api.settings.set({ separateSignIns: DEFAULT_SETTINGS.separateSignIns })} />
+      </h2>
+      <div className={styles.group}>
+        <Row
+          label="New chords keep their own sign-ins"
+          description="Off: every chord shares your accounts (Google and the rest). On: each new chord starts signed out, with its own cookies."
+          control={<Switch label="New chords keep their own sign-ins" checked={settings.separateSignIns} onChange={(separateSignIns) => void api.settings.set({ separateSignIns })} />}
+        />
+        {chords.map((chord) => {
+          const separate = chord.profileId !== DEFAULT_PROFILE;
+          return (
+            <Row
+              key={chord.id}
+              label={`${chord.icon}  ${chord.name}`}
+              description={separate ? 'Keeps its own sign-ins.' : 'Shares sign-ins with your other chords.'}
+              control={<Switch label={`Keep sign-ins separate for ${chord.name}`} checked={separate} onChange={(value) => void api.settings.chordSignIns(chord.id, value)} />}
+            />
+          );
+        })}
+      </div>
+      <p className={styles.groupNote}>Changing a chord reloads its tabs. A chord on its own starts signed out; Undo brings its old sign-ins back.</p>
+    </>
+  );
+}
+
 function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
   const engine = snapshot.settings.searchEngine;
   return (
     <>
-      <SectionHeader title="General" description="How Chord searches, and whether it opens your links." />
+      <SectionHeader title="General" description="How Chord searches, which chords share sign-ins, and whether it opens your links." />
       <h2 className={styles.groupTitle}>
         Search engine
         <ResetButton visible={engine !== DEFAULT_SETTINGS.searchEngine} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
@@ -114,6 +147,7 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
           </button>
         ))}
       </div>
+      <SignIns snapshot={snapshot} />
       <DefaultBrowser platform={info.platform} />
     </>
   );

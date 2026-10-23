@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,9 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     // "No icon", the way example.com says it; and an icon that claims to be a PNG but isn't.
     '/no-icon': '<title>No icon</title><link rel="icon" href="data:,">',
     '/bad-icon': '<title>Bad icon</title><link rel="icon" href="/bad.png">',
+    // Signing in sets a cookie; /whoami reports whether this chord's sign-ins have it.
+    '/login': `<title>Login</title><script>document.cookie = 'account=alex; path=/; max-age=3600'; document.title = 'Signed in';</script>`,
+    '/whoami': `<title>Whoami</title><script>document.title = document.cookie.includes('account=alex') ? 'Alex' : 'Signed out';</script>`,
     // A "Sign in with…" flow: a sized popup reports back through window.opener, then closes.
     '/signin':
       `<title>Signed out</title><button id="signin" onclick="window.open('/signin-popup', 'auth', 'width=420,height=560')">Sign in</button>` +
@@ -358,6 +361,63 @@ test('a sign-in popup keeps its opener, opens at the size it asked for, and repo
     await popup.locator('#done').click();
     await expect.poll(() => tab.title()).toBe('Signed in');
     await expect.poll(() => app.windows().some((p) => p.url() === `${site.origin}/signin-popup`)).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a chord can keep its sign-ins separate, with Undo, and its sign-ins are deleted once unused', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const ownPartitions = () => (existsSync(join(profile, 'Partitions')) ? readdirSync(join(profile, 'Partitions')).filter((n) => n.startsWith('p-')) : []);
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/login` }, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await pageWhere(app, (url) => url === `${site.origin}/login`);
+    const visit = async (path: string) => {
+      await openCommandBar(shell, overlay, 'new');
+      await overlay.keyboard.type(`${site.origin}${path}`);
+      await overlay.keyboard.press('Enter');
+    };
+    const whoami = () => app.windows().find((p) => p.url() === `${site.origin}/whoami`)?.title();
+
+    // A new chord shares sign-ins by default: Work sees Personal's account.
+    await shell.getByRole('button', { name: 'New chord' }).click();
+    await shell.getByRole('textbox', { name: 'Chord name' }).fill('Work');
+    await shell.getByRole('textbox', { name: 'Chord name' }).press('Enter');
+    await visit('/whoami');
+    await expect.poll(whoami).toBe('Alex');
+
+    // Keeping Work's sign-ins separate reloads its tab, signed out, and marks the chord.
+    await runAction(shell, 'chord.separateSignIns');
+    await expect.poll(whoami).toBe('Signed out');
+    await expect(shell.getByRole('img', { name: 'Keeps its own sign-ins' })).toBeVisible();
+    expect(ownPartitions()).toHaveLength(1);
+
+    // Undo shares them again.
+    await shell.getByRole('button', { name: 'Undo' }).click();
+    await expect.poll(whoami).toBe('Alex');
+    await expect(shell.getByRole('img', { name: 'Keeps its own sign-ins' })).toHaveCount(0);
+
+    // Settings → General lists every chord with its own switch.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
+    const workSwitch = settings.getByRole('switch', { name: 'Keep sign-ins separate for Work' });
+    await expect(workSwitch).toHaveAttribute('aria-checked', 'false');
+    await workSwitch.click();
+    await expect(workSwitch).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(whoami).toBe('Signed out');
+    await workSwitch.click();
+    await expect.poll(whoami).toBe('Alex');
+  } finally {
+    await app.close();
+  }
+
+  // Nothing uses Work's own sign-ins any more, so the next launch deletes them from disk.
+  app = await launch({}, profile);
+  try {
+    await pageWhere(app, isShell);
+    await expect.poll(ownPartitions).toEqual([]);
   } finally {
     await app.close();
   }

@@ -10,6 +10,7 @@ import {
   frecencyOn,
   pickedAgain,
   placeKey,
+  profilePartition,
   terms,
   used,
   type Chord,
@@ -113,6 +114,18 @@ export class ChordDatabase {
       this.db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  /**
+   * Profiles no chord uses any more (its sign-ins were shared again, or the
+   * chord was deleted): their rows go. Returns their partitions. Main deletes
+   * the sign-ins on disk itself, from the folders (removeUnusedPartitions),
+   * because a profile switched on and off between two writes never gets a row.
+   */
+  pruneProfiles(): string[] {
+    const unused = this.sql('SELECT id, partition FROM profile WHERE is_default = 0 AND id NOT IN (SELECT profile_id FROM chord)').all() as Row[];
+    for (const r of unused) this.sql('DELETE FROM profile WHERE id = ?').run(str(r['id']));
+    return unused.map((r) => str(r['partition']));
   }
 
   /** Everything saved, or null for a brand-new profile. */
@@ -319,11 +332,21 @@ export class ChordDatabase {
       this.sql('DELETE FROM chord WHERE id = ?').run(id);
       return;
     }
+    const profileId = chord.profileId || DEFAULT_PROFILE;
+    // A chord that keeps its sign-ins separate has a profile of its own.
+    if (profileId !== DEFAULT_PROFILE) {
+      this.sql('INSERT OR IGNORE INTO profile (id, name, partition, is_default, created_at) VALUES (?, ?, ?, 0, ?)').run(
+        profileId,
+        chord.name,
+        profilePartition(profileId),
+        now,
+      );
+    }
     this.sql(
       `INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon, theme = excluded.theme,
-         rank = excluded.rank, updated_at = excluded.updated_at`,
-    ).run(id, chord.profileId || DEFAULT_PROFILE, chord.name, chord.icon, JSON.stringify(chord.theme), chord.rank, chord.createdAt, now);
+       ON CONFLICT(id) DO UPDATE SET profile_id = excluded.profile_id, name = excluded.name, icon = excluded.icon,
+         theme = excluded.theme, rank = excluded.rank, updated_at = excluded.updated_at`,
+    ).run(id, profileId, chord.name, chord.icon, JSON.stringify(chord.theme), chord.rank, chord.createdAt, now);
   }
 
   private writeNode(id: string, node: SidebarNode | null, now: number): void {

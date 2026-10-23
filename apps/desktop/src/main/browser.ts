@@ -5,9 +5,12 @@
 import {
   activeTab,
   activeTabId,
+  DEFAULT_PROFILE,
   markdownLink,
   motionEnabled,
+  sortedChords,
   tabsInOrder,
+  uuidv7,
   zoomStep,
   type ActionId,
   type Effect,
@@ -309,6 +312,7 @@ export class Browser {
     return {
       settings: state.settings,
       chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
+      chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId })),
     };
   }
 
@@ -393,6 +397,8 @@ export class Browser {
           this.lastWindowId = w.id;
           this.openSettings('appearance');
         },
+        separateSignIns: chord.profileId !== DEFAULT_PROFILE,
+        toggleSeparateSignIns: () => this.toggleSeparateSignIns(w, chordId),
         delete: onlyChord ? null : () => this.deleteChord(w, chordId),
       }),
       { ...at, width: 0, height: 0 },
@@ -411,6 +417,29 @@ export class Browser {
       id: `chord-deleted:${chordId}`,
       message: `Deleted “${chord.name}”`,
       action: { label: 'Undo', command: { t: 'chord.restore', windowId: w.id, chordId } },
+    });
+  }
+
+  private toggleSeparateSignIns(w: AppWindow, chordId: string): void {
+    const chord = this.store.state.chords[chordId];
+    if (chord) this.setSeparateSignIns(chordId, chord.profileId === DEFAULT_PROFILE, w);
+  }
+
+  /**
+   * "Keep sign-ins separate": the chord gets a profile of its own (its tabs
+   * reload in it, signed out), or shares the default one again. Undo goes
+   * back to the sign-ins it had, which stay on disk until the next launch.
+   */
+  setSeparateSignIns(chordId: string, separate: boolean, w = this.lastWindow()): void {
+    const chord = this.store.state.chords[chordId];
+    if (!chord || (chord.profileId !== DEFAULT_PROFILE) === separate) return;
+    const previous = chord.profileId;
+    this.store.dispatch({ t: 'chord.profile', chordId, profileId: separate ? uuidv7() : DEFAULT_PROFILE });
+    if (!w) return;
+    send(w.shell.webContents, 'toast:show', {
+      id: `chord-signins:${chordId}`,
+      message: separate ? `“${chord.name}” keeps its own sign-ins now. Its tabs reloaded, signed out.` : `“${chord.name}” shares sign-ins with your other chords again.`,
+      action: { label: 'Undo', command: { t: 'chord.profile', chordId, profileId: previous } },
     });
   }
 
@@ -512,6 +541,11 @@ export class Browser {
       case 'chord.delete': {
         const chordId = this.store.state.windows[w.id]?.activeChordId;
         if (chordId && Object.keys(this.store.state.chords).length > 1) this.deleteChord(w, chordId);
+        return true;
+      }
+      case 'chord.separateSignIns': {
+        const chordId = this.store.state.windows[w.id]?.activeChordId;
+        if (chordId) this.toggleSeparateSignIns(w, chordId);
         return true;
       }
       case 'chord.next':

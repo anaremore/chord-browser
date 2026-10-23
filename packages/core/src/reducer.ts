@@ -7,6 +7,7 @@
 import { generateKeyBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
 import {
+  DEFAULT_PROFILE,
   IDLE_LIVE,
   type Bounds,
   type ChordId,
@@ -17,6 +18,7 @@ import {
   type LiveTab,
   type NodeId,
   type PermissionDecision,
+  type ProfileId,
   type Section,
   type SitePermission,
   type SettingsPatch,
@@ -57,6 +59,8 @@ export type Command =
   /** ⌘1–⌘8 go to that chord; ⌘9 always goes to the last one, as tab shortcuts do in Chrome. */
   | { t: 'chord.goto'; windowId: WindowId; index: number }
   | { t: 'chord.update'; chordId: ChordId; name?: string; icon?: string }
+  /** Which sign-ins a chord uses: DEFAULT_PROFILE to share, or a profile of its own. Its open tabs reload into it. */
+  | { t: 'chord.profile'; chordId: ChordId; profileId: ProfileId }
   /** Removes a chord and its tabs, kept for Undo. The last chord can't be deleted. */
   | { t: 'chord.delete'; chordId: ChordId }
   /** Undo a deletion: the chord and its tabs come back, and this window switches to it. */
@@ -358,6 +362,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const { searchEngine, motion, colorScheme } = cmd.settings;
       if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
+      const { separateSignIns } = cmd.settings;
+      if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;
       for (const [key, value] of Object.entries(motion ?? {}) as [keyof typeof draft.settings.motion, boolean | undefined][]) {
         if (value !== undefined && draft.settings.motion[key] !== value) draft.settings.motion[key] = value;
       }
@@ -397,7 +403,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const id = ctx.newId();
       draft.chords[id] = {
         id,
-        profileId: 'default',
+        profileId: draft.settings.separateSignIns ? ctx.newId() : DEFAULT_PROFILE,
         name: cmd.name.trim().slice(0, MAX_CHORD_NAME) || 'New chord',
         icon: cmd.icon,
         theme: cmd.theme,
@@ -436,6 +442,26 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const name = cmd.name?.trim().slice(0, MAX_CHORD_NAME);
       if (name && chord.name !== name) chord.name = name;
       if (cmd.icon && chord.icon !== cmd.icon) chord.icon = cmd.icon;
+      return;
+    }
+
+    case 'chord.profile': {
+      const chord = draft.chords[cmd.chordId];
+      if (!chord || chord.profileId === cmd.profileId) return;
+      chord.profileId = cmd.profileId;
+      // A page can't change session: every open tab in the chord closes its page, and the one
+      // a window shows comes straight back in the new session. The rest load when you visit them.
+      for (const node of Object.values(draft.nodes)) {
+        if (node.kind !== 'tab' || node.chordId !== cmd.chordId || !draft.live[node.id]) continue;
+        delete draft.live[node.id];
+        effects.push({ e: 'view.destroy', nodeId: node.id });
+      }
+      for (const win of Object.values(draft.windows)) {
+        const shown = win.activeChordId === cmd.chordId ? win.activeTab[cmd.chordId] : null;
+        if (!shown) continue;
+        draft.live[shown] = { ...IDLE_LIVE, loading: true };
+        effects.push({ e: 'view.ensure', nodeId: shown }, { e: 'view.show', windowId: win.id, nodeId: shown });
+      }
       return;
     }
 

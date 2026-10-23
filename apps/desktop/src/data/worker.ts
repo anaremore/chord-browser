@@ -17,6 +17,7 @@ process.parentPort.on('message', (event) => {
       case 'open':
         db?.close();
         db = new ChordDatabase(request.file);
+        if (request.prune) db.pruneProfiles();
         reply({ id: request.id, ok: true, saved: db.load() });
         break;
       case 'write':

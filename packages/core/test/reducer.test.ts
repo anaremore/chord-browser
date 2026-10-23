@@ -41,6 +41,33 @@ function setup(): { state: State; ctx: Context; run: (cmd: Command) => ReturnTyp
 const titles = (state: State) => tabsInOrder(state, 'c1').map((t) => t.url);
 
 describe('reducer', () => {
+  it('gives new chords their own sign-ins when Settings says so', () => {
+    const t = setup();
+    const theme = { stops: [{ l: 0.72, c: 0.12, h: 30 }], grain: 0.2, appearance: 'auto' as const };
+    t.run({ t: 'chord.create', windowId: 'w1', name: 'Shared', icon: 'S', theme });
+    t.run({ t: 'settings.set', settings: { separateSignIns: true } });
+    t.run({ t: 'chord.create', windowId: 'w1', name: 'Own', icon: 'O', theme });
+    const byName = (name: string) => Object.values(t.state.chords).find((c) => c.name === name)!;
+    expect(byName('Shared').profileId).toBe('default');
+    expect(byName('Own').profileId).not.toBe('default');
+    expect(byName('Own').profileId).not.toBe(byName('Own').id);
+  });
+
+  it('moves a chord to its own sign-ins: open pages close, and the shown one reloads in the new session', () => {
+    const t = setup();
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://b.test/' });
+    const result = t.run({ t: 'chord.profile', chordId: 'c1', profileId: 'p-work' });
+    expect(t.state.chords['c1']!.profileId).toBe('p-work');
+    // Both pages close; only the one on screen comes back, already loading.
+    expect(result.effects.filter((e) => e.e === 'view.destroy')).toHaveLength(2);
+    expect(result.effects).toContainEqual({ e: 'view.show', windowId: 'w1', nodeId: 'id-002' });
+    expect(Object.keys(t.state.live)).toEqual(['id-002']);
+    expect(t.state.live['id-002']!.loading).toBe(true);
+    // Setting the same profile again changes nothing.
+    expect(t.run({ t: 'chord.profile', chordId: 'c1', profileId: 'p-work' }).effects).toEqual([]);
+  });
+
   it('opens new tabs at the top of Today and activates them', () => {
     const t = setup();
     t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });

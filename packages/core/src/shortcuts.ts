@@ -35,6 +35,7 @@ export type ActionId =
   | 'chord.next'
   | 'chord.previous'
   | 'chord.delete'
+  | 'chord.separateSignIns'
   | 'window.new'
   | 'window.newPrivate'
   | 'window.close'
@@ -102,6 +103,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('chord.previous', 'Previous chord', 'reserved', ['Mod+Alt+ArrowLeft'], ['Ctrl+Alt+ArrowLeft']),
   // No keys: deleting is a deliberate act, from the chord's menu or the command bar.
   s('chord.delete', 'Delete this chord', 'page-first', []),
+  s('chord.separateSignIns', 'Keep sign-ins separate for this chord', 'page-first', []),
   // Window and view
   s('window.new', 'New window', 'reserved', ['Mod+N']),
   s('window.newPrivate', 'New private window', 'reserved', ['Mod+Shift+N']),

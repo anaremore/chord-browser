@@ -91,7 +91,9 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('chord.goto'), windowId: id, index: z.number().int().min(0).max(8) }),
   z.object({ t: z.literal('chord.update'), chordId: id, name: chordName.optional(), icon: chordIcon.optional() }),
   z.object({ t: z.literal('chord.restore'), windowId: id, chordId: id }),
-  // chord.delete isn't here: it goes through main's confirmation (menu:chord).
+  // Undo for "Keep sign-ins separate": back to shared sign-ins, or to the chord's own (Chord's IDs are UUIDs).
+  z.object({ t: z.literal('chord.profile'), chordId: id, profileId: z.union([z.literal('default'), z.uuid()]) }),
+  // chord.delete isn't here: main deletes, then offers Undo in a toast.
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
 // Compile-time check: every renderer command is a real core command.
@@ -103,6 +105,7 @@ const engineIds = SEARCH_ENGINES.map((e) => e.id) as [SearchEngineId, ...SearchE
 export const SettingsPatch = z.strictObject({
   searchEngine: z.enum(engineIds).optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
+  separateSignIns: z.boolean().optional(),
   interface: z.strictObject({ contrast: z.number().min(0).max(1), glass: z.number().min(0).max(1) }).partial().optional(),
   motion: z
     .strictObject({
@@ -130,6 +133,8 @@ export type DefaultBrowserStatus = z.infer<typeof DefaultBrowserStatus>;
 export interface SettingsSnapshot {
   settings: Settings;
   chord: Pick<Chord, 'id' | 'name' | 'icon' | 'theme'> | null;
+  /** Every chord in switcher order, for Settings → General → Sign-ins. */
+  chords: Pick<Chord, 'id' | 'name' | 'icon' | 'profileId'>[];
 }
 
 /** A permission prompt in the popover. */
@@ -260,6 +265,7 @@ export const invokeChannels = {
   'settings:deleteTheme': { roles: ['internal'], request: z.strictObject({ id: z.string().min(1).max(64) }), response: z.void() },
   /** Put text on the clipboard (Chord's own pages have no clipboard permission of their own). */
   'settings:copyText': { roles: ['internal'], request: z.strictObject({ text: z.string().max(10_000) }), response: z.void() },
+  'settings:chordSignIns': { roles: ['internal'], request: z.strictObject({ chordId: id, separate: z.boolean() }), response: z.void() },
   'settings:defaultBrowser': { roles: ['internal'], request: z.void(), response: DefaultBrowserStatus },
   'settings:makeDefaultBrowser': { roles: ['internal'], request: z.void(), response: DefaultBrowserStatus },
   // The popover: find bar and permission prompts, over the page (ARCHITECTURE.md §5).
@@ -347,6 +353,8 @@ export interface SettingsApi {
     saveTheme(theme: CustomTheme): Promise<void>;
     deleteTheme(id: string): Promise<void>;
     copyText(text: string): Promise<void>;
+    /** Keep a chord's sign-ins separate, or share them again (its tabs reload; the window offers Undo). */
+    chordSignIns(chordId: string, separate: boolean): Promise<void>;
     /** Whether Chord opens web links from other apps; `unavailable` in development builds. */
     defaultBrowser(): Promise<DefaultBrowserStatus>;
     /** Asks the OS to make Chord the default (on Windows, opens Settings → Default apps), then reports again. */

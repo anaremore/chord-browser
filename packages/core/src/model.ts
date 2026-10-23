@@ -9,6 +9,16 @@ export type NodeId = string;
 export type WindowId = string;
 export type ProfileId = string;
 
+/**
+ * The sign-ins every chord shares, unless it keeps its own ("Keep sign-ins
+ * separate" gives it a profile of its own: ARCHITECTURE.md §6, Profiles).
+ */
+export const DEFAULT_PROFILE: ProfileId = 'default';
+
+/** The Electron session partition that holds a profile's cookies, storage and cache. */
+export const profilePartition = (profileId: ProfileId): string =>
+  profileId === DEFAULT_PROFILE ? 'persist:default' : `persist:p-${profileId}`;
+
 export interface Oklch {
   l: number;
   c: number;
@@ -181,6 +191,8 @@ export interface Settings {
   colorScheme: ColorScheme;
   interface: InterfaceSettings;
   themes: CustomTheme[];
+  /** New chords keep their own sign-ins (a profile of their own) instead of sharing everyone's. */
+  separateSignIns: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -189,6 +201,7 @@ export const DEFAULT_SETTINGS: Settings = {
   colorScheme: 'system',
   interface: { contrast: 0.5, glass: 0.5 },
   themes: [],
+  separateSignIns: false,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -213,6 +226,7 @@ export interface SettingsPatch {
   motion?: Partial<MotionSettings>;
   colorScheme?: ColorScheme;
   interface?: Partial<InterfaceSettings>;
+  separateSignIns?: boolean;
 }
 
 export interface State {

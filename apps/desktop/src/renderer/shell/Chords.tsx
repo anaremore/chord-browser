@@ -3,10 +3,10 @@
  * rename and the icon picker, the switcher in the footer, and the color
  * crossfade behind it all.
  */
-import { firstGrapheme, formatKeys, shortcutById, sortedChords, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
+import { DEFAULT_PROFILE, firstGrapheme, formatKeys, shortcutById, sortedChords, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
-import { Plus } from 'lucide-react';
+import { KeyRound, Plus } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { api } from './api';
@@ -226,6 +226,11 @@ export function ChordHeader({
       ) : (
         <span className={styles.ellipsis} title="Double-click to rename" onDoubleClick={() => setEditing(true)}>
           {chord?.name ?? ''}
+        </span>
+      )}
+      {chord && chord.profileId !== DEFAULT_PROFILE && (
+        <span className={styles.signIns} role="img" aria-label="Keeps its own sign-ins" title="Keeps its own sign-ins">
+          <KeyRound size={12} strokeWidth={2} aria-hidden />
         </span>
       )}
     </div>

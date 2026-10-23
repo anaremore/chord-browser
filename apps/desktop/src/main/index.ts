@@ -1,4 +1,4 @@
-import { restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
+import { profilePartition, restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { join } from 'node:path';
@@ -11,7 +11,7 @@ import { handle } from './ipc';
 import { DownloadManager } from './downloads';
 import { PermissionBroker } from './permissions';
 import { openable, urlsFromArgv } from './os-links';
-import { Persistence } from './persistence';
+import { Persistence, removeUnusedPartitions } from './persistence';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
@@ -102,6 +102,7 @@ function registerIpc(): void {
   handle('settings:saveTheme', ({ theme }) => browser!.store.dispatch({ t: 'theme.save', theme }));
   handle('settings:deleteTheme', ({ id }) => browser!.store.dispatch({ t: 'theme.delete', id }));
   handle('settings:copyText', ({ text }) => clipboard.writeText(text));
+  handle('settings:chordSignIns', ({ chordId, separate }) => browser!.setSeparateSignIns(chordId, separate));
   handle('settings:defaultBrowser', () => defaultBrowserStatus());
   handle('settings:makeDefaultBrowser', async () => {
     await makeDefaultBrowser();
@@ -176,7 +177,7 @@ if (!app.requestSingleInstanceLock()) {
     profileSession = (profileId: string) => {
       let ses = profiles.get(profileId);
       if (!ses) {
-        ses = session.fromPartition(profileId === 'default' ? 'persist:default' : `persist:p-${profileId}`);
+        ses = session.fromPartition(profilePartition(profileId));
         permissions.attach(ses);
         downloads.attach(ses);
         profiles.set(profileId, ses);
@@ -196,6 +197,8 @@ if (!app.requestSingleInstanceLock()) {
       homeUrl: HOME_URL,
     });
     if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
+    // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
+    await removeUnusedPartitions(app.getPath('userData'), new Set(Object.values(initial.chords).map((c) => c.profileId)));
 
     const store = persistence;
     browser = new Browser({

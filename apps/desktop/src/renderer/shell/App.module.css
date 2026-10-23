@@ -176,6 +176,14 @@ kbd {
   font: var(--text-label);
 }
 
+/* Shown when the chord keeps its own sign-ins. */
+.signIns {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--color-fg-subtle);
+}
+
 /* The chord's icon: click to change it. */
 .chordIconButton {
   display: grid;

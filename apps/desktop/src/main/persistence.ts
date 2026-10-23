@@ -4,6 +4,7 @@
  * utility process dies, the batch it was writing goes back in the queue and a
  * new process takes over, at most three times.
  */
+import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { PersistedState, State } from '@chord/core';
 import {
@@ -42,11 +43,11 @@ export class Persistence {
 
   private constructor(private readonly file: string) {}
 
-  /** Start chord-data and read what was saved (null for a brand-new profile). */
+  /** Start chord-data and read what was saved (null for a brand-new profile). Rows of unused profiles are dropped. */
   static async open(file: string): Promise<{ persistence: Persistence; saved: PersistedState | null }> {
     const persistence = new Persistence(file);
     persistence.spawn();
-    const response = await persistence.request({ type: 'open', file });
+    const response = await persistence.request({ type: 'open', file, prune: true });
     if (!response.ok) throw new Error(response.error);
     return { persistence, saved: response.saved ?? null };
   }
@@ -147,5 +148,20 @@ export class Persistence {
     await Promise.race([done.catch(() => {}), new Promise((resolve) => setTimeout(resolve, CLOSE_TIMEOUT_MS))]);
     this.closed = true;
     this.child.kill();
+  }
+}
+
+/**
+ * Deletes the sign-ins (cookies, storage, cache) of profiles no chord uses:
+ * every `<userData>/Partitions/p-<id>` folder whose profile isn't in `used`.
+ * Runs at startup, before any session loads them. Only Chord's own `p-<id>`
+ * folders qualify, so nothing else can be deleted through this.
+ */
+export async function removeUnusedPartitions(userData: string, used: ReadonlySet<string>): Promise<void> {
+  const root = join(userData, 'Partitions');
+  const names = await readdir(root).catch(() => [] as string[]);
+  for (const name of names) {
+    const id = /^p-([0-9a-f-]{8,64})$/i.exec(name)?.[1];
+    if (id && !used.has(id)) await rm(join(root, name), { recursive: true, force: true }).catch(() => {});
   }
 }

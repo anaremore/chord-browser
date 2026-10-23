@@ -43,7 +43,8 @@ export interface SearchResult {
 
 /** Main → chord-data. */
 export type DataRequest =
-  | { id: number; type: 'open'; file: string }
+  /** `prune` (at app start only): drop the rows of profiles no chord uses. */
+  | { id: number; type: 'open'; file: string; prune?: boolean }
   | { id: number; type: 'write'; ops: WriteOp[]; events: HistoryEvent[] }
   | { id: number; type: 'search'; query: string; chordId: string | null; now: number }
   | { id: number; type: 'close' };

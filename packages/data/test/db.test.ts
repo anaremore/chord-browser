@@ -118,6 +118,24 @@ describe('chord-data', () => {
     expect(count('favicon')).toBe(0);
   });
 
+  it('gives a chord with separate sign-ins its own profile, and prunes it once nothing uses it', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const chordId = Object.keys(state.chords)[0]!;
+    state = drive(db, state, [{ t: 'chord.profile', chordId, profileId: 'work-1' }]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect(db.load()!.chords[0]!.profileId).toBe('work-1');
+    // Still used: nothing to prune.
+    expect(db.pruneProfiles()).toEqual([]);
+    drive(db, state, [{ t: 'chord.profile', chordId, profileId: 'default' }]);
+    expect(db.pruneProfiles()).toEqual(['persist:p-work-1']);
+    expect(db.pruneProfiles()).toEqual([]);
+    db.close();
+    expect(count('profile')).toBe(1);
+  });
+
   it('rolls back a batch that breaks a constraint, keeping what was there', () => {
     const db = new ChordDatabase(file);
     const state = seed();

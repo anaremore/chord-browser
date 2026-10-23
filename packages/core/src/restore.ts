@@ -84,6 +84,7 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
     if (isUnit(ui['glass'])) settings.interface.glass = ui['glass'];
   }
   if (Array.isArray(saved['themes'])) settings.themes = saved['themes'].map(validTheme).filter((t): t is CustomTheme => t !== null);
+  if (typeof saved['separateSignIns'] === 'boolean') settings.separateSignIns = saved['separateSignIns'];
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
   const motion = saved['motion'];
