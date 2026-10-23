@@ -4,6 +4,7 @@
  * keeps its "session files" in a temp CLAUDE_CONFIG_DIR, so resume, fallback
  * and deletion of the provider's copy can be checked on disk.
  */
+import { execFile } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -259,6 +260,22 @@ test('Duet: form values never leave the page, and a Never site is refused even u
   }
 });
 
+test('Duet: a Claude Code too old for browse mode isn’t asked whether it’s signed in, and Setup says to update it', async () => {
+  const setup = fresh();
+  const app = await launch(setup, '/article', { FAKE_CLAUDE_VERSION: '1.0.34' });
+  try {
+    const shell = await shellOf(app);
+    const panel = await openDuet(shell);
+    await expect(panel.getByText('Installed 1.0.34 · Needs an update')).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'How to update' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
+    // `claude auth status` would be a prompt to 1.x: it was never run.
+    expect(existsSync(join(setup.config, 'auth-asked'))).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
 /** Every page URL main has open (tabs, and the PDF viewer inside them). */
 const openUrls = (app: ElectronApplication) => app.evaluate(({ webContents }) => webContents.getAllWebContents().map((w) => w.getURL()));
 
@@ -299,6 +316,43 @@ test('Duet: reads a PDF through the tab’s own session, cites its page, and sho
     await expect.poll(() => app.evaluate(() => (globalThis as { found?: number }).found ?? 0)).toBe(1);
   } finally {
     await app.close();
+  }
+});
+
+/**
+ * Claude Code installed only inside WSL, for real: the fake CLI runs inside the default distro
+ * through wsl.exe. Opt-in (CHORD_E2E_WSL=1), as it needs Windows with WSL and node in the distro.
+ * CLAUDE_CONFIG_DIR reaches the distro through WSLENV, the way a user's own setting would.
+ */
+test('Duet: Claude Code inside WSL is offered in Setup, answers through wsl.exe, and deleting the chat deletes its session there', async () => {
+  test.skip(!(process.platform === 'win32' && process.env['CHORD_E2E_WSL'] === '1'), 'Needs WSL with node in the default distro: set CHORD_E2E_WSL=1');
+  test.setTimeout(120_000);
+  const wsl = (args: string[]) => new Promise<string>((done) => execFile('wsl.exe', args, { windowsHide: true }, (_e, out) => done(String(out))));
+  const linuxFake = fake.replace(/^([A-Za-z]):/, (_m, drive: string) => `/mnt/${drive.toLowerCase()}`).replace(/\\/g, '/');
+  const config = `/tmp/chord-e2e-wsl-${Date.now()}`;
+  const sessions = () => wsl(['-e', 'sh', '-c', `ls ${config}/projects/*/*.jsonl 2>/dev/null`]).then((out) => out.trim().split('\n').filter(Boolean));
+  const app = await launch(fresh(), '/article', {
+    CHORD_DUET_CLAUDE: '',
+    CHORD_DUET_CLAUDE_WSL: `node ${linuxFake}`,
+    CLAUDE_CONFIG_DIR: config,
+    WSLENV: [process.env['WSLENV'], 'CLAUDE_CONFIG_DIR/u'].filter(Boolean).join(':'),
+  });
+  try {
+    const shell = await shellOf(app);
+    const panel = await openDuet(shell);
+    await expect(panel.getByText(/^Claude Code in WSL \(.+\)$/)).toBeVisible({ timeout: 60_000 });
+    await expect(panel.getByText('Installed 2.1.309 · Signed in')).toBeVisible();
+    await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-wsl-setup.png`) });
+    await setUp(panel);
+    await send(panel, 'Summarize this page');
+    await expect(panel.getByText('Here is the gist.')).toBeVisible({ timeout: 30_000 });
+    expect(await sessions()).toHaveLength(1);
+    await panel.getByRole('button', { name: 'Chats' }).click();
+    await panel.getByRole('menuitem', { name: 'Delete this chat' }).click();
+    await expect.poll(sessions, { timeout: 30_000 }).toHaveLength(0);
+  } finally {
+    await app.close();
+    await wsl(['-e', 'rm', '-rf', '--', config]);
   }
 });
 

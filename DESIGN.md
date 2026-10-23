@@ -585,12 +585,13 @@ Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECTURE.md §11).
 
 - **Frame:** a `surface` frame (`radius-frame`, `shadow-frame`), 380 px, right of the page with an 8 px gap. The page's frame narrows to make room.
-- **Header (40 px):** the chat's title (click *Rename* to edit it in place), a *provider · model* chip ("Claude Code · Default") that opens the model menu, the **Chats** menu (New chat, Rename, Export as Markdown, Delete this chat, recent chats, Turn off in this chord), and close.
+- **Header (40 px):** the chat's title (click *Rename* to edit it in place), the context meter, a *provider · model* chip ("Claude Code · Default") that opens the model menu, the **Chats** menu (New chat, Rename, Export as Markdown, Delete this chat, recent chats, Turn off in this chord), and close.
+- **`ContextMeter`:** a 16 px pie in a 24 px hit area, `fg-subtle` (the `accent` from 80%), filling clockwise from the top as the chat uses the model's context. A pie, not a ring: a partly drawn ring reads as a spinner. Its tooltip and accessible value say "62% of context used. When it fills up, Claude Code compacts the conversation automatically and carries on." It's a focusable `meter`. It appears after the first answer, and only when the CLI reports its context window (ARCHITECTURE.md §11.2); it's never estimated.
 - **Reading line:** "Duet can read:" with *What you attach (asks for more)* · *Tabs in this chord* · *All my tabs*, for this chat (the default is set in Settings → Duet).
 - **Messages:** `text-body`, max width 64ch.
   - User messages sit in a soft accent-tinted bubble, with the attached tabs' titles under it; hovering shows **Copy** and, on the last one, **Edit and send again**.
   - Assistant messages are unbubbled for calm reading: a small, safe Markdown subset with no images. A link shows its full address and opens only when clicked.
-  - **Citations** are small numbered pills inside the sentence they support. Clicking one switches to the source tab and finds the quote; if the tab is gone, it opens the page scrolled to the quote.
+  - **Citations** are small numbered pills inside the sentence they support. Clicking one switches to the source tab and finds the quote; if the tab is gone, it opens the page scrolled to the quote. A PDF's pill names its page, "1 · p. 3" (its accessible name, "Source 1, page 3: “…”"), and opens the PDF there.
   - An interrupted reply says *Interrupted* with **Retry**; an error gives the plain cause and the fix.
   - Dividers mark *Continued with a summary* and *Switched to Codex*.
 - **`ToolActivityRow`:** a single quiet line ("Read “Article”", "Read 3 tabs · 1 more", "Searched history for 'flights'") that expands to show details.
@@ -687,6 +688,8 @@ A link clicked inside a pinned tab opens in Peek instead of replacing the pinned
 2. **Setup** (under the intro) lists what's on this computer:
    - Claude Code: *Installed 2.1.309 · Signed in* with **Use this**, or **Sign in** (opens a terminal running `claude auth login`). *Using your API key* shows when that's what pays.
    - Codex: *Not installed* · **How to install**.
+   - On Windows, one installed only inside WSL is named for it: **Claude Code in WSL (Ubuntu)**, with the same line and buttons. While Chord looks there, the line says *Looking in WSL…*. With no WSL, nothing about it shows.
+   - A version too old to say whether it's signed in: *Installed 1.0.34 · Needs an update* · **How to update**.
    - **Check again** re-detects. The user picks one and is done; it can be changed any time from the model chip or Settings.
 3. **First-use note**, once: "What you attach goes to Claude Code through your own account. Duet reads only what's attached to your message, unless you let it see more. It never sees what you type into forms." **Got it**.
 4. **Ready, empty:** "Ask about this page, your tabs, or anything you're working on." Chips: *Summarize this page* · *What should I know before I decide?* · *Compare with my other tabs*.

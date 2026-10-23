@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   cleanPageText,
+  contextLabel,
+  contextPercent,
   DUET_READ_MAX,
   DUET_TOOLS,
   isNeverReadable,
   pageResult,
+  pdfPageOf,
+  pdfPageUrl,
+  pdfText,
   readNeedsApproval,
   splitCitations,
   textFragmentUrl,
@@ -92,5 +97,52 @@ describe('Duet: threads', () => {
       { id: '2', threadId: 'x', createdAt: 2, body: { role: 'assistant', text: 'Hi [[t1:"q"]] there', citations: [], status: 'done' } },
     ];
     expect(transcriptSummary(messages)).toBe('User: Hello\nDuet: Hi  there');
+  });
+});
+
+describe('Duet: PDFs', () => {
+  const pages = ['Field guide\nA chord is three notes.', 'Triads are bright and stable, a well-\nknown sound.', '', 'Inversions put another note at the bottom of the chord and continue onto'];
+
+  it('marks each page, so ranges and the model both know where they are', () => {
+    expect(pdfText(pages)).toBe(
+      '[Page 1]\nField guide\nA chord is three notes.\n\n[Page 2]\nTriads are bright and stable, a well-\nknown sound.\n\n[Page 3]\n\n[Page 4]\nInversions put another note at the bottom of the chord and continue onto',
+    );
+    // pageResult cleans again; nothing moves.
+    expect(JSON.parse(pageResult({ ref: 't1', url: 'https://e.test/a.pdf', text: pdfText(pages), retrievedAt: 0 })).content).toBe(pdfText(pages));
+  });
+
+  it('finds the page a quote is on, however the PDF broke its lines', () => {
+    expect(pdfPageOf(pages, 'A chord is three notes')).toBe(1);
+    expect(pdfPageOf(pages, 'bright and stable')).toBe(2);
+    // A word hyphenated across lines, and case, don't matter.
+    expect(pdfPageOf(pages, 'a wellknown sound')).toBe(2);
+    expect(pdfPageOf(pages, 'TRIADS ARE BRIGHT')).toBe(2);
+    // A quote that runs past the end of a page counts as the page it starts on.
+    expect(pdfPageOf(pages, 'put another note at the bottom of the chord and continue onto the next page')).toBe(4);
+    expect(pdfPageOf(pages, 'nothing like this')).toBeNull();
+    expect(pdfPageOf(pages, '   ')).toBeNull();
+  });
+
+  it('opens a PDF at a page', () => {
+    expect(pdfPageUrl('https://e.test/a.pdf#page=1', 3)).toBe('https://e.test/a.pdf#page=3');
+  });
+
+  it('says it’s a PDF, how many pages were read, and why fewer', () => {
+    const result = JSON.parse(pageResult({ ref: 't2', url: 'https://e.test/a.pdf', text: 'x', retrievedAt: 0, pdf: { pages: 512, read: 200 }, note: 'Read pages 1–200.' }));
+    expect(result).toMatchObject({ source: 'pdf', trust: 'untrusted', pages: { total: 512, read: 200 }, note: 'Read pages 1–200.' });
+    expect(JSON.parse(pageResult({ ref: 't2', url: 'https://e.test/', text: 'x', retrievedAt: 0 }))).not.toHaveProperty('pages');
+  });
+});
+
+describe('Duet: context meter', () => {
+  it('rounds and clamps the share used', () => {
+    expect(contextPercent({ used: 124_000, window: 200_000 })).toBe(62);
+    expect(contextPercent({ used: 250_000, window: 200_000 })).toBe(100);
+    expect(contextPercent({ used: 10, window: 0 })).toBe(0);
+  });
+
+  it('says what each provider does when the context fills up', () => {
+    expect(contextLabel('claude', { used: 124_000, window: 200_000 })).toBe('62% of context used. When it fills up, Claude Code compacts the conversation automatically and carries on.');
+    expect(contextLabel('codex', { used: 1, window: 100 })).toMatch(/^1% of context used\. When it fills up, Codex compacts/);
   });
 });

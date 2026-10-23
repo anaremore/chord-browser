@@ -573,19 +573,20 @@ function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
                 <span className={styles.providerName}>{name}</span>
                 <span className={styles.muted}>
                   {!p.installed
-                    ? view.lookingInWsl
+                    ? view.lookingInWsl.includes(p.provider)
                       ? 'Looking in WSL…'
                       : 'Not installed'
                     : `Installed ${p.version ?? ''}${p.signedIn ? ' · Signed in' : ''}${p.billing === 'api-key' ? ' · Using your API key' : ''}${p.tooOld ? ' · Needs an update' : ''}`}
                 </span>
               </div>
-              {!p.installed ? (
+              {/* Too old to say whether it's signed in: updating comes first. */}
+              {!p.installed || p.signedIn === null ? (
                 <button
                   type="button"
                   className={styles.quiet}
                   onClick={() => void api.state.dispatch({ t: 'tab.open', windowId, url: p.provider === 'claude' ? 'https://code.claude.com/docs/en/setup' : 'https://developers.openai.com/codex' })}
                 >
-                  How to install
+                  {p.installed ? 'How to update' : 'How to install'}
                 </button>
               ) : !p.signedIn ? (
                 <button type="button" className={styles.secondary} onClick={() => act({ do: 'signIn', provider: p.provider })}>

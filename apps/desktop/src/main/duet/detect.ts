@@ -210,6 +210,9 @@ export function rememberedInWsl(status: ProviderStatus, target: WslTarget): Dete
 async function check(provider: DuetProvider, launch: Launch, path: string, wsl: string | null = null): Promise<Detected> {
   const version = parseVersion((await run(launch, ['--version'])).stdout);
   const status: ProviderStatus = { ...notInstalled(provider), installed: true, path, version, tooOld: version ? compareVersions(version, MIN_VERSION[provider]) < 0 : false, wsl };
+  // Claude Code 1.x has no `auth` command: `claude auth status` would start a session with that as its prompt.
+  // An old one is reported as needing an update, sign-in unknown (seen with 1.0.34 inside WSL).
+  if (provider === 'claude' && status.tooOld) return { status, launch };
   if (provider === 'claude') {
     // Exit 0 when signed in. Only authMethod is read; the JSON can hold account details, never logged.
     const auth = await run(launch, ['auth', 'status']);

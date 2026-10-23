@@ -125,7 +125,8 @@ export class DuetService {
   /** Installs found inside WSL at the last look, used while Windows itself has none. */
   private inWsl: Partial<Record<DuetProvider, Detected>> = {};
   private wslLookup: Promise<void> | null = null;
-  private lookingInWsl = false;
+  /** Providers Setup is still looking for inside WSL. */
+  private lookingInWsl: DuetProvider[] = [];
   private readonly threads = new Map<string, ThreadState>();
   /** Which thread each chord's panel shows: a thread id, or a chord-keyed fresh one. */
   private readonly showing = new Map<string, string>();
@@ -874,7 +875,10 @@ export class DuetService {
     let pdf = state.pdfs.get(node.id);
     if (!pdf || pdf.url !== url || start === 0) {
       try {
-        const bytes = await fetchPdf(contents, url, (finalUrl) => !isNeverReadable(finalUrl, this.settings.neverSites));
+        // The address the tab shows now, and where the download ends up, must both be readable.
+        const readable = (address: string) => !isNeverReadable(address, this.settings.neverSites);
+        if (!readable(url)) throw new PdfError('never');
+        const bytes = await fetchPdf(contents, url, readable);
         const { pages, totalPages } = await extractPdf(bytes, DUET_PDF_MAX_PAGES);
         pdf = { url, pages, totalPages, text: pdfText(pages) };
       } catch (error) {
@@ -1058,7 +1062,7 @@ export class DuetService {
         for (const p of providers) delete this.inWsl[p];
         return;
       }
-      this.lookingInWsl = true;
+      this.lookingInWsl = providers;
       this.schedulePush();
       try {
         const found = await detectInWsl(providers, distro);
@@ -1072,7 +1076,7 @@ export class DuetService {
         }
         void this.savePanel();
       } finally {
-        this.lookingInWsl = false;
+        this.lookingInWsl = [];
         this.schedulePush();
       }
     })().finally(() => (this.wslLookup = null));

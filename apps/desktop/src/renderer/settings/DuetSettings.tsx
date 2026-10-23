@@ -56,14 +56,15 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
             description={
               !p.installed
                 ? 'Not installed.'
-                : `Installed ${p.version ?? ''}${p.signedIn ? ' · Signed in' : ' · Not signed in'}${p.billing === 'api-key' ? ' · Using your API key, billed to it' : ''}${p.tooOld ? ' · Needs an update' : ''}${p.path ? ` · ${p.path}` : ''}`
+                : `Installed ${p.version ?? ''}${p.signedIn ? ' · Signed in' : p.signedIn === false ? ' · Not signed in' : ''}${p.billing === 'api-key' ? ' · Using your API key, billed to it' : ''}${p.tooOld ? ' · Needs an update' : ''}${p.path ? ` · ${p.path}` : ''}`
             }
             control={
-              p.installed && !p.signedIn ? (
+              // Too old to say whether it's signed in (signedIn null): the description says it needs an update.
+              p.installed && p.signedIn === false ? (
                 <button type="button" className={styles.linkButton} onClick={() => void api.settings.duet({ do: 'signIn', provider: p.provider }).then(setProviders)}>
                   Sign in
                 </button>
-              ) : p.installed ? (
+              ) : p.installed && p.signedIn ? (
                 <Switch label={`Use ${DUET_PROVIDER_NAMES[p.provider]}`} checked={duet.provider === p.provider} onChange={(on) => set({ provider: on ? p.provider : null })} />
               ) : null
             }

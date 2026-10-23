@@ -581,8 +581,8 @@ export interface DuetView {
   draft: string;
   /** How full the chat's context is, when the provider's CLI reports it (null hides the meter). */
   context: DuetContextUsage | null;
-  /** Setup is still looking for Claude Code or Codex inside WSL (Windows). */
-  lookingInWsl: boolean;
+  /** Providers Setup is still looking for inside WSL (Windows). */
+  lookingInWsl: DuetProvider[];
 }
 
 /** Renderer → main requests (`ipcRenderer.invoke`). */

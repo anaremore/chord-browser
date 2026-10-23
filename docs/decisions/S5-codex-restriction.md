@@ -27,6 +27,7 @@ The spike is `spikes/s10-duet/codex.mjs`. It prints protocol shapes only: the ac
 | Model | The global default model was rejected for the test account's plan (*not supported*). Duet now uses the default from `model/list`, unless the user picks one. |
 | A live turn | `turn/start` returned an `error` notification with `codexErrorInfo: usageLimitExceeded` and a reset time. Duet shows that as a usage limit with the reset time. |
 | Signed in? | `codex login status` exits 0 when signed in, 1 when not. Chord never calls `getAuthStatus` (it can return the token). |
+| How full is the context? (2026-10-23, from `codex app-server generate-ts`) | `thread/tokenUsage/updated {threadId, turnId, tokenUsage: {total, last, modelContextWindow: number \| null}}`, each breakdown `{totalTokens, inputTokens, cachedInputTokens, cacheWriteInputTokens, outputTokens, reasoningOutputTokens}`. Duet's meter shows `last.totalTokens` of the window, and nothing when the window is null. Compaction is a `contextCompaction` item (`thread/compacted` is deprecated). Not seen live: the account is still at its usage limit. |
 
 ## Not yet verified (the pass criteria)
 

@@ -21,9 +21,11 @@ const flag = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 if (args[0] === '--version') {
-  process.stdout.write('2.1.309 (Claude Code)\n');
+  // FAKE_CLAUDE_VERSION plays an older Claude Code (1.x has no `auth` command).
+  process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.309'} (Claude Code)\n`);
   process.exit(0);
 }
+if (args[0] === 'auth' && process.env.CLAUDE_CONFIG_DIR) appendFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'auth-asked'), `${args.join(' ')}\n`);
 if (args[0] === 'auth' && args[1] === 'status') {
   process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }));
   process.exit(0);

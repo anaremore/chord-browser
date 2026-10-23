@@ -69,11 +69,11 @@
 }
 
 .meterTrack {
-  stroke: currentcolor;
+  stroke: currentColor;
 }
 
 .meterFill {
-  stroke: currentcolor;
+  stroke: currentColor;
   transition: stroke-dasharray var(--duration-fade-fast) var(--ease-standard);
 }
 
