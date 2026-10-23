@@ -30,7 +30,7 @@ Previews aren't code-signed yet, so Windows and macOS warn you before the first 
 **macOS:** open `Chord-<version>-mac-<arch>.dmg` and drag Chord to Applications. The first time you open it, macOS says it can't verify Chord. Click **Done**, then:
 - **macOS 15 and later:** open **System Settings → Privacy & Security**, scroll to *Security*, click **Open Anyway** next to Chord, and confirm with your password.
 - **macOS 14 and earlier:** Control-click Chord in Applications, choose **Open**, then **Open** again.
-- After an update, macOS may ask whether Chord can use *Chord Safe Storage* in your keychain (it encrypts your cookies). Click **Always Allow**.
+- After an update, macOS may ask whether Chord can use *Chord Safe Storage* in your keychain (it encrypts your cookies). Click **Always Allow**. Until you answer, Chord shows its window but can't load pages, so if pages stay blank after an update, look for that prompt behind the window.
 
 **Linux:**
 - **Debian and Ubuntu:** `sudo apt install ./Chord-<version>-linux-<arch>.deb`. The package sets up the browser sandbox, including on Ubuntu 23.10 and later.

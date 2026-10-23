@@ -47,21 +47,24 @@ const PRESET_GRAIN = 0.2;
 function Mark({ spring }: { spring: SpringFor }) {
   return (
     <svg className={styles.mark} viewBox="4 6 24 20" aria-hidden>
-      {NOTES.map((note, i) => (
-        <motion.rect
-          key={note.color}
-          y={note.y}
-          width={note.width}
-          height={4}
-          rx={2}
-          fill={note.color}
-          // Each note overlaps the one above through a cutout in the card's color.
-          className={styles.note}
-          initial={{ x: note.x - 6, opacity: 0 }}
-          animate={{ x: note.x, opacity: 1 }}
-          transition={{ ...spring('bouncy', 'commandBar'), delay: i * 0.06 }}
-        />
-      ))}
+      {/* Its own presence boundary: the card's skips its first animation, and would skip the notes' too. */}
+      <AnimatePresence>
+        {NOTES.map((note, i) => (
+          <motion.rect
+            key={note.color}
+            y={note.y}
+            width={note.width}
+            height={4}
+            rx={2}
+            fill={note.color}
+            // Each note overlaps the one above through a cutout in the card's color.
+            className={styles.note}
+            initial={{ x: note.x - 6, opacity: 0 }}
+            animate={{ x: note.x, opacity: 1 }}
+            transition={{ ...spring('bouncy', 'commandBar'), delay: i * 0.06 }}
+          />
+        ))}
+      </AnimatePresence>
     </svg>
   );
 }
