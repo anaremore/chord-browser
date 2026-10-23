@@ -92,6 +92,17 @@ describe('restoreState', () => {
     expect(restored({ googleFree: 'yes' })).toMatchObject({ googleFree: false, searchEngine: 'google' });
   });
 
+  it('restores Safe Browsing only as it was answered, and never in Google-free mode', () => {
+    const restored = (settings: Record<string, unknown>) => restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings }, seed).settings;
+    // A profile from before Safe Browsing never saw its notice: off, and still to be offered.
+    expect(restored({})).toMatchObject({ safeBrowsing: false, safeBrowsingAsked: false });
+    expect(restored({ safeBrowsing: true, safeBrowsingAsked: true })).toMatchObject({ safeBrowsing: true, safeBrowsingAsked: true });
+    expect(restored({ safeBrowsing: false, safeBrowsingAsked: true })).toMatchObject({ safeBrowsing: false, safeBrowsingAsked: true });
+    // On without its notice answered can't be: it stays off.
+    expect(restored({ safeBrowsing: true })).toMatchObject({ safeBrowsing: false, safeBrowsingAsked: false });
+    expect(restored({ safeBrowsing: true, safeBrowsingAsked: true, googleFree: true })).toMatchObject({ safeBrowsing: false, googleFree: true });
+  });
+
   it('always has a window to open', () => {
     const state = restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings: {} }, seed);
     const [only] = Object.values(state.windows);

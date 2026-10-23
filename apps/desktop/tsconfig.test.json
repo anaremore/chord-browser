@@ -18,6 +18,10 @@
     "test/e2e",
     "test/fixtures",
     "test/packaged",
-    "src/renderer/env.d.ts"
+    "src/renderer/env.d.ts",
+    "src/main/safe-browsing/database.ts",
+    "src/main/safe-browsing/proto.ts",
+    "src/main/safe-browsing/rice.ts",
+    "src/main/safe-browsing/url.ts"
   ]
 }

@@ -196,6 +196,9 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
   if (typeof saved['googleFree'] === 'boolean') settings.googleFree = saved['googleFree'];
   if (settings.googleFree && settings.searchEngine === 'google') settings.searchEngine = GOOGLE_FREE_ENGINE;
+  // A profile saved before Safe Browsing existed never saw its notice: it stays off, and is offered once.
+  if (typeof saved['safeBrowsingAsked'] === 'boolean') settings.safeBrowsingAsked = saved['safeBrowsingAsked'];
+  if (typeof saved['safeBrowsing'] === 'boolean') settings.safeBrowsing = saved['safeBrowsing'] && settings.safeBrowsingAsked && !settings.googleFree;
   const motion = saved['motion'];
   if (motion && typeof motion === 'object') {
     for (const key of Object.keys(settings.motion) as (keyof MotionSettings)[]) {

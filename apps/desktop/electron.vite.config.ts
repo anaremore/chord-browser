@@ -7,13 +7,16 @@ const src = (path: string) => resolve(import.meta.dirname, 'src', path);
 
 export default defineConfig({
   main: {
+    // Google's Safe Browsing API key (ARCHITECTURE.md §14.1), from the environment at build time: the
+    // release workflow passes the `release` environment's secret. Without it Safe Browsing is unavailable.
+    define: { __CHORD_SAFE_BROWSING_KEY__: JSON.stringify(process.env['CHORD_SAFE_BROWSING_KEY'] ?? '') },
     // Bundle everything (workspace packages are TypeScript sources); only
-    // electron and Node built-ins stay external. Two entries: main itself,
-    // and chord-data's utility process (ARCHITECTURE.md §4).
+    // electron and Node built-ins stay external. Three entries: main itself,
+    // chord-data's utility process (ARCHITECTURE.md §4), and Safe Browsing's worker thread.
     build: {
       externalizeDeps: false,
       rolldownOptions: {
-        input: { index: src('main/index.ts'), data: src('data/worker.ts') },
+        input: { index: src('main/index.ts'), data: src('data/worker.ts'), 'safe-browsing': src('main/safe-browsing/worker.ts') },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },
       },

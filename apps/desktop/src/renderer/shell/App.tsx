@@ -31,6 +31,7 @@ import { DuetPanel } from './Duet';
 import { DuetReadTabs } from './duet-context';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { Onboarding } from './Onboarding';
+import { SafeBrowsingWarning } from './SafeBrowsingWarning';
 import { SplitPanes, useElementSize } from './Split';
 import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
@@ -63,8 +64,9 @@ function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadErro
   );
 }
 
-/** What the frame shows instead of a page that crashed or didn't load (nothing while the page is fine). */
+/** What the frame shows instead of a page that crashed, didn't load, or may be unsafe (nothing while the page is fine). */
 function PageState({ tab, live, windowId }: { tab: TabNode; live: LiveTab | undefined; windowId: string }) {
+  if (live?.threat) return <SafeBrowsingWarning threat={live.threat} nodeId={tab.id} windowId={windowId} />;
   if (live?.crashed) {
     return (
       <div className={styles.empty} role="alert" data-page-state>

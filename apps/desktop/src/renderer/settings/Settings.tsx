@@ -369,10 +369,18 @@ function About({ about, snapshot }: { about: AboutInfo; snapshot: SettingsSnapsh
           description="Includes electron-chrome-extensions, which is GPL-3.0, so Chord’s release builds are distributed under GPL-3.0. Chord’s own source stays MIT."
           control={<span className={styles.value}>GPL-3.0</span>}
         />
+        <Row
+          label="Safe Browsing"
+          description="Warnings about suspected phishing and malware come from Safe Browsing by Google, for non-commercial use under Google’s terms."
+          control={<span className={styles.value}>Google</span>}
+        />
       </div>
       <div className={styles.links}>
         <button type="button" className={styles.linkButton} onClick={() => void api.settings.openUrl(REPO_URL)}>
           Source on GitHub
+        </button>
+        <button type="button" className={styles.linkButton} onClick={() => void api.settings.openUrl(`${REPO_URL}/blob/main/LICENSES/THIRD-PARTY-NOTICES.md`)}>
+          Third-party notices
         </button>
         <button type="button" className={styles.linkButton} onClick={() => void api.settings.openUrl(`${REPO_URL}/issues/new`)}>
           Report an issue

@@ -85,14 +85,29 @@ jobs:
           HAS_WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD != '' }}
         run: node apps/desktop/scripts/signing-mode.mjs
 
+      # Google's Safe Browsing API key goes into the build (electron.vite.config.ts, ARCHITECTURE.md §14.1).
+      # It's a secret of the protected `release` environment, so manual runs build without it. Only whether
+      # it's set reaches this step. Without it the build still works; Settings shows Safe Browsing as unavailable.
+      - name: Check the Safe Browsing key
+        shell: bash
+        env:
+          HAS_SAFE_BROWSING_KEY: ${{ secrets.CHORD_SAFE_BROWSING_KEY != '' }}
+        run: |
+          if [ "$HAS_SAFE_BROWSING_KEY" != "true" ]; then
+            echo "::warning::CHORD_SAFE_BROWSING_KEY isn't set, so this build has no Safe Browsing: Settings → Privacy shows it as unavailable (ARCHITECTURE.md §14.1)."
+          fi
+
       - name: Package
         if: env.CHORD_SIGNING == 'none'
+        env:
+          CHORD_SAFE_BROWSING_KEY: ${{ secrets.CHORD_SAFE_BROWSING_KEY }}
         run: pnpm --filter @chord/desktop package --${{ matrix.platform }} --${{ matrix.arch }}
 
       - name: Package, signed and notarized (macOS)
         if: env.CHORD_SIGNING == 'developer-id'
         shell: bash
         env:
+          CHORD_SAFE_BROWSING_KEY: ${{ secrets.CHORD_SAFE_BROWSING_KEY }}
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
@@ -109,6 +124,7 @@ jobs:
       - name: Package, signed with Artifact Signing (Windows)
         if: env.CHORD_SIGNING == 'artifact-signing'
         env:
+          CHORD_SAFE_BROWSING_KEY: ${{ secrets.CHORD_SAFE_BROWSING_KEY }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -121,6 +137,7 @@ jobs:
       - name: Package, signed with a certificate (Windows)
         if: env.CHORD_SIGNING == 'certificate'
         env:
+          CHORD_SAFE_BROWSING_KEY: ${{ secrets.CHORD_SAFE_BROWSING_KEY }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WIN_PUBLISHER_NAME: ${{ vars.WIN_PUBLISHER_NAME }}

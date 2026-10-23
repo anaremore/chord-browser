@@ -3,16 +3,72 @@
  * Downloads button in the sidebar footer (or the minimal bar), anchored to
  * it, newest first. Clicking outside or Escape closes it.
  */
-import { describeDownload, downloadsFor, type Download, type DownloadAction, type State } from '@chord/core';
+import {
+  describeDownload,
+  describeHeldDownload,
+  downloadsFor,
+  SAFE_BROWSING_ADVISORY,
+  THREAT_LEARN_MORE,
+  type Download,
+  type DownloadAction,
+  type State,
+  type ThreatKind,
+} from '@chord/core';
 import type { Rect } from '@chord/ipc';
-import { File, FolderOpen, Pause, Play, RotateCcw, X } from 'lucide-react';
+import { File, FolderOpen, Pause, Play, RotateCcw, ShieldAlert, X } from 'lucide-react';
 import { motion, type Transition } from 'motion/react';
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useId, useRef, type CSSProperties } from 'react';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const EDGE = 8;
+
+/**
+ * A download Safe Browsing suspects (ARCHITECTURE.md §14.1): paused, never
+ * opened, until you delete it or keep it. Google's page about the threat and
+ * its advisory open as tabs.
+ */
+function HeldRow({ download, threat, windowId, onClose }: { download: Download; threat: ThreatKind; windowId: string; onClose(): void }) {
+  const run = (action: DownloadAction) => void api.downloads.run(download.id, action);
+  const open = (url: string) => {
+    void api.state.dispatch({ t: 'tab.open', windowId, url });
+    onClose();
+  };
+  const nameId = useId();
+  const statusId = useId();
+  return (
+    <li className={styles.download} data-state="held">
+      <span className={styles.held} role="group" aria-labelledby={nameId} aria-describedby={statusId}>
+        <ShieldAlert className={styles.heldIcon} {...ICON} aria-hidden />
+        <span className={styles.downloadText}>
+          <span id={nameId} className={styles.downloadName} title={download.url}>
+            {download.filename}
+          </span>
+          <span id={statusId} className={styles.heldStatus}>
+            {describeHeldDownload(threat)}
+          </span>
+          <span className={styles.heldActions}>
+            <button type="button" className={styles.heldDelete} onClick={() => run('discard')}>
+              Delete
+            </button>
+            <button type="button" className={styles.textButton} onClick={() => run('keep')}>
+              Keep anyway
+            </button>
+          </span>
+          <span className={styles.heldLinks}>
+            <button type="button" className={styles.heldLink} onClick={() => open(THREAT_LEARN_MORE[threat].url)}>
+              {THREAT_LEARN_MORE[threat].label}
+            </button>
+            <button type="button" className={styles.heldLink} onClick={() => open(SAFE_BROWSING_ADVISORY.url)}>
+              {SAFE_BROWSING_ADVISORY.label}
+            </button>
+          </span>
+        </span>
+      </span>
+    </li>
+  );
+}
 
 function Row({ download }: { download: Download }) {
   const run = (action: DownloadAction) => void api.downloads.run(download.id, action);
@@ -134,9 +190,7 @@ export function DownloadsPanel({
         <p className={styles.downloadsEmpty}>Nothing downloaded yet.</p>
       ) : (
         <ul className={styles.downloadList}>
-          {downloads.map((d) => (
-            <Row key={d.id} download={d} />
-          ))}
+          {downloads.map((d) => (d.threat ? <HeldRow key={d.id} download={d} threat={d.threat} windowId={windowId} onClose={() => onClose()} /> : <Row key={d.id} download={d} />))}
         </ul>
       )}
       {finished && (

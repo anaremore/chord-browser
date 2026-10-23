@@ -178,6 +178,8 @@ export const SettingsPatch = z.strictObject({
   searchSuggestions: z.boolean().optional(),
   checkForUpdates: z.boolean().optional(),
   googleFree: z.boolean().optional(),
+  // Settings → Privacy's switch, with the notice beside it (main ignores it in Google-free mode).
+  safeBrowsing: z.boolean().optional(),
   separateSignIns: z.boolean().optional(),
   externalLinks: z.enum(['mini', 'tab']).optional(),
   spellcheck: z
@@ -414,6 +416,25 @@ export interface PopoverState {
   find: FindState | null;
   permission: PermissionPrompt | null;
   share: SharePrompt | null;
+  /** The one-time offer to turn Safe Browsing on, with its notice (profiles from before it existed). */
+  safeBrowsingOffer: boolean;
+}
+
+/**
+ * Safe Browsing on this computer (ARCHITECTURE.md §14.1), for Settings and
+ * first run. `available`: this build has Google's API key (or, in
+ * development, a test server); without it Chord never turns it on.
+ */
+export interface SafeBrowsingStatus {
+  available: boolean;
+  /** On, and not stopped by Google-free mode. */
+  active: boolean;
+  /** When the lists last updated, or null before the first time. */
+  updatedAt: number | null;
+  /** The last update failed; Chord tries again later. */
+  failing: boolean;
+  /** Hash prefixes in the lists on this computer. */
+  entries: number;
 }
 
 /** The permissions a site can be asked for, in Settings' order. */
@@ -621,9 +642,17 @@ export const invokeChannels = {
   'perf:shell': { roles: ['shell'], request: z.strictObject({ milestone: z.enum(['ready', 'painted']) }), response: z.void() },
   'download:action': {
     roles: ['shell', 'overlay'],
-    request: z.object({ id, action: z.enum(['open', 'show', 'pause', 'resume', 'cancel', 'retry', 'remove']) }),
+    request: z.object({ id, action: z.enum(['open', 'show', 'pause', 'resume', 'cancel', 'retry', 'remove', 'keep', 'discard']) }),
     response: z.void(),
   },
+  // Safe Browsing (ARCHITECTURE.md §14.1). Settings and first run read whether it's available.
+  'safeBrowsing:status': { roles: ['shell', 'internal'], request: z.void(), response: z.custom<SafeBrowsingStatus>() },
+  /** First run's step and the one-time offer: on or off, having seen the notice. */
+  'safeBrowsing:choose': { roles: ['shell', 'popover'], request: z.strictObject({ on: z.boolean() }), response: z.void() },
+  /** The warning's "Back to safety": the page before, or the tab closes if there's none. */
+  'safeBrowsing:back': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
+  /** The warning's "Visit anyway": the site isn't flagged again until Chord quits. */
+  'safeBrowsing:proceed': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   'downloads:openFolder': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
   /** The command bar's history and learned picks for what was typed (in the window's chord). */
   'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
@@ -850,6 +879,13 @@ export interface ShellApi {
     onRegion(listener: (event: FocusRegionEvent) => void): () => void;
     move(to: 'page' | 'popover' | 'shell'): Promise<void>;
   };
+  /** Safe Browsing: first run's step, and the warning's two ways out. */
+  safeBrowsing: {
+    status(): Promise<SafeBrowsingStatus>;
+    choose(on: boolean): Promise<void>;
+    back(nodeId: string): Promise<void>;
+    proceed(nodeId: string): Promise<void>;
+  };
 }
 
 /** F6 or ⇧F6: which way, where the keyboard is now, and whether a find bar or prompt shows over the page. */
@@ -901,6 +937,8 @@ export interface SettingsApi {
     /** Settings → Duet: which providers are installed and signed in; sign in; clear all chats. */
     duet(request: { do: 'detect' } | { do: 'signIn'; provider: DuetProvider } | { do: 'clearAll' }): Promise<DuetProviderInfo[]>;
     openUrl(url: string): Promise<void>;
+    /** Settings → Privacy → Safe Browsing: available in this build, and how its lists are doing. */
+    safeBrowsing(): Promise<SafeBrowsingStatus>;
   };
   extensions: {
     install(input: string): Promise<InstallResult>;
@@ -972,6 +1010,8 @@ export interface PopoverApi {
   permission: { respond(id: number, decision: 'allow' | 'block' | 'dismiss'): Promise<void> };
   /** The screen-share picker: a source to share, or null to cancel. */
   share: { respond(id: number, sourceId: string | null, audio: boolean): Promise<void> };
+  /** The one-time offer: turn Safe Browsing on, or not now (either way it isn't offered again). */
+  safeBrowsing: { choose(on: boolean): Promise<void> };
 }
 
 /** `window.chord` in the command bar overlay. */
