@@ -138,6 +138,41 @@ electron-updater has no rollback ✅, so the fix is always a **higher version**.
   GitHub then merges the moment CI passes. Don't flip `platformAutomerge` without the ruleset, or GitHub may merge before tests finish ✅ ([docs](https://docs.renovatebot.com/configuration-options/#platformautomerge)).
 - The `security` and `p0` labels are created the first time they're needed.
 
+### Update signing key
+
+Installed copies on Windows and the AppImage install an update only when its manifest is signed with this Ed25519 key (ARCHITECTURE.md §14.4). Until the key exists, every copy only says a new version is out. Make it once, on a machine you trust:
+
+1. **Create the environment.** *Settings → Environments → New environment*, named `release`.
+   - Under *Deployment protection rules*, tick **Required reviewers** and add yourself.
+   - Under *Deployment branches and tags*, choose **Selected branches and tags** and add the tag rule `v*`.
+   - Do this before the next tag: a workflow that names an environment that doesn't exist creates it with no protection.
+2. **Make the key pair.** From the repository root, run `node apps/desktop/scripts/update-key.mjs`. It prints a public key, a fingerprint and a private key, and writes nothing to disk.
+3. **Store the private key.** In the `release` environment, under *Environment secrets → Add environment secret*:
+   - Name: `CHORD_UPDATE_SIGNING_KEY`.
+   - Value: the whole private key, from `-----BEGIN PRIVATE KEY-----` through `-----END PRIVATE KEY-----`.
+   - Put it in an environment secret, not a repository secret, so only the reviewed release job can read it.
+4. **Keep an offline copy** of the private key, in your password manager. GitHub won't show a secret again. Without a copy, losing it means users install one version by hand (step 7).
+5. **Embed the public key.** Paste it into `apps/desktop/src/main/update-key.ts`, keeping the PEM's line breaks:
+   ```ts
+   export const UPDATE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+   MCowBQYDK2VwAyEA…
+   -----END PUBLIC KEY-----
+   `;
+   ```
+   Merge it through a normal PR. Then clear your terminal's scrollback.
+6. **Check the first signed release.**
+   - The *Sign the update manifests* step logs `Signed latest-win-x64.yml (key <fingerprint>)`, with the fingerprint from step 2.
+   - The draft has a `.yml.sig` beside each `latest-win-*.yml` and `latest-linux*.yml`.
+   - If the secret is missing, the step warns and the release ships notify-only. It doesn't fail.
+7. **Copies made before the key was embedded can't install updates themselves.** They say the new version is out, and the user installs it by hand once. After that, they update themselves.
+
+**Rotating the key:**
+1. Make a new pair.
+2. Ship one release that embeds the **new** public key but is signed with the **old** private key. Copies install it, and from then on they trust the new key.
+3. Then replace the secret.
+
+If the old key leaks, rotate at once. If it's lost, step 7 applies to everyone.
+
 ## Known gaps
 
 - ⚠ **Ticking the dashboard checkbox from a workflow** is how other repos trigger the Mend app, but Mend doesn't document it as an API. If it stops working, the issue still opens and Renovate still runs within about 4 hours. Tick the box by hand to go faster.

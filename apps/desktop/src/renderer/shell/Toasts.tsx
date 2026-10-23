@@ -41,7 +41,9 @@ function ToastCard({ toast, transition, onDone }: { toast: Toast; transition: Tr
           type="button"
           className={styles.toastAction}
           onClick={() => {
-            void api.state.dispatch(toast.action!.command);
+            const action = toast.action!;
+            if ('update' in action) void api.updates.restart();
+            else void api.state.dispatch(action.command);
             onDone();
           }}
         >

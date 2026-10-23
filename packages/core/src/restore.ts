@@ -9,6 +9,7 @@ import {
   defaultSettings,
   type ArchiveAfter,
   emptyState,
+  GOOGLE_FREE_ENGINE,
   MAX_ZOOM,
   MIN_ZOOM,
   SIDEBAR_WIDTH,
@@ -165,12 +166,25 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   }
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
+  if (typeof saved['googleFree'] === 'boolean') settings.googleFree = saved['googleFree'];
+  if (settings.googleFree && settings.searchEngine === 'google') settings.searchEngine = GOOGLE_FREE_ENGINE;
   const motion = saved['motion'];
   if (motion && typeof motion === 'object') {
     for (const key of Object.keys(settings.motion) as (keyof MotionSettings)[]) {
       const value = (motion as Record<string, unknown>)[key];
       if (typeof value === 'boolean') settings.motion[key] = value;
     }
+  }
+  const duet = saved['duet'] as Record<string, unknown> | undefined;
+  if (duet && typeof duet === 'object') {
+    if (typeof duet['enabled'] === 'boolean') settings.duet.enabled = duet['enabled'];
+    if (duet['provider'] === 'claude' || duet['provider'] === 'codex') settings.duet.provider = duet['provider'];
+    if (typeof duet['model'] === 'string' && duet['model'].length <= 100) settings.duet.model = duet['model'];
+    if (duet['keep'] === 'forever' || duet['keep'] === '90d' || duet['keep'] === '30d') settings.duet.keep = duet['keep'];
+    if (duet['scope'] === 'ask' || duet['scope'] === 'chord' || duet['scope'] === 'all') settings.duet.scope = duet['scope'];
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length <= 300).slice(0, 500) : []);
+    settings.duet.neverSites = strings(duet['neverSites']);
+    settings.duet.offChords = strings(duet['offChords']);
   }
   return settings;
 }

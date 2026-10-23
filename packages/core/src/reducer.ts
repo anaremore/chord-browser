@@ -10,6 +10,7 @@ import { cleanKeys } from './bindings';
 import { isInternalUrl, visibleTabs } from './idle';
 import {
   DEFAULT_PROFILE,
+  GOOGLE_FREE_ENGINE,
   IDLE_LIVE,
   MAX_ZOOM,
   MIN_ZOOM,
@@ -891,7 +892,13 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'settings.set': {
       const { searchEngine, motion, colorScheme, archiveAfter, sleepTabs, searchSuggestions, checkForUpdates, extensionButtons } = cmd.settings;
       if (extensionButtons !== undefined && draft.settings.extensionButtons !== extensionButtons) draft.settings.extensionButtons = extensionButtons;
-      if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
+      const { googleFree } = cmd.settings;
+      if (googleFree !== undefined && draft.settings.googleFree !== googleFree) draft.settings.googleFree = googleFree;
+      // Google-free mode searches with anything but Google: choosing Google is ignored, and turning the mode on moves off it.
+      if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine && !(draft.settings.googleFree && searchEngine === 'google')) {
+        draft.settings.searchEngine = searchEngine;
+      }
+      if (draft.settings.googleFree && draft.settings.searchEngine === 'google') draft.settings.searchEngine = GOOGLE_FREE_ENGINE;
       if (archiveAfter !== undefined && draft.settings.archiveAfter !== archiveAfter) draft.settings.archiveAfter = archiveAfter;
       if (sleepTabs !== undefined && draft.settings.sleepTabs !== sleepTabs) draft.settings.sleepTabs = sleepTabs;
       if (searchSuggestions !== undefined && draft.settings.searchSuggestions !== searchSuggestions) draft.settings.searchSuggestions = searchSuggestions;
@@ -899,6 +906,17 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const { autoPip } = cmd.settings;
       if (autoPip !== undefined && draft.settings.autoPip !== autoPip) draft.settings.autoPip = autoPip;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
+      if (cmd.settings.duet) {
+        const duet = cmd.settings.duet;
+        const current = draft.settings.duet;
+        if (duet.enabled !== undefined && current.enabled !== duet.enabled) current.enabled = duet.enabled;
+        if (duet.provider !== undefined && current.provider !== duet.provider) current.provider = duet.provider;
+        if (duet.model !== undefined && current.model !== duet.model) current.model = duet.model;
+        if (duet.keep !== undefined && current.keep !== duet.keep) current.keep = duet.keep;
+        if (duet.scope !== undefined && current.scope !== duet.scope) current.scope = duet.scope;
+        if (duet.neverSites) current.neverSites = [...new Set(duet.neverSites)];
+        if (duet.offChords) current.offChords = [...new Set(duet.offChords)];
+      }
       const { separateSignIns, onboarded } = cmd.settings;
       if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;
       if (onboarded !== undefined && draft.settings.onboarded !== onboarded) draft.settings.onboarded = onboarded;

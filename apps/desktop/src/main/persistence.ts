@@ -14,6 +14,8 @@ import {
   type ArchiveEntry,
   type ArchivePage,
   type DataRequest,
+  type DuetOp,
+  type DuetResult,
   type DataResponse,
   type HistoryEvent,
   type PathPatch,
@@ -119,6 +121,13 @@ export class Persistence {
     } catch {
       return { history: [], choices: [], archive: [] };
     }
+  }
+
+  /** Duet's threads and messages. Throws if chord-data can't answer, so Duet can say so. */
+  async duet(op: DuetOp): Promise<DuetResult> {
+    const response = await this.request({ type: 'duet', op });
+    if (!response.ok) throw new Error(response.error);
+    return response.duet ?? {};
   }
 
   /** The archive page's entries. Pending writes go first, so a tab archived a moment ago is there. */

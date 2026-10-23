@@ -5,17 +5,19 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Check, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Check, EyeOff, Info, Keyboard, MessagesSquare, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { useLive, type Live } from '../shared/live';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
+import { DuetSettings } from './DuetSettings';
 import { AppearanceSection } from './Appearance';
 import { ShortcutsSection } from './Shortcuts';
 import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import { ExtensionsSection } from './Extensions';
+import { PrivacySection } from './Privacy';
 import styles from './Settings.module.css';
 import { SitesSection, Spelling } from './Sites';
 
@@ -23,8 +25,10 @@ const SECTIONS = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'motion', label: 'Motion', icon: Sparkles },
+  { id: 'privacy', label: 'Privacy', icon: EyeOff },
   { id: 'sites', label: 'Site permissions', icon: ShieldCheck },
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
+  { id: 'duet', label: 'Duet', icon: MessagesSquare },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
 ] as const;
@@ -124,12 +128,13 @@ function SignIns({ snapshot }: { snapshot: SettingsSnapshot }) {
 
 function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
   const engine = snapshot.settings.searchEngine;
+  const googleFree = snapshot.settings.googleFree;
   return (
     <>
       <SectionHeader title="General" description="How Chord searches, which chords share sign-ins, and whether it opens your links." />
       <h2 className={styles.groupTitle}>
         Search engine
-        <ResetButton visible={engine !== DEFAULT_SETTINGS.searchEngine} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
+        <ResetButton visible={engine !== DEFAULT_SETTINGS.searchEngine && !googleFree} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
       </h2>
       <div className={styles.group} role="radiogroup" aria-label="Search engine">
         {SEARCH_ENGINES.map((e) => (
@@ -139,10 +144,12 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
             role="radio"
             aria-checked={e.id === engine}
             className={styles.choice}
+            // Settings → Privacy → Google-free mode searches with anything but Google.
+            disabled={googleFree && e.id === 'google'}
             onClick={() => void api.settings.set({ searchEngine: e.id })}
           >
             <span className={styles.rowLabel}>{e.name}</span>
-            <span className={styles.choiceHost}>{new URL(e.prefix).host}</span>
+            <span className={styles.choiceHost}>{googleFree && e.id === 'google' ? 'Off in Google-free mode' : new URL(e.prefix).host}</span>
             {e.id === engine && <Check className={styles.check} size={16} strokeWidth={2.25} aria-hidden />}
           </button>
         ))}
@@ -253,10 +260,17 @@ function checkedAgo(at: number): string {
   return `Checked ${relativeTime.format(-Math.round(minutes / 60), 'hour')}.`;
 }
 
-/** Settings → About: the notify-only update check's answer, and its switch. */
+/** Settings → About: the update check's answer (and the download, where Chord installs updates itself), and its switch. */
 function Updates({ enabled }: { enabled: boolean }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   useEffect(() => void api.settings.updateStatus().then(setStatus), []);
+  // A download in progress: follow it until it's ready.
+  const downloading = status?.state === 'downloading';
+  useEffect(() => {
+    if (!downloading) return;
+    const timer = setInterval(() => void api.settings.updateStatus().then(setStatus), 1000);
+    return () => clearInterval(timer);
+  }, [downloading]);
   if (!status) return null;
   const checkNow = async () => {
     setStatus({ state: 'checking' });
@@ -279,6 +293,20 @@ function Updates({ enabled }: { enabled: boolean }) {
         return <Row label="Chord is up to date" description={checkedAgo(status.checkedAt)} control={checkButton} />;
       case 'failed':
         return <Row label="Couldn’t check for updates" description="Chord will try again later." control={checkButton} />;
+      case 'downloading':
+        return <Row label={`Downloading Chord ${status.version}…`} description={`${status.percent}%. You can keep browsing.`} control={null} />;
+      case 'ready':
+        return (
+          <Row
+            label={`Chord ${status.version} is ready`}
+            description="Restart to install it. Your tabs and windows come back as they are."
+            control={
+              <button type="button" className={styles.linkButton} onClick={() => void api.settings.restartToUpdate()}>
+                Restart to update
+              </button>
+            }
+          />
+        );
       case 'available':
         return (
           <Row
@@ -298,7 +326,7 @@ function Updates({ enabled }: { enabled: boolean }) {
       {row}
       <Row
         label="Check for updates automatically"
-        description="Once a day, Chord asks GitHub whether a newer version is out. Nothing about you is sent, and nothing installs by itself."
+        description="Once a day, Chord asks GitHub whether a newer version is out, and nothing about you is sent. On Windows and in the AppImage, a new version downloads in the background and installs when Chord restarts."
         changed={enabled !== DEFAULT_SETTINGS.checkForUpdates}
         onReset={() => void api.settings.set({ checkForUpdates: DEFAULT_SETTINGS.checkForUpdates })}
         control={<Switch label="Check for updates automatically" checked={enabled} onChange={(checkForUpdates) => void api.settings.set({ checkForUpdates })} />}
@@ -410,8 +438,10 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'general' && <General snapshot={snapshot} info={info} />}
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} editColors={editColors} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
+              {section === 'privacy' && <PrivacySection snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
+              {section === 'duet' && <DuetSettings snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}
             </motion.div>

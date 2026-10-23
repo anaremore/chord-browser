@@ -18,6 +18,8 @@ import { delimiter, join } from 'node:path';
 import { app, clipboard, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
+import { openSignIn } from './duet/detect';
+import { DuetService } from './duet/service';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
@@ -33,6 +35,7 @@ import { platform, systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
 import { Suggestions } from './suggestions';
+import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
 import { chromiumUserAgent } from './user-agent';
 
@@ -59,6 +62,7 @@ function devMs(name: string): number | null {
 
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
+let duet: DuetService | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker();
 const downloads = new DownloadManager({
@@ -71,9 +75,12 @@ let profileSession: (profileId: string) => Session;
 const updates = new UpdateChecker({
   enabled: () => browser?.store.state.settings.checkForUpdates ?? false,
   onAvailable: (release) => browser?.announce(`update:${release.version}`, `${release.name} is out`, { label: 'What’s new', url: release.url }),
+  onReady: (release) => browser?.announceUpdateReady(`update:${release.version}`, `${release.name} is ready`),
+  installer: new UpdateInstaller(),
 });
 const suggestions = new Suggestions({
-  enabled: () => browser?.store.state.settings.searchSuggestions ?? false,
+  // Google-free mode never searches with Google (core enforces it); this is the backstop.
+  enabled: () => (browser?.store.state.settings.searchSuggestions ?? false) && !(browser?.store.state.settings.googleFree && browser.store.state.settings.searchEngine === 'google'),
   engine: () => browser?.store.state.settings.searchEngine ?? 'google',
 });
 
@@ -173,6 +180,7 @@ function registerIpc(): void {
   handle('settings:defaultBrowser', () => defaultBrowserStatus());
   handle('settings:updateStatus', () => updates.status());
   handle('settings:checkForUpdates', () => updates.checkNow());
+  handle('update:restart', () => updates.restart());
   handle('settings:makeDefaultBrowser', async () => {
     await makeDefaultBrowser();
     return defaultBrowserStatus();
@@ -182,6 +190,22 @@ function registerIpc(): void {
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
+  handle('duet:view', (_request, sender) => duet!.view(senderWindow(sender).id));
+  handle('duet:do', (action, sender) => duet!.act(senderWindow(sender).id, action));
+  handle('duet:search', ({ query }, sender) => (fromPrivateWindow(sender) ? [] : duet!.search(query)));
+  handle('duet:openHit', ({ chordId, threadId }, sender) => duet!.openHit(senderWindow(sender).id, chordId, threadId));
+  handle('settings:duet', async (request) => {
+    if (request.do === 'signIn') {
+      const status = duet!.providerStatuses.find((s) => s.provider === request.provider) ?? (await duet!.refreshProviders()).find((s) => s.provider === request.provider);
+      if (status?.path) openSignIn(request.provider, status.path);
+      return duet!.providerStatuses;
+    }
+    if (request.do === 'clearAll') {
+      await duet!.clearAll();
+      return duet!.providerStatuses;
+    }
+    return duet!.refreshProviders();
+  });
   handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
   handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
   handle('settings:sitePermission', ({ origin, permission, decision }) =>
@@ -233,7 +257,11 @@ if (!app.requestSingleInstanceLock()) {
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
-    void persistence.close().finally(() => app.quit());
+    // Duet first: replies in flight are kept as interrupted, and provider processes end.
+    void (duet?.quit() ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => persistence!.close())
+      .finally(() => app.quit());
   });
 
   void app.whenReady().then(async () => {
@@ -264,7 +292,8 @@ if (!app.requestSingleInstanceLock()) {
         permissions.attach(ses, priv ? profileId : null);
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
         screenShare.attach(ses);
-        applySpellcheck(ses, browser?.store.state.settings.spellcheck ?? DEFAULT_SETTINGS.spellcheck);
+        const settings = browser?.store.state.settings ?? DEFAULT_SETTINGS;
+        applySpellcheck(ses, settings.spellcheck, settings.googleFree);
         profiles.set(profileId, ses);
       }
       return ses;
@@ -342,11 +371,13 @@ if (!app.requestSingleInstanceLock()) {
     followScheme();
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
-      // Spelling settings apply to every profile's session at once.
-      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'spellcheck')) {
-        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck);
+      // Spelling settings (and where dictionaries come from) apply to every profile's session at once.
+      if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'spellcheck' || p.path[1] === 'googleFree'))) {
+        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck, change.state.settings.googleFree);
       }
     });
+    duet = new DuetService(browser, persistence, app.getPath('userData'));
+    browser.duet = duet;
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu.
