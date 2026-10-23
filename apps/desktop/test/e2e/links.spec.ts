@@ -64,7 +64,7 @@ async function launch(env: Record<string, string>, args: string[] = []): Promise
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: mkdtempSync(join(tmpdir(), 'chord-e2e-')), ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
   // A link from another app comes last, after --single-argument, as the OS hands it over.
-  return watchForMainErrors(await electron.launch({ args: [appDir, '--no-first-run', ...args], env: childEnv, cwd: appDir }));
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run', ...args], env: childEnv, cwd: appDir }));
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean, timeout = 20_000): Promise<Page> {

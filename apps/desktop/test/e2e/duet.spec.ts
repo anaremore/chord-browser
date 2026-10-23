@@ -57,7 +57,7 @@ async function launch(setup: Setup, home: string, env: Record<string, string> = 
     ...env,
   };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return watchForMainErrors(await electron.launch({ args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
 }
 
 async function shellOf(app: ElectronApplication): Promise<Page> {
