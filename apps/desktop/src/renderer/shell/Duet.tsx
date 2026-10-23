@@ -602,17 +602,31 @@ const panelStart = (panel: HTMLElement | null) =>
  * Opened, the panel takes the keyboard (from the page too: ⌘E); closed, it
  * gives it back. In between, a step that replaces the focused button (Use
  * this → Got it → the message field) hands the keyboard to the next one.
+ * A step's main button can also arrive after the step: opened while Duet is
+ * still finding Claude Code and Codex, the keyboard starts on the panel's
+ * first button, and moves to "Use this" when it appears, unless the user has
+ * moved it since.
  */
 function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string): void {
+  // Where the panel last put the keyboard.
+  const placed = useRef<HTMLElement | null>(null);
+  const focusStart = () => {
+    placed.current = panelStart(panel.current) ?? null;
+    placed.current?.focus();
+  };
   useEffect(() => {
     // Only when the keyboard was left nowhere (its button went with the step): never taken from elsewhere.
     const now = document.activeElement;
     if (now && now !== document.body) return;
-    panelStart(panel.current)?.focus();
+    focusStart();
   }, [step]);
   useEffect(() => {
+    if (!placed.current || document.activeElement !== placed.current) return;
+    if (panelStart(panel.current) !== placed.current) focusStart();
+  });
+  useEffect(() => {
     const before = document.hasFocus() && document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
-    panelStart(panel.current)?.focus();
+    focusStart();
     void api.focus.move('shell');
     return () => {
       setTimeout(() => {

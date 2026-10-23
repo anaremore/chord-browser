@@ -307,14 +307,17 @@ test('Settings, keyboard only: change a setting, then put it back with its ↺, 
 
 test('Duet, keyboard only: open it, set it up, ask, answer its question from the keyboard, and use its menus', async () => {
   const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
-  const app = await launch({ CHORD_HOME_URL: `${site.origin}/article`, CHORD_DUET_CLAUDE: fakeClaude, CHORD_DUET_CODEX: resolve(config, 'no-codex'), CLAUDE_CONFIG_DIR: config });
+  // Claude answers late, so Duet opens before it has found it (as on a slow machine).
+  const env = { CHORD_HOME_URL: `${site.origin}/article`, CHORD_DUET_CLAUDE: fakeClaude, CHORD_DUET_CODEX: resolve(config, 'no-codex'), CLAUDE_CONFIG_DIR: config, FAKE_CLAUDE_SLOW_VERSION: '2000' };
+  const app = await launch(env);
   try {
     const shell = await pageWhere(app, isShell);
     await expect(row(today(shell), 'Article')).toBeVisible();
-    // ⌘E (page-first, through the registry): the panel opens with the keyboard on its first step.
+    // ⌘E (page-first, through the registry): the panel opens with the keyboard on its first step,
+    // and the keyboard follows when "Use this" arrives.
     await runAction(shell, 'duet.toggle');
     const panel = shell.getByRole('complementary', { name: 'Duet' });
-    await expect(panel.getByRole('button', { name: 'Use this' }).first()).toBeFocused();
+    await expect(panel.getByRole('button', { name: 'Use this' }).first()).toBeFocused({ timeout: 15_000 });
     await shell.keyboard.press('Enter');
     await expect(panel.getByRole('button', { name: 'Got it' })).toBeFocused();
     await shell.keyboard.press('Enter');
