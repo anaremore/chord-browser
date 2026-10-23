@@ -1003,6 +1003,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (key === 'error') {
           const error = value as LiveTab['error'];
           if (live.error?.code !== error?.code || live.error?.url !== error?.url) live.error = error;
+        } else if (key === 'threat') {
+          const threat = value as LiveTab['threat'];
+          if (live.threat?.kind !== threat?.kind || live.threat?.url !== threat?.url || live.threat?.frameUrl !== threat?.frameUrl) live.threat = threat;
         } else if (live[key] !== value) {
           live[key] = value as boolean;
         }
@@ -1098,6 +1101,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         draft.settings.searchEngine = searchEngine;
       }
       if (draft.settings.googleFree && draft.settings.searchEngine === 'google') draft.settings.searchEngine = GOOGLE_FREE_ENGINE;
+      // Safe Browsing's lists come from Google: Google-free mode turns it off and keeps it off.
+      // Turning it on means its notice was on screen (it sits beside every switch for it).
+      const { safeBrowsing, safeBrowsingAsked } = cmd.settings;
+      if (safeBrowsingAsked !== undefined && draft.settings.safeBrowsingAsked !== safeBrowsingAsked) draft.settings.safeBrowsingAsked = safeBrowsingAsked;
+      if (safeBrowsing !== undefined && draft.settings.safeBrowsing !== safeBrowsing && !(draft.settings.googleFree && safeBrowsing)) {
+        draft.settings.safeBrowsing = safeBrowsing;
+        if (safeBrowsing && !draft.settings.safeBrowsingAsked) draft.settings.safeBrowsingAsked = true;
+      }
+      if (draft.settings.googleFree && draft.settings.safeBrowsing) draft.settings.safeBrowsing = false;
       if (archiveAfter !== undefined && draft.settings.archiveAfter !== archiveAfter) draft.settings.archiveAfter = archiveAfter;
       if (sleepTabs !== undefined && draft.settings.sleepTabs !== sleepTabs) draft.settings.sleepTabs = sleepTabs;
       if (searchSuggestions !== undefined && draft.settings.searchSuggestions !== searchSuggestions) draft.settings.searchSuggestions = searchSuggestions;

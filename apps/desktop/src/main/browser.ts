@@ -52,6 +52,8 @@ import { liveOf, Peeks } from './peek';
 import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
 import { Previews } from './previews';
+import type { Verdict } from './safe-browsing/database';
+import { SafeBrowsingGuard } from './safe-browsing/guard';
 import type { ScreenShareBroker } from './screen-share';
 import { SiteZoom } from './site-zoom';
 import { spellcheckLanguages } from './spellcheck';
@@ -91,6 +93,13 @@ export interface BrowserOptions {
   onChange?(change: Change): void;
   /** A private window closed: drop its session (cookies, storage, cache) and anything kept for it. */
   releaseProfile(profileId: string): void;
+  /** Safe Browsing (ARCHITECTURE.md §14.5): checks pages while it's on, and whether to offer turning it on. */
+  safeBrowsing: {
+    enabled(): boolean;
+    check(urls: string[]): Promise<Verdict>;
+    /** The one-time offer applies: available, never asked, not in Google-free mode. */
+    offer(): boolean;
+  };
   /** Chrome extensions (ARCHITECTURE.md §12). */
   extensions: {
     /** Where Web Store extensions are unpacked. */
@@ -114,6 +123,8 @@ export class Browser {
   readonly store: Store;
   readonly tabs: TabManager;
   readonly extensions: Extensions;
+  /** Safe Browsing's warnings: which pages show one, "Back to safety" and "Visit anyway". */
+  readonly safeBrowsing: SafeBrowsingGuard;
   private readonly windows = new Map<WindowId, AppWindow>();
   private readonly finders = new Map<WindowId, FindInPage>();
   /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
@@ -168,6 +179,19 @@ export class Browser {
   constructor(private readonly options: BrowserOptions) {
     this.store = new Store(options.initial);
     setShortcutOverrides(this.store.state.settings.shortcuts);
+    this.safeBrowsing = new SafeBrowsingGuard({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      enabled: () => options.safeBrowsing.enabled(),
+      check: (urls) => options.safeBrowsing.check(urls),
+      isTab: (contents, nodeId) => this.tabs.get(nodeId)?.webContents === contents,
+      contentsOf: (nodeId) => this.tabs.get(nodeId)?.webContents,
+      handOver: (contents, nodeId, url) => this.openFlaggedAsTab(contents, nodeId, url),
+      closeTab: (nodeId) => {
+        const windowId = this.windowShowing(nodeId);
+        if (windowId) this.store.dispatch({ t: 'tab.close', windowId, nodeId });
+      },
+    });
     this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
     this.tabs = new TabManager({
       state: () => this.store.state,
@@ -186,6 +210,7 @@ export class Browser {
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
         this.extensions.tabCreated(contents, nodeId);
+        this.safeBrowsing.attach(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
         this.siteZoom.attach(contents);
         contents.on('did-stop-loading', () => this.previews.loaded(nodeId));
@@ -242,6 +267,7 @@ export class Browser {
         else if (windowId) this.store.dispatch({ t: 'tab.open', windowId, url, background: true });
       },
       onPopupCreated: (contents, openerNodeId) => {
+        this.safeBrowsing.attachPopup(contents, openerNodeId);
         attachContextMenu(contents, {
           surface: 'web',
           inspect: true,
@@ -687,6 +713,8 @@ export class Browser {
       find: find && find.target === shown ? find.state : null,
       permission: this.options.permissions.promptFor(activeTabId(state, w.id)),
       share: this.options.screenShare.promptFor(activeTabId(state, w.id)),
+      // Not over first run (which asks itself), nor in a private window.
+      safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
     };
   }
 
@@ -716,7 +744,7 @@ export class Browser {
     for (const nodeId of shownTabs(state, w.id)) {
       const live = state.live[nodeId];
       const contents = this.tabs.get(nodeId)?.webContents;
-      if (contents && (onboarding || live?.error || live?.crashed)) hidden.add(contents);
+      if (contents && (onboarding || live?.error || live?.crashed || live?.threat)) hidden.add(contents);
     }
     w.setHiddenPanes(hidden);
     const popover = this.popoverState(w);
@@ -1174,6 +1202,52 @@ export class Browser {
     const w = this.lastNormalWindow();
     if (!w) return;
     w.toast({ id, message, action: { label: 'Restart to update', update: 'restart' } });
+  }
+
+  /**
+   * Safe Browsing flagged a page that isn't a tab's (Peek's, a mini window's,
+   * or a popup): it closes, and the address opens as a tab, where the frame
+   * shows the warning with its ways out. Peek and popups open beside the tab
+   * they came from; a mini window's goes to the normal window used last.
+   */
+  private openFlaggedAsTab(contents: WebContents, nodeId: NodeId, url: string): void {
+    const peeking = this.peeks.windowOf(nodeId);
+    const peekWindow = peeking ? this.windows.get(peeking) : undefined;
+    if (peekWindow) {
+      this.peeks.close(peekWindow);
+      this.store.dispatch({ t: 'tab.open', windowId: peekWindow.id, url });
+      return;
+    }
+    const mini = this.minis.forContents(contents);
+    if (mini) {
+      mini.window.close();
+      const w = this.normalWindowForLinks();
+      if (w) {
+        this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+        w.window.focus();
+      }
+      return;
+    }
+    if (this.tabs.get(nodeId)?.webContents === contents) return;
+    BrowserWindow.fromWebContents(contents)?.close();
+    const windowId = this.windowShowing(nodeId);
+    if (windowId) this.store.dispatch({ t: 'tab.open', windowId, url });
+  }
+
+  /** The warning's buttons, for a tab the sender's window shows. */
+  safeBrowsingAction(sender: WebContents, nodeId: NodeId, action: 'back' | 'proceed'): void {
+    const w = this.windowFor(sender);
+    if (!w || !shownTabs(this.store.state, w.id).includes(nodeId)) return;
+    if (action === 'back') this.safeBrowsing.back(nodeId);
+    else this.safeBrowsing.proceed(nodeId);
+  }
+
+  /** A download Safe Browsing holds: the downloads panel opens where it started, so you can keep or delete it. */
+  showHeldDownload(privateWindow: WindowId | undefined): void {
+    const w = privateWindow ? this.windows.get(privateWindow) : this.lastNormalWindow();
+    if (!w) return;
+    this.peeks.close(w);
+    w.openOverlay('downloads', '');
   }
 
   /** A note for the window used last, with a link that opens as a tab there (a new Chord version, for one). */

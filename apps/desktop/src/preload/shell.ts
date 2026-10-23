@@ -46,6 +46,12 @@ const api: ShellApi = {
   preview: { hover: (target) => invoke('preview:hover', target) },
   focus: { onRegion: (listener) => subscribe('focus:region', listener), move: (to) => invoke('focus:move', { to }) },
   perf: { shell: (milestone) => invoke('perf:shell', { milestone }) },
+  safeBrowsing: {
+    status: () => invoke('safeBrowsing:status'),
+    choose: (on) => invoke('safeBrowsing:choose', { on }),
+    back: (nodeId) => invoke('safeBrowsing:back', { nodeId }),
+    proceed: (nodeId) => invoke('safeBrowsing:proceed', { nodeId }),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));
