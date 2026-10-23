@@ -272,6 +272,52 @@ test('Clear archives every Today tab, and Undo brings them back where they were'
   }
 });
 
+test('a private window has no Favorites, makes no folders, and Clear closes its tabs rather than archiving them', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const { shell, overlay } = await setUp(app, ['/second']);
+    await runAction(shell, 'tab.favorite');
+    await expect(shell.getByRole('list', { name: 'Favorites' }).getByRole('listitem')).toHaveCount(1);
+
+    await runAction(shell, 'window.newPrivate');
+    const another = async (match: (url: string) => boolean, known: Page) => {
+      const find = () => app.windows().find((p) => match(p.url()) && p !== known);
+      await expect.poll(() => Boolean(find()), { timeout: 20_000 }).toBe(true);
+      return find()!;
+    };
+    const privateShell = await another(isShell, shell);
+    const privateOverlay = await another(isOverlay, overlay);
+    await expect(privateShell.getByText('This window is private.')).toBeVisible();
+    for (const path of ['/third', '/fourth']) {
+      if (!(await privateOverlay.getByRole('dialog').isVisible())) {
+        await privateShell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
+      }
+      await expect(privateOverlay.getByRole('dialog')).toBeVisible();
+      await privateOverlay.keyboard.type(`${site.origin}${path}`);
+      await privateOverlay.keyboard.press('Enter');
+      await expect(privateShell.getByRole('list', { name: 'Today' }).getByRole('listitem').first()).toContainText(path === '/third' ? 'Third' : 'Fourth');
+    }
+    const today = privateShell.getByRole('list', { name: 'Today' });
+
+    // Favorites are kept and shared, so a private window neither shows them nor adds to them.
+    await expect(privateShell.getByRole('list', { name: 'Favorites' })).toHaveCount(0);
+    await runAction(privateShell, 'tab.favorite');
+    await runAction(privateShell, 'folder.new');
+    await expect(privateShell.getByRole('textbox', { name: 'Folder name' })).toHaveCount(0);
+    await expect(privateShell.getByRole('list', { name: 'Pinned' })).toHaveCount(0);
+    await expect(shell.getByRole('list', { name: 'Favorites' }).getByRole('listitem')).toHaveCount(1);
+
+    // Clear closes; Undo still brings them back.
+    await runAction(privateShell, 'today.clear');
+    await expect(today.getByRole('listitem')).toHaveCount(0);
+    await expect(privateShell.getByText('Closed 2 tabs')).toBeVisible();
+    await privateShell.getByRole('button', { name: 'Undo' }).click();
+    await expect(today.getByRole('listitem')).toHaveCount(2);
+  } finally {
+    await app.close();
+  }
+});
+
 test('the sidebar resizes from its edge, catches at the default width, and the page follows', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {

@@ -11,7 +11,9 @@ import {
   DEFAULT_PROFILE,
   IDLE_LIVE,
   SIDEBAR_WIDTH,
+  PRIVATE_CHORD_THEME,
   extensionKey,
+  privateProfileId,
   type ArchivedTab,
   type ArchiveReason,
   type Bounds,
@@ -35,7 +37,7 @@ import {
   type WindowId,
   type WindowModel,
 } from './model';
-import { children, descendants, isWithin, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
+import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 
 enablePatches();
 
@@ -91,6 +93,14 @@ export type Command =
   /** Engine reports (not user intent). */
   | { t: 'tab.updated'; nodeId: NodeId; url?: string; title?: string; favicon?: string | null }
   | { t: 'tab.live'; nodeId: NodeId; live: Partial<LiveTab> }
+  /**
+   * A new window (main picks its id). It starts on the chord `from` shows,
+   * with nothing open yet. With `privateChordId` it's a private window with a
+   * chord of its own.
+   */
+  | { t: 'window.create'; windowId: WindowId; from?: WindowId; privateChordId?: ChordId }
+  /** One of several windows closed. A private window takes its chord, tabs and downloads with it. */
+  | { t: 'window.close'; windowId: WindowId }
   | { t: 'window.bounds'; windowId: WindowId; bounds: Bounds }
   | { t: 'window.sidebar'; windowId: WindowId; sidebar: 'docked' | 'collapsed' }
   /** Drag the sidebar's edge: clamped to SIDEBAR_WIDTH. */
@@ -115,8 +125,8 @@ export type Command =
   | { t: 'download.update'; download: Download }
   /** Take one download off the list (the file stays where it is). */
   | { t: 'download.remove'; id: string }
-  /** Take every finished download off the list. */
-  | { t: 'download.clear' }
+  /** Take every finished download off the list this window shows (a private window's own, or the rest). */
+  | { t: 'download.clear'; windowId: WindowId }
   /** Engine reports: an extension was installed, updated, or told so (main only). */
   | { t: 'extension.record'; extension: InstalledExtension }
   /** An extension was removed from a profile (main only); kept for Undo this session. */
@@ -146,7 +156,9 @@ export type Effect =
   /** A tab came back from the archive: its saved history goes into the new view, and the entry leaves the archive. */
   | { e: 'archive.restored'; archiveId: string; nodeId: NodeId }
   /** The window's sidebar docked or collapsed, or changed width: lay the content frame out again. */
-  | { e: 'window.layout'; windowId: WindowId; sidebar: 'docked' | 'collapsed'; width: number; animate: boolean };
+  | { e: 'window.layout'; windowId: WindowId; sidebar: 'docked' | 'collapsed'; width: number; animate: boolean }
+  /** A window was created: open it. */
+  | { e: 'window.open'; windowId: WindowId };
 
 export interface Context {
   now: number;
@@ -177,6 +189,8 @@ const MAX_DOWNLOADS = 100;
 const MAX_REMOVED_EXTENSIONS = 10;
 /** Longest chord name; the switcher and headers truncate well before this. */
 const MAX_CHORD_NAME = 64;
+/** A new window opens this far down and right of the one it came from. */
+const CASCADE = 28;
 
 export function apply(state: State, command: Command, ctx: Context): Result {
   const effects: Effect[] = [];
@@ -275,6 +289,28 @@ function toArchive(node: TabNode, reason: ArchiveReason, ctx: Context, effects: 
   return id;
 }
 
+/** The window other than `windowId` that shows this tab, if any: a tab shows in one window at a time. */
+function shownByOther(draft: Draft<State>, nodeId: NodeId, windowId: WindowId): Draft<WindowModel> | undefined {
+  return Object.values(draft.windows).find((w) => w.id !== windowId && w.activeTab[w.activeChordId] === nodeId);
+}
+
+/** A chord's most recently used tab that no other window is showing (and isn't `skip`). */
+function recentFree(draft: Draft<State>, chordId: ChordId, windowId: WindowId, skip: NodeId | null = null): NodeId | null {
+  return (
+    tabsInOrder(draft as State, chordId)
+      .filter((t) => t.id !== skip && !shownByOther(draft, t.id, windowId))
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0]?.id ?? null
+  );
+}
+
+/** Where a window lands when its tab goes: the nearest tab below it, else above, that no other window shows (Arc's rule). */
+function nearestFree(draft: Draft<State>, order: readonly TabNode[], index: number, windowId: WindowId, gone: (t: TabNode) => boolean): NodeId | null {
+  const free = (t: TabNode) => !gone(t) && !shownByOther(draft, t.id, windowId);
+  const below = order.slice(index + 1).find(free);
+  const above = order.slice(0, Math.max(0, index)).reverse().find(free);
+  return (below ?? above)?.id ?? null;
+}
+
 /**
  * The tab a window shows stops being used now. It counts as used until a
  * moment ago, so idle time (archiving, sleeping) runs from when you left it,
@@ -297,6 +333,15 @@ function activate(
   const win = draft.windows[windowId];
   if (!win) return;
   win.activeTab[win.activeChordId] = nodeId;
+  // A window showing this tab lets it go first (a view has one parent): it falls back to its
+  // most recently used tab that's free, and its effects come first so the page never has two homes.
+  const other = nodeId ? shownByOther(draft, nodeId, windowId) : undefined;
+  if (other) {
+    const fallback = recentFree(draft, other.activeChordId, other.id, nodeId);
+    other.activeTab[other.activeChordId] = fallback;
+    if (fallback) effects.push({ e: 'view.ensure', nodeId: fallback });
+    effects.push({ e: 'view.show', windowId: other.id, nodeId: fallback });
+  }
   if (nodeId) {
     const node = draft.nodes[nodeId];
     if (touch && node?.kind === 'tab') node.lastActiveAt = ctx.now;
@@ -308,14 +353,12 @@ function activate(
 /** Switch a window to a chord, landing on the tab it last showed there (or its most recently used one). */
 function switchChord(draft: Draft<State>, windowId: WindowId, chordId: ChordId, ctx: Context, effects: Effect[]): void {
   const win = draft.windows[windowId];
-  if (!win || !draft.chords[chordId] || win.activeChordId === chordId) return;
+  if (!win || win.activeChordId === chordId || !chordsFor(draft as State, windowId).some((c) => c.id === chordId)) return;
   leave(draft, win, ctx);
   win.activeChordId = chordId;
+  // Landing on a chord never takes a tab from another window.
   let tabId = win.activeTab[chordId] ?? null;
-  if (!tabId || draft.nodes[tabId]?.kind !== 'tab') {
-    const recent = tabsInOrder(draft as State, chordId).sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0];
-    tabId = recent?.id ?? null;
-  }
+  if (!tabId || draft.nodes[tabId]?.kind !== 'tab' || shownByOther(draft, tabId, windowId)) tabId = recentFree(draft, chordId, windowId);
   activate(draft, windowId, tabId, ctx, effects);
 }
 
@@ -341,8 +384,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         createdAt: ctx.now,
       };
       draft.nodes[id] = tab;
-      // First run's "What do you open every day?" lands straight in Pinned.
-      if (cmd.pinned) moveNode(draft, draft.nodes[id]!, 'pinned', children(draft as State, win.activeChordId, 'pinned', null).length);
+      // First run's "What do you open every day?" lands straight in Pinned (never in a private window).
+      if (cmd.pinned && !win.private) moveNode(draft, draft.nodes[id]!, 'pinned', children(draft as State, win.activeChordId, 'pinned', null).length);
       draft.live[id] = { ...IDLE_LIVE, loading: true };
       effects.push({ e: 'view.ensure', nodeId: id });
       if (!cmd.background) {
@@ -356,6 +399,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const node = draft.nodes[cmd.nodeId];
       const win = draft.windows[cmd.windowId];
       if (node?.kind !== 'tab' || !win) return;
+      // A private window shows only its own tabs, and no other window ever shows them.
+      if (win.private ? node.chordId !== win.activeChordId : isPrivateChord(draft as State, node.chordId)) return;
       const touch = cmd.touch ?? true;
       if (touch && win.activeTab[win.activeChordId] !== cmd.nodeId) leave(draft, win, ctx);
       if (node.chordId !== win.activeChordId) win.activeChordId = node.chordId;
@@ -368,8 +413,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (node?.kind !== 'tab') return;
       const order = tabsInOrder(draft as State, node.chordId);
       const index = order.findIndex((t) => t.id === node.id);
-      // Arc's rule: land on the tab below, or above if this was the last one.
-      const neighbor = order[index + 1] ?? order[index - 1] ?? null;
+      // Arc's rule: land on the tab below, or above if this was the last one (one no other window shows).
+      const isClosing = (t: TabNode) => t.id === node.id;
       // A pinned tab never goes away: closing unloads it and takes it home to its pinned page.
       if (node.section === 'pinned') {
         if (node.pinnedUrl && node.url !== node.pinnedUrl) node.url = node.pinnedUrl;
@@ -377,13 +422,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         effects.push({ e: 'view.destroy', nodeId: cmd.nodeId });
         for (const win of Object.values(draft.windows)) {
           if (win.activeTab[node.chordId] !== cmd.nodeId) continue;
-          if (node.chordId === win.activeChordId) activate(draft, win.id, neighbor?.id ?? null, ctx, effects);
-          else win.activeTab[node.chordId] = neighbor?.id ?? null;
+          const neighbor = nearestFree(draft, order, index, win.id, isClosing);
+          if (node.chordId === win.activeChordId) activate(draft, win.id, neighbor, ctx, effects);
+          else win.activeTab[node.chordId] = neighbor;
         }
         return;
       }
       // A closed Today tab goes to the archive; ⌘⇧T brings it back to the same place.
-      const archiveId = toArchive(node as TabNode, 'closed', ctx, effects);
+      // A private window's tabs never reach the archive: ⌘⇧T remembers them only while it's open.
+      const archiveId = isPrivateChord(draft as State, node.chordId) ? null : toArchive(node as TabNode, 'closed', ctx, effects);
       const closed: ClosedTab = { node: { ...(node as TabNode) }, windowId: cmd.windowId, closedAt: ctx.now, archiveId };
       draft.closed.unshift(closed);
       if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
@@ -393,8 +440,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       for (const win of Object.values(draft.windows)) {
         for (const [chordId, tabId] of Object.entries(win.activeTab)) {
           if (tabId !== cmd.nodeId) continue;
-          if (chordId === win.activeChordId) activate(draft, win.id, neighbor?.id ?? null, ctx, effects);
-          else win.activeTab[chordId] = neighbor?.id ?? null;
+          const neighbor = nearestFree(draft, order, index, win.id, isClosing);
+          if (chordId === win.activeChordId) activate(draft, win.id, neighbor, ctx, effects);
+          else win.activeTab[chordId] = neighbor;
         }
       }
       return;
@@ -402,8 +450,11 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'tab.reopenClosed': {
       const win = draft.windows[cmd.windowId];
-      const entry = draft.closed.shift();
-      if (!win || !entry) return;
+      // The newest closed tab from this window's side of the private line.
+      const at = reopenableIndex(draft as State, cmd.windowId);
+      if (!win || at < 0) return;
+      const [entry] = draft.closed.splice(at, 1);
+      if (!entry) return;
       // Back where it was if its chord (and folder) still exist; otherwise top of Today.
       const chordExists = Boolean(draft.chords[entry.node.chordId]);
       const parentExists = entry.node.parentId === null || Boolean(draft.nodes[entry.node.parentId]);
@@ -429,9 +480,11 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.archive': {
       // Tidying up never takes a tab from under you; Clear can (it's what you asked for).
       const onScreen = cmd.reason === 'auto' ? visibleTabs(draft as State) : new Set<NodeId>();
+      // A private window's tabs are never tidied away; Clear closes them without archiving.
       const tabs = cmd.nodeIds
         .map((id) => draft.nodes[id])
-        .filter((n): n is Draft<TabNode> => n?.kind === 'tab' && n.section === 'today' && !onScreen.has(n.id));
+        .filter((n): n is Draft<TabNode> => n?.kind === 'tab' && n.section === 'today' && !onScreen.has(n.id))
+        .filter((n) => cmd.reason !== 'auto' || !isPrivateChord(draft as State, n.chordId));
       if (tabs.length === 0) return;
       const gone = new Set(tabs.map((t) => t.id));
       // Where each window lands if its tab goes: the nearest tab that stays, below first (Arc's rule).
@@ -441,14 +494,11 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
           if (!tabId || !gone.has(tabId)) continue;
           const order = tabsInOrder(draft as State, chordId);
           const at = order.findIndex((t) => t.id === tabId);
-          const stays = (t: TabNode) => !gone.has(t.id);
-          const below = order.slice(at + 1).find(stays);
-          const above = order.slice(0, Math.max(0, at)).reverse().find(stays);
-          landing.set(`${win.id}:${chordId}`, (below ?? above)?.id ?? null);
+          landing.set(`${win.id}:${chordId}`, nearestFree(draft, order, at, win.id, (t) => gone.has(t.id)));
         }
       }
       for (const tab of tabs) {
-        const archiveId = toArchive(tab as TabNode, cmd.reason, ctx, effects);
+        const archiveId = isPrivateChord(draft as State, tab.chordId) ? null : toArchive(tab as TabNode, cmd.reason, ctx, effects);
         // Clearing is something you did, so ⌘⇧T can undo it; tidying up after idle tabs isn't.
         if (cmd.reason === 'cleared') draft.closed.unshift({ node: { ...(tab as TabNode) }, windowId: '', closedAt: ctx.now, archiveId });
         delete draft.nodes[tab.id];
@@ -470,7 +520,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'archive.restore': {
       const win = draft.windows[cmd.windowId];
-      if (!win || draft.nodes[cmd.nodeId]) return;
+      if (!win || win.private || draft.nodes[cmd.nodeId]) return;
       const chordId = draft.chords[cmd.tab.chordId] ? cmd.tab.chordId : win.activeChordId;
       draft.nodes[cmd.nodeId] = {
         kind: 'tab',
@@ -519,6 +569,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'node.move': {
       const node = draft.nodes[cmd.nodeId];
+      // Nothing pins in a private window: it would be forgotten anyway.
+      if (cmd.section === 'pinned' && node && isPrivateChord(draft as State, node.chordId)) return;
       if (node) moveNode(draft, node, cmd.section, cmd.index, cmd.parentId ?? null);
       return;
     }
@@ -528,6 +580,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const from = node ? draft.chords[node.chordId] : undefined;
       const to = draft.chords[cmd.chordId];
       if (node?.kind !== 'tab' || !from || !to || from.id === to.id) return;
+      // A private window's tabs stay in it, and nothing moves into one (tab.activate refuses the same line).
+      if (from.private || to.private) return;
       const land = landWindows(draft, new Set([node.id]), ctx, effects);
       node.chordId = to.id;
       const place = cmd.place;
@@ -554,7 +608,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'folder.create': {
       const chord = draft.chords[cmd.chordId];
-      if (!chord || draft.nodes[cmd.folderId]) return;
+      // Folders live in Pinned, which a private window doesn't have.
+      if (!chord || chord.private || draft.nodes[cmd.folderId]) return;
       const tab = cmd.tabId ? draft.nodes[cmd.tabId] : undefined;
       if (cmd.tabId && (tab?.kind !== 'tab' || tab.chordId !== chord.id)) return;
       // Where the tab was, if it was pinned; otherwise the end of Pinned.
@@ -621,7 +676,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'favorite.add': {
       const tab = draft.nodes[cmd.nodeId];
-      if (tab?.kind !== 'tab' || draft.favorites[cmd.favoriteId]) return;
+      // Favorites are kept and shared; nothing from a private window becomes one.
+      if (tab?.kind !== 'tab' || draft.favorites[cmd.favoriteId] || isPrivateChord(draft as State, tab.chordId)) return;
       const url = tab.pinnedUrl ?? tab.url;
       const order = sortedFavorites(draft as State);
       // Web pages only, one favorite per page, and a sane limit.
@@ -699,7 +755,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'tab.pin': {
       const node = draft.nodes[cmd.nodeId];
-      if (node?.kind !== 'tab' || node.section === 'pinned') return;
+      if (node?.kind !== 'tab' || node.section === 'pinned' || isPrivateChord(draft as State, node.chordId)) return;
       moveNode(draft, node, 'pinned', children(draft as State, node.chordId, 'pinned', null).length);
       return;
     }
@@ -743,6 +799,60 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
           live[key] = value as boolean;
         }
       }
+      return;
+    }
+
+    case 'window.create': {
+      if (draft.windows[cmd.windowId]) return;
+      const from = cmd.from ? draft.windows[cmd.from] : undefined;
+      const bounds = from?.bounds ? { ...from.bounds, x: from.bounds.x + CASCADE, y: from.bounds.y + CASCADE, maximized: false } : null;
+      let chordId: ChordId | undefined;
+      if (cmd.privateChordId) {
+        chordId = cmd.privateChordId;
+        draft.chords[chordId] = {
+          id: chordId,
+          profileId: privateProfileId(cmd.windowId),
+          name: 'Private',
+          icon: '',
+          theme: { ...PRIVATE_CHORD_THEME, stops: PRIVATE_CHORD_THEME.stops.map((s) => ({ ...s })) },
+          rank: 'z',
+          createdAt: ctx.now,
+          private: true,
+        };
+      } else {
+        // The chord you're in, or (from a private window) your first one.
+        chordId = from && !from.private ? from.activeChordId : sortedChords(draft as State)[0]?.id;
+      }
+      if (!chordId) return;
+      draft.windows[cmd.windowId] = {
+        id: cmd.windowId,
+        activeChordId: chordId,
+        activeTab: { [chordId]: null },
+        sidebar: from?.sidebar ?? 'docked',
+        sidebarWidth: from?.sidebarWidth ?? SIDEBAR_WIDTH.default,
+        bounds,
+        ...(cmd.privateChordId ? { private: true } : {}),
+      };
+      effects.push({ e: 'window.open', windowId: cmd.windowId });
+      return;
+    }
+
+    case 'window.close': {
+      const win = draft.windows[cmd.windowId];
+      if (!win) return;
+      delete draft.windows[cmd.windowId];
+      if (!win.private) return;
+      // Closing a private window forgets everything in it (files it downloaded stay on disk).
+      const chordId = win.activeChordId;
+      for (const node of Object.values(draft.nodes)) {
+        if (node.chordId !== chordId) continue;
+        if (node.kind === 'tab') effects.push({ e: 'view.destroy', nodeId: node.id });
+        delete draft.nodes[node.id];
+        delete draft.live[node.id];
+      }
+      delete draft.chords[chordId];
+      if (draft.closed.some((c) => c.node.chordId === chordId)) draft.closed = draft.closed.filter((c) => c.node.chordId !== chordId);
+      for (const d of Object.values(draft.downloads)) if (d.privateWindow === cmd.windowId) delete draft.downloads[d.id];
       return;
     }
 
@@ -818,7 +928,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'chord.create': {
       const win = draft.windows[cmd.windowId];
-      if (!win) return;
+      if (!win || win.private) return;
       const last = sortedChords(draft as State).at(-1);
       const id = ctx.newId();
       draft.chords[id] = {
@@ -842,7 +952,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'chord.cycle': {
       const win = draft.windows[cmd.windowId];
       if (!win) return;
-      const order = sortedChords(draft as State);
+      const order = chordsFor(draft as State, cmd.windowId);
       const current = order.findIndex((c) => c.id === win.activeChordId);
       const next = order[(current + cmd.direction + order.length) % order.length];
       if (next) switchChord(draft, cmd.windowId, next.id, ctx, effects);
@@ -850,7 +960,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'chord.goto': {
-      const order = sortedChords(draft as State);
+      const order = chordsFor(draft as State, cmd.windowId);
       const target = cmd.index >= 8 ? order.at(-1) : order[cmd.index];
       if (target) switchChord(draft, cmd.windowId, target.id, ctx, effects);
       return;
@@ -867,7 +977,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'chord.profile': {
       const chord = draft.chords[cmd.chordId];
-      if (!chord || chord.profileId === cmd.profileId) return;
+      if (!chord || chord.private || chord.profileId === cmd.profileId) return;
       chord.profileId = cmd.profileId;
       // A page can't change session: every open tab in the chord closes its page, and the one
       // a window shows comes straight back in the new session. The rest load when you visit them.
@@ -917,6 +1027,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'download.update': {
+      // A private window's download that finishes after the window closed stays forgotten.
+      if (cmd.download.privateWindow && !draft.windows[cmd.download.privateWindow]) return;
       const current = draft.downloads[cmd.download.id];
       if (current && JSON.stringify(current) === JSON.stringify(cmd.download)) return;
       draft.downloads[cmd.download.id] = cmd.download;
@@ -931,9 +1043,14 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       delete draft.downloads[cmd.id];
       return;
 
-    case 'download.clear':
-      for (const d of Object.values(draft.downloads)) if (d.state !== 'progressing' && d.state !== 'paused') delete draft.downloads[d.id];
+    case 'download.clear': {
+      const priv = Boolean(draft.windows[cmd.windowId]?.private);
+      for (const d of Object.values(draft.downloads)) {
+        const listed = priv ? d.privateWindow === cmd.windowId : !d.privateWindow;
+        if (listed && d.state !== 'progressing' && d.state !== 'paused') delete draft.downloads[d.id];
+      }
       return;
+    }
 
     case 'extension.record': {
       const key = extensionKey(cmd.extension.profileId, cmd.extension.id);

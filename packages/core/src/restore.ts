@@ -156,7 +156,7 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
  * first chord's theme for that case.
  */
 export function restoreState(saved: PersistedState | null, seed: SeedOptions): State {
-  if (!saved || saved.chords.length === 0) {
+  if (!saved || !saved.chords.some((c) => !c.private)) {
     const fresh = seedState(seed);
     if (saved) {
       fresh.settings = restoreSettings(saved.settings);
@@ -176,7 +176,8 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   state.downloads = restoreDownloads(saved.downloads);
   state.favorites = restoreFavorites(saved.favorites);
   state.extensions = restoreExtensions(saved.extensions);
-  for (const chord of saved.chords) state.chords[chord.id] = chord;
+  // A private window's chord is never saved; if one ever were, it doesn't come back.
+  for (const chord of saved.chords) if (!chord.private) state.chords[chord.id] = chord;
   for (const node of saved.nodes) {
     if (!state.chords[node.chordId]) continue;
     state.nodes[node.id] = { ...node };
@@ -188,13 +189,19 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   // No live entries: every tab starts unloaded, and gets one when its page starts loading.
 
   const firstChord = sortedChords(state)[0]!;
+  // A tab shows in one window at a time; if saved windows disagree, the first keeps it.
+  const shown = new Set<string>();
   for (const win of saved.windows) {
+    if (win.private) continue;
     const activeChordId = state.chords[win.activeChordId] ? win.activeChordId : firstChord.id;
     const activeTab: WindowModel['activeTab'] = {};
     for (const [chordId, tabId] of Object.entries(win.activeTab)) {
       if (!state.chords[chordId]) continue;
       activeTab[chordId] = tabId && state.nodes[tabId]?.kind === 'tab' && state.nodes[tabId]?.chordId === chordId ? tabId : null;
     }
+    const showing = activeTab[activeChordId];
+    if (showing && shown.has(showing)) activeTab[activeChordId] = null;
+    else if (showing) shown.add(showing);
     activeTab[activeChordId] ??= null;
     const width = win.sidebarWidth;
     const sidebarWidth = typeof width === 'number' && width >= SIDEBAR_WIDTH.min && width <= SIDEBAR_WIDTH.max ? width : SIDEBAR_WIDTH.default;

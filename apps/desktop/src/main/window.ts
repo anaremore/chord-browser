@@ -24,6 +24,8 @@ export interface AppWindowOptions {
   bounds: Bounds | null;
   sidebar: SidebarMode;
   sidebarWidth: number;
+  /** A private window: always dark, and titled so in the taskbar and window switcher. */
+  private?: boolean;
   onBounds(bounds: Bounds): void;
 }
 
@@ -103,22 +105,28 @@ export class AppWindow {
   private anchor: Rect | null = null;
   private overlayVisible = false;
   private overlaySeq = 0;
+  /** The command bar listens only once it has started; an opening asked for before that waits here. */
+  private overlayReady = false;
+  private pendingOpen: { mode: OverlayOpenEvent['mode']; url: string; anchor: Rect | null } | null = null;
+  readonly isPrivate: boolean;
   private origin: FrameOrigin;
   private frameAnimation: ReturnType<typeof setInterval> | undefined;
   /** Minimal mode's peek: the shell sits above the page so the sidebar can float over it. */
   private peeking = false;
   private floating: FloatingView | null = null;
 
-  constructor({ id, uiSession, bounds, sidebar, sidebarWidth, onBounds }: AppWindowOptions) {
+  constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds }: AppWindowOptions) {
     this.id = id;
+    this.isPrivate = isPrivate;
     this.origin = frameOrigin(sidebar, sidebarWidth);
+    const forced = isPrivate ? 'dark' : null;
     this.window = new BaseWindow({
       ...(bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : { width: 1280, height: 820 }),
       minWidth: 720,
       minHeight: 480,
-      title: 'Chord',
+      title: isPrivate ? 'Chord (private window)' : 'Chord',
       show: false,
-      ...windowChromeOptions(),
+      ...windowChromeOptions(forced),
     });
     if (bounds?.maximized) this.window.maximize();
 
@@ -153,7 +161,7 @@ export class AppWindow {
     this.window.on('unmaximize', reportBounds);
 
     const onTheme = () => {
-      if (platform !== 'darwin') this.window.setTitleBarOverlay?.(titleBarOverlay());
+      if (platform !== 'darwin') this.window.setTitleBarOverlay?.(titleBarOverlay(forced));
       for (const view of [this.shell, this.popover, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
     };
     nativeTheme.on('updated', onTheme);
@@ -166,6 +174,10 @@ export class AppWindow {
     });
 
     this.shell.webContents.once('did-finish-load', () => this.window.show());
+    // Loading again (a reload, or after a crash), the command bar isn't listening until it says so.
+    this.overlay.webContents.on('did-start-loading', () => {
+      this.overlayReady = false;
+    });
   }
 
   /** Show a tab's view in the content frame (or nothing: the shell's empty state shows through). */
@@ -221,10 +233,23 @@ export class AppWindow {
   /** `anchor` places the downloads panel by its button; ⌘L uses the address the shell reported. */
   openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null): void {
     this.closeFloating();
+    if (!this.overlayReady) {
+      // A brand-new window: the command bar opens as soon as it's listening.
+      this.pendingOpen = { mode, url, anchor };
+      return;
+    }
     this.overlayVisible = true;
     this.overlay.setVisible(true);
     this.overlay.webContents.focus();
     send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq });
+  }
+
+  /** The command bar has started and listens for openings (it says so after every load). */
+  markOverlayReady(): void {
+    this.overlayReady = true;
+    const pending = this.pendingOpen;
+    this.pendingOpen = null;
+    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor);
   }
 
   /** `seq` is the opening being closed; a close for an earlier one (racing a newer open) is ignored. */

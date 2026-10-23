@@ -684,7 +684,7 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
       )}
 
       <div className={styles.divider}>
-        {pinned.length === 0 && active && active.type !== 'favorite' && <PinnedDropZone />}
+        {pinned.length === 0 && active && active.type !== 'favorite' && !state.windows[rest.windowId]?.private && <PinnedDropZone />}
         <span className={styles.hairline} role="separator" />
         {today.length > 0 && (
           <button type="button" className={styles.clear} title="Archive every Today tab" onClick={() => void api.action.run('today.clear')}>

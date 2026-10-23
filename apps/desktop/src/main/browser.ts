@@ -7,10 +7,13 @@ import {
   activeTab,
   activeTabId,
   children,
+  chordsFor,
   DEFAULT_PROFILE,
   isInternalUrl,
+  isPrivateChord,
   markdownLink,
   motionEnabled,
+  reopenableIndex,
   sortedChords,
   tabsInOrder,
   uuidv7,
@@ -60,6 +63,8 @@ export interface BrowserOptions {
   idle: IdleTiming;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
+  /** A private window closed: drop its session (cookies, storage, cache) and anything kept for it. */
+  releaseProfile(profileId: string): void;
   /** Chrome extensions (ARCHITECTURE.md §12). */
   extensions: {
     /** Where Web Store extensions are unpacked. */
@@ -90,6 +95,8 @@ export class Browser {
   /** Archive entries being restored, so a double click brings a tab back once. */
   private readonly restoring = new Set<string>();
   private archiveChangedTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Chord is quitting: windows closing now stay in the saved state, to come back at the next launch. */
+  private quitting = false;
   private readonly keyboard: KeyboardHandlers = {
     run: (action, contents) => this.run(action, contents),
     onControlUp: () => this.finishRecentCycle(),
@@ -106,8 +113,13 @@ export class Browser {
       // The archive is Chord's only page shown as a tab so far.
       createInternalView: () => createUiView(options.uiSession, 'archive'),
       windowFor: (nodeId) => this.windowShowing(nodeId),
-      onVisit: (url, title) => options.history({ k: 'visit', url, title, at: Date.now() }),
-      onTitle: (url, title) => options.history({ k: 'title', url, title }),
+      // A private window's pages never reach history.
+      onVisit: (url, title, nodeId) => {
+        if (!this.isPrivateNode(nodeId)) options.history({ k: 'visit', url, title, at: Date.now() });
+      },
+      onTitle: (url, title, nodeId) => {
+        if (!this.isPrivateNode(nodeId)) options.history({ k: 'title', url, title });
+      },
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
         this.extensions.tabCreated(contents, nodeId);
@@ -160,7 +172,8 @@ export class Browser {
       ...(options.extensions.publisherKeyHash ? { publisherKeyHash: options.extensions.publisherKeyHash } : {}),
       windows: () => this.windows.values(),
       windowById: (windowId) => this.windows.get(windowId),
-      lastWindow: () => this.lastWindow(),
+      // Extensions never open tabs in a private window (they don't run there).
+      lastWindow: () => this.lastNormalWindow(),
       windowOfNode: (nodeId) => this.windowShowing(nodeId),
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       liveTabs: () => this.tabs.entries(),
@@ -220,10 +233,38 @@ export class Browser {
     });
   }
 
-  /** Open a window for every window in the state that isn't open yet, and show its active tab. */
+  /** Open a window for every window in the state that isn't open yet (or a new one if there are none), and show its active tab. */
   start(): void {
-    for (const model of Object.values(this.store.state.windows)) if (!this.windows.has(model.id)) this.openWindow(model.id);
+    const models = Object.values(this.store.state.windows);
+    if (models.length === 0) this.newWindow();
+    for (const model of models) if (!this.windows.has(model.id)) this.openWindow(model.id);
     this.idle.start();
+  }
+
+  /** Quitting: every window closing from now on is remembered for the next launch, as Chrome does. */
+  prepareToQuit(): void {
+    this.quitting = true;
+  }
+
+  /**
+   * ⌘N or ⌘⇧N: a new window on the chord you're in (or a private window with
+   * a chord of its own), with the command bar open. Returns its id.
+   */
+  newWindow({ from, private: isPrivate = false }: { from?: WindowId; private?: boolean } = {}): WindowId {
+    if (!isPrivate) {
+      // A window you closed while only private ones were open was kept for the next launch; this one replaces it.
+      for (const model of Object.values(this.store.state.windows)) {
+        if (!model.private && !this.windows.has(model.id)) this.store.dispatch({ t: 'window.close', windowId: model.id });
+      }
+    }
+    const windowId = uuidv7();
+    this.store.dispatch({ t: 'window.create', windowId, ...(from ? { from } : {}), ...(isPrivate ? { privateChordId: uuidv7() } : {}) });
+    return windowId;
+  }
+
+  private isPrivateNode(nodeId: NodeId): boolean {
+    const node = this.store.state.nodes[nodeId];
+    return node ? isPrivateChord(this.store.state, node.chordId) : false;
   }
 
   focusFirstWindow(): void {
@@ -250,7 +291,7 @@ export class Browser {
     return activeTab(this.store.state, windowId)?.url ?? '';
   }
 
-  private openWindow(windowId: WindowId): AppWindow {
+  private openWindow(windowId: WindowId, { commandBar = false } = {}): AppWindow {
     const model = this.store.state.windows[windowId]!;
     const w = new AppWindow({
       id: windowId,
@@ -258,6 +299,7 @@ export class Browser {
       bounds: model.bounds && placeOnDisplays(model.bounds, screen.getAllDisplays().map((d) => d.workArea)),
       sidebar: model.sidebar,
       sidebarWidth: model.sidebarWidth,
+      private: Boolean(model.private),
       onBounds: (bounds) => this.store.dispatch({ t: 'window.bounds', windowId, bounds }),
     });
     this.windows.set(windowId, w);
@@ -291,6 +333,7 @@ export class Browser {
       this.popoverSent.delete(windowId);
       this.extensions.forget(windowId);
       if (this.lastWindowId === windowId) this.lastWindowId = this.windows.keys().next().value ?? null;
+      this.windowClosed(windowId);
       if (this.windows.size === 0 && process.platform !== 'darwin') {
         this.idle.stop();
         this.tabs.destroyAll();
@@ -301,15 +344,37 @@ export class Browser {
     const active = activeTabId(this.store.state, windowId);
     w.showTab(active ? (this.tabs.ensure(active) ?? null) : null);
     this.extensions.tabShown(w);
+    if (commandBar) w.openOverlay('new', '');
     return w;
   }
 
+  /**
+   * A window closed. A private window is forgotten at once, sign-ins and all.
+   * Closing one of several windows forgets it too; the last normal one, or
+   * any while quitting, stays saved so it comes back next time.
+   */
+  private windowClosed(windowId: WindowId): void {
+    const state = this.store.state;
+    const model = state.windows[windowId];
+    if (!model || this.quitting) return;
+    if (model.private) {
+      const profileId = state.chords[model.activeChordId]?.profileId;
+      this.store.dispatch({ t: 'window.close', windowId });
+      if (profileId) this.options.releaseProfile(profileId);
+      return;
+    }
+    const normalOpen = [...this.windows.keys()].some((id) => !state.windows[id]?.private);
+    if (normalOpen) this.store.dispatch({ t: 'window.close', windowId });
+  }
+
+  /** The window showing a tab, else one on its chord, else one on its side of the private line. */
   private windowShowing(nodeId: NodeId): WindowId | undefined {
     const models = Object.values(this.store.state.windows);
     const showing = models.find((m) => m.activeTab[m.activeChordId] === nodeId);
     if (showing) return showing.id;
     const node = this.store.state.nodes[nodeId];
-    return models.find((m) => m.activeChordId === node?.chordId)?.id ?? models[0]?.id;
+    const priv = node ? isPrivateChord(this.store.state, node.chordId) : false;
+    return models.find((m) => m.activeChordId === node?.chordId)?.id ?? (priv ? undefined : models.find((m) => !m.private)?.id);
   }
 
   private broadcast(change: Change): void {
@@ -373,6 +438,9 @@ export class Browser {
           this.windows.get(effect.windowId)?.setSidebar(effect.sidebar, effect.width, animate);
           break;
         }
+        case 'window.open':
+          if (!this.windows.has(effect.windowId)) this.openWindow(effect.windowId, { commandBar: true });
+          break;
       }
     }
   }
@@ -411,7 +479,7 @@ export class Browser {
     const id = activeTabId(this.store.state, w.id);
     const live = id ? this.store.state.live[id] : undefined;
     // The frame explains errors and crashes, and holds first run's cards, instead of the page.
-    w.setTabHidden(Boolean(live?.error || live?.crashed) || !this.store.state.settings.onboarded);
+    w.setTabHidden(Boolean(live?.error || live?.crashed) || (!this.store.state.settings.onboarded && !w.isPrivate));
     const state = this.popoverState(w);
     const json = JSON.stringify(state);
     if (this.popoverSent.get(w.id) === json) return;
@@ -431,21 +499,31 @@ export class Browser {
     const w = [...this.windows.values()].find((x) => x.window === focused) ?? this.lastWindow();
     if (w) this.runAction(action, w);
     else if (action === 'app.settings' || action === 'app.shortcuts') this.openSettings(action === 'app.shortcuts' ? 'shortcuts' : undefined);
+    // macOS, with every window closed: ⌘N and ⌘⇧N still make one.
+    else if (action === 'window.new' || action === 'window.newPrivate') this.newWindow({ private: action === 'window.newPrivate' });
   }
 
-  /** The browser window used most recently (Settings acts on it). */
+  /** The normal browser window used most recently: Settings acts on it, never on a private window. */
   lastBrowserWindow(): AppWindow | undefined {
-    return this.lastWindow();
+    return this.lastNormalWindow();
   }
 
   private lastWindow(): AppWindow | undefined {
     return (this.lastWindowId ? this.windows.get(this.lastWindowId) : undefined) ?? this.windows.values().next().value;
   }
 
+  /** The window used most recently that isn't private: where Settings, links from other apps and extensions act. */
+  private lastNormalWindow(): AppWindow | undefined {
+    const last = this.lastWindow();
+    if (last && !last.isPrivate) return last;
+    return [...this.windows.values()].find((w) => !w.isPrivate);
+  }
+
   settingsSnapshot(): SettingsSnapshot {
     const state = this.store.state;
-    const model = this.lastWindowId ? state.windows[this.lastWindowId] : undefined;
-    const chord = model ? state.chords[model.activeChordId] : Object.values(state.chords)[0];
+    const last = this.lastNormalWindow();
+    const model = last ? state.windows[last.id] : undefined;
+    const chord = model ? state.chords[model.activeChordId] : sortedChords(state)[0];
     return {
       settings: state.settings,
       chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
@@ -472,20 +550,22 @@ export class Browser {
     });
   }
 
-  /** Links from other apps (Chord as the default browser): new tabs in the window used last, which comes forward. */
+  /** Links from other apps (Chord as the default browser): new tabs in the normal window used last, which comes forward. */
   openExternalUrls(urls: readonly string[]): void {
     // macOS keeps running with every window closed; a link brings one back.
     if (this.windows.size === 0) this.start();
-    const w = this.lastWindow();
+    // Never into a private window: with only private ones open, a link gets a new window.
+    if (!this.lastNormalWindow()) this.newWindow();
+    const w = this.lastNormalWindow();
     if (!w) return;
     for (const url of urls) this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
     if (w.window.isMinimized()) w.window.restore();
     w.window.focus();
   }
 
-  /** A link from Settings opens as a new tab in the browser window used last, which comes forward. */
+  /** A link from Settings opens as a new tab in the normal window used last, which comes forward. */
   openUrlInLastWindow(url: string): void {
-    const w = this.lastWindow();
+    const w = this.lastNormalWindow();
     if (!w) return;
     this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
     w.window.focus();
@@ -519,6 +599,8 @@ export class Browser {
       buildTabMenu({
         url: tab.url,
         pinned: tab.section === 'pinned',
+        // Nothing pins in a private window.
+        canPin: !isPrivateChord(this.store.state, tab.chordId),
         togglePin: () => this.store.dispatch({ t: tab.section === 'pinned' ? 'tab.unpin' : 'tab.pin', nodeId }),
         copyLink: () => clipboard.writeText(tab.url),
         copyMarkdown: () => clipboard.writeText(markdownLink(tab.title, tab.url)),
@@ -527,7 +609,7 @@ export class Browser {
         close: () => this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId }),
         addFavorite: this.canFavorite(tab) ? () => this.store.dispatch({ t: 'favorite.add', favoriteId: uuidv7(), nodeId }) : null,
         newFolder: () => this.createFolder(w, tab.chordId, nodeId),
-        moveTargets: sortedChords(state)
+        moveTargets: (isPrivateChord(state, tab.chordId) ? [] : chordsFor(state, w.id))
           .filter((c) => c.id !== tab.chordId)
           .map((c) => ({ id: c.id, label: `${c.icon}  ${c.name}`, signInsDiffer: c.profileId !== from?.profileId })),
         moveTo: (chordId) => this.moveToChord(w, nodeId, chordId),
@@ -582,6 +664,8 @@ export class Browser {
     const tab = state.nodes[nodeId];
     const to = state.chords[chordId];
     if (tab?.kind !== 'tab' || !to || tab.chordId === chordId) return;
+    // A private window's tabs stay in it, and nothing moves into one.
+    if (to.private || isPrivateChord(state, tab.chordId)) return;
     const from = tab.chordId;
     const place = { section: tab.section, parentId: tab.parentId, rank: tab.rank };
     const reloads = state.chords[from]?.profileId !== to.profileId;
@@ -601,10 +685,12 @@ export class Browser {
     const nodeIds = children(state, chordId, 'today', null).map((n) => n.id);
     if (nodeIds.length === 0) return;
     const shown = activeTabId(state, w.id);
-    this.store.dispatch({ t: 'tab.archive', nodeIds, reason: 'cleared' });
+    const archives = !isPrivateChord(state, chordId);
+    if (archives) this.store.dispatch({ t: 'tab.archive', nodeIds, reason: 'cleared' });
+    else for (const nodeId of nodeIds) this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId });
     send(w.shell.webContents, 'toast:show', {
       id: `today-cleared:${chordId}`,
-      message: `Archived ${nodeIds.length} ${nodeIds.length === 1 ? 'tab' : 'tabs'}`,
+      message: `${archives ? 'Archived' : 'Closed'} ${nodeIds.length} ${nodeIds.length === 1 ? 'tab' : 'tabs'}`,
       action: { label: 'Undo', command: { t: 'closed.restore', windowId: w.id, nodeIds, activate: shown && nodeIds.includes(shown) ? shown : null } },
     });
   }
@@ -619,8 +705,9 @@ export class Browser {
   openChordMenu(contents: WebContents, chordId: string, at: { x: number; y: number }): void {
     const w = this.windowFor(contents);
     const chord = this.store.state.chords[chordId];
-    if (!w || !chord) return;
-    const onlyChord = Object.keys(this.store.state.chords).length < 2;
+    // A private window's chord has nothing to change: no name, colors, sign-ins or delete.
+    if (!w || !chord || chord.private) return;
+    const onlyChord = sortedChords(this.store.state).length < 2;
     w.popupMenu(
       buildChordMenu({
         rename: () => {
@@ -646,7 +733,7 @@ export class Browser {
 
   /** A note for the window used last, with a link that opens as a tab there (a new Chord version, for one). */
   announce(id: string, message: string, link: { label: string; url: string }): void {
-    const w = this.lastWindow();
+    const w = this.lastNormalWindow();
     if (!w) return;
     send(w.shell.webContents, 'toast:show', { id, message, action: { label: link.label, command: { t: 'tab.open', windowId: w.id, url: link.url } } });
   }
@@ -657,7 +744,7 @@ export class Browser {
    */
   private deleteChord(w: AppWindow, chordId: string): void {
     const chord = this.store.state.chords[chordId];
-    if (!chord) return;
+    if (!chord || chord.private) return;
     this.store.dispatch({ t: 'chord.delete', chordId });
     send(w.shell.webContents, 'toast:show', {
       id: `chord-deleted:${chordId}`,
@@ -676,9 +763,9 @@ export class Browser {
    * reload in it, signed out), or shares the default one again. Undo goes
    * back to the sign-ins it had, which stay on disk until the next launch.
    */
-  setSeparateSignIns(chordId: string, separate: boolean, w = this.lastWindow()): void {
+  setSeparateSignIns(chordId: string, separate: boolean, w = this.lastNormalWindow()): void {
     const chord = this.store.state.chords[chordId];
-    if (!chord || (chord.profileId !== DEFAULT_PROFILE) === separate) return;
+    if (!chord || chord.private || (chord.profileId !== DEFAULT_PROFILE) === separate) return;
     const previous = chord.profileId;
     this.store.dispatch({ t: 'chord.profile', chordId, profileId: separate ? uuidv7() : DEFAULT_PROFILE });
     if (!w) return;
@@ -705,11 +792,16 @@ export class Browser {
         return true;
       case 'tab.reopen':
         // This session's closed tabs keep their place; after that, the archive remembers what you closed.
-        if (this.store.state.closed.length > 0) this.store.dispatch({ t: 'tab.reopenClosed', windowId: w.id });
-        else void this.options.archive.entry({ reasons: ['closed', 'cleared'] }).then((entry) => entry && this.restoreEntry(w.id, entry, true));
+        // A private window reopens only its own, and has no archive.
+        if (reopenableIndex(this.store.state, w.id) >= 0) this.store.dispatch({ t: 'tab.reopenClosed', windowId: w.id });
+        else if (!w.isPrivate) void this.options.archive.entry({ reasons: ['closed', 'cleared'] }).then((entry) => entry && this.restoreEntry(w.id, entry, true));
         return true;
       case 'app.history':
-        this.openArchive(w.id);
+        if (!w.isPrivate) this.openArchive(w.id);
+        return true;
+      case 'window.new':
+      case 'window.newPrivate':
+        this.newWindow({ from: w.id, private: action === 'window.newPrivate' });
         return true;
       case 'tab.recentNext':
       case 'tab.recentPrevious':

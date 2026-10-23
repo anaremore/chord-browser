@@ -565,6 +565,51 @@ describe('moving tabs between chords', () => {
   });
 });
 
+describe('the private line, and several windows', () => {
+  const withPrivate = () => {
+    const t = setup();
+    t.state.chords['p'] = { ...t.state.chords['c1']!, id: 'p', name: 'Private', rank: 'z', profileId: 'private-w2', private: true };
+    t.state.windows['w2'] = { id: 'w2', activeChordId: 'p', activeTab: { p: null }, sidebar: 'docked', sidebarWidth: 248, bounds: null, private: true };
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });
+    t.run({ t: 'tab.open', windowId: 'w2', url: 'https://secret.test/' });
+    return { t, normal: t.state.windows['w1']!.activeTab['c1']!, secret: t.state.windows['w2']!.activeTab['p']! };
+  };
+
+  it('keeps tabs from crossing into or out of a private chord', () => {
+    const { t, normal, secret } = withPrivate();
+    expect(t.run({ t: 'node.moveToChord', nodeId: normal, chordId: 'p' }).patches).toEqual([]);
+    expect(t.run({ t: 'node.moveToChord', nodeId: secret, chordId: 'c1' }).patches).toEqual([]);
+  });
+
+  it('makes no folders or favorites from a private window, and pins nothing there', () => {
+    const { t, secret } = withPrivate();
+    expect(t.run({ t: 'folder.create', folderId: 'f', chordId: 'p', title: 'F', tabId: secret }).patches).toEqual([]);
+    expect(t.run({ t: 'favorite.add', favoriteId: 'fav', nodeId: secret }).patches).toEqual([]);
+    expect(t.run({ t: 'node.move', nodeId: secret, section: 'pinned', index: 0 }).patches).toEqual([]);
+  });
+
+  it('lands every window showing a tab that moves to other sign-ins, and closes its page once', () => {
+    const t = setup();
+    t.state.chords['c2'] = { ...t.state.chords['c1']!, id: 'c2', name: 'Work', rank: 'b0', profileId: 'p-work' };
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://b.test/' });
+    const b = t.state.windows['w1']!.activeTab['c1']!;
+    // A second window (⌘N) on the same chord, on the same tab.
+    t.run({ t: 'window.create', windowId: 'w2', from: 'w1' });
+    t.run({ t: 'tab.activate', windowId: 'w2', nodeId: b });
+    expect(t.state.windows['w2']!.activeTab['c1']).toBe(b);
+    const moved = t.run({ t: 'node.moveToChord', nodeId: b, chordId: 'c2' });
+    expect(moved.effects.filter((e) => e.e === 'view.destroy')).toEqual([{ e: 'view.destroy', nodeId: b }]);
+    for (const w of ['w1', 'w2']) {
+      expect(t.state.windows[w]!.activeTab['c1']).not.toBe(b);
+      expect(moved.effects).toContainEqual({ e: 'view.show', windowId: w, nodeId: t.state.windows[w]!.activeTab['c1'] });
+    }
+    // The page closed before either window showed its neighbor.
+    const destroyAt = moved.effects.findIndex((e) => e.e === 'view.destroy');
+    expect(moved.effects.findIndex((e) => e.e === 'view.show')).toBeGreaterThan(destroyAt);
+  });
+});
+
 describe('Clear Today and its Undo', () => {
   it('archives Today and brings the same tabs back in place', () => {
     const t = setup();

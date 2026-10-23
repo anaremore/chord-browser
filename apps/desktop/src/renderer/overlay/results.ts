@@ -22,7 +22,7 @@ import {
   recencyPoints,
   searchEngine,
   searchUrl,
-  sortedChords,
+  chordsFor,
   usagePoints,
   type ActionId,
   type ArchivedTab,
@@ -205,7 +205,9 @@ export function buildResults(
   const q = query.trim();
   const win = state.windows[windowId];
   const activeId = win ? win.activeTab[win.activeChordId] : null;
-  const tabs = Object.values(state.nodes).filter((n): n is TabNode => n.kind === 'tab');
+  // Open tabs from the chords this window can see: a private window's own, or none of a private window's.
+  const visibleChords = new Set(chordsFor(state, windowId).map((c) => c.id));
+  const tabs = Object.values(state.nodes).filter((n): n is TabNode => n.kind === 'tab' && visibleChords.has(n.chordId));
   const chordName = (t: TabNode) => (win && t.chordId !== win.activeChordId ? (state.chords[t.chordId]?.name ?? null) : null);
   const tabResult = (t: TabNode): Result => ({
     kind: 'tab',
@@ -219,7 +221,7 @@ export function buildResults(
   const suggestionRows = (into: (text: string) => string): Result[] =>
     suggestions.map((text) => ({ kind: 'open', key: `suggest:${text}`, title: text, detail: '', url: into(text), search: true, suggested: true }));
 
-  if (scope?.kind === 'filter') return filtered(scope.filter, q, state, win?.activeChordId ?? null, activeId ?? null, tabs, tabResult, history, now);
+  if (scope?.kind === 'filter') return filtered(scope.filter, q, state, windowId, win?.activeChordId ?? null, activeId ?? null, tabs, tabResult, history, now);
 
   if (!q) {
     if (mode === 'edit' || scope) return [];
@@ -353,7 +355,7 @@ export function buildResults(
   }
 
   // Other chords by name: how to switch when the sidebar is hidden.
-  for (const chord of sortedChords(state)) {
+  for (const chord of chordsFor(state, windowId)) {
     if (chord.id === win?.activeChordId) continue;
     const match = matchScore(q, chord.name) ?? abbreviationScore(q, chord.name);
     if (match === null) continue;
@@ -400,6 +402,7 @@ function filtered(
   filter: Filter,
   q: string,
   state: State,
+  windowId: string,
   activeChordId: string | null,
   activeId: string | null,
   tabs: TabNode[],
@@ -455,7 +458,7 @@ function filtered(
       );
     case 'chords':
       return ranked(
-        sortedChords(state).filter((c) => c.id !== activeChordId),
+        chordsFor(state, windowId).filter((c) => c.id !== activeChordId),
         (c) => matchScore(q, c.name) ?? abbreviationScore(q, c.name),
         () => 0,
         (c) => ({ kind: 'chord', key: `chord:${c.id}`, title: c.name, chord: c }),

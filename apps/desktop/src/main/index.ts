@@ -1,4 +1,16 @@
-import { ARCHIVE_AFTER_MS, IDLE_CHECK_MS, SLEEP_AFTER_MS, profilePartition, restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
+import {
+  ARCHIVE_AFTER_MS,
+  IDLE_CHECK_MS,
+  SLEEP_AFTER_MS,
+  isPrivateProfile,
+  isPrivateWindow,
+  privateWindowOf,
+  profilePartition,
+  restoreState,
+  uuidv7,
+  type Command,
+  type WindowId,
+} from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { delimiter, join } from 'node:path';
@@ -65,6 +77,9 @@ function activeChordOf(sender: WebContents): string | null {
   return browser!.store.state.windows[senderWindow(sender).id]?.activeChordId ?? null;
 }
 
+/** A private window's command bar neither reads history and the archive nor teaches them anything. */
+const fromPrivateWindow = (sender: WebContents): boolean => isPrivateWindow(browser!.store.state, senderWindow(sender).id);
+
 /** Renderers may only act on their own window, whatever windowId they send. */
 function scopeToWindow(command: RendererCommand, windowId: WindowId): Command {
   return 'windowId' in command ? { ...command, windowId } : command;
@@ -90,14 +105,17 @@ function registerIpc(): void {
     w.openOverlay(mode, mode === 'edit' ? browser!.activeUrl(w.id) : '', anchor ?? null);
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
-  handle('history:search', ({ query }, sender) => persistence!.search(query, activeChordOf(sender)));
+  handle('history:search', ({ query }, sender) =>
+    fromPrivateWindow(sender) ? { history: [], choices: [], archive: [] } : persistence!.search(query, activeChordOf(sender)),
+  );
   handle('search:suggest', ({ query, engine }, sender) => suggestions.suggest(sender.id, query, engine));
   handle('history:choose', ({ text, destination, address }, sender) => {
     const chordId = activeChordOf(sender);
-    if (chordId) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
+    if (chordId && !fromPrivateWindow(sender)) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
   });
   handle('downloads:openFolder', () => downloads.openFolder());
   handle('overlay:close', ({ seq }, sender) => senderWindow(sender).closeOverlay(seq));
+  handle('overlay:ready', (_request, sender) => senderWindow(sender).markOverlayReady());
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
   handle('menu:tab', ({ nodeId, x, y }, sender) => browser!.openTabMenu(sender, nodeId, { x, y }));
@@ -192,6 +210,8 @@ if (!app.requestSingleInstanceLock()) {
   // Flush unsaved changes before quitting (capped at 2 s inside close()).
   let flushed = false;
   app.on('before-quit', (event) => {
+    // Every window open now comes back next launch, so their closing isn't forgetting them.
+    browser?.prepareToQuit();
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
@@ -221,11 +241,25 @@ if (!app.requestSingleInstanceLock()) {
       let ses = profiles.get(profileId);
       if (!ses) {
         ses = session.fromPartition(profilePartition(profileId));
-        permissions.attach(ses);
-        downloads.attach(ses);
+        // A private window's session keeps its answers and downloads to itself.
+        const priv = isPrivateProfile(profileId);
+        permissions.attach(ses, priv ? profileId : null);
+        downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
         profiles.set(profileId, ses);
       }
       return ses;
+    };
+    /** A private window closed: its in-memory session is emptied now, not just at exit. */
+    const releaseProfile = (profileId: string) => {
+      const ses = profiles.get(profileId);
+      if (!isPrivateProfile(profileId)) return;
+      permissions.forgetScope(profileId);
+      if (!ses) return;
+      profiles.delete(profileId);
+      void ses
+        .clearStorageData()
+        .then(() => ses.clearCache())
+        .catch(() => {});
     };
 
     // Session restore: what chord-data saved, repaired; or a first chord in the OS accent color.
@@ -264,6 +298,7 @@ if (!app.requestSingleInstanceLock()) {
         sleepAfterMs: devMs('CHORD_SLEEP_AFTER_MS') ?? SLEEP_AFTER_MS,
       },
       onChange: (change) => store.record(change.patches, change.state),
+      releaseProfile,
       extensions: {
         root: join(app.getPath('userData'), 'Extensions'),
         preloadPath: join(import.meta.dirname, '../preload/extensions.cjs'),

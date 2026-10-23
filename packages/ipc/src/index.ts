@@ -110,7 +110,7 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('window.sidebarWidth'), windowId: id, width: z.number().min(0).max(10_000) }),
   z.object({ t: z.literal('tab.pin'), nodeId: id }),
   z.object({ t: z.literal('tab.unpin'), nodeId: id }),
-  z.object({ t: z.literal('download.clear') }),
+  z.object({ t: z.literal('download.clear'), windowId: id }),
   z.object({ t: z.literal('window.sidebar'), windowId: id, sidebar: z.enum(['docked', 'collapsed']) }),
   z.object({ t: z.literal('chord.create'), windowId: id, name: chordName, icon: chordIcon, theme: ChordTheme }),
   z.object({ t: z.literal('chord.activate'), windowId: id, chordId: id }),
@@ -345,6 +345,8 @@ export const invokeChannels = {
   'nav:command': { roles: ['shell', 'overlay'], request: z.object({ action: NavAction }), response: z.void() },
   'overlay:open': { roles: ['shell'], request: OverlayOpen, response: z.void() },
   'overlay:close': { roles: ['overlay'], request: z.object({ seq: z.number().int() }), response: z.void() },
+  /** The command bar has started and listens for openings (a new window opens it as soon as it is). */
+  'overlay:ready': { roles: ['overlay'], request: z.void(), response: z.void() },
   /** The shell reports where the URL pill / address field sits, for anchored ⌘L. */
   'layout:anchor': { roles: ['shell'], request: Rect.nullable(), response: z.void() },
   'download:action': {
@@ -601,6 +603,8 @@ export interface OverlayApi {
   overlay: {
     onOpen(listener: (event: OverlayOpenEvent) => void): () => void;
     close(seq: number): Promise<void>;
+    /** Listening now: main may open the command bar. */
+    ready(): Promise<void>;
   };
   action: { run(action: CoreActionId): Promise<void> };
   downloads: DownloadsApi;

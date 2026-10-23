@@ -16,9 +16,19 @@ export type ProfileId = string;
  */
 export const DEFAULT_PROFILE: ProfileId = 'default';
 
-/** The Electron session partition that holds a profile's cookies, storage and cache. */
+/** A private window's sign-ins: one per window, in memory only, gone when the window closes. */
+export const privateProfileId = (windowId: WindowId): ProfileId => `private-${windowId}`;
+export const isPrivateProfile = (profileId: ProfileId): boolean => profileId.startsWith('private-');
+/** The private window a private profile belongs to. */
+export const privateWindowOf = (profileId: ProfileId): WindowId => profileId.slice('private-'.length);
+
+/**
+ * The Electron session partition that holds a profile's cookies, storage and
+ * cache. A private window's has no `persist:` prefix, so Electron keeps it in
+ * memory only.
+ */
 export const profilePartition = (profileId: ProfileId): string =>
-  profileId === DEFAULT_PROFILE ? 'persist:default' : `persist:p-${profileId}`;
+  profileId === DEFAULT_PROFILE ? 'persist:default' : isPrivateProfile(profileId) ? `chord-${profileId}` : `persist:p-${profileId}`;
 
 export interface Oklch {
   l: number;
@@ -62,7 +72,12 @@ export interface Chord {
   theme: ChordThemeSpec;
   rank: string;
   createdAt: number;
+  /** A private window's own chord: only that window sees it, and nothing of it is ever saved. */
+  private?: boolean;
 }
+
+/** How a private window's chord looks: quiet graphite, always dark. */
+export const PRIVATE_CHORD_THEME: ChordThemeSpec = { stops: [{ l: 0.72, c: 0.015, h: 260 }], grain: 0.2, appearance: 'dark' };
 
 export type Section = 'pinned' | 'today';
 
@@ -132,6 +147,8 @@ export interface WindowModel {
   /** The docked sidebar's width, within SIDEBAR_WIDTH. */
   sidebarWidth: number;
   bounds: Bounds | null;
+  /** A private window: it shows only its own chord, and Chord forgets it when it closes. */
+  private?: boolean;
 }
 
 /** Engine state that is shown but never persisted. */
@@ -171,6 +188,8 @@ export interface Download {
   speed: number;
   startedAt: number;
   endedAt: number | null;
+  /** Started in this private window: listed only there, never saved, and forgotten when it closes (the file stays). */
+  privateWindow?: WindowId;
 }
 
 /** What the downloads panel can do with one download. */

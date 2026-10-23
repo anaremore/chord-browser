@@ -115,13 +115,35 @@ const COLLECTIONS = { chords: 'chord', nodes: 'node', windows: 'window' } as con
 export const opKey = (op: WriteOp): string => `${op.k}:${op.id}`;
 
 /**
+ * Whether an op would save something from a private window, which is never
+ * saved. Deletions always go through: deleting what was never written is harmless.
+ */
+function isPrivate(op: WriteOp, state: State): boolean {
+  if (op.value === null) return false;
+  switch (op.k) {
+    case 'chord':
+      return Boolean(op.value.private);
+    case 'node':
+      return Boolean(state.chords[op.value.chordId]?.private);
+    case 'window':
+      return Boolean(op.value.private);
+    case 'download':
+      return Boolean(op.value.privateWindow);
+    default:
+      return false;
+  }
+}
+
+/**
  * The entities a change touched, each with its value in `state` after the
- * change. Live engine state, recently closed tabs and the version are never
- * persisted.
+ * change. Live engine state, recently closed tabs, the version and anything
+ * from a private window are never persisted.
  */
 export function opsFromPatches(patches: readonly PathPatch[], state: State): WriteOp[] {
   const ops = new Map<string, WriteOp>();
-  const add = (op: WriteOp) => ops.set(opKey(op), op);
+  const add = (op: WriteOp) => {
+    if (!isPrivate(op, state)) ops.set(opKey(op), op);
+  };
   for (const { path } of patches) {
     const [collection, id] = path;
     if (collection === 'downloads') {
@@ -161,9 +183,9 @@ export function opsFromPatches(patches: readonly PathPatch[], state: State): Wri
   return [...ops.values()];
 }
 
-/** Every saved entity in a state, for the first write of a brand-new profile. */
+/** Every saved entity in a state, for the first write of a brand-new profile (private windows' never are). */
 export function opsForState(state: State): WriteOp[] {
-  return [
+  const ops: WriteOp[] = [
     ...Object.values(state.chords).map((value): WriteOp => ({ k: 'chord', id: value.id, value })),
     ...Object.values(state.nodes).map((value): WriteOp => ({ k: 'node', id: value.id, value })),
     ...Object.values(state.windows).map((value): WriteOp => ({ k: 'window', id: value.id, value })),
@@ -173,4 +195,5 @@ export function opsForState(state: State): WriteOp[] {
     ...Object.values(state.favorites).map((value): WriteOp => ({ k: 'favorite', id: value.id, value })),
     ...Object.entries(state.extensions).map(([key, value]): WriteOp => ({ k: 'extension', id: key, value })),
   ];
+  return ops.filter((op) => !isPrivate(op, state));
 }

@@ -3,7 +3,7 @@
  * Downloads button in the sidebar footer (or the minimal bar), anchored to
  * it, newest first. Clicking outside or Escape closes it.
  */
-import { describeDownload, type Download, type DownloadAction, type State } from '@chord/core';
+import { describeDownload, downloadsFor, type Download, type DownloadAction, type State } from '@chord/core';
 import type { Rect } from '@chord/ipc';
 import { File, FolderOpen, Pause, Play, RotateCcw, X } from 'lucide-react';
 import { motion, type Transition } from 'motion/react';
@@ -73,7 +73,19 @@ function Row({ download }: { download: Download }) {
   );
 }
 
-export function DownloadsPanel({ state, anchor, transition, onClose }: { state: State; anchor: Rect | null; transition: Transition; onClose(): void }) {
+export function DownloadsPanel({
+  state,
+  windowId,
+  anchor,
+  transition,
+  onClose,
+}: {
+  state: State;
+  windowId: string;
+  anchor: Rect | null;
+  transition: Transition;
+  onClose(): void;
+}) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
@@ -82,7 +94,8 @@ export function DownloadsPanel({ state, anchor, transition, onClose }: { state: 
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const downloads = Object.values(state.downloads).sort((a, b) => b.startedAt - a.startedAt);
+  // A private window lists only its own downloads, and no other window lists them.
+  const downloads = downloadsFor(state, windowId).sort((a, b) => b.startedAt - a.startedAt);
   const finished = downloads.some((d) => d.state !== 'progressing' && d.state !== 'paused');
   // Above the footer button in the sidebar; below the button in the minimal bar, kept on screen.
   const below = anchor ? anchor.y < window.innerHeight / 2 : true;
@@ -121,7 +134,7 @@ export function DownloadsPanel({ state, anchor, transition, onClose }: { state: 
       )}
       {finished && (
         <footer className={styles.downloadsFooter}>
-          <button type="button" className={styles.textButton} onClick={() => void api.state.dispatch({ t: 'download.clear' })}>
+          <button type="button" className={styles.textButton} onClick={() => void api.state.dispatch({ t: 'download.clear', windowId })}>
             Clear finished
           </button>
         </footer>

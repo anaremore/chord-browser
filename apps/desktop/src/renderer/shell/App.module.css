@@ -211,6 +211,17 @@ kbd {
   color: var(--color-fg-subtle);
 }
 
+/* A private window's chord: the eye-off glyph in the icon's place. */
+.privateGlyph {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+  margin-inline: calc(var(--space-1) * -1);
+  color: var(--color-fg-muted);
+}
+
 /* The chord's icon: click to change it. */
 .chordIconButton {
   display: grid;
