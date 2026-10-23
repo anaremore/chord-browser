@@ -40,7 +40,7 @@ The full report is `apps/desktop/test-results/perf.json`. CI uploads it as the `
 - `environment`: the CPU, and the display's refresh rate and its idle frame interval.
 - `locked` and `cpuBusy`: the screen state and the machine's load when it was measured.
 - Switch tabs' renders `detail`: the renders per switch, and the most in one frame for each.
-- Page view moves `detail`: the moves in each of the three changes.
+- Page view moves `detail`: the moves in each of the three changes, and how often the page laid itself out in each and for how long (`pageLayouts`, `pageLayoutMs`, from the trace of the page's renderer).
 - Launch `detail.sinceMainEntry`: when each stage was reached, run by run (`ready`, `restored`, `windowCreated`, `shellLoaded`, `windowShown`, `shellReady`, `shellPainted`).
 - Command bar `detail`: per opening, when the overlay `received` the request and `committed` it; per keystroke, when the history search was `sent` and its `roundTrip` through chord-data.
 - Frames `detail`: the worst frame split into script, style and layout, and paint, with its longest JS calls, and the longest task with its calls. These point at what to profile.

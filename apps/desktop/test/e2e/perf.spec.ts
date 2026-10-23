@@ -15,7 +15,7 @@ import type { AddressInfo } from 'node:net';
 import { cpus, release, tmpdir, totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type CDPSession, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { frameIntervals, framesOf, longestTask, trace, type Frame } from './frames';
+import { frameIntervals, framesOf, layoutsOf, longestTask, trace, type Frame, type TraceEvent } from './frames';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -355,8 +355,9 @@ interface Step {
  * Runs `steps`, tracing each one's `act`, and records against the frame
  * budget: the longest task (anywhere), the worst frame's work at 60 Hz and
  * 120 Hz, and the slowest gap between frames (60 fps). See frames.ts.
+ * `traced` sees each step's trace too (every process is in it).
  */
-async function interaction(s: Session, name: string, steps: Step[]): Promise<void> {
+async function interaction(s: Session, name: string, steps: Step[], traced?: (events: TraceEvent[]) => Promise<void> | void): Promise<void> {
   const frames: (Frame & { renderer: string })[] = [];
   const tasks: { renderer: string; ms: number; calls: { name: string; ms: number }[] }[] = [];
   const intervals: number[] = [];
@@ -371,6 +372,7 @@ async function interaction(s: Session, name: string, steps: Step[]): Promise<voi
       frames.push(...framesOf(events, pid).map((f) => ({ ...f, renderer })));
       tasks.push({ renderer, ...longestTask(events, pid) });
     }
+    await traced?.(events);
     await step.verify?.();
   }
   const work = frames.map((f) => f.work);
@@ -524,6 +526,10 @@ async function watchPageMoves(app: ElectronApplication, origin: string): Promise
     }
   }, origin);
 }
+
+/** The renderer processes of the pages shown (the site's), by OS process ID. */
+const pageRenderers = (app: ElectronApplication, origin: string) =>
+  app.evaluate(({ webContents }, from) => [...new Set(webContents.getAllWebContents().filter((c) => c.getURL().startsWith(from)).map((c) => c.getOSProcessId()))], origin);
 
 /** The most any watched page view moved since `watchPageMoves`. */
 const pageMoves = (app: ElectronApplication) =>
@@ -681,22 +687,34 @@ for (const tabs of [20, 200]) {
         // snapshot technique (DESIGN.md §6.5), so each page view moves at most twice, never every frame.
         const frameChange = async (name: string, change: () => Promise<void>, ready: () => Promise<void>, done: () => Promise<void>) => {
           const moves: number[] = [];
+          // The page's own cost: each resize lays it out again, so a page moved every frame relayouts every frame.
+          const layouts: { count: number; ms: number }[] = [];
+          let pagePids: number[] = [];
           let locked: boolean | null = null;
-          await interaction(s, name, repeat(3, () => ({
-            setup: async () => {
-              await ready();
-              await watchPageMoves(app, site.origin);
-              locked = screenLocked() || locked;
+          await interaction(
+            s,
+            name,
+            repeat(3, () => ({
+              setup: async () => {
+                await ready();
+                await watchPageMoves(app, site.origin);
+                pagePids = await pageRenderers(app, site.origin);
+                locked = screenLocked() || locked;
+              },
+              act: async () => {
+                await change();
+                await settle();
+              },
+              verify: async () => {
+                await done();
+                moves.push(await pageMoves(app));
+              },
+            })),
+            (events) => {
+              const each = pagePids.map((pid) => layoutsOf(events, pid));
+              layouts.push({ count: each.reduce((n, l) => n + l.count, 0), ms: round(each.reduce((n, l) => n + l.ms, 0)) });
             },
-            act: async () => {
-              await change();
-              await settle();
-            },
-            verify: async () => {
-              await done();
-              moves.push(await pageMoves(app));
-            },
-          })));
+          );
           record({
             group: 'page view',
             name: `${name}: page view moves`,
@@ -704,7 +722,7 @@ for (const tabs of [20, 200]) {
             motion: s.motion,
             locked,
             checks: [check('most in one', max(moves), 2, { locked, unit: 'moves' })],
-            detail: { moves },
+            detail: { moves, pageLayouts: layouts.map((l) => l.count), pageLayoutMs: layouts.map((l) => l.ms) },
           });
         };
         const hideSidebar = shell.getByRole('button', { name: 'Hide sidebar' });
