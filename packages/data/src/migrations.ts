@@ -207,9 +207,16 @@ export const MIGRATIONS: readonly string[] = [
     INSERT INTO duet_fts(rowid, text) VALUES (new.rid, new.text);
   END;
   `,
+  // 10: split view (Phase 2; 9 is Duet's). A split is a node of kind 'split'; its panes are its
+  // child tabs, in rank order. layout is {direction:'row'|'column', sizes:number[]} (shares in pane order).
+  `
+  CREATE TABLE IF NOT EXISTS split (
+    node_id TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+    layout TEXT NOT NULL
+  ) STRICT;
+  `,
   // 11: link routes (from Crest): a site's links open in a chord. A route to a chord that's gone is
-  // dropped at restore. Numbered after Duet's (9) and split view's (10, landing separately); it
-  // only adds its own table, if it isn't there yet, so where it runs in the sequence doesn't matter.
+  // dropped at restore. It only adds its own table, if it isn't there yet.
   `
   CREATE TABLE IF NOT EXISTS link_route (
     host TEXT PRIMARY KEY, chord_id TEXT NOT NULL, created_at INTEGER NOT NULL

@@ -15,6 +15,7 @@ const api: ShellApi = {
   layout: {
     anchor: (rect) => invoke('layout:anchor', rect),
     peek: (open) => invoke('layout:peek', { open }),
+    lift: (lifted) => invoke('layout:lift', { lifted }),
   },
   menu: {
     app: (anchor) => invoke('menu:app', anchor),
@@ -42,6 +43,7 @@ const api: ShellApi = {
   },
   defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
   share: { stop: (nodeId) => invoke('share:stop', { nodeId }) },
+  preview: { hover: (target) => invoke('preview:hover', target) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

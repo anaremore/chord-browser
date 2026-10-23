@@ -25,6 +25,7 @@ import {
   type InstalledExtension,
   type LinkRoute,
   type FolderNode,
+  type SplitNode,
   type PersistedState,
   type SidebarNode,
   type SitePermissions,
@@ -240,10 +241,11 @@ export class ChordDatabase {
 
     const nodeRows = this.sql(
       `SELECT n.*, t.url, t.title AS tab_title, t.pinned_url, t.custom_title, t.last_active_at,
-              f.title AS folder_title, f.collapsed, i.mime AS icon_mime, i.data AS icon_data
+              f.title AS folder_title, f.collapsed, s.layout AS split_layout, i.mime AS icon_mime, i.data AS icon_data
          FROM node n
          LEFT JOIN tab t ON t.node_id = n.id
          LEFT JOIN folder f ON f.node_id = n.id
+         LEFT JOIN split s ON s.node_id = n.id
          LEFT JOIN favicon i ON i.key = t.favicon_key
         WHERE n.deleted_at IS NULL`,
     ).all() as Row[];
@@ -266,6 +268,17 @@ export class ChordDatabase {
       } else if (r['kind'] === 'folder' && typeof r['folder_title'] === 'string') {
         const folder: FolderNode = { ...base, kind: 'folder', section: 'pinned', title: r['folder_title'], collapsed: num(r['collapsed']) === 1 };
         nodes.push(folder);
+      } else if (r['kind'] === 'split' && typeof r['split_layout'] === 'string') {
+        // Restore checks the panes and sizes (core settleSplits); here they're just read back.
+        const layout = parseJson<{ direction?: unknown; sizes?: unknown }>(r['split_layout'], {});
+        const split: SplitNode = {
+          ...base,
+          kind: 'split',
+          section: r['section'] === 'pinned' ? 'pinned' : 'today',
+          direction: layout.direction === 'column' ? 'column' : 'row',
+          sizes: Array.isArray(layout.sizes) ? layout.sizes.filter((s): s is number => typeof s === 'number') : [],
+        };
+        nodes.push(split);
       }
     }
 
@@ -523,13 +536,24 @@ export class ChordDatabase {
     ).run(id, node.chordId, node.parentId, node.section, node.kind, node.rank, node.createdAt, now);
     if (node.kind === 'folder') {
       this.sql('DELETE FROM tab WHERE node_id = ?').run(id);
+      this.sql('DELETE FROM split WHERE node_id = ?').run(id);
       this.sql(
         `INSERT INTO folder (node_id, title, collapsed) VALUES (?, ?, ?)
          ON CONFLICT(node_id) DO UPDATE SET title = excluded.title, collapsed = excluded.collapsed`,
       ).run(id, node.title, node.collapsed ? 1 : 0);
       return;
     }
+    if (node.kind === 'split') {
+      this.sql('DELETE FROM tab WHERE node_id = ?').run(id);
+      this.sql('DELETE FROM folder WHERE node_id = ?').run(id);
+      this.sql('INSERT INTO split (node_id, layout) VALUES (?, ?) ON CONFLICT(node_id) DO UPDATE SET layout = excluded.layout').run(
+        id,
+        JSON.stringify({ direction: node.direction, sizes: node.sizes }),
+      );
+      return;
+    }
     this.sql('DELETE FROM folder WHERE node_id = ?').run(id);
+    this.sql('DELETE FROM split WHERE node_id = ?').run(id);
     const iconKey = node.favicon ? this.storeFavicon(node.favicon, now) : null;
     this.sql(
       `INSERT INTO tab (node_id, pinned_url, custom_title, url, title, favicon_key, last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?)

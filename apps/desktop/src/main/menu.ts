@@ -241,6 +241,10 @@ export interface TabMenuActions {
   /** Null when the page can't be a favorite (not a web page, or already one). */
   addFavorite: (() => void) | null;
   newFolder(): void;
+  /** Show it beside the tab on screen (split view); null when it can't (it's that tab, or the split is full). */
+  openInSplit: (() => void) | null;
+  /** Take it out of its split; null when it isn't in one. */
+  removeFromSplit: (() => void) | null;
   /** The other chords, for "Move to"; `signInsDiffer` notes the reload. */
   moveTargets: { id: string; label: string; signInsDiffer: boolean }[];
   moveTo(chordId: string): void;
@@ -263,6 +267,10 @@ export function buildTabMenu(a: TabMenuActions): Menu {
     { label: 'New folder with tab', enabled: a.canPin, click: a.newFolder },
     { label: 'Move to', enabled: moveTo.length > 0, submenu: moveTo.length > 0 ? moveTo : [{ label: 'No other chords', enabled: false }] },
     { type: 'separator' },
+    a.removeFromSplit
+      ? { label: 'Remove from split', click: () => a.removeFromSplit?.() }
+      : { label: 'Open in split', enabled: a.openInSplit !== null, click: () => a.openInSplit?.() },
+    { type: 'separator' },
     { label: 'Reload', click: a.reload },
     { label: 'Duplicate', click: a.duplicate },
     { type: 'separator' },
@@ -278,6 +286,16 @@ export function buildFolderMenu(a: { collapsed: boolean; toggle(): void; rename(
     { label: 'New folder inside', click: a.newFolderInside },
     { type: 'separator' },
     { label: 'Delete folder', click: a.delete },
+  ]);
+}
+
+/** Right-click on a split's row in the sidebar. */
+export function buildSplitMenu(a: { pinned: boolean; canPin: boolean; togglePin(): void; separate(): void; close(): void }): Menu {
+  return Menu.buildFromTemplate([
+    { label: 'Separate tabs', accelerator: acceleratorFor('split.separate'), click: a.separate },
+    { label: a.pinned ? 'Unpin split' : 'Pin split', enabled: a.canPin, click: a.togglePin },
+    { type: 'separator' },
+    { label: a.pinned ? 'Close tabs (stay pinned)' : 'Close split', click: a.close },
   ]);
 }
 

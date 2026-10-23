@@ -237,6 +237,31 @@ test('a pinned tab’s link to another site opens in Peek: Esc or a click outsid
     expect(state.windows[windowId]!.activeTab[state.windows[windowId]!.activeChordId]).toBe(tabWith(state, `${site.other}/other2`)!.id);
     expect(tabWith(state, `${site.origin}/pinned`)).toMatchObject({ section: 'pinned' });
 
+    // In a split, Peek floats over the pinned tab's pane, not the whole frame.
+    const pinnedId = tabWith(state, `${site.origin}/pinned`)!.id;
+    await dispatch(shell, { t: 'split.add', windowId, withId: pinnedId, url: `${site.origin}/b` });
+    await pageWhere(app, (url) => url === `${site.origin}/b`);
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: pinnedId });
+    await expect.poll(async () => (await snapshot(shell)).state.windows[windowId]!.activeTab[state.windows[windowId]!.activeChordId]).toBe(pinnedId);
+    await clickLink(app, `${site.origin}/pinned`, '#out');
+    await expect(peek).toBeVisible();
+    const paneOf = (url: string) =>
+      app.evaluate(({ BaseWindow }, u) => {
+        for (const w of BaseWindow.getAllWindows()) {
+          const view = w.contentView.children.find((v) => 'webContents' in v && (v as Electron.WebContentsView).webContents.getURL() === u);
+          if (view) return view.getBounds();
+        }
+        return null;
+      }, url);
+    const pane = (await paneOf(`${site.origin}/pinned`))!;
+    // Two panes side by side: Peek sized to the whole frame wouldn't fit in one.
+    expect(await paneOf(`${site.origin}/b`)).not.toEqual(pane);
+    const card = (await peek.boundingBox())!;
+    expect(card.x).toBeGreaterThanOrEqual(pane.x);
+    expect(card.x + card.width).toBeLessThanOrEqual(pane.x + pane.width + 1);
+    await overlay.getByTestId('peek-scrim').click({ position: { x: 4, y: 4 } });
+    await expect(peek).toBeHidden();
+
     // A private window has no pinned tabs, but any link can open in Peek from its menu; nothing of it is kept.
     await runAction(shell, 'window.newPrivate');
     await expect.poll(() => app.windows().filter((p) => isOverlay(p.url())).length).toBe(2);
@@ -296,9 +321,14 @@ test('a link route sends a site’s links to its chord, from other apps and the 
       );
     }
     expect((await snapshot(shell)).state.linkRoutes).toEqual({});
-    await expect(shell.getByText('Always open localhost in Work?')).toBeVisible();
-    await shell.getByRole('button', { name: 'Always' }).click();
+    // On the move's own toast: a second line, under "Moved to Work" and its Undo.
+    const moved = shell.getByRole('status').filter({ hasText: 'Always open localhost here?' });
+    await expect(moved).toContainText('Moved to Work');
+    await moved.getByRole('button', { name: 'Always' }).click();
     await expect.poll(async () => (await snapshot(shell)).state.linkRoutes['localhost']?.chordId).toBe(work);
+    // Answered, the question goes; the move's Undo stays.
+    await expect(shell.getByText('Always open localhost here?')).toBeHidden();
+    await expect(shell.getByRole('status').filter({ hasText: 'Moved to Work' }).first().getByRole('button', { name: 'Undo' })).toBeVisible();
 
     // From another app: straight to Work, as a tab (a route skips the mini window).
     await handOver(app, `${site.other}/c`);

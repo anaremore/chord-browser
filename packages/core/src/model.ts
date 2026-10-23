@@ -113,7 +113,31 @@ export interface FolderNode {
   createdAt: number;
 }
 
-export type SidebarNode = TabNode | FolderNode;
+/** Panes side by side (`row`) or stacked (`column`). */
+export type SplitDirection = 'row' | 'column';
+
+/**
+ * A split view (DESIGN.md §7.9, §8.4): 2–4 tabs shown together, saved as one
+ * unit in Pinned or Today. Its tabs are its children (their `parentId` is the
+ * split), in pane order; `sizes` are their shares of the frame, in the same
+ * order, summing to 1.
+ */
+export interface SplitNode {
+  kind: 'split';
+  id: NodeId;
+  chordId: ChordId;
+  section: Section;
+  parentId: NodeId | null;
+  rank: string;
+  direction: SplitDirection;
+  sizes: number[];
+  createdAt: number;
+}
+
+export type SidebarNode = TabNode | FolderNode | SplitNode;
+
+/** Split view's limits (DESIGN.md §7.9): up to 4 panes, none narrower than 320 px, 8 px apart. */
+export const SPLIT = { maxPanes: 4, minPane: 320, gap: 8 } as const;
 
 /**
  * A site in the Favorites row at the top of the sidebar, shared by every
@@ -299,6 +323,8 @@ export interface Settings {
   sleepTabs: boolean;
   /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
   autoPip: boolean;
+  /** Hovering a pinned tab or folder shows a preview; pinned pages are kept as small pictures in `<userData>/Captures/` (DESIGN.md §7.6). */
+  pagePreviews: boolean;
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
   shortcuts: ShortcutOverrides;
   spellcheck: SpellcheckSettings;
@@ -370,6 +396,7 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveAfter: '12h',
   sleepTabs: true,
   autoPip: true,
+  pagePreviews: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
   googleFree: false,
@@ -411,6 +438,7 @@ export interface SettingsPatch {
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
   autoPip?: boolean;
+  pagePreviews?: boolean;
   spellcheck?: Partial<SpellcheckSettings>;
   externalLinks?: ExternalLinks;
   miniWindowSize?: { width: number; height: number } | null;

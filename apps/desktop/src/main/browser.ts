@@ -17,7 +17,11 @@ import {
   reopenableIndex,
   routeFor,
   routeHost,
+  shownTabs,
   sortedChords,
+  splitMembers,
+  splitOf,
+  SPLIT,
   tabsInOrder,
   uuidv7,
   type ActionId,
@@ -29,8 +33,9 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, GesturePhase, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
+import type { ArchiveSnapshot, GesturePhase, PopoverState, PreviewTarget, Rect, SettingsSnapshot } from '@chord/ipc';
 import { size } from '@chord/tokens';
+import { join } from 'node:path';
 import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
@@ -44,8 +49,9 @@ import { setShortcutOverrides } from './shortcut-overrides';
 import { IdleKeeper, type IdleTiming } from './idle';
 import { MiniWindows } from './mini-window';
 import { liveOf, Peeks } from './peek';
-import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
+import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
+import { Previews } from './previews';
 import type { ScreenShareBroker } from './screen-share';
 import { SiteZoom } from './site-zoom';
 import { spellcheckLanguages } from './spellcheck';
@@ -122,6 +128,8 @@ export class Browser {
     return [...this.windows.values()];
   }
   private readonly autoPip: AutoPip;
+  /** Hover previews for pinned tabs and folders, and the pictures behind them (DESIGN.md §7.6). */
+  private readonly previews: Previews;
   private readonly siteZoom: SiteZoom;
   private readonly archivedHistory = new Map<string, NavState | null>();
   /** Archive entries being restored, so a double click brings a tab back once. */
@@ -171,6 +179,7 @@ export class Browser {
         this.extensions.tabCreated(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
         this.siteZoom.attach(contents);
+        contents.on('did-stop-loading', () => this.previews.loaded(nodeId));
         // Whatever a page asked for is denied once it's gone or replaced by another page; a share ends.
         contents.on('did-start-navigation', (details) => {
           if (!details.isMainFrame || details.isSameDocument) return;
@@ -180,6 +189,11 @@ export class Browser {
         contents.once('destroyed', () => {
           options.permissions.forgetTab(nodeId);
           options.screenShare.forgetTab(nodeId);
+        });
+        // Clicking into a split's pane focuses it: the address, buttons and keys act on it from then on.
+        contents.on('focus', () => this.paneFocused(nodeId));
+        contents.on('input-event', (_event, input) => {
+          if (input.type === 'mouseDown') this.paneFocused(nodeId);
         });
         // A page going fullscreen (a video) covers the whole window; Esc, or the page, brings Chord back.
         contents.on('enter-html-full-screen', () => this.windowFor(contents)?.setPageFullScreen(true));
@@ -297,13 +311,23 @@ export class Browser {
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       onChange: () => this.syncPopovers(),
     });
+    this.previews = new Previews(join(app.getPath('userData'), 'Captures'), {
+      state: () => this.store.state,
+      contentsOf: (nodeId) => this.tabs.get(nodeId)?.webContents,
+      onScreen: (contents) => [...this.windows.values()].some((w) => w.paneContents.includes(contents) && !w.window.isMinimized()),
+      animate: () => motionEnabled(this.store.state.settings, 'sidebar', systemInfo().prefersReducedMotion),
+    });
+    void this.previews.open();
     this.autoPip = new AutoPip({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       contents: (nodeId) => this.tabs.get(nodeId)?.webContents,
       loaded: () => this.tabs.loaded(),
-      isShown: (nodeId) => [...this.windows.values()].some((w) => w.activeTabContents !== null && w.activeTabContents === this.tabs.get(nodeId)?.webContents),
+      isShown: (nodeId) => {
+        const contents = this.tabs.get(nodeId)?.webContents;
+        return Boolean(contents) && [...this.windows.values()].some((w) => w.paneContents.includes(contents!));
+      },
       // "Back to tab" in the PiP window: the tab comes forward in its window.
       bringBack: (nodeId) => {
         const windowId = this.windowShowing(nodeId);
@@ -348,6 +372,11 @@ export class Browser {
       this.syncPopovers();
       this.extensions.sync();
       if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
+      // Pictures of tabs that were closed, archived or unpinned go; turning previews off takes them all.
+      if (change.patches.some((p) => p.path[0] === 'nodes' || p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'pagePreviews'))) {
+        this.previews.sync();
+        if (!change.state.settings.pagePreviews) for (const w of this.windows.values()) w.hidePreview();
+      }
       // New keys apply at once: the router reads them live, and the menus are rebuilt to show and accept them.
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'shortcuts')) {
         setShortcutOverrides(change.state.settings.shortcuts);
@@ -413,11 +442,16 @@ export class Browser {
 
   windowFor(contents: WebContents): AppWindow | undefined {
     for (const w of this.windows.values()) {
-      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.activeTabContents, w.peekContents].includes(contents)) return w;
+      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.preview.webContents, w.peekContents, ...w.paneContents].includes(contents)) return w;
     }
     const nodeId = this.tabs.nodeFor(contents);
     const windowId = nodeId ? this.windowShowing(nodeId) : undefined;
     return windowId ? this.windows.get(windowId) : undefined;
+  }
+
+  /** The pointer rests on a pinned tab or folder row in a window's sidebar (or left it). */
+  previewHover(w: AppWindow, target: PreviewTarget): Promise<void> {
+    return this.previews.hover(w, target);
   }
 
   activeUrl(windowId: WindowId): string {
@@ -487,9 +521,7 @@ export class Browser {
         app.quit();
       }
     });
-    const active = activeTabId(this.store.state, windowId);
-    w.showTab(active ? (this.tabs.ensure(active) ?? null) : null);
-    this.extensions.tabShown(w);
+    this.showPanes(w);
     if (commandBar) w.openOverlay('new', '');
     return w;
   }
@@ -513,12 +545,12 @@ export class Browser {
     if (normalOpen) this.store.dispatch({ t: 'window.close', windowId });
   }
 
-  /** The window showing a tab, else one on its chord, else one on its side of the private line. */
+  /** The window showing a tab (alone or as a split's pane), else one on its chord, else one on its side of the private line. */
   private windowShowing(nodeId: NodeId): WindowId | undefined {
     const peeking = this.peeks.windowOf(nodeId);
     if (peeking) return peeking;
     const models = Object.values(this.store.state.windows);
-    const showing = models.find((m) => m.activeTab[m.activeChordId] === nodeId);
+    const showing = models.find((m) => shownTabs(this.store.state, m.id).includes(nodeId));
     if (showing) return showing.id;
     const node = this.store.state.nodes[nodeId];
     const priv = node ? isPrivateChord(this.store.state, node.chordId) : false;
@@ -543,14 +575,9 @@ export class Browser {
         case 'view.show': {
           const w = this.windows.get(effect.windowId);
           if (!w) break;
-          // Peek belongs to the page it came from: another tab or chord closes it.
+          // Peek belongs to the page it came from: another tab, pane or chord closes it.
           this.peeks.close(w);
-          const outgoing = w.activeTabContents;
-          w.showTab(effect.nodeId ? (this.tabs.ensure(effect.nodeId) ?? null) : null);
-          this.extensions.tabShown(w);
-          // Auto picture-in-picture: the tab you left may pop its video out; the one you're on takes it back.
-          if (outgoing && outgoing !== w.activeTabContents && !outgoing.isDestroyed()) this.autoPip.left(outgoing);
-          if (effect.nodeId) this.autoPip.returned(effect.nodeId);
+          this.showPanes(w);
           break;
         }
         case 'view.navigate': {
@@ -559,7 +586,7 @@ export class Browser {
           this.tabs.navigate(effect.nodeId, effect.url);
           const after = this.tabs.get(effect.nodeId);
           if (after && after !== before) {
-            for (const w of this.windows.values()) if (activeTabId(this.store.state, w.id) === effect.nodeId) w.showTab(after);
+            for (const w of this.windows.values()) if (shownTabs(this.store.state, w.id).includes(effect.nodeId)) this.showPanes(w);
           }
           break;
         }
@@ -595,6 +622,50 @@ export class Browser {
     }
   }
 
+  /**
+   * Put a window's pages in its frame as the state says: the active tab, or
+   * every pane of its split (focused on the active tab), laid out as the
+   * split says. Videos in pages that left the screen may pop out (auto
+   * picture-in-picture); pages back on screen take theirs back.
+   */
+  private showPanes(w: AppWindow): void {
+    const state = this.store.state;
+    const before = w.paneContents;
+    const active = activeTabId(state, w.id);
+    const shown = shownTabs(state, w.id).flatMap((nodeId) => {
+      const view = this.tabs.ensure(nodeId);
+      return view ? [{ nodeId, view }] : [];
+    });
+    const split = active ? splitOf(state, active) : null;
+    // Hover previews: picture the pages going off screen while their views are still attached.
+    const showing = shown.map((p) => p.view.webContents);
+    for (const contents of before) {
+      const nodeId = showing.includes(contents) || contents.isDestroyed() ? undefined : this.tabs.nodeFor(contents);
+      if (nodeId) this.previews.leaving(nodeId, contents);
+    }
+    w.showTabs(
+      shown.map((p) => p.view),
+      Math.max(0, shown.findIndex((p) => p.nodeId === active)),
+      split ? { direction: split.direction, sizes: split.sizes } : null,
+    );
+    for (const { nodeId, view } of shown) if (!before.includes(view.webContents)) this.previews.shown(nodeId);
+    this.extensions.tabShown(w);
+    const after = w.paneContents;
+    for (const contents of before) if (!after.includes(contents) && !contents.isDestroyed()) this.autoPip.left(contents);
+    for (const { nodeId } of shown) this.autoPip.returned(nodeId);
+    this.syncPopover(w);
+  }
+
+  /** A page took the keyboard: if it's a pane of its window's split, that pane is now the focused one. */
+  private paneFocused(nodeId: NodeId): void {
+    const state = this.store.state;
+    for (const w of Object.values(state.windows)) {
+      if (activeTabId(state, w.id) === nodeId || !shownTabs(state, w.id).includes(nodeId)) continue;
+      this.store.dispatch({ t: 'tab.activate', windowId: w.id, nodeId });
+      return;
+    }
+  }
+
   /** What a window's popover shows: the find bar for its page, and the active tab's permission prompt. */
   popoverState(w: AppWindow): PopoverState {
     const state = this.store.state;
@@ -627,16 +698,23 @@ export class Browser {
    */
   private syncPopover(w: AppWindow): void {
     const find = this.finders.get(w.id);
+    // Find works on the focused pane, or Peek's page over it; it closes when focus moves elsewhere.
     if (find?.target && find.target !== (this.peeks.contents(w) ?? w.activeTabContents)) find.close(false);
-    const id = activeTabId(this.store.state, w.id);
-    const live = id ? this.store.state.live[id] : undefined;
-    // The frame explains errors and crashes, and holds first run's cards, instead of the page.
-    w.setTabHidden(Boolean(live?.error || live?.crashed) || (!this.store.state.settings.onboarded && !w.isPrivate));
-    const state = this.popoverState(w);
-    const json = JSON.stringify(state);
+    const state = this.store.state;
+    // The frame explains errors and crashes (pane by pane), and holds first run's cards, instead of the page.
+    const onboarding = !state.settings.onboarded && !w.isPrivate;
+    const hidden = new Set<WebContents>();
+    for (const nodeId of shownTabs(state, w.id)) {
+      const live = state.live[nodeId];
+      const contents = this.tabs.get(nodeId)?.webContents;
+      if (contents && (onboarding || live?.error || live?.crashed)) hidden.add(contents);
+    }
+    w.setHiddenPanes(hidden);
+    const popover = this.popoverState(w);
+    const json = JSON.stringify(popover);
     if (this.popoverSent.get(w.id) === json) return;
     this.popoverSent.set(w.id, json);
-    send(w.popover.webContents, 'popover:state', state);
+    send(w.popover.webContents, 'popover:state', popover);
   }
 
   /** Run an action for the window that owns this contents (keys, the shell's buttons, the command bar). */
@@ -794,30 +872,33 @@ export class Browser {
     }
     if (w.window.isMinimized()) w.window.restore();
     w.window.focus();
-    this.noteChordForSite(url, chordId, w);
+    const offer = this.routeOffer(url, chordId, w);
+    if (offer) {
+      send(w.shell.webContents, 'toast:show', {
+        id: `route-offer:${offer}`,
+        message: `Always open ${offer} in ${chord.name}?`,
+        action: { label: 'Always', command: { t: 'linkRoute.set', host: offer, chordId } },
+      });
+    }
   }
 
   /**
    * Learning which chord a site belongs in (from Crest), as an offer, never
    * silently: the second time this session a site's page goes to the same
    * chord (from a mini window, or moved there), Chord asks once whether its
-   * links should always open there.
+   * links should always open there. Returns the site to ask about, if it's time.
    */
-  private noteChordForSite(url: string, chordId: string, w: AppWindow): void {
+  private routeOffer(url: string, chordId: string, w: AppWindow): string | null {
     const host = routeHost(hostOf(url) ?? '');
     const chord = this.store.state.chords[chordId];
-    if (!host || !chord || chord.private || w.isPrivate || this.routeOffered.has(host) || this.store.state.linkRoutes[host]) return;
+    if (!host || !chord || chord.private || w.isPrivate || this.routeOffered.has(host) || this.store.state.linkRoutes[host]) return null;
     const counts = this.routeHints.get(host) ?? new Map<string, number>();
     const seen = (counts.get(chordId) ?? 0) + 1;
     counts.set(chordId, seen);
     this.routeHints.set(host, counts);
-    if (seen < 2) return;
+    if (seen < 2) return null;
     this.routeOffered.add(host);
-    send(w.shell.webContents, 'toast:show', {
-      id: `route-offer:${host}`,
-      message: `Always open ${host} in ${chord.name}?`,
-      action: { label: 'Always', command: { t: 'linkRoute.set', host, chordId } },
-    });
+    return host;
   }
 
   /** Close the overlay for this opening; Peek's closes Peek. */
@@ -869,9 +950,33 @@ export class Browser {
       );
       return;
     }
+    if (node.kind === 'split') {
+      const pinned = node.section === 'pinned';
+      const first = splitMembers(this.store.state, nodeId)[0];
+      w.popupMenu(
+        buildSplitMenu({
+          pinned,
+          canPin: !isPrivateChord(this.store.state, node.chordId),
+          togglePin: () => first && this.store.dispatch({ t: pinned ? 'tab.unpin' : 'tab.pin', nodeId: first.id }),
+          separate: () => this.separateSplit(w, nodeId),
+          close: () => {
+            for (const pane of splitMembers(this.store.state, nodeId)) this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId: pane.id });
+          },
+        }),
+        { ...at, width: 0, height: 0 },
+      );
+      return;
+    }
     const tab: TabNode = node;
     const state = this.store.state;
     const from = state.chords[tab.chordId];
+    // "Open in split" puts it beside the tab on screen (or in that tab's split, if there's room).
+    const shown = activeTab(state, w.id);
+    const shownSplit = shown ? splitOf(state, shown.id) : null;
+    const inShownSplit = shownSplit !== null && tab.parentId === shownSplit.id;
+    const room = !shownSplit || splitMembers(state, shownSplit.id).length < SPLIT.maxPanes;
+    const canSplit = shown !== null && shown.id !== tab.id && shown.chordId === tab.chordId && !inShownSplit && room;
+    const ownSplit = splitOf(state, tab.id);
     w.popupMenu(
       buildTabMenu({
         url: tab.url,
@@ -886,6 +991,8 @@ export class Browser {
         close: () => this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId }),
         addFavorite: this.canFavorite(tab) ? () => this.store.dispatch({ t: 'favorite.add', favoriteId: uuidv7(), nodeId }) : null,
         newFolder: () => this.createFolder(w, tab.chordId, nodeId),
+        openInSplit: canSplit && shown ? () => this.store.dispatch({ t: 'split.add', windowId: w.id, withId: shown.id, nodeId }) : null,
+        removeFromSplit: ownSplit ? () => this.store.dispatch({ t: 'split.remove', nodeId }) : null,
         moveTargets: (isPrivateChord(state, tab.chordId) ? [] : chordsFor(state, w.id))
           .filter((c) => c.id !== tab.chordId)
           .map((c) => ({ id: c.id, label: `${c.icon}  ${c.name}`, signInsDiffer: c.profileId !== from?.profileId })),
@@ -947,11 +1054,13 @@ export class Browser {
     const place = { section: tab.section, parentId: tab.parentId, rank: tab.rank };
     const reloads = state.chords[from]?.profileId !== to.profileId;
     this.store.dispatch({ t: 'node.moveToChord', nodeId, chordId });
-    this.noteChordForSite(tab.url, chordId, w);
+    const offer = this.routeOffer(tab.url, chordId, w);
     send(w.shell.webContents, 'toast:show', {
       id: `tab-moved:${nodeId}`,
       message: reloads ? `Moved to ${to.name} (sign-ins differ, so it reloaded)` : `Moved to ${to.name}`,
       action: { label: 'Undo', command: { t: 'node.moveToChord', nodeId, chordId: from, place } },
+      // The second move of a site's page to this chord: offer a route on the same toast.
+      ...(offer ? { also: { message: `Always open ${offer} here?`, action: { label: 'Always', command: { t: 'linkRoute.set', host: offer, chordId } } } } : {}),
     });
   }
 
@@ -960,7 +1069,10 @@ export class Browser {
     const state = this.store.state;
     const chordId = state.windows[w.id]?.activeChordId;
     if (!chordId) return;
-    const nodeIds = children(state, chordId, 'today', null).map((n) => n.id);
+    // Splits stay: you set them up on purpose (separate one to let its tabs go).
+    const nodeIds = children(state, chordId, 'today', null)
+      .filter((n) => n.kind === 'tab')
+      .map((n) => n.id);
     if (nodeIds.length === 0) return;
     const shown = activeTabId(state, w.id);
     const archives = !isPrivateChord(state, chordId);
@@ -971,6 +1083,40 @@ export class Browser {
       message: `${archives ? 'Archived' : 'Closed'} ${nodeIds.length} ${nodeIds.length === 1 ? 'tab' : 'tabs'}`,
       action: { label: 'Undo', command: { t: 'closed.restore', windowId: w.id, nodeIds, activate: shown && nodeIds.includes(shown) ? shown : null } },
     });
+  }
+
+  /**
+   * Separate a split's tabs, each back in the sidebar where the split was,
+   * with Undo (DESIGN.md §8.4: each step can be undone from a toast).
+   */
+  separateSplit(w: AppWindow, splitId: NodeId): void {
+    const state = this.store.state;
+    const split = state.nodes[splitId];
+    if (split?.kind !== 'split') return;
+    const nodeIds = splitMembers(state, splitId).map((t) => t.id);
+    const focus = activeTabId(state, w.id);
+    this.store.dispatch({ t: 'split.separate', splitId });
+    send(w.shell.webContents, 'toast:show', {
+      id: `split-separated:${splitId}`,
+      message: 'Separated split tabs',
+      action: {
+        label: 'Undo',
+        command: {
+          t: 'split.join',
+          windowId: w.id,
+          splitId,
+          nodeIds,
+          direction: split.direction,
+          sizes: split.sizes,
+          ...(focus && nodeIds.includes(focus) ? { focus } : {}),
+        },
+      },
+    });
+  }
+
+  /** While a tab is dragged from the sidebar, the shell sits above the page to draw split drop zones. */
+  setLifted(contents: WebContents, lifted: boolean): void {
+    this.windowFor(contents)?.setLifted(lifted);
   }
 
   /** Minimal mode's peek: the shell goes above the page while the sidebar floats over it. */
@@ -1171,6 +1317,19 @@ export class Browser {
       case 'today.clear':
         this.clearToday(w);
         return true;
+      case 'split.with':
+        // Pick what opens beside the current tab; with nothing shown there's nothing to split.
+        if (active) w.openOverlay('split', '');
+        return true;
+      case 'split.focusNext':
+      case 'split.focusPrevious':
+        this.store.dispatch({ t: 'split.focus', windowId: w.id, direction: action === 'split.focusNext' ? 1 : -1 });
+        return true;
+      case 'split.separate': {
+        const split = active ? splitOf(this.store.state, active) : null;
+        if (split) this.separateSplit(w, split.id);
+        return true;
+      }
       case 'app.settings':
         this.openSettings();
         return true;
