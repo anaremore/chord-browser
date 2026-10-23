@@ -146,6 +146,7 @@ export const SettingsPatch = z.strictObject({
   extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
   searchSuggestions: z.boolean().optional(),
   checkForUpdates: z.boolean().optional(),
+  googleFree: z.boolean().optional(),
   separateSignIns: z.boolean().optional(),
   spellcheck: z
     .strictObject({ enabled: z.boolean(), language: z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/).nullable() })

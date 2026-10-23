@@ -5,7 +5,7 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Check, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Check, EyeOff, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
@@ -15,6 +15,7 @@ import { AppearanceSection } from './Appearance';
 import { ShortcutsSection } from './Shortcuts';
 import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import { ExtensionsSection } from './Extensions';
+import { PrivacySection } from './Privacy';
 import styles from './Settings.module.css';
 import { SitesSection, Spelling } from './Sites';
 
@@ -22,6 +23,7 @@ const SECTIONS = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'motion', label: 'Motion', icon: Sparkles },
+  { id: 'privacy', label: 'Privacy', icon: EyeOff },
   { id: 'sites', label: 'Site permissions', icon: ShieldCheck },
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
@@ -123,12 +125,13 @@ function SignIns({ snapshot }: { snapshot: SettingsSnapshot }) {
 
 function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
   const engine = snapshot.settings.searchEngine;
+  const googleFree = snapshot.settings.googleFree;
   return (
     <>
       <SectionHeader title="General" description="How Chord searches, which chords share sign-ins, and whether it opens your links." />
       <h2 className={styles.groupTitle}>
         Search engine
-        <ResetButton visible={engine !== DEFAULT_SETTINGS.searchEngine} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
+        <ResetButton visible={engine !== DEFAULT_SETTINGS.searchEngine && !googleFree} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
       </h2>
       <div className={styles.group} role="radiogroup" aria-label="Search engine">
         {SEARCH_ENGINES.map((e) => (
@@ -138,10 +141,12 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
             role="radio"
             aria-checked={e.id === engine}
             className={styles.choice}
+            // Settings → Privacy → Google-free mode searches with anything but Google.
+            disabled={googleFree && e.id === 'google'}
             onClick={() => void api.settings.set({ searchEngine: e.id })}
           >
             <span className={styles.rowLabel}>{e.name}</span>
-            <span className={styles.choiceHost}>{new URL(e.prefix).host}</span>
+            <span className={styles.choiceHost}>{googleFree && e.id === 'google' ? 'Off in Google-free mode' : new URL(e.prefix).host}</span>
             {e.id === engine && <Check className={styles.check} size={16} strokeWidth={2.25} aria-hidden />}
           </button>
         ))}
@@ -432,6 +437,7 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               {section === 'general' && <General snapshot={snapshot} info={info} />}
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} editColors={editColors} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
+              {section === 'privacy' && <PrivacySection snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}

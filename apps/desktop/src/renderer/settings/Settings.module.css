@@ -314,7 +314,11 @@
   transition: background-color var(--duration-fade-fast) var(--ease-standard);
 }
 
-.choice:hover {
+.choice:disabled {
+  opacity: 0.5;
+}
+
+.choice:hover:not(:disabled) {
   background: var(--color-item-hover);
 }
 

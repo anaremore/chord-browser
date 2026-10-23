@@ -76,7 +76,8 @@ const updates = new UpdateChecker({
   installer: new UpdateInstaller(),
 });
 const suggestions = new Suggestions({
-  enabled: () => browser?.store.state.settings.searchSuggestions ?? false,
+  // Google-free mode never searches with Google (core enforces it); this is the backstop.
+  enabled: () => (browser?.store.state.settings.searchSuggestions ?? false) && !(browser?.store.state.settings.googleFree && browser.store.state.settings.searchEngine === 'google'),
   engine: () => browser?.store.state.settings.searchEngine ?? 'google',
 });
 
@@ -268,7 +269,8 @@ if (!app.requestSingleInstanceLock()) {
         permissions.attach(ses, priv ? profileId : null);
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
         screenShare.attach(ses);
-        applySpellcheck(ses, browser?.store.state.settings.spellcheck ?? DEFAULT_SETTINGS.spellcheck);
+        const settings = browser?.store.state.settings ?? DEFAULT_SETTINGS;
+        applySpellcheck(ses, settings.spellcheck, settings.googleFree);
         profiles.set(profileId, ses);
       }
       return ses;
@@ -346,9 +348,9 @@ if (!app.requestSingleInstanceLock()) {
     followScheme();
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
-      // Spelling settings apply to every profile's session at once.
-      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'spellcheck')) {
-        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck);
+      // Spelling settings (and where dictionaries come from) apply to every profile's session at once.
+      if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'spellcheck' || p.path[1] === 'googleFree'))) {
+        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck, change.state.settings.googleFree);
       }
     });
     registerIpc();

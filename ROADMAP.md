@@ -273,6 +273,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
     - spellcheck dictionaries from a non-Google host (`session.setSpellCheckerDictionaryDownloadURL`), or local only;
     - plus anything else the audit finds.
   - *Kept honest by a test:* CI fails if a fresh session in this mode contacts a Google domain on its own.
+  - *Built:* the audit is [S10](docs/decisions/S10-google-free.md). The switch is in Settings → Privacy: a non-Google engine (your choice), so its suggestions too; spelling only with dictionaries already downloaded; no background Web Store update checks. The test is `test/e2e/google-free.spec.ts`. A new profile's first tab is still Google, because the mode can't be on yet.
 
 ## Phase 4 — Deeper · March 2027 onward
 
