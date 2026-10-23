@@ -48,7 +48,7 @@ describe('downloads', () => {
 describe('extensions', () => {
   const ctx: Context = { now: 1, newId: () => 'x' };
   const ID = 'nngceckbapebfimnlniiiahkandclblb';
-  const ext = { id: ID, profileId: 'default', name: 'Bitwarden', version: '1.0', source: 'store' as const, path: '/e', notifiedVersion: null, installedAt: 1, updatedAt: 1 };
+  const ext = { id: ID, profileId: 'default', name: 'Bitwarden', version: '1.0', source: 'store' as const, path: '/e', notifiedVersion: null, pinned: true, installedAt: 1, updatedAt: 1 };
 
   it('records installs per profile and forgets removals', () => {
     let state = emptyState();
@@ -58,6 +58,27 @@ describe('extensions', () => {
     expect(apply(state, { t: 'extension.record', extension: ext }, ctx).patches).toHaveLength(0);
     state = apply(state, { t: 'extension.forget', profileId: 'work', id: ID }, ctx).state;
     expect(Object.keys(state.extensions)).toEqual([`default:${ID}`]);
+  });
+
+  it('pins and unpins, and a removal can be undone this session', () => {
+    let state = apply(emptyState(), { t: 'extension.record', extension: ext }, ctx).state;
+    state = apply(state, { t: 'extension.pin', profileId: 'default', id: ID, pinned: false }, ctx).state;
+    expect(state.extensions[`default:${ID}`]?.pinned).toBe(false);
+    state = apply(state, { t: 'extension.forget', profileId: 'default', id: ID }, ctx).state;
+    expect(state.extensions).toEqual({});
+    expect(state.removedExtensions).toHaveLength(1);
+    state = apply(state, { t: 'extension.restore', profileId: 'default', id: ID }, ctx).state;
+    expect(state.extensions[`default:${ID}`]).toEqual({ ...ext, pinned: false });
+    expect(state.removedExtensions).toEqual([]);
+    expect(apply(state, { t: 'extension.restore', profileId: 'default', id: ID }, ctx).patches).toHaveLength(0);
+  });
+
+  it('remembers where extension buttons go', () => {
+    const state = apply(emptyState(), { t: 'settings.set', settings: { extensionButtons: 'titleBar' } }, ctx).state;
+    expect(state.settings.extensionButtons).toBe('titleBar');
+    const seed = { now: 1, newId: () => 'n', theme: { stops: [{ l: 0.7, c: 0.1, h: 1 }], grain: 0.2, appearance: 'auto' as const }, homeUrl: 'h' };
+    expect(restoreState({ chords: [], nodes: [], windows: [], settings: { extensionButtons: 'titleBar' } }, seed).settings.extensionButtons).toBe('titleBar');
+    expect(restoreState({ chords: [], nodes: [], windows: [], settings: { extensionButtons: 'toolbar' } }, seed).settings.extensionButtons).toBe('sidebar');
   });
 
   it('restores only well-formed installs', () => {

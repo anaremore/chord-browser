@@ -161,9 +161,14 @@ export interface InstalledExtension {
    * Chrome's install step, so Chord does this itself.
    */
   notifiedVersion: string | null;
+  /** Its button shows in the sidebar's extensions shelf (or the title bar); every install starts pinned. */
+  pinned: boolean;
   installedAt: number;
   updatedAt: number;
 }
+
+/** Where extension buttons go (DESIGN.md §3): the sidebar's shelf, or the title bar. */
+export type ExtensionButtons = 'sidebar' | 'titleBar';
 
 /** Installed extensions are keyed by profile and ID: the same extension can be in two profiles. */
 export const extensionKey = (profileId: string, id: string): string => `${profileId}:${id}`;
@@ -205,6 +210,7 @@ export interface Settings {
   colorScheme: ColorScheme;
   interface: InterfaceSettings;
   themes: CustomTheme[];
+  extensionButtons: ExtensionButtons;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -213,6 +219,7 @@ export const DEFAULT_SETTINGS: Settings = {
   colorScheme: 'system',
   interface: { contrast: 0.5, glass: 0.5 },
   themes: [],
+  extensionButtons: 'sidebar',
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -237,6 +244,7 @@ export interface SettingsPatch {
   motion?: Partial<MotionSettings>;
   colorScheme?: ColorScheme;
   interface?: Partial<InterfaceSettings>;
+  extensionButtons?: ExtensionButtons;
 }
 
 export interface State {
@@ -247,6 +255,8 @@ export interface State {
   downloads: Record<string, Download>;
   /** By `extensionKey(profileId, id)`. */
   extensions: Record<string, InstalledExtension>;
+  /** Extensions removed this session, newest first, for Undo (not persisted). */
+  removedExtensions: InstalledExtension[];
   chords: Record<ChordId, Chord>;
   nodes: Record<NodeId, SidebarNode>;
   windows: Record<WindowId, WindowModel>;
@@ -269,6 +279,7 @@ export const emptyState = (): State => ({
   sitePermissions: {},
   downloads: {},
   extensions: {},
+  removedExtensions: [],
   chords: {},
   nodes: {},
   windows: {},

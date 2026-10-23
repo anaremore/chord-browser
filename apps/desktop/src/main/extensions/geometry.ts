@@ -17,10 +17,11 @@ export function popupSize(preferred: { width: number; height: number }, window: 
 }
 
 /**
- * Just under its button, lined up with the button's right edge when the
- * button is on the window's right half (the bar), its left edge otherwise
- * (the sidebar), and kept inside the window. With no button, it hangs from
- * the frame's top-right corner.
+ * Next to its button: under it, or above it when the button is in the
+ * window's lower half (the sidebar's shelf). Lined up with the button's right
+ * edge when the button is on the window's right half (the title bar), its
+ * left edge otherwise, and kept inside the window. With no button, it hangs
+ * from the frame's top-right corner.
  */
 export function popupPosition(
   popup: { width: number; height: number },
@@ -33,6 +34,7 @@ export function popupPosition(
   if (!anchor) return { x: maxX, y: Math.min(maxY, window.frameTop + space[2]) };
   const rightAligned = anchor.x + anchor.width / 2 > window.width / 2;
   const x = rightAligned ? anchor.x + anchor.width - popup.width : anchor.x;
-  const y = anchor.y + anchor.height + space[1];
+  const above = anchor.y + anchor.height / 2 > window.height / 2;
+  const y = above ? anchor.y - space[1] - popup.height : anchor.y + anchor.height + space[1];
   return { x: Math.round(Math.min(maxX, Math.max(inset, x))), y: Math.round(Math.min(maxY, Math.max(inset, y))) };
 }

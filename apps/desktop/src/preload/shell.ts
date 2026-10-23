@@ -26,7 +26,6 @@ const api: ShellApi = {
     onState: (listener) => subscribe('extensions:state', listener),
     activate: (id, anchor) => invoke('extension:activate', { id, anchor }),
     menu: (id, at) => invoke('extension:menu', { id, x: at.x, y: at.y }),
-    overflow: (ids, anchor) => invoke('extensions:overflow', { ids, anchor }),
     install: (input) => invoke('extensions:install', { input }),
   },
 };

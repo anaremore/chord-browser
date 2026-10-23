@@ -2,7 +2,7 @@ import { restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { delimiter, join } from 'node:path';
-import { app, clipboard, Menu, nativeTheme, net, session, type Session, type WebContents } from 'electron';
+import { app, clipboard, Menu, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { configureAppIdentity } from './identity';
@@ -104,7 +104,7 @@ function registerIpc(): void {
   handle('extensions:state', (_request, sender) => browser!.extensions.barState(senderWindow(sender)));
   handle('extension:activate', ({ id, anchor }, sender) => browser!.extensions.activate(senderWindow(sender), id, anchor));
   handle('extension:menu', ({ id, x, y }, sender) => browser!.extensions.menu(senderWindow(sender), id, { x, y }));
-  handle('extensions:overflow', ({ ids, anchor }, sender) => browser!.extensions.overflow(senderWindow(sender), ids, anchor));
+  handle('extensions:manage', () => browser!.openSettings('extensions'));
   handle('extensions:install', ({ input }, sender) => {
     // Into the profile of the chord the caller's window shows (Settings: the last-used window's).
     const w = browser!.windowFor(sender) ?? browser!.lastBrowserWindow();
@@ -221,6 +221,16 @@ if (!app.requestSingleInstanceLock()) {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
     });
     registerIpc();
+    // End-to-end tests only (never when packaged): what extensions add to a page's
+    // right-click menu, read without opening a native menu.
+    if (dev('CHORD_E2E_HOOKS')) {
+      (globalThis as Record<string, unknown>)['chordTestHooks'] = {
+        extensionMenuLabels: (contentsId: number, params: Partial<ContextMenuParams>) => {
+          const contents = webContents.fromId(contentsId);
+          return contents ? browser!.extensions.contextMenuItems(contents, params as ContextMenuParams).map((item) => item.label) : [];
+        },
+      };
+    }
     // Extensions load before any page does, so their content scripts reach restored tabs.
     await browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean));
     browser.start();

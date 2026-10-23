@@ -149,6 +149,7 @@ export class ChordDatabase {
         source: r['source'] === 'unpacked' ? 'unpacked' : 'store',
         path: str(r['path']),
         notifiedVersion: strOrNull(r['notified_version']),
+        pinned: num(r['pinned']) !== 0,
         installedAt: num(r['installed_at']),
         updatedAt: num(r['updated_at']),
       }),
@@ -405,11 +406,11 @@ export class ChordDatabase {
       return;
     }
     this.sql(
-      `INSERT INTO extension (profile_id, id, name, version, source, path, notified_version, installed_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO extension (profile_id, id, name, version, source, path, notified_version, pinned, installed_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(profile_id, id) DO UPDATE SET name = excluded.name, version = excluded.version, source = excluded.source,
-         path = excluded.path, notified_version = excluded.notified_version, updated_at = excluded.updated_at`,
-    ).run(e.profileId, e.id, e.name, e.version, e.source, e.path, e.notifiedVersion, e.installedAt, e.updatedAt);
+         path = excluded.path, notified_version = excluded.notified_version, pinned = excluded.pinned, updated_at = excluded.updated_at`,
+    ).run(e.profileId, e.id, e.name, e.version, e.source, e.path, e.notifiedVersion, e.pinned ? 1 : 0, e.installedAt, e.updatedAt);
   }
 
   private writeWindow(id: string, win: WindowModel | null): void {

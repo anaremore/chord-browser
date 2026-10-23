@@ -1,4 +1,19 @@
-/* Extension buttons and "Add to Chord" (ARCHITECTURE.md §12). Tokens only; badge colors come from extensions, inline. */
+/* Extension buttons, the sidebar's shelf, and "Add to Chord" (ARCHITECTURE.md §12). Tokens only; badge colors come from extensions, inline. */
+
+/* A slim row just above the sidebar's footer: pinned buttons, the puzzle piece at the end. */
+.shelf {
+  display: flex;
+  flex: none;
+  gap: var(--space-0);
+  align-items: center;
+  margin-block-end: var(--space-1);
+  padding-block-start: var(--space-1);
+  box-shadow: 0 calc(var(--size-hairline) * -1) 0 var(--color-divider);
+}
+
+.flex {
+  flex: 1;
+}
 
 .group {
   display: flex;

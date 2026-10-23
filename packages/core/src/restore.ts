@@ -66,6 +66,7 @@ export function restoreExtensions(saved: readonly InstalledExtension[] | undefin
       source: e.source,
       path: e.path,
       notifiedVersion: typeof e.notifiedVersion === 'string' ? e.notifiedVersion : null,
+      pinned: e.pinned !== false,
       installedAt: Number.isFinite(e.installedAt) ? e.installedAt : 0,
       updatedAt: Number.isFinite(e.updatedAt) ? e.updatedAt : 0,
     };
@@ -110,6 +111,8 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
     if (isUnit(ui['contrast'])) settings.interface.contrast = ui['contrast'];
     if (isUnit(ui['glass'])) settings.interface.glass = ui['glass'];
   }
+  const buttons = saved['extensionButtons'];
+  if (buttons === 'sidebar' || buttons === 'titleBar') settings.extensionButtons = buttons;
   if (Array.isArray(saved['themes'])) settings.themes = saved['themes'].map(validTheme).filter((t): t is CustomTheme => t !== null);
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];

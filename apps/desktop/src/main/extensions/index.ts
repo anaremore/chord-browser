@@ -14,9 +14,9 @@ import {
   type State,
   type WindowId,
 } from '@chord/core';
-import type { ExtensionAction, ExtensionInfo, ExtensionsBarState, InstallResult, Rect } from '@chord/ipc';
+import type { ExtensionAction, ExtensionInfo, ExtensionsBarState, InstallResult, Rect, Toast } from '@chord/ipc';
 import { BaseWindow, BrowserWindow, Menu, nativeImage, type ContextMenuParams, type MenuItemConstructorOptions, type Session, type WebContents } from 'electron';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { send } from '../ipc';
 import type { AppWindow } from '../window';
@@ -52,7 +52,7 @@ export interface ExtensionsDeps {
   /** Tabs that have a page right now. */
   liveTabs(): Iterable<[NodeId, WebContents]>;
   ensureTab(nodeId: NodeId): WebContents | undefined;
-  toast(windowId: WindowId, message: string): void;
+  toast(windowId: WindowId, message: string, action?: Toast['action']): void;
   openSettings(section: string): void;
   /** The installed list changed in a way state doesn't show (loaded or not): Settings refreshes. */
   changed(): void;
@@ -99,6 +99,9 @@ export class Extensions {
   private readonly iconCache = new Map<string, string | null>();
   private readonly installing = new Map<string, Promise<InstallResult>>();
   private readonly popupWindows = new Set<BrowserWindow>();
+  /** Extensions loading again after Undo, and ones that wouldn't load (by extensionKey). */
+  private readonly loading = new Set<string>();
+  private readonly unloadable = new Set<string>();
   private updateTimer: ReturnType<typeof setTimeout> | undefined;
   private syncQueued = false;
 
@@ -281,20 +284,26 @@ export class Extensions {
   barState(w: AppWindow): ExtensionsBarState {
     const profileId = this.profileOfWindow(w);
     const host = this.host(profileId, false);
+    const state = this.deps.state();
     const tab = w.activeTabContents && !w.activeTabContents.isDestroyed() ? w.activeTabContents : null;
     const actions: ExtensionAction[] = host
-      ? host.actions(tab).map((a) => {
-          const key = `${profileId}/${a.extensionId}/${tab?.id ?? ''}/${a.iconVersion}`;
-          if (!this.iconCache.has(key)) this.iconCache.set(key, host.icon(a.extensionId, tab, ACTION_ICON_PX));
-          return { id: a.extensionId, title: a.title, badgeText: a.badgeText, badgeColor: a.badgeColor, icon: this.iconCache.get(key) ?? null };
-        })
+      ? host
+          .actions(tab)
+          .map((a) => {
+            const key = `${profileId}/${a.extensionId}/${tab?.id ?? ''}/${a.iconVersion}`;
+            if (!this.iconCache.has(key)) this.iconCache.set(key, host.icon(a.extensionId, tab, ACTION_ICON_PX));
+            const pinned = state.extensions[extensionKey(profileId, a.extensionId)]?.pinned ?? true;
+            return { id: a.extensionId, profileId, pinned, title: a.title, badgeText: a.badgeText, badgeColor: a.badgeColor, icon: this.iconCache.get(key) ?? null };
+          })
+          .sort((a, b) => a.title.localeCompare(b.title))
       : [];
-    const state = this.deps.state();
-    const url = activeTabId(state, w.id) ? (state.nodes[activeTabId(state, w.id)!] as { url?: string } | undefined)?.url : undefined;
+    const installed = Object.values(state.extensions).filter((e) => e.profileId === profileId).length;
+    const activeId = activeTabId(state, w.id);
+    const url = activeId ? (state.nodes[activeId] as { url?: string } | undefined)?.url : undefined;
     const storeId = url ? extensionIdFrom(url) : null;
     const offer = storeId && !state.extensions[extensionKey(profileId, storeId)] ? { id: storeId } : null;
     const installing = [...this.installing.keys()].find((k) => k.startsWith(`${profileId}:`))?.slice(profileId.length + 1) ?? null;
-    return { actions, offer, installing };
+    return { actions, installed, offer, installing };
   }
 
   /** A click on an extension's button in this window. */
@@ -317,12 +326,13 @@ export class Extensions {
     }
   }
 
-  /** Right-click on an extension's button. */
+  /** Right-click on an extension's button: its own items, then Options, Unpin, Remove and Settings. */
   menu(w: AppWindow, extensionId: string, at: { x: number; y: number }): void {
     const profileId = this.profileOfWindow(w);
     const host = this.host(profileId, false);
     const ext = host?.get(extensionId);
-    if (!host || !ext) return;
+    const record = this.deps.state().extensions[extensionKey(profileId, extensionId)];
+    if (!host || !ext || !record) return;
     const manifest = ext.manifest as ManifestShape;
     const items: (MenuItemConstructorOptions | Electron.MenuItem)[] = [
       {
@@ -334,31 +344,17 @@ export class Extensions {
     if (own.length > 0) items.push({ type: 'separator' }, ...own);
     items.push({ type: 'separator' });
     const options = this.optionsUrl(ext);
-    items.push({ label: 'Options', enabled: Boolean(options), click: () => options && this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: options }) });
-    items.push({ label: 'Manage extensions…', click: () => this.deps.openSettings('extensions') });
+    if (options) items.push({ label: 'Options', click: () => this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: options }) });
+    items.push(
+      {
+        label: record.pinned ? 'Unpin' : 'Pin',
+        click: () => this.deps.dispatch({ t: 'extension.pin', profileId, id: extensionId, pinned: !record.pinned }),
+      },
+      { label: 'Remove', click: () => this.remove(profileId, extensionId, w.id) },
+      { type: 'separator' },
+      { label: 'Manage in Settings', click: () => this.deps.openSettings('extensions') },
+    );
     w.popupMenu(Menu.buildFromTemplate(items), { x: at.x, y: at.y, width: 0, height: 0 });
-  }
-
-  /** The buttons that didn't fit: a menu of them under the overflow button; picking one clicks it there. */
-  overflow(w: AppWindow, ids: readonly string[], anchor: Rect): void {
-    const host = this.host(this.profileOfWindow(w), false);
-    if (!host) return;
-    const tab = w.activeTabContents && !w.activeTabContents.isDestroyed() ? w.activeTabContents : null;
-    const items: MenuItemConstructorOptions[] = host
-      .actions(tab)
-      .filter((a) => ids.includes(a.extensionId))
-      .map((a) => {
-        const icon = host.icon(a.extensionId, tab, 16);
-        const name = a.title.split(/\r?\n/)[0] || 'Extension';
-        return {
-          label: a.badgeText ? `${name} (${a.badgeText})` : name,
-          ...(icon ? { icon: nativeImage.createFromDataURL(icon) } : {}),
-          click: () => this.activate(w, a.extensionId, anchor),
-        };
-      });
-    if (items.length === 0) return;
-    items.push({ type: 'separator' }, { label: 'Manage extensions…', click: () => this.deps.openSettings('extensions') });
-    w.popupMenu(Menu.buildFromTemplate(items), anchor);
   }
 
   private optionsUrl(ext: Electron.Extension): string | null {
@@ -415,6 +411,11 @@ export class Extensions {
    * start checking for updates.
    */
   async start(devFolders: readonly string[] = []): Promise<void> {
+    try {
+      this.removeOrphanFolders();
+    } catch (error) {
+      console.error('Cleaning up old extension folders failed:', error);
+    }
     const installed = Object.values(this.deps.state().extensions);
     await Promise.all(
       installed.map(async (e) => {
@@ -469,6 +470,7 @@ export class Extensions {
       source: 'unpacked',
       path,
       notifiedVersion: previous?.path === path ? previous.notifiedVersion : null,
+      pinned: previous?.pinned ?? true,
       installedAt: previous?.installedAt ?? now,
       updatedAt: now,
     };
@@ -524,7 +526,7 @@ export class Extensions {
       throw new Error('The package’s ID doesn’t match.');
     }
     const now = Date.now();
-    const record: InstalledExtension = { id, profileId, name: ext.name, version: ext.version, source: 'store', path, notifiedVersion: null, installedAt: now, updatedAt: now };
+    const record: InstalledExtension = { id, profileId, name: ext.name, version: ext.version, source: 'store', path, notifiedVersion: null, pinned: true, installedAt: now, updatedAt: now };
     this.deps.dispatch({ t: 'extension.record', extension: record });
     await this.finishInstall(record);
     return record;
@@ -624,20 +626,62 @@ export class Extensions {
     await this.finishInstall(record);
   }
 
-  /** Take an extension out of a profile. Store extensions' folders are deleted; unpacked ones are left alone. */
-  remove(profileId: string, id: string): void {
+  /**
+   * Take an extension out of a profile, with Undo (undo, not confirmation).
+   * Its folder stays until the next launch, so Undo can load it again;
+   * unpacked folders are never deleted.
+   */
+  remove(profileId: string, id: string, windowId?: WindowId): void {
     const record = this.deps.state().extensions[extensionKey(profileId, id)];
-    for (const [windowId, popup] of this.popups) {
+    for (const [w, popup] of this.popups) {
       if (popup.extensionId === id) {
         popup.close();
-        this.popups.delete(windowId);
+        this.popups.delete(w);
       }
     }
     this.host(profileId, false)?.unload(id);
     this.deps.dispatch({ t: 'extension.forget', profileId, id });
-    if (record?.source === 'store') this.removeFolder(join(this.deps.root, profileId, id));
+    if (record && windowId) this.deps.toast(windowId, `Removed ${record.name}`, { label: 'Undo', command: { t: 'extension.restore', profileId, id } });
     this.sync();
     this.deps.changed();
+  }
+
+  /**
+   * Bring the engine in line with state after a change: an extension that's
+   * installed again (Undo) loads. One that won't load isn't retried.
+   */
+  reconcile(): void {
+    for (const e of Object.values(this.deps.state().extensions)) {
+      const key = extensionKey(e.profileId, e.id);
+      if (this.unloadable.has(key) || this.loading.has(key) || this.installing.has(key)) continue;
+      const host = this.host(e.profileId, true)!;
+      if (host.get(e.id)) continue;
+      this.loading.add(key);
+      void host
+        .load(e.path)
+        .catch((error: unknown) => {
+          this.unloadable.add(key);
+          console.error(`Extension ${e.name} (${e.id}) didn't load:`, error);
+        })
+        .finally(() => {
+          this.loading.delete(key);
+          this.sync();
+          this.deps.changed();
+        });
+    }
+  }
+
+  /** Web Store folders no installed extension uses (removed last session, or left by an update): deleted at launch. */
+  private removeOrphanFolders(): void {
+    if (!existsSync(this.deps.root)) return;
+    const used = new Set(Object.values(this.deps.state().extensions).map((e) => resolve(e.path)));
+    const dirs = (dir: string) => readdirSync(dir).map((name) => join(dir, name)).filter((path) => statSync(path).isDirectory());
+    for (const profileDir of dirs(this.deps.root)) {
+      for (const idDir of dirs(profileDir)) {
+        for (const versionDir of dirs(idDir)) if (!used.has(resolve(versionDir))) this.removeFolder(versionDir);
+        if (readdirSync(idDir).length === 0) this.removeFolder(idDir);
+      }
+    }
   }
 
   /** Delete a folder, but only inside Chord's own extensions folder. */

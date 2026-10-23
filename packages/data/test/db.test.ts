@@ -114,6 +114,7 @@ describe('chord-data', () => {
       source: 'store' as const,
       path: `C:/Chord/Extensions/${profileId}/${id}/${version}_0`,
       notifiedVersion: null,
+      pinned: true,
       installedAt: 1,
       updatedAt: 2,
     });
@@ -123,10 +124,11 @@ describe('chord-data', () => {
       { t: 'extension.record', extension: ext('work', ubol, '2026.1013.1') },
       { t: 'extension.record', extension: { ...ext('default', ubol, '2026.1021.1354'), notifiedVersion: '2026.1013.1' } },
       { t: 'extension.forget', profileId: 'work', id: ubol },
+      { t: 'extension.pin', profileId: 'default', id: ubol, pinned: false },
     ]);
     const saved = db.load();
     db.close();
-    expect(saved?.extensions).toEqual([{ ...ext('default', ubol, '2026.1021.1354'), notifiedVersion: '2026.1013.1' }]);
+    expect(saved?.extensions).toEqual([{ ...ext('default', ubol, '2026.1021.1354'), notifiedVersion: '2026.1013.1', pinned: false }]);
     expect(restoreState(saved, { now: 9, newId: ctx.newId, theme: state.chords[Object.keys(state.chords)[0]!]!.theme, homeUrl: 'x' }).extensions).toEqual(state.extensions);
   });
 

@@ -124,9 +124,9 @@ export class Browser {
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       liveTabs: () => this.tabs.entries(),
       ensureTab: (nodeId) => this.tabs.ensure(nodeId)?.webContents,
-      toast: (windowId, message) => {
+      toast: (windowId, message, action) => {
         const w = this.windows.get(windowId);
-        if (w) send(w.shell.webContents, 'toast:show', { id: `extension:${Date.now()}`, message });
+        if (w) send(w.shell.webContents, 'toast:show', { id: `extension:${Date.now()}`, message, ...(action ? { action } : {}) });
       },
       openSettings: (section) => this.openSettings(section),
       changed: () => this.settingsWindow?.update(this.settingsSnapshot()),
@@ -142,6 +142,7 @@ export class Browser {
       this.runEffects(change.effects);
       this.syncPopovers();
       this.extensions.sync();
+      if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
       if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }

@@ -71,8 +71,12 @@ export type Command =
   | { t: 'download.clear' }
   /** Engine reports: an extension was installed, updated, or told so (main only). */
   | { t: 'extension.record'; extension: InstalledExtension }
-  /** An extension was removed from a profile (main only). */
+  /** An extension was removed from a profile (main only); kept for Undo this session. */
   | { t: 'extension.forget'; profileId: string; id: string }
+  /** Undo a removal: main loads it again. */
+  | { t: 'extension.restore'; profileId: string; id: string }
+  /** Show or hide an extension's button in the shelf (or title bar). */
+  | { t: 'extension.pin'; profileId: string; id: string; pinned: boolean }
   /** Add or change a custom theme; chords made from it follow. */
   | { t: 'theme.save'; theme: CustomTheme }
   /** Remove a custom theme; chords using it keep their colors. */
@@ -109,6 +113,8 @@ const MAX_THEMES = 100;
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 /** Finished downloads kept in the list; older ones drop off. */
 const MAX_DOWNLOADS = 100;
+/** Removed extensions kept for Undo. */
+const MAX_REMOVED_EXTENSIONS = 10;
 /** Longest chord name; the switcher and headers truncate well before this. */
 const MAX_CHORD_NAME = 64;
 
@@ -361,7 +367,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'settings.set': {
-      const { searchEngine, motion, colorScheme } = cmd.settings;
+      const { searchEngine, motion, colorScheme, extensionButtons } = cmd.settings;
+      if (extensionButtons !== undefined && draft.settings.extensionButtons !== extensionButtons) draft.settings.extensionButtons = extensionButtons;
       if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
       for (const [key, value] of Object.entries(motion ?? {}) as [keyof typeof draft.settings.motion, boolean | undefined][]) {
@@ -503,9 +510,29 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       return;
     }
 
-    case 'extension.forget':
-      delete draft.extensions[extensionKey(cmd.profileId, cmd.id)];
+    case 'extension.forget': {
+      const key = extensionKey(cmd.profileId, cmd.id);
+      const removed = draft.extensions[key];
+      if (!removed) return;
+      delete draft.extensions[key];
+      draft.removedExtensions = [removed, ...draft.removedExtensions.filter((e) => extensionKey(e.profileId, e.id) !== key)].slice(0, MAX_REMOVED_EXTENSIONS);
       return;
+    }
+
+    case 'extension.restore': {
+      const key = extensionKey(cmd.profileId, cmd.id);
+      const removed = draft.removedExtensions.find((e) => extensionKey(e.profileId, e.id) === key);
+      if (!removed || draft.extensions[key]) return;
+      draft.extensions[key] = removed;
+      draft.removedExtensions = draft.removedExtensions.filter((e) => e !== removed);
+      return;
+    }
+
+    case 'extension.pin': {
+      const ext = draft.extensions[extensionKey(cmd.profileId, cmd.id)];
+      if (ext && ext.pinned !== cmd.pinned) ext.pinned = cmd.pinned;
+      return;
+    }
 
     case 'permission.set': {
       const site = (draft.sitePermissions[cmd.origin] ??= {});

@@ -3,11 +3,12 @@
  * Chrome Web Store, see what's installed, open an extension's options, and
  * remove one. Removing asks a second time in place, never in a dialog.
  */
+import { DEFAULT_SETTINGS, type ExtensionButtons } from '@chord/core';
 import type { ExtensionInfo, SettingsSnapshot } from '@chord/ipc';
 import { Puzzle, RefreshCw } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from './api';
-import { SectionHeader } from './controls';
+import { Row, SectionHeader, Segmented } from './controls';
 import styles from './Extensions.module.css';
 import settingsStyles from './Settings.module.css';
 
@@ -119,13 +120,33 @@ function CheckForUpdates() {
 }
 
 export function ExtensionsSection({ snapshot }: { snapshot: SettingsSnapshot }) {
-  const { extensions } = snapshot;
+  const { extensions, settings } = snapshot;
   return (
     <>
       <SectionHeader
         title="Extensions"
         description="Chrome extensions from the Chrome Web Store: password managers, blockers, and more. Each one is checked against the store’s signature before it’s installed."
       />
+      <div className={settingsStyles.group}>
+        <Row
+          label="Show extension buttons"
+          description="Pinned extensions get a button. The puzzle piece lists them all."
+          changed={settings.extensionButtons !== DEFAULT_SETTINGS.extensionButtons}
+          onReset={() => void api.settings.set({ extensionButtons: DEFAULT_SETTINGS.extensionButtons })}
+          control={
+            <Segmented<ExtensionButtons>
+              label="Show extension buttons"
+              value={settings.extensionButtons}
+              options={[
+                { value: 'sidebar', label: 'In the sidebar' },
+                { value: 'titleBar', label: 'In the title bar' },
+              ]}
+              onChange={(extensionButtons) => void api.settings.set({ extensionButtons })}
+            />
+          }
+        />
+      </div>
+
       <h2 className={settingsStyles.groupTitle}>Add an extension</h2>
       <AddExtension />
       <p className={styles.hint}>
@@ -133,7 +154,7 @@ export function ExtensionsSection({ snapshot }: { snapshot: SettingsSnapshot }) 
         <button type="button" className={styles.link} onClick={() => void api.settings.openUrl(WEB_STORE_URL)}>
           Chrome Web Store
         </button>
-        , then use “Add to Chord” beside the address, or paste its link here.
+        . On an extension’s page there, “Add to Chord” appears with your extension buttons; or paste its link here.
       </p>
 
       <div className={styles.listHead}>

@@ -30,6 +30,11 @@ export default defineConfig([
     languageOptions: { globals: globals.node },
   },
   {
+    // The test extension runs in Chrome's extension environment.
+    files: ['apps/desktop/test/fixtures/extension/**/*.js'],
+    languageOptions: { globals: { ...globals.browser, chrome: 'readonly' } },
+  },
+  {
     // The domain core and design tokens must stay free of Electron and DOM.
     files: ['packages/core/**/*.ts', 'packages/tokens/**/*.ts'],
     rules: {

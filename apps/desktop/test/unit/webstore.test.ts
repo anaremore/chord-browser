@@ -62,11 +62,13 @@ describe('popup geometry', () => {
     expect(popupSize({ width: 800, height: 600 }, { width: 500, height: 400 })).toEqual({ width: 484, height: 384 });
   });
 
-  it('hangs under its button: right-aligned in the bar, left-aligned in the sidebar, inside the window', () => {
+  it('opens by its button: under it in the bar (right-aligned), above it in the shelf (left-aligned), inside the window', () => {
     const popup = { width: 300, height: 200 };
     expect(popupPosition(popup, { x: 1100, y: 8, width: 28, height: 28 }, window)).toEqual({ x: 828, y: 40 });
     expect(popupPosition(popup, { x: 40, y: 50, width: 28, height: 28 }, window)).toEqual({ x: 40, y: 82 });
     expect(popupPosition(popup, { x: 1260, y: 8, width: 28, height: 28 }, window).x).toBe(1280 - 300 - 4);
     expect(popupPosition(popup, null, window)).toEqual({ x: 976, y: 48 });
+    expect(popupPosition(popup, { x: 12, y: 740, width: 28, height: 28 }, window)).toEqual({ x: 12, y: 536 });
+    expect(popupPosition({ width: 300, height: 760 }, { x: 12, y: 740, width: 28, height: 28 }, window).y).toBe(4);
   });
 });

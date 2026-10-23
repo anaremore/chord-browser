@@ -13,7 +13,7 @@ import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Cho
 import { useSystemInfo } from './hooks';
 import { keycap, withKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
-import { ExtensionButtons, useExtensionsBar } from './Extensions';
+import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
 
@@ -131,9 +131,10 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const overlayChrome = info.windowChrome.kind === 'overlay';
   const secure = active?.url.startsWith('https:') ?? false;
   const collapsed = win?.sidebar === 'collapsed';
-  // Extension buttons live in the top bar when there is one, else beside the URL pill.
-  const barShown = overlayChrome || collapsed;
+  // Extension buttons: the sidebar's shelf by default, or the title bar (Settings → Extensions).
+  // With the sidebar collapsed, the minimal bar keeps just the puzzle piece in sidebar mode.
   const extensionsBar = useExtensionsBar();
+  const inTitleBar = state.settings.extensionButtons === 'titleBar';
   const spring = springsFor(state.settings, info.prefersReducedMotion);
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
 
@@ -178,22 +179,21 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             <SidebarToggle collapsed={collapsed} info={info} onToggle={toggleSidebar} />
             {!overlayChrome && <span className={styles.flex} />}
             <NavButtons live={live} hasTab={Boolean(active)} info={info} />
+            {/* macOS has no title bar beside a docked sidebar: its header row is the title bar. */}
+            {inTitleBar && !overlayChrome && <ExtensionButtons bar={extensionsBar} puzzleOnly={false} />}
           </header>
 
-          <div className={styles.urlRow}>
-            <button
-              ref={collapsed ? undefined : anchorRef}
-              type="button"
-              className={styles.urlPill}
-              title={active?.url ?? ''}
-              onClick={() => void api.overlay.open('edit')}
-            >
-              {secure ? <Lock size={12} strokeWidth={2} aria-hidden /> : <Globe size={12} strokeWidth={2} aria-hidden />}
-              <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
-              <kbd className={styles.pillKeycap}>{keycap('address.edit', info)}</kbd>
-            </button>
-            {!barShown && <ExtensionButtons bar={extensionsBar} max={3} />}
-          </div>
+          <button
+            ref={collapsed ? undefined : anchorRef}
+            type="button"
+            className={styles.urlPill}
+            title={active?.url ?? ''}
+            onClick={() => void api.overlay.open('edit')}
+          >
+            {secure ? <Lock size={12} strokeWidth={2} aria-hidden /> : <Globe size={12} strokeWidth={2} aria-hidden />}
+            <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
+            <kbd className={styles.pillKeycap}>{keycap('address.edit', info)}</kbd>
+          </button>
 
           <AnimatePresence initial={false} mode="popLayout" custom={slide}>
             <ChordPane key={chord?.id} slide={slide} transition={spring('smooth', 'chordSlide')}>
@@ -216,6 +216,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           </AnimatePresence>
 
           {!collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
+
+          {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
 
           <ChordSwitcher
             state={state}
@@ -260,7 +262,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               )}
             </button>
             <span className={styles.flex} />
-            <ExtensionButtons bar={extensionsBar} max={5} />
+            {(inTitleBar || collapsed) && <ExtensionButtons bar={extensionsBar} puzzleOnly={!inTitleBar} />}
             {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
             {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
             {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}

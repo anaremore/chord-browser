@@ -134,6 +134,7 @@ export const MIGRATIONS: readonly string[] = [
     name TEXT NOT NULL, version TEXT NOT NULL,
     source TEXT NOT NULL CHECK (source IN ('store','unpacked')), path TEXT NOT NULL,
     notified_version TEXT,
+    pinned INTEGER NOT NULL DEFAULT 1,
     installed_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
     PRIMARY KEY (profile_id, id)
   ) STRICT;

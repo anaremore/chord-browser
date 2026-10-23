@@ -91,6 +91,8 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('chord.goto'), windowId: id, index: z.number().int().min(0).max(8) }),
   z.object({ t: z.literal('chord.update'), chordId: id, name: chordName.optional(), icon: chordIcon.optional() }),
   z.object({ t: z.literal('chord.restore'), windowId: id, chordId: id }),
+  z.object({ t: z.literal('extension.pin'), profileId: id, id: z.string().regex(/^[a-p]{32}$/), pinned: z.boolean() }),
+  z.object({ t: z.literal('extension.restore'), profileId: id, id: z.string().regex(/^[a-p]{32}$/) }),
   // chord.delete isn't here: it goes through main's confirmation (menu:chord).
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
@@ -103,6 +105,7 @@ const engineIds = SEARCH_ENGINES.map((e) => e.id) as [SearchEngineId, ...SearchE
 export const SettingsPatch = z.strictObject({
   searchEngine: z.enum(engineIds).optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
+  extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
   interface: z.strictObject({ contrast: z.number().min(0).max(1), glass: z.number().min(0).max(1) }).partial().optional(),
   motion: z
     .strictObject({
@@ -148,6 +151,9 @@ export interface SettingsSnapshot {
 /** One extension's toolbar button, for the window's current tab. */
 export interface ExtensionAction {
   id: string;
+  profileId: string;
+  /** Shown in the shelf (or title bar); the rest are in the extensions list. */
+  pinned: boolean;
   title: string;
   badgeText: string;
   /** CSS color, or null for the default. */
@@ -158,7 +164,10 @@ export interface ExtensionAction {
 
 /** The extension buttons a window shows (ARCHITECTURE.md §12). */
 export interface ExtensionsBarState {
+  /** Every extension with a button, pinned or not, in a stable order. */
   actions: ExtensionAction[];
+  /** How many extensions the window's profile has, with a button or without (the shelf shows when there are any). */
+  installed: number;
   /** The tab shows a Chrome Web Store page for an extension that isn't installed: offer "Add to Chord". */
   offer: { id: string } | null;
   /** Being installed right now, from "Add to Chord". */
@@ -230,14 +239,14 @@ export const OverlayOpen = z.object({
    * editing the current tab. `downloads`: the downloads panel, anchored on the
    * button that opened it (`anchor`).
    */
-  mode: z.enum(['new', 'edit', 'downloads']),
+  mode: z.enum(['new', 'edit', 'downloads', 'extensions']),
   anchor: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
 });
 export type OverlayOpen = z.infer<typeof OverlayOpen>;
 
 /** What main tells the overlay when it opens. */
 export interface OverlayOpenEvent {
-  mode: 'new' | 'edit' | 'downloads';
+  mode: 'new' | 'edit' | 'downloads' | 'extensions';
   /** Where the address sits, for the anchored placement (window coordinates). */
   anchor: Rect | null;
   /** The current tab's address, prefilled in edit mode. */
@@ -290,13 +299,13 @@ export const invokeChannels = {
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
   // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
-  'extensions:state': { roles: ['shell'], request: z.void(), response: z.custom<ExtensionsBarState>() },
-  /** Click an extension's button: its popup opens under `anchor` (window coordinates). */
-  'extension:activate': { roles: ['shell'], request: z.strictObject({ id: extensionId, anchor: Rect }), response: z.void() },
+  'extensions:state': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<ExtensionsBarState>() },
+  /** Click an extension's button (or its row in the list): its popup opens under `anchor` (window coordinates). */
+  'extension:activate': { roles: ['shell', 'overlay'], request: z.strictObject({ id: extensionId, anchor: Rect }), response: z.void() },
+  /** Settings → Extensions, from the list or a button's menu. */
+  'extensions:manage': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
   /** Right-click an extension's button, at this point in the window. */
   'extension:menu': { roles: ['shell'], request: z.strictObject({ id: extensionId, x: z.number(), y: z.number() }), response: z.void() },
-  /** The extensions that didn't fit, as a menu under this button; picking one clicks it. */
-  'extensions:overflow': { roles: ['shell'], request: z.strictObject({ ids: z.array(extensionId).max(200), anchor: Rect }), response: z.void() },
   /** Install from the Chrome Web Store: an extension ID or a store page's address. Into the profile of the caller's chord. */
   'extensions:install': { roles: ['shell', 'internal'], request: z.strictObject({ input: z.string().min(1).max(2048) }), response: z.custom<InstallResult>() },
   'extensions:remove': { roles: ['internal'], request: z.strictObject({ profileId: id, id: extensionId }), response: z.void() },
@@ -382,7 +391,6 @@ export interface ShellApi {
     onState(listener: (state: ExtensionsBarState) => void): () => void;
     activate(id: string, anchor: Rect): Promise<void>;
     menu(id: string, at: { x: number; y: number }): Promise<void>;
-    overflow(ids: string[], anchor: Rect): Promise<void>;
     install(input: string): Promise<InstallResult>;
   };
 }
@@ -452,5 +460,10 @@ export interface OverlayApi {
   history: {
     search(query: string): Promise<HistorySearch>;
     choose(text: string, destination: string, address?: string): Promise<void>;
+  };
+  extensions: {
+    state(): Promise<ExtensionsBarState>;
+    activate(id: string, anchor: Rect): Promise<void>;
+    manage(): Promise<void>;
   };
 }
