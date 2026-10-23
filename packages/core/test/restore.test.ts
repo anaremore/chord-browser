@@ -92,6 +92,13 @@ describe('restoreState', () => {
     expect(restored({ googleFree: 'yes' })).toMatchObject({ googleFree: false, searchEngine: 'google' });
   });
 
+  it('restores the interface size only as one of its sizes', () => {
+    const restored = (settings: Record<string, unknown>) => restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings }, seed).settings;
+    expect(restored({ uiScale: 1.5 }).uiScale).toBe(1.5);
+    expect(restored({ uiScale: 4 }).uiScale).toBe(1);
+    expect(restored({}).uiScale).toBe(1);
+  });
+
   it('always has a window to open', () => {
     const state = restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings: {} }, seed);
     const [only] = Object.values(state.windows);

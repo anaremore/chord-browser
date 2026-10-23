@@ -18,6 +18,7 @@ import {
   SPLIT,
   PRIVATE_CHORD_THEME,
   extensionKey,
+  isUiScale,
   privateProfileId,
   type ArchivedTab,
   type ArchiveReason,
@@ -1102,7 +1103,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (sleepTabs !== undefined && draft.settings.sleepTabs !== sleepTabs) draft.settings.sleepTabs = sleepTabs;
       if (searchSuggestions !== undefined && draft.settings.searchSuggestions !== searchSuggestions) draft.settings.searchSuggestions = searchSuggestions;
       if (checkForUpdates !== undefined && draft.settings.checkForUpdates !== checkForUpdates) draft.settings.checkForUpdates = checkForUpdates;
-      const { autoPip, pagePreviews } = cmd.settings;
+      const { autoPip, pagePreviews, uiScale } = cmd.settings;
+      if (isUiScale(uiScale) && draft.settings.uiScale !== uiScale) draft.settings.uiScale = uiScale;
       if (autoPip !== undefined && draft.settings.autoPip !== autoPip) draft.settings.autoPip = autoPip;
       if (pagePreviews !== undefined && draft.settings.pagePreviews !== pagePreviews) draft.settings.pagePreviews = pagePreviews;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;

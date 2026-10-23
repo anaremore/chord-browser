@@ -6,7 +6,7 @@
 //   node ../../scripts/dev/readme-shots.mjs [out-dir]   (default: ../../docs/images)
 /* global document, window -- used inside Playwright page callbacks */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron } from '@playwright/test';
@@ -34,9 +34,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function session(appearance) {
   const config = mkdtempSync(join(tmpdir(), 'chord-shots-claude-'));
+  const profile = mkdtempSync(join(tmpdir(), 'chord-shots-'));
   const env = {
     ...process.env,
-    CHORD_USER_DATA: mkdtempSync(join(tmpdir(), 'chord-shots-')),
+    CHORD_USER_DATA: profile,
     CHORD_APPEARANCE: appearance,
     CHORD_HOME_URL: PAGES.chord,
     CHORD_DUET_CLAUDE: demoClaude,
@@ -112,7 +113,12 @@ async function session(appearance) {
   await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)?.focus(), PAGES.chord);
   await shell.mouse.move(SIZE.width - 10, SIZE.height - 10);
   await sleep(5000);
-  return { app, shell, snap, dispatch, run, tabFor, capture, windowId, article };
+  // Quit, then remove the throwaway profile and Duet's stand-in config.
+  const close = async () => {
+    await app.close();
+    for (const dir of [profile, config]) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+  };
+  return { app, close, shell, snap, dispatch, run, tabFor, capture, windowId, article };
 }
 
 // Light: the window, Duet beside the article, and split view.
@@ -139,7 +145,7 @@ async function session(appearance) {
     await sleep(5000);
     s.capture('split-view');
   } finally {
-    await s.app.close();
+    await s.close();
   }
 }
 
@@ -168,7 +174,7 @@ async function session(appearance) {
     await sleep(1500);
     await settings.screenshot({ path: join(outDir, 'themes.png') });
   } finally {
-    await s.app.close();
+    await s.close();
   }
 }
 console.log(`screenshots in ${outDir}`);

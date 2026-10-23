@@ -15,7 +15,7 @@ import { frameRadius, radius, size, space, springCurve, springs } from '@chord/t
 import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session, type WebContents } from 'electron';
 import { registerCaller, send } from './ipc';
 import { epochNow, markLaunch } from './perf';
-import { applyMaterial, platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
+import { applyMaterial, onUiScale, platform, systemInfo, titleBarOverlay, trafficLightPosition, uiScale, windowChromeOptions } from './platform';
 import { lockToOrigins } from './security';
 import { originOf } from './urls';
 
@@ -49,6 +49,18 @@ const FRAME_TICK_MS = 1000 / 60;
 const PREVIEW_SPRING = springCurve(springs.snappy);
 /** The preview page pads its card so the whole shadow shows (more below); the card's own edge sits this far in. */
 const PREVIEW_PAD = space[6];
+
+/**
+ * A rect in Chord's UI units (the shell's CSS pixels, which is what the shell
+ * reports and what the layout below works in) as window pixels, at the
+ * interface size (DESIGN.md §10). Edges are rounded rather than sizes, so
+ * neighbors stay flush.
+ */
+export function toWindowRect(r: Rect, s = uiScale()): Rect {
+  const x = Math.round(r.x * s);
+  const y = Math.round(r.y * s);
+  return { x, y, width: Math.round((r.x + r.width) * s) - x, height: Math.round((r.y + r.height) * s) - y };
+}
 
 /** How split panes share the content frame (DESIGN.md §7.9). */
 export interface PaneLayout {
@@ -101,9 +113,18 @@ export function createUiView(uiSession: Session, surface: UiSurface, hash?: stri
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
+      zoomFactor: uiScale(),
     },
   });
   view.setBackgroundColor('#00000000');
+  // The interface size (DESIGN.md §10): kept across reloads, and followed when it changes.
+  const contents = view.webContents;
+  const zoom = () => {
+    if (!contents.isDestroyed() && Math.abs(contents.getZoomFactor() - uiScale()) > 0.001) contents.setZoomFactor(uiScale());
+  };
+  contents.on('did-navigate', zoom);
+  const stopZoom = onUiScale(zoom);
+  contents.once('destroyed', stopZoom);
   const url = uiUrl(surface);
   const origin = originOf(url);
   if (!origin) throw new Error(`Bad UI URL ${url}`);
@@ -220,7 +241,17 @@ export class AppWindow {
       for (const view of [this.shell, this.popover, this.preview, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
     };
     nativeTheme.on('updated', onTheme);
+    // A new interface size: the caption controls follow the strip, and everything is placed again.
+    const stopScale = onUiScale(() => {
+      if (this.window.isDestroyed()) return;
+      if (platform === 'darwin') this.window.setWindowButtonPosition(trafficLightPosition(size.header, 16));
+      onTheme();
+      this.closeFloating();
+      this.hidePreview();
+      this.layout();
+    });
     this.window.on('closed', () => {
+      stopScale();
       this.closeFloating();
       clearTimeout(this.peekTimer);
       nativeTheme.off('updated', onTheme);
@@ -403,12 +434,14 @@ export class AppWindow {
       }
       const elapsed = performance.now() - start;
       const k = FRAME_SPRING.at(elapsed);
-      view.setBounds({
-        x: Math.round(from.x + (to.x - from.x) * k),
-        y: Math.round(from.y + (to.y - from.y) * k),
-        width: Math.round(from.width + (to.width - from.width) * k),
-        height: Math.round(from.height + (to.height - from.height) * k),
-      });
+      view.setBounds(
+        toWindowRect({
+          x: from.x + (to.x - from.x) * k,
+          y: from.y + (to.y - from.y) * k,
+          width: from.width + (to.width - from.width) * k,
+          height: from.height + (to.height - from.height) * k,
+        }),
+      );
       if (elapsed >= FRAME_SPRING.durationMs) {
         clearInterval(timer);
         done();
@@ -420,9 +453,16 @@ export class AppWindow {
     return { ...this.peek!, card: this.peekCard() };
   }
 
-  /** The content frame, in window coordinates (left of Duet's panel when it's open). */
+  /** The window's content area in UI units. */
+  private contentSize(): { width: number; height: number } {
+    const { width, height } = this.window.getContentBounds();
+    const s = uiScale();
+    return { width: width / s, height: height / s };
+  }
+
+  /** The content frame, in UI units from the window's corner (left of Duet's panel when it's open). */
   private frameRect(): Rect {
-    const { width: windowWidth, height } = this.window.getContentBounds();
+    const { width: windowWidth, height } = this.contentSize();
     const width = this.duetWidth > 0 ? Math.max(0, windowWidth - this.duetWidth - space[2]) : windowWidth;
     const x = Math.round(this.origin.left);
     const y = Math.round(this.origin.top);
@@ -561,14 +601,14 @@ export class AppWindow {
       this.preview.setVisible(false);
       return;
     }
-    const content = this.window.getContentBounds();
-    const x = Math.round(this.origin.left);
-    const y = Math.max(0, Math.min(Math.round(this.previewAnchor.top) - PREVIEW_PAD, content.height - h));
+    const content = this.contentSize();
+    const y = Math.max(0, Math.min(this.previewAnchor.top - PREVIEW_PAD, content.height - h));
+    const to = toWindowRect({ x: this.origin.left, y, width: w, height: h });
     const from = this.preview.getBounds();
     clearInterval(this.previewAnimation);
     this.previewAnimation = undefined;
-    if (!this.previewGlide || !this.preview.getVisible() || from.y === y) {
-      this.preview.setBounds({ x, y, width: w, height: h });
+    if (!this.previewGlide || !this.preview.getVisible() || from.y === to.y) {
+      this.preview.setBounds(to);
       this.preview.setVisible(true);
       return;
     }
@@ -577,7 +617,7 @@ export class AppWindow {
       if (this.window.isDestroyed()) return clearInterval(this.previewAnimation);
       const elapsed = performance.now() - start;
       const k = PREVIEW_SPRING.at(elapsed);
-      this.preview.setBounds({ x, y: Math.round(from.y + (y - from.y) * k), width: w, height: h });
+      this.preview.setBounds({ ...to, y: Math.round(from.y + (to.y - from.y) * k) });
       if (elapsed >= PREVIEW_SPRING.durationMs) {
         clearInterval(this.previewAnimation);
         this.previewAnimation = undefined;
@@ -757,10 +797,10 @@ export class AppWindow {
     floating?.close();
   }
 
-  /** The window's content area and the page frame within it, for placing floating views. */
+  /** The window's content area and the page frame within it, in window pixels, for placing floating views. */
   get frameBounds(): { width: number; height: number; frameTop: number } {
     const { width, height } = this.window.getContentBounds();
-    return { width, height, frameTop: Math.round(this.origin.top) };
+    return { width, height, frameTop: Math.round(this.origin.top * uiScale()) };
   }
 
   /** Duet's panel opened (its width) or closed (0). The page makes room for it. */
@@ -774,43 +814,40 @@ export class AppWindow {
   /** The content frame: inset from the window, right of the sidebar (if docked), below the strip on Windows/Linux. */
   private layout(): void {
     const { width: windowWidth, height } = this.window.getContentBounds();
-    // With Duet open, the frame ends before its panel and the gap between them.
-    const width = this.duetWidth > 0 ? Math.max(0, windowWidth - this.duetWidth - space[2]) : windowWidth;
-    const inset = size.frameInset;
-    const x = Math.round(this.origin.left);
-    const y = Math.round(this.origin.top);
     this.shell.setBounds({ x: 0, y: 0, width: windowWidth, height });
     this.overlay.setBounds({ x: 0, y: 0, width: windowWidth, height });
-    const frame = { x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) };
+    // Worked out in UI units (the shell's CSS pixels), then placed in window pixels.
+    const frame = this.frameRect();
     // The shell draws each pane's frame with the same math (DESIGN.md §7.9: 8 px gaps).
     const rects = this.paneRectsIn(frame);
     this.panes.forEach((view, i) => {
       if (this.pageFullScreen && view === this.tabView) view.setBounds({ x: 0, y: 0, width: windowWidth, height });
-      else view.setBounds(rects[i] ?? frame);
+      else view.setBounds(toWindowRect(rects[i] ?? frame));
     });
     const { width: pw, height: ph } = this.popoverSize;
     // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.
     if (this.peek) {
       const page = this.peekPageRect();
-      this.popover.setBounds({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph });
-      if (this.peekView && this.window.contentView.children.includes(this.peekView)) this.peekView.setBounds(page);
+      this.popover.setBounds(toWindowRect({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph }));
+      if (this.peekView && this.window.contentView.children.includes(this.peekView)) this.peekView.setBounds(toWindowRect(page));
       send(this.overlay.webContents, 'peek:state', this.peekState());
       return;
     }
     // The popover (find, permission prompts) hangs from the focused pane's top-right corner; its cards carry their own margin.
     const pane = rects[this.focusedPane] ?? frame;
-    this.popover.setBounds({ x: Math.max(pane.x, pane.x + pane.width - pw), y: pane.y, width: pw, height: ph });
+    this.popover.setBounds(toWindowRect({ x: Math.max(pane.x, pane.x + pane.width - pw), y: pane.y, width: pw, height: ph }));
   }
 
   /**
    * Pop a menu at a point (an empty rect), or below an anchor with its right
-   * edge under the anchor's (the ⋯ button, by the window's right edge).
-   * Electron can't right-align native menus, so `width` is the menu's
-   * measured width.
+   * edge under the anchor's (the ⋯ button, by the window's right edge). The
+   * anchor is the shell's, in UI units. Electron can't right-align native
+   * menus, so `width` is the menu's measured width, in window pixels.
    */
   popupMenu(menu: Menu, anchor: Rect, width = 0): void {
+    const s = uiScale();
     const below = anchor.height > 0 ? anchor.height + space[1] : 0;
-    const x = Math.max(0, Math.round(anchor.x + anchor.width - width));
-    menu.popup({ window: this.window, x, y: Math.round(anchor.y + below) });
+    const x = Math.max(0, Math.round((anchor.x + anchor.width) * s - width));
+    menu.popup({ window: this.window, x, y: Math.round((anchor.y + below) * s) });
   }
 }
