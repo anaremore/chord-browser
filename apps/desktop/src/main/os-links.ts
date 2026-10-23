@@ -27,15 +27,20 @@ export function openable(text: string): string | null {
   return null;
 }
 
-/** The URLs on a command line, in order, without duplicates. Switches and Chord's own paths are skipped. */
+/**
+ * The URLs on a command line, in order, without duplicates. Switches and
+ * Chord's own paths are skipped. After `--single-argument` only one link
+ * counts, the first one found: a running Chord's second-instance argv can
+ * come reordered with switches added (Electron documents this; macOS and
+ * Linux do it), so it isn't always the very next argument.
+ */
 export function urlsFromArgv(argv: readonly string[]): string[] {
   const single = argv.indexOf('--single-argument');
-  const candidates = single >= 0 ? argv.slice(single + 1, single + 2) : argv.filter((arg) => !arg.startsWith('-'));
   const urls: string[] = [];
-  for (const candidate of candidates) {
-    const url = openable(candidate);
+  for (const arg of single >= 0 ? argv.slice(single + 1) : argv) {
+    const url = arg.startsWith('-') ? null : openable(arg);
     if (url && !urls.includes(url)) urls.push(url);
-    if (urls.length === MAX_URLS) break;
+    if (urls.length === (single >= 0 ? 1 : MAX_URLS)) break;
   }
   return urls;
 }
