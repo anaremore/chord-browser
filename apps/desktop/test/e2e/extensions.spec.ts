@@ -45,10 +45,43 @@ function startSite(packages: Map<string, Buffer> = new Map()): Promise<{ server:
   return new Promise((done) => server.listen(0, '127.0.0.1', () => done({ server, origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` })));
 }
 
+// DEBUG (CI, temporary): pids, the app's own output, how closing goes, and leftovers on a reused profile.
+const debugAlive = (pid: number | undefined) => {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const debugLastPid = new Map<string, number | undefined>();
+function debugApp(app: ElectronApplication, profile: string): ElectronApplication {
+  const pid = app.process().pid;
+  const prev = debugLastPid.get(profile);
+  console.log(`DEBUG launched pid=${pid} profile=${profile.slice(-12)} previousPid=${prev} previousAlive=${debugAlive(prev)}`);
+  debugLastPid.set(profile, pid);
+  const t0 = Date.now();
+  const log = (stream: string) => (chunk: Buffer) => {
+    for (const line of chunk.toString().split(/\r?\n/)) if (line.trim()) console.log(`APP[${pid}] +${Date.now() - t0}ms ${stream}: ${line.slice(0, 300)}`);
+  };
+  app.process().stdout?.on('data', log('out'));
+  app.process().stderr?.on('data', log('err'));
+  app.process().once('exit', (code, signal) => console.log(`DEBUG exit pid=${pid} code=${code} signal=${signal} +${Date.now() - t0}ms`));
+  const close = app.close.bind(app);
+  app.close = async () => {
+    const start = Date.now();
+    console.log(`DEBUG close start pid=${pid}`);
+    await close();
+    console.log(`DEBUG close done pid=${pid} after ${Date.now() - start}ms alive=${debugAlive(pid)}`);
+  };
+  return app;
+}
+
 async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'))): Promise<ElectronApplication> {
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, CHORD_E2E_HOOKS: '1', ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return electron.launch({ args: [appDir], env: childEnv, cwd: appDir });
+  return debugApp(await electron.launch({ args: [appDir], env: childEnv, cwd: appDir }), profile);
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
@@ -156,12 +189,17 @@ test('an extension: told it was installed once, its scripts and rules run, and i
   }
 
   // Next launch: it loads from what was saved, and isn't told it was installed again.
+  step('relaunching');
   app = await launch({ CHORD_HOME_URL: `${origin}/` }, profile);
+  step('relaunched');
   try {
     const shell = await pageWhere(app, isShell);
+    step('shell');
     const shelf = shell.locator('[data-placement="sidebar"]');
     await shelf.getByRole('button', { name: 'Chord Test, 7' }).click({ timeout: 20_000 });
+    step('clicked');
     const popup = await pageWhere(app, isPopup);
+    step('popup');
     await expect(popup.locator('#installs')).toHaveText('Installed 1 time(s), reason install');
   } finally {
     await app.close();

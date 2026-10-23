@@ -86,6 +86,39 @@ function startSite(): Promise<{ server: Server; origin: string }> {
   );
 }
 
+// DEBUG (CI, temporary): pids, the app's own output, how closing goes, and leftovers on a reused profile.
+const debugAlive = (pid: number | undefined) => {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const debugLastPid = new Map<string, number | undefined>();
+function debugApp(app: ElectronApplication, profile: string): ElectronApplication {
+  const pid = app.process().pid;
+  const prev = debugLastPid.get(profile);
+  console.log(`DEBUG launched pid=${pid} profile=${profile.slice(-12)} previousPid=${prev} previousAlive=${debugAlive(prev)}`);
+  debugLastPid.set(profile, pid);
+  const t0 = Date.now();
+  const log = (stream: string) => (chunk: Buffer) => {
+    for (const line of chunk.toString().split(/\r?\n/)) if (line.trim()) console.log(`APP[${pid}] +${Date.now() - t0}ms ${stream}: ${line.slice(0, 300)}`);
+  };
+  app.process().stdout?.on('data', log('out'));
+  app.process().stderr?.on('data', log('err'));
+  app.process().once('exit', (code, signal) => console.log(`DEBUG exit pid=${pid} code=${code} signal=${signal} +${Date.now() - t0}ms`));
+  const close = app.close.bind(app);
+  app.close = async () => {
+    const start = Date.now();
+    console.log(`DEBUG close start pid=${pid}`);
+    await close();
+    console.log(`DEBUG close done pid=${pid} after ${Date.now() - start}ms alive=${debugAlive(pid)}`);
+  };
+  return app;
+}
+
 async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-')), { firstRun = false } = {}): Promise<ElectronApplication> {
   // A fresh profile per launch unless a test reuses one: tests never touch a developer's real data.
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, ...env };
@@ -93,7 +126,7 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
   // Every test but first run's own starts straight in the browser (Chrome's --no-first-run, which
   // Playwright also adds by itself; CHORD_FIRST_RUN=1 asks for first run anyway).
   if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
-  return electron.launch({ args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir });
+  return debugApp(await electron.launch({ args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir }), profile);
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
