@@ -464,7 +464,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar` |
 | Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
-| Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState` |
+| Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer` |
 | Settings and help | `SettingRow` (label, control, and a ↺ reset button shown only when the value differs from its default), `ShortcutSheet` (the cheat sheet, generated from the shortcut registry) |
 | Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
 | Duet | `DuetPanel`, `ThreadHeader` (title, provider/model chip, thread menu), `MessageList`, `AssistantMessage` (with `CitationPill`), `ToolActivityRow`, `ApprovalCard`, `Composer` (`ContextChips`, input, send), `DuetSetup` |
@@ -636,8 +636,10 @@ The window opens at 1200×800, centered, with the real sidebar on the left showi
 | 5 | Open links in Chord? *(optional)* | 5 s | "Links from Mail, Slack, and other apps will open here." Platform-specific outcome copy: on macOS the system asks to confirm; on Windows, "Windows will open Settings — pick Chord under Web browser"; on Linux it's set directly (Flatpak shows instructions). | **Make Chord my default** · *Not now* |
 | 6 | Three things to know | 10 s | Three cards with live keycaps: **⌘T** Search or open anything · **⌘1–9** Jump between chords (or swipe the sidebar) · **Drag a tab up** to pin it for good | **Start browsing** → command bar opens: "Where to?" |
 
+*As built, between 5 and 6:* **Warn you before risky sites?** (Safe Browsing, ARCHITECTURE.md §14.5). An eyebrow with a shield, the title, and Safe Browsing's notice in full: "Chord checks the addresses you visit against Google's lists on this computer. Only when one matches does it send Google a short partial fingerprint of the address, never the address itself. Protection isn't perfect: a dangerous site can be missed, and a safe one can be flagged by mistake." **Turn on warnings** (↵) · *Not now*. It's a choice, so Esc doesn't skip it. Builds without Google's API key leave the step out.
+
 - *As built:* a brand-new profile starts here. Chrome's `--no-first-run` skips it, and development builds can force it with `CHORD_FIRST_RUN=1` (Playwright adds `--no-first-run` to every Electron app it drives). The page waits hidden behind the cards. Step 5 is left out when Chord is already the default, and in development builds, which can't be.
-- Progress shows as 6 dots: filled for required steps, hollow for optional.
+- Progress shows as a dot per step (6 or 7): filled for required steps, hollow for optional.
 - Every optional step can be skipped with Esc.
 - Duet is **not** part of onboarding; it sets itself up the first time you open it (§8.6).
 
@@ -706,6 +708,27 @@ A link clicked inside a pinned tab opens in Peek instead of replacing the pinned
 | Duet, no threads | Ask about this page, your tabs, or anything you're working on. | — | three contextual chips |
 | Page crashed | This page stopped working. | It's not you. Reloading usually fixes it. | Reload |
 | Offline | You're offline. | Pages you have open will keep working; new ones will load when you're back. | Try again |
+
+**Safe Browsing** (ARCHITECTURE.md §14.5). Google's terms shape the words: a warning never says a site *is* unsafe, only that it *may* be, and that it's on Google's list of *suspected* ones; it links to Google's page about the threat, and credits Google.
+
+| Where | Title | Body | Action |
+|---|---|---|---|
+| A page on the phishing list | This site may be trying to trick you. | example.com is on Google's list of suspected phishing sites. Sites like this pretend to be someone you trust to get your passwords, card numbers or other details. | **Back to safety** |
+| On the malware list | This site may harm your computer. | …on Google's list of sites suspected of spreading malware: software that can steal your information or damage your files. | **Back to safety** |
+| On the unwanted-software list | This site may try to install unwanted software. | …on Google's list of sites suspected of offering programs that change your browser or computer without asking. | **Back to safety** |
+| A frame on a list | (the title for its list) | "Part of this page comes from ads.example, which is on Google's list of…" | **Back to safety** |
+| A held download (downloads panel) | the file's name | This file may be malware. Chord paused it. | **Delete** · *Keep anyway* |
+
+- **The warning page** sits in the content frame where the page would be, like a load error (§7.1 `SafeBrowsingWarning`), on the frame's `surface`, centered, at most 480 px wide. Top to bottom:
+  - A 48 px `danger` disc at 14% under a 24 px `shield-alert` in `danger`: the one place the danger color is this large. Status is never color alone: the title says it.
+  - The title in `text-heading`, the body in `fg-muted`.
+  - *Learn more about phishing* (or malware, or unwanted software): a link to Google's page, in `accent`, opening as a tab beside this one.
+  - **Back to safety**: the accent pill, the only filled button. It shows the page you were on before, or closes the tab when there's none.
+  - *Details* (a disclosure, closed): "If you trust this site, you can visit it anyway. Chord won't warn you about example.com again until you quit." and a quiet *Visit anyway* pill. Never one click from the main button.
+  - *Advisory provided by Google*, in `text-micro`, `fg-subtle`, linked to Google's advisory. Always shown.
+- **The held download** in the downloads panel: the row's file icon becomes `shield-alert` in `danger`; the line under the name says what's suspected; **Delete** is the accent pill and *Keep anyway* a text button; *Learn more…* and *Advisory provided by Google* sit under them in `text-micro`. The panel opens on it by itself, in the window the download came from.
+- **Settings → Privacy → Safe Browsing:** one row, *Warn before suspected phishing and malware*, with the notice as its description (so it's read beside the switch, before it's on), and under it, once on, how Google's lists are doing ("999,877 entries on this computer, updated 3 minutes ago."). In Google-free mode the row says it's off and why; in a build without the key, that it isn't in this build. A note under the group: "Safe Browsing by Google." No ↺: a new profile turns it on in first run, so there's no single default to go back to.
+- **The one-time offer**, for profiles from before Safe Browsing: a card in the popover at the frame's top-right, like a permission prompt, with a shield, *Warn you before risky sites?*, the notice, and *Not now* · **Turn on**. Either answer is final; Settings can change it.
 
 **Toast copy:**
 - "Tab closed · Undo"

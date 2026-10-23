@@ -1,10 +1,11 @@
 # S10: Which hosts Chord contacts on its own (Google-free mode)
 
-**Result: Chord's own Google traffic comes from four sources.**
+**Result: Chord's own Google traffic comes from five sources.**
 - Search suggestions.
 - The default search engine.
 - Spellcheck dictionary downloads.
 - Chrome Web Store extension updates.
+- Safe Browsing, added 2026-10-23 after this audit, when it's on (ARCHITECTURE.md §14.5).
 
 A fifth Google contact is only a page: a brand-new profile's first tab is `www.google.com`. Electron 45.0.0 (Chromium 156) itself sends nothing to Google: no Safe Browsing, component updater, variations or metrics. Measured on Windows 11 on 2026-10-23. Linux and macOS are covered by the CI test, not by hand.
 
@@ -38,6 +39,7 @@ Not seen in a fresh session, but in the code:
 | Host | When | Source |
 |---|---|---|
 | `clients2.google.com`, then Google's download CDN | A minute after launch, then every 5 hours, **if any Chrome Web Store extension is installed** | The Web Store update check, `src/main/extensions/webstore.ts`. Installing from the store goes there too, but you start that yourself. |
+| `safebrowsing.googleapis.com` | **While Safe Browsing is on**, in builds that have its API key: `hashLists.batchGet` 15 s after launch, then as often as Google's `minimumWaitDuration` says (the lists of hash prefixes); `hashes.search` only when an address's 4-byte hash prefix is on one of those lists, with just that prefix. From its own in-memory session, with no cookies. | `src/main/safe-browsing/service.ts` (ARCHITECTURE.md §14.5) |
 | `www.google.com/search` | Whenever you search, with Google as the engine | `SEARCH_ENGINES`, `@chord/core` |
 | `api.github.com`, `github.com` and its download host | 30 s after launch, then daily (**installed builds only**) | The update check and in-app updates (`src/main/updates.ts`, `update-installer.ts`). This is GitHub, not Google, and it stays on in Google-free mode. |
 | `www.google.com/maps`, `www.youtube.com`, `chrome.google.com/webstore` | Only when you type the `maps` or `yt` keyword, or open an extension's store page from its menu | Navigations you ask for, like any link. |
@@ -55,6 +57,7 @@ Nothing else came up:
 | Search suggestions | Follow your switch in General, and come from the chosen engine, which is never Google. Main also refuses Google suggestions as a backstop. |
 | Spellcheck dictionaries | **Only dictionaries already downloaded**, plus the system's own spellchecker: macOS, and Windows for its languages. The download URL becomes `SPELLCHECK_OFFLINE_URL` (`http://127.0.0.1:9/`). Port 9 is on Chromium's restricted-ports list, so a missing dictionary fails at once and nothing leaves the computer. Chord's own UI session never spellchecks at all, so it never needs a dictionary, in either mode. |
 | Web Store extension updates | **No background checks.** Settings → Extensions → *Check for updates* still works when you press it. |
+| Safe Browsing | **Off, and kept off.** Turning the mode on turns it off; the reducer ignores turning it back on while the mode is on, and restoring a profile repairs it. No lists are downloaded and nothing is asked; Settings → Privacy says why. Lists downloaded before stay on disk, unused. `test/e2e/safe-browsing.spec.ts` checks that a Google-free session sends its stand-in server nothing. |
 | First tab of a new profile | Unchanged: the mode can't be on before the first launch. |
 | Chord's own update check | Unchanged (GitHub). |
 

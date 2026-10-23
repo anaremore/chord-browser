@@ -72,7 +72,7 @@ Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every 
 | M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows, PDFs, spelling, screen sharing, site permissions, zoom per site, **editable shortcuts** | | real password-manager sign-in checks (by hand) |
 | M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check, macOS hands-on (2026-10-22 report), accessibility pass (automated), performance budgets (launch, command bar, history) | CI green on every OS, the 200-tab sidebar budget | design QA sweep, macOS re-run, the 0.1 release |
 | Phase 2 | Duet, split view, mini window, Peek, hover previews | Codex's live-turn checks (S5, after its usage limit resets Nov 16) | Electron 46 (stable 2027-01-05) |
-| Phase 3 | link routes, in-app updates (Ed25519-signed manifests; needs your signing key), Google-free mode, a Flatpak built from source, the apt/dnf upload workflow (off until Cloudsmith is set up), the 72-hour runbook (rehearsed up to publishing) | | rpm builds; yours: the Flathub app ID and submission, the Cloudsmith repository and key, D7 Safe Browsing |
+| Phase 3 | link routes, in-app updates (Ed25519-signed manifests; needs your signing key), Google-free mode, a Flatpak built from source, the apt/dnf upload workflow (off until Cloudsmith is set up), the 72-hour runbook (rehearsed up to publishing), **D7 Safe Browsing** (v5 Local List Mode; its key is in the release workflow) | | rpm builds; yours: the Flathub app ID and submission, the Cloudsmith repository and key, Safe Browsing checked by hand with the real key |
 | Phase 4 | signing and notarization in the release workflow, off until your certificates exist; a Microsoft Store draft | | your certificates ([docs/releasing/signing.md](docs/releasing/signing.md)), Mac in-app updates, Electron 47, compact density |
 
 ---
@@ -273,7 +273,10 @@ Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every 
     - *Yours:* the Cloudsmith repository and the `CLOUDSMITH_API_KEY` secret ([linux-repos.md](docs/releasing/linux-repos.md#switching-it-on)). `.rpm` builds are still to add to `release.yml`.
   - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests. *Built:* download in the background, then "Restart to update"; it needs the signing key made once ([patch-runbook.md](docs/releasing/patch-runbook.md#update-signing-key)).
   - The **72-hour patch runbook** rehearsed end to end. *Done:* written ([patch-runbook.md](docs/releasing/patch-runbook.md)) and rehearsed on 2026-10-23 up to the publish step. The first real release completes the rehearsal.
-- **D7** Safe Browsing, if you choose it.
+- **D7 Safe Browsing.** **Decided and built 2026-10-23** (ARCHITECTURE.md §14.5): Google's Safe Browsing API v5 in Local List Mode, for pages, frames, redirects and downloads in every window, private ones too.
+  - *Built:* the lists and hashing in a worker thread (a local check takes about 0.2 ms); the warning in the content frame, with *Back to safety*, *Visit anyway* behind Details (remembered until you quit), Google's learn-more pages and its attribution; held downloads kept as `.crdownload` until you keep or delete them; Settings → Privacy's switch with its notice; first run's step for new profiles, a one-time offer for older ones; off in Google-free mode.
+  - *The key:* the `CHORD_SAFE_BROWSING_KEY` secret in the `release` environment, put into release builds at build time. Builds without it show Safe Browsing as unavailable.
+  - *Yours:* restrict the key to the Safe Browsing API, and check it by hand against Google's test pages ([patch-runbook.md](docs/releasing/patch-runbook.md#safe-browsing-key)).
 - **Google-free mode** (requested 2026-10-22).
   - *Why not ungoogled-chromium itself:* it's a set of patches, domain substitutions and build flags for Chromium's source. Chord runs on Electron, which builds its own Chromium, so using it would mean building Electron from source with those patches applied. That's hours of build per OS and architecture for every security release, and no maintained project does it today.
   - *What we can do instead:* first, an **audit spike** that runs a Chord session with a network log (`--log-net-log`) and lists every Google host Chord itself contacts, apart from pages you visit. Then a switch in Settings:
@@ -282,7 +285,7 @@ Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every 
     - spellcheck dictionaries from a non-Google host (`session.setSpellCheckerDictionaryDownloadURL`), or local only;
     - plus anything else the audit finds.
   - *Kept honest by a test:* CI fails if a fresh session in this mode contacts a Google domain on its own.
-  - *Built:* the audit is [S10](docs/decisions/S10-google-free.md). The switch is in Settings → Privacy: a non-Google engine (your choice), so its suggestions too; spelling only with dictionaries already downloaded; no background Web Store update checks. The test is `test/e2e/google-free.spec.ts`. A new profile's first tab is still Google, because the mode can't be on yet.
+  - *Built:* the audit is [S10](docs/decisions/S10-google-free.md). The switch is in Settings → Privacy: a non-Google engine (your choice), so its suggestions too; spelling only with dictionaries already downloaded; no background Web Store update checks; Safe Browsing off. The test is `test/e2e/google-free.spec.ts`. A new profile's first tab is still Google, because the mode can't be on yet.
 
 ## Phase 4 — Deeper · March 2027 onward
 
