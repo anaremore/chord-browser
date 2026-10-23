@@ -469,7 +469,7 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
         - treeitem "Second page" [level=1]
         - treeitem "New folder" [expanded] [level=1]
         - treeitem "Third page" [level=2] [selected]
-      - button "New tab Ctrl+T"
+      - button "New tab ${process.platform === 'darwin' ? '⌘T' : 'Ctrl+T'}"
       - tree "Today":
         - treeitem "Article" [level=1]
       - region "Notifications"
@@ -695,13 +695,20 @@ test('reduce transparency (stubbed in main) makes the window solid, and turning 
   try {
     const shell = await pageWhere(app, isShell);
     await expect(today(shell)).toContainText('First page');
-    const before = await shell.evaluate(() => document.documentElement.dataset['material']);
-    const setReduced = (reduce: boolean) =>
-      app.evaluate(({ nativeTheme }, r) => {
+    const material = () => shell.evaluate(() => document.documentElement.dataset['material']);
+    const setReduced = async (reduce: boolean) => {
+      await app.evaluate(({ nativeTheme }, r) => {
         Object.defineProperty(nativeTheme, 'prefersReducedTransparency', { configurable: true, get: () => r });
         nativeTheme.emit('updated');
       }, reduce);
+      // A round trip to main: IPC keeps order, so the change main sent first has been applied.
+      await shell.evaluate(() => (window as unknown as { chord: { system: { info(): Promise<unknown> } } }).chord.system.info());
+    };
     const base = () => shell.evaluate(() => getComputedStyle(document.querySelector('[data-sidebar]')!).backgroundColor);
+    // The material without reduce transparency: measured with it off, since the OS may have it on
+    // (the macOS CI runners do, so the window starts solid there).
+    await setReduced(false);
+    const before = await material();
 
     await setReduced(true);
     await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['material'])).toBe('solid');

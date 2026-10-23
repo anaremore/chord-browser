@@ -112,8 +112,9 @@ test('an extension: told it was installed once, its scripts and rules run, and i
     const popup = await pageWhere(app, isPopup);
     await expect(popup.locator('#installs')).toHaveText('Installed 1 time(s), reason install');
     await expect(popup.locator('#tab')).toHaveText('Active tab: First page');
-    await expect.poll(() => popup.evaluate(() => window.innerWidth)).toBeGreaterThanOrEqual(260);
-    expect(await popup.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(300);
+    // Sized to its page once the page reports its size; a page slow to report shows at full size first.
+    await expect.poll(() => popup.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(300);
+    expect(await popup.evaluate(() => window.innerWidth)).toBeGreaterThanOrEqual(260);
     await popup.locator('#close').click();
     await expect.poll(() => app.windows().some((p) => isPopup(p.url()))).toBe(false);
 
