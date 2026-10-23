@@ -32,7 +32,7 @@ import {
   type TabNode,
 } from '@chord/core';
 import { CollisionPriority } from '@dnd-kit/abstract';
-import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
+import { Accessibility, KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import { DragDropProvider, useDraggable, useDragDropMonitor, useDroppable } from '@dnd-kit/react';
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
@@ -41,9 +41,11 @@ import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, Scr
 import { AnimatePresence, motion } from 'motion/react';
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useRoving } from '../shared/a11y';
 import { Favicon } from '../shared/Favicon';
 import type { SpringFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
+import { announce } from './announce';
 import { api } from './api';
 import styles from './App.module.css';
 import { DuetReadTabs } from './duet-context';
@@ -141,6 +143,9 @@ export function SidebarDnd({
   return (
     <DragContext.Provider value={drag}>
       <DragDropProvider
+        // The rows are a tree with keyboard moves of its own (treeKeys below), so dnd-kit's own
+        // screen-reader layer (a "draggable" role description, a pressed state on rows) stays out.
+        plugins={(defaults) => defaults.filter((plugin) => plugin !== Accessibility)}
         sensors={(defaults) => [
           // The keyboard moves rows its own way (treeKeys below), so dnd-kit's keyboard sensor stays out.
           ...defaults.filter((sensor) => sensor !== PointerSensor && sensor !== KeyboardSensor),
@@ -347,6 +352,39 @@ interface RowContext {
   /** Splits opened to show their tabs. */
   openSplits: ReadonlySet<string>;
   toggleSplit(id: string, open: boolean): void;
+  /** Each row's place among its siblings, for screen readers ("2 of 5"). */
+  places: ReadonlyMap<string, TreePlace>;
+}
+
+/** A row's place among its siblings in the tree. */
+interface TreePlace {
+  pos: number;
+  size: number;
+}
+
+/**
+ * What makes a row a tree item (DESIGN.md §10: the sidebar is an ARIA tree).
+ * The rows are drawn flat, indented by depth, so the tree's shape is told by
+ * level, position and size. A row is named by its text. Its own buttons (×,
+ * ↩, Stop sharing) are for the pointer: the keyboard has Delete, and the
+ * row's menu (Shift+F10 or the menu key) has the rest.
+ */
+function treeItem(id: string, depth: number, ctx: RowContext, tooltip: string) {
+  const place = ctx.places.get(id);
+  return {
+    role: 'treeitem',
+    title: tooltip,
+    'aria-level': depth + 1,
+    'aria-setsize': place?.size,
+    'aria-posinset': place?.pos,
+  } as const;
+}
+
+/** Where a row's menu opens: at the pointer, or under the row when the keyboard asked for it. */
+function menuPoint(e: MouseEvent): { x: number; y: number } {
+  if (e.clientX !== 0 || e.clientY !== 0) return { x: e.clientX, y: e.clientY };
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.bottom };
 }
 
 /** A pinned tab is "away" once it has left its pinned site; ↩ takes it back. */
@@ -364,7 +402,7 @@ const indent = (depth: number) => ({ '--depth': Math.min(depth, MAX_VISUAL_DEPTH
 
 function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index: number; section: Section; depth: number; ctx: RowContext; drag: RowDrag }) {
   const duetRead = useContext(DuetReadTabs).has(tab.id);
-  // The row's button is the handle, so dnd-kit's drag semantics land on a button and the <li> stays a list item.
+  // The row's surface is the drag handle; the <li> is the tree item that takes focus.
   const { ref, handleRef, isDragging, isDropTarget } = useSortable({ id: tab.id, index, group: section, type: 'tab', accept: ROW_ACCEPTS });
   const { dragging, projected } = drag;
   const { state, windowId, activeId, info, appearance, spring } = ctx;
@@ -385,13 +423,27 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
   const dispatch = api.state.dispatch;
   const close = () => void dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
   const shownDepth = isDragging && projected ? projected.depth : depth;
+  const title = pageTitle(tab) || displayHost(tab.url) || 'New tab';
   return (
     <motion.li
       ref={ref}
+      {...treeItem(tab.id, depth, ctx, pageTitle(tab) || tab.url)}
+      aria-selected={isActive}
+      aria-current={isActive ? 'page' : undefined}
+      aria-describedby={sharing ? `sharing-${tab.id}` : popped ? `pip-${tab.id}` : undefined}
       // While dragging, dnd-kit moves rows; motion only animates arrivals and departures.
       layout={dragging ? false : 'position'}
       className={styles.item}
       style={indent(shownDepth)}
+      data-row="tab"
+      data-id={tab.id}
+      data-parent={tab.parentId ?? undefined}
+      // Pinned tabs get a hover preview (DESIGN.md §7.6).
+      data-preview={pinned || undefined}
+      // A pinned tab that hasn't been opened yet reads quieter (DESIGN.md §7.2).
+      data-unloaded={unloaded || undefined}
+      data-asleep={asleep || undefined}
+      data-pip={popped || sharing || undefined}
       data-dragging={lifted || undefined}
       data-drop-target={(dragging && isDropTarget && !isDragging) || undefined}
       initial={{ opacity: 0, scale: 0.96 }}
@@ -406,25 +458,14 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
       }}
       onContextMenu={(e: MouseEvent) => {
         e.preventDefault();
-        void api.menu.tab(tab.id, { x: e.clientX, y: e.clientY });
+        void api.menu.tab(tab.id, menuPoint(e));
       }}
     >
       {isActive && <motion.span layoutId={`active-pill-${tab.chordId}`} className={styles.activePill} transition={spring('snappy', 'tabMoves')} />}
-      <button
+      <div
         ref={handleRef}
-        type="button"
         className={`${styles.row} ${isActive ? styles.active : ''}`}
-        data-row="tab"
-        data-id={tab.id}
-        data-parent={tab.parentId ?? undefined}
-        // Pinned tabs get a hover preview (DESIGN.md §7.6).
-        data-preview={pinned || undefined}
-        // A pinned tab that hasn't been opened yet reads quieter (DESIGN.md §7.2).
-        data-unloaded={unloaded || undefined}
-        data-asleep={asleep || undefined}
-        data-pip={popped || sharing || undefined}
-        aria-current={isActive ? 'page' : undefined}
-        title={pageTitle(tab) || tab.url}
+        data-activate
         onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
       >
         {isInternalUrl(tab.url) ? (
@@ -433,12 +474,14 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
         ) : (
           <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
         )}
-        <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
+        <span className={styles.ellipsis}>{title}</span>
         {duetRead && <Sparkle className={styles.duetRead} size={12} strokeWidth={2} role="img" aria-label="Duet read this tab" />}
-      </button>
+      </div>
       {sharing ? (
         <button
           type="button"
+          tabIndex={-1}
+          aria-hidden
           className={`${styles.pip} ${styles.sharing}`}
           aria-label="Stop sharing your screen"
           title="Stop sharing your screen"
@@ -449,6 +492,8 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
       ) : popped && (
         <button
           type="button"
+          tabIndex={-1}
+          aria-hidden
           className={styles.pip}
           aria-label="Bring the video back"
           title="Bring the video back"
@@ -457,9 +502,21 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
           <PictureInPicture2 size={14} strokeWidth={2} />
         </button>
       )}
+      {sharing && (
+        <span id={`sharing-${tab.id}`} hidden>
+          Sharing your screen
+        </span>
+      )}
+      {popped && !sharing && (
+        <span id={`pip-${tab.id}`} hidden>
+          Its video plays in a small window
+        </span>
+      )}
       {away ? (
         <button
           type="button"
+          tabIndex={-1}
+          aria-hidden
           className={styles.close}
           aria-label="Back to pinned page"
           title={`Back to ${displayHost(tab.pinnedUrl!)}`}
@@ -470,6 +527,8 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
       ) : unloaded ? null : (
         <button
           type="button"
+          tabIndex={-1}
+          aria-hidden
           className={styles.close}
           aria-label={`Close ${tab.title || 'tab'}`}
           title={withKeys(pinned ? 'Close (stays pinned)' : 'Close tab', 'tab.close')}
@@ -498,9 +557,15 @@ function FolderRow({ folder, index, depth, ctx, drag }: { folder: FolderNode; in
   return (
     <motion.li
       ref={ref}
+      {...treeItem(folder.id, depth, ctx, folder.title)}
+      aria-expanded={open}
       layout={dragging ? false : 'position'}
       className={styles.item}
       style={indent(shownDepth)}
+      data-row="folder"
+      data-id={folder.id}
+      data-parent={folder.parentId ?? undefined}
+      data-preview
       data-dragging={(isDragging || drag.moving === folder.id) || undefined}
       data-drop-target={(dragging && isDropTarget && !isDragging) || undefined}
       initial={{ opacity: 0, scale: 0.96 }}
@@ -509,27 +574,15 @@ function FolderRow({ folder, index, depth, ctx, drag }: { folder: FolderNode; in
       transition={spring('smooth', 'tabMoves')}
       onContextMenu={(e: MouseEvent) => {
         e.preventDefault();
-        void api.menu.tab(folder.id, { x: e.clientX, y: e.clientY });
+        void api.menu.tab(folder.id, menuPoint(e));
       }}
     >
-      {/* The button is always there: it's the drag handle, and dnd-kit keeps whatever it first found. */}
-      <button
-        ref={handleRef}
-        type="button"
-        className={styles.row}
-        data-row="folder"
-        data-id={folder.id}
-        data-parent={folder.parentId ?? undefined}
-        data-preview
-        aria-expanded={open}
-        title={folder.title}
-        onClick={toggle}
-        onDoubleClick={() => setRenaming(folder.id)}
-      >
+      {/* The row's surface is always there: it's the drag handle, and dnd-kit keeps whatever it first found. */}
+      <div ref={handleRef} className={styles.row} data-activate onClick={toggle} onDoubleClick={() => setRenaming(folder.id)}>
         <ChevronRight className={styles.chevron} data-open={open || undefined} size={12} strokeWidth={2} aria-hidden />
         <Glyph className={styles.rowGlyph} size={16} strokeWidth={1.75} aria-hidden />
         <span className={styles.ellipsis}>{folder.title}</span>
-      </button>
+      </div>
       {renaming === folder.id && (
         // Over the title, where the name is typed.
         <input
@@ -546,8 +599,11 @@ function FolderRow({ folder, index, depth, ctx, drag }: { folder: FolderNode; in
             }
           }}
           onKeyDown={(e) => {
+            // The tree's keys stay out of the name being typed.
+            e.stopPropagation();
             if (e.key === 'Enter') commit(e.currentTarget.value);
             else if (e.key === 'Escape') setRenaming(null);
+            if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.closest<HTMLElement>('[data-row]')?.focus();
           }}
           onBlur={(e) => commit(e.currentTarget.value)}
         />
@@ -559,7 +615,7 @@ function FolderRow({ folder, index, depth, ctx, drag }: { folder: FolderNode; in
 /**
  * A split (DESIGN.md §7.9): one row, its tabs' icons in a line and their
  * titles joined ("Docs + Figma"). Clicking shows the split, focused where it
- * was last; the chevron opens it to list its tabs.
+ * was last; the chevron (or →) opens it to list its tabs.
  */
 function SplitRow({ split, index, section, depth, ctx, drag }: { split: SplitNode; index: number; section: Section; depth: number; ctx: RowContext; drag: RowDrag }) {
   const { ref, handleRef, isDragging, isDropTarget } = useSortable({ id: split.id, index, group: section, type: 'split', accept: ROW_ACCEPTS });
@@ -578,9 +634,16 @@ function SplitRow({ split, index, section, depth, ctx, drag }: { split: SplitNod
   return (
     <motion.li
       ref={ref}
+      {...treeItem(split.id, depth, ctx, title)}
+      aria-expanded={open}
+      aria-selected={isActive}
+      aria-current={isActive ? 'page' : undefined}
       layout={dragging ? false : 'position'}
       className={styles.item}
       style={indent(shownDepth)}
+      data-row="split"
+      data-id={split.id}
+      data-parent={split.parentId ?? undefined}
       data-dragging={(isDragging || drag.moving === split.id) || undefined}
       data-drop-target={(dragging && isDropTarget && !isDragging) || undefined}
       initial={{ opacity: 0, scale: 0.96 }}
@@ -589,23 +652,11 @@ function SplitRow({ split, index, section, depth, ctx, drag }: { split: SplitNod
       transition={spring('smooth', 'tabMoves')}
       onContextMenu={(e: MouseEvent) => {
         e.preventDefault();
-        void api.menu.tab(split.id, { x: e.clientX, y: e.clientY });
+        void api.menu.tab(split.id, menuPoint(e));
       }}
     >
       {isActive && <motion.span layoutId={`active-pill-${split.chordId}`} className={styles.activePill} transition={spring('snappy', 'tabMoves')} />}
-      <button
-        ref={handleRef}
-        type="button"
-        className={`${styles.row} ${isActive ? styles.active : ''}`}
-        data-row="split"
-        data-id={split.id}
-        data-parent={split.parentId ?? undefined}
-        aria-expanded={open}
-        aria-current={isActive ? 'page' : undefined}
-        aria-label={`Split: ${title}`}
-        title={title}
-        onClick={show}
-      >
+      <div ref={handleRef} className={`${styles.row} ${isActive ? styles.active : ''}`} data-activate onClick={show}>
         <span className={styles.splitIcons} aria-hidden>
           {panes.slice(0, 4).map((p) =>
             isInternalUrl(p.url) ? (
@@ -615,10 +666,15 @@ function SplitRow({ split, index, section, depth, ctx, drag }: { split: SplitNod
             ),
           )}
         </span>
-        <span className={styles.ellipsis}>{title}</span>
-      </button>
+        <span className={styles.ellipsis}>
+          <span className="sr-only">Split: </span>
+          {title}
+        </span>
+      </div>
       <button
         type="button"
+        tabIndex={-1}
+        aria-hidden
         className={styles.close}
         data-split-toggle
         aria-label={open ? 'Hide the tabs in this split' : 'Show the tabs in this split'}
@@ -643,11 +699,19 @@ function SplitMemberRow({ tab, depth, ctx }: { tab: TabNode; depth: number; ctx:
   const focused = tab.id === activeId;
   const live = state.live[tab.id];
   const close = () => void api.state.dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
+  const title = pageTitle(tab) || displayHost(tab.url) || 'New tab';
   return (
     <motion.li
       ref={ref}
+      {...treeItem(tab.id, depth, ctx, pageTitle(tab) || tab.url)}
+      aria-selected={focused}
+      aria-current={focused ? 'true' : undefined}
       className={styles.item}
       style={indent(depth)}
+      data-row="tab"
+      data-id={tab.id}
+      data-parent={tab.parentId ?? undefined}
+      data-focused-pane={focused || undefined}
       data-dragging={isDragging || undefined}
       initial={{ opacity: 0, scale: 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
@@ -658,19 +722,13 @@ function SplitMemberRow({ tab, depth, ctx }: { tab: TabNode; depth: number; ctx:
       }}
       onContextMenu={(e: MouseEvent) => {
         e.preventDefault();
-        void api.menu.tab(tab.id, { x: e.clientX, y: e.clientY });
+        void api.menu.tab(tab.id, menuPoint(e));
       }}
     >
-      <button
+      <div
         ref={handleRef}
-        type="button"
         className={styles.row}
-        data-row="tab"
-        data-id={tab.id}
-        data-parent={tab.parentId ?? undefined}
-        data-focused-pane={focused || undefined}
-        aria-current={focused ? 'true' : undefined}
-        title={pageTitle(tab) || tab.url}
+        data-activate
         onClick={() => void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
       >
         {isInternalUrl(tab.url) ? (
@@ -678,9 +736,9 @@ function SplitMemberRow({ tab, depth, ctx }: { tab: TabNode; depth: number; ctx:
         ) : (
           <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
         )}
-        <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
-      </button>
-      <button type="button" className={styles.close} aria-label={`Close ${tab.title || 'tab'}`} title={withKeys('Close tab', 'tab.close')} onClick={close}>
+        <span className={styles.ellipsis}>{title}</span>
+      </div>
+      <button type="button" tabIndex={-1} aria-hidden className={styles.close} aria-label={`Close ${tab.title || 'tab'}`} title={withKeys('Close tab', 'tab.close')} onClick={close}>
         <X size={14} strokeWidth={2} />
       </button>
     </motion.li>
@@ -799,6 +857,7 @@ function moveKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys, moving: Movi
   const node = ctx.state.nodes[moving.id];
   if (!node) return ctx.setMoving(null);
   const list = event.currentTarget;
+  const siblings = children(ctx.state, node.chordId, node.section, node.parentId);
   // React may move the row's element to reorder the list, which takes the focus away: give it back.
   const move = (index: number, parentId = node.parentId, section = node.section) =>
     void api.state
@@ -808,23 +867,38 @@ function moveKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys, moving: Movi
     case 'ArrowUp':
     case 'ArrowDown': {
       event.preventDefault();
-      const siblings = children(ctx.state, node.chordId, node.section, node.parentId);
       const at = siblings.findIndex((s) => s.id === node.id);
       const to = at + (event.key === 'ArrowUp' ? -1 : 1);
-      if (to >= 0 && to < siblings.length) move(to);
+      if (to >= 0 && to < siblings.length) {
+        move(to);
+        announce(`${to + 1} of ${siblings.length}`);
+      }
       return;
     }
     case ' ':
-    case 'Enter':
+    case 'Enter': {
       event.preventDefault();
+      const at = siblings.findIndex((s) => s.id === node.id);
+      announce(`Dropped ${nameOf(ctx.state, node.id)}, ${at + 1} of ${siblings.length}`);
       return ctx.setMoving(null);
+    }
     case 'Escape':
       event.preventDefault();
       move(moving.index, moving.parentId, moving.section);
+      announce(`Put ${nameOf(ctx.state, node.id)} back`);
       return ctx.setMoving(null);
     case 'Tab':
       return ctx.setMoving(null);
   }
+}
+
+/** What a row is called, for announcements. */
+function nameOf(state: State, id: string): string {
+  const node = state.nodes[id];
+  if (!node) return '';
+  if (node.kind === 'folder') return node.title;
+  if (node.kind === 'split') return splitMembers(state, id).map((p) => pageTitle(p) || displayHost(p.url)).join(' + ');
+  return pageTitle(node) || displayHost(node.url) || 'New tab';
 }
 
 function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys) {
@@ -868,12 +942,18 @@ function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys) {
       else if (node?.kind === 'split' && ctx.openSplits.has(id)) ctx.toggleSplit(id, false);
       else if (row.dataset['parent']) rows.find((r) => r.dataset['id'] === row.dataset['parent'])?.focus();
       return;
+    case 'Enter':
+      // Open the tab (or the split), or open and close the folder: what a click on the row does.
+      event.preventDefault();
+      row.querySelector<HTMLElement>('[data-activate]')?.click();
+      return;
     case ' ': {
-      // Pick the row up (and don't click it when Space comes back up).
+      // Pick the row up.
       if (!node) return;
       event.preventDefault();
       const index = children(ctx.state, node.chordId, node.section, node.parentId).findIndex((s) => s.id === id);
       ctx.setMoving({ id, section: node.section, parentId: node.parentId, index });
+      announce(`Picked up ${nameOf(ctx.state, id)}. Up and down arrows move it, Space drops it, Escape puts it back.`);
       return;
     }
     case 'F2':
@@ -898,7 +978,29 @@ function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys) {
 
 /* ---------- The lists ---------- */
 
-export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 'setRenaming' | 'openSplits' | 'toggleSplit'> & { chordId: ChordId }) {
+/** Each row's place among its siblings: Pinned's levels, Today's one list, and an opened split's tabs. */
+function treePlaces(state: State, pinned: readonly FlatRow[], today: readonly SidebarNode[], openSplits: ReadonlySet<string>): Map<string, TreePlace> {
+  const places = new Map<string, TreePlace>();
+  const sizes = new Map<string | null, number>();
+  for (const r of pinned) sizes.set(r.parentId, (sizes.get(r.parentId) ?? 0) + 1);
+  const seen = new Map<string | null, number>();
+  for (const r of pinned) {
+    const pos = (seen.get(r.parentId) ?? 0) + 1;
+    seen.set(r.parentId, pos);
+    places.set(r.id, { pos, size: sizes.get(r.parentId)! });
+  }
+  today.forEach((n, i) => places.set(n.id, { pos: i + 1, size: today.length }));
+  for (const id of openSplits) {
+    const members = splitMembers(state, id);
+    members.forEach((m, i) => places.set(m.id, { pos: i + 1, size: members.length }));
+  }
+  return places;
+}
+
+/** The trees' one Tab stop: the tab on screen, or the row last focused (shared/a11y.ts). */
+const TREE_ROVING = { items: '[role="treeitem"]', current: '[aria-selected="true"]' } as const;
+
+export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 'setRenaming' | 'openSplits' | 'toggleSplit' | 'places'> & { chordId: ChordId }) {
   const { active, projected } = useDrag();
   const [moving, setMoving] = useState<Moving | null>(null);
   const drag: RowDrag = { dragging: active !== null, projected, moving: moving?.id ?? null };
@@ -912,11 +1014,14 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
       else next.delete(id);
       return next;
     });
-  const ctx: RowContext = { ...rest, renaming, setRenaming, openSplits, toggleSplit };
   const { state, info } = rest;
   const { keycap } = useKeys(info);
   const pinned = flattenPinned(state, chordId, active?.type === 'folder' ? active.id : null);
   const today = children(state, chordId, 'today', null).filter((n) => n.kind !== 'folder');
+  const ctx: RowContext = { ...rest, renaming, setRenaming, openSplits, toggleSplit, places: treePlaces(state, pinned, today, openSplits) };
+  const pinnedTree = useRoving<HTMLUListElement>(TREE_ROVING);
+  const todayTree = useRoving<HTMLUListElement>(TREE_ROVING);
+  const help = `tree-help-${chordId}`;
   // A split's tabs list under its opened row, except while a row is dragged (dnd-kit then moves rows around them).
   const showMembers = !active || active.member;
 
@@ -944,7 +1049,7 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
       onPointerDown={() => moving && setMoving(null)}
     >
       {pinned.length > 0 && (
-        <ul className={styles.pinnedList} aria-label="Pinned">
+        <ul ref={pinnedTree.ref} className={styles.pinnedList} role="tree" aria-label="Pinned" aria-describedby={help}>
           <AnimatePresence initial={false} mode="popLayout">
             {pinned.map(row)}
           </AnimatePresence>
@@ -967,11 +1072,14 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
         <kbd className={styles.rowKeycap}>{keycap('tab.new')}</kbd>
       </button>
 
-      <ul className={styles.list} aria-label="Today">
+      <ul ref={todayTree.ref} className={styles.list} role="tree" aria-label="Today" aria-describedby={help}>
         <AnimatePresence initial={false} mode="popLayout">
           {today.map(todayRow)}
         </AnimatePresence>
       </ul>
+      <span id={help} hidden>
+        Arrow keys move between rows; right and left open and close folders. Enter opens a tab. Space picks a row up to move it. Delete closes a tab.
+      </span>
     </div>
   );
 }

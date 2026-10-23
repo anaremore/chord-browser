@@ -110,7 +110,7 @@ export function Spelling({ snapshot, info }: { snapshot: SettingsSnapshot; info:
     <>
       <h2 className={styles.groupTitle}>
         Spelling
-        <ResetButton visible={changed} onReset={() => void api.settings.set({ spellcheck: { ...DEFAULT_SETTINGS.spellcheck } })} />
+        <ResetButton label="Reset Spelling to default" visible={changed} onReset={() => void api.settings.set({ spellcheck: { ...DEFAULT_SETTINGS.spellcheck } })} />
       </h2>
       <div className={styles.group}>
         <Row

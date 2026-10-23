@@ -71,16 +71,16 @@ test.afterAll(() => {
 async function setUp(app: ElectronApplication, paths: string[], origin = () => site.origin) {
   const shell = await pageWhere(app, isShell);
   const overlay = await pageWhere(app, isOverlay);
-  const today = shell.getByRole('list', { name: 'Today' });
+  const today = shell.getByRole('tree', { name: 'Today' });
   await expect(today).toContainText('First page');
   for (const path of paths) {
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
     await expect(overlay.getByRole('dialog')).toBeVisible();
     await overlay.keyboard.type(`${origin()}${path}`);
     await overlay.keyboard.press('Enter');
-    await expect(today.getByRole('listitem').first()).toContainText(new RegExp(path.slice(1), 'i'));
+    await expect(today.getByRole('treeitem').first()).toContainText(new RegExp(path.slice(1), 'i'));
   }
-  return { shell, overlay, today, pinned: shell.getByRole('list', { name: 'Pinned' }) };
+  return { shell, overlay, today, pinned: shell.getByRole('tree', { name: 'Pinned' }) };
 }
 
 /** Drag with the mouse the way a hand does: pick up, travel, settle, let go. */
@@ -115,7 +115,7 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
       ['favorites', 'Add this tab to Favorites'],
       ['tidy', 'Clear Today'],
     ]) {
-      await overlay.getByRole('textbox').fill(typed!);
+      await overlay.getByRole('combobox').fill(typed!);
       await expect(overlay.getByRole('option').filter({ hasText: title! })).toHaveCount(1);
     }
     await overlay.keyboard.press('Escape');
@@ -126,31 +126,31 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
     await expect(name).toBeFocused();
     await name.fill('Reading');
     await name.press('Enter');
-    const folder = pinned.getByRole('button', { name: 'Reading' });
+    const folder = pinned.getByRole('treeitem', { name: 'Reading' });
     await expect(folder).toHaveAttribute('aria-expanded', 'true');
-    await expect(pinned.getByRole('button', { name: 'Third page', exact: true })).toHaveAttribute('data-parent', /.+/);
+    await expect(pinned.getByRole('treeitem', { name: 'Third page', exact: true })).toHaveAttribute('data-parent', /.+/);
 
     // Drag Second (in Today) into the folder, just above Third: it's pinned there.
-    const third = pinned.getByRole('listitem').filter({ hasText: 'Third page' });
-    await drag(shell, today.getByRole('listitem').filter({ hasText: 'Second page' }), await point(third, 6));
-    await expect(pinned.getByRole('listitem')).toHaveCount(3);
-    await expect(pinned.getByRole('listitem').nth(1)).toContainText('Second page');
-    await expect(pinned.getByRole('button', { name: 'Second page', exact: true })).toHaveAttribute('data-parent', /.+/);
-    await expect(today.getByRole('listitem')).toHaveCount(1);
+    const third = pinned.getByRole('treeitem').filter({ hasText: 'Third page' });
+    await drag(shell, today.getByRole('treeitem').filter({ hasText: 'Second page' }), await point(third, 6));
+    await expect(pinned.getByRole('treeitem')).toHaveCount(3);
+    await expect(pinned.getByRole('treeitem').nth(1)).toContainText('Second page');
+    await expect(pinned.getByRole('treeitem', { name: 'Second page', exact: true })).toHaveAttribute('data-parent', /.+/);
+    await expect(today.getByRole('treeitem')).toHaveCount(1);
 
     // Clicking folds it: its tabs leave the list until it opens again.
     await folder.click();
     await expect(folder).toHaveAttribute('aria-expanded', 'false');
-    await expect(pinned.getByRole('listitem')).toHaveCount(1);
+    await expect(pinned.getByRole('treeitem')).toHaveCount(1);
 
     // The keyboard: → opens, ↓ goes in, ← goes back up to the folder, ← folds.
     await folder.focus();
     await shell.keyboard.press('ArrowRight');
     await expect(folder).toHaveAttribute('aria-expanded', 'true');
     await shell.keyboard.press('ArrowRight');
-    await expect(pinned.getByRole('button', { name: 'Second page', exact: true })).toBeFocused();
+    await expect(pinned.getByRole('treeitem', { name: 'Second page', exact: true })).toBeFocused();
     await shell.keyboard.press('ArrowDown');
-    await expect(pinned.getByRole('button', { name: 'Third page', exact: true })).toBeFocused();
+    await expect(pinned.getByRole('treeitem', { name: 'Third page', exact: true })).toBeFocused();
     await shell.keyboard.press('ArrowLeft');
     await expect(folder).toBeFocused();
     await shell.keyboard.press('ArrowLeft');
@@ -161,18 +161,18 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
     await expect(name).toBeFocused();
     await name.fill('Later');
     await name.press('Enter');
-    const later = pinned.getByRole('button', { name: 'Later' });
+    const later = pinned.getByRole('treeitem', { name: 'Later' });
     await expect(later).toBeVisible();
 
     // Delete removes the folder and what's in it; Undo brings it all back.
     await later.focus();
     await shell.keyboard.press('Delete');
-    await expect(shell.getByRole('list', { name: 'Pinned' })).toHaveCount(0);
+    await expect(shell.getByRole('tree', { name: 'Pinned' })).toHaveCount(0);
     await expect(shell.getByText('Deleted folder “Later”')).toBeVisible();
     await shell.getByRole('button', { name: 'Undo' }).click();
-    await expect(pinned.getByRole('button', { name: 'Later' })).toBeVisible();
-    await pinned.getByRole('button', { name: 'Later' }).click();
-    await expect(pinned.getByRole('listitem')).toHaveCount(3);
+    await expect(pinned.getByRole('treeitem', { name: 'Later' })).toBeVisible();
+    await pinned.getByRole('treeitem', { name: 'Later' }).click();
+    await expect(pinned.getByRole('treeitem')).toHaveCount(3);
   } finally {
     await app.close();
   }
@@ -186,20 +186,20 @@ test('a row moves with the keyboard: Space picks it up, arrows move it, Space dr
     expect(await titles()).toEqual(['Third page', 'Second page', 'First page']);
 
     // First page, up two places.
-    await today.getByRole('button', { name: 'First page', exact: true }).focus();
+    await today.getByRole('treeitem', { name: 'First page', exact: true }).focus();
     await shell.keyboard.press('Space');
-    await expect(today.getByRole('listitem').filter({ hasText: 'First page' })).toHaveAttribute('data-dragging', 'true');
+    await expect(today.getByRole('treeitem').filter({ hasText: 'First page' })).toHaveAttribute('data-dragging', 'true');
     await shell.keyboard.press('ArrowUp');
     await expect.poll(titles).toEqual(['Third page', 'First page', 'Second page']);
     await shell.keyboard.press('ArrowUp');
     await expect.poll(titles).toEqual(['First page', 'Third page', 'Second page']);
     await shell.keyboard.press('Space');
-    await expect(today.getByRole('listitem').filter({ hasText: 'First page' })).not.toHaveAttribute('data-dragging', 'true');
+    await expect(today.getByRole('treeitem').filter({ hasText: 'First page' })).not.toHaveAttribute('data-dragging', 'true');
     // Picking it up didn't open it.
-    await expect(today.getByRole('button', { name: 'First page', exact: true })).not.toHaveAttribute('aria-current', 'page');
+    await expect(today.getByRole('treeitem', { name: 'First page', exact: true })).not.toHaveAttribute('aria-current', 'page');
 
     // Esc puts a row back where it was.
-    await today.getByRole('button', { name: 'Second page', exact: true }).focus();
+    await today.getByRole('treeitem', { name: 'Second page', exact: true }).focus();
     await shell.keyboard.press('Space');
     await shell.keyboard.press('ArrowUp');
     await expect.poll(titles).toEqual(['First page', 'Second page', 'Third page']);
@@ -208,7 +208,7 @@ test('a row moves with the keyboard: Space picks it up, arrows move it, Space dr
 
     // Enter opens the focused row.
     await shell.keyboard.press('Enter');
-    await expect(today.getByRole('button', { name: 'Second page', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(today.getByRole('treeitem', { name: 'Second page', exact: true })).toHaveAttribute('aria-current', 'page');
   } finally {
     await app.close();
   }
@@ -231,20 +231,20 @@ test('Favorites: added by action or by dragging, shared by chords, and a favorit
     // Dragging First onto the row adds it after Second.
     const tile = favorites.getByRole('listitem').first();
     const box = (await tile.boundingBox())!;
-    await drag(shell, today.getByRole('listitem').filter({ hasText: 'First page' }), { x: box.x + box.width - 4, y: box.y + box.height / 2 });
+    await drag(shell, today.getByRole('treeitem').filter({ hasText: 'First page' }), { x: box.x + box.width - 4, y: box.y + box.height / 2 });
     await expect(favorites.getByRole('listitem')).toHaveCount(2);
     await expect(favorites.getByRole('listitem').nth(1).getByRole('button')).toHaveAccessibleName('First page');
 
     // A favorite switches to this chord's tab on that site…
     await favorites.getByRole('button', { name: 'First page' }).click();
-    await expect(today.getByRole('button', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(today.getByRole('treeitem', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
     // …and, with none open, opens one.
-    await today.getByRole('listitem').filter({ hasText: 'First page' }).hover();
-    await today.getByRole('button', { name: 'Close First page' }).click();
-    await expect(today.getByRole('listitem')).toHaveCount(1);
+    await today.getByRole('treeitem').filter({ hasText: 'First page' }).hover();
+    await today.locator('[aria-label="Close First page"]').click();
+    await expect(today.getByRole('treeitem')).toHaveCount(1);
     await favorites.getByRole('button', { name: 'First page' }).click();
-    await expect(today.getByRole('listitem').first()).toContainText('First page');
-    await expect(today.getByRole('button', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(today.getByRole('treeitem').first()).toContainText('First page');
+    await expect(today.getByRole('treeitem', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
 
     // Every chord shares them.
     await shell.getByRole('button', { name: 'New chord' }).click();
@@ -263,13 +263,13 @@ test('Clear archives every Today tab, and Undo brings them back where they were'
     const before = await titles();
     await shell.getByRole('separator').first().hover();
     await shell.getByRole('button', { name: 'Clear' }).click();
-    await expect(today.getByRole('listitem')).toHaveCount(0);
+    await expect(today.getByRole('treeitem')).toHaveCount(0);
     await expect(shell.getByText('Archived 3 tabs')).toBeVisible();
     await shell.getByRole('button', { name: 'Undo' }).click();
-    await expect(today.getByRole('listitem')).toHaveCount(3);
+    await expect(today.getByRole('treeitem')).toHaveCount(3);
     expect(await titles()).toEqual(before);
     // The tab you were on is shown again.
-    await expect(today.getByRole('button', { name: 'Third page', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(today.getByRole('treeitem', { name: 'Third page', exact: true })).toHaveAttribute('aria-current', 'page');
   } finally {
     await app.close();
   }
@@ -298,24 +298,24 @@ test('a private window has no Favorites, makes no folders, and Clear closes its 
       await expect(privateOverlay.getByRole('dialog')).toBeVisible();
       await privateOverlay.keyboard.type(`${site.origin}${path}`);
       await privateOverlay.keyboard.press('Enter');
-      await expect(privateShell.getByRole('list', { name: 'Today' }).getByRole('listitem').first()).toContainText(path === '/third' ? 'Third' : 'Fourth');
+      await expect(privateShell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText(path === '/third' ? 'Third' : 'Fourth');
     }
-    const today = privateShell.getByRole('list', { name: 'Today' });
+    const today = privateShell.getByRole('tree', { name: 'Today' });
 
     // Favorites are kept and shared, so a private window neither shows them nor adds to them.
     await expect(privateShell.getByRole('list', { name: 'Favorites' })).toHaveCount(0);
     await runAction(privateShell, 'tab.favorite');
     await runAction(privateShell, 'folder.new');
     await expect(privateShell.getByRole('textbox', { name: 'Folder name' })).toHaveCount(0);
-    await expect(privateShell.getByRole('list', { name: 'Pinned' })).toHaveCount(0);
+    await expect(privateShell.getByRole('tree', { name: 'Pinned' })).toHaveCount(0);
     await expect(shell.getByRole('list', { name: 'Favorites' }).getByRole('listitem')).toHaveCount(1);
 
     // Clear closes; Undo still brings them back.
     await runAction(privateShell, 'today.clear');
-    await expect(today.getByRole('listitem')).toHaveCount(0);
+    await expect(today.getByRole('treeitem')).toHaveCount(0);
     await expect(privateShell.getByText('Closed 2 tabs')).toBeVisible();
     await privateShell.getByRole('button', { name: 'Undo' }).click();
-    await expect(today.getByRole('listitem')).toHaveCount(2);
+    await expect(today.getByRole('treeitem')).toHaveCount(2);
   } finally {
     await app.close();
   }
@@ -325,7 +325,7 @@ test('the sidebar resizes from its edge, catches at the default width, and the p
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     const handle = shell.getByRole('separator', { name: 'Sidebar width' });
     const pageX = async () => (await views(app))[1]!.x;
     await expect.poll(pageX).toBe(248);
@@ -364,7 +364,7 @@ test('a tab dropped on another chord moves there, reloading signed out when that
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/login` });
   try {
     const shell = await pageWhere(app, isShell);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     const chords = shell.getByRole('tablist', { name: 'Chords' });
     await expect(today).toContainText('Signed in');
     // Work keeps its own sign-ins; Personal has the account.
@@ -381,17 +381,17 @@ test('a tab dropped on another chord moves there, reloading signed out when that
     await expect.poll(whoami).toBe('Alex');
 
     // Drop it on Work in the switcher.
-    await drag(shell, today.getByRole('listitem').filter({ hasText: 'Alex' }), await point(chords.getByRole('tab', { name: 'Work' }), 14));
+    await drag(shell, today.getByRole('treeitem').filter({ hasText: 'Alex' }), await point(chords.getByRole('tab', { name: 'Work' }), 14));
     await expect(shell.getByText('Moved to Work (sign-ins differ, so it reloaded)')).toBeVisible();
     await expect(today).not.toContainText('Alex');
     await chords.getByRole('tab', { name: 'Work' }).click();
-    const row = today.getByRole('listitem').first().locator('[data-row]');
+    const row = today.getByRole('treeitem').first();
     await row.click();
     await expect.poll(whoami).toBe('Signed out');
 
     // Undo takes it home, where it's signed in again.
     await chords.getByRole('tab', { name: 'Personal' }).click();
-    await shell.getByRole('status').filter({ hasText: 'Moved to Work' }).getByRole('button', { name: 'Undo' }).click();
+    await shell.getByRole('group').filter({ hasText: 'Moved to Work' }).getByRole('button', { name: 'Undo' }).click();
     await expect(today).toContainText(/Signed out|Alex/);
     await row.click();
     await expect.poll(whoami).toBe('Alex');
@@ -405,7 +405,7 @@ test('minimal mode peeks the sidebar over the page from the left edge, and puts 
   try {
     const shell = await pageWhere(app, isShell);
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     await shell.getByRole('button', { name: 'Hide sidebar' }).click();
     await expect(sidebar).toBeHidden();
     // The page sits right above the shell…

@@ -447,3 +447,48 @@
 .siteInput:focus-visible {
   box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
 }
+
+/* ---------- Windows High Contrast (DESIGN.md §10) ---------- */
+
+@media (forced-colors: active) {
+  .backdrop,
+  .navPill {
+    display: none;
+  }
+
+  .navItem[aria-current],
+  .segment[aria-checked='true'],
+  .choice[aria-checked='true'] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .navItem[aria-current] *,
+  .choice[aria-checked='true'] * {
+    color: inherit;
+  }
+
+  /* A switch reads by its knob's side and its fill: an edge, and the selection color when on. */
+  .switch {
+    border: var(--size-hairline) solid ButtonText;
+  }
+
+  .switch[aria-checked='true'] {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+
+  .knob {
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
+  .switch[aria-checked='true'] .knob {
+    background: HighlightText;
+  }
+
+  .group {
+    border: var(--size-hairline) solid CanvasText;
+  }
+}

@@ -101,12 +101,16 @@ function Recorder({ label, platform, onKey, onRemove, onCancel }: { label: strin
       ref={ref}
       type="button"
       className={styles.recorder}
-      aria-label={`Press the new keys for ${label}. Esc cancels, Delete removes.`}
+      // Named by what it shows (the keys held so far); what it's for, and Esc and Delete, are its description.
+      aria-describedby="shortcut-recorder-help"
       onKeyDown={onKeyDown}
       onKeyUp={(e) => setHeld(heldModifiers(e, platform))}
       onBlur={onCancel}
     >
       {held || 'Press keys…'}
+      <span id="shortcut-recorder-help" hidden>
+        {`The new keys for ${label}. Esc cancels, Delete removes.`}
+      </span>
     </button>
   );
 }
@@ -168,7 +172,7 @@ function ShortcutRow({
       <div className={settingsStyles.shortcut}>
         <span className={settingsStyles.rowLabel}>{shortcut.label}</span>
         <span className={settingsStyles.keys}>
-          <ResetButton visible={changed} onReset={() => save({ [shortcut.id]: null })} />
+          <ResetButton label={`Reset ${shortcut.label} to its default keys`} visible={changed} onReset={() => save({ [shortcut.id]: null })} />
           {keys.map((k, i) => (
             <span key={`${i}:${k}`} className={settingsStyles.keyAlt}>
               {i > 0 && <span className={settingsStyles.or}>or</span>}

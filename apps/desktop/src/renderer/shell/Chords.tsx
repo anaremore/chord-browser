@@ -10,6 +10,7 @@ import { useDroppable } from '@dnd-kit/react';
 import { EyeOff, KeyRound, Plus } from 'lucide-react';
 import { motion, useIsPresent, type MotionValue, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
+import { useRestoreFocus, useRoving } from '../shared/a11y';
 import { api } from './api';
 import styles from './App.module.css';
 import { CHORD_DROP } from './tree';
@@ -128,6 +129,8 @@ const EMOJI_PANEL: Partial<Record<SystemInfo['platform'], string>> = { win32: 'W
 
 function IconPicker({ chord, info, onPick, onClose }: { chord: Chord; info: SystemInfo; onPick(icon: string): void; onClose(): void }) {
   const root = useRef<HTMLDivElement>(null);
+  // Picked or dismissed, the keyboard goes back to the icon button.
+  useRestoreFocus(true, root);
   // Close on a click anywhere else, or Escape.
   useEffect(() => {
     const onPointer = (event: PointerEvent) => {
@@ -198,6 +201,9 @@ export function ChordHeader({
   const [picking, setPicking] = useState(false);
   const isEditing = (editing || edit === 'name') && chord;
   const isPicking = (picking || edit === 'icon') && chord;
+  // Named (or not), the keyboard goes back where it was: the New chord button, the chord's menu.
+  const nameField = useRef<HTMLInputElement | null>(null);
+  useRestoreFocus(Boolean(isEditing), nameField);
   const commit = (name: string) => {
     if (chord && name.trim() && name.trim() !== chord.name) void api.state.dispatch({ t: 'chord.update', chordId: chord.id, name });
     setEditing(false);
@@ -258,6 +264,7 @@ export function ChordHeader({
           spellCheck={false}
           // Focus and select on mount, so typing replaces the name.
           ref={(el) => {
+            nameField.current = el;
             if (el && document.activeElement !== el) {
               el.focus();
               el.select();
@@ -304,7 +311,7 @@ function ChordButton({ chord, selected, keys, info, pill, windowId }: { chord: C
       }}
     >
       {selected && <motion.span layoutId="chord-pill" className={styles.chordPill} transition={pill} />}
-      {chord.private ? <EyeOff className={styles.chordGlyph} size={14} strokeWidth={2} aria-hidden /> : <span className={styles.chordGlyph}>{chord.icon}</span>}
+      {chord.private ? <EyeOff className={styles.chordGlyph} size={14} strokeWidth={2} aria-hidden /> : <span className={styles.chordGlyph} aria-hidden>{chord.icon}</span>}
     </button>
   );
 }
@@ -352,6 +359,8 @@ export function ChordSwitcher({
       observer.disconnect();
     };
   }, [chords.length]);
+  // One Tab stop; ← → move between chords and switch to them (WAI-ARIA tabs, automatic activation).
+  const roving = useRoving<HTMLDivElement>({ items: '[role="tab"]', current: '[aria-selected="true"]', orientation: 'horizontal', activate: true });
   // The chord you're in is always in view. Only scrolled to when some chord is out of sight:
   // scrolling into view lays out the whole window on the spot, which right after a switch (a chord's
   // sidebar just rendered) costs most of a frame (ARCHITECTURE.md §1).
@@ -363,10 +372,15 @@ export function ChordSwitcher({
     <footer className={styles.footer}>
       {leading}
       <div
-        ref={strip}
+        ref={(el) => {
+          strip.current = el;
+          return roving.ref(el);
+        }}
         className={styles.switcher}
         role="tablist"
         aria-label="Chords"
+        aria-orientation="horizontal"
+        onKeyDown={roving.onKeyDown}
         data-fade={fade}
         // A mouse wheel scrolls up and down; turn that into sideways movement here.
         onWheel={(e) => {

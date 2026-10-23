@@ -320,7 +320,7 @@ test('launch: from main entry to a usable window', async () => {
   const seeded = await launch({ CHORD_PERF_TABS: '200', CHORD_PERF_VISITS: String(VISITS) }, profile);
   try {
     const shell = await pageWhere(seeded, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' }).getByRole('listitem')).toHaveCount(201, { timeout: 20_000 });
+    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem')).toHaveCount(201, { timeout: 20_000 });
   } finally {
     await seeded.close();
   }
@@ -616,10 +616,10 @@ for (const tabs of [20, 200]) {
       try {
         const shell = await pageWhere(app, isShell);
         const overlay = await pageWhere(app, isOverlay);
-        const today = shell.getByRole('list', { name: 'Today' });
-        const pinned = shell.getByRole('list', { name: 'Pinned' });
+        const today = shell.getByRole('tree', { name: 'Today' });
+        const pinned = shell.getByRole('tree', { name: 'Pinned' });
         const todayRows = today.locator('[data-row="tab"]');
-        await expect(today.getByRole('listitem')).toHaveCount(tabs + 1, { timeout: 20_000 });
+        await expect(today.getByRole('treeitem')).toHaveCount(tabs + 1, { timeout: 20_000 });
         await bringToFront(app, shell);
         await setMotion(app, shell, overlay, motion === 'on');
         environment ??= await readEnvironment(app, shell);

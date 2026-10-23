@@ -423,6 +423,7 @@ kbd {
 .item {
   position: relative;
   flex: none;
+  border-radius: var(--radius-sm);
 }
 
 /* Pinned tabs sit above the Today divider and size to their rows; Today takes the rest. */
@@ -500,6 +501,16 @@ kbd {
     padding var(--duration-fade-fast) var(--ease-standard);
 }
 
+/* A row is a tree item: the ring goes on its surface, above the active pill and hover fill (DESIGN.md §7.2). */
+.item:focus-visible {
+  outline: none;
+}
+
+.item:focus-visible > .row {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: calc(var(--size-focus-ring) * -1);
+}
+
 /* A folder's chevron turns as it opens (DESIGN.md §6.5). */
 .chevron {
   flex: none;
@@ -535,13 +546,9 @@ kbd {
 }
 
 /* Make room for the close button while it shows. */
-.item:hover .row {
+.item:hover .row,
+.item:focus-visible .row {
   padding-inline-end: calc(var(--space-2) + var(--size-hit-min));
-}
-
-.item:hover .row:not(.active),
-.newTab:hover {
-  background: var(--color-item-hover);
 }
 
 .active {
@@ -549,12 +556,12 @@ kbd {
 }
 
 /* A pinned tab that hasn't been opened yet. */
-.row[data-unloaded] {
+.item[data-unloaded] > .row {
   color: var(--color-fg-muted);
 }
 
 /* Asleep or not loaded yet: the icon fades a little (DESIGN.md §7.2). */
-.row[data-asleep] > :first-child {
+.item[data-asleep] > .row > :first-child {
   opacity: 0.7;
 }
 
@@ -597,7 +604,8 @@ kbd {
 }
 
 .close:focus-visible,
-.item:hover .close {
+.item:hover .close,
+.item:focus-visible .close {
   opacity: 1;
 }
 
@@ -700,8 +708,7 @@ kbd {
  * the audio slot just before ×'s (DESIGN.md §7.2), so nothing moves on hover.
  * Click brings the video home.
  */
-.row[data-pip],
-.item:hover .row[data-pip] {
+.item[data-pip] > .row {
   padding-inline-end: calc(var(--space-2) + var(--size-hit-min) * 2);
 }
 
@@ -941,15 +948,12 @@ kbd {
   border: 0;
   border-radius: var(--radius-full);
   background: transparent;
-  opacity: 0.7;
-  transition:
-    opacity var(--duration-fade-fast) var(--ease-standard),
-    transform var(--spring-press-duration) var(--spring-press);
+  transition: transform var(--spring-press-duration) var(--spring-press);
 }
 
-.chordButton:hover,
-.chordButton[aria-selected='true'] {
-  opacity: 1;
+/* Every chord's icon at full strength: its accent is what reads (≥ 3:1 over the tint); the pill says which is current. */
+.chordButton:hover {
+  background: var(--color-item-hover);
 }
 
 .chordButton:active {
@@ -1151,9 +1155,9 @@ kbd {
   transition: outline-color var(--duration-fade-fast) var(--ease-standard);
 }
 
-/* The focused pane: a 2 px accent ring at 50%, in the gap. */
+/* The focused pane: a 2 px accent ring in the gap, at the 3:1 the theme guarantees over the tint (DESIGN.md §7.9). */
 .pane[data-focused] {
-  outline-color: color-mix(in oklab, var(--color-accent) 50%, transparent);
+  outline-color: var(--color-accent);
 }
 
 /* Invisible until hovered, then a 4 × 32 px pill; the cursor shows the way it resizes. */
@@ -1191,8 +1195,13 @@ kbd {
   opacity: 1;
 }
 
+/* From the keyboard: no ring around the gap, the pill itself in the focus color. */
 .paneDivider:focus-visible {
   outline: none;
+}
+
+.paneDivider:focus-visible::after {
+  background: var(--color-focus-ring);
 }
 
 /*
@@ -1256,7 +1265,12 @@ kbd {
 }
 
 /* The open split's tab whose pane has focus. */
-.row[data-focused-pane] {
+.item[data-focused-pane] > .row {
+  background: var(--color-item-hover);
+}
+
+.item:hover .row:not(.active),
+.newTab:hover {
   background: var(--color-item-hover);
 }
 
@@ -1333,4 +1347,68 @@ kbd {
 .duetRead {
   flex: none;
   color: var(--color-accent);
+}
+
+/* ---------- Windows High Contrast (DESIGN.md §10): tints off, system colors on ---------- */
+
+@media (forced-colors: active) {
+  .backdrop,
+  .activePill,
+  .chordPill {
+    display: none;
+  }
+
+  /* What's chosen wears the system's selection colors, not a tint or a shadow. */
+  .item[aria-selected='true'] > .row,
+  .chordButton[aria-selected='true'],
+  .favorite[aria-current='page'],
+  .iconCell[aria-pressed='true'],
+  .duetButton[aria-pressed='true'] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText !important;
+  }
+
+  .item[aria-selected='true'] > .row * {
+    color: inherit;
+  }
+
+  /* Focus sits just outside the row, so it never lands on the selection's own color. */
+  .item:focus-visible > .row {
+    outline-color: CanvasText;
+    outline-offset: 0;
+  }
+
+  .toast,
+  .iconPicker,
+  .window[data-sidebar='collapsed'][data-peek] .sidebar {
+    border: var(--size-hairline) solid CanvasText;
+  }
+
+  /* Split view: the focused pane's ring, the dividers, and where a dragged tab would go. */
+  .pane {
+    outline-style: none;
+  }
+
+  .pane[data-focused] {
+    outline-style: solid;
+    outline-color: Highlight;
+  }
+
+  .paneDivider::after {
+    background: CanvasText;
+  }
+
+  .paneDivider:focus-visible::after {
+    background: Highlight;
+  }
+
+  .dropZone,
+  .item[data-drop-target],
+  .favoriteItem[data-drop-target],
+  .chordButton[data-drop-target],
+  .pinZone[data-over] {
+    outline: var(--size-focus-ring) dashed Highlight;
+    outline-offset: calc(var(--size-focus-ring) * -1);
+  }
 }

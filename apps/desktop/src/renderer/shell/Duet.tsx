@@ -13,8 +13,10 @@
 import { DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, splitCitations, type DuetMessage, type DuetProvider, type DuetScope } from '@chord/core';
 import type { DuetAction, DuetView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
-import { motion, type Transition } from 'motion/react';
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { motion, useIsPresent, type Transition } from 'motion/react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { useMenu, useRoving } from '../shared/a11y';
+import { announce } from './announce';
 import { api } from './api';
 import styles from './Duet.module.css';
 
@@ -207,8 +209,10 @@ function Approval({ message }: { message: DuetMessage }) {
   };
   const outcome = { once: 'Allowed', thread: 'Allowed for this chat', denied: 'Not allowed', expired: 'Not answered', pending: '' }[body.decision];
   return (
-    <div className={styles.approval} data-pending={pending || undefined} role={pending ? 'group' : undefined} aria-label={pending ? 'Duet is asking' : undefined} onKeyDown={onKey} tabIndex={pending ? 0 : -1}>
-      <p className={styles.approvalTitle}>{body.description}</p>
+    <div className={styles.approval} data-pending={pending || undefined} role={pending ? 'group' : undefined} aria-label={pending ? 'Duet is asking' : undefined} aria-describedby={pending ? `ask-${message.id}` : undefined} onKeyDown={onKey} tabIndex={pending ? 0 : -1}>
+      <p id={`ask-${message.id}`} className={styles.approvalTitle}>
+        {body.description}
+      </p>
       {body.target.length > 0 && (
         <ul className={styles.targets}>
           {body.target.slice(0, 8).map((t, i) => (
@@ -313,7 +317,7 @@ function Working({ startedAt }: { startedAt: number | null }) {
   }, []);
   const seconds = startedAt ? Math.max(0, Math.round((now - startedAt) / 1000)) : 0;
   return (
-    <p className={styles.working} aria-live="polite">
+    <p className={styles.working}>
       <span className={styles.pulse} aria-hidden />
       Working{seconds >= 2 ? ` · ${seconds}s` : '…'}
     </p>
@@ -336,7 +340,18 @@ function Timeline({ view, onLink, onEdit }: { view: DuetView; onLink(url: string
   };
   return (
     <div className={styles.timelineWrap}>
-      <div ref={scroller} className={styles.timeline} onScroll={onScroll} role="log" aria-live="polite" aria-label="Duet conversation">
+      <div
+        ref={scroller}
+        className={styles.timeline}
+        onScroll={onScroll}
+        role="log"
+        // Replies stream in a few words at a time; reading each would talk over itself. The panel
+        // announces "Duet finished answering" instead, and the log is there to read (DESIGN.md §10).
+        aria-live="off"
+        aria-busy={view.busy}
+        aria-label="Duet conversation"
+        tabIndex={0}
+      >
         {rows(view.messages).map((row) =>
           row.kind === 'tools' ? (
             <ToolRow key={row.messages[0]!.id} messages={row.messages} />
@@ -366,6 +381,7 @@ function Timeline({ view, onLink, onEdit }: { view: DuetView; onLink(url: string
 function Composer({ view, providerName, draftSeed }: { view: DuetView; providerName: string; draftSeed: { text: string; n: number } }) {
   const [text, setText] = useState(view.draft);
   const [picking, setPicking] = useState(false);
+  const picker = useMenu(picking, () => setPicking(false));
   const input = useRef<HTMLTextAreaElement>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // A different chat brings its own draft.
@@ -389,8 +405,16 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
     clearTimeout(draftTimer.current);
   };
   const lastUser = [...view.messages].reverse().find((m) => m.body.role === 'user');
+  // A card asking to read more answers to its keys from here too: ⌘↵ / Ctrl+↵ allows once, Esc says no (DESIGN.md §7.8).
+  const asking = view.messages.find((m) => m.body.role === 'approval' && m.body.decision === 'pending');
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (asking && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      act({ do: 'approve', messageId: asking.id, decision: 'once' });
+    } else if (asking && e.key === 'Escape') {
+      e.preventDefault();
+      act({ do: 'approve', messageId: asking.id, decision: 'denied' });
+    } else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       send();
     } else if (e.key === 'ArrowUp' && !text && lastUser?.body.role === 'user') {
@@ -425,21 +449,36 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
             </button>
           </span>
         ))}
-        <button type="button" className={styles.addChip} aria-label="Attach a tab" aria-expanded={picking} title="Attach a tab" onClick={() => setPicking(!picking)}>
+        <button
+          type="button"
+          className={styles.addChip}
+          aria-label="Attach a tab"
+          aria-haspopup="menu"
+          aria-expanded={picking}
+          aria-controls={picking ? 'duet-attach' : undefined}
+          title="Attach a tab"
+          onClick={() => setPicking(!picking)}
+        >
           <AtSign size={13} strokeWidth={2} />
         </button>
       </div>
       {picking && (
-        <ul className={styles.picker} role="listbox" aria-label="Attach a tab">
-          {view.attachable.filter((t) => !view.attachments.some((a) => a.nodeId === t.nodeId)).length === 0 && <li className={styles.muted}>Every tab here is attached.</li>}
+        <ul ref={picker.ref} id="duet-attach" className={styles.picker} role="menu" aria-label="Attach a tab" onKeyDown={picker.onKeyDown}>
+          {view.attachable.filter((t) => !view.attachments.some((a) => a.nodeId === t.nodeId)).length === 0 && (
+            <li role="none">
+              <span role="menuitem" aria-disabled="true" tabIndex={-1} className={styles.muted}>
+                Every tab here is attached.
+              </span>
+            </li>
+          )}
           {view.attachable
             .filter((t) => !view.attachments.some((a) => a.nodeId === t.nodeId))
             .map((t) => (
-              <li key={t.nodeId}>
+              <li key={t.nodeId} role="none">
                 <button
                   type="button"
-                  role="option"
-                  aria-selected={false}
+                  role="menuitem"
+                  tabIndex={-1}
                   className={styles.pickerRow}
                   onClick={() => {
                     act({ do: 'attach', nodeId: t.nodeId });
@@ -512,7 +551,12 @@ function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
                   Sign in
                 </button>
               ) : (
-                <button type="button" className={ready && view.provider === p.provider ? styles.secondary : styles.primary} onClick={() => act({ do: 'setup', provider: p.provider })}>
+                <button
+                  type="button"
+                  className={ready && view.provider === p.provider ? styles.secondary : styles.primary}
+                  data-autofocus={view.provider !== p.provider || undefined}
+                  onClick={() => act({ do: 'setup', provider: p.provider })}
+                >
                   {view.provider === p.provider ? 'Using this' : 'Use this'}
                 </button>
               )}
@@ -529,25 +573,92 @@ function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
 
 /* ---------- The panel ---------- */
 
+/**
+ * What screen readers hear from Duet (DESIGN.md §10): that it finished
+ * answering (not each word as it streams), and that it's asking to read more.
+ */
+function useDuetAnnouncements(view: DuetView): void {
+  const wasBusy = useRef(view.busy);
+  const asked = useRef(new Set(view.messages.filter((m) => m.body.role === 'approval').map((m) => m.id)));
+  useEffect(() => {
+    if (wasBusy.current && !view.busy) {
+      const last = [...view.messages].reverse().find((m) => m.body.role === 'assistant');
+      if (last?.body.role === 'assistant' && last.body.status === 'done') announce('Duet finished answering.');
+      else if (last?.body.role === 'assistant' && last.body.status === 'interrupted') announce('Duet stopped.');
+    }
+    wasBusy.current = view.busy;
+    for (const m of view.messages) {
+      if (m.body.role !== 'approval' || asked.current.has(m.id)) continue;
+      asked.current.add(m.id);
+      if (m.body.decision === 'pending') announce(`Duet is asking: ${m.body.description}. Allow once, Allow for this chat, or No.`);
+    }
+  }, [view]);
+}
+
+/** Where the keyboard starts in the panel: the message field, else the step's main button. */
+const panelStart = (panel: HTMLElement | null) =>
+  panel?.querySelector<HTMLElement>('[data-autofocus]') ?? panel?.querySelector<HTMLElement>('textarea') ?? panel?.querySelector<HTMLElement>('button');
+
+/**
+ * Opened, the panel takes the keyboard (from the page too: ⌘E); closed, it
+ * gives it back. In between, a step that replaces the focused button (Use
+ * this → Got it → the message field) hands the keyboard to the next one.
+ */
+function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string, present: boolean): void {
+  useEffect(() => {
+    // Only when the keyboard was left nowhere (its button went with the step): never taken from elsewhere.
+    const now = document.activeElement;
+    if (now && now !== document.body) return;
+    panelStart(panel.current)?.focus();
+  }, [step]);
+  useEffect(() => {
+    if (!present) return;
+    const before = document.hasFocus() && document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    panelStart(panel.current)?.focus();
+    void api.focus.move('shell');
+    return () => {
+      // Closing (sliding out, or gone): the keyboard leaves the panel now, not when the slide ends.
+      if (document.activeElement instanceof HTMLElement && panel.current?.contains(document.activeElement)) document.activeElement.blur();
+      setTimeout(() => {
+        const now = document.activeElement;
+        if (now && now !== document.body) return;
+        if (before?.isConnected) before.focus();
+        else void api.focus.move('page');
+      }, 0);
+    };
+  }, [present]);
+}
+
 /** Off the window's right edge: where the panel slides in from and out to (DESIGN.md §6.5). */
 const OFF_RIGHT = { x: '110%' };
 
 export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId: string; info: SystemInfo; slide: { enter: Transition; exit: Transition } }) {
+  // Closing, it slides out (AnimatePresence keeps it a moment): the keyboard goes back as it starts to.
+  const present = useIsPresent();
   const [menu, setMenu] = useState<'thread' | 'model' | 'scope' | null>(null);
+  const panel = useRef<HTMLElement>(null);
+  const modelMenu = useMenu(menu === 'model', () => setMenu(null));
+  const threadMenu = useMenu(menu === 'thread', () => setMenu(null));
+  const scopeGroup = useRoving<HTMLDivElement>({ items: '[role="radio"]', current: '[aria-checked="true"]', orientation: 'horizontal', activate: true });
+  useDuetAnnouncements(view);
+  const thread = view.thread;
+  const ready = view.provider !== null && view.providers.some((p) => p.provider === (view.thread?.provider ?? view.provider) && p.installed && p.signedIn);
+  usePanelFocus(panel, view.chordOff ? 'off' : !view.provider ? 'intro' : !ready ? 'setup' : view.firstUse ? 'first-use' : 'ready', present);
   const [renaming, setRenaming] = useState(false);
   const [seed, setSeed] = useState({ text: '', n: 0 });
   const provider = view.thread?.provider ?? view.provider ?? 'claude';
   const providerName = DUET_PROVIDER_NAMES[provider];
-  const ready = view.provider !== null && view.providers.some((p) => p.provider === (view.thread?.provider ?? view.provider) && p.installed && p.signedIn);
   const openLink = (url: string) => void api.state.dispatch({ t: 'tab.open', windowId, url });
   const modelLabel = MODELS[provider].find((m) => m.value === (view.thread?.model ?? null))?.label ?? view.thread?.model ?? 'Default';
   const empty = view.messages.length === 0;
-  const thread = view.thread;
 
   return (
     <motion.aside
+      ref={panel}
       className={styles.panel}
       aria-label="Duet"
+      data-region="duet"
+      inert={!present}
       initial={OFF_RIGHT}
       animate={{ x: 0, transition: slide.enter }}
       exit={{ ...OFF_RIGHT, transition: slide.exit }}
@@ -573,31 +684,50 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
           <span className={`${styles.title} ${styles.ellipsis}`}>{thread?.title || 'Duet'}</span>
         )}
         {ready && (
-          <button type="button" className={styles.chip} aria-haspopup="menu" aria-expanded={menu === 'model'} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
+          <button
+            type="button"
+            className={styles.chip}
+            aria-haspopup="menu"
+            aria-expanded={menu === 'model'}
+            aria-controls={menu === 'model' ? 'duet-model' : undefined}
+            onClick={() => setMenu(menu === 'model' ? null : 'model')}
+          >
             {providerName} · {modelLabel}
             <ChevronDown size={12} strokeWidth={2} aria-hidden />
           </button>
         )}
-        <button type="button" className={styles.iconButton} aria-label="Chats" aria-haspopup="menu" aria-expanded={menu === 'thread'} onClick={() => setMenu(menu === 'thread' ? null : 'thread')}>
+        <button
+          type="button"
+          className={styles.iconButton}
+          aria-label="Chats"
+          title="Chats"
+          aria-haspopup="menu"
+          aria-expanded={menu === 'thread'}
+          aria-controls={menu === 'thread' ? 'duet-chats' : undefined}
+          onClick={() => setMenu(menu === 'thread' ? null : 'thread')}
+        >
           <Ellipsis {...ICON} />
         </button>
-        <button type="button" className={styles.iconButton} aria-label="Close Duet" onClick={() => act({ do: 'toggle', open: false })}>
+        <button type="button" className={styles.iconButton} aria-label="Close Duet" title="Close Duet" onClick={() => act({ do: 'toggle', open: false })}>
           <X {...ICON} />
         </button>
       </header>
 
       {menu === 'model' && (
-        <ul className={styles.menu} role="menu" aria-label="Model">
+        <ul ref={modelMenu.ref} id="duet-model" className={styles.menu} role="menu" aria-label="Model" onKeyDown={modelMenu.onKeyDown}>
           {(['claude', 'codex'] as const)
             .filter((p) => view.providers.some((s) => s.provider === p && s.installed && s.signedIn))
             .map((p) => (
-              <Fragment key={p}>
-                <li className={styles.menuLabel}>{DUET_PROVIDER_NAMES[p]}</li>
+              <li key={p} role="group" aria-labelledby={`duet-model-${p}`} className={styles.menuGroup}>
+                <span id={`duet-model-${p}`} className={styles.menuLabel}>
+                  {DUET_PROVIDER_NAMES[p]}
+                </span>
                 {MODELS[p].map((m) => (
-                  <li key={`${p}:${m.label}`}>
+                  <span key={`${p}:${m.label}`} role="none">
                     <button
                       type="button"
                       role="menuitemradio"
+                      tabIndex={-1}
                       aria-checked={provider === p && (thread?.model ?? null) === m.value}
                       className={styles.menuItem}
                       onClick={() => {
@@ -607,16 +737,16 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
                     >
                       {m.label}
                     </button>
-                  </li>
+                  </span>
                 ))}
-              </Fragment>
+              </li>
             ))}
         </ul>
       )}
       {menu === 'thread' && (
-        <ul className={styles.menu} role="menu" aria-label="Chats">
-          <li>
-            <button type="button" role="menuitem" className={styles.menuItem} onClick={() => {
+        <ul ref={threadMenu.ref} id="duet-chats" className={styles.menu} role="menu" aria-label="Chats" onKeyDown={threadMenu.onKeyDown}>
+          <li role="none">
+            <button type="button" role="menuitem" tabIndex={-1} className={styles.menuItem} onClick={() => {
                     act({ do: 'new' });
                     setMenu(null);
                   }}>
@@ -625,24 +755,24 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
           </li>
           {thread?.id && (
             <>
-              <li>
-                <button type="button" role="menuitem" className={styles.menuItem} onClick={() => {
+              <li role="none">
+                <button type="button" role="menuitem" tabIndex={-1} className={styles.menuItem} onClick={() => {
                     setRenaming(true);
                     setMenu(null);
                   }}>
                   Rename
                 </button>
               </li>
-              <li>
-                <button type="button" role="menuitem" className={styles.menuItem} onClick={() => {
+              <li role="none">
+                <button type="button" role="menuitem" tabIndex={-1} className={styles.menuItem} onClick={() => {
                     act({ do: 'export' });
                     setMenu(null);
                   }}>
                   Export as Markdown
                 </button>
               </li>
-              <li>
-                <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.danger}`} onClick={() => {
+              <li role="none">
+                <button type="button" role="menuitem" tabIndex={-1} className={`${styles.menuItem} ${styles.danger}`} onClick={() => {
                     act({ do: 'delete', threadId: thread.id! });
                     setMenu(null);
                   }}>
@@ -651,22 +781,28 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
               </li>
             </>
           )}
-          {view.threads.filter((t) => t.id !== thread?.id).length > 0 && <li className={styles.menuLabel}>Recent chats</li>}
-          {view.threads
-            .filter((t) => t.id !== thread?.id)
-            .map((t) => (
-              <li key={t.id}>
-                <button type="button" role="menuitem" className={styles.menuItem} onClick={() => {
-                    act({ do: 'open', threadId: t.id });
-                    setMenu(null);
-                  }}>
-                  <span className={styles.ellipsis}>{t.title}</span>
-                </button>
-              </li>
-            ))}
+          {view.threads.filter((t) => t.id !== thread?.id).length > 0 && (
+            <li role="group" aria-labelledby="duet-recent" className={styles.menuGroup}>
+              <span id="duet-recent" className={styles.menuLabel}>
+                Recent chats
+              </span>
+              {view.threads
+                .filter((t) => t.id !== thread?.id)
+                .map((t) => (
+                  <span key={t.id} role="none">
+                    <button type="button" role="menuitem" tabIndex={-1} className={styles.menuItem} onClick={() => {
+                        act({ do: 'open', threadId: t.id });
+                        setMenu(null);
+                      }}>
+                      <span className={styles.ellipsis}>{t.title}</span>
+                    </button>
+                  </span>
+                ))}
+            </li>
+          )}
           {!view.chordOff && (
-            <li>
-              <button type="button" role="menuitem" className={styles.menuItem} onClick={() => {
+            <li role="none">
+              <button type="button" role="menuitem" tabIndex={-1} className={styles.menuItem} onClick={() => {
                   act({ do: 'chordOff', off: true });
                   setMenu(null);
                 }}>
@@ -699,14 +835,14 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
               <p>
                 What you attach goes to {providerName} through your own account. Duet reads only what’s attached to your message, unless you let it see more. It never sees what you type into forms.
               </p>
-              <button type="button" className={styles.secondary} onClick={() => act({ do: 'dismissFirstUse' })}>
+              <button type="button" className={styles.secondary} data-autofocus onClick={() => act({ do: 'dismissFirstUse' })}>
                 Got it
               </button>
             </div>
           )}
           <div className={styles.scopeRow}>
             <span className={styles.muted}>Reads</span>
-            <div className={styles.scope} role="radiogroup" aria-label="What Duet can read">
+            <div ref={scopeGroup.ref} className={styles.scope} role="radiogroup" aria-label="What Duet can read" onKeyDown={scopeGroup.onKeyDown}>
               {(['ask', 'chord', 'all'] as const).map((s) => (
                 <button
                   key={s}

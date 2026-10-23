@@ -37,6 +37,8 @@ import { Onboarding } from './Onboarding';
 import { SplitPanes, useElementSize } from './Split';
 import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
+import { Announcer, announce } from './announce';
+import { cycleRegion, trackRegions } from './regions';
 import { useChordSwipe, type PaneMotion } from './useChordSwipe';
 import { usePreviewHover } from './usePreviewHover';
 
@@ -46,7 +48,7 @@ function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadErro
   const back = () =>
     void (canGoBack ? api.nav.command('back') : api.state.dispatch({ t: 'tab.close', windowId, nodeId: tabId }));
   return (
-    <div className={styles.empty} role="alert" data-kind={copy.kind}>
+    <div className={styles.empty} role="alert" data-kind={copy.kind} data-page-state>
       <p className={styles.emptyTitle}>{copy.title}</p>
       <p className={styles.emptyBody}>{copy.body}</p>
       {copy.action === 'retry' ? (
@@ -67,7 +69,7 @@ function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadErro
 function PageState({ tab, live, windowId }: { tab: TabNode; live: LiveTab | undefined; windowId: string }) {
   if (live?.crashed) {
     return (
-      <div className={styles.empty} role="alert">
+      <div className={styles.empty} role="alert" data-page-state>
         <p className={styles.emptyTitle}>This page stopped working.</p>
         <p className={styles.emptyBody}>It’s not you. Reloading usually fixes it.</p>
         <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
@@ -297,6 +299,24 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const duetSlide = { enter: duetEnter, exit: duetEnter === INSTANT ? INSTANT : { duration: durations.fadeBase / 1000, ease: 'easeIn' as const } };
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
   useEffect(() => api.chords.onEdit(setChordEdit), []);
+  // F6 and ⇧F6 move between the window's regions (regions.ts).
+  useEffect(() => {
+    const untrack = trackRegions();
+    const unsubscribe = api.focus.onRegion(cycleRegion);
+    return () => {
+      untrack();
+      unsubscribe();
+    };
+  }, []);
+  // A chord switch is announced: "Work chord, 3 pinned, 7 today" (DESIGN.md §8.2).
+  const announcedChord = useRef(chord?.id);
+  useEffect(() => {
+    if (!chord || announcedChord.current === chord.id) return;
+    announcedChord.current = chord.id;
+    const tabs = Object.values(state.nodes).filter((n) => n.kind === 'tab' && n.chordId === chord.id);
+    const pinned = tabs.filter((n) => n.section === 'pinned').length;
+    announce(`${chord.name} chord, ${pinned} pinned, ${tabs.length - pinned} today`);
+  }, [chord?.id]);
   const createChord = async () => {
     await api.state.dispatch({ t: 'chord.create', windowId, name: 'New chord', ...newChordLook(sortedChords(state)) });
     // Main's patches arrive before its reply, so the mirror already shows the new chord: name it right away.
@@ -405,6 +425,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           )}
 
           <nav
+            data-region="sidebar"
             className={styles.sidebar}
             aria-label="Sidebar"
             data-swipe-area
@@ -430,6 +451,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               type="button"
               className={styles.urlPill}
               title={active?.url ?? ''}
+              // Its name is the address, not the keycap beside it; whether it's secure is said too.
+              aria-label={host ? `Address: ${host}${secure ? ', secure' : ''}` : 'Search or enter address'}
               onClick={() => void api.overlay.open('edit')}
             >
               {internal ? (
@@ -491,7 +514,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
                 })}
               </div>
 
-              {(!collapsed || peeking) && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
+              {(!collapsed || peeking) && <Toasts transition={spring('overlay', 'sidebar')} compact={false} undoKeys={!collapsed} mac={info.platform === 'darwin'} />}
 
               {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
 
@@ -514,7 +537,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
 
           {/* The top bar: right of the sidebar on Windows/Linux; the whole minimal bar when collapsed (DESIGN.md §3.3). */}
           {(overlayChrome || collapsed) && (
-            <div className={styles.bar} data-swipe-area={collapsed || undefined}>
+            <div className={styles.bar} data-swipe-area={collapsed || undefined} data-region="bar">
               {collapsed && (
                 <div className={styles.barLead}>
                   <SidebarToggle collapsed info={info} onToggle={toggleSidebar} onHover={hoverToggle} />
@@ -525,6 +548,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
                 ref={collapsed ? anchorRef : undefined}
                 type="button"
                 className={styles.address}
+                data-address
+                aria-label={host ? `Address: ${host}${title ? `, ${title}` : ''}` : 'Search or enter address'}
                 title={active?.url ?? ''}
                 onClick={() => void api.overlay.open('edit')}
               >
@@ -547,7 +572,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               <span className={styles.flex} />
               {(inTitleBar || collapsed) && <ExtensionButtons bar={extensionsBar} puzzleOnly={!inTitleBar} />}
               {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
-              {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
+              {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact undoKeys mac={info.platform === 'darwin'} />}
               {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
               {duet?.enabled && (
                 <button
@@ -569,7 +594,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           )}
           {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
 
-          <div ref={frameRef} className={styles.frame} data-split={split ? split.direction : undefined}>
+          <div ref={frameRef} className={styles.frame} data-split={split ? split.direction : undefined} data-region="page">
             {!state.settings.onboarded && chord && !isPrivate ? (
               <Onboarding chord={chord} windowId={windowId} info={info} spring={spring} />
             ) : (
@@ -587,7 +612,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
                   active && <PageState tab={active} live={live} windowId={windowId} />
                 )}
                 {!active && (
-                  <div className={styles.empty}>
+                  <div className={styles.empty} data-page-state>
                     {isPrivate ? (
                       <>
                         <p className={styles.emptyTitle}>This window is private.</p>
@@ -615,6 +640,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               {duetOpen && <DuetPanel key="duet" view={duet} windowId={windowId} info={info} slide={duetSlide} />}
             </AnimatePresence>
           )}
+          <Announcer />
+
           {/* Split view's drop zones, over the page while a tab is dragged (Tabs.tsx draws them here). */}
           <div ref={setDropHost} className={styles.dropLayer} aria-hidden={!lifted || undefined} />
         </div>

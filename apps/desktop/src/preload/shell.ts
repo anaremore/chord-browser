@@ -46,6 +46,7 @@ const api: ShellApi = {
   defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
   share: { stop: (nodeId) => invoke('share:stop', { nodeId }) },
   preview: { hover: (target) => invoke('preview:hover', target) },
+  focus: { onRegion: (listener) => subscribe('focus:region', listener), move: (to) => invoke('focus:move', { to }) },
   perf: { shell: (milestone) => invoke('perf:shell', { milestone }) },
 };
 
