@@ -27,6 +27,11 @@ the commit "Vendor electron-chrome-extensions 4.9.5 (iamEvanYT fork), unmodified
   `chrome.declarativeNetRequest.updateEnabledRulesets()`.
 - **`src/preload.ts`**: no debug logging into every web page's console, and no `printIsolatedWorlds` debug
   global.
+- **`src/browser/api/lib/native-messaging-host.ts`** and a new **`native-messaging-frames.ts`**: messages to a
+  native host are sized in bytes, not characters. Messages from it are reassembled across stdout chunks, and
+  several in one chunk are all delivered. A message over Chrome's 1 MB limit, or one that isn't JSON,
+  disconnects. Before, non-ASCII or large messages (password managers send both) broke. A candidate for
+  upstream.
 
-New files, not from upstream: `package.json`, `tsconfig.json`, `build-types.mjs`, `types/` (generated), this
-file, and `README.md`. Upstream's README is kept as `UPSTREAM-README.md`.
+New files, not from upstream: `package.json`, `tsconfig.json`, `build-types.mjs`, `types/` (generated),
+`src/browser/api/lib/native-messaging-frames.ts`, `test/`, this file, and `README.md`. Upstream's README is kept as `UPSTREAM-README.md`.

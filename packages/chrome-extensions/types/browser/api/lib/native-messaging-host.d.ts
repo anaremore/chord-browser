@@ -7,6 +7,7 @@ export declare class NativeMessagingHost {
     private pending?;
     private keepAlive;
     private resolveResponse?;
+    private reader;
     ready?: Promise<void>;
     constructor(extensionId: string, sender: ExtensionSender, connectionId: string, application: string, keepAlive?: boolean);
     destroy(): void;

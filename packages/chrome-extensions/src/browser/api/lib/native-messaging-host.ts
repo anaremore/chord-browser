@@ -1,3 +1,4 @@
+// Modified by Chord contributors, 2026-10-22: byte-length framing and reassembly of split or joined messages (native-messaging-frames.ts). See CHORD-CHANGES.md in this package.
 import { spawn } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import * as os from 'node:os'
@@ -6,6 +7,7 @@ import { app } from 'electron'
 import debug from 'debug'
 import { ExtensionSender, IpcEvent } from '../../router'
 import { readRegistryKey } from './winreg'
+import { encodeNativeMessage, NativeMessageReader } from './native-messaging-frames'
 
 const d = debug('electron-chrome-extensions:nativeMessaging')
 
@@ -105,6 +107,7 @@ export class NativeMessagingHost {
   private pending?: any[]
   private keepAlive: boolean
   private resolveResponse?: (message: any) => void
+  private reader = new NativeMessageReader()
 
   ready?: Promise<void>
 
@@ -206,21 +209,27 @@ export class NativeMessagingHost {
       return
     }
 
-    const message = JSON.stringify(json)
-    const buffer = Buffer.alloc(4 + message.length)
-    buffer.writeUInt32LE(message.length, 0)
-    buffer.write(message, 4)
-    this.process!.stdin!.write(buffer)
+    // Chord: the length is in bytes, not characters.
+    this.process!.stdin!.write(encodeNativeMessage(json))
   }
 
+  // Chord: stdout chunks don't line up with messages; a reader reassembles them.
   private receive = (data: Buffer) => {
-    const length = data.readUInt32LE(0)
-    const message = JSON.parse(data.subarray(4, 4 + length).toString())
-    d('receive: %s', message)
-    if (this.keepAlive && this.sender) {
-      this.sender.send(`crx-native-msg-${this.connectionId}`, message)
-    } else {
-      this.resolveResponse?.(message)
+    let messages: unknown[]
+    try {
+      messages = this.reader.push(data)
+    } catch (error) {
+      d('receive: bad message, disconnecting: %s', error)
+      this.destroy()
+      return
+    }
+    for (const message of messages) {
+      d('receive: %s', message)
+      if (this.keepAlive && this.sender) {
+        this.sender.send(`crx-native-msg-${this.connectionId}`, message)
+      } else {
+        this.resolveResponse?.(message)
+      }
     }
   }
 
