@@ -36,7 +36,7 @@ test.afterAll(() => site.server.close());
 async function launch(profile: string, args: string[] = []): Promise<ElectronApplication> {
   const env: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, CHORD_HOME_URL: `${site.origin}/` };
   delete env['ELECTRON_RUN_AS_NODE'];
-  return watchForMainErrors(await electron.launch({ args: [appDir, '--no-first-run', ...args], env, cwd: appDir }));
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run', ...args], env, cwd: appDir }));
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {

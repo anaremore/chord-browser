@@ -19,7 +19,7 @@ async function launch(): Promise<ElectronApplication> {
   // A fresh profile per launch, on a page that needs no network.
   const env: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: mkdtempSync(join(tmpdir(), 'chord-e2e-')), CHORD_HOME_URL: 'about:blank' };
   delete env['ELECTRON_RUN_AS_NODE'];
-  return watchForMainErrors(await electron.launch({ args: [appDir], env, cwd: appDir }));
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir], env, cwd: appDir }));
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {

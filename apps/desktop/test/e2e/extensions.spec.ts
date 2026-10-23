@@ -49,7 +49,7 @@ function startSite(packages: Map<string, Buffer> = new Map()): Promise<{ server:
 async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'))): Promise<ElectronApplication> {
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, CHORD_E2E_HOOKS: '1', ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return watchForMainErrors(await electron.launch({ args: [appDir], env: childEnv, cwd: appDir }));
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir], env: childEnv, cwd: appDir }));
 }
 
 failOnMainErrors();

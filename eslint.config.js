@@ -30,6 +30,19 @@ export default defineConfig([
     languageOptions: { globals: globals.node },
   },
   {
+    // On Linux, Playwright launches Electron with --no-sandbox unless told otherwise.
+    files: ['apps/*/test/**/*.{ts,mjs}'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "CallExpression[callee.object.name='electron'][callee.property.name='launch']:not(:has(Property[key.name='chromiumSandbox'][value.value=true]))",
+          message: 'Launch with chromiumSandbox: true. Chord never runs without its sandbox, and on Linux Playwright turns it off unless told.',
+        },
+      ],
+    },
+  },
+  {
     // The test extension runs in Chrome's extension environment.
     files: ['apps/desktop/test/fixtures/extension/**/*.js'],
     languageOptions: { globals: { ...globals.browser, chrome: 'readonly' } },

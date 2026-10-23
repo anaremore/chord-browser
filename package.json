@@ -12,7 +12,8 @@
     "typecheck": "pnpm -r --parallel typecheck",
     "lint": "eslint . && stylelint \"**/*.css\" --ignore-pattern \".claude/**\"",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e:linux": "node scripts/e2e-linux/run.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
