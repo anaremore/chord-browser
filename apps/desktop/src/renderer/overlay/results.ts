@@ -9,7 +9,7 @@
  * a filter (`@tabs`, `@history`, …) shows only that kind. The engine's search
  * suggestions come last, so they never move the rows above them.
  */
-import {
+import { type DuetHit,
   abbreviationScore,
   habit,
   keywordFor,
@@ -35,7 +35,7 @@ import {
 import type { HistorySearch } from '@chord/ipc';
 import { displayHost, pageTitle } from '../shared/site';
 
-export type Filter = 'tabs' | 'pinned' | 'history' | 'archive' | 'chords' | 'actions';
+export type Filter = 'tabs' | 'pinned' | 'history' | 'archive' | 'duet' | 'chords' | 'actions';
 export type Scope = { kind: 'keyword'; keyword: SiteKeyword } | { kind: 'filter'; filter: Filter };
 
 export type Result =
@@ -45,6 +45,8 @@ export type Result =
   | { kind: 'history'; key: string; title: string; detail: string; url: string }
   /** A tab in the archive: picking it brings the tab back, history and all. */
   | { kind: 'archive'; key: string; title: string; detail: string; url: string; archiveId: string }
+  /** A Duet chat whose words match (@duet): picking it opens the chat. */
+  | { kind: 'duet'; key: string; title: string; detail: string; threadId: string; chordId: string }
   | { kind: 'action'; key: string; title: string; action: ActionId }
   | { kind: 'chord'; key: string; title: string; chord: Chord }
   /** A way to narrow the bar: search a site, or show one kind of result. */
@@ -56,6 +58,7 @@ export const FILTERS: readonly { id: Filter; token: string; name: string; placeh
   { id: 'pinned', token: '@pinned', name: 'Pinned', placeholder: 'Search pinned tabs' },
   { id: 'history', token: '@history', name: 'History', placeholder: 'Search history' },
   { id: 'archive', token: '@archive', name: 'Archive', placeholder: 'Search the archive' },
+  { id: 'duet', token: '@duet', name: 'Duet chats', placeholder: 'Search Duet chats' },
   { id: 'chords', token: '@chords', name: 'Chords', placeholder: 'Search chords' },
   { id: 'actions', token: '@actions', name: 'Actions', placeholder: 'Search actions' },
 ];
@@ -158,6 +161,7 @@ export function destinationOf(result: Result): string | null {
     case 'action':
       return `action:${result.action}`;
     case 'scope':
+    case 'duet':
       return null;
   }
 }
@@ -192,6 +196,8 @@ export interface Narrowing {
   scope?: Scope | null;
   /** The engine's suggestions for the text, newest reply. */
   suggestions?: readonly string[];
+  /** Duet chats matching the text (@duet), newest reply. */
+  duetHits?: readonly DuetHit[];
 }
 
 /**
@@ -225,7 +231,7 @@ function resultsFor(
   mode: 'new' | 'edit',
   history: HistorySearch | null,
   now: number,
-  { scope = null, suggestions = [] }: Narrowing,
+  { scope = null, suggestions = [], duetHits = [] }: Narrowing,
 ): Result[] {
   const q = query.trim();
   const win = state.windows[windowId];
@@ -246,6 +252,9 @@ function resultsFor(
   const suggestionRows = (into: (text: string) => string): Result[] =>
     suggestions.map((text) => ({ kind: 'open', key: `suggest:${text}`, title: text, detail: '', url: into(text), search: true, suggested: true }));
 
+  if (scope?.kind === 'filter' && scope.filter === 'duet') {
+    return duetHits.map((h) => ({ kind: 'duet', key: `duet:${h.messageId}`, title: h.threadTitle || 'Duet chat', detail: h.snippet, threadId: h.threadId, chordId: h.chordId }));
+  }
   if (scope?.kind === 'filter') return filtered(scope.filter, q, state, windowId, win?.activeChordId ?? null, activeId ?? null, tabs, tabResult, history, now);
 
   if (!q) {
@@ -495,5 +504,8 @@ function filtered(
         () => 0,
         (a) => ({ kind: 'action', key: `action:${a.action}`, title: a.title, action: a.action }),
       );
+    case 'duet':
+      // Answered by chord-data (buildResults' duetHits), not ranked here.
+      return [];
   }
 }

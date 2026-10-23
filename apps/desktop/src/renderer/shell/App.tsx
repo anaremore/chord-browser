@@ -13,7 +13,7 @@ import {
   type LoadError,
   type TabNode,
 } from '@chord/core';
-import type { ChordEdit, SystemInfo } from '@chord/ipc';
+import type { ChordEdit, DuetView, SystemInfo } from '@chord/ipc';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
@@ -27,6 +27,8 @@ import { ChordHeader, ChordPane, ChordSwitcher, GhostPane, newChordLook, Tint } 
 import { useSystemInfo } from './hooks';
 import { ShortcutsProvider, useKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
+import { DuetPanel } from './Duet';
+import { DuetReadTabs } from './duet-context';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { Onboarding } from './Onboarding';
 import { SplitPanes, useElementSize } from './Split';
@@ -277,6 +279,13 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
       <Archive {...ICON} />
     </button>
   );
+  // Duet's panel for this window (DESIGN.md §7.8): main pushes what it shows.
+  const [duet, setDuet] = useState<DuetView | null>(null);
+  useEffect(() => {
+    void api.duet.view().then(setDuet);
+    return api.duet.onState(setDuet);
+  }, []);
+  const duetOpen = Boolean(duet?.enabled && duet.open);
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
   useEffect(() => api.chords.onEdit(setChordEdit), []);
   const createChord = async () => {
@@ -358,7 +367,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           data-peek={peeking || undefined}
           data-lifted={lifted || undefined}
           data-resizing={liveWidth !== null || undefined}
-          style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+          style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px`, '--duet-space': duetOpen ? 'calc(var(--size-duet-width) + var(--space-2))' : 'var(--space-0)' } as CSSProperties}
         >
           <div className={styles.backdrop} aria-hidden>
             {/* A swipe blends the neighbor's tint in as the fingers move, so its switch needn't crossfade again. */}
@@ -436,15 +445,17 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
                       edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
                       onDone={() => setChordEdit(null)}
                     />
-                    <SidebarTabs
-                      chordId={chord?.id ?? ''}
-                      state={state}
-                      windowId={windowId}
-                      activeId={activeId}
-                      info={info}
-                      appearance={appearance}
-                      spring={spring}
-                    />
+                    <DuetReadTabs.Provider value={new Set(duetOpen ? (duet?.readTabIds ?? []) : [])}>
+                      <SidebarTabs
+                        chordId={chord?.id ?? ''}
+                        state={state}
+                        windowId={windowId}
+                        activeId={activeId}
+                        info={info}
+                        appearance={appearance}
+                        spring={spring}
+                      />
+                    </DuetReadTabs.Provider>
                   </ChordPane>
                 </AnimatePresence>
                 {/* The neighbors a swipe brings in beside the current chord. */}
@@ -527,6 +538,17 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
               {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
               {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
+              {duet?.enabled && (
+                <button
+                  type="button"
+                  className={styles.duetButton}
+                  aria-pressed={duetOpen}
+                  title={`Duet  ${keycap('duet.toggle')}`.trim()}
+                  onClick={() => void api.duet.act({ do: 'toggle' })}
+                >
+                  ✦ Duet
+                </button>
+              )}
               {overlayChrome && (
                 <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>
                   <Ellipsis {...ICON} />
@@ -574,6 +596,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
               </>
             )}
           </div>
+          {duetOpen && duet && <DuetPanel view={duet} windowId={windowId} info={info} />}
           {/* Split view's drop zones, over the page while a tab is dragged (Tabs.tsx draws them here). */}
           <div ref={setDropHost} className={styles.dropLayer} aria-hidden={!lifted || undefined} />
         </div>

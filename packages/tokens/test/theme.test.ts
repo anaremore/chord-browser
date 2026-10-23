@@ -28,7 +28,7 @@ const contexts: ThemeContext[] = (['light', 'dark'] as Appearance[]).flatMap((sy
 );
 
 describe('createChordTheme', () => {
-  it('keeps text at ≥ 4.5:1 and the accent at ≥ 3:1 for 10,000 random themes', () => {
+  it('keeps text at ≥ 4.5:1, the accent at ≥ 3:1 and text on the accent at ≥ 4.5:1 for 10,000 random themes', () => {
     const random = mulberry32(0xc0ffee);
     for (let i = 0; i < 10_000; i++) {
       const stops: Oklch[] = Array.from({ length: 1 + Math.floor(random() * 3) }, () => ({
@@ -43,6 +43,7 @@ describe('createChordTheme', () => {
       expect(theme.minContrast.fg, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(4.5);
       expect(theme.minContrast.fgMuted, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(4.5);
       expect(theme.minContrast.accent).toBeGreaterThanOrEqual(3);
+      expect(theme.minContrast.accentFg, JSON.stringify({ stops, appearance, context })).toBeGreaterThanOrEqual(4.5);
     }
   });
 

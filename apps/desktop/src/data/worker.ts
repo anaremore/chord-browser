@@ -41,6 +41,10 @@ process.parentPort.on('message', (event) => {
         if (!db) throw new Error('chord-data: archive before open');
         reply({ id: request.id, ok: true, entry: db.archiveLatest(request.reasons) });
         break;
+      case 'duet':
+        if (!db) throw new Error('chord-data: duet before open');
+        reply({ id: request.id, ok: true, duet: db.duet(request.op) });
+        break;
       case 'close':
         db?.close();
         db = null;

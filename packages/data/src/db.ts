@@ -32,6 +32,7 @@ import {
   type WindowModel,
 } from '@chord/core';
 import type { ArchiveEntry, ArchivePage, HistoryEvent, NavState, SearchResult, WriteOp } from './index';
+import { runDuet, type DuetOp, type DuetResult } from './duet';
 import { MIGRATIONS } from './migrations';
 
 /** The profile every chord belongs to until "Keep sign-ins separate" exists. */
@@ -463,6 +464,11 @@ export class ChordDatabase {
           WHERE archive_fts MATCH ? AND a.profile_id = ? ORDER BY ${order} LIMIT ?`,
       ).all(match, DEFAULT_PROFILE, limit) as Row[]
     ).map(archivedTab);
+  }
+
+  /** Duet's threads and messages (packages/data/src/duet.ts). */
+  duet(op: DuetOp): DuetResult {
+    return runDuet((text) => this.sql(text), op);
   }
 
   /** One entry, with the history it needs to come back. */

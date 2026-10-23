@@ -37,7 +37,7 @@ import { DragDropProvider, useDraggable, useDragDropMonitor, useDroppable } from
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import { size, type Appearance } from '@chord/tokens';
-import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Undo2, X } from 'lucide-react';
+import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Sparkle, Undo2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -46,6 +46,7 @@ import type { SpringFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
 import { api } from './api';
 import styles from './App.module.css';
+import { DuetReadTabs } from './duet-context';
 import { useKeys } from './keys';
 import { SPLIT_DROP, splitDropFor, type SplitDrop } from './split-drop';
 import { CHORD_DROP, flattenPinned, levelsFor, MAX_VISUAL_DEPTH, projectDrop, type Drop, type FlatRow } from './tree';
@@ -362,6 +363,7 @@ function awayFromHome(tab: TabNode): boolean {
 const indent = (depth: number) => ({ '--depth': Math.min(depth, MAX_VISUAL_DEPTH) }) as CSSProperties;
 
 function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index: number; section: Section; depth: number; ctx: RowContext; drag: RowDrag }) {
+  const duetRead = useContext(DuetReadTabs).has(tab.id);
   // The row's button is the handle, so dnd-kit's drag semantics land on a button and the <li> stays a list item.
   const { ref, handleRef, isDragging, isDropTarget } = useSortable({ id: tab.id, index, group: section, type: 'tab', accept: ROW_ACCEPTS });
   const { dragging, projected } = drag;
@@ -430,6 +432,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
           <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
         )}
         <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
+        {duetRead && <Sparkle className={styles.duetRead} size={12} strokeWidth={2} role="img" aria-label="Duet read this tab" />}
       </button>
       {sharing ? (
         <button
