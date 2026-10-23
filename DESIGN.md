@@ -96,6 +96,7 @@ macOS                                            Windows / Linux
 | URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L edits the address **in place**: the pill becomes a text field with the URL selected, and results drop down beneath it (§7.3). Hover reveals copy link · page actions. |
 | Chord header | 28 | Chord icon (16) + name (`text-label`). Hover shows the ⋯ menu (Edit theme, Rename, Keep sign-ins separate, Delete). |
 | Pinned | 32 / row | Pinned tabs and folders, nestable; indent 12 px per level, visually capped at 4 levels. |
+| Favorites | 40 + 8 | *(As built, M1.2.)* Tiles every chord shares, in a wrapping grid, each a site's icon on an `item-hover` square (`radius-md`). The one for the tab you're on is raised. A tile switches to this chord's tab on that site, or opens it in Today. Drag a tab onto the row to add it; right-click to remove. |
 | Today divider | 24 | Hairline + "Clear" (`text-micro`), which appears on hover or focus and archives all Today tabs. |
 | New tab | 32 | "+ New tab", muted. Same as ⌘T. |
 | Today | 32 / row | New tabs arrive at the top. |

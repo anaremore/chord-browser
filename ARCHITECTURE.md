@@ -200,6 +200,11 @@ Verified constraints and how they shape this:
   - When the peek ends, the bounds shrink back.
   - The cost is that the page's leftmost 6 px don't receive clicks while peek-on-hover is enabled.
   - The peek setting can be turned off.
+  - *As built (M1.2), simpler and with no cost to the page:*
+    - The hot strip is the 4 px bezel left of the frame, which is already the shell's. Hovering the bar's toggle for 300 ms also peeks.
+    - Peeking lifts the shell above the page (`AppWindow.setPeek`) at full size. While it's lifted the shell paints nothing over the page: the backdrop is clipped to the bar, and the frame placeholder is hidden.
+    - The pointer resting over the page, a click there, or Esc puts it away. The shell goes back under the page once the slide-out finishes.
+    - There's no setting to turn it off yet.
 - **Closing a tab really releases it.** `removeChildView` alone does not free the renderer; `webContents.close()` does. The `WebContentsView.destroy()` request (#42884) was closed without explanation on 2026-09-25.
 
 ---
@@ -412,6 +417,8 @@ CREATE TABLE duet_site_rule (
 Favicons are stored once per distinct icon, keyed by content hash, and unused ones (no tab or archived tab uses them) are dropped on open.
 
 **The archive, as built (migration 5):** `archive_item` with an explicit integer `rid` (so its external-content FTS5 index, `archive_fts`, survives `VACUUM`), `reason` of `auto`, `closed` or `cleared`, and `nav_state` as JSON: the tab's `navigationHistory` entries (with Chromium's `pageState`, which holds the scroll position) and index, at most 50 entries around the current one, web pages only, and capped at 1 MB. An entry is deleted when its tab comes back. Entries older than 30 days go on open. Archive writes ride the history event stream (`HistoryEvent` `archive` / `unarchive`), in order and in the same transaction as the batch they arrive with.
+
+**Favorites, as built (migration 6):** `favorite` (id, url, title, `favicon_key` into `favicon`, rank, created_at), shared by every chord and profile; the favicon clean-up keeps their icons. **Folders** use the `folder` table from migration 1, Pinned only (a tab moved into a folder is pinned there). **Sidebar width** uses `window_state.sidebar_width` from migration 1, 200–400 px.
 
 **Migrations** are forward-only numbered SQL files, each run in a transaction. Before every migration, and as a daily rolling copy (keep 3), we take a backup with `VACUUM INTO`. A failed migration restores the backup and opens in a read-only "something went wrong" state rather than losing data.
 
