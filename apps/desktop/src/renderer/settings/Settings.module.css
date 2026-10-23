@@ -160,6 +160,16 @@
   box-shadow: 0 calc(var(--size-hairline) * -1) 0 var(--color-divider);
 }
 
+/* A second card right under the first, for a setting that belongs with the group above. */
+.groupAfter {
+  margin-block-start: var(--space-3);
+}
+
+/* A card with a card under it. */
+.groupBelow {
+  margin-block-end: var(--space-3);
+}
+
 .row,
 .shortcut {
   display: flex;
@@ -400,7 +410,11 @@
   transition: background-color var(--duration-fade-fast) var(--ease-standard);
 }
 
-.linkButton:hover {
+.linkButton:disabled {
+  opacity: 0.5;
+}
+
+.linkButton:hover:not(:disabled) {
   background: var(--color-item-active-bg);
   box-shadow: var(--shadow-raised);
 }

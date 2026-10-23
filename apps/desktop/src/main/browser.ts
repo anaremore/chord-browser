@@ -399,6 +399,13 @@ export class Browser {
     );
   }
 
+  /** A note for the window used last, with a link that opens as a tab there (a new Chord version, for one). */
+  announce(id: string, message: string, link: { label: string; url: string }): void {
+    const w = this.lastWindow();
+    if (!w) return;
+    send(w.shell.webContents, 'toast:show', { id, message, action: { label: link.label, command: { t: 'tab.open', windowId: w.id, url: link.url } } });
+  }
+
   /**
    * Delete at once and offer Undo in a toast: no confirmation box (native ones
    * also make Windows play a warning sound).

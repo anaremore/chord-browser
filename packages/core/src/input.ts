@@ -52,22 +52,54 @@ export interface SearchEngine {
   name: string;
   /** The results page; the query is appended URL-encoded. */
   prefix: string;
+  /**
+   * Its OpenSearch suggestion endpoint, the query appended URL-encoded. Each
+   * was checked with a real request through Chromium's network stack; it
+   * answers `["text", ["suggestion", …]]`.
+   */
+  suggest: string;
 }
 
 /** Google is the default (decided 2026-10-22). Order is the order Settings lists them. */
 export const SEARCH_ENGINES: readonly SearchEngine[] = [
-  { id: 'google', name: 'Google', prefix: 'https://www.google.com/search?q=' },
-  { id: 'duckduckgo', name: 'DuckDuckGo', prefix: 'https://duckduckgo.com/?q=' },
-  { id: 'bing', name: 'Bing', prefix: 'https://www.bing.com/search?q=' },
-  { id: 'brave', name: 'Brave Search', prefix: 'https://search.brave.com/search?q=' },
-  { id: 'kagi', name: 'Kagi', prefix: 'https://kagi.com/search?q=' },
-  { id: 'ecosia', name: 'Ecosia', prefix: 'https://www.ecosia.org/search?q=' },
+  { id: 'google', name: 'Google', prefix: 'https://www.google.com/search?q=', suggest: 'https://www.google.com/complete/search?client=firefox&q=' },
+  { id: 'duckduckgo', name: 'DuckDuckGo', prefix: 'https://duckduckgo.com/?q=', suggest: 'https://duckduckgo.com/ac/?type=list&q=' },
+  { id: 'bing', name: 'Bing', prefix: 'https://www.bing.com/search?q=', suggest: 'https://www.bing.com/osjson.aspx?query=' },
+  { id: 'brave', name: 'Brave Search', prefix: 'https://search.brave.com/search?q=', suggest: 'https://search.brave.com/api/suggest?q=' },
+  { id: 'kagi', name: 'Kagi', prefix: 'https://kagi.com/search?q=', suggest: 'https://kagi.com/api/autosuggest?q=' },
+  { id: 'ecosia', name: 'Ecosia', prefix: 'https://www.ecosia.org/search?q=', suggest: 'https://ac.ecosia.org/autocomplete?type=list&q=' },
 ];
 
 export const searchEngine = (id: SearchEngineId): SearchEngine => SEARCH_ENGINES.find((e) => e.id === id) ?? SEARCH_ENGINES[0]!;
 
 export function searchUrl(query: string, engine: SearchEngineId = 'google'): string {
   return `${searchEngine(engine).prefix}${encodeURIComponent(query)}`;
+}
+
+/** How many suggestions the command bar shows. */
+export const MAX_SUGGESTIONS = 5;
+
+/** Where to ask an engine for suggestions; null for an address, which never leaves Chord. */
+export function suggestUrl(query: string, engine: SearchEngineId = 'google'): string | null {
+  const text = query.trim();
+  if (!text || text.length > 200 || parseInput(text)?.kind !== 'search') return null;
+  return `${searchEngine(engine).suggest}${encodeURIComponent(text)}`;
+}
+
+/** Suggestions from an OpenSearch reply (`["text", ["a", "b"], …]`): text only, distinct, not the query itself. */
+export function parseSuggestions(reply: unknown, query: string): string[] {
+  if (!Array.isArray(reply) || !Array.isArray(reply[1])) return [];
+  const typed = query.trim().toLocaleLowerCase();
+  const out: string[] = [];
+  for (const item of reply[1] as unknown[]) {
+    if (typeof item !== 'string') continue;
+    const text = item.trim().replace(/\s+/g, ' ').slice(0, 200);
+    const folded = text.toLocaleLowerCase();
+    if (!text || folded === typed || out.some((s) => s.toLocaleLowerCase() === folded)) continue;
+    out.push(text);
+    if (out.length === MAX_SUGGESTIONS) break;
+  }
+  return out;
 }
 
 /** The URL to open for typed input, or null for empty input. */

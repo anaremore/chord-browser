@@ -276,28 +276,32 @@ export class ChordDatabase {
   /**
    * History pages matching every typed word as a prefix (FTS5, best bm25
    * first), and the chord's picks for text starting with what was typed.
-   * One letter matches nothing in history: the index starts at two.
+   * One letter matches nothing in history: the index starts at two. Nothing
+   * at all (the command bar's `@history` before you type) lists recent pages.
    */
   search(query: string, chordId: string | null, now = Date.now()): SearchResult {
     const words = terms(query).filter((w) => [...w].length >= 2);
-    const history =
-      words.length === 0
+    const rows: Row[] = !query.trim()
+      ? (this.sql(
+          `SELECT url, title, visit_count, typed_count, last_visit_at, decay_day
+             FROM history_url WHERE profile_id = ? ORDER BY last_visit_at DESC LIMIT ?`,
+        ).all(DEFAULT_PROFILE, SEARCH_LIMIT) as Row[])
+      : words.length === 0
         ? []
-        : (
-            this.sql(
-              `SELECT h.url, h.title, h.visit_count, h.typed_count, h.last_visit_at, h.decay_day
-                 FROM history_fts JOIN history_url h ON h.id = history_fts.rowid
-                WHERE history_fts MATCH ? AND h.profile_id = ?
-                ORDER BY bm25(history_fts) LIMIT ?`,
-            ).all(words.map((w) => `"${w.replaceAll('"', '""')}"*`).join(' '), DEFAULT_PROFILE, SEARCH_LIMIT) as Row[]
-          ).map((r) => ({
-            url: str(r['url']),
-            title: str(r['title']),
-            visitCount: num(r['visit_count']),
-            typedCount: num(r['typed_count']),
-            lastVisitAt: num(r['last_visit_at']),
-            frecency: frecencyOn(num(r['decay_day']), now),
-          }));
+        : (this.sql(
+            `SELECT h.url, h.title, h.visit_count, h.typed_count, h.last_visit_at, h.decay_day
+               FROM history_fts JOIN history_url h ON h.id = history_fts.rowid
+              WHERE history_fts MATCH ? AND h.profile_id = ?
+              ORDER BY bm25(history_fts) LIMIT ?`,
+          ).all(words.map((w) => `"${w.replaceAll('"', '""')}"*`).join(' '), DEFAULT_PROFILE, SEARCH_LIMIT) as Row[]);
+    const history = rows.map((r) => ({
+      url: str(r['url']),
+      title: str(r['title']),
+      visitCount: num(r['visit_count']),
+      typedCount: num(r['typed_count']),
+      lastVisitAt: num(r['last_visit_at']),
+      frecency: frecencyOn(num(r['decay_day']), now),
+    }));
     const text = foldChoiceText(query);
     const choices: Choice[] =
       chordId && text

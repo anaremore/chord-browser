@@ -15,6 +15,8 @@ import { Persistence } from './persistence';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
+import { Suggestions } from './suggestions';
+import { UpdateChecker } from './updates';
 import { chromiumUserAgent } from './user-agent';
 
 // Before `ready`: privileged schemes, identity (decides userData), sandbox for every renderer.
@@ -36,6 +38,14 @@ const downloads = new DownloadManager({
   defaultSession: () => profileSession('default'),
 });
 let profileSession: (profileId: string) => Session;
+const updates = new UpdateChecker({
+  enabled: () => browser?.store.state.settings.checkForUpdates ?? false,
+  onAvailable: (release) => browser?.announce(`update:${release.version}`, `${release.name} is out`, { label: 'What’s new', url: release.url }),
+});
+const suggestions = new Suggestions({
+  enabled: () => browser?.store.state.settings.searchSuggestions ?? false,
+  engine: () => browser?.store.state.settings.searchEngine ?? 'google',
+});
 
 function senderWindow(sender: WebContents) {
   const w = browser?.windowFor(sender);
@@ -74,6 +84,7 @@ function registerIpc(): void {
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
   handle('history:search', ({ query }, sender) => persistence!.search(query, activeChordOf(sender)));
+  handle('search:suggest', ({ query, engine }, sender) => suggestions.suggest(sender.id, query, engine));
   handle('history:choose', ({ text, destination, address }, sender) => {
     const chordId = activeChordOf(sender);
     if (chordId) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
@@ -103,6 +114,8 @@ function registerIpc(): void {
   handle('settings:deleteTheme', ({ id }) => browser!.store.dispatch({ t: 'theme.delete', id }));
   handle('settings:copyText', ({ text }) => clipboard.writeText(text));
   handle('settings:defaultBrowser', () => defaultBrowserStatus());
+  handle('settings:updateStatus', () => updates.status());
+  handle('settings:checkForUpdates', () => updates.checkNow());
   handle('settings:makeDefaultBrowser', async () => {
     await makeDefaultBrowser();
     return defaultBrowserStatus();
@@ -219,6 +232,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     browser.start();
     if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
+    updates.start();
   });
 
   app.on('window-all-closed', () => {

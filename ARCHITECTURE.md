@@ -520,7 +520,20 @@ Each query carries a sequence number; stale responses are dropped. The in-memory
 
   Otherwise the address or search the text spells comes first. A typed address leads over pages unless habit says otherwise.
 - **Transport:** history lives in chord-data (migration 4: `history_url`, `history_visit`, an external-content FTS5 index kept in sync by triggers, and `palette_choice`). The overlay asks through main (`history:search`), not yet over a direct MessagePort. The 50 best bm25 matches come back, and the overlay ranks them with everything else.
-- ⚠ **Not yet:** inline autocomplete, search suggestions, the archive, and Crest's calculator.
+- **Inline autocomplete:** only the leading row completes, and only when it's a page whose address (its place key, or `www.` plus it) starts with the typed text. So the field never shows one place while Return opens another. The completed part stays selected: typing on replaces it, Tab accepts it. Deleting never brings it back until you type again. An address typed in full that is an open tab's leads with that tab ("Switch to tab"), so accepting a completion never opens a page twice.
+- **Search suggestions** (Q4: on, with a switch in Settings → General):
+  - Main asks the chosen engine's OpenSearch endpoint (`SEARCH_ENGINES[].suggest`). All six were checked with real requests through Chromium's network stack. Brave refuses curl but answers Chromium ✅.
+  - The request goes through an in-memory `chord-suggest` session with `credentials: 'omit'`. A newer question from the same command bar aborts the older one; failures mean no suggestions.
+  - Typed addresses and half-typed `@filters` never go out.
+  - The overlay waits 120 ms after the last keystroke, drops stale replies, and appends suggestions below every local row, so nothing above them moves.
+- **Scopes** (DESIGN.md §7.3):
+  - **Site keywords** (`core/keywords.ts`): YouTube `yt`, GitHub `gh`, Wikipedia `wiki`, Google Maps `maps` and Reddit `reddit`, plus one per engine (`google`, `ddg`, `bing`, `brave`, `kagi`, `ecosia`).
+    - Tab switches to the keyword. Space switches too, but only for abbreviations (`yt`, `gh`, `wiki`, `ddg`), so a search that starts with "maps" stays a search.
+    - The keyword's search leads. Pages on that site follow, then the engine's suggestions when the keyword is an engine.
+  - **Filters:** `@tabs`, `@pinned`, `@history` (recent pages before you type), `@chords` and `@actions`. Typing `@` lists them.
+  - The keyword or filter shows as a chip; Backspace in the empty field removes it.
+- **Where a result opens:** ↵ here, ⌘↵ / Ctrl+↵ in a new background tab, ⇧↵ in a new tab in front. ⇧↵ becomes "new window" once Chord has more than one window.
+- ⚠ **Not yet:** the archive as a source, `@archive`, Crest's calculator, and the fading HintBar.
 
 ---
 
@@ -786,7 +799,12 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
 | Flatpak | Flathub | Flathub's GPG-verified remotes ✅ |
 
 **While builds are unsigned** (§15.2), the preview builds work like this:
-- **Phase 1:** a notify-only update check on every platform ("Chord 0.2 is ready · Download").
+- **Phase 1:** a notify-only update check on every platform (`src/main/updates.ts`, built).
+  - **When:** installed builds only, with Settings → About → "Check for updates automatically" (on by default). It runs 30 s after launch, then daily.
+  - **What it asks:** GitHub's `/releases` list, unauthenticated: 60 calls an hour per address ✅. It uses an in-memory session and never sends cookies.
+  - **Which release counts:** the newest by SemVer precedence. Drafts never count. SemVer pre-releases count only for someone already running one; GitHub's own pre-release flag is ignored, so previews still announce each other. Only release-page links are trusted.
+  - **What you see:** a toast "Chord 0.2.0 is out · What's new" (once per version per run) and the answer in About, with "Check now".
+  - **Failures:** silent, with backoff of 1 h, 2 h, 4 h, then daily.
 - **Phase 3:** in-app install on Windows and AppImage, still gated by the Ed25519 check.
 - **macOS:** stays notify-and-download until it's signed.
 

@@ -355,8 +355,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'settings.set': {
-      const { searchEngine, motion, colorScheme } = cmd.settings;
+      const { searchEngine, motion, colorScheme, searchSuggestions, checkForUpdates } = cmd.settings;
       if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
+      if (searchSuggestions !== undefined && draft.settings.searchSuggestions !== searchSuggestions) draft.settings.searchSuggestions = searchSuggestions;
+      if (checkForUpdates !== undefined && draft.settings.checkForUpdates !== checkForUpdates) draft.settings.checkForUpdates = checkForUpdates;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
       for (const [key, value] of Object.entries(motion ?? {}) as [keyof typeof draft.settings.motion, boolean | undefined][]) {
         if (value !== undefined && draft.settings.motion[key] !== value) draft.settings.motion[key] = value;

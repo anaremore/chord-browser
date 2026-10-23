@@ -103,6 +103,8 @@ const engineIds = SEARCH_ENGINES.map((e) => e.id) as [SearchEngineId, ...SearchE
 export const SettingsPatch = z.strictObject({
   searchEngine: z.enum(engineIds).optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
+  searchSuggestions: z.boolean().optional(),
+  checkForUpdates: z.boolean().optional(),
   interface: z.strictObject({ contrast: z.number().min(0).max(1), glass: z.number().min(0).max(1) }).partial().optional(),
   motion: z
     .strictObject({
@@ -122,6 +124,18 @@ void _settingsMatch;
 
 export const ChordThemePatch = ChordTheme.partial();
 export type ChordThemePatch = z.infer<typeof ChordThemePatch>;
+
+/**
+ * The update check's last answer (Settings → About). `unavailable` in
+ * development builds, which aren't released; `idle` before the first check.
+ */
+export type UpdateStatus =
+  | { state: 'unavailable' }
+  | { state: 'idle' }
+  | { state: 'checking' }
+  | { state: 'current'; checkedAt: number }
+  | { state: 'available'; checkedAt: number; version: string; url: string }
+  | { state: 'failed'; checkedAt: number };
 
 export const DefaultBrowserStatus = z.enum(['default', 'not-default', 'unavailable']);
 export type DefaultBrowserStatus = z.infer<typeof DefaultBrowserStatus>;
@@ -237,6 +251,12 @@ export const invokeChannels = {
   'downloads:openFolder': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
   /** The command bar's history and learned picks for what was typed (in the window's chord). */
   'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
+  /** Search suggestions while typing, from the chosen engine (or a keyword's engine); empty when they're off. */
+  'search:suggest': {
+    roles: ['overlay'],
+    request: z.strictObject({ query: z.string().max(200), engine: z.enum(engineIds).optional() }),
+    response: z.array(z.string().max(200)).max(10),
+  },
   /** The command bar remembers which row was picked for what was typed. */
   'history:choose': {
     roles: ['overlay'],
@@ -262,6 +282,8 @@ export const invokeChannels = {
   'settings:copyText': { roles: ['internal'], request: z.strictObject({ text: z.string().max(10_000) }), response: z.void() },
   'settings:defaultBrowser': { roles: ['internal'], request: z.void(), response: DefaultBrowserStatus },
   'settings:makeDefaultBrowser': { roles: ['internal'], request: z.void(), response: DefaultBrowserStatus },
+  'settings:updateStatus': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
+  'settings:checkForUpdates': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
   // The popover: find bar and permission prompts, over the page (ARCHITECTURE.md §5).
   'popover:state': { roles: ['popover'], request: z.void(), response: z.custom<PopoverState>() },
   /** The popover's content size, so main can fit the view to its cards (0 × 0 hides it). */
@@ -351,6 +373,9 @@ export interface SettingsApi {
     defaultBrowser(): Promise<DefaultBrowserStatus>;
     /** Asks the OS to make Chord the default (on Windows, opens Settings → Default apps), then reports again. */
     makeDefaultBrowser(): Promise<DefaultBrowserStatus>;
+    /** The update check's last answer, and asking again now. */
+    updateStatus(): Promise<UpdateStatus>;
+    checkForUpdates(): Promise<UpdateStatus>;
     about(): Promise<AboutInfo>;
     openUrl(url: string): Promise<void>;
   };
@@ -390,5 +415,9 @@ export interface OverlayApi {
   history: {
     search(query: string): Promise<HistorySearch>;
     choose(text: string, destination: string, address?: string): Promise<void>;
+  };
+  search: {
+    /** What the engine suggests for the text; a newer call cancels an older one. */
+    suggest(query: string, engine?: SearchEngineId): Promise<string[]>;
   };
 }

@@ -181,6 +181,10 @@ export interface Settings {
   colorScheme: ColorScheme;
   interface: InterfaceSettings;
   themes: CustomTheme[];
+  /** Searches from the engine while typing in the command bar (ROADMAP Q4: on, with a switch). Typed addresses never go out. */
+  searchSuggestions: boolean;
+  /** Installed builds ask GitHub Releases once a day whether a newer Chord is out; nothing installs by itself. */
+  checkForUpdates: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -189,6 +193,8 @@ export const DEFAULT_SETTINGS: Settings = {
   colorScheme: 'system',
   interface: { contrast: 0.5, glass: 0.5 },
   themes: [],
+  searchSuggestions: true,
+  checkForUpdates: true,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -213,6 +219,8 @@ export interface SettingsPatch {
   motion?: Partial<MotionSettings>;
   colorScheme?: ColorScheme;
   interface?: Partial<InterfaceSettings>;
+  searchSuggestions?: boolean;
+  checkForUpdates?: boolean;
 }
 
 export interface State {

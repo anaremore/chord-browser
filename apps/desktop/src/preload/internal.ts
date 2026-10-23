@@ -19,6 +19,8 @@ const api: SettingsApi = {
     copyText: (text) => invoke('settings:copyText', { text }),
     defaultBrowser: () => invoke('settings:defaultBrowser'),
     makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),
+    updateStatus: () => invoke('settings:updateStatus'),
+    checkForUpdates: () => invoke('settings:checkForUpdates'),
     about: () => invoke('settings:about'),
     openUrl: (url) => invoke('settings:openUrl', { url }),
   },

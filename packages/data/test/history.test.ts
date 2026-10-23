@@ -34,6 +34,8 @@ describe('history', () => {
     expect(db.search('git anar', null, t0).history).toHaveLength(1);
     // One letter is too little to search history.
     expect(db.search('c', null, t0).history).toEqual([]);
+    // Nothing typed (`@history` before you type) lists recent pages, newest first.
+    expect(db.search('', null, t0 + 2000).history.map((h) => h.title)).toEqual(['chord-browser', 'Chord (music) - Wikipedia']);
   });
 
   it('takes titles that arrive after the visit', () => {
