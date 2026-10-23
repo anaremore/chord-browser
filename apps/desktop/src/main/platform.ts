@@ -5,7 +5,7 @@
 import { release } from 'node:os';
 import type { SystemInfo } from '@chord/ipc';
 import { hexToRgb, oklchToRgb, rgbToHex, size, windowBackground } from '@chord/tokens';
-import { nativeTheme, systemPreferences, type BaseWindowConstructorOptions } from 'electron';
+import { nativeTheme, systemPreferences, type BaseWindow, type BaseWindowConstructorOptions } from 'electron';
 import { windowIcon } from './app-icon';
 
 export type OsPlatform = 'darwin' | 'win32' | 'linux';
@@ -41,6 +41,22 @@ export const titleBarOverlay = (forced: ForcedAppearance = null) => ({ color: '#
 export function usesTranslucentMaterial(): boolean {
   if (nativeTheme.prefersReducedTransparency) return false;
   return platform === 'darwin' || windowsSupportsMica();
+}
+
+/**
+ * Reduce transparency (DESIGN.md §10), turned on or off while Chord runs:
+ * the window drops its OS material for a solid background, or takes it back.
+ * (The renderers re-theme from `systemInfo().material` at the same time.)
+ */
+export function applyMaterial(window: BaseWindow, forced: ForcedAppearance = null): void {
+  if (window.isDestroyed()) return;
+  const translucent = usesTranslucentMaterial();
+  if (platform === 'darwin') {
+    window.setVibrancy(translucent ? 'sidebar' : null);
+  } else if (windowsSupportsMica()) {
+    window.setBackgroundMaterial(translucent ? 'mica' : 'none');
+  }
+  if (!translucent) window.setBackgroundColor(backgroundHex(forced));
 }
 
 export function windowChromeOptions(forced: ForcedAppearance = null): BaseWindowConstructorOptions {

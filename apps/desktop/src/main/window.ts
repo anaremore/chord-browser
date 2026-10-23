@@ -15,7 +15,7 @@ import { frameRadius, radius, size, space, springCurve, springs } from '@chord/t
 import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session, type WebContents } from 'electron';
 import { registerCaller, send } from './ipc';
 import { epochNow, markLaunch } from './perf';
-import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
+import { applyMaterial, platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
 import { lockToOrigins } from './security';
 import { originOf } from './urls';
 
@@ -135,6 +135,8 @@ export class AppWindow {
   private focusPopoverWhenShown = false;
   private anchor: Rect | null = null;
   private overlayVisible = false;
+  /** Where the keyboard was when the overlay opened: Esc gives it back there. */
+  private overlayFrom: 'shell' | 'page' = 'page';
   private overlaySeq = 0;
   /** The command bar listens only once it has started; an opening asked for before that waits here. */
   private overlayReady = false;
@@ -210,6 +212,7 @@ export class AppWindow {
 
     const onTheme = () => {
       if (platform !== 'darwin') this.window.setTitleBarOverlay?.(titleBarOverlay(forced));
+      applyMaterial(this.window, forced);
       for (const view of [this.shell, this.popover, this.preview, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
     };
     nativeTheme.on('updated', onTheme);
@@ -554,12 +557,15 @@ export class AppWindow {
   }
 
   /**
-   * `anchor` places the downloads panel by its button; ⌘L uses the address the shell reported.
-   * `requestedAt` is when the opening was asked for: the command bar's open budget counts from it.
+   * `anchor` places the downloads panel by its button; ⌘L uses the address the
+   * shell reported. `from`: where the keyboard was, so dismissing it (Esc, a
+   * click outside) gives the focus back there (DESIGN.md §10). `requestedAt` is
+   * when the opening was asked for: the command bar's open budget counts from it.
    */
-  openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null, requestedAt = epochNow()): void {
+  openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null, from: 'shell' | 'page' = 'page', requestedAt = epochNow()): void {
     this.closeFloating();
     this.hidePreview();
+    this.overlayFrom = from;
     if (!this.overlayReady) {
       // A brand-new window: the command bar opens as soon as it's listening.
       this.pendingOpen = { mode, url, anchor, requestedAt };
@@ -576,7 +582,7 @@ export class AppWindow {
     this.overlayReady = true;
     const pending = this.pendingOpen;
     this.pendingOpen = null;
-    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, pending.requestedAt);
+    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, this.overlayFrom, pending.requestedAt);
     else if (this.shellPainted) send(this.overlay.webContents, 'overlay:warm', null);
   }
 
@@ -591,14 +597,44 @@ export class AppWindow {
     if (this.overlayReady) send(this.overlay.webContents, 'overlay:warm', null);
   }
 
-  /** `seq` is the opening being closed; a close for an earlier one (racing a newer open) is ignored. */
-  closeOverlay(seq = this.overlaySeq): void {
+  /**
+   * `seq` is the opening being closed; a close for an earlier one (racing a
+   * newer open) is ignored. Dismissed, it gives the focus back to the shell if
+   * that's where it came from; otherwise the page has it, as after a pick.
+   */
+  closeOverlay(seq = this.overlaySeq, dismissed = false): void {
     if (!this.overlayVisible || seq !== this.overlaySeq) return;
     // Peek's chrome closes with Peek (Browser does both).
     if (this.peek && seq === this.peekSeq) return;
     this.overlayVisible = false;
     this.overlay.setVisible(false);
-    (this.tabView?.webContents ?? this.shell.webContents).focus();
+    const back = dismissed && this.overlayFrom === 'shell' ? this.shell : (this.tabView ?? this.shell);
+    back.webContents.focus();
+  }
+
+  /**
+   * F6's regions (DESIGN.md §10): the shell decides the order, and asks for
+   * the keyboard to go to the page, the popover (find, a permission prompt)
+   * or back to itself.
+   */
+  focusRegion(to: 'page' | 'popover' | 'shell'): void {
+    if (this.window.isDestroyed()) return;
+    if (to === 'popover' && this.popover.getVisible()) this.popover.webContents.focus();
+    else if (to === 'page' && this.tabView?.getVisible()) this.tabView.webContents.focus();
+    else this.shell.webContents.focus();
+  }
+
+  /** Whether a find bar or permission prompt shows over the page (it's one of F6's regions). */
+  get popoverShown(): boolean {
+    return !this.window.isDestroyed() && this.popover.getVisible();
+  }
+
+  /** Which of the window's views has the keyboard, as F6 counts regions. */
+  focusSource(contents: WebContents | null): 'shell' | 'popover' | 'overlay' | 'page' {
+    if (contents === this.shell.webContents) return 'shell';
+    if (contents === this.popover.webContents) return 'popover';
+    if (contents === this.overlay.webContents) return 'overlay';
+    return 'page';
   }
 
   /**

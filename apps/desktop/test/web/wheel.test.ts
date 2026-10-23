@@ -73,6 +73,8 @@ describe('handles', () => {
     expect(stepColor(c, 'ArrowLeft', false)!.h).toBe(353);
     expect(stepColor(c, 'ArrowUp', true)!.c).toBe(MAX_CHROMA);
     expect(stepColor(c, 'ArrowDown', true)!.c).toBeCloseTo(0.145, 6);
+    expect(stepColor(c, 'PageUp', false)!.h).toBe(28);
+    expect(stepColor(c, 'PageDown', false)!.h).toBe(328);
     expect(stepColor(c, 'Enter', false)).toBeNull();
   });
 });

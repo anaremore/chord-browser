@@ -311,8 +311,12 @@ Only the first character counts (an emoji with its modifiers is one), and letter
    - Sample the composited gradient at 9 points, assuming worst-case material (light material as L 0.90, dark as L 0.28).
    - `fg` and `fg-muted` must each reach **≥ 4.5:1** at every sample.
    - If not, nudge the tint lightness away from the text by 0.01 per step (max 15 steps), then reduce chroma.
+   - *As built (M1.6):* `fg-muted` and `fg-subtle` are text too (descriptions, keycaps, hints). Each moves away from its grounds until it reaches ≥ 4.5:1 on all of them: the tint's samples, `surface`, `surface-raised`, and each of those under an `item-hover` fill.
    - Unit tests run this over 10,000 random inputs.
 7. **Accent.** The most chromatic stop at L 0.58 (light) or 0.76 (dark), `C = min(0.16, 1.2·C)`. It must reach ≥ 3:1 against `surface` (non-text contrast). Used for the selected command bar row, loading progress, Duet's send button, and split focus rings.
+   - *As built (M1.6):* the accent is also text (Undo in a toast, links), so it reaches ≥ 4.5:1 on both surfaces, with and without a hover fill, and ≥ 3:1 over every sample of the tint.
+   - **Focus ring:** the OS accent (or the chord's accent when the OS has none), with its lightness moved until it reaches ≥ 3:1 against the tint, both surfaces, hover fills and the active row's pill. It's the theme's `--color-focus-ring`.
+   - **Fallback favicons** (§7.4): when neither white nor ink reaches 4.5:1 on a site's square, the square moves away from the letter until it does.
 8. **Interaction roles:**
    - `item-hover` = `fg` at 6% (light) / 7% (dark).
    - `item-active-bg` = white at 78% plus `shadow-raised` (light), or white at 10% plus an inset hairline (dark).
@@ -522,6 +526,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 - 40 px tall, `radius-md`, `surface-raised`, `shadow-popover`.
 - Anatomy: `[icon] [message text-small] … [Undo — text-label, accent] [⌘Z keycap when the shell has focus]`.
 - Announced through a polite live region.
+- *As built (M1.6):* the stack is the one live region (each toast is announced once, as it arrives), and each Undo is described by its toast's message. The clock pauses while a toast has focus, as on hover. ⌘Z / Ctrl+Z, while the shell has focus and no text field does, presses the newest toast's Undo.
 
 ### 7.6 `HoverPreview`
 
@@ -591,6 +596,7 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **`ToolActivityRow`:** a single quiet line ("Read “Article”", "Read 3 tabs · 1 more", "Searched history for 'flights'") that expands to show details.
 - **`ApprovalCard`** ("Duet is asking"): what Duet wants to read, in plain words ("Read “Pricing”", "See the list of your tabs"), with the target listed.
   - Buttons: **Allow once** (⌘↵ / Ctrl+↵) · **Allow for this chat** · **No** (Esc).
+  - *As built (M1.6):* those keys work from the message field too, while a card waits; the question is announced to screen readers.
   - The card never auto-accepts. Once answered it shrinks to a muted line (*Allowed*, *Not allowed*).
 - **Working:** a dot and *Working… 12s* while a reply streams; text renders as it arrives, with no typing animation.
 - **Follow:** the list follows new text until you scroll up more than 40 px; then a **Jump to latest** pill appears.
@@ -607,7 +613,7 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 
 | Component | Spec |
 |---|---|
-| **Split view** | 2–4 panes, each its own rounded frame, separated by 8 px gaps. The focused pane gets a 2 px accent ring at 50% in the gap. Dividers are invisible until hovered, then show a 4×32 px pill (`fg` at 30%); the cursor shows the resize direction. Minimum pane width 320 px; double-click a divider to equalize. **In the sidebar** a split is one row: up to 4 favicons in a line plus a joined title ("Docs + Figma"), expandable to show its members. |
+| **Split view** | 2–4 panes, each its own rounded frame, separated by 8 px gaps. The focused pane gets a 2 px accent ring in the gap (at full strength: the accent's 3:1 over the tint is what makes it visible; it was 50% before the M1.6 accessibility pass). Dividers are invisible until hovered, then show a 4×32 px pill (`fg` at 30%); the cursor shows the resize direction. Minimum pane width 320 px; double-click a divider to equalize. **In the sidebar** a split is one row: up to 4 favicons in a line plus a joined title ("Docs + Figma"), expandable to show its members. |
 | **Peek** | Scrim plus a card up to 88% of the frame (max 1200×900), `radius-lg`, `shadow-modal`, with a 40 px header (domain · *Open in Today* ⌘↵ · *Close* Esc). It enters from scale 0.92 at the click point (`overlay`). Promoting it grows the card into the frame (`smooth`) and the page becomes a Today tab. |
 | **Mini window** | A small window (remembers its size; default 900×640) with a 36 px bar showing the domain, **Open in ▾ [chord]**, and close. Neutral tint. Promoting it fades the window out, and the tab lands in the chosen chord's Today with the pin bloom. On Wayland the compositor places the window.<br>**As built:** each link gets its own mini window, cascaded from the middle of the screen. The bar shows a lock or globe with the domain, *Copy link*, and a split button: **Open in [icon] [chord]** moves the page (⌘↵ / Ctrl+Enter), and ▾ picks another chord from a menu, which moves it there at once. Close is the window's own caption control (traffic lights on macOS, the caption buttons on Windows and Linux), as for Chord's other windows. A thin line along the bar's bottom shows loading. Chord launched just to open a link shows only the mini window. ⚠ Not yet: the pin bloom on arrival (the tab just appears at the top of Today), and the fade on Linux (it closes at once). |
 | **Auto picture-in-picture** | Leave a tab while its video plays and the video pops out into a floating window over everything, including other apps. Come back and it slides home inline.<br>**The window is Chromium's native PiP window**, the same one Chrome and Dia use. Its controls appear on hover: ↖ *back to tab* (top-left), the site's origin (top-center), ✕ (top-right), play/pause with the site's skip buttons (e.g. −10 / +30), and a progress bar. Chord doesn't restyle or animate this window; the OS and Chromium own it.<br>**In the sidebar** the tab's speaker icon becomes a PiP glyph (Lucide `picture-in-picture-2`). Clicking the glyph brings the video home.<br>**Settings:** *Pop out playing videos when you switch away* (on by default), plus a per-site "Don't pop out" in the site menu.<br>Details and limits: ARCHITECTURE.md §9. |
@@ -732,6 +738,19 @@ Empty states get a small abstract illustration in the chord's own colors (three 
   - Windows High Contrast / `forced-colors`: tints off, system colors on.
   - Text scaling via Chord's zoom setting (shell UI 90–150%).
 - **Targets:** at least 24×24 px (WCAG 2.2 AA); sidebar rows are 32 px tall.
+
+*As built (M1.6, the accessibility pass):*
+
+- **F6 / ⇧F6** go sidebar → page → (find bar or permission prompt) → Duet → top strip. Main knows which view has the keyboard; the shell picks the next region it shows and asks main to focus the page, the popover or itself (`focus:region`, `focus:move`). Coming back to a region lands where you left it; the first time, on the tab on screen, Duet's message field, or the address. The command bar and Peek are modal: F6 stays out.
+- **The sidebar** is two ARIA trees, Pinned and Today. Each row is a `treeitem` named by its title, with level, position and size (rows are drawn flat, indented by depth). Each tree is one Tab stop: the row last focused, else the tab on screen. Arrows, Home and End move; → / ← open, enter and close folders and splits; ↵ opens; Space picks a row up; Delete or ⌘⌫ closes. Picking up, moving and dropping are announced. A row's own buttons (×, ↩, Stop sharing, a split's chevron) are for the pointer; the keyboard has Delete and the row's menu (Shift+F10 or the menu key), which now also offers Stop sharing your screen and Back to pinned page.
+- **Composite widgets share one pattern** (`shared/a11y.ts`): radio groups, the chord switcher (tabs: ← → switch chords) and Duet's scope are one Tab stop, and arrow keys move and choose. Menus (Duet's model and Chats menus, Attach a tab) open on their first item, take ↑ ↓ Home End, and close on Esc or Tab with the keyboard back on their button. Popovers, pickers and in-place editors give the keyboard back to where it came from when they close.
+- **The command bar** is a modal dialog: a `combobox` (expanded while it has results) owning the `listbox` "Results", with the active option followed by `aria-activedescendant`. Esc gives the keyboard back where it came from (the sidebar row, or the page). Split with…, Separate split tabs and the pane moves are among its actions. The downloads and extensions panels take the keyboard when they open.
+- **Settings:** every row's description is read with its control; every ↺ is named for its setting ("Reset Search suggestions to default") and, once used, hands the keyboard to the setting it reset.
+- **Duet** says "Duet finished answering." once a reply is done, rather than reading it as it streams: the conversation is a `log` with `aria-live="off"` and `aria-busy` while it streams. Opening the panel (⌘E too) puts the keyboard on its first step; closing it gives it back.
+- **Announcements** go through one polite live region in the shell: chord switches ("Work chord, 3 pinned, 7 today"), Duet, onboarding steps and keyboard moves in the sidebar.
+- **Windows High Contrast** (`forced-colors: active`): tints and grain are off; what's chosen (the tab on screen, the current chord, a checked option, a switch that's on, the selected command bar result) is `Highlight` with `HighlightText`; focus is a ring in `CanvasText` just outside the control; the focused split pane is ringed in `Highlight`; floating surfaces get a `CanvasText` edge. Color swatches, orbs and the wheel's handles keep their colors, since colors are what they show.
+- **Reduce transparency** is read from `nativeTheme.prefersReducedTransparency`, at launch and whenever it changes: the window drops Mica or vibrancy for a solid background, and the theme composites over a solid base (§5.2 step 4).
+- **Tests:** `test/e2e/a11y.spec.ts` runs axe on every surface in light and dark across the capture matrix's themes, and computes contrast from the theme tokens where axe can't see through the tint; it also checks the screen-reader structure (aria snapshots), forced colors (with captures), reduced motion both ways and reduced transparency. `test/e2e/keyboard.spec.ts` walks every key flow in §8 with real focus.
 
 ---
 

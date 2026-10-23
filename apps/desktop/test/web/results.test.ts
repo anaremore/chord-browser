@@ -65,6 +65,19 @@ describe('command bar ranking', () => {
     expect(results.some((r) => r.kind === 'archive')).toBe(false);
   });
 
+  it("offers split view's actions to the keyboard: Split with… with a tab on screen, the rest only in a split", () => {
+    const { state, windowId } = stateWith(['https://a.test/', 'https://b.test/']);
+    const actions = (s: State, q: string) => buildResults(q, s, windowId, 'new', null, now).flatMap((r) => (r.kind === 'action' ? [r.action] : []));
+    expect(actions(state, 'split')).toContain('split.with');
+    expect(actions(state, 'separate')).not.toContain('split.separate');
+    const win = state.windows[windowId]!;
+    const shown = win.activeTab[win.activeChordId]!;
+    const other = Object.values(state.nodes).find((node) => node.kind === 'tab' && node.id !== shown)!;
+    const split = apply(state, { t: 'split.add', windowId, withId: shown, nodeId: other.id }, ctx).state;
+    expect(actions(split, 'separate')).toContain('split.separate');
+    expect(actions(split, 'pane')).toEqual(expect.arrayContaining(['split.focusNext', 'split.focusPrevious']));
+  });
+
   it('knows where each row leads, so picks can be remembered', () => {
     const { state, windowId } = stateWith([]);
     const [action] = buildResults('zoom in', state, windowId, 'new', null, now).filter((r) => r.kind === 'action');

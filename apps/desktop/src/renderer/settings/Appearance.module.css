@@ -530,3 +530,23 @@
   font-variant-numeric: tabular-nums;
   text-align: end;
 }
+
+/* ---------- Windows High Contrast (DESIGN.md §10) ---------- */
+
+@media (forced-colors: active) {
+  /* Colors are what these show, so they keep them; the chosen one is ringed in the selection color. */
+  .orb,
+  .swatch,
+  .slot,
+  .mini {
+    forced-color-adjust: none;
+  }
+
+  .scheme[aria-checked='true'],
+  .card[data-selected],
+  .slot[aria-checked='true'],
+  .swatch[aria-checked='true'] {
+    outline: var(--size-focus-ring) solid Highlight;
+    outline-offset: var(--size-focus-ring);
+  }
+}

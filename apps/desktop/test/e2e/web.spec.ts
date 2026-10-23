@@ -78,7 +78,7 @@ const runAction = (shell: Page, action: string) =>
 async function visit(shell: Page, overlay: Page, url: string) {
   await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
   await expect(overlay.getByRole('dialog')).toBeVisible();
-  await overlay.getByRole('textbox').fill(url);
+  await overlay.getByRole('combobox').fill(url);
   await overlay.keyboard.press('Enter');
 }
 
@@ -100,7 +100,7 @@ test('a PDF opens in its tab with the PDF viewer, and one sent as an attachment 
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('doc.pdf');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('doc.pdf');
     // Chromium's viewer shows it: its extension's page is part of the tab.
     const viewer = () =>
       app.evaluate(({ webContents }) =>
@@ -167,7 +167,7 @@ test('screen sharing goes through Chord’s picker, and Stop in the sidebar ends
     await picker.getByRole('option').first().click();
     await picker.getByRole('button', { name: 'Share', exact: true }).click();
     await expect.poll(() => tab.title()).toBe('Sharing');
-    const stop = shell.getByRole('button', { name: 'Stop sharing your screen' });
+    const stop = shell.locator('[aria-label="Stop sharing your screen"]');
     await expect(stop).toBeVisible();
 
     // Stop ends it the way the OS would: the page hears "ended".

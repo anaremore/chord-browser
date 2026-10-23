@@ -24,6 +24,8 @@ import { type DuetHit,
   searchUrl,
   shownTabs,
   chordsFor,
+  activeTabId,
+  splitOf,
   usagePoints,
   type ActionId,
   type ArchivedTab,
@@ -84,7 +86,17 @@ export function scopeLabel(scope: Scope): { name: string; placeholder: string } 
 }
 
 /** Actions that work in this milestone; the list grows with each feature. */
-const ACTIONS: { action: ActionId; title: string; words: string }[] = [
+/** The tab on screen is one of a split's panes. */
+const inSplit = (state: State, windowId: string) => {
+  const active = activeTabId(state, windowId);
+  return active !== null && splitOf(state, active) !== null;
+};
+
+/**
+ * Every action the keyboard needs is here (DESIGN.md §14.1 rule 4). `when`:
+ * shown only where it does something (Separate split tabs, in a split).
+ */
+const ACTIONS: { action: ActionId; title: string; words: string; when?: (state: State, windowId: string) => boolean }[] = [
   { action: 'tab.reopen', title: 'Reopen closed tab', words: 'reopen closed tab undo restore' },
   { action: 'app.history', title: 'Archive', words: 'archive archived history closed tabs' },
   { action: 'tab.close', title: 'Close tab', words: 'close tab' },
@@ -92,6 +104,10 @@ const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'tab.favorite', title: 'Add this tab to Favorites', words: 'add favorite favorites star bookmark tile' },
   { action: 'folder.new', title: 'New folder with this tab', words: 'new folder group organize pinned' },
   { action: 'today.clear', title: 'Clear Today', words: 'clear today archive tidy close all tabs' },
+  { action: 'split.with', title: 'Split with…', words: 'split view side by side pane beside two tabs', when: (s, w) => activeTabId(s, w) !== null },
+  { action: 'split.separate', title: 'Separate split tabs', words: 'separate split unsplit leave panes tabs apart', when: inSplit },
+  { action: 'split.focusNext', title: 'Focus the pane to the right', words: 'split pane focus next right', when: inSplit },
+  { action: 'split.focusPrevious', title: 'Focus the pane to the left', words: 'split pane focus previous left', when: inSplit },
   { action: 'address.copy', title: 'Copy page address', words: 'copy url address link' },
   { action: 'address.copyMarkdown', title: 'Copy as Markdown link', words: 'copy markdown link md' },
   { action: 'tab.next', title: 'Next tab', words: 'next tab down' },
@@ -398,6 +414,7 @@ function resultsFor(
   }
 
   for (const a of ACTIONS) {
+    if (a.when && !a.when(state, windowId)) continue;
     const match = matchScore(q, a.title, a.words) ?? abbreviationScore(q, a.title);
     if (match === null) continue;
     const result: Result = { kind: 'action', key: `action:${a.action}`, title: a.title, action: a.action };
@@ -499,7 +516,7 @@ function filtered(
       );
     case 'actions':
       return ranked(
-        ACTIONS,
+        ACTIONS.filter((a) => !a.when || a.when(state, windowId)),
         (a) => matchScore(q, a.title, a.words) ?? abbreviationScore(q, a.title),
         () => 0,
         (a) => ({ kind: 'action', key: `action:${a.action}`, title: a.title, action: a.action }),

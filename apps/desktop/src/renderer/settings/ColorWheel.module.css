@@ -44,6 +44,12 @@
     var(--shadow-raised);
 }
 
+/* From the keyboard: the ring goes outside the handle's own ring, so it reads against the card, not the color. */
+.handle:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-focus-ring);
+}
+
 .handle:active {
   cursor: grabbing;
 }
@@ -52,4 +58,20 @@
 .handle[data-leaving] {
   opacity: 0.6;
   scale: 0.5;
+}
+
+/* Windows High Contrast (DESIGN.md §10): the handles keep their colors; the chosen one is ringed. */
+@media (forced-colors: active) {
+  .handle {
+    forced-color-adjust: none;
+  }
+
+  .handle[data-selected] {
+    outline: var(--size-focus-ring) solid Highlight;
+    outline-offset: var(--size-focus-ring);
+  }
+
+  .handle:focus-visible {
+    outline-color: CanvasText;
+  }
 }

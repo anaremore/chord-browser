@@ -71,6 +71,12 @@ export interface ThemeContext {
   contrast?: number;
   /** Settings → Appearance → Window tint, 0–1 (0.5 is the default): how much color covers the window material. */
   glass?: number;
+  /**
+   * The OS accent color, which focus rings wear (DESIGN.md §10). Null or
+   * missing: the chord's own accent. Either way its lightness is moved until
+   * the ring reaches 3:1 on the tint and on every surface.
+   */
+  focus?: Oklch | null;
 }
 
 /** 0–1 around a 0.5 midpoint: below it moves from `low` to `mid`, above it from `mid` to `high`. */
@@ -84,8 +90,13 @@ export interface ChordTheme {
   /** Tint stops after mapping into the appearance band and the contrast guard. */
   stops: Oklch[];
   tintAlpha: number;
-  /** Lowest text contrast found across the tint, for tests and diagnostics. */
-  minContrast: { fg: number; fgMuted: number; accent: number; accentFg: number };
+  /**
+   * Lowest contrasts found, for tests and diagnostics: text over the tint
+   * (`fg`, `fgMuted`), subtle text over the tint and the surfaces, the accent
+   * as text on the surfaces, text on the accent, and the focus ring against
+   * everything it can sit on.
+   */
+  minContrast: { fg: number; fgMuted: number; fgSubtle: number; accent: number; accentFg: number; focusRing: number };
   /** CSS custom properties to set on the element that hosts the chord. */
   vars: Record<`--${string}`, string>;
 }
@@ -104,13 +115,20 @@ export function presetStops(id: PresetId): Oklch[] {
  * Fallback-favicon colors for a site's stable hue (DESIGN.md §7.4): a soft
  * square with whichever of white or near-black reads at ≥ 4.5:1.
  */
-export function siteColors(hue: number, appearance: Appearance): { background: string; foreground: string } {
-  const bg: Oklch = appearance === 'light' ? { l: 0.7, c: 0.11, h: hue } : { l: 0.55, c: 0.1, h: hue };
-  const bgRgb = oklchToRgb(bg);
+export function siteColors(hue: number, appearance: Appearance): { background: string; foreground: string; contrast: number } {
+  let bg: Oklch = appearance === 'light' ? { l: 0.7, c: 0.11, h: hue } : { l: 0.55, c: 0.1, h: hue };
   const white = oklchToRgb({ l: 1, c: 0, h: 0 });
   const ink: Oklch = { l: 0.2, c: 0.02, h: hue };
-  const foreground = contrast(white, bgRgb) >= contrast(oklchToRgb(ink), bgRgb) ? 'oklch(1 0 0)' : cssOklch(ink);
-  return { background: cssOklch(bg), foreground };
+  const inkRgb = oklchToRgb(ink);
+  const useWhite = contrast(white, oklchToRgb(bg)) >= contrast(inkRgb, oklchToRgb(bg));
+  const fg = useWhite ? white : inkRgb;
+  // Neither may reach 4.5:1 at some hues: the square moves away from the letter until it does.
+  let ratio = contrast(fg, oklchToRgb(bg));
+  for (let i = 0; i < 30 && ratio < 4.5; i++) {
+    bg = { ...bg, l: useWhite ? bg.l - 0.01 : bg.l + 0.01 };
+    ratio = contrast(fg, oklchToRgb(bg));
+  }
+  return { background: cssOklch(bg), foreground: useWhite ? 'oklch(1 0 0)' : cssOklch(ink), contrast: ratio };
 }
 
 /** Solid window background before any tint paints, and where no OS material exists. */
@@ -137,7 +155,7 @@ export function defaultChordStops(accent: Oklch | null): Oklch[] {
 const TEXT_MIN_CONTRAST = 4.5;
 const UI_MIN_CONTRAST = 3;
 /** Assumed worst-case OS material behind a translucent tint (DESIGN.md §5.2). */
-const WORST_MATERIAL: Record<Appearance, Oklch> = {
+export const WORST_MATERIAL: Record<Appearance, Oklch> = {
   light: { l: 0.9, c: 0, h: 0 },
   dark: { l: 0.28, c: 0, h: 0 },
 };
@@ -215,15 +233,39 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
     );
   }
 
-  // Accent: the most chromatic pick, kept legible against surfaces as a UI color.
+  // Every ground text sits on: the surfaces, the tint at each of its sample points, and each of those
+  // under a hover fill (`item-hover`, the main text color at a few percent), as rows, the address
+  // pill, segmented controls and keycaps draw it.
+  const hoverAlpha = around(strength, light ? 0.04 : 0.05, light ? 0.06 : 0.07, light ? 0.1 : 0.12);
+  const surfaces = [oklchToRgb(surface), oklchToRgb(surfaceRaised)];
+  const tints = gradientSamples(stops).map((sample) => over(oklchToRgb(sample), tintAlpha, backdrop));
+  const withHover = (grounds: Rgb[]) => [...grounds, ...grounds.map((ground) => over(fgRgb, hoverAlpha, ground))];
+  const onSurfaces = withHover(surfaces);
+  const everywhere = withHover([...surfaces, ...tints]);
+  const lowestOn = (color: Oklch, withTint: boolean) => {
+    const rgb = oklchToRgb(color);
+    return Math.min(...(withTint ? everywhere : onSurfaces).map((ground) => contrast(rgb, ground)));
+  };
+  /** Moves a text color away from its grounds until it reads at 4.5:1 on all of them. */
+  const readable = (color: Oklch): [Oklch, number] => {
+    let next = color;
+    let min = lowestOn(next, true);
+    for (let i = 0; i < 60 && min < TEXT_MIN_CONTRAST; i++) {
+      next = { ...next, l: light ? next.l - 0.01 : next.l + 0.01 };
+      min = lowestOn(next, true);
+    }
+    return [next, min];
+  };
+  // Secondary and subtle text (descriptions, keycaps, hints, footnotes) are text too.
+  const [muted, mutedEverywhere] = readable(fgMuted);
+  const [subtle, subtleMin] = readable(fgSubtle);
+
+  // Accent: the most chromatic pick. It colors text (Undo, links, citations) as well as fills, so it
+  // reads as text on the surfaces (≥ 4.5:1), and as a UI color over the tint (≥ 3:1).
   const vivid = userStops.reduce((a, b) => (b.c > a.c ? b : a));
   let accent: Oklch = { l: light ? 0.58 : 0.76, c: Math.min(0.16, vivid.c * 1.2), h: vivid.h };
-  const surfaceRgb = oklchToRgb(surface);
-  let accentContrast = contrast(oklchToRgb(accent), surfaceRgb);
-  for (let i = 0; i < 20 && accentContrast < UI_MIN_CONTRAST; i++) {
-    accent = { ...accent, l: light ? accent.l - 0.02 : accent.l + 0.02 };
-    accentContrast = contrast(oklchToRgb(accent), surfaceRgb);
-  }
+  const accentOk = (color: Oklch) => lowestOn(color, false) >= TEXT_MIN_CONTRAST && Math.min(...tints.map((ground) => contrast(oklchToRgb(color), ground))) >= UI_MIN_CONTRAST;
+  for (let i = 0; i < 30 && !accentOk(accent); i++) accent = { ...accent, l: light ? accent.l - 0.02 : accent.l + 0.02 };
   // Text on the accent (primary buttons): white in light themes, a dark ink in the accent's hue in
   // dark ones (the theme's own text color is light there, and light-on-light fails). The accent
   // darkens or lightens until that text reads; either way it moves away from the surface, which
@@ -236,11 +278,27 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
     accent = { ...accent, l: light ? accent.l - 0.02 : accent.l + 0.02 };
     accentRgb = oklchToRgb(accent);
   }
-  accentContrast = contrast(accentRgb, surfaceRgb);
+  const accentContrast = lowestOn(accent, false);
   const onWhite = contrast(white, accentRgb);
   const onInk = contrast(inkRgb, accentRgb);
   const accentFg = onWhite >= TEXT_MIN_CONTRAST || onWhite >= onInk ? 'oklch(1 0 0)' : cssOklch(ink);
   const accentFgContrast = accentFg === 'oklch(1 0 0)' ? onWhite : onInk;
+
+  // Focus rings (DESIGN.md §10): the OS accent, or the chord's, at ≥ 3:1 against everything a ring can
+  // sit on or beside: the tint, the surfaces, and the active row's pill.
+  const activePill = light ? { color: { l: 1, c: 0, h: 0 }, alpha: 0.78 } : { color: { l: 1, c: 0, h: 0 }, alpha: around(strength, 0.08, 0.1, 0.15) };
+  const ringMin = (color: Oklch) => {
+    const rgb = oklchToRgb(color);
+    let min = lowestOn(color, true);
+    for (const under of tints) min = Math.min(min, contrast(rgb, over(oklchToRgb(activePill.color), activePill.alpha, under)));
+    return min;
+  };
+  let ring: Oklch = context.focus && context.focus.c >= 0.02 ? { ...context.focus } : { ...accent };
+  let ringContrast = ringMin(ring);
+  for (let i = 0; i < 50 && ringContrast < UI_MIN_CONTRAST; i++) {
+    ring = { ...ring, l: Math.min(1, Math.max(0, light ? ring.l - 0.02 : ring.l + 0.02)) };
+    ringContrast = ringMin(ring);
+  }
 
   const tint = (s: Oklch) => cssOklch(s, tintAlpha);
   const [a, b, c] = stops as [Oklch, Oklch?, Oklch?];
@@ -254,18 +312,19 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
     appearance,
     stops,
     tintAlpha,
-    minContrast: { fg: fgMin, fgMuted: mutedMin, accent: accentContrast, accentFg: accentFgContrast },
+    minContrast: { fg: fgMin, fgMuted: Math.min(mutedMin, mutedEverywhere), fgSubtle: subtleMin, accent: accentContrast, accentFg: accentFgContrast, focusRing: ringContrast },
     vars: {
       '--color-tint': tintCss,
       '--color-base': context.material === 'translucent' ? 'transparent' : cssOklch(base),
       '--color-fg': cssOklch(fg),
-      '--color-fg-muted': cssOklch(fgMuted),
-      '--color-fg-subtle': cssOklch(fgSubtle),
-      '--color-item-hover': cssOklch(fg, around(strength, light ? 0.04 : 0.05, light ? 0.06 : 0.07, light ? 0.1 : 0.12)),
+      '--color-fg-muted': cssOklch(muted),
+      '--color-fg-subtle': cssOklch(subtle),
+      '--color-item-hover': cssOklch(fg, hoverAlpha),
       '--color-item-active-bg': light ? 'oklch(1 0 0 / 0.78)' : `oklch(1 0 0 / ${around(strength, 0.08, 0.1, 0.15).toFixed(3)})`,
       '--color-divider': cssOklch(fg, around(strength, 0.06, 0.1, 0.18)),
       '--color-accent': cssOklch(accent),
       '--color-accent-fg': accentFg,
+      '--color-focus-ring': cssOklch(ring),
       '--color-danger': cssOklch(DANGER[appearance]),
       /** Selected rows in lists like the command bar. */
       '--color-selection': cssOklch(accent, light ? 0.14 : 0.22),

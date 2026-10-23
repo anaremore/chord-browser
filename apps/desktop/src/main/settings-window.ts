@@ -6,7 +6,7 @@
 import type { SettingsSnapshot } from '@chord/ipc';
 import { BaseWindow, nativeTheme, type Session, type WebContentsView } from 'electron';
 import { send } from './ipc';
-import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
+import { applyMaterial, platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
 import { createUiView } from './window';
 
 const WIDTH = 860;
@@ -42,6 +42,7 @@ export class SettingsWindow {
 
     const onTheme = () => {
       if (platform !== 'darwin') this.window.setTitleBarOverlay?.(titleBarOverlay());
+      applyMaterial(this.window);
       send(this.view.webContents, 'system:changed', systemInfo());
     };
     nativeTheme.on('updated', onTheme);

@@ -24,7 +24,7 @@ import { INSTANT } from '../shared/motion';
 import { api } from './api';
 import styles from './Appearance.module.css';
 import { ColorWheel } from './ColorWheel';
-import { ResetButton, Row, SectionHeader, Segmented } from './controls';
+import { RadioGroup, ResetButton, Row, SectionHeader, Segmented } from './controls';
 import settingsStyles from './Settings.module.css';
 import { MAX_STOPS, addedStop, surpriseStops } from './wheel';
 
@@ -125,7 +125,7 @@ const SCHEMES: { value: ColorScheme; label: string }[] = [
 
 function ColorSchemes({ scheme, ...look }: Look & { scheme: ColorScheme }) {
   return (
-    <div className={styles.schemes} role="radiogroup" aria-label="Color scheme">
+    <RadioGroup className={styles.schemes} label="Color scheme">
       {SCHEMES.map(({ value, label }) => (
         <button key={value} type="button" role="radio" aria-checked={scheme === value} className={styles.scheme} onClick={() => void api.settings.set({ colorScheme: value })}>
           <span className={styles.schemePreview}>
@@ -145,7 +145,7 @@ function ColorSchemes({ scheme, ...look }: Look & { scheme: ColorScheme }) {
           </span>
         </button>
       ))}
-    </div>
+    </RadioGroup>
   );
 }
 
@@ -225,7 +225,7 @@ function ThemeEditor({
           }}
         />
         <div className={styles.pickerSide}>
-          <div className={styles.slots} role="radiogroup" aria-label="Theme colors">
+          <RadioGroup className={styles.slots} label="Theme colors">
             {stops.map((s, i) => (
               <span key={i} className={styles.slotWrap}>
                 <button
@@ -267,9 +267,9 @@ function ThemeEditor({
               </button>
             )}
             <span className={styles.slotHint}>{stops.length === 1 ? 'Add a second color for a gradient.' : 'The gradient runs from the first color to the last.'}</span>
-          </div>
+          </RadioGroup>
 
-          <div className={styles.palette} role="radiogroup" aria-label={`Color ${slot + 1}`}>
+          <RadioGroup className={styles.palette} label={`Swatches for color ${slot + 1}`}>
             {(Object.keys(SWATCHES) as SwatchId[]).map((id) => (
               <button
                 key={id}
@@ -283,7 +283,7 @@ function ThemeEditor({
                 onClick={() => setActive({ ...SWATCHES[id] })}
               />
             ))}
-          </div>
+          </RadioGroup>
 
           <label className={styles.slider}>
             <span>Grain</span>
@@ -453,7 +453,7 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
 
       <h2 className={settingsStyles.groupTitle}>
         Color scheme
-        <ResetButton visible={settings.colorScheme !== DEFAULT_SETTINGS.colorScheme} onReset={() => void api.settings.set({ colorScheme: DEFAULT_SETTINGS.colorScheme })} />
+        <ResetButton label="Reset Color scheme to default" visible={settings.colorScheme !== DEFAULT_SETTINGS.colorScheme} onReset={() => void api.settings.set({ colorScheme: DEFAULT_SETTINGS.colorScheme })} />
       </h2>
       <ColorSchemes scheme={settings.colorScheme} stops={stops} grain={grain} {...look} />
 
@@ -553,10 +553,20 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
   );
 }
 
-function Percent({ label, value, onChange }: { label: string; value: number; onChange(value: number): void }) {
+function Percent({ label, value, onChange, describedBy }: { label: string; value: number; onChange(value: number): void; describedBy?: string }) {
   return (
     <span className={styles.percent}>
-      <input type="range" min={0} max={100} step={5} aria-label={label} value={Math.round(value * 100)} onChange={(e) => onChange(Number(e.target.value) / 100)} />
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        aria-label={label}
+        aria-valuetext={`${Math.round(value * 100)}%`}
+        aria-describedby={describedBy}
+        value={Math.round(value * 100)}
+        onChange={(e) => onChange(Number(e.target.value) / 100)}
+      />
       <output className={styles.percentValue}>{Math.round(value * 100)}%</output>
     </span>
   );

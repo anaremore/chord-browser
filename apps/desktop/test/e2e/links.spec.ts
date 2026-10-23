@@ -88,7 +88,7 @@ const dispatch = (shell: Page, command: unknown) => shell.evaluate((c) => (windo
 async function visit(shell: Page, overlay: Page, url: string) {
   await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
   await expect(overlay.getByRole('dialog')).toBeVisible();
-  await overlay.getByRole('textbox').fill(url);
+  await overlay.getByRole('combobox').fill(url);
   await overlay.keyboard.press('Enter');
 }
 
@@ -146,7 +146,7 @@ test('a link from another app opens in a mini window, and Open in moves it into 
 
     await promote.click();
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' }).getByRole('listitem').first()).toContainText('B');
+    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('B');
     // The same page moved into the window, so Back still goes to A.
     expect(await contentsId(app, `${site.origin}/b`)).toBe(id);
     await expect.poll(() => canGoBack(app, id)).toBe(true);
@@ -173,7 +173,7 @@ test('a link from another app opens in a mini window, and Open in moves it into 
     await settings.getByRole('radiogroup', { name: 'Links from other apps open in' }).getByRole('radio', { name: 'New tab' }).click();
     await expect.poll(async () => (await snapshot(shell)).state.settings.externalLinks).toBe('tab');
     await handOver(app, `${site.origin}/d`);
-    await expect(shell.getByRole('list', { name: 'Today' }).getByRole('listitem').first()).toContainText('D');
+    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('D');
     expect(app.windows().some((p) => isMini(p.url()))).toBe(false);
   } finally {
     await app.close();
@@ -187,7 +187,7 @@ test('a pinned tab’s link to another site opens in Peek: Esc or a click outsid
     const overlay = await pageWhere(app, isOverlay);
     const tab = await pageWhere(app, (url) => url === `${site.origin}/pinned`);
     await runAction(shell, 'tab.pin');
-    await expect(shell.getByRole('list', { name: 'Pinned' })).toContainText('Pinned');
+    await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Pinned');
     const peek = overlay.getByRole('dialog', { name: /^Peek/ });
 
     // A link to the same site goes on in place, as always.
@@ -230,7 +230,7 @@ test('a pinned tab’s link to another site opens in Peek: Esc or a click outsid
     const id = (await contentsId(app, `${site.other}/other2`))!;
     await peek.getByRole('button', { name: /Open in Today/ }).click();
     await expect(peek).toBeHidden();
-    await expect(shell.getByRole('list', { name: 'Today' }).getByRole('listitem').first()).toContainText('Other 2');
+    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('Other 2');
     expect(await contentsId(app, `${site.other}/other2`)).toBe(id);
     await expect.poll(() => canGoBack(app, id)).toBe(true);
     const { windowId, state } = await snapshot(shell);
@@ -267,7 +267,7 @@ test('a pinned tab’s link to another site opens in Peek: Esc or a click outsid
     await expect.poll(() => app.windows().filter((p) => isOverlay(p.url())).length).toBe(2);
     const privateOverlay = app.windows().filter((p) => isOverlay(p.url()))[1]!;
     await expect(privateOverlay.getByRole('dialog')).toBeVisible();
-    await privateOverlay.getByRole('textbox').fill(`${site.origin}/private`);
+    await privateOverlay.getByRole('combobox').fill(`${site.origin}/private`);
     await privateOverlay.keyboard.press('Enter');
     const privateTab = await pageWhere(app, (url) => url === `${site.origin}/private`);
     const privateId = (await contentsId(app, `${site.origin}/private`))!;
@@ -301,7 +301,7 @@ test('a link route sends a site’s links to its chord, from other apps and the 
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('A');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('A');
     const theme = { stops: [{ l: 0.72, c: 0.1, h: 200 }], grain: 0.2, appearance: 'auto' as const };
     await dispatch(shell, { t: 'chord.create', windowId: 'w', name: 'Work', icon: 'W', theme });
     const chordNamed = (state: State, name: string) => Object.values(state.chords).find((c) => c.name === name)!.id;
@@ -313,7 +313,7 @@ test('a link route sends a site’s links to its chord, from other apps and the 
     // Moving a site's pages to the same chord twice: Chord asks, once, and only then makes a route.
     for (const path of ['/other', '/other2']) {
       await visit(shell, overlay, `${site.other}${path}`);
-      await expect(shell.getByRole('list', { name: 'Today' }).getByRole('listitem').first()).toContainText(path === '/other' ? 'Other' : 'Other 2');
+      await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText(path === '/other' ? 'Other' : 'Other 2');
       const { state } = await snapshot(shell);
       await shell.evaluate(
         ([nodeId, chordId]) => (window as unknown as { chord: { sidebar: { moveToChord(n: string, c: string): Promise<void> } } }).chord.sidebar.moveToChord(nodeId!, chordId!),
@@ -322,13 +322,13 @@ test('a link route sends a site’s links to its chord, from other apps and the 
     }
     expect((await snapshot(shell)).state.linkRoutes).toEqual({});
     // On the move's own toast: a second line, under "Moved to Work" and its Undo.
-    const moved = shell.getByRole('status').filter({ hasText: 'Always open localhost here?' });
+    const moved = shell.getByRole('group').filter({ hasText: 'Always open localhost here?' });
     await expect(moved).toContainText('Moved to Work');
     await moved.getByRole('button', { name: 'Always' }).click();
     await expect.poll(async () => (await snapshot(shell)).state.linkRoutes['localhost']?.chordId).toBe(work);
     // Answered, the question goes; the move's Undo stays.
     await expect(shell.getByText('Always open localhost here?')).toBeHidden();
-    await expect(shell.getByRole('status').filter({ hasText: 'Moved to Work' }).first().getByRole('button', { name: 'Undo' })).toBeVisible();
+    await expect(shell.getByRole('group').filter({ hasText: 'Moved to Work' }).first().getByRole('button', { name: 'Undo' })).toBeVisible();
 
     // From another app: straight to Work, as a tab (a route skips the mini window).
     await handOver(app, `${site.other}/c`);
