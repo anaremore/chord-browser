@@ -215,4 +215,11 @@ export const MIGRATIONS: readonly string[] = [
     layout TEXT NOT NULL
   ) STRICT;
   `,
+  // 11: link routes (from Crest): a site's links open in a chord. A route to a chord that's gone is
+  // dropped at restore. It only adds its own table, if it isn't there yet.
+  `
+  CREATE TABLE IF NOT EXISTS link_route (
+    host TEXT PRIMARY KEY, chord_id TEXT NOT NULL, created_at INTEGER NOT NULL
+  ) STRICT;
+  `,
 ];

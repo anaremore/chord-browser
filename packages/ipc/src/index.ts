@@ -14,6 +14,7 @@ import {
   type Chord,
   type CustomTheme,
   type InterfaceSettings,
+  type LinkRoute,
   type Command,
   type DownloadAction,
   type DuetHit,
@@ -30,8 +31,8 @@ import {
 } from '@chord/core';
 import { z } from 'zod';
 
-/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs); `preview` draws hover previews. */
-export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive' | 'preview';
+/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs); `preview` draws hover previews; `mini` is a mini window's bar. */
+export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive' | 'preview' | 'mini';
 
 export const Platform = z.enum(['darwin', 'win32', 'linux']);
 export type Platform = z.infer<typeof Platform>;
@@ -83,7 +84,10 @@ const chordName = z.string().max(64);
 
 /** Commands a renderer may send. Engine-only commands (tab.updated, tab.live) are not accepted from renderers. */
 export const RendererCommand = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('tab.open'), windowId: id, url, background: z.boolean().optional(), pinned: z.boolean().optional() }),
+  z.object({ t: z.literal('tab.open'), windowId: id, url, background: z.boolean().optional(), pinned: z.boolean().optional(), route: z.boolean().optional() }),
+  // Link routes (from Crest): "Always open linear.app in Work?" answers with linkRoute.set.
+  z.object({ t: z.literal('linkRoute.set'), host: z.string().min(1).max(253), chordId: id }),
+  z.object({ t: z.literal('linkRoute.delete'), host: z.string().min(1).max(253) }),
   z.object({ t: z.literal('tab.activate'), windowId: id, nodeId: id, touch: z.boolean().optional() }),
   z.object({ t: z.literal('tab.close'), windowId: id, nodeId: id }),
   z.object({ t: z.literal('tab.reopenClosed'), windowId: id }),
@@ -175,6 +179,7 @@ export const SettingsPatch = z.strictObject({
   checkForUpdates: z.boolean().optional(),
   googleFree: z.boolean().optional(),
   separateSignIns: z.boolean().optional(),
+  externalLinks: z.enum(['mini', 'tab']).optional(),
   spellcheck: z
     .strictObject({ enabled: z.boolean(), language: z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/).nullable() })
     .partial()
@@ -257,6 +262,31 @@ export interface SettingsSnapshot {
   sitePermissions: SitePermissions;
   /** Spelling dictionaries Chord can use (Windows and Linux); empty on macOS, where the system's own checks spelling. */
   spellcheckLanguages: string[];
+  /** Settings → General → Link routes, by site. */
+  linkRoutes: LinkRoute[];
+}
+
+/** What a mini window's bar shows (DESIGN.md §7.9): the page, and the chord "Open in" puts it in. */
+export interface MiniState {
+  url: string;
+  host: string;
+  title: string;
+  /** Loaded over https: the bar shows a lock. */
+  secure: boolean;
+  loading: boolean;
+  /** The chord "Open in" moves the page to; null when there's none it can go to. */
+  target: { id: string; name: string; icon: string } | null;
+}
+
+/** What Peek's chrome shows (DESIGN.md §7.9, §8.5). */
+export interface PeekState {
+  url: string;
+  host: string;
+  title: string;
+  /** The card, in window coordinates; the page sits in it below the header. */
+  card: Rect;
+  /** Where the card grows from: the click that opened it. */
+  origin: { x: number; y: number } | null;
 }
 
 /** One extension's toolbar button, for the window's current tab. */
@@ -414,6 +444,8 @@ export interface Toast {
   message: string;
   /** Most run a command in the shell's store (Undo); "Restart to update" asks main to install. */
   action?: { label: string; command: RendererCommand } | { label: string; update: 'restart' };
+  /** A second line with its own action, about the same thing ("Always open linear.app here?" under "Moved to Work"). */
+  also?: { message: string; action: { label: string; command: RendererCommand } };
 }
 
 export interface ChordEdit {
@@ -446,14 +478,19 @@ export type OverlayOpen = z.infer<typeof OverlayOpen>;
 
 /** What main tells the overlay when it opens. */
 export interface OverlayOpenEvent {
-  /** `split`: the command bar for "Split with…": what you pick opens beside the current tab. */
-  mode: 'new' | 'edit' | 'downloads' | 'extensions' | 'split';
+  /**
+   * `peek`: Peek's chrome around a link from a pinned tab (main opens it; the shell can't).
+   * `split`: the command bar for "Split with…": what you pick opens beside the current tab.
+   */
+  mode: 'new' | 'edit' | 'downloads' | 'extensions' | 'split' | 'peek';
   /** Where the address sits, for the anchored placement (window coordinates). */
   anchor: Rect | null;
   /** The current tab's address, prefilled in edit mode. */
   url: string;
   /** Which opening this is: a close for an earlier one is ignored (it can arrive after a newer open). */
   seq: number;
+  /** Peek's page and card, in peek mode. */
+  peek?: PeekState;
 }
 
 export interface StateSnapshot {
@@ -548,7 +585,7 @@ export const invokeChannels = {
     request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }), z.object({ do: z.literal('clearAll') })]),
     response: z.custom<DuetProviderInfo[]>(),
   },
-  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview'], request: z.void(), response: SystemInfo },
+  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview', 'mini'], request: z.void(), response: SystemInfo },
   'preview:hover': { roles: ['shell'], request: PreviewTarget, response: z.void() },
   'preview:size': { roles: ['preview'], request: z.object({ width: z.number().min(0).max(2000), height: z.number().min(0).max(2000) }), response: z.void() },
   'state:snapshot': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<StateSnapshot>() },
@@ -653,6 +690,17 @@ export const invokeChannels = {
     response: z.void(),
   },
   'settings:forgetSite': { roles: ['internal'], request: z.strictObject({ origin: siteOrigin }), response: z.void() },
+  /** Settings → General → Link routes: send a site's links to a chord, or (null) stop. */
+  'settings:linkRoute': { roles: ['internal'], request: z.strictObject({ host: z.string().min(1).max(253), chordId: id.nullable() }), response: z.void() },
+  // A mini window's bar (DESIGN.md §7.9): links from other apps open there.
+  'mini:state': { roles: ['mini'], request: z.void(), response: z.custom<MiniState>() },
+  /** Move the page into its "Open in" chord, as a tab with its history. */
+  'mini:promote': { roles: ['mini'], request: z.void(), response: z.void() },
+  /** "Open in ▾": the chords, below this rect; picking one moves the page there. */
+  'mini:chooseChord': { roles: ['mini'], request: Rect, response: z.void() },
+  'mini:copyLink': { roles: ['mini'], request: z.void(), response: z.void() },
+  /** Peek's "Open in Today": the page becomes a tab, history and all. Closing goes through overlay:close. */
+  'peek:expand': { roles: ['overlay'], request: z.void(), response: z.void() },
   // Screen sharing (ARCHITECTURE.md §9): the picker answers; the sidebar's Stop ends a share.
   'share:respond': {
     roles: ['popover'],
@@ -697,6 +745,11 @@ export interface EventPayloads {
   /** The archive gained or lost entries: the archive page lists them again. */
   'archive:changed': null;
   'archive:snapshot': ArchiveSnapshot;
+  'mini:state': MiniState;
+  /** Main closed this opening of the overlay itself (Peek, by Esc in its page, ⌘W, or Open in Today). */
+  'overlay:dismiss': { seq: number };
+  /** Peek's page moved on (title, address) or its card moved (the window resized). */
+  'peek:state': PeekState;
   'duet:state': DuetView;
 }
 
@@ -794,6 +847,8 @@ export interface SettingsApi {
     /** Change one remembered decision for a site (null asks again), or forget the site entirely. */
     sitePermission(origin: string, permission: SitePermission, decision: 'allow' | 'block' | null): Promise<void>;
     forgetSite(origin: string): Promise<void>;
+    /** Send a site's links to a chord, or (null) stop. */
+    linkRoute(host: string, chordId: string | null): Promise<void>;
     defaultBrowser(): Promise<DefaultBrowserStatus>;
     /** Asks the OS to make Chord the default (on Windows, opens Settings → Default apps), then reports again. */
     makeDefaultBrowser(): Promise<DefaultBrowserStatus>;
@@ -812,6 +867,21 @@ export interface SettingsApi {
     remove(profileId: string, id: string): Promise<void>;
     options(profileId: string, id: string): Promise<void>;
     update(): Promise<number>;
+  };
+}
+
+/** `window.chord` in a mini window's bar. */
+export interface MiniApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  mini: {
+    state(): Promise<MiniState>;
+    onState(listener: (state: MiniState) => void): () => void;
+    promote(): Promise<void>;
+    chooseChord(anchor: Rect): Promise<void>;
+    copyLink(): Promise<void>;
   };
 }
 
@@ -873,6 +943,8 @@ export interface OverlayApi {
   state: StateApi;
   overlay: {
     onOpen(listener: (event: OverlayOpenEvent) => void): () => void;
+    /** Main closed an opening itself: forget it, so it never shows again. */
+    onDismiss(listener: (seq: number) => void): () => void;
     close(seq: number): Promise<void>;
     /** Listening now: main may open the command bar. */
     ready(): Promise<void>;
@@ -893,6 +965,11 @@ export interface OverlayApi {
     suggest(query: string, engine?: SearchEngineId): Promise<string[]>;
   };
   archive: { restore(archiveId: string): Promise<void> };
+  /** Peek's chrome: its page's title and address as they change, and "Open in Today". */
+  peek: {
+    onState(listener: (state: PeekState) => void): () => void;
+    expand(): Promise<void>;
+  };
   /** @duet: Duet chats by their words, and opening one. */
   duet: { search(query: string): Promise<DuetHit[]>; open(chordId: string, threadId: string): Promise<void> };
 }

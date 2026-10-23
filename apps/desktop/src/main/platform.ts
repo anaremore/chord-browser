@@ -62,6 +62,13 @@ export function windowChromeOptions(forced: ForcedAppearance = null): BaseWindow
   };
 }
 
+/** A mini window (DESIGN.md §7.9): the same material, with the caption controls in its 36 px bar. */
+export function miniWindowChromeOptions(): BaseWindowConstructorOptions {
+  const options = windowChromeOptions();
+  if (platform === 'darwin') return { ...options, trafficLightPosition: { x: 12, y: (size.miniBar - 12) / 2 } };
+  return { ...options, titleBarOverlay: { ...titleBarOverlay(), height: size.miniBar } };
+}
+
 function accentColor(): string | null {
   try {
     const raw = systemPreferences.getAccentColor();

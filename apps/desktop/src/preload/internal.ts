@@ -21,6 +21,7 @@ const api: SettingsApi = {
     chordSignIns: (chordId, separate) => invoke('settings:chordSignIns', { chordId, separate }),
     sitePermission: (origin, permission, decision) => invoke('settings:sitePermission', { origin, permission, decision }),
     forgetSite: (origin) => invoke('settings:forgetSite', { origin }),
+    linkRoute: (host, chordId) => invoke('settings:linkRoute', { host, chordId }),
     defaultBrowser: () => invoke('settings:defaultBrowser'),
     duet: (request) => invoke('settings:duet', request),
     makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),

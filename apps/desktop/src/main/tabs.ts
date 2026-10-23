@@ -4,7 +4,7 @@
  * sleep: its page closes, and its back/forward history (scroll position
  * included) comes back when it's shown again.
  */
-import { isInternalUrl, placeKey, usableDataIcon, type Command, type LiveTab, type NodeId, type State, type TabNode, type WindowId } from '@chord/core';
+import { isCrossSite, isInternalUrl, placeKey, usableDataIcon, type Command, type LiveTab, type NodeId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { NavState } from '@chord/data';
 import { frameRadius } from '@chord/tokens';
 import { WebContentsView, type BrowserWindow, type HandlerDetails, type Session, type WebContents, type WindowOpenHandlerResponse } from 'electron';
@@ -14,6 +14,8 @@ import { platform } from './platform';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 const MAX_CRASH_RELOADS = 2;
+/** A navigation this soon after a click (or Enter) in the page counts as you following a link, not the page redirecting itself. */
+const LINK_GESTURE_MS = 1500;
 
 export interface TabManagerDeps {
   state(): State;
@@ -30,6 +32,15 @@ export interface TabManagerDeps {
   onTitle(url: string, title: string, nodeId: NodeId): void;
   /** A page opened a popup window (sign-in, payment): wire its context menu. */
   onPopupCreated(contents: WebContents, openerNodeId: NodeId): void;
+  /** A link in a pinned tab leads to another site: it opens in Peek (DESIGN.md §8.5), from `origin` (in the page) if known. */
+  onPeek(openerNodeId: NodeId, url: string, origin: { x: number; y: number } | null): void;
+}
+
+/** A page that isn't a tab yet: a Peek's or a mini window's (DESIGN.md §7.9). */
+interface FloatingPage {
+  view: WebContentsView;
+  /** A private window's Peek: its visits never reach history. */
+  private: boolean;
 }
 
 export class TabManager {
@@ -41,6 +52,8 @@ export class TabManager {
   private readonly pendingHistory = new Map<NodeId, NavState>();
   /** Tabs showing one of Chord's own pages, on Chord's UI session. */
   private readonly internal = new Set<NodeId>();
+  /** Pages that aren't tabs yet, by the id they'll have as one. */
+  private readonly floating = new Map<NodeId, FloatingPage>();
 
   constructor(private readonly deps: TabManagerDeps) {}
 
@@ -133,6 +146,52 @@ export class TabManager {
     return view;
   }
 
+  /**
+   * A page that isn't a tab yet (Peek, a mini window): a tab's view and
+   * wiring, under the id it will have as a tab, so `adopt` can make it one
+   * without reloading. Its reports to the store wait until then; its visits
+   * still count as history unless it's private.
+   */
+  createFloating(nodeId: NodeId, { session, url, private: isPrivate }: { session: Session; url: string; private: boolean }): WebContentsView {
+    const view = new WebContentsView({
+      webPreferences: { session, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
+    });
+    this.floating.set(nodeId, { view, private: isPrivate });
+    this.wire(nodeId, view.webContents, false);
+    this.deps.onContentsCreated(view.webContents, nodeId);
+    void view.webContents.loadURL(url).catch(() => {
+      // Load failures show in the page itself, as they would in a tab.
+    });
+    return view;
+  }
+
+  /** The floating page with this contents, if it is one. */
+  floatingFor(contents: WebContents): NodeId | undefined {
+    for (const [id, page] of this.floating) if (page.view.webContents === contents) return id;
+    return undefined;
+  }
+
+  getFloating(nodeId: NodeId): WebContentsView | undefined {
+    return this.floating.get(nodeId)?.view;
+  }
+
+  /** The floating page becomes the tab `nodeId` (tab.adopt makes the node), keeping its page and history. */
+  adopt(nodeId: NodeId): WebContentsView | undefined {
+    const page = this.floating.get(nodeId);
+    if (!page || page.view.webContents.isDestroyed()) return undefined;
+    this.floating.delete(nodeId);
+    this.views.set(nodeId, page.view);
+    page.view.setBorderRadius(frameRadius[platform]);
+    return page.view;
+  }
+
+  /** A floating page that won't become a tab: its page closes. */
+  closeFloating(nodeId: NodeId): void {
+    const page = this.floating.get(nodeId);
+    this.floating.delete(nodeId);
+    if (page && !page.view.webContents.isDestroyed()) page.view.webContents.close();
+  }
+
   navigate(nodeId: NodeId, url: string): void {
     const view = this.views.get(nodeId);
     if (!view) return;
@@ -165,6 +224,7 @@ export class TabManager {
 
   destroyAll(): void {
     for (const id of [...this.views.keys()]) this.destroy(id);
+    for (const id of [...this.floating.keys()]) this.closeFloating(id);
   }
 
   private wire(nodeId: NodeId, contents: WebContents, internal: boolean): void {
@@ -178,6 +238,12 @@ export class TabManager {
     const history = () =>
       contents.isDestroyed() ? {} : { canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward() };
     const live = (patch: Partial<LiveTab>) => dispatch({ t: 'tab.live', nodeId, live: patch });
+    // A floating page (Peek, a mini window) isn't in the store yet, but its visits are history (unless private).
+    const reportsHistory = () => {
+      if (current()) return true;
+      const page = this.floating.get(nodeId);
+      return Boolean(page && !page.private && page.view.webContents === contents && !contents.isDestroyed());
+    };
 
     contents.on('did-start-loading', () => live({ loading: true, crashed: false }));
     contents.on('did-stop-loading', () => live({ loading: false, ...history() }));
@@ -193,7 +259,7 @@ export class TabManager {
     let visited: string | null = null;
     const visit = (url: string) => {
       const place = placeKey(url);
-      if (!place || place === visited || !current()) return;
+      if (!place || place === visited || !reportsHistory()) return;
       visited = place;
       // The title arrives with page-title-updated; at this point it may still be the last page's.
       this.deps.onVisit(url, '', nodeId);
@@ -222,7 +288,7 @@ export class TabManager {
     });
     contents.on('page-title-updated', (_event, title) => {
       dispatch({ t: 'tab.updated', nodeId, title });
-      if (current()) this.deps.onTitle(contents.getURL(), title, nodeId);
+      if (reportsHistory()) this.deps.onTitle(contents.getURL(), title, nodeId);
     });
     contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons));
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));
@@ -248,6 +314,34 @@ export class TabManager {
 
     contents.setWindowOpenHandler((details) => this.openFrom(nodeId, details));
     contents.on('did-create-window', (popup) => this.wirePopup(popup, nodeId));
+
+    // Peek (DESIGN.md §8.5): following a link in a pinned tab to another site opens it in Peek, so
+    // the pinned page stays put. Only links you follow: a page redirecting itself (sign-in flows)
+    // navigates as usual, so a navigation counts only just after a click or Enter in the page.
+    let gestureAt = 0;
+    let gesturePoint: { x: number; y: number } | null = null;
+    contents.on('input-event', (_event, input) => {
+      if (input.type === 'mouseDown' || input.type === 'mouseUp') {
+        gestureAt = Date.now();
+        const mouse = input as Electron.MouseInputEvent;
+        gesturePoint = { x: mouse.x, y: mouse.y };
+      } else if (input.type === 'keyDown' && (input as Electron.KeyboardInputEvent).keyCode === 'Enter') {
+        gestureAt = Date.now();
+        gesturePoint = null;
+      }
+    });
+    contents.on('will-navigate', (event) => {
+      if (!event.isMainFrame || event.isSameDocument || !this.leadsToPeek(nodeId, contents, event.url)) return;
+      if (Date.now() - gestureAt > LINK_GESTURE_MS) return;
+      event.preventDefault();
+      this.deps.onPeek(nodeId, event.url, gesturePoint);
+    });
+  }
+
+  /** Whether following `url` from this tab's page opens Peek: it's pinned, and the link leaves its site. */
+  private leadsToPeek(nodeId: NodeId, contents: WebContents, url: string): boolean {
+    const node = this.deps.state().nodes[nodeId];
+    return node?.kind === 'tab' && node.section === 'pinned' && this.views.get(nodeId)?.webContents === contents && isCrossSite(contents.getURL(), url);
   }
 
   /**
@@ -269,10 +363,21 @@ export class TabManager {
         },
       };
     }
-    const windowId = this.deps.windowFor(openerNodeId);
-    if (windowId && /^https?:/i.test(url)) {
-      this.deps.dispatch({ t: 'tab.open', windowId, url, background: disposition === 'background-tab' });
+    if (!/^https?:/i.test(url)) return { action: 'deny' };
+    // Peek and mini windows keep to themselves: a link that wants a new tab opens right there.
+    const floating = this.floating.get(openerNodeId);
+    if (floating) {
+      if (!floating.view.webContents.isDestroyed()) void floating.view.webContents.loadURL(url).catch(() => {});
+      return { action: 'deny' };
     }
+    // A pinned tab's link to another site opens in Peek, unless it was asked for in the background (⌘/Ctrl-click).
+    const opener = this.views.get(openerNodeId)?.webContents;
+    if (disposition !== 'background-tab' && opener && this.leadsToPeek(openerNodeId, opener, url)) {
+      this.deps.onPeek(openerNodeId, url, null);
+      return { action: 'deny' };
+    }
+    const windowId = this.deps.windowFor(openerNodeId);
+    if (windowId) this.deps.dispatch({ t: 'tab.open', windowId, url, background: disposition === 'background-tab' });
     return { action: 'deny' };
   }
 

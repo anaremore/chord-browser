@@ -786,6 +786,30 @@ kbd {
   white-space: nowrap;
 }
 
+/* Two lines, each with its own action ("Moved to Work · Undo", then "Always open linear.app here? · Always"). */
+.toastTwoLines {
+  flex-direction: column;
+  gap: 0;
+  align-items: stretch;
+}
+
+.toastLine {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.toastLine + .toastLine {
+  border-block-start: var(--size-hairline) solid var(--color-divider);
+}
+
+/* In the sidebar a longer message wraps rather than lose its end; the minimal bar's stays one line. */
+.toasts .toastMessage {
+  padding-block: var(--space-2);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .toastAction {
   flex: none;
   padding: var(--space-1) var(--space-2);

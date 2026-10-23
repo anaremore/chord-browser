@@ -23,6 +23,7 @@ import {
   type Download,
   type Favorite,
   type InstalledExtension,
+  type LinkRoute,
   type FolderNode,
   type SplitNode,
   type PersistedState,
@@ -212,6 +213,9 @@ export class ChordDatabase {
     );
     const siteZoom: Record<string, number> = {};
     for (const r of this.sql('SELECT host, factor FROM site_zoom WHERE profile_id = ?').all(DEFAULT_PROFILE) as Row[]) siteZoom[str(r['host'])] = num(r['factor']);
+    const linkRoutes = (this.sql('SELECT host, chord_id, created_at FROM link_route').all() as Row[]).map(
+      (r): LinkRoute => ({ host: str(r['host']), chordId: str(r['chord_id']), createdAt: num(r['created_at']) }),
+    );
     if (chordRows.length === 0) {
       const anything =
         Object.keys(settings).length > 0 ||
@@ -289,7 +293,7 @@ export class ChordDatabase {
       }),
     );
 
-    return { chords, nodes, windows, settings, sitePermissions, downloads, extensions, favorites, siteZoom };
+    return { chords, nodes, windows, settings, sitePermissions, downloads, extensions, favorites, siteZoom, linkRoutes };
   }
 
   /** One batch, all or nothing. */
@@ -305,6 +309,7 @@ export class ChordDatabase {
         else if (op.k === 'favorite') this.writeFavorite(op.id, op.value, now);
         else if (op.k === 'extension') this.writeExtension(op.id, op.value);
         else if (op.k === 'siteZoom') this.writeSiteZoom(op.id, op.value, now);
+        else if (op.k === 'linkRoute') this.writeLinkRoute(op.id, op.value);
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
@@ -555,6 +560,14 @@ export class ChordDatabase {
        ON CONFLICT(node_id) DO UPDATE SET pinned_url = excluded.pinned_url, custom_title = excluded.custom_title, url = excluded.url,
          title = excluded.title, favicon_key = excluded.favicon_key, last_active_at = excluded.last_active_at`,
     ).run(id, node.pinnedUrl, node.customTitle, node.url, node.title, iconKey, node.lastActiveAt);
+  }
+
+  private writeLinkRoute(host: string, route: LinkRoute | null): void {
+    if (route === null) this.sql('DELETE FROM link_route WHERE host = ?').run(host);
+    else
+      this.sql(
+        'INSERT INTO link_route (host, chord_id, created_at) VALUES (?, ?, ?) ON CONFLICT(host) DO UPDATE SET chord_id = excluded.chord_id',
+      ).run(host, route.chordId, route.createdAt);
   }
 
   private writeSiteZoom(host: string, factor: number | null, now: number): void {

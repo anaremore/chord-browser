@@ -1,0 +1,143 @@
+/* A mini window's bar (DESIGN.md §7.9): 36 px, neutral tint, room for the OS's caption controls. Tokens only. */
+
+.bar {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding-inline: calc(var(--chrome-reserved-left) + var(--space-2)) calc(var(--chrome-reserved-right) + var(--space-2));
+  background: var(--color-base);
+  color: var(--color-fg);
+  -webkit-app-region: drag;
+}
+
+/* macOS: the traffic lights sit in the bar at a smaller inset than a full window's. */
+.bar[data-platform='darwin'] {
+  padding-inline-start: calc(var(--size-mini-bar) * 2);
+}
+
+.tint {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--color-tint);
+  pointer-events: none;
+}
+
+.site {
+  display: flex;
+  flex: 1;
+  gap: var(--space-1);
+  align-items: center;
+  min-inline-size: 0;
+  padding-inline: var(--space-1);
+  color: var(--color-fg-muted);
+  font: var(--text-label);
+}
+
+.siteIcon {
+  flex: none;
+  color: var(--color-fg-subtle);
+}
+
+.host {
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iconButton,
+.promote,
+.chevron {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: center;
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
+  -webkit-app-region: no-drag;
+  transition: background var(--duration-fade-fast) var(--ease-standard);
+}
+
+.iconButton {
+  inline-size: var(--size-icon-button);
+}
+
+.split {
+  display: flex;
+  flex: none;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+}
+
+.promote {
+  padding-inline: var(--space-2) var(--space-1);
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+  color: var(--color-fg);
+  font: var(--text-label);
+}
+
+.promote:disabled {
+  color: var(--color-fg-subtle);
+}
+
+.chord {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  font-weight: 600;
+}
+
+.chevron {
+  inline-size: var(--space-6);
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.iconButton:hover,
+.chevron:hover,
+.promote:hover:not(:disabled) {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+/* Loading: a thin line along the bar's bottom edge. */
+.loading {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  block-size: var(--size-focus-ring);
+  background: linear-gradient(90deg, transparent, var(--color-accent), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: sweep var(--duration-spin) linear infinite;
+  pointer-events: none;
+}
+
+@keyframes sweep {
+  from {
+    background-position: -50% 0;
+  }
+
+  to {
+    background-position: 150% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading {
+    animation: none;
+    background-position: 50% 0;
+  }
+}

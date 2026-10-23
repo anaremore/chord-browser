@@ -44,6 +44,7 @@ import {
   type WindowId,
   type WindowModel,
 } from './model';
+import { routeFor, routeHost } from './links';
 import { shortcutById, type ActionId } from './shortcuts';
 import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
@@ -51,7 +52,21 @@ import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMe
 enablePatches();
 
 export type Command =
-  | { t: 'tab.open'; windowId: WindowId; url: string; background?: boolean; pinned?: boolean }
+  /**
+   * A new tab at the top of Today. With `route`, a link route for its site
+   * (from the command bar) puts it in that chord instead, and the window goes there.
+   */
+  | { t: 'tab.open'; windowId: WindowId; url: string; background?: boolean; pinned?: boolean; route?: boolean }
+  /**
+   * A page that wasn't a tab yet (Peek, a mini window) becomes one as `nodeId`:
+   * main has already given TabManager its live page, so it keeps its history.
+   * It lands at the top of `chordId`'s Today (the window's chord by default),
+   * and the window goes there.
+   */
+  | { t: 'tab.adopt'; windowId: WindowId; nodeId: NodeId; chordId?: ChordId; url: string; title: string; favicon?: string | null; live?: Partial<LiveTab> }
+  /** Send a site's links to a chord (from Crest); a site has at most one route. */
+  | { t: 'linkRoute.set'; host: string; chordId: ChordId }
+  | { t: 'linkRoute.delete'; host: string }
   /** `touch: false` switches without counting as a visit (used while cycling recent tabs). */
   | { t: 'tab.activate'; windowId: WindowId; nodeId: NodeId; touch?: boolean }
   | { t: 'tab.close'; windowId: WindowId; nodeId: NodeId }
@@ -217,6 +232,8 @@ const MAX_FOLDER_TITLE = 64;
 /** The most custom themes kept. */
 const MAX_THEMES = 100;
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+/** The mini window's remembered size stays within what a window can sensibly be. */
+const clampSize = (n: number) => Math.round(Math.min(4000, Math.max(360, Number.isFinite(n) ? n : 0)));
 /** Finished downloads kept in the list; older ones drop off. */
 const MAX_DOWNLOADS = 100;
 /** Removed extensions kept for Undo. */
@@ -498,14 +515,17 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.open': {
       const win = draft.windows[cmd.windowId];
       if (!win) return;
+      // A route sends the site to its chord; a private window keeps everything to itself.
+      const routed = cmd.route && !win.private ? routeFor(draft as State, cmd.url) : null;
+      const chordId = routed && chordsFor(draft as State, cmd.windowId).some((c) => c.id === routed) ? routed : win.activeChordId;
       const id = ctx.newId();
       const tab: TabNode = {
         kind: 'tab',
         id,
-        chordId: win.activeChordId,
+        chordId,
         section: 'today',
         parentId: null,
-        rank: topOfToday(draft, win.activeChordId),
+        rank: topOfToday(draft, chordId),
         url: cmd.url,
         title: '',
         pinnedUrl: null,
@@ -516,13 +536,58 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       };
       draft.nodes[id] = tab;
       // First run's "What do you open every day?" lands straight in Pinned (never in a private window).
-      if (cmd.pinned && !win.private) moveNode(draft, draft.nodes[id]!, 'pinned', children(draft as State, win.activeChordId, 'pinned', null).length);
+      if (cmd.pinned && !win.private) moveNode(draft, draft.nodes[id]!, 'pinned', children(draft as State, chordId, 'pinned', null).length);
       draft.live[id] = { ...IDLE_LIVE, loading: true };
       effects.push({ e: 'view.ensure', nodeId: id });
       if (!cmd.background) {
         leave(draft, win, ctx);
+        if (win.activeChordId !== chordId) win.activeChordId = chordId;
         activate(draft, cmd.windowId, id, ctx, effects);
       }
+      return;
+    }
+
+    case 'tab.adopt': {
+      const win = draft.windows[cmd.windowId];
+      if (!win || draft.nodes[cmd.nodeId]) return;
+      const chordId = cmd.chordId ?? win.activeChordId;
+      // The window must be allowed to show that chord: a private window only its own, others never a private one.
+      if (!chordsFor(draft as State, cmd.windowId).some((c) => c.id === chordId)) return;
+      draft.nodes[cmd.nodeId] = {
+        kind: 'tab',
+        id: cmd.nodeId,
+        chordId,
+        section: 'today',
+        parentId: null,
+        rank: topOfToday(draft, chordId),
+        url: cmd.url,
+        title: cmd.title,
+        pinnedUrl: null,
+        customTitle: null,
+        favicon: cmd.favicon ?? null,
+        lastActiveAt: ctx.now,
+        createdAt: ctx.now,
+      };
+      draft.live[cmd.nodeId] = { ...IDLE_LIVE, ...cmd.live };
+      leave(draft, win, ctx);
+      if (win.activeChordId !== chordId) win.activeChordId = chordId;
+      activate(draft, cmd.windowId, cmd.nodeId, ctx, effects);
+      return;
+    }
+
+    case 'linkRoute.set': {
+      const host = routeHost(cmd.host);
+      const chord = draft.chords[cmd.chordId];
+      if (!host || !chord || chord.private) return;
+      const existing = draft.linkRoutes[host];
+      if (existing?.chordId === chord.id) return;
+      draft.linkRoutes[host] = { host, chordId: chord.id, createdAt: existing?.createdAt ?? ctx.now };
+      return;
+    }
+
+    case 'linkRoute.delete': {
+      const host = routeHost(cmd.host) ?? cmd.host;
+      if (draft.linkRoutes[host]) delete draft.linkRoutes[host];
       return;
     }
 
@@ -1058,6 +1123,13 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       }
       for (const [key, value] of Object.entries(cmd.settings.interface ?? {}) as [keyof typeof draft.settings.interface, number | undefined][]) {
         if (value !== undefined && draft.settings.interface[key] !== clamp01(value)) draft.settings.interface[key] = clamp01(value);
+      }
+      const { externalLinks, miniWindowSize } = cmd.settings;
+      if (externalLinks !== undefined && draft.settings.externalLinks !== externalLinks) draft.settings.externalLinks = externalLinks;
+      if (miniWindowSize !== undefined) {
+        const size = miniWindowSize && { width: clampSize(miniWindowSize.width), height: clampSize(miniWindowSize.height) };
+        const same = size && draft.settings.miniWindowSize?.width === size.width && draft.settings.miniWindowSize.height === size.height;
+        if (!same && !(size === null && draft.settings.miniWindowSize === null)) draft.settings.miniWindowSize = size;
       }
       const { spellcheck } = cmd.settings;
       if (spellcheck?.enabled !== undefined && draft.settings.spellcheck.enabled !== spellcheck.enabled) draft.settings.spellcheck.enabled = spellcheck.enabled;
