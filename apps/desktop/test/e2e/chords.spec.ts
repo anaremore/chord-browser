@@ -167,26 +167,53 @@ test('the color wheel: keys turn the hue, a click moves the nearest color, and a
     await first.press('Shift+ArrowDown');
     await expect(first).toHaveAttribute('aria-valuetext', /^Close to \w+/);
 
-    // A click on the wheel's right edge takes the nearest color to hue 90°.
+    // A click on the wheel's right edge takes the nearest color to hue 90°. Which one is nearest depends on
+    // the colors the chord started with (the OS accent's; Dusk's, lilac and coral, where there's none), so
+    // find it the way the wheel does: by distance from the click.
     const wheel = first.locator('..');
-    const box = (await wheel.boundingBox())!;
-    await settings.mouse.click(box.x + box.width - 6, box.y + box.height / 2);
-    await expect.poll(hue).toBeGreaterThan(85);
-    expect(await hue()).toBeLessThan(95);
-    await expect(first).toHaveAttribute('aria-valuetext', /vivid$/);
+    // All of it on screen: the editor scrolls, and a handle below the fold can't be clicked or dragged.
+    const showWheel = () => wheel.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    await showWheel();
+    let box = (await wheel.boundingBox())!;
+    const at = { x: box.x + box.width - 6, y: box.y + box.height / 2 };
+    const sliders = editor.getByRole('slider', { name: /^Color \d$/ });
+    const centers = await sliders.evaluateAll((els) => els.map((el) => el.getBoundingClientRect()).map((r) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 })));
+    const distances = centers.map((c) => Math.hypot(c.x - at.x, c.y - at.y));
+    const nearest = sliders.nth(distances.indexOf(Math.min(...distances)));
+    await settings.mouse.click(at.x, at.y);
+    await expect.poll(async () => Math.abs(Number(await nearest.getAttribute('aria-valuenow')) - 90)).toBeLessThanOrEqual(5);
+    await expect(nearest).toHaveAttribute('aria-valuetext', /vivid$/);
 
     // "+" adds a color; dragged off the wheel and let go, it's removed.
     const handles = editor.getByRole('slider', { name: /^Color \d$/ });
     const count = await handles.count();
     await editor.getByRole('button', { name: 'Add a color' }).click();
     await expect(handles).toHaveCount(count + 1);
+    await showWheel();
+    box = (await wheel.boundingBox())!;
     const added = (await handles.nth(count).boundingBox())!;
+    // Well past the rim (1.6 radii; past 1.25 it goes), on a side of the wheel with room in the window:
+    // Settings is smaller on a small screen.
+    const view = await settings.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const out = 1.6 * (box.width / 2);
+    const off = [
+      { x: center.x + out, y: center.y },
+      { x: center.x - out, y: center.y },
+      { x: center.x, y: center.y + out },
+      { x: center.x, y: center.y - out },
+    ].find((p) => p.x > 4 && p.y > 4 && p.x < view.width - 4 && p.y < view.height - 4);
+    expect(off, `no room past the wheel's rim in a ${view.width}×${view.height} window`).toBeDefined();
     await settings.mouse.move(added.x + added.width / 2, added.y + added.height / 2);
     await settings.mouse.down();
-    // Well past the rim (1.8 radii), still inside the window.
-    await settings.mouse.move(box.x + box.width + 100, box.y + box.height / 2, { steps: 6 });
+    await settings.mouse.move(off!.x, off!.y, { steps: 6 });
     await settings.mouse.up();
-    await expect(handles).toHaveCount(count);
+    await expect(handles)
+      .toHaveCount(count)
+      .catch(async (error: Error) => {
+        const where = { view, wheel: box, picked: added, droppedAt: off, handles: await handles.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON())) };
+        throw new Error(`${error.message}\n${JSON.stringify(where)}`);
+      });
 
     // Making the theme puts it on the chord.
     const before = await tint();

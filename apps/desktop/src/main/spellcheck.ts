@@ -29,24 +29,34 @@ const systemManaged = process.platform === 'darwin';
 
 /** Each session's languages before Chord changed anything: what "System" goes back to. */
 const systemLanguages = new WeakMap<Session, string[]>();
-/** Where each session downloads dictionaries from now. */
-const dictionarySources = new WeakMap<Session, string>();
+/** Where dictionaries download from now. */
+let dictionarySource: string | null = null;
 
 /** The dictionaries Chord can offer in Settings (none on macOS). */
 export function spellcheckLanguages(): string[] {
   return systemManaged ? [] : [...session.defaultSession.availableSpellCheckerLanguages];
 }
 
-/** Apply the spelling settings to a profile's session; in Google-free mode, only dictionaries already downloaded. */
+/**
+ * Where dictionaries download from. Electron keeps one place for the whole
+ * app, whichever session sets it, and a session starts downloading its saved
+ * languages as soon as spelling is on in it. So this is set before any
+ * session exists (offline, until the saved settings are read), then from the
+ * settings, and before every change to a session's spelling.
+ */
+export function setDictionarySource(googleFree: boolean): void {
+  if (systemManaged) return;
+  const source = googleFree ? SPELLCHECK_OFFLINE_URL : SPELLCHECK_DICTIONARIES_URL;
+  if (source === dictionarySource) return;
+  session.defaultSession.setSpellCheckerDictionaryDownloadURL(source);
+  dictionarySource = source;
+}
+
+/** Apply the spelling settings to a session; in Google-free mode, only dictionaries already downloaded. */
 export function applySpellcheck(ses: Session, settings: SpellcheckSettings, googleFree: boolean): void {
+  setDictionarySource(googleFree);
   ses.setSpellCheckerEnabled(settings.enabled);
   if (systemManaged) return;
-  // Before any language is set, which is what starts a download.
-  const source = googleFree ? SPELLCHECK_OFFLINE_URL : SPELLCHECK_DICTIONARIES_URL;
-  if (dictionarySources.get(ses) !== source) {
-    ses.setSpellCheckerDictionaryDownloadURL(source);
-    dictionarySources.set(ses, source);
-  }
   if (!systemLanguages.has(ses)) systemLanguages.set(ses, ses.getSpellCheckerLanguages());
   const available = new Set(ses.availableSpellCheckerLanguages);
   const wanted = settings.language && available.has(settings.language) ? [settings.language] : systemLanguages.get(ses)!;

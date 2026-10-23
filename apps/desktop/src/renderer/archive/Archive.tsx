@@ -9,6 +9,7 @@ import type { ArchiveList, ArchiveSnapshot, SystemInfo } from '@chord/ipc';
 import { Archive, ArchiveRestore, Search, X } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Favicon } from '../shared/Favicon';
+import { useLive, type Live } from '../shared/live';
 import { displayHost, pageTitle } from '../shared/site';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
@@ -22,11 +23,9 @@ const SEARCH_DELAY_MS = 120;
 
 const timeOf = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 
-export function ArchivePage({ initialInfo, initialSnapshot }: { initialInfo: SystemInfo; initialSnapshot: ArchiveSnapshot }) {
-  const [info, setInfo] = useState(initialInfo);
-  const [snapshot, setSnapshot] = useState(initialSnapshot);
-  useEffect(() => api.system.onChange(setInfo), []);
-  useEffect(() => api.archive.onSnapshot(setSnapshot), []);
+export function ArchivePage({ info: infoSource, snapshot: snapshotSource }: { info: Live<SystemInfo>; snapshot: Live<ArchiveSnapshot> }) {
+  const info = useLive(infoSource);
+  const snapshot = useLive(snapshotSource);
 
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(PAGE);
