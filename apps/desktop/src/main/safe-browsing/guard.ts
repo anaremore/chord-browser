@@ -83,13 +83,17 @@ export class SafeBrowsingGuard {
       });
     };
     contents.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && watch.own) {
+        watch.own = false;
+        // Chord leaving a flagged page. Back within the same document (an entry the page pushed) is still
+        // the flagged page: keep going back. Otherwise the warning stays, and the page it lands on was checked.
+        if (details.isSameDocument && nodeId) this.leave(contents, watch, nodeId);
+        else if (!details.isSameDocument) watch.seq++;
+        return;
+      }
       if (details.isSameDocument) return;
       if (details.isMainFrame) {
         watch.seq++;
-        if (watch.own) {
-          watch.own = false;
-          return;
-        }
         // You went somewhere else: the warning goes with the page it was about.
         if (nodeId) this.clear(nodeId, contents);
       }
