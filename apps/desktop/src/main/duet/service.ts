@@ -745,14 +745,23 @@ export class DuetService {
         return { text: toolResult({ tabs }) };
       }
       const query = String(args['query'] ?? '').slice(0, 200);
+      // Sites on the Never list stay out of search results too, as do chords where Duet is off.
+      const allowed = (url: string, chordId?: string) =>
+        !isNeverReadable(url, this.settings.neverSites) && !(chordId && (this.settings.offChords.includes(chordId) || this.isPrivateChord(chordId)));
       if (tool === 'search_history') {
         const result = await this.persistence.search(query, state.chordId);
-        const hits = result.history.slice(0, 20).map((h) => ({ title: h.title, url: h.url, last_visit: new Date(h.lastVisitAt).toISOString() }));
+        const hits = result.history
+          .filter((h) => allowed(h.url))
+          .slice(0, 20)
+          .map((h) => ({ title: h.title, url: h.url, last_visit: new Date(h.lastVisitAt).toISOString() }));
         await this.activity(state, tool, `Searched history for “${query}”`, `${hits.length} found`);
         return { text: toolResult({ results: hits }) };
       }
-      const page = await this.persistence.archiveList(query, 20);
-      const hits = page.items.map((a) => ({ title: a.title, url: a.url, archived: new Date(a.archivedAt).toISOString() }));
+      const page = await this.persistence.archiveList(query, 40);
+      const hits = page.items
+        .filter((a) => allowed(a.url, a.chordId))
+        .slice(0, 20)
+        .map((a) => ({ title: a.title, url: a.url, archived: new Date(a.archivedAt).toISOString() }));
       await this.activity(state, tool, `Searched the archive for “${query}”`, `${hits.length} found`);
       return { text: toolResult({ results: hits }) };
     }

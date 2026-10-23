@@ -16,7 +16,8 @@ Windows, macOS, and Linux (X11 and Wayland) are all first-class.
 - **Minimal mode:** collapse the sidebar and Chord shrinks to one slim bar.
 - **Chrome extensions**, including password managers.
 - **Pop-out video:** a playing video floats into picture-in-picture when you switch tabs.
-- **Later:** split view, Peek, a mini window for links from other apps, and **Duet**, an opt-in panel for chatting about your tabs with your own Claude Code or Codex app.
+- **Duet** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. It can read the page or your tabs when you let it, cites what it read, and never sees your sign-in. Turn it off in Settings and it's gone.
+- **Later:** split view, Peek, and a mini window for links from other apps.
 
 ## Try the preview
 
