@@ -44,6 +44,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { DuetAction, DuetView } from '@chord/ipc';
+import { app } from 'electron';
 import type { Browser } from '../browser';
 import { send } from '../ipc';
 import type { Persistence } from '../persistence';
@@ -96,6 +97,8 @@ interface Live {
 }
 
 const THREADS_IN_MENU = 12;
+/** Development and tests: a shorter idle window, so "start fresh, offer Continue" can be seen. */
+const IDLE_MS = (!app.isPackaged && Number(process.env['CHORD_DUET_IDLE_MS'])) || undefined;
 const PUSH_MS = 33;
 
 export class DuetService {
@@ -177,7 +180,7 @@ export class DuetService {
     const result = await this.persistence.duet({ op: 'threads', chordId, limit: THREADS_IN_MENU }).catch(() => ({ threads: [] as DuetThread[] }));
     const threads = result.threads ?? [];
     this.recent.set(chordId, threads.map((t) => ({ id: t.id, title: t.title, lastUsedAt: t.lastUsedAt })));
-    const { current, continueFrom } = threadToShow(threads, Date.now());
+    const { current, continueFrom } = threadToShow(threads, Date.now(), IDLE_MS);
     this.continueFrom.set(chordId, continueFrom ? { id: continueFrom.id, title: continueFrom.title } : null);
     return current ? this.load(current.id, chordId) : this.fresh(chordId);
   }

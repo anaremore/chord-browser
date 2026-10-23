@@ -1,5 +1,5 @@
 import { activeTabId, chordsFor, describeLoadError, downloadsFor, isInternalUrl, SIDEBAR_WIDTH, sortedChords, type LiveTab, type LoadError, type TabNode } from '@chord/core';
-import type { ChordEdit, SystemInfo } from '@chord/ipc';
+import type { ChordEdit, DuetView, SystemInfo } from '@chord/ipc';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig } from 'motion/react';
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
@@ -13,6 +13,8 @@ import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Cho
 import { useSystemInfo } from './hooks';
 import { keycap, withKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
+import { DuetPanel } from './Duet';
+import { DuetReadTabs } from './duet-context';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { Onboarding } from './Onboarding';
 import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
@@ -229,6 +231,13 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
       <Archive {...ICON} />
     </button>
   );
+  // Duet's panel for this window (DESIGN.md §7.8): main pushes what it shows.
+  const [duet, setDuet] = useState<DuetView | null>(null);
+  useEffect(() => {
+    void api.duet.view().then(setDuet);
+    return api.duet.onState(setDuet);
+  }, []);
+  const duetOpen = Boolean(duet?.enabled && duet.open);
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
   useEffect(() => api.chords.onEdit(setChordEdit), []);
   const createChord = async () => {
@@ -290,7 +299,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
         data-sidebar={collapsed ? 'collapsed' : 'docked'}
         data-peek={peeking || undefined}
         data-resizing={liveWidth !== null || undefined}
-        style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+        style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px`, '--duet-space': duetOpen ? 'calc(var(--size-duet-width) + var(--space-2))' : 'var(--space-0)' } as CSSProperties}
       >
         <div className={styles.backdrop} aria-hidden>
           <Tint value={String(style['--color-tint' as keyof typeof style] ?? '')} transition={spring('gentle', 'colorBlend')} />
@@ -364,15 +373,17 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
                   edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
                   onDone={() => setChordEdit(null)}
                 />
-                <SidebarTabs
-                  chordId={chord?.id ?? ''}
-                  state={state}
-                  windowId={windowId}
-                  activeId={activeId}
-                  info={info}
-                  appearance={appearance}
-                  spring={spring}
-                />
+                <DuetReadTabs.Provider value={new Set(duetOpen ? (duet?.readTabIds ?? []) : [])}>
+                  <SidebarTabs
+                    chordId={chord?.id ?? ''}
+                    state={state}
+                    windowId={windowId}
+                    activeId={activeId}
+                    info={info}
+                    appearance={appearance}
+                    spring={spring}
+                  />
+                </DuetReadTabs.Provider>
               </ChordPane>
             </AnimatePresence>
 
@@ -434,6 +445,17 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
             {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
             {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
+            {duet?.enabled && (
+              <button
+                type="button"
+                className={styles.duetButton}
+                aria-pressed={duetOpen}
+                title={withKeys('Duet', 'duet.toggle', info)}
+                onClick={() => void api.duet.act({ do: 'toggle' })}
+              >
+                ✦ Duet
+              </button>
+            )}
             {overlayChrome && (
               <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>
                 <Ellipsis {...ICON} />
@@ -479,6 +501,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             </>
           )}
         </div>
+        {duetOpen && duet && <DuetPanel view={duet} windowId={windowId} info={info} />}
       </div>
     </MotionConfig>
   );

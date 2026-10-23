@@ -1006,7 +1006,7 @@ kbd {
 .frame {
   position: absolute;
   inset-block: var(--size-strip) var(--size-frame-inset);
-  inset-inline: var(--size-sidebar-width) var(--size-frame-inset);
+  inset-inline: var(--size-sidebar-width) calc(var(--size-frame-inset) + var(--duet-space, var(--space-0)));
   display: grid;
   place-items: center;
   border-radius: var(--radius-frame);
@@ -1089,4 +1089,29 @@ kbd {
 
 .inlineKeycap {
   opacity: 0.75;
+}
+
+/* The bar's Duet button (DESIGN.md §3.1: "✦ Duet" when Duet is on). */
+.duetButton {
+  flex: none;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font: var(--text-label);
+  -webkit-app-region: no-drag;
+}
+
+.duetButton:hover,
+.duetButton[aria-pressed='true'] {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+/* A tab Duet read in the open chat. */
+.duetRead {
+  flex: none;
+  color: var(--color-accent);
 }

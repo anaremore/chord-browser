@@ -426,3 +426,20 @@
   background: var(--color-item-active-bg);
   box-shadow: var(--shadow-raised);
 }
+
+/* Settings → Duet: adding a site Duet never reads. */
+.siteInput {
+  inline-size: calc(var(--size-slider-width) * 0.8);
+  block-size: var(--size-hit-min);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+}
+
+.siteInput:focus-visible {
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+}

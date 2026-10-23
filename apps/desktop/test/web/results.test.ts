@@ -127,7 +127,7 @@ describe('scopes', () => {
   it('offers the filters `@` could start, ahead of everything else', () => {
     const { state, windowId } = stateWith([]);
     const results = buildResults('@', state, windowId, 'new', null, now);
-    expect(results.slice(0, 6).map((r) => r.kind === 'scope' && r.detail)).toEqual(['@tabs', '@pinned', '@history', '@archive', '@chords', '@actions']);
+    expect(results.slice(0, 7).map((r) => r.kind === 'scope' && r.detail)).toEqual(['@tabs', '@pinned', '@history', '@archive', '@duet', '@chords', '@actions']);
     expect(buildResults('@h', state, windowId, 'new', null, now)[0]).toMatchObject({ kind: 'scope', detail: '@history' });
   });
 
