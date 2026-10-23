@@ -8,7 +8,7 @@
  * accelerators (spike S8). Reserved keys never get that far; keyboard.ts
  * catches them in `before-input-event` and stops them there.
  */
-import { keysFor, shortcutById, type ActionId, type Platform } from '@chord/core';
+import { keysFor, shortcutById, SHORTCUTS, type ActionId, type Platform } from '@chord/core';
 import { Menu, shell, type MenuItemConstructorOptions } from 'electron';
 import { platform } from './platform';
 import { shortcutOverrides } from './shortcut-overrides';
@@ -43,6 +43,9 @@ export function acceleratorFor(id: ActionId, p: Platform = platform): string | u
 
 const ISSUES_URL = 'https://github.com/anaremore/chord-browser/issues/new';
 
+/** Page-first actions Chord can't do yet: they get no key here, so the page keeps it. */
+const NOT_BUILT: ReadonlySet<ActionId> = new Set(['nav.stop', 'page.save', 'app.downloads']);
+
 /** The options menu's width at 100% scale on Windows 11, measured from a capture; used to right-align it. */
 export const OPTIONS_MENU_WIDTH = 230;
 
@@ -59,6 +62,15 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
       acceleratorsFor(action)
         .slice(1)
         .map((accelerator) => ({ label: action, accelerator, visible: false, click: () => run(action) })),
+    );
+  /**
+   * Page-first actions with keys but no item of their own (Show or hide Duet,
+   * History, and any key you give an action in Settings): hidden items keep
+   * their keys live, since this menu is the only way page-first keys reach Chord.
+   */
+  const unlisted = (): MenuItemConstructorOptions[] =>
+    SHORTCUTS.filter((sc) => sc.kind === 'page-first' && !used.includes(sc.id) && !NOT_BUILT.has(sc.id)).flatMap((sc) =>
+      acceleratorsFor(sc.id).map((accelerator) => ({ label: sc.id, accelerator, visible: false, click: () => run(sc.id) })),
     );
   const help: MenuItemConstructorOptions = { label: 'Report an issue…', click: () => void shell.openExternal(ISSUES_URL) };
 
@@ -149,7 +161,7 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
       { role: 'help', submenu: [help] },
     ];
     // Hidden items in a visible menu: `acceleratorWorksWhenHidden` (default true) keeps their keys live.
-    tabMenu.push(...alternates());
+    tabMenu.push(...alternates(), ...unlisted());
     return Menu.buildFromTemplate(template);
   }
 
@@ -199,7 +211,7 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
     item('Close window', 'window.close'),
     ...(platform === 'linux' ? [item('Quit Chord', 'app.quit')] : []),
   ];
-  template.push(...alternates());
+  template.push(...alternates(), ...unlisted());
   return Menu.buildFromTemplate(template);
 }
 

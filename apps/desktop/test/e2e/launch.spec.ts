@@ -316,6 +316,13 @@ test('page-first keys reach Chord only when the page passes; reserved keys fire 
     await press('S');
     await expect(sidebar).toBeVisible();
 
+    // Ctrl+E has no item in the ⋯ menu, only a hidden key: from the page it still shows and hides Duet.
+    const duet = shell.getByRole('complementary', { name: 'Duet' });
+    await press('E');
+    await expect(duet).toBeVisible();
+    await press('E');
+    await expect(duet).toBeHidden();
+
     // Once the page handles Ctrl+S itself, the page wins.
     await tab.evaluate(() => (window as unknown as { takeKeys(): void }).takeKeys());
     await press('S');

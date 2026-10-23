@@ -1324,9 +1324,12 @@ kbd {
   opacity: 0.75;
 }
 
-/* The bar's Duet button (DESIGN.md §3.1: "✦ Duet" when Duet is on). */
+/* The bar's Duet button (DESIGN.md §3.1): Duet's icon and name, when Duet is on. */
 .duetButton {
+  display: inline-flex;
   flex: none;
+  gap: var(--space-1);
+  align-items: center;
   block-size: var(--size-icon-button);
   padding-inline: var(--space-2);
   border: 0;

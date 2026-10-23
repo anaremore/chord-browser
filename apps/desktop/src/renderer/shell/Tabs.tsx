@@ -37,12 +37,13 @@ import { DragDropProvider, useDraggable, useDragDropMonitor, useDroppable } from
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import { size, type Appearance } from '@chord/tokens';
-import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Sparkle, Undo2, X } from 'lucide-react';
+import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Undo2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useRoving } from '../shared/a11y';
 import { Favicon } from '../shared/Favicon';
+import { DuetIcon } from '../shared/icons';
 import type { SpringFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
 import { announce } from './announce';
@@ -475,7 +476,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
           <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
         )}
         <span className={styles.ellipsis}>{title}</span>
-        {duetRead && <Sparkle className={styles.duetRead} size={12} strokeWidth={2} role="img" aria-label="Duet read this tab" />}
+        {duetRead && <DuetIcon className={styles.duetRead} size={12} strokeWidth={2} role="img" aria-label="Duet read this tab" />}
       </div>
       {sharing ? (
         <button
