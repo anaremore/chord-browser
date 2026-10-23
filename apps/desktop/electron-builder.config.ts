@@ -1,9 +1,109 @@
 /**
- * Unsigned preview packaging (ARCHITECTURE.md §15). Each OS and architecture
- * is built natively in CI (.github/workflows/release.yml); locally,
- * `pnpm --filter @chord/desktop package` builds the current OS and arch.
+ * Packaging (ARCHITECTURE.md §15). Each OS and architecture is built natively
+ * in CI (.github/workflows/release.yml); locally,
+ * `pnpm --filter @chord/desktop package` builds the current OS and arch,
+ * unsigned.
+ *
+ * Code signing (ARCHITECTURE.md §15.2, docs/releasing/signing.md) follows
+ * CHORD_SIGNING. The release workflow sets it once the signing secrets exist
+ * (scripts/signing-mode.mjs):
+ * - unset or `none`: unsigned. macOS gets an ad-hoc signature, Windows none.
+ * - `developer-id`: macOS. Developer ID and the hardened runtime, then notarized.
+ * - `artifact-signing`: Windows, through Azure Artifact Signing (formerly Trusted Signing).
+ * - `certificate`: Windows, with a .pfx certificate.
+ * A signing mode with credentials missing stops the build instead of quietly
+ * building unsigned.
  */
-import type { Configuration } from 'electron-builder';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Configuration, MacConfiguration, WindowsConfiguration } from 'electron-builder';
+
+type Env = Readonly<Record<string, string | undefined>>;
+export type Signing = 'none' | 'developer-id' | 'artifact-signing' | 'certificate';
+const SIGNING_MODES: readonly string[] = ['none', 'developer-id', 'artifact-signing', 'certificate'];
+
+const BUILD = join(import.meta.dirname, 'build');
+
+const valueOf = (env: Env, name: string): string | undefined => env[name]?.trim() || undefined;
+
+/** The values of `names`, or an error that lists the missing ones. */
+function needed(env: Env, signing: Signing, names: readonly string[]): string[] {
+  const missing = names.filter((name) => !valueOf(env, name));
+  if (missing.length > 0) throw new Error(`CHORD_SIGNING=${signing} needs ${missing.join(', ')} (docs/releasing/signing.md)`);
+  return names.map((name) => valueOf(env, name)!);
+}
+
+export function signingFrom(env: Env): Signing {
+  const signing = valueOf(env, 'CHORD_SIGNING') ?? 'none';
+  if (!SIGNING_MODES.includes(signing)) throw new Error(`CHORD_SIGNING is '${signing}'; expected one of ${SIGNING_MODES.join(', ')}`);
+  return signing as Signing;
+}
+
+/** How Chord.app is signed. */
+export function macSigning(env: Env): Pick<MacConfiguration, 'identity' | 'hardenedRuntime' | 'entitlements' | 'entitlementsInherit' | 'notarize'> {
+  if (signingFrom(env) !== 'developer-id') {
+    // Ad-hoc signature: Apple Silicon won't run unsigned code at all. Hardened
+    // runtime only matters for notarization, and with an ad-hoc identity its
+    // library validation rejects Electron's frameworks, so it's off until
+    // Developer ID signing arrives (ARCHITECTURE.md §15.2).
+    return { identity: '-', hardenedRuntime: false };
+  }
+  // CSC_LINK is the Developer ID Application certificate and its key (.p12, base64);
+  // electron-builder imports it into a throwaway keychain and finds the identity there.
+  needed(env, 'developer-id', ['CSC_LINK', 'CSC_KEY_PASSWORD']);
+  // Notarization, by electron-builder's notarytool integration. An App Store Connect API key is
+  // what electron-builder recommends for CI; an Apple ID works too.
+  const apiKey = ['APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER'];
+  const appleId = ['APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID'];
+  if (!apiKey.every((name) => valueOf(env, name)) && !appleId.every((name) => valueOf(env, name))) {
+    throw new Error(`CHORD_SIGNING=developer-id needs notarization credentials: ${apiKey.join(', ')} (or ${appleId.join(', ')}) (docs/releasing/signing.md)`);
+  }
+  // electron-builder 26 hands APPLE_API_KEY to notarytool as is, so it has to be the .p8 file's path.
+  const keyFile = valueOf(env, 'APPLE_API_KEY');
+  if (keyFile && !existsSync(keyFile)) throw new Error('APPLE_API_KEY must be the path of the .p8 key file');
+  return {
+    hardenedRuntime: true,
+    // Named so ad-hoc builds never pick them up (electron-builder uses build/entitlements.mac.plist if it exists).
+    entitlements: join(BUILD, 'entitlements.developer-id.plist'),
+    entitlementsInherit: join(BUILD, 'entitlements.developer-id.inherit.plist'),
+    notarize: true,
+  };
+}
+
+/**
+ * How Chord.exe, its DLLs, and the installer and uninstaller are signed. A signed
+ * build's app-update.yml names its publisher, and electron-updater then installs
+ * only updates signed by that publisher (ARCHITECTURE.md §14.4). Unsigned builds
+ * name none, so they keep installing unsigned updates.
+ */
+export function winSigning(env: Env): Pick<WindowsConfiguration, 'azureSignOptions' | 'signtoolOptions' | 'signExts'> {
+  // electron-builder signs .exe files; Electron's own signer (@electron/windows-sign) signs DLLs too.
+  const signExts = ['.dll'];
+  switch (signingFrom(env)) {
+    case 'artifact-signing': {
+      // The TrustedSigning PowerShell module signs in to Microsoft Entra ID with these.
+      needed(env, 'artifact-signing', ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET']);
+      const [endpoint, codeSigningAccountName, certificateProfileName, publisherName] = needed(env, 'artifact-signing', [
+        'AZURE_SIGNING_ENDPOINT',
+        'AZURE_SIGNING_ACCOUNT',
+        'AZURE_SIGNING_PROFILE',
+        // The certificate's subject CN, exactly; it can't be read from the service.
+        'WIN_PUBLISHER_NAME',
+      ]) as [string, string, string, string];
+      return { azureSignOptions: { publisherName, endpoint, codeSigningAccountName, certificateProfileName }, signExts };
+    }
+    case 'certificate': {
+      // WIN_CSC_LINK is the .pfx (base64); electron-builder reads it and WIN_CSC_KEY_PASSWORD itself.
+      needed(env, 'certificate', ['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD']);
+      // Without WIN_PUBLISHER_NAME, electron-builder takes the publisher from the certificate's CN.
+      const publisherName = valueOf(env, 'WIN_PUBLISHER_NAME');
+      // Chord needs Windows 10 or later, so SHA-1 signatures would only add a second pass.
+      return { signtoolOptions: { signingHashAlgorithms: ['sha256'], ...(publisherName ? { publisherName } : {}) }, signExts };
+    }
+    default:
+      return {};
+  }
+}
 
 const config: Configuration = {
   // Identity is fixed forever (ARCHITECTURE.md §15.0). The same ID is
@@ -56,6 +156,7 @@ const config: Configuration = {
   win: {
     target: 'nsis',
     icon: 'build/icon.ico',
+    ...winSigning(process.env),
   },
   nsis: {
     // One-click, per-user (ARCHITECTURE.md §15.1): no admin prompt.
@@ -65,17 +166,30 @@ const config: Configuration = {
     // Registers Chord as a browser Windows can offer as the default.
     include: 'build/installer.nsh',
   },
+  // Microsoft Store (MSIX), off by default: win.target builds only the installer above. A Store
+  // package is built by hand with `--win appx` (docs/releasing/signing.md, Microsoft Store). The
+  // Store signs what it distributes, so this needs no certificate. Store copies update through
+  // the Store; update-installer.ts leaves them notify-only, as they have no uninstaller beside them.
+  appx: {
+    // Partner Center → the app → Product identity. Unset, electron-builder makes a test package.
+    identityName: process.env['CHORD_STORE_IDENTITY_NAME'],
+    publisher: process.env['CHORD_STORE_PUBLISHER'],
+    publisherDisplayName: process.env['CHORD_STORE_PUBLISHER_DISPLAY_NAME'] ?? 'Chord contributors',
+    applicationId: 'Chord',
+    displayName: 'Chord',
+    languages: ['en-US'],
+    // The link registration below uses uap3, which needs Windows 10 1607 (10.0.14393) or later.
+    minVersion: '10.0.14393.0',
+    maxVersionTested: '10.0.26100.0',
+    // Web links and .html files, so Windows can offer Chord as the browser (build/installer.nsh does this for the installer).
+    customExtensionsPath: 'build/appx-extensions.xml',
+  },
 
   mac: {
     target: ['dmg', 'zip'],
     icon: 'build/icon.icns',
     category: 'public.app-category.productivity',
-    // Ad-hoc signature: Apple Silicon won't run unsigned code at all. Hardened
-    // runtime only matters for notarization, and with an ad-hoc identity its
-    // library validation rejects Electron's frameworks, so it's off until
-    // Developer ID signing arrives (ARCHITECTURE.md §15.2).
-    identity: '-',
-    hardenedRuntime: false,
+    ...macSigning(process.env),
     // Web links and pages, so macOS lists Chord as a possible default browser.
     extendInfo: {
       CFBundleURLTypes: [{ CFBundleURLName: 'Web site URL', CFBundleURLSchemes: ['http', 'https'], CFBundleTypeRole: 'Viewer' }],

@@ -6,9 +6,10 @@
  * then checks the download against the manifest's sha512, and "Restart to
  * update" installs it and reopens Chord.
  *
- * macOS (unsigned apps can't update in place), the .deb (its package manager
- * should update it), copies run from an unpacked folder, and any build without
- * the signing key stay notify-only.
+ * macOS (unsigned apps can't update in place, and signed ones need a Mac
+ * updater that isn't built: docs/releasing/signing.md), the .deb (its package
+ * manager should update it), copies run from an unpacked folder, and any build
+ * without the signing key stay notify-only.
  */
 import { existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
