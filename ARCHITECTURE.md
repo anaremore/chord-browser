@@ -160,7 +160,7 @@ flowchart LR
 | **Overlay renderer** (1 per window, pre-warmed) | Command bar, Peek frame chrome, split-view drop zones. | Must paint above web content ([§5](#5-window-composition)). Kept mounted and hidden so it opens in < 50 ms. |
 | **Popover renderer** (1 per window, pre-warmed) | Hover previews, permission prompts. Its bounds are sized to the card. | Electron views can't pass clicks through (see [§5](#5-window-composition)), so popovers must not cover the sidebar. |
 | **Web content** | One WebContentsView per live tab; Chromium site isolation decides the processes. | `sandbox`, `contextIsolation`, no `nodeIntegration`, **no preload**, no `webviewTag`. |
-| **Internal pages** (`chord://settings`, `chord://archive`) | Settings is its own window (⌘, / Ctrl+,), one at a time: the preferences convention on every OS, and it keeps a privileged page out of browsing tabs entirely. The archive renders as a normal tab. | Narrow `internal.ts` preload, separate in-memory `chord-ui` session. Settings sees settings and one chord's theme, never tabs or history. |
+| **Internal pages** (`chord://settings`, `chord://archive`) | Settings is its own window (⌘, / Ctrl+,), one at a time: the preferences convention on every OS, and it keeps a privileged page out of browsing tabs entirely. The archive renders as a normal tab. | Separate in-memory `chord-ui` session; each page has its own narrow preload and IPC role. Settings (`internal.ts`, role `internal`) sees settings and one chord's theme, never tabs or history. The archive page (`archive.ts`, role `archive`) lists, restores and removes archived tabs, and sees its chord's colors. A tab showing it is made by TabManager on the UI session; navigating it to a web address (or a web tab to it) replaces the view. |
 
 All Chord UI views use one in-memory session, `chord-ui`. The `chord://` and `chord-favicon://` protocols are registered **only on that session**, so web pages can't reach them (this also prevents history-sniffing through favicons).
 
@@ -254,7 +254,7 @@ Every destructive command returns inverse patches plus an `UndoToken`. A toast h
 
 - Closed Today tabs go to the archive (`reason='closed'`) with their navigation history, which `webContents.navigationHistory.restore()` brings back ✅.
 - Deleted folders and chords are soft-deleted (`deleted_at`) and kept 30 days. They can be restored from Settings → Recently deleted.
-- Reopen-closed-tab (⌘⇧T) walks the same archive.
+- Reopen-closed-tab (⌘⇧T) walks the same archive: this session's closed (and cleared) tabs first, back in their exact place, then what the archive remembers you closed or cleared, newest first, across restarts. Tabs tidied away automatically aren't reopened by ⌘⇧T; they're in the archive page and the command bar.
 
 ---
 
@@ -409,13 +409,28 @@ CREATE TABLE duet_site_rule (
 - `parent_id` and `active_chord_id` aren't foreign keys. `restoreState()` in `@chord/core` repairs dangling references on load (an orphaned tab moves to its section root; a missing active chord falls back to the first).
 - `tab` and `folder` rows cascade from `node`.
 
-Favicons are stored once per distinct icon, keyed by content hash, and unused ones are dropped on open. Recently closed tabs are not persisted yet; they move to `archive_item` in M1.4.
+Favicons are stored once per distinct icon, keyed by content hash, and unused ones (no tab or archived tab uses them) are dropped on open.
+
+**The archive, as built (migration 5):** `archive_item` with an explicit integer `rid` (so its external-content FTS5 index, `archive_fts`, survives `VACUUM`), `reason` of `auto`, `closed` or `cleared`, and `nav_state` as JSON: the tab's `navigationHistory` entries (with Chromium's `pageState`, which holds the scroll position) and index, at most 50 entries around the current one, web pages only, and capped at 1 MB. An entry is deleted when its tab comes back. Entries older than 30 days go on open. Archive writes ride the history event stream (`HistoryEvent` `archive` / `unarchive`), in order and in the same transaction as the batch they arrive with.
 
 **Migrations** are forward-only numbered SQL files, each run in a transaction. Before every migration, and as a daily rolling copy (keep 3), we take a backup with `VACUUM INTO`. A failed migration restores the backup and opens in a read-only "something went wrong" state rather than losing data.
 
 **Profiles.** Chords share the default profile unless "Keep sign-ins separate" is on. That creates a profile with its own persistent partition: cookies, storage, cache, extensions. Moving a tab to a chord with a **different profile** recreates it in the target session and reloads it, because a WebContents can't change session. The UI says so before the drop completes.
 
+*As built:*
+- **Where to switch:** the chord's ⋯ menu, the command bar action, and Settings → General → Sign-ins. That Settings group also has a "New chords keep their own sign-ins" default.
+- **What happens:** `chord.profile` sets the chord's profile. Its open pages close, the page on screen reloads in the new session, and the window offers Undo.
+- **Cleanup:** a profile no chord uses is deleted at the next launch, both its `profile` row and its `Partitions/p-<id>` folder. That's when the sign-ins of a chord that was deleted or switched back to shared disappear.
+- **Still shared across profiles, on purpose:** history, permission decisions and downloads. They're about sites and you, not accounts.
+
 **Auto-archive.** A main-process timer runs every 5 minutes and on `powerMonitor` `resume`. It archives Today tabs whose `last_active_at` is older than the chord's threshold (12 h by default; 24 h, 7 d, 30 d, or never). It skips tabs that are audible, visible in any window, part of a split, or playing media. Archived items are kept 30 days by default.
+
+As built (`core/idle.ts`, `main/idle.ts`):
+- The threshold is one setting for now (Settings → General → "Archive Today tabs after"), not per chord.
+- `last_active_at` is when you last *left* the tab (the reducer stamps the tab a window stops showing), so idle time runs from then, not from when you opened it.
+- Busy tabs are skipped: audible; playing (`media-started-playing` until `media-paused`, so muted video counts); given the camera or microphone, until the page goes (Electron can't say when capture ends); and in picture-in-picture (asked in an isolated world just before acting).
+- Candidates are checked again against fresh state right before acting, and the reducer never auto-archives a tab on screen.
+- `CHORD_ARCHIVE_AFTER_MS`, `CHORD_SLEEP_AFTER_MS` and `CHORD_IDLE_CHECK_MS` shorten the times in development and tests (ignored when packaged).
 
 ---
 
@@ -442,10 +457,11 @@ Favicons are stored once per distinct icon, keyed by content hash, and unused on
 | Channel | shell | overlay | popover | internal | Notes |
 |---|:-:|:-:|:-:|:-:|---|
 | `state.snapshot` / `state.patch` | ✓ | ✓ | ✓ (subset) | — | |
-| `cmd.dispatch(Command)` | ✓ | ✓ (open/activate/actions subset) | — | ✓ (archive/space subset) | |
+| `cmd.dispatch(Command)` | ✓ | ✓ (open/activate/actions subset) | — | — | |
 | `layout.port` | ✓ | — | — | — | frame rects, Duet width |
 | `nav.back/forward/reload/stop` | ✓ | ✓ | — | — | |
-| `search.port` | — | ✓ | — | ✓ (archive page) | direct to chord-data |
+| `search.port` | — | ✓ | — | — | direct to chord-data |
+| `archive:list/restore/remove/snapshot` | — | restore only | — | — | the archive page's own role, `archive`; as built these are `invoke` channels through main, which flushes pending writes first |
 | `system.info` | ✓ | ✓ | ✓ | ✓ | platform, accent, reduced motion and transparency, forced colors, window-controls geometry |
 | `overlay.open/close` | ✓ | ✓ | — | — | |
 | `permission.respond` | — | — | ✓ | — | |
@@ -464,7 +480,7 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
 | Service | Approach |
 |---|---|
 | **Tabs** | TabManager owns `nodeId → WebContentsView`. Views are created lazily: on restart only the active tab of each window loads. Others load on activation (pinned tabs show their cached favicon and title until then). |
-| **Sleeping tabs** | Electron has no Chromium tab discarding. Tabs hidden for more than 60 minutes (configurable) get their `nav_state` saved and `webContents.close()` called. Activation restores them with `navigationHistory.restore()` ✅. **Never slept or auto-archived** (rule borrowed from Crest): tabs that are playing media, in picture-in-picture, sharing the screen or camera, being used by an agent, or holding a pending `beforeunload`. |
+| **Sleeping tabs** | Electron has no Chromium tab discarding. Tabs hidden for more than 60 minutes (configurable) get their `nav_state` saved and `webContents.close()` called. Activation restores them with `navigationHistory.restore()` ✅. **Never slept or auto-archived** (rule borrowed from Crest): tabs that are playing media, in picture-in-picture, sharing the screen or camera, being used by an agent, or holding a pending `beforeunload`. **As built:** 60 minutes hidden, checked with auto-archive; on by default, with a switch in Settings → General. The history (with `pageState`, so the scroll position comes back) stays in memory until the tab is shown; a sleeping tab is one with no live entry, and its icon fades to 70 %. ⚠ Not yet: detecting a pending `beforeunload` (a page with unsaved form input can be slept; `pageState` usually brings the input back). |
 | **Popups / OAuth** | `setWindowOpenHandler`: a plain `target=_blank` becomes a new Today tab (or Peek, for links from pinned tabs, later). `window.open` with features, as OAuth and payment popups use, gets a real child popup window so `window.opener` keeps working. |
 | **Navigation events** | `did-navigate`, `page-title-updated`, `page-favicon-updated`, loading and audible changes are coalesced per tab (≤ 1 update per 50 ms) into store commands. History visits go to chord-data. |
 | **Favicons** | Fetched through the tab's own session (`session.fetch`, so partition cookies apply), size-capped at 64 KB, sanitized (SVG rasterized to PNG in a sandboxed context), and stored by key. The shell loads them via `chord-favicon://<key>`. Fallback monograms are generated client-side (DESIGN.md §7.4). |
@@ -520,7 +536,21 @@ Each query carries a sequence number; stale responses are dropped. The in-memory
 
   Otherwise the address or search the text spells comes first. A typed address leads over pages unless habit says otherwise.
 - **Transport:** history lives in chord-data (migration 4: `history_url`, `history_visit`, an external-content FTS5 index kept in sync by triggers, and `palette_choice`). The overlay asks through main (`history:search`), not yet over a direct MessagePort. The 50 best bm25 matches come back, and the overlay ranks them with everything else.
-- ⚠ **Not yet:** inline autocomplete, search suggestions, the archive, and Crest's calculator.
+- **Inline autocomplete:** only the leading row completes, and only when it's a page whose address (its place key, or `www.` plus it) starts with the typed text. So the field never shows one place while Return opens another. The completed part stays selected: typing on replaces it, Tab accepts it. Deleting never brings it back until you type again. An address typed in full that is an open tab's leads with that tab ("Switch to tab"), so accepting a completion never opens a page twice.
+- **Search suggestions** (Q4: on, with a switch in Settings → General):
+  - Main asks the chosen engine's OpenSearch endpoint (`SEARCH_ENGINES[].suggest`). All six were checked with real requests through Chromium's network stack. Brave refuses curl but answers Chromium ✅.
+  - The request goes through an in-memory `chord-suggest` session with `credentials: 'omit'`. A newer question from the same command bar aborts the older one; failures mean no suggestions.
+  - Typed addresses and half-typed `@filters` never go out.
+  - The overlay waits 120 ms after the last keystroke, drops stale replies, and appends suggestions below every local row, so nothing above them moves.
+- **Scopes** (DESIGN.md §7.3):
+  - **Site keywords** (`core/keywords.ts`): YouTube `yt`, GitHub `gh`, Wikipedia `wiki`, Google Maps `maps` and Reddit `reddit`, plus one per engine (`google`, `ddg`, `bing`, `brave`, `kagi`, `ecosia`).
+    - Tab switches to the keyword. Space switches too, but only for abbreviations (`yt`, `gh`, `wiki`, `ddg`), so a search that starts with "maps" stays a search.
+    - The keyword's search leads. Pages on that site follow, then the engine's suggestions when the keyword is an engine.
+  - **Filters:** `@tabs`, `@pinned`, `@history` (recent pages before you type), `@archive` (the newest archived tabs before you type), `@chords` and `@actions`. Typing `@` lists them.
+  - The keyword or filter shows as a chip; Backspace in the empty field removes it.
+- **Where a result opens:** ↵ here, ⌘↵ / Ctrl+↵ in a new background tab, ⇧↵ in a new tab in front. ⇧↵ becomes "new window" once Chord has more than one window.
+- **Archive (as built):** archived tabs come from chord-data with history, and replace the history row for the same page. They rank with that page's use (or recency of archiving) and picking one brings the tab back with its back/forward history.
+- ⚠ **Not yet:** Crest's calculator, and the fading HintBar.
 
 ---
 
@@ -710,7 +740,7 @@ interface PlatformServices {
 | Accent color | `systemPreferences.getAccentColor()` ✅ | same, plus `accent-color-changed` ✅ | same (39+) ✅ |
 | Reduce motion / transparency | `getAnimationSettings().prefersReducedMotion` + CSS `prefers-reduced-motion` (follows OS on all three ✅); `nativeTheme.prefersReducedTransparency` | same; `nativeTheme.inForcedColorsMode` for High Contrast | CSS follows `gtk-enable-animations` ✅ |
 | Shortcuts | One registry (`packages/core/src/shortcuts.ts`, DESIGN.md §14) builds everything. **Reserved** keys are caught in `before-input-event` on every webContents, before the page sees them. **Page-first** keys are app-menu accelerators that fire only when the page didn't handle the key. Spike S8 passed on Windows; macOS is still to be confirmed by hand. | Same model; the menu is attached but never shown as a bar. Accelerators fire with `titleBarStyle: 'hidden'` (S8). | Same as Windows |
-| Default browser | `Info.plist` URL schemes + `app.setAsDefaultProtocolClient`. ⚠ Electron calls the deprecated `LSSetDefaultHandlerForURLScheme`; whether the system "Keep Safari / Use Chord" prompt appears is unverified (spike S3). Fallback: a small native helper calling `NSWorkspace setDefaultApplicationAtURL`. | Installer writes `Capabilities` + `URLAssociations` + `RegisteredApplications` (HKCU) and calls `SHChangeNotify`. In-app "Make default" opens `ms-settings:defaultapps?registeredAppUser=Chord`. Programmatic default is impossible (UCPD protects UserChoice) ✅. | `.desktop` declares `x-scheme-handler/http(s)` + `text/html`; Electron's API uses GIO (`g_app_info_set_as_default_for_type`) ✅. We also run `xdg-settings set default-web-browser` when available. Flatpak shows instructions (no portal found). |
+| Default browser | `Info.plist` URL schemes + `app.setAsDefaultProtocolClient`. ⚠ Electron calls the deprecated `LSSetDefaultHandlerForURLScheme`; whether the system "Keep Safari / Use Chord" prompt appears is unverified (spike S3). Fallback: a small native helper calling `NSWorkspace setDefaultApplicationAtURL`. | Installer writes `Capabilities` + `URLAssociations` + `RegisteredApplications` (HKCU) and calls `SHChangeNotify` (`build/installer.nsh`). Links launch `Chord.exe --single-argument %1`, as Chrome's do: Chromium hands everything after that switch over as one argument, so a crafted link can't add switches ✅ (tested). In-app "Make default" opens `ms-settings:defaultapps?registeredAppUser=Chord`. The status check reads `UserChoiceLatest\ProgId`, then `UserChoice` (newer Windows 11 builds keep the live choice in the former) ✅. Programmatic default is impossible (UCPD protects UserChoice) ✅. | `.desktop` declares `x-scheme-handler/http(s)` + `text/html`; Electron's API uses GIO (`g_app_info_set_as_default_for_type`) ✅. We also run `xdg-settings set default-web-browser` when available. Flatpak shows instructions (no portal found). |
 | Links from other apps | `open-url` (registered before `ready`) ✅ | `second-instance`, reading `additionalData` rather than argv (argv can be reordered) ✅ | same as Windows |
 | Window placement | free | free | **Wayland can't set positions or read the global cursor** ✅. The mini window uses compositor placement there, and Peek's origin comes from the last in-page mouse-down (`input-event`), which works everywhere. |
 | Chord swipe phases | `webContents.on('input-event')` `gestureScrollBegin/Update/End` on the shell view gives real phases ✅ (the old `scroll-touch-*` events were removed in 23). ⚠ Phase quality on Windows precision touchpads and libinput is unverified; fallback is end-on-idle (DESIGN.md §6.4). | | |
@@ -793,7 +823,12 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
 | Flatpak | Flathub | Flathub's GPG-verified remotes ✅ |
 
 **While builds are unsigned** (§15.2), the preview builds work like this:
-- **Phase 1:** a notify-only update check on every platform ("Chord 0.2 is ready · Download").
+- **Phase 1:** a notify-only update check on every platform (`src/main/updates.ts`, built).
+  - **When:** installed builds only, with Settings → About → "Check for updates automatically" (on by default). It runs 30 s after launch, then daily.
+  - **What it asks:** GitHub's `/releases` list, unauthenticated: 60 calls an hour per address ✅. It uses an in-memory session and never sends cookies.
+  - **Which release counts:** the newest by SemVer precedence. Drafts never count. SemVer pre-releases count only for someone already running one; GitHub's own pre-release flag is ignored, so previews still announce each other. Only release-page links are trusted.
+  - **What you see:** a toast "Chord 0.2.0 is out · What's new" (once per version per run) and the answer in About, with "Check now".
+  - **Failures:** silent, with backoff of 1 h, 2 h, 4 h, then daily.
 - **Phase 3:** in-app install on Windows and AppImage, still gated by the Ed25519 check.
 - **macOS:** stays notify-and-download until it's signed.
 

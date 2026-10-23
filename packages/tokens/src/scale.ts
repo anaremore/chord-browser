@@ -55,6 +55,8 @@ export const size = {
   /** Settings window: section list, readable content column, and its controls. */
   settingsNav: 200,
   settingsContent: 600,
+  /** The archive page's reading column. */
+  archiveContent: 720,
   settingRow: 52,
   switchWidth: 36,
   switchHeight: 20,

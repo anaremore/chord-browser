@@ -7,6 +7,7 @@
  */
 import {
   defaultSettings,
+  type ArchiveAfter,
   emptyState,
   extensionKey,
   type Chord,
@@ -22,6 +23,7 @@ import {
   type State,
   type WindowModel,
 } from './model';
+import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
@@ -114,6 +116,14 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
   const buttons = saved['extensionButtons'];
   if (buttons === 'sidebar' || buttons === 'titleBar') settings.extensionButtons = buttons;
   if (Array.isArray(saved['themes'])) settings.themes = saved['themes'].map(validTheme).filter((t): t is CustomTheme => t !== null);
+  if (typeof saved['separateSignIns'] === 'boolean') settings.separateSignIns = saved['separateSignIns'];
+  if (typeof saved['onboarded'] === 'boolean') settings.onboarded = saved['onboarded'];
+  const archiveAfter = saved['archiveAfter'];
+  if (typeof archiveAfter === 'string' && archiveAfter in ARCHIVE_AFTER_MS) settings.archiveAfter = archiveAfter as ArchiveAfter;
+  if (typeof saved['sleepTabs'] === 'boolean') settings.sleepTabs = saved['sleepTabs'];
+  for (const key of ['searchSuggestions', 'checkForUpdates'] as const) {
+    if (typeof saved[key] === 'boolean') settings[key] = saved[key];
+  }
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
   const motion = saved['motion'];
@@ -140,6 +150,8 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
       fresh.downloads = restoreDownloads(saved.downloads);
       fresh.extensions = restoreExtensions(saved.extensions);
     }
+    // No chords yet: first run, unless onboarding already finished once (or --no-first-run).
+    if (seed.firstRun && saved?.settings['onboarded'] !== true) fresh.settings.onboarded = false;
     return fresh;
   }
 

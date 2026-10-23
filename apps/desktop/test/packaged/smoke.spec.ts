@@ -31,10 +31,15 @@ function packagedExecutable(): string {
 
 type Running = { child: ChildProcess; browser: Browser; exited: Promise<number | null> };
 
-async function start(executable: string, profile: string): Promise<Running> {
+function childEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env['ELECTRON_RUN_AS_NODE'];
-  const child = spawn(executable, [`--user-data-dir=${profile}`, '--remote-debugging-port=0'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  return env;
+}
+
+/** `args` go last: a link the OS hands over comes after --single-argument, which takes the rest of the line. */
+async function start(executable: string, profile: string, args: string[] = []): Promise<Running> {
+  const child = spawn(executable, [`--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run', ...args], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = new Promise<number | null>((done) => child.once('exit', (code) => done(code)));
   const endpoint = await new Promise<string>((done, fail) => {
     let output = '';
@@ -138,6 +143,32 @@ test('the packaged app browses, opens Settings, and restores tabs after a relaun
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
     const settings = await pageWhere(app.browser, isSettings);
     await expect(settings.getByRole('radio', { name: /Kagi/ })).toHaveAttribute('aria-checked', 'true');
+    await quit(app, shell);
+  } catch (error) {
+    app.child.kill();
+    throw error;
+  }
+});
+
+test('links handed over by the OS open as tabs, at launch and in a running Chord', async () => {
+  const executable = packagedExecutable();
+  const profile = mkdtempSync(join(tmpdir(), 'chord-packaged-'));
+  // The way the Windows registration launches Chord (build/installer.nsh).
+  const app = await start(executable, profile, ['--single-argument', `${site.origin}/from-launch`]);
+  try {
+    const shell = await pageWhere(app.browser, isShell);
+    await pageWhere(app.browser, (url) => url === `${site.origin}/from-launch`);
+
+    // A second launch with the same profile hands its link to the running Chord and exits.
+    const second = spawn(executable, [`--user-data-dir=${profile}`, '--single-argument', `${site.origin}/from-second`], { env: childEnv(), stdio: 'ignore' });
+    const code = await new Promise<number | null>((done) => second.once('exit', (c) => done(c)));
+    expect(code).toBe(0);
+    await pageWhere(app.browser, (url) => url === `${site.origin}/from-second`);
+
+    // A packaged build can be the default browser, so Settings offers it (not clicked here: that asks the OS).
+    await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
+    const settings = await pageWhere(app.browser, isSettings);
+    await expect(settings.getByText(/^(Make Chord your default browser|Chord is your default browser)$/)).toBeVisible();
     await quit(app, shell);
   } catch (error) {
     app.child.kill();

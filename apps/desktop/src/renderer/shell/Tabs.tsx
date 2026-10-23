@@ -9,14 +9,14 @@
  * row it would land next to shows where, and on drop React moves it, with
  * the row leaving one list and arriving in the other.
  */
-import { children, type ChordId, type State, type TabNode } from '@chord/core';
+import { children, isInternalUrl, type ChordId, type State, type TabNode } from '@chord/core';
 import { CollisionPriority } from '@dnd-kit/abstract';
 import { PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import { DragDropProvider, useDroppable } from '@dnd-kit/react';
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
-import { Plus, Undo2, X } from 'lucide-react';
+import { Archive, Plus, Undo2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useState, type MouseEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
@@ -58,8 +58,10 @@ function TabRow({ tab, index, section, ctx }: { tab: TabNode; index: number; sec
   const live = state.live[tab.id];
   const pinned = section === 'pinned';
   const away = pinned && awayFromHome(tab);
+  // A tab whose page isn't loaded (asleep, or not opened since launch) shows a faded icon (DESIGN.md §7.2).
+  const asleep = !live && !isActive;
   // An unloaded pinned tab has nothing to close, so it shows no ×.
-  const unloaded = pinned && !live && !isActive;
+  const unloaded = pinned && asleep;
   const dispatch = api.state.dispatch;
   const close = () => void dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
   return (
@@ -92,11 +94,17 @@ function TabRow({ tab, index, section, ctx }: { tab: TabNode; index: number; sec
         className={`${styles.row} ${isActive ? styles.active : ''}`}
         // A pinned tab that hasn't been opened yet reads quieter (DESIGN.md §7.2).
         data-unloaded={unloaded || undefined}
+        data-asleep={asleep || undefined}
         aria-current={isActive ? 'page' : undefined}
         title={pageTitle(tab) || tab.url}
         onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
       >
-        <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
+        {isInternalUrl(tab.url) ? (
+          // Chord's own pages wear Chord's glyphs (DESIGN.md §7.3): a box for the archive.
+          <Archive className={styles.rowGlyph} size={16} strokeWidth={1.75} aria-hidden />
+        ) : (
+          <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
+        )}
         <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
       </button>
       {away ? (

@@ -200,6 +200,9 @@ export interface ChordMenuActions {
   rename(): void;
   changeIcon(): void;
   editColors(): void;
+  /** Whether the chord keeps its own sign-ins (a profile of its own). */
+  separateSignIns: boolean;
+  toggleSeparateSignIns(): void;
   /** Null when this is the only chord, which can't be deleted. */
   delete: (() => void) | null;
 }
@@ -210,6 +213,8 @@ export function buildChordMenu(a: ChordMenuActions): Menu {
     { label: 'Rename', click: a.rename },
     { label: 'Change icon…', click: a.changeIcon },
     { label: 'Edit colors…', click: a.editColors },
+    { type: 'separator' },
+    { label: 'Keep sign-ins separate', type: 'checkbox', checked: a.separateSignIns, click: a.toggleSeparateSignIns },
     { type: 'separator' },
     { label: 'Delete chord', enabled: a.delete !== null, click: () => a.delete?.() },
   ]);

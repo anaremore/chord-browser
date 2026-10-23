@@ -592,6 +592,7 @@ The window opens at 1200×800, centered, with the real sidebar on the left showi
 | 5 | Open links in Chord? *(optional)* | 5 s | "Links from Mail, Slack, and other apps will open here." Platform-specific outcome copy: on macOS the system asks to confirm; on Windows, "Windows will open Settings — pick Chord under Web browser"; on Linux it's set directly (Flatpak shows instructions). | **Make Chord my default** · *Not now* |
 | 6 | Three things to know | 10 s | Three cards with live keycaps: **⌘T** Search or open anything · **⌘1–9** Jump between chords (or swipe the sidebar) · **Drag a tab up** to pin it for good | **Start browsing** → command bar opens: "Where to?" |
 
+- *As built:* a brand-new profile starts here. Chrome's `--no-first-run` skips it, and development builds can force it with `CHORD_FIRST_RUN=1` (Playwright adds `--no-first-run` to every Electron app it drives). The page waits hidden behind the cards. Step 5 is left out when Chord is already the default, and in development builds, which can't be.
 - Progress shows as 6 dots: filled for required steps, hollow for optional.
 - Every optional step can be skipped with Esc.
 - Duet is **not** part of onboarding; it's opt-in later (§8.6).

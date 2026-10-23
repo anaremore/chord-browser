@@ -1,19 +1,23 @@
-import { restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
+import { ARCHIVE_AFTER_MS, IDLE_CHECK_MS, SLEEP_AFTER_MS, profilePartition, restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { delimiter, join } from 'node:path';
 import { app, clipboard, Menu, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
+import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
 import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
 import { PermissionBroker } from './permissions';
-import { Persistence } from './persistence';
+import { openable, urlsFromArgv } from './os-links';
+import { Persistence, removeUnusedPartitions } from './persistence';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
+import { Suggestions } from './suggestions';
+import { UpdateChecker } from './updates';
 import { chromiumUserAgent } from './user-agent';
 
 // Before `ready`: privileged schemes, identity (decides userData), sandbox for every renderer.
@@ -25,6 +29,12 @@ app.enableSandbox();
 // first page so CI never depends on the network.
 const HOME_URL = (!app.isPackaged && process.env['CHORD_HOME_URL']) || 'https://www.google.com/';
 
+/** Development and tests only: a duration in ms from the environment, for archiving and sleeping in seconds rather than hours. */
+function devMs(name: string): number | null {
+  const value = app.isPackaged ? NaN : Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
 const permissions = new PermissionBroker();
@@ -35,6 +45,14 @@ const downloads = new DownloadManager({
   defaultSession: () => profileSession('default'),
 });
 let profileSession: (profileId: string) => Session;
+const updates = new UpdateChecker({
+  enabled: () => browser?.store.state.settings.checkForUpdates ?? false,
+  onAvailable: (release) => browser?.announce(`update:${release.version}`, `${release.name} is out`, { label: 'What’s new', url: release.url }),
+});
+const suggestions = new Suggestions({
+  enabled: () => browser?.store.state.settings.searchSuggestions ?? false,
+  engine: () => browser?.store.state.settings.searchEngine ?? 'google',
+});
 
 function senderWindow(sender: WebContents) {
   const w = browser?.windowFor(sender);
@@ -73,6 +91,7 @@ function registerIpc(): void {
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
   handle('history:search', ({ query }, sender) => persistence!.search(query, activeChordOf(sender)));
+  handle('search:suggest', ({ query, engine }, sender) => suggestions.suggest(sender.id, query, engine));
   handle('history:choose', ({ text, destination, address }, sender) => {
     const chordId = activeChordOf(sender);
     if (chordId) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
@@ -116,18 +135,49 @@ function registerIpc(): void {
   handle('extensions:remove', ({ profileId, id }) => browser!.extensions.remove(profileId, id));
   handle('extensions:options', ({ profileId, id }) => browser!.extensions.openOptions(profileId, id));
   handle('extensions:update', () => browser!.extensions.checkForUpdates());
+  handle('settings:chordSignIns', ({ chordId, separate }) => browser!.setSeparateSignIns(chordId, separate));
+  handle('settings:defaultBrowser', () => defaultBrowserStatus());
+  handle('settings:updateStatus', () => updates.status());
+  handle('settings:checkForUpdates', () => updates.checkNow());
+  handle('settings:makeDefaultBrowser', async () => {
+    await makeDefaultBrowser();
+    return defaultBrowserStatus();
+  });
   handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
   handle('popover:size', ({ width, height }, sender) => senderWindow(sender).setPopoverSize(width, height));
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
+  handle('archive:snapshot', (_request, sender) => browser!.archiveSnapshot(sender));
+  handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
+  handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
+  handle('archive:remove', ({ archiveId }) => browser!.removeArchived(archiveId));
 }
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    browser?.focusFirstWindow();
+  // Links from other apps (Chord as the default browser) can arrive before the window does.
+  const pendingUrls = urlsFromArgv(process.argv);
+  const openUrls = (urls: string[]) => {
+    if (browser) browser.openExternalUrls(urls);
+    else pendingUrls.push(...urls);
+  };
+  app.on('second-instance', (_event, argv) => {
+    const urls = urlsFromArgv(argv);
+    if (urls.length > 0) openUrls(urls);
+    else browser?.focusFirstWindow();
+  });
+  // macOS hands links and files over as events, from launch onward.
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    const target = openable(url);
+    if (target) openUrls([target]);
+  });
+  app.on('open-file', (event, path) => {
+    event.preventDefault();
+    const target = openable(path);
+    if (target) openUrls([target]);
   });
 
   // macOS keeps running with no windows; the Dock icon brings the last one back.
@@ -166,7 +216,7 @@ if (!app.requestSingleInstanceLock()) {
     profileSession = (profileId: string) => {
       let ses = profiles.get(profileId);
       if (!ses) {
-        ses = session.fromPartition(profileId === 'default' ? 'persist:default' : `persist:p-${profileId}`);
+        ses = session.fromPartition(profilePartition(profileId));
         permissions.attach(ses);
         downloads.attach(ses);
         profiles.set(profileId, ses);
@@ -184,8 +234,13 @@ if (!app.requestSingleInstanceLock()) {
       newId: () => uuidv7(),
       theme: { stops: defaultChordStops(accentRgb ? rgbToOklch(accentRgb) : null), grain: 0.2, appearance: 'auto' },
       homeUrl: HOME_URL,
+      // Chrome's --no-first-run skips it. Playwright adds that switch to every Electron it drives,
+      // so development builds can ask for first run with CHORD_FIRST_RUN=1.
+      firstRun: (!app.isPackaged && process.env['CHORD_FIRST_RUN'] === '1') || !app.commandLine.hasSwitch('no-first-run'),
     });
     if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
+    // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
+    await removeUnusedPartitions(app.getPath('userData'), new Set(Object.values(initial.chords).map((c) => c.profileId)));
 
     const store = persistence;
     // Development and tests only (ignored when packaged): a stand-in Web Store and its signing key,
@@ -198,6 +253,12 @@ if (!app.requestSingleInstanceLock()) {
       profileSession,
       permissions,
       history: (event) => store.history(event),
+      archive: { entry: (which) => store.archiveEntry(which) },
+      idle: {
+        checkMs: devMs('CHORD_IDLE_CHECK_MS') ?? IDLE_CHECK_MS,
+        archiveAfterMs: (setting) => (setting === 'never' ? null : (devMs('CHORD_ARCHIVE_AFTER_MS') ?? ARCHIVE_AFTER_MS[setting])),
+        sleepAfterMs: devMs('CHORD_SLEEP_AFTER_MS') ?? SLEEP_AFTER_MS,
+      },
       onChange: (change) => store.record(change.patches, change.state),
       extensions: {
         root: join(app.getPath('userData'), 'Extensions'),
@@ -234,6 +295,8 @@ if (!app.requestSingleInstanceLock()) {
     // Extensions load before any page does, so their content scripts reach restored tabs.
     await browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean));
     browser.start();
+    if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
+    updates.start();
   });
 
   app.on('window-all-closed', () => {

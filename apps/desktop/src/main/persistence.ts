@@ -4,12 +4,15 @@
  * utility process dies, the batch it was writing goes back in the queue and a
  * new process takes over, at most three times.
  */
+import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { PersistedState, State } from '@chord/core';
+import type { ArchiveReason, PersistedState, State } from '@chord/core';
 import {
   opKey,
   opsForState,
   opsFromPatches,
+  type ArchiveEntry,
+  type ArchivePage,
   type DataRequest,
   type DataResponse,
   type HistoryEvent,
@@ -42,11 +45,11 @@ export class Persistence {
 
   private constructor(private readonly file: string) {}
 
-  /** Start chord-data and read what was saved (null for a brand-new profile). */
+  /** Start chord-data and read what was saved (null for a brand-new profile). Rows of unused profiles are dropped. */
   static async open(file: string): Promise<{ persistence: Persistence; saved: PersistedState | null }> {
     const persistence = new Persistence(file);
     persistence.spawn();
-    const response = await persistence.request({ type: 'open', file });
+    const response = await persistence.request({ type: 'open', file, prune: true });
     if (!response.ok) throw new Error(response.error);
     return { persistence, saved: response.saved ?? null };
   }
@@ -97,20 +100,42 @@ export class Persistence {
     this.schedule();
   }
 
-  /** A visit, a late title, or a command bar pick. */
+  /** A visit, a late title, a command bar pick, or a tab going to (or leaving) the archive. */
   history(event: HistoryEvent): void {
     if (this.closed) return;
     this.events.push(event);
     this.schedule();
   }
 
-  /** History and learned picks for what was typed in the command bar. */
+  /** History, archived tabs and learned picks for what was typed in the command bar. */
   async search(query: string, chordId: string | null): Promise<SearchResult> {
     try {
       const response = await this.request({ type: 'search', query, chordId, now: Date.now() });
-      return response.ok && response.search ? response.search : { history: [], choices: [] };
+      return response.ok && response.search ? response.search : { history: [], choices: [], archive: [] };
     } catch {
-      return { history: [], choices: [] };
+      return { history: [], choices: [], archive: [] };
+    }
+  }
+
+  /** The archive page's entries. Pending writes go first, so a tab archived a moment ago is there. */
+  async archiveList(query: string, limit: number): Promise<ArchivePage> {
+    try {
+      await this.flush();
+      const response = await this.request({ type: 'archive.list', query, limit });
+      return response.ok && response.archive ? response.archive : { items: [], more: false };
+    } catch {
+      return { items: [], more: false };
+    }
+  }
+
+  /** One archive entry with its history, or the newest one archived for `reasons`. */
+  async archiveEntry(which: { archiveId: string } | { reasons: ArchiveReason[] }): Promise<ArchiveEntry | null> {
+    try {
+      await this.flush();
+      const response = await this.request('archiveId' in which ? { type: 'archive.get', archiveId: which.archiveId } : { type: 'archive.latest', reasons: which.reasons });
+      return response.ok ? (response.entry ?? null) : null;
+    } catch {
+      return null;
     }
   }
 
@@ -147,5 +172,20 @@ export class Persistence {
     await Promise.race([done.catch(() => {}), new Promise((resolve) => setTimeout(resolve, CLOSE_TIMEOUT_MS))]);
     this.closed = true;
     this.child.kill();
+  }
+}
+
+/**
+ * Deletes the sign-ins (cookies, storage, cache) of profiles no chord uses:
+ * every `<userData>/Partitions/p-<id>` folder whose profile isn't in `used`.
+ * Runs at startup, before any session loads them. Only Chord's own `p-<id>`
+ * folders qualify, so nothing else can be deleted through this.
+ */
+export async function removeUnusedPartitions(userData: string, used: ReadonlySet<string>): Promise<void> {
+  const root = join(userData, 'Partitions');
+  const names = await readdir(root).catch(() => [] as string[]);
+  for (const name of names) {
+    const id = /^p-([0-9a-f-]{8,64})$/i.exec(name)?.[1];
+    if (id && !used.has(id)) await rm(join(root, name), { recursive: true, force: true }).catch(() => {});
   }
 }

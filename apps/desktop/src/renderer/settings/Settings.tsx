@@ -4,15 +4,18 @@
  * everywhere: the window behind this one re-themes as you pick.
  */
 import {
+  DEFAULT_PROFILE,
   DEFAULT_SETTINGS,
   SEARCH_ENGINES,
   SHORTCUTS,
   formatKeys,
   keysFor,
+  searchEngine,
+  type ArchiveAfter,
   type MotionSettings,
   type Shortcut,
 } from '@chord/core';
-import type { AboutInfo, SettingsSnapshot, SystemInfo } from '@chord/ipc';
+import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
 import { Check, Info, Keyboard, Palette, Puzzle, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
@@ -20,7 +23,7 @@ import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import { AppearanceSection } from './Appearance';
-import { ResetButton, Row, SectionHeader, Switch } from './controls';
+import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import { ExtensionsSection } from './Extensions';
 import styles from './Settings.module.css';
 
@@ -45,11 +48,89 @@ const REPO_URL = 'https://github.com/anaremore/chord-browser';
 
 /* ---------- Sections ---------- */
 
-function General({ snapshot }: { snapshot: SettingsSnapshot }) {
+const MAKE_DEFAULT_HINT: Record<SystemInfo['platform'], string> = {
+  win32: 'Opens Windows Settings, where you pick Chord for web links.',
+  darwin: 'Your Mac asks you to confirm.',
+  linux: 'Links from other apps will open in Chord.',
+};
+
+function DefaultBrowser({ platform }: { platform: SystemInfo['platform'] }) {
+  const [status, setStatus] = useState<DefaultBrowserStatus | null>(null);
+  useEffect(() => {
+    const refresh = () => void api.settings.defaultBrowser().then(setStatus);
+    refresh();
+    // The choice is made in the OS's settings; Chord checks again when you come back.
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
+  if (!status) return null;
+  return (
+    <>
+      <h2 className={styles.groupTitle}>Default browser</h2>
+      <div className={styles.group}>
+        {status === 'default' && (
+          <Row
+            label="Chord is your default browser"
+            description="Links from other apps open here, in the window you used last."
+            control={<Check className={styles.check} size={16} strokeWidth={2.25} aria-hidden />}
+          />
+        )}
+        {status === 'not-default' && (
+          <Row
+            label="Make Chord your default browser"
+            description={MAKE_DEFAULT_HINT[platform]}
+            control={
+              <button type="button" className={styles.linkButton} onClick={() => void api.settings.makeDefaultBrowser().then(setStatus)}>
+                Make default
+              </button>
+            }
+          />
+        )}
+        {status === 'unavailable' && (
+          <Row label="Default browser" description="Installed copies of Chord can be your default browser. This is a development build." control={null} />
+        )}
+      </div>
+    </>
+  );
+}
+
+/** Which chords share sign-ins (DESIGN.md: "Keep sign-ins separate", never "profile"). */
+function SignIns({ snapshot }: { snapshot: SettingsSnapshot }) {
+  const { settings, chords } = snapshot;
+  return (
+    <>
+      <h2 className={styles.groupTitle}>
+        Sign-ins
+        <ResetButton visible={settings.separateSignIns !== DEFAULT_SETTINGS.separateSignIns} onReset={() => void api.settings.set({ separateSignIns: DEFAULT_SETTINGS.separateSignIns })} />
+      </h2>
+      <div className={styles.group}>
+        <Row
+          label="New chords keep their own sign-ins"
+          description="Off: every chord shares your accounts (Google and the rest). On: each new chord starts signed out, with its own cookies."
+          control={<Switch label="New chords keep their own sign-ins" checked={settings.separateSignIns} onChange={(separateSignIns) => void api.settings.set({ separateSignIns })} />}
+        />
+        {chords.map((chord) => {
+          const separate = chord.profileId !== DEFAULT_PROFILE;
+          return (
+            <Row
+              key={chord.id}
+              label={`${chord.icon}  ${chord.name}`}
+              description={separate ? 'Keeps its own sign-ins.' : 'Shares sign-ins with your other chords.'}
+              control={<Switch label={`Keep sign-ins separate for ${chord.name}`} checked={separate} onChange={(value) => void api.settings.chordSignIns(chord.id, value)} />}
+            />
+          );
+        })}
+      </div>
+      <p className={styles.groupNote}>Changing a chord reloads its tabs. A chord on its own starts signed out; Undo brings its old sign-ins back.</p>
+    </>
+  );
+}
+
+function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
   const engine = snapshot.settings.searchEngine;
   return (
     <>
-      <SectionHeader title="General" description="How Chord searches when what you type isn't an address." />
+      <SectionHeader title="General" description="How Chord searches, which chords share sign-ins, and whether it opens your links." />
       <h2 className={styles.groupTitle}>
         Search engine
         <ResetButton visible={engine !== DEFAULT_SETTINGS.searchEngine} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
@@ -70,9 +151,62 @@ function General({ snapshot }: { snapshot: SettingsSnapshot }) {
           </button>
         ))}
       </div>
+      <div className={`${styles.group} ${styles.groupAfter}`}>
+        <Row
+          label="Search suggestions"
+          description={`As you type a search, ${searchEngine(engine).name} suggests ways to finish it. What you type is sent to ${searchEngine(engine).name}; addresses you type never are.`}
+          changed={snapshot.settings.searchSuggestions !== DEFAULT_SETTINGS.searchSuggestions}
+          onReset={() => void api.settings.set({ searchSuggestions: DEFAULT_SETTINGS.searchSuggestions })}
+          control={
+            <Switch
+              label="Search suggestions"
+              checked={snapshot.settings.searchSuggestions}
+              onChange={(searchSuggestions) => void api.settings.set({ searchSuggestions })}
+            />
+          }
+        />
+      </div>
+
+      <h2 className={styles.groupTitle}>Tabs</h2>
+      <div className={styles.group}>
+        <Row
+          label="Archive Today tabs after"
+          description="Tabs you haven't looked at in this long move to the archive. Pinned tabs, and tabs playing or sharing, stay."
+          changed={snapshot.settings.archiveAfter !== DEFAULT_SETTINGS.archiveAfter}
+          onReset={() => void api.settings.set({ archiveAfter: DEFAULT_SETTINGS.archiveAfter })}
+          control={
+            <Segmented<ArchiveAfter>
+              label="Archive Today tabs after"
+              value={snapshot.settings.archiveAfter}
+              options={ARCHIVE_CHOICES}
+              onChange={(archiveAfter) => void api.settings.set({ archiveAfter })}
+            />
+          }
+        />
+        <Row
+          label="Sleep tabs you're not using"
+          description="Tabs hidden for an hour free their memory, and pick up where you left off when you come back."
+          changed={snapshot.settings.sleepTabs !== DEFAULT_SETTINGS.sleepTabs}
+          onReset={() => void api.settings.set({ sleepTabs: DEFAULT_SETTINGS.sleepTabs })}
+          control={
+            <Switch label="Sleep tabs you're not using" checked={snapshot.settings.sleepTabs} onChange={(sleepTabs) => void api.settings.set({ sleepTabs })} />
+          }
+        />
+      </div>
+
+      <SignIns snapshot={snapshot} />
+      <DefaultBrowser platform={info.platform} />
     </>
   );
 }
+
+const ARCHIVE_CHOICES: { value: ArchiveAfter; label: string }[] = [
+  { value: '12h', label: '12 hours' },
+  { value: '24h', label: 'A day' },
+  { value: '7d', label: 'A week' },
+  { value: '30d', label: 'A month' },
+  { value: 'never', label: 'Never' },
+];
 
 const MOTION_ROWS: { key: keyof MotionSettings; label: string; description: string }[] = [
   { key: 'followSystem', label: 'Follow system motion settings', description: "When your computer asks for less motion, Chord's animations become instant." },
@@ -175,7 +309,70 @@ function Shortcuts({ info }: { info: SystemInfo }) {
   );
 }
 
-function About({ about }: { about: AboutInfo }) {
+const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+
+function checkedAgo(at: number): string {
+  const minutes = Math.round((Date.now() - at) / 60_000);
+  if (minutes < 1) return 'Checked just now.';
+  if (minutes < 60) return `Checked ${relativeTime.format(-minutes, 'minute')}.`;
+  return `Checked ${relativeTime.format(-Math.round(minutes / 60), 'hour')}.`;
+}
+
+/** Settings → About: the notify-only update check's answer, and its switch. */
+function Updates({ enabled }: { enabled: boolean }) {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  useEffect(() => void api.settings.updateStatus().then(setStatus), []);
+  if (!status) return null;
+  const checkNow = async () => {
+    setStatus({ state: 'checking' });
+    setStatus(await api.settings.checkForUpdates());
+  };
+  const checkButton = (
+    <button type="button" className={styles.linkButton} disabled={status.state === 'checking'} onClick={() => void checkNow()}>
+      Check now
+    </button>
+  );
+  const row = (() => {
+    switch (status.state) {
+      case 'unavailable':
+        return <Row label="Updates" description="Installed copies of Chord check for new versions. This is a development build." control={null} />;
+      case 'idle':
+        return <Row label="Check for updates" description="Not checked yet." control={checkButton} />;
+      case 'checking':
+        return <Row label="Checking for updates…" control={checkButton} />;
+      case 'current':
+        return <Row label="Chord is up to date" description={checkedAgo(status.checkedAt)} control={checkButton} />;
+      case 'failed':
+        return <Row label="Couldn’t check for updates" description="Chord will try again later." control={checkButton} />;
+      case 'available':
+        return (
+          <Row
+            label={`Chord ${status.version} is out`}
+            description="Download it from the release page; it installs over this version, keeping your tabs and settings."
+            control={
+              <button type="button" className={styles.linkButton} onClick={() => void api.settings.openUrl(status.url)}>
+                See what’s new
+              </button>
+            }
+          />
+        );
+    }
+  })();
+  return (
+    <div className={`${styles.group} ${styles.groupBelow}`}>
+      {row}
+      <Row
+        label="Check for updates automatically"
+        description="Once a day, Chord asks GitHub whether a newer version is out. Nothing about you is sent, and nothing installs by itself."
+        changed={enabled !== DEFAULT_SETTINGS.checkForUpdates}
+        onReset={() => void api.settings.set({ checkForUpdates: DEFAULT_SETTINGS.checkForUpdates })}
+        control={<Switch label="Check for updates automatically" checked={enabled} onChange={(checkForUpdates) => void api.settings.set({ checkForUpdates })} />}
+      />
+    </div>
+  );
+}
+
+function About({ about, snapshot }: { about: AboutInfo; snapshot: SettingsSnapshot }) {
   return (
     <>
       <div className={styles.aboutHero}>
@@ -185,6 +382,7 @@ function About({ about }: { about: AboutInfo }) {
         <h1 className={styles.aboutName}>Chord</h1>
         <p className={styles.sectionDescription}>Version {about.version}</p>
       </div>
+      <Updates enabled={snapshot.settings.checkForUpdates} />
       <div className={styles.group}>
         <Row label="Engine" control={<span className={styles.value}>Chromium {about.chromium}</span>} />
         <Row label="Electron" control={<span className={styles.value}>{about.electron}</span>} />
@@ -265,12 +463,12 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               exit={{ opacity: 0 }}
               transition={spring('snappy', 'commandBar')}
             >
-              {section === 'general' && <General snapshot={snapshot} />}
+              {section === 'general' && <General snapshot={snapshot} info={info} />}
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'shortcuts' && <Shortcuts info={info} />}
-              {section === 'about' && <About about={about} />}
+              {section === 'about' && <About about={about} snapshot={snapshot} />}
             </motion.div>
           </AnimatePresence>
         </main>

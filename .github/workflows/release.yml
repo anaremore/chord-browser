@@ -95,6 +95,33 @@ jobs:
         shell: bash
         run: npx --yes @electron/fuses@2.1.3 read --app "$FUSES_APP"
 
+      # The OS can offer Chord as the default browser (src/main/default-browser.ts).
+      - name: Check the browser registration (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $capabilities = (Get-ItemProperty 'HKCU:\Software\RegisteredApplications').Chord
+          if ($capabilities -ne 'Software\Clients\StartMenuInternet\Chord\Capabilities') { throw "RegisteredApplications\Chord is '$capabilities'" }
+          $https = (Get-ItemProperty 'HKCU:\Software\Clients\StartMenuInternet\Chord\Capabilities\URLAssociations').https
+          if ($https -ne 'ChordHTML') { throw "https is registered as '$https'" }
+          $command = (Get-ItemProperty 'HKCU:\Software\Classes\ChordHTML\shell\open\command').'(default)'
+          "Links open with: $command"
+          if ($command -notlike '*Chord.exe" --single-argument %1') { throw 'Links must reach Chord after --single-argument' }
+
+      - name: Check the browser registration (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: plutil -extract CFBundleURLTypes json -o - "${CHORD_APP%/MacOS/Chord}/Info.plist" | tee /dev/stderr | grep -q '"https"'
+
+      - name: Check the browser registration (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          desktop=/usr/share/applications/com.chordbrowser.Chord.desktop
+          cat "$desktop"
+          grep -E '^MimeType=.*x-scheme-handler/https' "$desktop"
+          grep -E '^Exec=.* %U$' "$desktop"
+
       - name: Smoke test
         if: runner.os != 'Linux'
         run: pnpm --filter @chord/desktop test:packaged

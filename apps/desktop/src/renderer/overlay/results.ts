@@ -1,13 +1,19 @@
 /**
  * What the command bar shows for a query (DESIGN.md §7.3, ARCHITECTURE.md §10):
- * the address or search for the text, open tabs in every chord, history,
- * other chords and actions, ranked by the signals in core/rank.ts (from
+ * the address or search for the text, open tabs in every chord, archived tabs,
+ * history, other chords and actions, ranked by the signals in core/rank.ts (from
  * Crest): how well the text matches, how often and recently a page was used,
  * whether a tab is pinned, and what was picked before for the same text.
+ *
+ * A scope narrows it: a site keyword (`yt`, then Tab) searches that site, and
+ * a filter (`@tabs`, `@history`, …) shows only that kind. The engine's search
+ * suggestions come last, so they never move the rows above them.
  */
 import {
   abbreviationScore,
   habit,
+  keywordFor,
+  keywordSearchUrl,
   learnedPoints,
   matchScore,
   parseInput,
@@ -19,23 +25,64 @@ import {
   sortedChords,
   usagePoints,
   type ActionId,
+  type ArchivedTab,
   type Chord,
+  type SiteKeyword,
   type State,
   type TabNode,
 } from '@chord/core';
 import type { HistorySearch } from '@chord/ipc';
 import { displayHost, pageTitle } from '../shared/site';
 
+export type Filter = 'tabs' | 'pinned' | 'history' | 'archive' | 'chords' | 'actions';
+export type Scope = { kind: 'keyword'; keyword: SiteKeyword } | { kind: 'filter'; filter: Filter };
+
 export type Result =
-  | { kind: 'open'; key: string; title: string; detail: string; url: string; search: boolean }
+  /** The address or search the text spells; `suggested` when the engine offered it. */
+  | { kind: 'open'; key: string; title: string; detail: string; url: string; search: boolean; suggested?: boolean }
   | { kind: 'tab'; key: string; title: string; detail: string; tab: TabNode; chordName: string | null }
   | { kind: 'history'; key: string; title: string; detail: string; url: string }
+  /** A tab in the archive: picking it brings the tab back, history and all. */
+  | { kind: 'archive'; key: string; title: string; detail: string; url: string; archiveId: string }
   | { kind: 'action'; key: string; title: string; action: ActionId }
-  | { kind: 'chord'; key: string; title: string; chord: Chord };
+  | { kind: 'chord'; key: string; title: string; chord: Chord }
+  /** A way to narrow the bar: search a site, or show one kind of result. */
+  | { kind: 'scope'; key: string; title: string; detail: string; scope: Scope };
+
+/** The narrowing filters (DESIGN.md §7.3), in the order `@` lists them. */
+export const FILTERS: readonly { id: Filter; token: string; name: string; placeholder: string }[] = [
+  { id: 'tabs', token: '@tabs', name: 'Tabs', placeholder: 'Search open tabs' },
+  { id: 'pinned', token: '@pinned', name: 'Pinned', placeholder: 'Search pinned tabs' },
+  { id: 'history', token: '@history', name: 'History', placeholder: 'Search history' },
+  { id: 'archive', token: '@archive', name: 'Archive', placeholder: 'Search the archive' },
+  { id: 'chords', token: '@chords', name: 'Chords', placeholder: 'Search chords' },
+  { id: 'actions', token: '@actions', name: 'Actions', placeholder: 'Search actions' },
+];
+
+export const filterInfo = (id: Filter) => FILTERS.find((f) => f.id === id)!;
+
+/**
+ * The scope the text switches to when Tab (or Space) follows it: a filter's
+ * `@word`, or a site keyword. Only short abbreviations switch on Space.
+ */
+export function scopeFor(text: string, key: 'tab' | 'space'): Scope | null {
+  const typed = text.trim().toLowerCase();
+  const filter = FILTERS.find((f) => f.token === typed);
+  if (filter) return { kind: 'filter', filter: filter.id };
+  const keyword = keywordFor(typed);
+  return keyword && (key === 'tab' || keyword.space) ? { kind: 'keyword', keyword } : null;
+}
+
+export function scopeLabel(scope: Scope): { name: string; placeholder: string } {
+  if (scope.kind === 'keyword') return { name: scope.keyword.name, placeholder: `Search ${scope.keyword.name}` };
+  const f = filterInfo(scope.filter);
+  return { name: f.name, placeholder: f.placeholder };
+}
 
 /** Actions that work in this milestone; the list grows with each feature. */
 const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'tab.reopen', title: 'Reopen closed tab', words: 'reopen closed tab undo restore' },
+  { action: 'app.history', title: 'Archive', words: 'archive archived history closed tabs' },
   { action: 'tab.close', title: 'Close tab', words: 'close tab' },
   { action: 'tab.pin', title: 'Pin or unpin tab', words: 'pin unpin tab keep' },
   { action: 'address.copy', title: 'Copy page address', words: 'copy url address link' },
@@ -57,9 +104,11 @@ const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'app.shortcuts', title: 'Keyboard shortcuts', words: 'keyboard shortcuts hotkeys keys cheat sheet' },
 ];
 
-/** The most rows of each kind, and in all. */
-const LIMIT = { tab: 5, history: 6, chord: 3, action: 3 } as const;
+/** The most rows of each kind, and in all. A filter shows more of its one kind. */
+const LIMIT = { tab: 5, archive: 4, history: 6, chord: 3, action: 3 } as const;
 const MAX_ROWS = 12;
+/** A filter lists everything of its kind; the panel scrolls. */
+const FILTER_ROWS = 50;
 /** An open tab scores above the same match in history; a pinned one above that (Crest's signals). */
 const OPEN_TAB_POINTS = 150;
 const KEPT_POINTS = 100;
@@ -68,6 +117,15 @@ const LEADS_AT_USAGE = 120;
 const LEADS_AT_RECENCY = 100;
 
 const tabTitle = (t: TabNode) => pageTitle(t) || displayHost(t.url) || 'New tab';
+
+const archiveResult = (a: ArchivedTab): Result => ({
+  kind: 'archive',
+  key: `archive:${a.id}`,
+  title: a.title || shortUrl(a.url),
+  detail: shortUrl(a.url),
+  url: a.url,
+  archiveId: a.id,
+});
 
 /** "github.com/anaremore/chord-browser": the address without scheme or `www.`. */
 export function shortUrl(url: string): string {
@@ -80,7 +138,7 @@ export function shortUrl(url: string): string {
   }
 }
 
-/** Where a row leads, as learned picks remember it: a page's place, a chord, an action. Searches aren't remembered. */
+/** Where a row leads, as learned picks remember it: a page's place, a chord, an action. Searches and scopes aren't remembered. */
 export function destinationOf(result: Result): string | null {
   switch (result.kind) {
     case 'open':
@@ -88,12 +146,33 @@ export function destinationOf(result: Result): string | null {
     case 'tab':
       return placeKey(result.tab.url) ?? `tab:${result.tab.id}`;
     case 'history':
+    case 'archive':
       return placeKey(result.url);
     case 'chord':
       return `chord:${result.chord.id}`;
     case 'action':
       return `action:${result.action}`;
+    case 'scope':
+      return null;
   }
+}
+
+/**
+ * Inline autocomplete (DESIGN.md §7.3, ARCHITECTURE.md §10): when the row
+ * that leads is a page whose address starts with what was typed, the rest of
+ * that address, to show selected after the caret. Only the leading row
+ * completes, so the field never shows one place while Return opens another.
+ */
+export function completionFor(typed: string, lead: Result | undefined): string {
+  if (!typed || /\s/.test(typed) || typed.includes('://')) return '';
+  if (lead?.kind !== 'tab' && lead?.kind !== 'history' && lead?.kind !== 'archive') return '';
+  const place = placeKey(lead.kind === 'tab' ? lead.tab.url : lead.url);
+  if (!place) return '';
+  const lower = typed.toLowerCase();
+  for (const address of [place, `www.${place}`]) {
+    if (address.length > typed.length && address.toLowerCase().startsWith(lower)) return address.slice(typed.length);
+  }
+  return '';
 }
 
 interface Scored {
@@ -103,6 +182,13 @@ interface Scored {
   mayLead: boolean;
 }
 
+export interface Narrowing {
+  /** A site keyword or filter the person switched to. */
+  scope?: Scope | null;
+  /** The engine's suggestions for the text, newest reply. */
+  suggestions?: readonly string[];
+}
+
 export function buildResults(
   query: string,
   state: State,
@@ -110,6 +196,7 @@ export function buildResults(
   mode: 'new' | 'edit',
   history: HistorySearch | null = null,
   now = Date.now(),
+  { scope = null, suggestions = [] }: Narrowing = {},
 ): Result[] {
   const q = query.trim();
   const win = state.windows[windowId];
@@ -124,9 +211,14 @@ export function buildResults(
     tab: t,
     chordName: chordName(t),
   });
+  const engine = state.settings.searchEngine;
+  const suggestionRows = (into: (text: string) => string): Result[] =>
+    suggestions.map((text) => ({ kind: 'open', key: `suggest:${text}`, title: text, detail: '', url: into(text), search: true, suggested: true }));
+
+  if (scope?.kind === 'filter') return filtered(scope.filter, q, state, win?.activeChordId ?? null, activeId ?? null, tabs, tabResult, history, now);
 
   if (!q) {
-    if (mode === 'edit') return [];
+    if (mode === 'edit' || scope) return [];
     // Nothing typed yet: recently used tabs, most recent first.
     return tabs
       .filter((t) => t.id !== activeId)
@@ -135,14 +227,53 @@ export function buildResults(
       .map(tabResult);
   }
 
+  // A site keyword: the site's search first, then pages on that site that match, then the engine's ideas.
+  if (scope?.kind === 'keyword') {
+    const k = scope.keyword;
+    const onSite = (url: string) => placeKey(url)?.startsWith(k.place) ?? false;
+    const intent: Result = { kind: 'open', key: 'open', title: q, detail: `Search ${k.name}`, url: keywordSearchUrl(k, q), search: true };
+    const pages: Result[] = [
+      ...tabs.filter((t) => onSite(t.url) && matchScore(q, tabTitle(t), shortUrl(t.url)) !== null).map(tabResult),
+      ...(history?.archive ?? [])
+        .filter((a) => onSite(a.url) && matchScore(q, a.title || shortUrl(a.url), shortUrl(a.url)) !== null)
+        .map(archiveResult),
+      ...(history?.history ?? [])
+        .filter((h) => onSite(h.url) && matchScore(q, h.title || shortUrl(h.url), shortUrl(h.url)) !== null)
+        .map((h): Result => ({ kind: 'history', key: `history:${placeKey(h.url)}`, title: h.title || shortUrl(h.url), detail: shortUrl(h.url), url: h.url })),
+    ];
+    const seen = new Set<string>();
+    const unique = pages.filter((r) => {
+      const place = destinationOf(r) ?? r.key;
+      if (seen.has(place)) return false;
+      seen.add(place);
+      return true;
+    });
+    return [intent, ...unique.slice(0, MAX_ROWS - 1), ...(k.engine ? suggestionRows((text) => keywordSearchUrl(k, text)) : [])];
+  }
+
   const parsed = parseInput(q);
   let intent: Result | null = null;
   if (parsed?.kind === 'url') {
     intent = { kind: 'open', key: 'open', title: parsed.url, detail: '', url: parsed.url, search: false };
   } else if (parsed) {
-    const engine = state.settings.searchEngine;
     intent = { kind: 'open', key: 'open', title: q, detail: `Search ${searchEngine(engine).name}`, url: searchUrl(parsed.query, engine), search: true };
   }
+
+  // Ways to narrow: `@` lists the filters it could start; a keyword typed exactly offers its site.
+  const filterOffers: Result[] =
+    q.startsWith('@') && !/\s/.test(q)
+      ? FILTERS.filter((f) => f.token.startsWith(q.toLowerCase())).map((f) => ({
+          kind: 'scope',
+          key: `scope:${f.token}`,
+          title: f.placeholder,
+          detail: f.token,
+          scope: { kind: 'filter', filter: f.id },
+        }))
+      : [];
+  const keyword = keywordFor(q);
+  const keywordOffer: Result | null = keyword
+    ? { kind: 'scope', key: `scope:${keyword.keyword}`, title: `Search ${keyword.name}`, detail: keyword.keyword, scope: { kind: 'keyword', keyword } }
+    : null;
 
   const choices = history?.choices ?? [];
   const learned = (result: Result) => {
@@ -176,6 +307,30 @@ export function buildResults(
     const place = placeKey(intent.url);
     if (place) claimed.add(place);
   }
+  // Archived tabs before history: the same page, but it comes back with its own back/forward
+  // history. It ranks with the page's use, and recent archiving counts as recent use.
+  const usageOf = new Map<string, number>();
+  for (const h of history?.history ?? []) {
+    const place = placeKey(h.url);
+    if (place) usageOf.set(place, Math.max(usageOf.get(place) ?? 0, usagePoints(h.frecency)));
+  }
+  for (const a of history?.archive ?? []) {
+    const place = placeKey(a.url);
+    if (!place || claimed.has(place)) continue;
+    claimed.add(place);
+    const title = a.title || shortUrl(a.url);
+    const match = matchScore(q, title, shortUrl(a.url));
+    if (match === null) continue;
+    const result = archiveResult(a);
+    const usage = Math.max(usageOf.get(place) ?? 0, recencyPoints(a.archivedAt, now));
+    scored.push({
+      result,
+      kind: 'archive',
+      score: match + usage + learned(result),
+      mayLead: (prefixes(q, title) || prefixes(q, shortUrl(a.url))) && usage >= LEADS_AT_USAGE,
+    });
+  }
+
   for (const h of history?.history ?? []) {
     const place = placeKey(h.url);
     if (!place || claimed.has(place)) continue;
@@ -219,11 +374,94 @@ export function buildResults(
   kept.sort((a, b) => b.score - a.score);
 
   // What leads (Return runs it): a habit for this exact text, else a well-used page the text starts.
-  // A typed address leads over a page only by habit.
+  // A typed address leads over a page only by habit, or when it is an open tab's address exactly:
+  // then Return switches to that tab rather than opening it twice. `@` text leads with its filters.
   const habitual = habit(choices, q, now);
+  const typedPlace = parsed?.kind === 'url' ? placeKey(parsed.url) : null;
   const lead =
-    (habitual ? kept.find((s) => destinationOf(s.result) === habitual) : undefined) ??
-    (parsed?.kind === 'url' ? undefined : kept.find((s) => s.mayLead));
+    filterOffers.length > 0
+      ? undefined
+      : ((habitual ? kept.find((s) => destinationOf(s.result) === habitual) : undefined) ??
+        (typedPlace
+          ? kept.find((s) => s.result.kind === 'tab' && placeKey(s.result.tab.url) === typedPlace)
+          : kept.find((s) => s.mayLead)));
   const rest = kept.filter((s) => s !== lead).map((s) => s.result);
-  return [...(lead ? [lead.result] : []), ...(intent ? [intent] : []), ...rest].slice(0, MAX_ROWS);
+  const local = [...filterOffers, ...(lead ? [lead.result] : []), ...(intent ? [intent] : []), ...(keywordOffer ? [keywordOffer] : []), ...rest].slice(0, MAX_ROWS);
+  // Half a filter (`@hi`) isn't a search worth suggesting for.
+  return [...local, ...(parsed?.kind === 'search' && filterOffers.length === 0 ? suggestionRows((text) => searchUrl(text, engine)) : [])];
+}
+
+/** One kind of result only (`@tabs` and the rest): everything of that kind when nothing's typed, best matches otherwise. */
+function filtered(
+  filter: Filter,
+  q: string,
+  state: State,
+  activeChordId: string | null,
+  activeId: string | null,
+  tabs: TabNode[],
+  tabResult: (t: TabNode) => Result,
+  history: HistorySearch | null,
+  now: number,
+): Result[] {
+  const ranked = <T>(items: T[], match: (item: T) => number | null, extra: (item: T) => number, toResult: (item: T) => Result): Result[] =>
+    items
+      .map((item) => ({ item, match: q ? match(item) : 0 }))
+      .filter((x): x is { item: T; match: number } => x.match !== null)
+      .map((x) => ({ result: toResult(x.item), score: x.match + extra(x.item) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, FILTER_ROWS)
+      .map((x) => x.result);
+  const tabMatch = (t: TabNode) => matchScore(q, tabTitle(t), shortUrl(t.url)) ?? abbreviationScore(q, tabTitle(t));
+  switch (filter) {
+    case 'tabs':
+      return ranked(
+        tabs.filter((t) => t.id !== activeId),
+        tabMatch,
+        (t) => recencyPoints(t.lastActiveAt, now) + (q ? 0 : t.lastActiveAt / 1e12),
+        tabResult,
+      );
+    case 'pinned':
+      return ranked(
+        tabs.filter((t) => t.section === 'pinned'),
+        tabMatch,
+        (t) => recencyPoints(t.lastActiveAt, now),
+        tabResult,
+      );
+    case 'history': {
+      const seen = new Set<string>();
+      const pages = (history?.history ?? []).filter((h) => {
+        const place = placeKey(h.url);
+        if (!place || seen.has(place)) return false;
+        seen.add(place);
+        return true;
+      });
+      return ranked(
+        pages,
+        (h) => matchScore(q, h.title || shortUrl(h.url), shortUrl(h.url)),
+        (h) => (q ? usagePoints(h.frecency) : h.lastVisitAt / 1e12),
+        (h) => ({ kind: 'history', key: `history:${placeKey(h.url)}`, title: h.title || shortUrl(h.url), detail: shortUrl(h.url), url: h.url }),
+      );
+    }
+    case 'archive':
+      return ranked(
+        history?.archive ?? [],
+        (a) => matchScore(q, a.title || shortUrl(a.url), shortUrl(a.url)),
+        (a) => (q ? recencyPoints(a.archivedAt, now) : a.archivedAt / 1e12),
+        archiveResult,
+      );
+    case 'chords':
+      return ranked(
+        sortedChords(state).filter((c) => c.id !== activeChordId),
+        (c) => matchScore(q, c.name) ?? abbreviationScore(q, c.name),
+        () => 0,
+        (c) => ({ kind: 'chord', key: `chord:${c.id}`, title: c.name, chord: c }),
+      );
+    case 'actions':
+      return ranked(
+        ACTIONS,
+        (a) => matchScore(q, a.title, a.words) ?? abbreviationScore(q, a.title),
+        () => 0,
+        (a) => ({ kind: 'action', key: `action:${a.action}`, title: a.title, action: a.action }),
+      );
+  }
 }

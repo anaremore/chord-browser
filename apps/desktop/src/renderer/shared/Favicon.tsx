@@ -13,6 +13,8 @@ interface Props {
 
 /** Icons whose visible pixels are mostly dark, measured once per icon. */
 const darkIcons = new Map<string, boolean>();
+/** Icons the browser couldn't decode: they show the monogram instead of a broken image. */
+const brokenIcons = new Set<string>();
 
 function measureDark(img: HTMLImageElement): boolean {
   const canvas = document.createElement('canvas');
@@ -33,14 +35,15 @@ function measureDark(img: HTMLImageElement): boolean {
 }
 
 /**
- * A site's icon, a monogram when it has none, or a spinner while it loads
+ * A site's icon, a monogram when it has none (or it won't decode), or a spinner while it loads
  * (DESIGN.md §7.4). Dark icons (GitHub's, for one) get a soft light backing on
  * dark themes so they don't disappear.
  */
 export function Favicon({ url, title, favicon, loading = false, appearance }: Props) {
   const [dark, setDark] = useState(() => (favicon ? (darkIcons.get(favicon) ?? false) : false));
+  const [, setBroken] = useState(0);
   if (loading) return <span className={styles.spinner} aria-hidden />;
-  if (favicon) {
+  if (favicon && !brokenIcons.has(favicon)) {
     const plated = appearance === 'dark' && dark;
     return (
       <span className={`${styles.frame} ${plated ? styles.plate : ''}`}>
@@ -54,6 +57,10 @@ export function Favicon({ url, title, favicon, loading = false, appearance }: Pr
             const isDark = measureDark(e.currentTarget);
             darkIcons.set(favicon, isDark);
             if (isDark) setDark(true);
+          }}
+          onError={() => {
+            brokenIcons.add(favicon);
+            setBroken((n) => n + 1);
           }}
         />
       </span>

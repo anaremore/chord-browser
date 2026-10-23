@@ -232,6 +232,26 @@
   color: var(--color-fg-muted);
 }
 
+/* A site keyword or @filter the bar is narrowed to; Backspace in the empty field removes it. */
+.scopeChip {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2) var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--color-selection);
+  color: var(--color-fg);
+  font: var(--text-label);
+  white-space: nowrap;
+}
+
+.anchored .scopeChip {
+  block-size: var(--size-hit-min);
+  font: var(--text-small);
+}
+
 .input {
   flex: 1;
   min-inline-size: 0;

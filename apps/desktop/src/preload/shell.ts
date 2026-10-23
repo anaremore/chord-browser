@@ -28,6 +28,7 @@ const api: ShellApi = {
     menu: (id, at) => invoke('extension:menu', { id, x: at.x, y: at.y }),
     install: (input) => invoke('extensions:install', { input }),
   },
+  defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

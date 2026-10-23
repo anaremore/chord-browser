@@ -176,6 +176,14 @@ kbd {
   font: var(--text-label);
 }
 
+/* Shown when the chord keeps its own sign-ins. */
+.signIns {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--color-fg-subtle);
+}
+
 /* The chord's icon: click to change it. */
 .chordIconButton {
   display: grid;
@@ -412,6 +420,16 @@ kbd {
 
 /* A pinned tab that hasn't been opened yet. */
 .row[data-unloaded] {
+  color: var(--color-fg-muted);
+}
+
+/* Asleep or not loaded yet: the icon fades a little (DESIGN.md §7.2). */
+.row[data-asleep] > :first-child {
+  opacity: 0.7;
+}
+
+.rowGlyph {
+  flex: none;
   color: var(--color-fg-muted);
 }
 

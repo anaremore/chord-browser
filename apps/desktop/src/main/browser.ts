@@ -3,21 +3,28 @@
  * broadcasts patches to renderer mirrors, and carries out keyboard actions.
  */
 import {
+  ARCHIVE_URL,
   activeTab,
   activeTabId,
+  DEFAULT_PROFILE,
+  isInternalUrl,
   markdownLink,
   motionEnabled,
+  sortedChords,
   tabsInOrder,
+  uuidv7,
   zoomStep,
   type ActionId,
+  type ArchiveReason,
   type Effect,
   type NodeId,
   type State,
   type TabNode,
   type WindowId,
 } from '@chord/core';
-import type { PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
-import { app, BaseWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
+import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
+import type { ArchiveSnapshot, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
+import { app, BaseWindow, BrowserWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
 import { Extensions } from './extensions';
@@ -25,14 +32,17 @@ import type { WebStore } from './extensions/webstore';
 import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
+import { IdleKeeper, type IdleTiming } from './idle';
 import { buildAppMenu, buildChordMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
-import type { HistoryEvent } from '@chord/data';
 import type { PermissionBroker } from './permissions';
 import { systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
 import { TabManager } from './tabs';
-import { AppWindow } from './window';
+import { AppWindow, createUiView } from './window';
+
+/** Histories of tabs archived this session, kept in memory so ⌘⇧T doesn't wait on the database. */
+const MAX_REMEMBERED_HISTORIES = 100;
 
 export interface BrowserOptions {
   initial: State;
@@ -40,8 +50,12 @@ export interface BrowserOptions {
   profileSession(profileId: string): Session;
   /** Answers permission requests; connected here once the store exists. */
   permissions: PermissionBroker;
-  /** Where visits and page titles go (chord-data's history). */
+  /** Where visits, page titles and archived tabs go (chord-data). */
   history(event: HistoryEvent): void;
+  /** Reads from chord-data's archive: one entry, or the newest archived for some reasons. */
+  archive: { entry(which: { archiveId: string } | { reasons: ArchiveReason[] }): Promise<ArchiveEntry | null> };
+  /** When idle tabs are archived and put to sleep. */
+  idle: IdleTiming;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
   /** Chrome extensions (ARCHITECTURE.md §12). */
@@ -68,6 +82,11 @@ export class Browser {
   private lastWindowId: WindowId | null = null;
   private settingsWindow: SettingsWindow | null = null;
   private recent: { windowId: WindowId; order: NodeId[]; index: number } | null = null;
+  readonly idle: IdleKeeper;
+  private readonly archivedHistory = new Map<string, NavState | null>();
+  /** Archive entries being restored, so a double click brings a tab back once. */
+  private readonly restoring = new Set<string>();
+  private archiveChangedTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly keyboard: KeyboardHandlers = {
     run: (action, contents) => this.run(action, contents),
     onControlUp: () => this.finishRecentCycle(),
@@ -81,6 +100,8 @@ export class Browser {
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       sessionFor: (node) => options.profileSession(this.store.state.chords[node.chordId]?.profileId ?? 'default'),
+      // The archive is Chord's only page shown as a tab so far.
+      createInternalView: () => createUiView(options.uiSession, 'archive'),
       windowFor: (nodeId) => this.windowShowing(nodeId),
       onVisit: (url, title) => options.history({ k: 'visit', url, title, at: Date.now() }),
       onTitle: (url, title) => options.history({ k: 'title', url, title }),
@@ -106,6 +127,22 @@ export class Browser {
             return w && bounds ? { window: w.window, x: bounds.x, y: bounds.y } : undefined;
           },
           extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
+        });
+      },
+      onPopupCreated: (contents, openerNodeId) => {
+        attachContextMenu(contents, {
+          surface: 'web',
+          inspect: true,
+          searchEngine: () => this.store.state.settings.searchEngine,
+          // Links from a sign-in window open beside the page that opened it.
+          openTab: (url, background) => {
+            const windowId = this.windowShowing(openerNodeId);
+            if (windowId) this.store.dispatch({ t: 'tab.open', windowId, url, background });
+          },
+          placement: () => {
+            const popup = BrowserWindow.fromWebContents(contents);
+            return popup ? { window: popup, x: 0, y: 0 } : undefined;
+          },
         });
       },
     });
@@ -137,6 +174,15 @@ export class Browser {
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       onChange: () => this.syncPopovers(),
     });
+    this.idle = new IdleKeeper(
+      {
+        state: () => this.store.state,
+        dispatch: (command) => this.store.dispatch(command),
+        tabs: this.tabs,
+        isCapturing: (nodeId) => options.permissions.isCapturing(nodeId),
+      },
+      options.idle,
+    );
     this.store.subscribe((change) => {
       this.broadcast(change);
       this.runEffects(change.effects);
@@ -146,6 +192,9 @@ export class Browser {
       if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
+      if (change.patches.some((p) => p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'interface'))) {
+        for (const contents of this.archivePages()) send(contents, 'archive:snapshot', this.archiveSnapshot(contents));
+      }
       options.onChange?.(change);
     });
   }
@@ -153,6 +202,7 @@ export class Browser {
   /** Open a window for every window in the state that isn't open yet, and show its active tab. */
   start(): void {
     for (const model of Object.values(this.store.state.windows)) if (!this.windows.has(model.id)) this.openWindow(model.id);
+    this.idle.start();
   }
 
   focusFirstWindow(): void {
@@ -220,6 +270,7 @@ export class Browser {
       this.extensions.forget(windowId);
       if (this.lastWindowId === windowId) this.lastWindowId = this.windows.keys().next().value ?? null;
       if (this.windows.size === 0 && process.platform !== 'darwin') {
+        this.idle.stop();
         this.tabs.destroyAll();
         this.settingsWindow?.window.close();
         app.quit();
@@ -260,11 +311,35 @@ export class Browser {
           if (w) this.extensions.tabShown(w);
           break;
         }
-        case 'view.navigate':
+        case 'view.navigate': {
+          // Going between Chord's own page and the web makes a new view; windows showing the tab take it.
+          const before = this.tabs.get(effect.nodeId);
           this.tabs.navigate(effect.nodeId, effect.url);
+          const after = this.tabs.get(effect.nodeId);
+          if (after && after !== before) {
+            for (const w of this.windows.values()) if (activeTabId(this.store.state, w.id) === effect.nodeId) w.showTab(after);
+          }
           break;
+        }
         case 'view.destroy':
           this.tabs.destroy(effect.nodeId);
+          break;
+        case 'view.sleep':
+          this.tabs.sleep(effect.nodeId);
+          break;
+        case 'archive.save': {
+          // Before its view goes: the history is what brings it back where it was.
+          const nav = this.tabs.history(effect.nodeId);
+          this.rememberHistory(effect.tab.id, nav);
+          this.options.history({ k: 'archive', tab: effect.tab, nav });
+          this.archiveChanged();
+          break;
+        }
+        case 'archive.restored':
+          this.tabs.restoreHistoryOnLoad(effect.nodeId, this.archivedHistory.get(effect.archiveId) ?? null);
+          this.archivedHistory.delete(effect.archiveId);
+          this.options.history({ k: 'unarchive', id: effect.archiveId });
+          this.archiveChanged();
           break;
         case 'window.layout': {
           const animate = motionEnabled(this.store.state.settings, 'sidebar', systemInfo().prefersReducedMotion);
@@ -308,7 +383,8 @@ export class Browser {
     if (find?.target && find.target !== w.activeTabContents) find.close(false);
     const id = activeTabId(this.store.state, w.id);
     const live = id ? this.store.state.live[id] : undefined;
-    w.setTabHidden(Boolean(live?.error || live?.crashed));
+    // The frame explains errors and crashes, and holds first run's cards, instead of the page.
+    w.setTabHidden(Boolean(live?.error || live?.crashed) || !this.store.state.settings.onboarded);
     const state = this.popoverState(w);
     const json = JSON.stringify(state);
     if (this.popoverSent.get(w.id) === json) return;
@@ -347,6 +423,7 @@ export class Browser {
       settings: state.settings,
       chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
       extensions: this.extensions.infos(),
+      chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId })),
     };
   }
 
@@ -366,6 +443,17 @@ export class Browser {
       openTab: (url) => this.openUrlInLastWindow(url),
       placement: () => (this.settingsWindow ? { window: this.settingsWindow.window, x: 0, y: 0 } : undefined),
     });
+  }
+
+  /** Links from other apps (Chord as the default browser): new tabs in the window used last, which comes forward. */
+  openExternalUrls(urls: readonly string[]): void {
+    // macOS keeps running with every window closed; a link brings one back.
+    if (this.windows.size === 0) this.start();
+    const w = this.lastWindow();
+    if (!w) return;
+    for (const url of urls) this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+    if (w.window.isMinimized()) w.window.restore();
+    w.window.focus();
   }
 
   /** A link from Settings opens as a new tab in the browser window used last, which comes forward. */
@@ -420,10 +508,19 @@ export class Browser {
           this.lastWindowId = w.id;
           this.openSettings('appearance');
         },
+        separateSignIns: chord.profileId !== DEFAULT_PROFILE,
+        toggleSeparateSignIns: () => this.toggleSeparateSignIns(w, chordId),
         delete: onlyChord ? null : () => this.deleteChord(w, chordId),
       }),
       { ...at, width: 0, height: 0 },
     );
+  }
+
+  /** A note for the window used last, with a link that opens as a tab there (a new Chord version, for one). */
+  announce(id: string, message: string, link: { label: string; url: string }): void {
+    const w = this.lastWindow();
+    if (!w) return;
+    send(w.shell.webContents, 'toast:show', { id, message, action: { label: link.label, command: { t: 'tab.open', windowId: w.id, url: link.url } } });
   }
 
   /**
@@ -438,6 +535,29 @@ export class Browser {
       id: `chord-deleted:${chordId}`,
       message: `Deleted “${chord.name}”`,
       action: { label: 'Undo', command: { t: 'chord.restore', windowId: w.id, chordId } },
+    });
+  }
+
+  private toggleSeparateSignIns(w: AppWindow, chordId: string): void {
+    const chord = this.store.state.chords[chordId];
+    if (chord) this.setSeparateSignIns(chordId, chord.profileId === DEFAULT_PROFILE, w);
+  }
+
+  /**
+   * "Keep sign-ins separate": the chord gets a profile of its own (its tabs
+   * reload in it, signed out), or shares the default one again. Undo goes
+   * back to the sign-ins it had, which stay on disk until the next launch.
+   */
+  setSeparateSignIns(chordId: string, separate: boolean, w = this.lastWindow()): void {
+    const chord = this.store.state.chords[chordId];
+    if (!chord || (chord.profileId !== DEFAULT_PROFILE) === separate) return;
+    const previous = chord.profileId;
+    this.store.dispatch({ t: 'chord.profile', chordId, profileId: separate ? uuidv7() : DEFAULT_PROFILE });
+    if (!w) return;
+    send(w.shell.webContents, 'toast:show', {
+      id: `chord-signins:${chordId}`,
+      message: separate ? `“${chord.name}” keeps its own sign-ins now. Its tabs reloaded, signed out.` : `“${chord.name}” shares sign-ins with your other chords again.`,
+      action: { label: 'Undo', command: { t: 'chord.profile', chordId, profileId: previous } },
     });
   }
 
@@ -456,7 +576,12 @@ export class Browser {
         if (active) this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId: active });
         return true;
       case 'tab.reopen':
-        this.store.dispatch({ t: 'tab.reopenClosed', windowId: w.id });
+        // This session's closed tabs keep their place; after that, the archive remembers what you closed.
+        if (this.store.state.closed.length > 0) this.store.dispatch({ t: 'tab.reopenClosed', windowId: w.id });
+        else void this.options.archive.entry({ reasons: ['closed', 'cleared'] }).then((entry) => entry && this.restoreEntry(w.id, entry, true));
+        return true;
+      case 'app.history':
+        this.openArchive(w.id);
         return true;
       case 'tab.recentNext':
       case 'tab.recentPrevious':
@@ -541,6 +666,11 @@ export class Browser {
         if (chordId && Object.keys(this.store.state.chords).length > 1) this.deleteChord(w, chordId);
         return true;
       }
+      case 'chord.separateSignIns': {
+        const chordId = this.store.state.windows[w.id]?.activeChordId;
+        if (chordId) this.toggleSeparateSignIns(w, chordId);
+        return true;
+      }
       case 'chord.next':
       case 'chord.previous':
         this.store.dispatch({ t: 'chord.cycle', windowId: w.id, direction: action === 'chord.next' ? 1 : -1 });
@@ -551,6 +681,75 @@ export class Browser {
         return Boolean(goto);
       }
     }
+  }
+
+  /** Show the archive page: the one already open in this chord, or a new tab. */
+  private openArchive(windowId: WindowId): void {
+    const chordId = this.store.state.windows[windowId]?.activeChordId;
+    const open = chordId ? tabsInOrder(this.store.state, chordId).find((t) => t.url.startsWith(ARCHIVE_URL)) : undefined;
+    if (open) this.store.dispatch({ t: 'tab.activate', windowId, nodeId: open.id });
+    else this.store.dispatch({ t: 'tab.open', windowId, url: ARCHIVE_URL });
+  }
+
+  /**
+   * Bring a tab back from the archive into the window `contents` belongs to.
+   * The command bar opens it; the archive page leaves it waiting in the sidebar.
+   */
+  async restoreArchived(contents: WebContents, archiveId: string): Promise<void> {
+    const w = this.windowFor(contents);
+    if (!w || this.restoring.has(archiveId)) return;
+    this.restoring.add(archiveId);
+    try {
+      const entry = await this.options.archive.entry({ archiveId });
+      if (entry) this.restoreEntry(w.id, entry, contents === w.overlay.webContents);
+    } finally {
+      this.restoring.delete(archiveId);
+    }
+  }
+
+  private restoreEntry(windowId: WindowId, entry: ArchiveEntry, activate: boolean): void {
+    this.rememberHistory(entry.tab.id, entry.nav);
+    this.store.dispatch({ t: 'archive.restore', windowId, nodeId: uuidv7(), tab: entry.tab, activate });
+  }
+
+  /** Forget an archived tab for good (the archive page's Remove). */
+  removeArchived(archiveId: string): void {
+    this.archivedHistory.delete(archiveId);
+    this.options.history({ k: 'unarchive', id: archiveId });
+    this.archiveChanged();
+  }
+
+  private rememberHistory(archiveId: string, nav: NavState | null): void {
+    this.archivedHistory.set(archiveId, nav);
+    while (this.archivedHistory.size > MAX_REMEMBERED_HISTORIES) this.archivedHistory.delete(this.archivedHistory.keys().next().value!);
+  }
+
+  /** Every archive page that's loaded. */
+  private archivePages(): WebContents[] {
+    return Object.values(this.store.state.nodes)
+      .filter((n): n is TabNode => n.kind === 'tab' && isInternalUrl(n.url))
+      .map((n) => this.tabs.get(n.id)?.webContents)
+      .filter((c): c is WebContents => c !== undefined && !c.isDestroyed());
+  }
+
+  /** Archive pages list their entries again, once a burst of changes settles. */
+  private archiveChanged(): void {
+    clearTimeout(this.archiveChangedTimer);
+    this.archiveChangedTimer = setTimeout(() => {
+      for (const contents of this.archivePages()) send(contents, 'archive:changed', null);
+    }, 100);
+  }
+
+  /** What an archive page shows besides its entries: its chord's colors and every chord's name. */
+  archiveSnapshot(contents: WebContents): ArchiveSnapshot {
+    const state = this.store.state;
+    const nodeId = this.tabs.nodeFor(contents);
+    const node = nodeId ? state.nodes[nodeId] : undefined;
+    return {
+      theme: node ? (state.chords[node.chordId]?.theme ?? null) : null,
+      interface: state.settings.interface,
+      chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon })),
+    };
   }
 
   /** Hold Ctrl and press Tab to walk back through recently used tabs; release to land. */
