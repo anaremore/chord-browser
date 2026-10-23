@@ -5,8 +5,9 @@
  * covered end to end in duet.spec.ts.
  */
 import { DUET_PDF_MAX_BYTES, pdfPageOf, pdfText, pageResult } from '@chord/core';
+import type { WebContents } from 'electron';
 import { describe, expect, it } from 'vitest';
-import { looksLikePdf, pdfProblemCopy, readCapped } from '../../src/main/duet/pdf';
+import { fetchPdf, looksLikePdf, PdfError, pdfProblemCopy, readCapped } from '../../src/main/duet/pdf';
 import { extractPdfText, PdfReadError } from '../../src/pdf/extract';
 import { buildPdf, SAMPLE_PDF_PAGES } from '../fixtures/pdf';
 
@@ -67,6 +68,33 @@ describe('PDF download', () => {
     expect(await readCapped(new Response(stream), 2500)).toBeNull();
     // A declared length over the cap isn't downloaded at all.
     expect(await readCapped(new Response(small, { headers: { 'content-length': String(DUET_PDF_MAX_BYTES + 1) } }), DUET_PDF_MAX_BYTES)).toBeNull();
+  });
+
+  it('fetches through the tab’s own session, and refuses where a redirect lands if Duet never reads it', async () => {
+    const pdf = buildPdf(SAMPLE_PDF_PAGES);
+    const asked: { url: string; init?: RequestInit }[] = [];
+    /** A tab whose session answers with `respond()`, as if it ended at `landed`. */
+    const tab = (landed: string, respond: () => Response) =>
+      ({
+        session: {
+          fetch: async (url: string, init?: RequestInit) => {
+            asked.push({ url, ...(init ? { init } : {}) });
+            const response = respond();
+            Object.defineProperty(response, 'url', { value: landed });
+            return response;
+          },
+        },
+      }) as unknown as WebContents;
+    const url = 'https://docs.example/guide.pdf';
+    const readable = (address: string) => !address.startsWith('https://private.example/');
+    expect(await fetchPdf(tab(url, () => new Response(pdf)), url, readable)).toEqual(pdf);
+    // The user's cookies apply: it's the tab's session, with credentials.
+    expect(asked[0]).toMatchObject({ url, init: { credentials: 'include' } });
+    await expect(fetchPdf(tab('https://private.example/guide.pdf', () => new Response(pdf)), url, readable)).rejects.toMatchObject({ problem: 'never' });
+    await expect(fetchPdf(tab(url, () => new Response('sign in first', { status: 403 })), url, readable)).rejects.toMatchObject({ problem: 'unreachable', detail: 'the site answered 403' });
+    await expect(fetchPdf(tab(url, () => new Response('<!doctype html><title>Sign in</title>')), url, readable)).rejects.toMatchObject({ problem: 'not-pdf' });
+    await expect(fetchPdf(tab(url, () => new Response(pdf)), url, readable, 100)).rejects.toBeInstanceOf(PdfError);
+    await expect(fetchPdf(tab(url, () => new Response(pdf)), url, readable, 100)).rejects.toMatchObject({ problem: 'too-big' });
   });
 
   it('says plainly why a PDF couldn’t be read', () => {
