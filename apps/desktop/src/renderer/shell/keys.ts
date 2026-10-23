@@ -1,15 +1,24 @@
-import { formatKeys, shortcutById, type ActionId } from '@chord/core';
+import { keycapFor, type ActionId, type ShortcutOverrides } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
+import { createContext, useContext } from 'react';
 
-/** The keycap for an action on this platform: "⌘L", "Ctrl+L". */
-export function keycap(id: ActionId, info: SystemInfo): string {
-  const keys = shortcutById(id);
-  const first = keys ? (info.platform === 'darwin' ? keys.mac : keys.other)[0] : undefined;
-  return first ? formatKeys(first, info.platform) : '';
-}
+/** Your shortcut changes (Settings → Keyboard shortcuts), provided once at the top of the shell. */
+const Shortcuts = createContext<ShortcutOverrides>({});
+export const ShortcutsProvider = Shortcuts.Provider;
 
-/** A label with its shortcut, for tooltips: "Reload  Ctrl+R". */
-export function withKeys(label: string, id: ActionId, info: SystemInfo): string {
-  const keys = keycap(id, info);
-  return keys ? `${label}  ${keys}` : label;
+/**
+ * Keycaps that follow your shortcut changes: `keycap('tab.new')` is "⌘T" or
+ * "Ctrl+T" (or whatever you set it to), and `withKeys` adds it to a tooltip
+ * ("Reload  Ctrl+R").
+ */
+export function useKeys(info: SystemInfo): { keycap(id: ActionId): string; withKeys(label: string, id: ActionId): string } {
+  const overrides = useContext(Shortcuts);
+  const keycap = (id: ActionId) => keycapFor(id, info.platform, overrides);
+  return {
+    keycap,
+    withKeys: (label, id) => {
+      const keys = keycap(id);
+      return keys ? `${label}  ${keys}` : label;
+    },
+  };
 }

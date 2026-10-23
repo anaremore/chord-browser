@@ -194,4 +194,4 @@ jobs:
             --prerelease \
             --title "Chord ${GITHUB_REF_NAME#v} (preview)" \
             --generate-notes \
-            --notes "Unsigned preview build. Windows and macOS will warn before the first launch; see [Try the preview](https://github.com/${GITHUB_REPOSITORY}#try-the-preview) for what to click. Check downloads against SHA256SUMS.txt."
+            --notes "Unsigned preview build. Windows and macOS will warn before the first launch; see [Try the preview](https://github.com/${GITHUB_REPOSITORY}#try-the-preview) for what to click. Check downloads against SHA256SUMS.txt. What's new: [RELEASE_NOTES.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/RELEASE_NOTES.md)."

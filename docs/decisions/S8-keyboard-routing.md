@@ -23,10 +23,15 @@ Setup: WebContentsView tabs inside a BaseWindow with `titleBarStyle: 'hidden'`. 
 
 On macOS, keys a page leaves alone go back to the menu as the original `NSEvent`. Injected keys have no `NSEvent`, so the menu never sees them, and a CI test would fail even though real keys work.
 
+## Changed keys (Settings → Keyboard shortcuts)
+
+The routing stays the same when you change a shortcut: a reserved action stays reserved and a page-first one stays page-first. Only its keys change. The router reads your changes on every key press, and main rebuilds the app menu (and so its accelerators) whenever they change. E2E covers both paths on Windows and X11: a changed reserved key works and its old one doesn't, and a changed page-first key works through the rebuilt menu. macOS needs the same check by hand.
+
 ## Still to check (by hand)
 
 - **macOS:**
   - ⌘S with a page focused toggles the sidebar.
   - In a page that saves on ⌘S (Google Docs, for example), the page wins.
   - ⌘W closes exactly one tab.
+  - After changing Show or hide the sidebar to another key in Settings, the new key works with a page focused and ⌘S no longer does. The macOS menu bar shows the new key.
 - **Linux, Wayland:** the same three checks with Ctrl, on real keys. In CI under headless Weston, the page-first check fails: Ctrl+S never reaches the menu, while reserved keys work. The likely cause is that headless Weston never activates the window, and accelerators only fire for an active one, but that's unverified. The test is skipped on Wayland until a real session confirms it.

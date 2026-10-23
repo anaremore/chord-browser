@@ -1,6 +1,7 @@
 /** The state of a brand-new profile: one chord, one window, one tab. */
 import { generateKeyBetween } from 'fractional-indexing';
 import { IDLE_LIVE, SIDEBAR_WIDTH, emptyState, type ChordThemeSpec, type State } from './model';
+import type { Platform } from './shortcuts';
 
 export interface SeedOptions {
   now: number;
@@ -9,6 +10,8 @@ export interface SeedOptions {
   homeUrl: string;
   /** A brand-new profile starts in first-run onboarding (DESIGN.md §8.1); `--no-first-run` skips it. */
   firstRun?: boolean;
+  /** This OS, so saved shortcut changes it keeps for itself are dropped. */
+  platform?: Platform;
 }
 
 export function seedState({ now, newId, theme, homeUrl }: SeedOptions): State {

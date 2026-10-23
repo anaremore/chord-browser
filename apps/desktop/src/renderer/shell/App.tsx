@@ -1,4 +1,17 @@
-import { activeTabId, chordsFor, describeLoadError, downloadsFor, isInternalUrl, SIDEBAR_WIDTH, sortedChords, type LiveTab, type LoadError, type TabNode } from '@chord/core';
+import {
+  activeTabId,
+  chordsFor,
+  describeLoadError,
+  downloadsFor,
+  isInternalUrl,
+  keycapFor,
+  SIDEBAR_WIDTH,
+  sortedChords,
+  type ActionId,
+  type LiveTab,
+  type LoadError,
+  type TabNode,
+} from '@chord/core';
 import type { ChordEdit, SystemInfo } from '@chord/ipc';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
@@ -11,7 +24,7 @@ import { api } from './api';
 import styles from './App.module.css';
 import { ChordHeader, ChordPane, ChordSwitcher, GhostPane, newChordLook, Tint } from './Chords';
 import { useSystemInfo } from './hooks';
-import { keycap, withKeys } from './keys';
+import { ShortcutsProvider, useKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { Onboarding } from './Onboarding';
@@ -67,13 +80,14 @@ function anchorRef(el: HTMLElement | null) {
 }
 
 function SidebarToggle({ collapsed, info, onToggle, onHover }: { collapsed: boolean; info: SystemInfo; onToggle(): void; onHover?(over: boolean): void }) {
+  const { withKeys } = useKeys(info);
   return (
     <button
       type="button"
       className={styles.iconButton}
       aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'}
       aria-expanded={!collapsed}
-      title={withKeys(collapsed ? 'Show sidebar' : 'Hide sidebar', 'view.toggleSidebar', info)}
+      title={withKeys(collapsed ? 'Show sidebar' : 'Hide sidebar', 'view.toggleSidebar')}
       onClick={onToggle}
       onPointerEnter={() => onHover?.(true)}
       onPointerLeave={() => onHover?.(false)}
@@ -150,13 +164,14 @@ const PEEK_DELAY_MS = 300;
 const EDGE_PEEK_DELAY_MS = 120;
 
 function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab: boolean; info: SystemInfo }) {
+  const { withKeys } = useKeys(info);
   return (
     <>
       <button
         type="button"
         className={styles.iconButton}
         aria-label="Back"
-        title={withKeys('Back', 'nav.back', info)}
+        title={withKeys('Back', 'nav.back')}
         disabled={!live?.canGoBack}
         onClick={() => void api.nav.command('back')}
       >
@@ -166,7 +181,7 @@ function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab:
         type="button"
         className={styles.iconButton}
         aria-label="Forward"
-        title={withKeys('Forward', 'nav.forward', info)}
+        title={withKeys('Forward', 'nav.forward')}
         disabled={!live?.canGoForward}
         onClick={() => void api.nav.command('forward')}
       >
@@ -176,7 +191,7 @@ function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab:
         type="button"
         className={styles.iconButton}
         aria-label={live?.loading ? 'Stop' : 'Reload'}
-        title={live?.loading ? 'Stop' : withKeys('Reload', 'nav.reload', info)}
+        title={live?.loading ? 'Stop' : withKeys('Reload', 'nav.reload')}
         disabled={!hasTab}
         onClick={() => void api.nav.command(live?.loading ? 'stop' : 'reload')}
       >
@@ -211,6 +226,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const inTitleBar = state.settings.extensionButtons === 'titleBar';
   const spring = springsFor(state.settings, info.prefersReducedMotion);
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
+  // Keycaps follow your shortcut changes; App provides them to everything below.
+  const keycap = (id: ActionId) => keycapFor(id, info.platform, state.settings.shortcuts);
 
   // Which way the sidebar slides when switching chords: toward the new chord's place in the switcher.
   const chordIndex = chord ? chordsFor(state, windowId).findIndex((c) => c.id === chord.id) : 0;
@@ -224,7 +241,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const [downloadsSeenAt, setDownloadsSeenAt] = useState(() => Date.now());
   const downloads = summarizeDownloads(downloadsFor(state, windowId), downloadsSeenAt);
   const downloadsButton = <DownloadsButton summary={downloads} onOpen={() => setDownloadsSeenAt(Date.now())} />;
-  const archiveLabel = withKeys('Archive', 'app.history', info);
+  const archiveKeys = keycap('app.history');
+  const archiveLabel = archiveKeys ? `Archive  ${archiveKeys}` : 'Archive';
   const archiveButton = (
     <button type="button" className={styles.downloadsButton} aria-label="Archive" title={archiveLabel} onClick={() => void api.action.run('app.history')}>
       <Archive {...ICON} />
@@ -302,228 +320,230 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
 
   // Motion's default ignores the OS; "user" honors reduced motion (DESIGN.md §6.6) unless Settings says not to.
   return (
-    <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
-      <div
-        ref={rootRef}
-        className={styles.window}
-        data-sidebar={collapsed ? 'collapsed' : 'docked'}
-        data-peek={peeking || undefined}
-        data-resizing={liveWidth !== null || undefined}
-        style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
-      >
-        <div className={styles.backdrop} aria-hidden>
-          {/* A swipe blends the neighbor's tint in as the fingers move, so its switch needn't crossfade again. */}
-          <Tint value={String(style['--color-tint' as keyof typeof style] ?? '')} transition={swipe.tintInstant ? INSTANT : spring('gentle', 'colorBlend')} />
-          {swipe.blendId && <motion.div className={styles.tint} style={{ background: tintOf(swipe.blendId), opacity: swipe.blend }} />}
-          <div className={styles.grain} />
-        </div>
-
-        {/*
-          Over the page while the sidebar peeks: the pointer resting here (not in the sidebar) puts it
-          away after a moment, and a click at once. Coming from the edge, the sidebar is a few px away.
-        */}
-        {peeking && (
-          <div
-            className={styles.peekScrim}
-            aria-hidden
-            onPointerMove={() => schedulePeek(false, PEEK_DELAY_MS)}
-            onPointerDown={() => setPeek(false)}
-          />
-        )}
-        {/* Pointing at the window's left edge peeks the sidebar (DESIGN.md §3.3). */}
-        {collapsed && !peeking && (
-          <div className={styles.edgeZone} aria-hidden onPointerEnter={() => schedulePeek(true, EDGE_PEEK_DELAY_MS)} onPointerLeave={keepPeek} />
-        )}
-
-        <nav
-          className={styles.sidebar}
-          aria-label="Sidebar"
-          data-swipe-area
-          inert={collapsed && !peeking}
-          aria-hidden={(collapsed && !peeking) || undefined}
-          onPointerEnter={() => peeking && keepPeek()}
-          onPointerMove={() => peeking && keepPeek()}
-          onPointerLeave={() => peeking && schedulePeek(false, PEEK_DELAY_MS)}
-          onKeyDown={(e) => {
-            if (peeking && e.key === 'Escape') setPeek(false);
-          }}
+    <ShortcutsProvider value={state.settings.shortcuts}>
+      <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
+        <div
+          ref={rootRef}
+          className={styles.window}
+          data-sidebar={collapsed ? 'collapsed' : 'docked'}
+          data-peek={peeking || undefined}
+          data-resizing={liveWidth !== null || undefined}
+          style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
         >
-          <header className={styles.header}>
-            <SidebarToggle collapsed={collapsed} info={info} onToggle={toggleSidebar} />
-            {!overlayChrome && <span className={styles.flex} />}
-            <NavButtons live={live} hasTab={Boolean(active)} info={info} />
-            {/* macOS has no title bar beside a docked sidebar: its header row is the title bar. */}
-            {inTitleBar && !overlayChrome && <ExtensionButtons bar={extensionsBar} puzzleOnly={false} />}
-          </header>
+          <div className={styles.backdrop} aria-hidden>
+            {/* A swipe blends the neighbor's tint in as the fingers move, so its switch needn't crossfade again. */}
+            <Tint value={String(style['--color-tint' as keyof typeof style] ?? '')} transition={swipe.tintInstant ? INSTANT : spring('gentle', 'colorBlend')} />
+            {swipe.blendId && <motion.div className={styles.tint} style={{ background: tintOf(swipe.blendId), opacity: swipe.blend }} />}
+            <div className={styles.grain} />
+          </div>
 
-          <button
-            ref={collapsed ? undefined : anchorRef}
-            type="button"
-            className={styles.urlPill}
-            title={active?.url ?? ''}
-            onClick={() => void api.overlay.open('edit')}
-          >
-            {internal ? (
-              <Archive size={12} strokeWidth={2} aria-hidden />
-            ) : secure ? (
-              <Lock size={12} strokeWidth={2} aria-hidden />
-            ) : (
-              <Globe size={12} strokeWidth={2} aria-hidden />
-            )}
-            <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
-            <kbd className={styles.pillKeycap}>{keycap('address.edit', info)}</kbd>
-          </button>
-
-          {/* One drag space: tabs move between lists, onto Favorites, and onto chords in the switcher. */}
-          <SidebarDnd state={state} chordId={chord?.id ?? ''}>
-            {!isPrivate && <FavoritesRow state={state} windowId={windowId} activeId={activeId} appearance={appearance} />}
-
-            <div ref={trackRef} className={styles.paneTrack} data-swiping={swipe.ghosts.length > 0 || swipe.paneMotion !== null || undefined}>
-              <AnimatePresence initial={false} mode="popLayout" custom={paneMotion}>
-                <ChordPane key={chord?.id} motion={paneMotion} x={swipe.xFor(chord?.id ?? '')} transition={spring('smooth', 'chordSlide')}>
-                  <ChordHeader
-                    chord={chord}
-                    info={info}
-                    edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
-                    onDone={() => setChordEdit(null)}
-                  />
-                  <SidebarTabs
-                    chordId={chord?.id ?? ''}
-                    state={state}
-                    windowId={windowId}
-                    activeId={activeId}
-                    info={info}
-                    appearance={appearance}
-                    spring={spring}
-                  />
-                </ChordPane>
-              </AnimatePresence>
-              {/* The neighbors a swipe brings in beside the current chord. */}
-              {swipe.ghosts.map(({ id }) => {
-                const neighbor = state.chords[id];
-                return (
-                  neighbor && (
-                    <GhostPane key={`ghost-${id}`} x={swipe.xFor(id)}>
-                      <ChordHeader chord={neighbor} info={info} edit={null} onDone={() => {}} />
-                      <SidebarTabs
-                        chordId={id}
-                        state={state}
-                        windowId={windowId}
-                        activeId={win?.activeTab[id] ?? null}
-                        info={info}
-                        appearance={appearance}
-                        spring={spring}
-                      />
-                    </GhostPane>
-                  )
-                );
-              })}
-            </div>
-
-            {(!collapsed || peeking) && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
-
-            {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
-
-            <ChordSwitcher
-              state={state}
-              windowId={windowId}
-              info={info}
-              pill={spring('snappy', 'chordSlide')}
-              leading={
-                <>
-                  {!isPrivate && archiveButton}
-                  {downloadsButton}
-                </>
-              }
-              onCreate={isPrivate ? null : () => void createChord()}
+          {/*
+            Over the page while the sidebar peeks: the pointer resting here (not in the sidebar) puts it
+            away after a moment, and a click at once. Coming from the edge, the sidebar is a few px away.
+          */}
+          {peeking && (
+            <div
+              className={styles.peekScrim}
+              aria-hidden
+              onPointerMove={() => schedulePeek(false, PEEK_DELAY_MS)}
+              onPointerDown={() => setPeek(false)}
             />
-          </SidebarDnd>
-          {!collapsed && <ResizeHandle width={sidebarWidth} windowId={windowId} onLive={setLiveWidth} />}
-        </nav>
+          )}
+          {/* Pointing at the window's left edge peeks the sidebar (DESIGN.md §3.3). */}
+          {collapsed && !peeking && (
+            <div className={styles.edgeZone} aria-hidden onPointerEnter={() => schedulePeek(true, EDGE_PEEK_DELAY_MS)} onPointerLeave={keepPeek} />
+          )}
 
-        {/* The top bar: right of the sidebar on Windows/Linux; the whole minimal bar when collapsed (DESIGN.md §3.3). */}
-        {(overlayChrome || collapsed) && (
-          <div className={styles.bar} data-swipe-area={collapsed || undefined}>
-            {collapsed && (
-              <div className={styles.barLead}>
-                <SidebarToggle collapsed info={info} onToggle={toggleSidebar} onHover={hoverToggle} />
-                <NavButtons live={live} hasTab={Boolean(active)} info={info} />
-              </div>
-            )}
+          <nav
+            className={styles.sidebar}
+            aria-label="Sidebar"
+            data-swipe-area
+            inert={collapsed && !peeking}
+            aria-hidden={(collapsed && !peeking) || undefined}
+            onPointerEnter={() => peeking && keepPeek()}
+            onPointerMove={() => peeking && keepPeek()}
+            onPointerLeave={() => peeking && schedulePeek(false, PEEK_DELAY_MS)}
+            onKeyDown={(e) => {
+              if (peeking && e.key === 'Escape') setPeek(false);
+            }}
+          >
+            <header className={styles.header}>
+              <SidebarToggle collapsed={collapsed} info={info} onToggle={toggleSidebar} />
+              {!overlayChrome && <span className={styles.flex} />}
+              <NavButtons live={live} hasTab={Boolean(active)} info={info} />
+              {/* macOS has no title bar beside a docked sidebar: its header row is the title bar. */}
+              {inTitleBar && !overlayChrome && <ExtensionButtons bar={extensionsBar} puzzleOnly={false} />}
+            </header>
+
             <button
-              ref={collapsed ? anchorRef : undefined}
+              ref={collapsed ? undefined : anchorRef}
               type="button"
-              className={styles.address}
+              className={styles.urlPill}
               title={active?.url ?? ''}
               onClick={() => void api.overlay.open('edit')}
             >
-              {host ? (
-                <>
-                  <span className={styles.addressHost}>{host}</span>
-                  {title && (
-                    <>
-                      <span className={styles.addressMuted} aria-hidden>
-                        /
-                      </span>
-                      <span className={`${styles.addressMuted} ${styles.ellipsis}`}>{title}</span>
-                    </>
-                  )}
-                </>
+              {internal ? (
+                <Archive size={12} strokeWidth={2} aria-hidden />
+              ) : secure ? (
+                <Lock size={12} strokeWidth={2} aria-hidden />
               ) : (
-                <span className={styles.addressMuted}>Search or enter address</span>
+                <Globe size={12} strokeWidth={2} aria-hidden />
               )}
+              <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
+              <kbd className={styles.pillKeycap}>{keycap('address.edit')}</kbd>
             </button>
-            <span className={styles.flex} />
-            {(inTitleBar || collapsed) && <ExtensionButtons bar={extensionsBar} puzzleOnly={!inTitleBar} />}
-            {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
-            {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
-            {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
-            {overlayChrome && (
-              <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>
-                <Ellipsis {...ICON} />
+
+            {/* One drag space: tabs move between lists, onto Favorites, and onto chords in the switcher. */}
+            <SidebarDnd state={state} chordId={chord?.id ?? ''}>
+              {!isPrivate && <FavoritesRow state={state} windowId={windowId} activeId={activeId} appearance={appearance} />}
+
+              <div ref={trackRef} className={styles.paneTrack} data-swiping={swipe.ghosts.length > 0 || swipe.paneMotion !== null || undefined}>
+                <AnimatePresence initial={false} mode="popLayout" custom={paneMotion}>
+                  <ChordPane key={chord?.id} motion={paneMotion} x={swipe.xFor(chord?.id ?? '')} transition={spring('smooth', 'chordSlide')}>
+                    <ChordHeader
+                      chord={chord}
+                      info={info}
+                      edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
+                      onDone={() => setChordEdit(null)}
+                    />
+                    <SidebarTabs
+                      chordId={chord?.id ?? ''}
+                      state={state}
+                      windowId={windowId}
+                      activeId={activeId}
+                      info={info}
+                      appearance={appearance}
+                      spring={spring}
+                    />
+                  </ChordPane>
+                </AnimatePresence>
+                {/* The neighbors a swipe brings in beside the current chord. */}
+                {swipe.ghosts.map(({ id }) => {
+                  const neighbor = state.chords[id];
+                  return (
+                    neighbor && (
+                      <GhostPane key={`ghost-${id}`} x={swipe.xFor(id)}>
+                        <ChordHeader chord={neighbor} info={info} edit={null} onDone={() => {}} />
+                        <SidebarTabs
+                          chordId={id}
+                          state={state}
+                          windowId={windowId}
+                          activeId={win?.activeTab[id] ?? null}
+                          info={info}
+                          appearance={appearance}
+                          spring={spring}
+                        />
+                      </GhostPane>
+                    )
+                  );
+                })}
+              </div>
+
+              {(!collapsed || peeking) && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
+
+              {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
+
+              <ChordSwitcher
+                state={state}
+                windowId={windowId}
+                info={info}
+                pill={spring('snappy', 'chordSlide')}
+                leading={
+                  <>
+                    {!isPrivate && archiveButton}
+                    {downloadsButton}
+                  </>
+                }
+                onCreate={isPrivate ? null : () => void createChord()}
+              />
+            </SidebarDnd>
+            {!collapsed && <ResizeHandle width={sidebarWidth} windowId={windowId} onLive={setLiveWidth} />}
+          </nav>
+
+          {/* The top bar: right of the sidebar on Windows/Linux; the whole minimal bar when collapsed (DESIGN.md §3.3). */}
+          {(overlayChrome || collapsed) && (
+            <div className={styles.bar} data-swipe-area={collapsed || undefined}>
+              {collapsed && (
+                <div className={styles.barLead}>
+                  <SidebarToggle collapsed info={info} onToggle={toggleSidebar} onHover={hoverToggle} />
+                  <NavButtons live={live} hasTab={Boolean(active)} info={info} />
+                </div>
+              )}
+              <button
+                ref={collapsed ? anchorRef : undefined}
+                type="button"
+                className={styles.address}
+                title={active?.url ?? ''}
+                onClick={() => void api.overlay.open('edit')}
+              >
+                {host ? (
+                  <>
+                    <span className={styles.addressHost}>{host}</span>
+                    {title && (
+                      <>
+                        <span className={styles.addressMuted} aria-hidden>
+                          /
+                        </span>
+                        <span className={`${styles.addressMuted} ${styles.ellipsis}`}>{title}</span>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <span className={styles.addressMuted}>Search or enter address</span>
+                )}
               </button>
+              <span className={styles.flex} />
+              {(inTitleBar || collapsed) && <ExtensionButtons bar={extensionsBar} puzzleOnly={!inTitleBar} />}
+              {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
+              {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
+              {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
+              {overlayChrome && (
+                <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>
+                  <Ellipsis {...ICON} />
+                </button>
+              )}
+            </div>
+          )}
+          {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
+
+          <div className={styles.frame}>
+            {!state.settings.onboarded && chord && !isPrivate ? (
+              <Onboarding chord={chord} windowId={windowId} info={info} spring={spring} />
+            ) : (
+              <>
+                {active && live?.crashed && (
+                  <div className={styles.empty} role="alert">
+                    <p className={styles.emptyTitle}>This page stopped working.</p>
+                    <p className={styles.emptyBody}>It’s not you. Reloading usually fixes it.</p>
+                    <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
+                      Reload
+                    </button>
+                  </div>
+                )}
+                {active && !live?.crashed && live?.error && <LoadErrorState error={live.error} canGoBack={live.canGoBack} windowId={windowId} tabId={active.id} />}
+                {!active && (
+                  <div className={styles.empty}>
+                    {isPrivate ? (
+                      <>
+                        <p className={styles.emptyTitle}>This window is private.</p>
+                        <p className={styles.emptyBody}>Chord won’t remember the sites you visit in this window. Files you download are kept.</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className={styles.emptyTitle}>Fresh chord, fresh start.</p>
+                        <p className={styles.emptyBody}>Open a site, or search for anything.</p>
+                      </>
+                    )}
+                    <button type="button" className={styles.emptyButton} onClick={() => void api.overlay.open('new')}>
+                      New tab <kbd className={styles.inlineKeycap}>{keycap('tab.new')}</kbd>
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
-        )}
-        {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
-
-        <div className={styles.frame}>
-          {!state.settings.onboarded && chord && !isPrivate ? (
-            <Onboarding chord={chord} windowId={windowId} info={info} spring={spring} />
-          ) : (
-            <>
-              {active && live?.crashed && (
-                <div className={styles.empty} role="alert">
-                  <p className={styles.emptyTitle}>This page stopped working.</p>
-                  <p className={styles.emptyBody}>It’s not you. Reloading usually fixes it.</p>
-                  <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
-                    Reload
-                  </button>
-                </div>
-              )}
-              {active && !live?.crashed && live?.error && <LoadErrorState error={live.error} canGoBack={live.canGoBack} windowId={windowId} tabId={active.id} />}
-              {!active && (
-                <div className={styles.empty}>
-                  {isPrivate ? (
-                    <>
-                      <p className={styles.emptyTitle}>This window is private.</p>
-                      <p className={styles.emptyBody}>Chord won’t remember the sites you visit in this window. Files you download are kept.</p>
-                    </>
-                  ) : (
-                    <>
-                      <p className={styles.emptyTitle}>Fresh chord, fresh start.</p>
-                      <p className={styles.emptyBody}>Open a site, or search for anything.</p>
-                    </>
-                  )}
-                  <button type="button" className={styles.emptyButton} onClick={() => void api.overlay.open('new')}>
-                    New tab <kbd className={styles.inlineKeycap}>{keycap('tab.new', info)}</kbd>
-                  </button>
-                </div>
-              )}
-            </>
-          )}
         </div>
-      </div>
-    </MotionConfig>
+      </MotionConfig>
+    </ShortcutsProvider>
   );
 }

@@ -5,6 +5,8 @@
  * keeps closed tabs in its own table).
  */
 
+import type { ActionId, ShortcutOverrides } from './shortcuts';
+
 export type ChordId = string;
 export type NodeId = string;
 export type WindowId = string;
@@ -295,6 +297,8 @@ export interface Settings {
   sleepTabs: boolean;
   /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
   autoPip: boolean;
+  /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
+  shortcuts: ShortcutOverrides;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -311,6 +315,7 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveAfter: '12h',
   sleepTabs: true,
   autoPip: true,
+  shortcuts: {},
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -319,6 +324,7 @@ export const defaultSettings = (): Settings => ({
   motion: { ...DEFAULT_SETTINGS.motion },
   interface: { ...DEFAULT_SETTINGS.interface },
   themes: [],
+  shortcuts: {},
 });
 
 /**
@@ -343,6 +349,8 @@ export interface SettingsPatch {
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
   autoPip?: boolean;
+  /** Per action: its whole new list of keys, or null to go back to the registry's. */
+  shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
 }
 
 export interface State {

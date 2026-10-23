@@ -58,6 +58,21 @@ A milestone is done when all of these hold:
 | **3 · Links from everywhere** | — | Feb 2027 | open links from other apps in a mini window, Peek from pinned tabs, install from Flathub or apt/dnf, update in place |
 | **4 · Deeper** | — | Mar 2027 + | use Duet in developer mode, your own API keys or local models, and signed builds |
 
+## Where we are (updated 2026-10-22)
+
+Phase 1 is well ahead of the dates above. Every item marked done is on `main`, with unit and E2E tests, and the six release targets build and pass their smoke tests.
+
+| Milestone | Done | In progress | Left |
+|---|---|---|---|
+| M1.0 Foundations | all | | |
+| M1.1 Browsing shell | tabs, find, downloads, permission prompts, error and crash pages, sign-in popups, session restore, keyboard routing (S8) | | |
+| M1.2 Sidebar | Pinned/Today, folders, Favorites, drag and drop, resize, Clear Today, keyboard navigation, minimal bar with peek | | arc animation on archive |
+| M1.3 Chords | chords, icons, themes and the theme library, separate sign-ins, moving tabs across chords | trackpad swipe, color wheel and *Surprise me* | |
+| M1.4 Command bar + archive | ranking with learned picks, history, completion, suggestions, site keywords, `@` filters, archive, sleeping tabs, ⌘⇧T | | |
+| M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows | PDFs, spellcheck, screen sharing, site permissions page, **editable shortcuts** (moved up from Phase 3) | real password-manager sign-in checks |
+| M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check | CI green on every OS, macOS hands-on on your MacBook | accessibility pass, design QA sweep, performance budgets, the 0.1 release |
+| Phase 2 | | Duet browse mode | split view, hover previews, Connect an agent, Electron 46 |
+
 ---
 
 ## Before we start
@@ -193,6 +208,7 @@ A milestone is done when all of these hold:
   - Linux: `.desktop` plus GIO and `xdg-settings`.
   - For now, links from other apps open in the active window; the mini window arrives in Phase 3.
 - **`chord://settings`:** search engine, auto-archive, appearance, PiP, extensions, default browser, update channel.
+- **Rebindable shortcuts** with conflict detection (moved up from Phase 3 at your request, 2026-10-23). **Done:** every action's keys can be changed in Settings → Keyboard shortcuts (DESIGN.md §14.1).
 
 ### M1.6 First run + preview release · → Mon Dec 14
 
@@ -243,7 +259,6 @@ A milestone is done when all of these hold:
 
 - **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it.
 - **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in.
-- **Rebindable shortcuts** with conflict detection.
 - **Peek** for links clicked inside pinned tabs.
 - **Distribution:**
   - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.
