@@ -17,6 +17,8 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 **Licenses.** Duet's PDF reading uses pdf.js, under the Apache License 2.0; its text ships with every build.
 
+**Fedora and RHEL.** Releases include an `.rpm` for x64 and arm64: `sudo dnf install ./Chord-<version>-linux-<arch>.rpm`.
+
 ## 0.1.0 · preview (unreleased)
 
 The first public preview: a calm, colorful browser for people leaving Arc. Builds aren't code-signed yet: see [Try the preview](README.md#try-the-preview) for the first-launch steps on each OS.

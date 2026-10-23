@@ -90,7 +90,7 @@ Every one, on the bump's commit. CI runs the first two on every PR and every pus
 | Packaged smoke test (Playwright over CDP) | the release workflow, on each installed build | `pnpm --filter @chord/desktop package:dir && pnpm --filter @chord/desktop test:packaged` |
 | Flatpak build and smoke test | locally, until Chord is on Flathub | `flatpak/build.sh --test` (Linux, Docker or Podman) |
 
-Electron updates change Chromium, so the packaged smoke test matters: it proves the fused binary starts, the asar'd shell loads, and `node:sqlite` in the chord-data utility process saves and restores a profile. It runs in the release workflow, on the installed `.exe`, `.app`, `.deb` and AppImage.
+Electron updates change Chromium, so the packaged smoke test matters: it proves the fused binary starts, the asar'd shell loads, and `node:sqlite` in the chord-data utility process saves and restores a profile. It runs in the release workflow, on the installed `.exe`, `.app`, `.deb`, AppImage and `.rpm`.
 
 **When CI fails on the bump:**
 1. **Re-run the failed jobs once.** E2E can flake.
@@ -122,7 +122,7 @@ Never reuse a version number or move a tag: updaters, package repositories and F
 Approve the `release` environment twice: first for the builds (they read the signing secrets), then for the draft.
 
 1. Six native builds: Windows x64 and arm64, macOS arm64 and x64, Linux x64 and arm64. Code signing and notarization run by themselves once their secrets are in `release` ([signing.md](signing.md)); until then, builds are unsigned. If a build that should be signed isn't, the release stops: fix the secret and re-run the failed jobs.
-2. Each build is installed or opened the way a user would (silent per-user NSIS install, `codesign --verify` and `hdiutil verify`, the `.deb` with its AppArmor profile, then the AppImage), its fuses are read back, its browser registration is checked, and the packaged smoke test runs against that copy.
+2. Each build is installed or opened the way a user would (silent per-user NSIS install, `codesign --verify` and `hdiutil verify`, the `.deb` with its AppArmor profile, then the AppImage), its fuses are read back, its browser registration is checked, and the packaged smoke test runs against that copy. The `.rpm` gets the same smoke test after a `dnf install` in a Fedora container.
 3. It signs the update manifests with the [update signing key](#update-signing-key). Without the key it warns, and that release's copies only say it's out.
 4. If every leg passes, it uploads a **draft pre-release** with all the files and `SHA256SUMS.txt`.
 

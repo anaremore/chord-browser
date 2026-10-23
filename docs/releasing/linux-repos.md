@@ -23,8 +23,6 @@ Run by hand, it takes a **tag** and two switches:
 - Secret `CLOUDSMITH_API_KEY`: switches it on.
 - Variable `CLOUDSMITH_REPOSITORY`: `workspace/repository`, default `chord-browser/chord`. The README's repository lines must use the same names.
 
-**rpm:** the release workflow builds `.deb` and AppImage today; `.rpm` is being added to `release.yml` separately. Until a release carries `.rpm` files, only the apt repository is updated.
-
 ## Switching it on
 
 Everything here needs the maintainer's own accounts; nothing in the repo creates accounts, keys or secrets.
@@ -74,9 +72,9 @@ EOF
 sudo dnf install chord
 ```
 
-The line formats match what Cloudsmith's own `config.deb.txt` and `config.rpm.txt` endpoints produce for `any-distro`/`any-version` ✅ (checked against a live Cloudsmith repository). `signed-by` limits the key to this repository. ⚠ That Cloudsmith also signs each RPM, as `gpgcheck=1` requires, is how its public RPM repositories work today; check it with the first upload (`rpm -K` on the downloaded file).
+The line formats match what Cloudsmith's own `config.deb.txt` and `config.rpm.txt` endpoints produce for `any-distro`/`any-version` ✅ (checked against a live Cloudsmith repository). `signed-by` limits the key to this repository. ⚠ That Cloudsmith also signs each RPM, as `gpgcheck=1` requires, is how its public RPM repositories work today; check it with the first upload (`rpm -K` on the downloaded file). The release's own `.rpm` files carry no signature, so if Cloudsmith doesn't add one, `dnf` refuses them.
 
-Someone who installed a `.deb` from GitHub Releases moves to the repository without reinstalling: the package name (`chord`) is the same, so `apt upgrade` takes over.
+Someone who installed a `.deb` or `.rpm` from GitHub Releases moves to the repository without reinstalling: the package name (`chord`) is the same, so `apt upgrade` or `dnf upgrade` takes over.
 
 ## Day to day
 
