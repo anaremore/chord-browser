@@ -235,10 +235,12 @@ export interface ExtensionInfo {
 
 /**
  * The update check's last answer (Settings → About). `unavailable` in
- * development builds, which aren't released; `idle` before the first check.
+ * development builds, which aren't released; `managed` in a Flatpak, which
+ * Flathub updates; `idle` before the first check.
  */
 export type UpdateStatus =
   | { state: 'unavailable' }
+  | { state: 'managed' }
   | { state: 'idle' }
   | { state: 'checking' }
   | { state: 'current'; checkedAt: number }
@@ -248,7 +250,12 @@ export type UpdateStatus =
   | { state: 'ready'; checkedAt: number; version: string; url: string }
   | { state: 'failed'; checkedAt: number };
 
-export const DefaultBrowserStatus = z.enum(['default', 'not-default', 'unavailable']);
+/**
+ * Whether Chord is the default browser. `system`: only the OS's settings can
+ * tell or change it (a Flatpak can't); `unavailable`: a development build,
+ * which the OS doesn't know about.
+ */
+export const DefaultBrowserStatus = z.enum(['default', 'not-default', 'system', 'unavailable']);
 export type DefaultBrowserStatus = z.infer<typeof DefaultBrowserStatus>;
 
 /** What the Settings window shows: settings, the chord in the last-used window (for Appearance), every chord, and extensions. */

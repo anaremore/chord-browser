@@ -12,6 +12,7 @@
  */
 import type { UpdateStatus } from '@chord/ipc';
 import { app, session, type Session } from 'electron';
+import { inFlatpak } from './identity';
 import { newerRelease, type Release } from './releases';
 
 /** What updates.ts needs from update-installer.ts (an interface, so tests can stand in for it). */
@@ -41,9 +42,9 @@ export interface UpdateCheckerOptions {
 }
 
 export class UpdateChecker {
-  /** Development and E2E only: a local feed, checked a second after launch. */
-  private readonly feed = app.isPackaged ? FEED : process.env['CHORD_UPDATE_FEED'];
-  private last: UpdateStatus = this.feed ? { state: 'idle' } : { state: 'unavailable' };
+  /** Development and E2E only: a local feed, checked a second after launch. A Flatpak doesn't check at all. */
+  private readonly feed = inFlatpak ? undefined : app.isPackaged ? FEED : process.env['CHORD_UPDATE_FEED'];
+  private last: UpdateStatus = this.feed ? { state: 'idle' } : { state: inFlatpak ? 'managed' : 'unavailable' };
   private timer: ReturnType<typeof setTimeout> | undefined;
   private failures = 0;
   private readonly announced = new Set<string>();

@@ -18,6 +18,6 @@ Chord is built on Electron, which ships Chromium. When Electron publishes a rele
 
 - An hourly workflow watches Electron's releases and opens a P0 issue when one carries security fixes.
 - Renovate raises the Electron update right away, and merges it once CI passes on every OS.
-- The steps from there to a published release are in the runbook, [docs/SECURITY-PATCHING.md](docs/SECURITY-PATCHING.md). The design is in [ARCHITECTURE.md §14](ARCHITECTURE.md#14-security-updates-and-the-72-hour-patch-process).
+- The steps from there to a published release are in the runbook, [docs/releasing/patch-runbook.md](docs/releasing/patch-runbook.md). The design is in [ARCHITECTURE.md §14](ARCHITECTURE.md#14-security-updates-and-the-72-hour-patch-process).
 
-Signed builds, staged rollouts, and the Linux package repositories don't exist yet, so for now the fix ships as a GitHub release.
+Signed builds and staged rollouts don't exist yet, and the Linux package repositories and Flathub aren't live yet, so for now the fix ships as a GitHub release.

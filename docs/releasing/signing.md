@@ -15,7 +15,7 @@ Each platform switches on by itself once **every** name in its row is set. A row
 | macOS | `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | | Developer ID signature with the hardened runtime and [Chord's entitlements](../../apps/desktop/build/entitlements.developer-id.plist), then notarized with notarytool and the ticket stapled. arm64 and x64, `.dmg` and `.zip`. | `codesign --verify --deep --strict`, a `Developer ID Application` authority and the `runtime` flag; `spctl -a -vv` must say `source=Notarized Developer ID`; `stapler validate`. Run on the built app and on the copies inside the `.dmg` and the `.zip`. |
 | Windows (preferred) | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`, `WIN_PUBLISHER_NAME` | Azure Artifact Signing signs `Chord.exe`, its DLLs, the installer and its uninstaller, on x64 and arm64. Installed copies then accept only updates signed by `WIN_PUBLISHER_NAME`. | `Get-AuthenticodeSignature` on the installer and on the installed `Chord.exe`, `Uninstall Chord.exe` and DLLs: `Valid`, timestamped, and signed by the publisher that `app-update.yml` pins. |
 | Windows (fallback) | `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` | `WIN_PUBLISHER_NAME` (optional) | The same, with signtool and a `.pfx`. The publisher defaults to the certificate's CN. Used only when Artifact Signing isn't set up. | The same. |
-| Linux | none | | No OS code signing. Updates are covered by the Ed25519 manifest key ([SECURITY-PATCHING.md](../SECURITY-PATCHING.md#update-signing-key)). Package repos and Flathub do their own GPG signing ([below](#linux)). | |
+| Linux | none | | No OS code signing. Updates are covered by the Ed25519 manifest key ([patch-runbook.md](patch-runbook.md#update-signing-key)). Package repos and Flathub do their own GPG signing ([below](#linux)). | |
 
 Unsigned Windows builds pin no publisher, and *Check the signatures (Windows)* fails the release if one ever does, so unsigned copies keep installing unsigned updates.
 
@@ -26,7 +26,7 @@ Unsigned Windows builds pin no publisher, and *Check the signatures (Windows)* f
 
 ## First: the `release` environment
 
-The `release` environment may already exist: [SECURITY-PATCHING.md, *Update signing key*](../SECURITY-PATCHING.md#update-signing-key), step 1, creates it. If it doesn't:
+The `release` environment may already exist: [patch-runbook.md, *Update signing key*](patch-runbook.md#update-signing-key), step 1, creates it. If it doesn't:
 
 1. *Settings → Environments → New environment*, named `release`.
 2. Under *Required reviewers*, add yourself.

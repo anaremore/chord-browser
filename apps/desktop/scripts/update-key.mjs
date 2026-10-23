@@ -1,5 +1,5 @@
 // Makes Chord's update-signing key pair (ARCHITECTURE.md §14.4,
-// docs/SECURITY-PATCHING.md "Update signing key"). Prints both halves; writes
+// docs/releasing/patch-runbook.md "Update signing key"). Prints both halves; writes
 // nothing to disk, so the private half never lands in a file by accident.
 //
 //   node apps/desktop/scripts/update-key.mjs

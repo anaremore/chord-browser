@@ -4,7 +4,7 @@ name: Electron security watch
 # release notes, so no vulnerability alert fires for them. Every hour, look for
 # newer releases on our Electron major with security content; open a P0 issue
 # (once per version) and ask Renovate to run now.
-# ARCHITECTURE.md §14.3 · docs/SECURITY-PATCHING.md · logic in scripts/ci/electron-watch.mjs
+# ARCHITECTURE.md §14.3 · docs/releasing/patch-runbook.md · logic in scripts/ci/electron-watch.mjs
 
 on:
   schedule:

@@ -5,6 +5,6 @@
  * only in the release workflow's `CHORD_UPDATE_SIGNING_KEY` secret.
  *
  * Empty means no key has been made yet: every copy stays notify-only.
- * docs/SECURITY-PATCHING.md ("Update signing key") says how to make one.
+ * docs/releasing/patch-runbook.md ("Update signing key") says how to make one.
  */
 export const UPDATE_PUBLIC_KEY = '';

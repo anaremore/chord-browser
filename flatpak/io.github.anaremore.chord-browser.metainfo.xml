@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright Chord contributors. This file is CC0-1.0. -->
+<component type="desktop-application">
+  <id>io.github.anaremore.chord-browser</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <!--
+    Chord's source is MIT, with one MPL-2.0 file (packages/core/src/rank.ts).
+    Builds include the GPL-3.0-only electron-chrome-extensions library, so what
+    Flathub distributes is a GPL-3.0-only combined work (ARCHITECTURE.md §16, D1).
+  -->
+  <project_license>GPL-3.0-only</project_license>
+
+  <name>Chord</name>
+  <summary>Calm, colorful web browser</summary>
+  <developer id="io.github.anaremore">
+    <name>Chord contributors</name>
+  </developer>
+
+  <description>
+    <p>
+      Chord is an open-source browser built around a vertical sidebar. Tabs live in chords: sets of pinned and everyday tabs, each with its own color. A command bar reaches everything. No account, no telemetry.
+    </p>
+    <ul>
+      <li>Pinned tabs that remember their home page, and Today tabs that tidy themselves into an archive</li>
+      <li>Folders, Favorites and drag and drop in the sidebar, which collapses to one slim bar</li>
+      <li>Chords with their own colors and, if you like, their own sign-ins</li>
+      <li>One command bar for open tabs, history, the archive and actions</li>
+      <li>Chrome extensions from the Chrome Web Store, including password managers</li>
+      <li>Videos that pop out into picture-in-picture when you switch tabs</li>
+    </ul>
+    <p>
+      Chord is an early preview. To make it your default browser, choose it in your system's default applications settings.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.anaremore.chord-browser.desktop</launchable>
+  <url type="homepage">https://github.com/anaremore/chord-browser</url>
+  <url type="bugtracker">https://github.com/anaremore/chord-browser/issues</url>
+  <url type="vcs-browser">https://github.com/anaremore/chord-browser</url>
+  <url type="contribute">https://github.com/anaremore/chord-browser/blob/main/CONTRIBUTING.md</url>
+
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+  <keywords>
+    <keyword>browser</keyword>
+    <keyword>web</keyword>
+    <keyword>tabs</keyword>
+    <keyword>sidebar</keyword>
+  </keywords>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <!-- The banner behind the icon on Flathub: the icon's lilac, light and dark. -->
+  <branding>
+    <color type="primary" scheme_preference="light">#e4d9fb</color>
+    <color type="primary" scheme_preference="dark">#3b2b58</color>
+  </branding>
+
+  <!-- A browser shows whatever the web has; it collects nothing itself. -->
+  <content_rating type="oars-1.1"/>
+
+  <!--
+    Screenshots are required before a Flathub submission
+    (docs/releasing/flathub.md). Add them as stable URLs at a release tag, e.g.
+    https://raw.githubusercontent.com/anaremore/chord-browser/v0.1.0/docs/screenshots/sidebar.png
+  -->
+
+  <!-- Newest first; one entry per release (docs/releasing/patch-runbook.md). -->
+  <releases>
+    <release version="0.1.0" date="2026-12-14" type="development">
+      <url type="details">https://github.com/anaremore/chord-browser/blob/main/RELEASE_NOTES.md</url>
+    </release>
+  </releases>
+</component>

@@ -140,7 +140,7 @@ describe('issues', () => {
     expect(issue.body.startsWith(securityMarker('44.9.3'))).toBe(true);
     expect(issue.body).toContain('**Ship by 2026-10-23 00:48 UTC**');
     expect(issue.body).toContain('Chromium 152.0.7977.180');
-    expect(issue.body).toContain('https://github.com/anaremore/chord-browser/blob/main/docs/SECURITY-PATCHING.md');
+    expect(issue.body).toContain('https://github.com/anaremore/chord-browser/blob/main/docs/releasing/patch-runbook.md');
     expect(issue.body).not.toMatch(/https:\/\/github\.com\/electron\/electron\/pull/);
   });
 
