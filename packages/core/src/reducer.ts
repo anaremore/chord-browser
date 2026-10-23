@@ -906,6 +906,17 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const { autoPip } = cmd.settings;
       if (autoPip !== undefined && draft.settings.autoPip !== autoPip) draft.settings.autoPip = autoPip;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
+      if (cmd.settings.duet) {
+        const duet = cmd.settings.duet;
+        const current = draft.settings.duet;
+        if (duet.enabled !== undefined && current.enabled !== duet.enabled) current.enabled = duet.enabled;
+        if (duet.provider !== undefined && current.provider !== duet.provider) current.provider = duet.provider;
+        if (duet.model !== undefined && current.model !== duet.model) current.model = duet.model;
+        if (duet.keep !== undefined && current.keep !== duet.keep) current.keep = duet.keep;
+        if (duet.scope !== undefined && current.scope !== duet.scope) current.scope = duet.scope;
+        if (duet.neverSites) current.neverSites = [...new Set(duet.neverSites)];
+        if (duet.offChords) current.offChords = [...new Set(duet.offChords)];
+      }
       const { separateSignIns, onboarded } = cmd.settings;
       if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;
       if (onboarded !== undefined && draft.settings.onboarded !== onboarded) draft.settings.onboarded = onboarded;

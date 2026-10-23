@@ -4,7 +4,7 @@
  * and chord-data persists everything except `live` and `closed` (the archive
  * keeps closed tabs in its own table).
  */
-
+import type { DuetKeep, DuetProvider, DuetScope } from './duet';
 import type { ActionId, ShortcutOverrides } from './shortcuts';
 
 export type ChordId = string;
@@ -309,6 +309,8 @@ export interface Settings {
    * Web Store update checks. Pages you visit can still load from Google.
    */
   googleFree: boolean;
+  /** Duet, the chat panel (ARCHITECTURE.md §11). */
+  duet: DuetSettings;
 }
 
 /** What Google-free mode searches with until you pick another (any engine but Google). */
@@ -319,6 +321,22 @@ export interface SpellcheckSettings {
   enabled: boolean;
   /** A dictionary language like `en-US` (Windows and Linux); null follows the system. macOS always uses its own. */
   language: string | null;
+}
+
+export interface DuetSettings {
+  /** Off removes the panel, its button, shortcut and menu items; nothing is ever spawned. */
+  enabled: boolean;
+  /** Chosen in Setup; null until then. */
+  provider: DuetProvider | null;
+  /** The provider's model alias or id; null uses its default. */
+  model: string | null;
+  keep: DuetKeep;
+  /** What new threads may read without asking. */
+  scope: DuetScope;
+  /** Sites Duet may never read or have attached (origins). */
+  neverSites: string[];
+  /** Chords where Duet is off. */
+  offChords: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -338,6 +356,7 @@ export const DEFAULT_SETTINGS: Settings = {
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
   googleFree: false,
+  duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -348,6 +367,7 @@ export const defaultSettings = (): Settings => ({
   themes: [],
   spellcheck: { ...DEFAULT_SETTINGS.spellcheck },
   shortcuts: {},
+  duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
 });
 
 /**
@@ -376,6 +396,7 @@ export interface SettingsPatch {
   googleFree?: boolean;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
+  duet?: Partial<DuetSettings>;
 }
 
 export interface State {

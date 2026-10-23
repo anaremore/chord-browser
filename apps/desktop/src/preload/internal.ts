@@ -22,6 +22,7 @@ const api: SettingsApi = {
     sitePermission: (origin, permission, decision) => invoke('settings:sitePermission', { origin, permission, decision }),
     forgetSite: (origin) => invoke('settings:forgetSite', { origin }),
     defaultBrowser: () => invoke('settings:defaultBrowser'),
+    duet: (request) => invoke('settings:duet', request),
     makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),
     updateStatus: () => invoke('settings:updateStatus'),
     checkForUpdates: () => invoke('settings:checkForUpdates'),

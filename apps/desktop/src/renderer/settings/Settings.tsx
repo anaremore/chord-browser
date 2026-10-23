@@ -5,12 +5,13 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Check, EyeOff, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Check, EyeOff, Info, Keyboard, MessagesSquare, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
+import { DuetSettings } from './DuetSettings';
 import { AppearanceSection } from './Appearance';
 import { ShortcutsSection } from './Shortcuts';
 import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
@@ -26,6 +27,7 @@ const SECTIONS = [
   { id: 'privacy', label: 'Privacy', icon: EyeOff },
   { id: 'sites', label: 'Site permissions', icon: ShieldCheck },
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
+  { id: 'duet', label: 'Duet', icon: MessagesSquare },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
 ] as const;
@@ -440,6 +442,7 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               {section === 'privacy' && <PrivacySection snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
+              {section === 'duet' && <DuetSettings snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}
             </motion.div>

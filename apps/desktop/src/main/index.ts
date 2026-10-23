@@ -18,6 +18,8 @@ import { delimiter, join } from 'node:path';
 import { app, clipboard, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
+import { openSignIn } from './duet/detect';
+import { DuetService } from './duet/service';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
@@ -60,6 +62,7 @@ function devMs(name: string): number | null {
 
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
+let duet: DuetService | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker();
 const downloads = new DownloadManager({
@@ -187,6 +190,22 @@ function registerIpc(): void {
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
+  handle('duet:view', (_request, sender) => duet!.view(senderWindow(sender).id));
+  handle('duet:do', (action, sender) => duet!.act(senderWindow(sender).id, action));
+  handle('duet:search', ({ query }, sender) => (fromPrivateWindow(sender) ? [] : duet!.search(query)));
+  handle('duet:openHit', ({ chordId, threadId }, sender) => duet!.openHit(senderWindow(sender).id, chordId, threadId));
+  handle('settings:duet', async (request) => {
+    if (request.do === 'signIn') {
+      const status = duet!.providerStatuses.find((s) => s.provider === request.provider) ?? (await duet!.refreshProviders()).find((s) => s.provider === request.provider);
+      if (status?.path) openSignIn(request.provider, status.path);
+      return duet!.providerStatuses;
+    }
+    if (request.do === 'clearAll') {
+      await duet!.clearAll();
+      return duet!.providerStatuses;
+    }
+    return duet!.refreshProviders();
+  });
   handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
   handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
   handle('settings:sitePermission', ({ origin, permission, decision }) =>
@@ -238,7 +257,11 @@ if (!app.requestSingleInstanceLock()) {
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
-    void persistence.close().finally(() => app.quit());
+    // Duet first: replies in flight are kept as interrupted, and provider processes end.
+    void (duet?.quit() ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => persistence!.close())
+      .finally(() => app.quit());
   });
 
   void app.whenReady().then(async () => {
@@ -353,6 +376,8 @@ if (!app.requestSingleInstanceLock()) {
         for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck, change.state.settings.googleFree);
       }
     });
+    duet = new DuetService(browser, persistence, app.getPath('userData'));
+    browser.duet = duet;
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu.

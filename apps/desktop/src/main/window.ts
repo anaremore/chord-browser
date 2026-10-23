@@ -116,6 +116,8 @@ export class AppWindow {
   /** The page is in HTML fullscreen (a video): it covers the whole window, above Chord's own views. */
   private pageFullScreen = false;
   private floating: FloatingView | null = null;
+  /** Duet's panel on the right (0 when closed): the page's frame ends before it, with a gap. */
+  private duetWidth = 0;
 
   constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds }: AppWindowOptions) {
     this.id = id;
@@ -368,15 +370,25 @@ export class AppWindow {
     return { width, height, frameTop: Math.round(this.origin.top) };
   }
 
+  /** Duet's panel opened (its width) or closed (0). The page makes room for it. */
+  setDuetWidth(width: number): void {
+    if (this.duetWidth === width) return;
+    this.duetWidth = width;
+    this.closeFloating();
+    this.layout();
+  }
+
   /** The content frame: inset from the window, right of the sidebar (if docked), below the strip on Windows/Linux. */
   private layout(): void {
-    const { width, height } = this.window.getContentBounds();
+    const { width: windowWidth, height } = this.window.getContentBounds();
+    // With Duet open, the frame ends before its panel and the gap between them.
+    const width = this.duetWidth > 0 ? Math.max(0, windowWidth - this.duetWidth - space[2]) : windowWidth;
     const inset = size.frameInset;
     const x = Math.round(this.origin.left);
     const y = Math.round(this.origin.top);
-    this.shell.setBounds({ x: 0, y: 0, width, height });
-    this.overlay.setBounds({ x: 0, y: 0, width, height });
-    if (this.pageFullScreen) this.tabView?.setBounds({ x: 0, y: 0, width, height });
+    this.shell.setBounds({ x: 0, y: 0, width: windowWidth, height });
+    this.overlay.setBounds({ x: 0, y: 0, width: windowWidth, height });
+    if (this.pageFullScreen) this.tabView?.setBounds({ x: 0, y: 0, width: windowWidth, height });
     else this.tabView?.setBounds({ x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) });
     // The popover hangs from the frame's top-right corner; its cards carry their own margin.
     const { width: pw, height: ph } = this.popoverSize;

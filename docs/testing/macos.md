@@ -16,6 +16,7 @@ Chord is built and tested mostly on Windows, with macOS covered by CI runners. T
 ```sh
 xcode-select --install                  # Command Line Tools (git, compilers)
 brew install node@24 gh                 # or Node 24 from nodejs.org; gh is optional
+brew link --overwrite --force node@24   # node@24 is keg-only, so this puts node on your PATH
 corepack enable && corepack prepare pnpm@10.33.0 --activate
 git clone https://github.com/anaremore/chord-browser.git ~/Projects/chord-browser
 cd ~/Projects/chord-browser && pnpm install
@@ -28,7 +29,7 @@ Keep the Mac awake and unlocked, and leave it alone while the E2E suites run: th
 ```sh
 pnpm typecheck && pnpm lint && pnpm test          # types, lint, unit tests
 pnpm --filter @chord/desktop build
-pnpm --filter @chord/desktop test:e2e             # dev-build E2E (both spec files)
+pnpm --filter @chord/desktop test:e2e             # dev-build E2E (every spec in test/e2e)
 pnpm --filter @chord/desktop package:dir          # an unsigned Chord.app in apps/desktop/release/mac*/
 pnpm --filter @chord/desktop test:packaged        # the packaged smoke tests
 ```

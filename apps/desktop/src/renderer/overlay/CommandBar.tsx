@@ -7,37 +7,9 @@
  * keyword or `@filter` followed by Tab narrows the bar to a chip, and the
  * engine's suggestions slot in under the local rows when they arrive.
  */
-import { keycapFor, parseInput, type ActionId, type SearchEngineId } from '@chord/core';
+import { keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
 import type { HistorySearch, OverlayOpenEvent, SystemInfo } from '@chord/ipc';
-import {
-  AppWindow,
-  Archive,
-  ArchiveRestore,
-  ArrowDown,
-  ArrowUp,
-  Code,
-  Command,
-  CornerDownLeft,
-  Globe,
-  History,
-  Keyboard,
-  Layers,
-  Link,
-  Maximize,
-  PanelLeft,
-  Pin,
-  Printer,
-  RotateCcw,
-  RotateCw,
-  Search,
-  Settings,
-  SquareTerminal,
-  TextSearch,
-  Trash2,
-  X,
-  ZoomIn,
-  ZoomOut,
-} from 'lucide-react';
+import { AppWindow, Archive, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, MessagesSquare, PanelLeft, Pin, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
@@ -92,7 +64,7 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'app.shortcuts': Keyboard,
 };
 
-const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, archive: Archive, chords: Layers, actions: Command };
+const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, archive: Archive, duet: MessagesSquare, chords: Layers, actions: Command };
 const scopeIcon = (scope: Scope) => (scope.kind === 'filter' ? FILTER_ICONS[scope.filter] : Search);
 
 /** Anchored panels are at least this wide, so results have room beside a narrow sidebar. */
@@ -108,6 +80,7 @@ function hintFor(result: Result, mode: Session['mode']): { text: string; key: st
   if (result.kind === 'chord') return { text: 'Switch to chord', key: '↵' };
   if (result.kind === 'history') return { text: mode === 'edit' ? 'Go' : 'Open', key: '↵' };
   if (result.kind === 'archive') return { text: 'Bring back', key: '↵' };
+  if (result.kind === 'duet') return { text: 'Open chat', key: '↵' };
   if (result.search) return { text: 'Search', key: '↵' };
   return { text: mode === 'edit' ? 'Go' : 'Open', key: '↵' };
 }
@@ -167,6 +140,19 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   // dropped; until the new one lands, the last reply keeps rows from flickering away. `@history`
   // asks even before anything is typed, as does `@archive`: recent pages, newest archived tabs.
   const [history, setHistory] = useState<HistorySearch | null>(null);
+  // @duet: Duet chats by their words, from chord-data.
+  const [duetHits, setDuetHits] = useState<DuetHit[]>([]);
+  const duetFilter = scope?.kind === 'filter' && scope.filter === 'duet';
+  useEffect(() => {
+    if (!duetFilter || !query.trim()) return setDuetHits([]);
+    let current = true;
+    void api.duet.search(query.trim()).then((hits) => {
+      if (current) setDuetHits(hits);
+    });
+    return () => {
+      current = false;
+    };
+  }, [duetFilter, query]);
   const searchSeq = useRef(0);
   const historyFilter = scope?.kind === 'filter' && (scope.filter === 'history' || scope.filter === 'archive');
   useEffect(() => {
@@ -216,7 +202,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   );
 
   const results = useMemo(
-    () => (session && session.mode !== 'downloads' && session.mode !== 'extensions' ? buildResults(query, state, windowId, session.mode, history, Date.now(), { scope, suggestions }) : []),
+    () => (session && session.mode !== 'downloads' && session.mode !== 'extensions' ? buildResults(query, state, windowId, session.mode, history, Date.now(), { scope, suggestions, duetHits }) : []),
     [session, query, state, windowId, history, scope, suggestions],
   );
   const current = Math.min(selected, Math.max(0, results.length - 1));
@@ -265,6 +251,8 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       void dispatch({ t: 'chord.activate', windowId, chordId: result.chord.id });
     } else if (result.kind === 'archive') {
       void api.archive.restore(result.archiveId);
+    } else if (result.kind === 'duet') {
+      void api.duet.open(result.chordId, result.threadId);
     }
     close();
     // Actions run after the bar closes, so focus is back on the page (print, devtools, zoom act on it).
@@ -422,6 +410,8 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                         ? History
                         : result.kind === 'archive'
                           ? ArchiveRestore
+                          : result.kind === 'duet'
+                            ? MessagesSquare
                           : result.kind === 'scope'
                             ? scopeIcon(result.scope)
                             : result.kind === 'open'
@@ -458,6 +448,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                       {result.kind === 'scope' && <span className={styles.chip}>{result.detail}</span>}
                       {result.kind === 'chord' && <span className={styles.resultDetail}>Chord</span>}
                       {result.kind === 'archive' && <span className={styles.chip}>Archived</span>}
+                      {result.kind === 'duet' && <span className={styles.resultDetail}>{result.detail}</span>}
                       {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
                       {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform, state.settings.shortcuts)}</kbd>}
                       {isSelected && (
