@@ -830,7 +830,7 @@ export class Browser {
   announceUpdateReady(id: string, message: string): void {
     const w = this.lastNormalWindow();
     if (!w) return;
-    send(w.shell.webContents, 'toast:show', { id, message, action: { label: 'Restart to update', update: 'restart' } });
+    w.toast({ id, message, action: { label: 'Restart to update', update: 'restart' } });
   }
 
   /** A note for the window used last, with a link that opens as a tab there (a new Chord version, for one). */
