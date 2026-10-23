@@ -262,7 +262,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 - **Distribution:**
   - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.
   - **Cloudsmith** apt and dnf repos, GPG-signed.
-  - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests.
+  - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests. *Built:* download in the background, then "Restart to update"; it needs the signing key made once ([docs/SECURITY-PATCHING.md](docs/SECURITY-PATCHING.md#update-signing-key)).
   - The **72-hour patch runbook** rehearsed end to end.
 - **D7** Safe Browsing, if you choose it.
 - **Google-free mode** (requested 2026-10-22).

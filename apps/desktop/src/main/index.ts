@@ -33,6 +33,7 @@ import { platform, systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
 import { Suggestions } from './suggestions';
+import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
 import { chromiumUserAgent } from './user-agent';
 
@@ -71,6 +72,8 @@ let profileSession: (profileId: string) => Session;
 const updates = new UpdateChecker({
   enabled: () => browser?.store.state.settings.checkForUpdates ?? false,
   onAvailable: (release) => browser?.announce(`update:${release.version}`, `${release.name} is out`, { label: 'What’s new', url: release.url }),
+  onReady: (release) => browser?.announceUpdateReady(`update:${release.version}`, `${release.name} is ready`),
+  installer: new UpdateInstaller(),
 });
 const suggestions = new Suggestions({
   enabled: () => browser?.store.state.settings.searchSuggestions ?? false,
@@ -173,6 +176,7 @@ function registerIpc(): void {
   handle('settings:defaultBrowser', () => defaultBrowserStatus());
   handle('settings:updateStatus', () => updates.status());
   handle('settings:checkForUpdates', () => updates.checkNow());
+  handle('update:restart', () => updates.restart());
   handle('settings:makeDefaultBrowser', async () => {
     await makeDefaultBrowser();
     return defaultBrowserStatus();

@@ -27,7 +27,7 @@ describe('newerRelease', () => {
 
   it('picks the newest release newer than the running one', () => {
     const reply = [release('v0.2.0'), release('v0.3.0'), release('v0.1.0')];
-    expect(newerRelease(reply, '0.1.0')).toEqual({ version: '0.3.0', name: 'Chord 0.3.0', url: `${RELEASES_PAGE}tag/v0.3.0` });
+    expect(newerRelease(reply, '0.1.0')).toEqual({ version: '0.3.0', tag: 'v0.3.0', name: 'Chord 0.3.0', url: `${RELEASES_PAGE}tag/v0.3.0` });
     expect(newerRelease(reply, '0.3.0')).toBeNull();
     expect(newerRelease([], '0.1.0')).toBeNull();
   });

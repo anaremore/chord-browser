@@ -252,10 +252,17 @@ function checkedAgo(at: number): string {
   return `Checked ${relativeTime.format(-Math.round(minutes / 60), 'hour')}.`;
 }
 
-/** Settings → About: the notify-only update check's answer, and its switch. */
+/** Settings → About: the update check's answer (and the download, where Chord installs updates itself), and its switch. */
 function Updates({ enabled }: { enabled: boolean }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   useEffect(() => void api.settings.updateStatus().then(setStatus), []);
+  // A download in progress: follow it until it's ready.
+  const downloading = status?.state === 'downloading';
+  useEffect(() => {
+    if (!downloading) return;
+    const timer = setInterval(() => void api.settings.updateStatus().then(setStatus), 1000);
+    return () => clearInterval(timer);
+  }, [downloading]);
   if (!status) return null;
   const checkNow = async () => {
     setStatus({ state: 'checking' });
@@ -278,6 +285,20 @@ function Updates({ enabled }: { enabled: boolean }) {
         return <Row label="Chord is up to date" description={checkedAgo(status.checkedAt)} control={checkButton} />;
       case 'failed':
         return <Row label="Couldn’t check for updates" description="Chord will try again later." control={checkButton} />;
+      case 'downloading':
+        return <Row label={`Downloading Chord ${status.version}…`} description={`${status.percent}%. You can keep browsing.`} control={null} />;
+      case 'ready':
+        return (
+          <Row
+            label={`Chord ${status.version} is ready`}
+            description="Restart to install it. Your tabs and windows come back as they are."
+            control={
+              <button type="button" className={styles.linkButton} onClick={() => void api.settings.restartToUpdate()}>
+                Restart to update
+              </button>
+            }
+          />
+        );
       case 'available':
         return (
           <Row
@@ -297,7 +318,7 @@ function Updates({ enabled }: { enabled: boolean }) {
       {row}
       <Row
         label="Check for updates automatically"
-        description="Once a day, Chord asks GitHub whether a newer version is out. Nothing about you is sent, and nothing installs by itself."
+        description="Once a day, Chord asks GitHub whether a newer version is out, and nothing about you is sent. On Windows and in the AppImage, a new version downloads in the background and installs when Chord restarts."
         changed={enabled !== DEFAULT_SETTINGS.checkForUpdates}
         onReset={() => void api.settings.set({ checkForUpdates: DEFAULT_SETTINGS.checkForUpdates })}
         control={<Switch label="Check for updates automatically" checked={enabled} onChange={(checkForUpdates) => void api.settings.set({ checkForUpdates })} />}

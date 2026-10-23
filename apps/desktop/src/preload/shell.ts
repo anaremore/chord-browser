@@ -31,6 +31,7 @@ const api: ShellApi = {
   toasts: { onShow: (listener) => subscribe('toast:show', listener) },
   gestures: { onPhase: (listener) => subscribe('gesture:phase', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
+  updates: { restart: () => invoke('update:restart') },
   extensions: {
     state: () => invoke('extensions:state'),
     onState: (listener) => subscribe('extensions:state', listener),
