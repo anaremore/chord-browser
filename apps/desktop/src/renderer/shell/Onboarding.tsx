@@ -8,7 +8,7 @@ import type { DefaultBrowserStatus, SystemInfo } from '@chord/ipc';
 import { PRESETS, SWATCHES, cssOklch, presetStops, type PresetId, type SwatchId } from '@chord/tokens';
 import { Check, Dices, ShieldCheck } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useRoving } from '../shared/a11y';
 import type { SpringFor } from '../shared/motion';
 import { announce } from './announce';
@@ -38,12 +38,18 @@ const NAME_CHIPS = [
   { name: 'Home', icon: '🏡' },
 ] as const;
 
-/** The app icon's three notes (build/icon.svg): the only place the mark animates (DESIGN.md §2). */
+/**
+ * The app icon's three notes (build/icon.svg), on the icon's own 1024 grid with
+ * its gradients and shadows; each overlaps the one above through a cutout in
+ * the card's color, as in the icon. The only place the mark animates (DESIGN.md §2).
+ */
 const NOTES = [
-  { x: 14, y: 8, width: 12, color: '#a585f4' },
-  { x: 10, y: 14, width: 14, color: '#f06aae' },
-  { x: 6, y: 20, width: 14, color: '#ff7d55' },
+  { id: 'lilac', from: '#c3a2ff', to: '#9476ec', shadow: '#6a4bc4', x: 408, y: 346, width: 384 },
+  { id: 'rose', from: '#ff92c0', to: '#e85aa6', shadow: '#b8357f', x: 320, y: 450, width: 424 },
+  { id: 'coral', from: '#ffae78', to: '#ff6f4c', shadow: '#d4502f', x: 232, y: 554, width: 380 },
 ] as const;
+/** A note's height and corner, and its cutout's margin, on that grid. */
+const NOTE = { height: 124, rx: 62, cut: 10 } as const;
 
 const titleCase = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
 const RADIOS = { items: '[role="radio"]', current: '[aria-checked="true"]', activate: true } as const;
@@ -51,23 +57,35 @@ const PRESET_GRAIN = 0.2;
 
 function Mark({ spring }: { spring: SpringFor }) {
   return (
-    <svg className={styles.mark} viewBox="4 6 24 20" aria-hidden>
+    <svg className={styles.mark} viewBox="212 336 590 352" aria-hidden>
+      <defs>
+        {NOTES.map((note) => (
+          <Fragment key={note.id}>
+            <linearGradient id={`mark-${note.id}`} x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stopColor={note.from} />
+              <stop offset="1" stopColor={note.to} />
+            </linearGradient>
+            <filter id={`mark-${note.id}-shadow`} x="-20%" y="-50%" width="140%" height="220%">
+              <feDropShadow dx="0" dy="14" stdDeviation="18" floodColor={note.shadow} floodOpacity="0.32" />
+            </filter>
+          </Fragment>
+        ))}
+        {/* Light from above: a little brighter on top, a touch deeper below. */}
+        <linearGradient id="mark-sheen" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fff" stopOpacity="0.24" />
+          <stop offset="0.55" stopColor="#fff" stopOpacity="0" />
+          <stop offset="1" stopColor="#000" stopOpacity="0.05" />
+        </linearGradient>
+      </defs>
       {/* Its own presence boundary: the card's skips its first animation, and would skip the notes' too. */}
       <AnimatePresence>
         {NOTES.map((note, i) => (
-          <motion.rect
-            key={note.color}
-            y={note.y}
-            width={note.width}
-            height={4}
-            rx={2}
-            fill={note.color}
-            // Each note overlaps the one above through a cutout in the card's color.
-            className={styles.note}
-            initial={{ x: note.x - 6, opacity: 0 }}
-            animate={{ x: note.x, opacity: 1 }}
-            transition={{ ...spring('bouncy', 'commandBar'), delay: i * 0.06 }}
-          />
+          // Back to front, each striking in from the left a beat after the one above.
+          <motion.g key={note.id} initial={{ x: -120, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ ...spring('bouncy', 'commandBar'), delay: i * 0.06 }}>
+            {i > 0 && <rect className={styles.cut} x={note.x - NOTE.cut} y={note.y - NOTE.cut} width={note.width + 2 * NOTE.cut} height={NOTE.height + 2 * NOTE.cut} rx={NOTE.rx + NOTE.cut} />}
+            <rect x={note.x} y={note.y} width={note.width} height={NOTE.height} rx={NOTE.rx} fill={`url(#mark-${note.id})`} filter={`url(#mark-${note.id}-shadow)`} />
+            <rect x={note.x} y={note.y} width={note.width} height={NOTE.height} rx={NOTE.rx} fill="url(#mark-sheen)" />
+          </motion.g>
         ))}
       </AnimatePresence>
     </svg>

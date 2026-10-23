@@ -10,10 +10,13 @@ import { afterNextPaint } from '../shared/perf';
 import { applySystem } from '../shared/system';
 import { api } from './api';
 import { App } from './App';
+import { markArchived } from './ArchiveArc';
 import { createToastStore } from './toast-store';
 
 // First, before anything awaits: a toast main sends while the shell is starting still lands.
 const toasts = createToastStore((listener) => api.toasts.onShow(listener));
+// Which rows leave for the archive (ArchiveArc.tsx): main says so just before the patch that removes them.
+api.sidebar.onArchived(({ nodeIds }) => markArchived(nodeIds));
 const info = await live(() => api.system.info(), (listener) => api.system.onChange(listener));
 applySystem(info.get());
 info.subscribe(() => applySystem(info.get()));

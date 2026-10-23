@@ -29,6 +29,7 @@ const api: ShellApi = {
     moveToChord: (nodeId, chordId) => invoke('sidebar:moveToChord', { nodeId, chordId }),
     deleteFolder: (nodeId) => invoke('sidebar:deleteFolder', { nodeId }),
     onRename: (listener) => subscribe('sidebar:rename', listener),
+    onArchived: (listener) => subscribe('sidebar:archived', listener),
   },
   chords: { onEdit: (listener) => subscribe('chord:edit', listener) },
   toasts: { onShow: (listener) => subscribe('toast:show', listener) },

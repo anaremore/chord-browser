@@ -15,6 +15,14 @@ interface Props {
 const darkIcons = new Map<string, boolean>();
 /** Icons the browser couldn't decode: they show the monogram instead of a broken image. */
 const brokenIcons = new Set<string>();
+/** Monogram colors by hue and appearance: finding a readable pair takes a few color conversions, and a list has many. */
+const monogramColors = new Map<string, ReturnType<typeof siteColors>>();
+function colorsFor(hue: number, appearance: Appearance): ReturnType<typeof siteColors> {
+  const key = `${hue} ${appearance}`;
+  let colors = monogramColors.get(key);
+  if (!colors) monogramColors.set(key, (colors = siteColors(hue, appearance)));
+  return colors;
+}
 
 function measureDark(img: HTMLImageElement): boolean {
   const canvas = document.createElement('canvas');
@@ -67,7 +75,7 @@ export function Favicon({ url, title, favicon, loading = false, appearance }: Pr
     );
   }
   const host = displayHost(url);
-  const colors = siteColors(siteHue(host), appearance);
+  const colors = colorsFor(siteHue(host), appearance);
   const style = { '--monogram-bg': colors.background, '--monogram-fg': colors.foreground } as CSSProperties;
   return (
     <span className={styles.monogram} style={style} aria-hidden>

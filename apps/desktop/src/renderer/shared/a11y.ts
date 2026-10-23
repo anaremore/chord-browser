@@ -22,6 +22,12 @@ export interface RovingOptions {
   orientation?: 'horizontal' | 'vertical' | 'both';
   /** Arrow keys also choose the item they move to: radios and tabs, where selection follows focus. */
   activate?: boolean;
+  /**
+   * Places the Tab stop on the next frame rather than as items change: for
+   * long lists whose items come and go as they render (the sidebar's trees),
+   * so finding which items show never forces a layout in the middle of a commit.
+   */
+  deferred?: boolean;
 }
 
 const usable = (el: HTMLElement) => !el.matches(':disabled, [aria-disabled="true"]') && el.getClientRects().length > 0;
@@ -79,22 +85,34 @@ export function rovingKeyDown(event: KeyboardEvent<HTMLElement>, { items, orient
  * every item) and watching the widget all over again.
  */
 export function useRoving<T extends HTMLElement>(options: RovingOptions): { ref: (root: T | null) => (() => void) | undefined; onKeyDown(event: KeyboardEvent<T>): void } {
-  const { items, current, orientation, activate = false } = options;
+  const { items, current, orientation, activate = false, deferred = false } = options;
   const ref = useCallback(
     (root: T | null) => {
       if (!root) return undefined;
       const apply = () => applyRoving(root, items, current);
-      apply();
       // A change of choice (or of items) re-places the Tab stop; for radios and tabs, the keyboard too.
-      const observer = new MutationObserver(() => applyRoving(root, items, current, activate));
+      const change = () => applyRoving(root, items, current, activate);
+      let frame = 0;
+      const changed = deferred
+        ? () => {
+            frame ||= requestAnimationFrame(() => {
+              frame = 0;
+              change();
+            });
+          }
+        : change;
+      if (deferred) changed();
+      else apply();
+      const observer = new MutationObserver(changed);
       observer.observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-checked', 'aria-selected', 'aria-current', 'disabled', 'aria-disabled'] });
       root.addEventListener('focusin', apply);
       return () => {
+        cancelAnimationFrame(frame);
         observer.disconnect();
         root.removeEventListener('focusin', apply);
       };
     },
-    [items, current, activate],
+    [items, current, activate, deferred],
   );
   const onKeyDown = useCallback(
     (event: KeyboardEvent<T>) => rovingKeyDown(event, { items, current, orientation, activate }),

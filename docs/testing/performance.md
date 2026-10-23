@@ -10,7 +10,9 @@ pnpm --filter @chord/desktop test:perf                       # report only
 CHORD_PERF_ENFORCE=1 pnpm --filter @chord/desktop test:perf  # any miss fails
 ```
 
-In PowerShell, set `$env:CHORD_PERF_ENFORCE = '1'` first. A run takes about four minutes: six launches, then four sessions (20 and 200 Today tabs, each with motion on and off). Each session opens and types in the command bar, switches tabs, collapses and docks the sidebar, opens and closes Duet, pins, folds a folder, drags to reorder, switches chords, and runs Clear Today and its Undo. The spec turns motion on and off itself, whatever the OS setting.
+In PowerShell, set `$env:CHORD_PERF_ENFORCE = '1'` first. A run takes about four minutes: six launches, then four sessions (20 and 200 Today tabs, each with motion on and off). Each session opens and types in the command bar, switches tabs, collapses and docks the sidebar, opens and closes Duet, pins, folds a folder, drags to reorder, switches chords, and runs Clear Today and its Undo, then Clear Today again scrolled to the end of the list (in a windowed list, rows that weren't mounted at the start). With motion on, each Clear also checks the archive arc (DESIGN.md §6.5): rows on screen leave, at most 6 favicons fly, and under 50 nodes animate at once; with motion off, nothing does. The spec turns motion on and off itself, whatever the OS setting.
+
+`test/e2e/today.spec.ts` covers the windowed list itself (DESIGN.md §6.7): scrolling, an axe audit of the list scrolled to the middle, the keyboard to the end of 200 tabs, a drag past the list's edge, and the arc with motion on, reduced and off. It captures the arc mid-flight, light and dark, as `test-results/captures/archive-arc-*.png`.
 
 Before an enforced run:
 

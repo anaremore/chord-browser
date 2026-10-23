@@ -359,8 +359,9 @@ export function ChordSwitcher({
       observer.disconnect();
     };
   }, [chords.length]);
-  // One Tab stop; ← → move between chords and switch to them (WAI-ARIA tabs, automatic activation).
-  const roving = useRoving<HTMLDivElement>({ items: '[role="tab"]', current: '[aria-selected="true"]', orientation: 'horizontal', activate: true });
+  // One Tab stop; ← → move between chords and switch to them (WAI-ARIA tabs, automatic activation). Placed on the
+  // next frame, so a switch (which redraws the whole sidebar) isn't laid out twice to find which chords show.
+  const roving = useRoving<HTMLDivElement>({ items: '[role="tab"]', current: '[aria-selected="true"]', orientation: 'horizontal', activate: true, deferred: true });
   // The chord you're in is always in view. Only scrolled to when some chord is out of sight:
   // scrolling into view lays out the whole window on the spot, which right after a switch (a chord's
   // sidebar just rendered) costs most of a frame (ARCHITECTURE.md §1).

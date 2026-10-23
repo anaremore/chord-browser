@@ -45,7 +45,7 @@ Each principle has a test, so reviews can say "this fails principle 3" instead o
 
 **Name.** A *chord* is several notes played together. Inside Chord, each set of tabs is itself a chord: the tabs are the notes, and they play together with their own color. The identity stays musical but quiet. No music-note clip art.
 
-**Mark.** Three rounded notes of different lengths, stacked and stepped like a chord on a staff and like tabs in a sidebar. Each note is one *Dusk* hue (Lilac, Rose, Coral), and each overlaps the one above through a cutout in the body's color. They sit on a pale body that runs from lilac-white to peach, so the colors carry the icon at any size. The sources are SVGs in `apps/desktop/build/` (ARCHITECTURE.md §15.1). It must not resemble Arc's arch, and it uses no Arc color pairings. Still to do: a monochrome version for menus and tray, and an Icon Composer `.icon` with layered glass for macOS 26 (electron-builder supports this).
+**Mark.** Three rounded notes of different lengths, stacked and stepped like a chord on a staff and like tabs in a sidebar. Each note is one *Dusk* hue (Lilac, Rose, Coral), and each overlaps the one above through a cutout in the body's color. They sit on a pale body that runs from lilac-white to peach, so the colors carry the icon at any size. The sources are SVGs in `apps/desktop/build/` (ARCHITECTURE.md §15.1). The welcome card (§8.1) draws the same notes from the same numbers (`Onboarding.tsx`, `Mark`): the icon's geometry, gradients and shadows, with the cutouts in the card's color. It must not resemble Arc's arch, and it uses no Arc color pairings. Still to do: a monochrome version for menus and tray, and an Icon Composer `.icon` with layered glass for macOS 26 (electron-builder supports this).
 
 **Signature motion.** On first launch the three bars land one after another (60 ms stagger, `bouncy` spring), like a chord being struck. That is the only place the logo animates.
 
@@ -414,6 +414,10 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | **Edit the address (⌘L)** | The URL pill (or, in minimal mode, the bar's address field) becomes the input where it sits: its text and position stay put while the results panel grows down beneath it (`overlay`). With *Animate into the command bar* off (§6.8), it appears instantly. |
 | **Duet panel** | The panel slides in from the right with `overlay`. The page's frame narrows through the snapshot technique: the bitmap scales over one `smooth` spring, then the real view is placed once. *As built:* closing slides it out in `fade-base` (exits are quicker) while the frame widens the same way, and the keyboard leaves the panel as it starts to go. A panel already open when the window opens is just there. |
 
+*As built* (`shell/ArchiveArc.tsx`, `shell/today-motion.ts`):
+- **Archive:** only rows that were on screen animate. A flight is a copy of the row's own icon, flown by the compositor; at most 6, 12 ms apart. Main says which tabs it's archiving just before the patch that removes them (`sidebar:archived`), so an archived row never leaves like a closed one. With reduced motion, rows go at once and the Archive button's highlight fades over 90 ms.
+- **Close** drifts 8 px left and fades (`fade-fast`); **pin** lifts 8 px toward Pinned and fades, and the row lands in Pinned with `bouncy`. Rows arriving together start 12 ms apart, up to 6.
+
 ### 6.6 Reduced motion
 
 `MotionConfig reducedMotion="user"` is set at the root. Motion's default is `"never"`, so this has to be explicit. When the OS asks for reduced motion, Motion disables transform and layout animations and keeps opacity and color. On top of that:
@@ -436,6 +440,14 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 - Input never waits for motion: a field is focused and typeable on the first frame of its entrance animation.
 - **One render a frame.** Updates from main (state patches, Duet's, the extension bar's) render the shell once a frame however many arrive in it, and a key or click first renders whatever is waiting (ARCHITECTURE.md §6.2).
 - **Web content moves at most twice per frame-size change** (out of sight at its new size, then into place), never per frame; the perf spec counts it.
+
+*As built* (`shell/virtual.ts`, `shell/today-motion.ts`, `shell/Tabs.tsx`):
+- **The window.** Above 150 rows, Today mounts the rows in view and 3 more past each edge; spacers stand in for the rest, so the scrollbar is true. The rows past the edges come a frame after the list mounts (a chord switch), since they don't show.
+- **Always mounted,** wherever they are: the tab on screen (its pill glides from there, and it's the trees' Tab stop), a row being dragged, a row picked up with Space, and the row with the keyboard (or about to get it).
+- **Rows aren't Motion components,** in Pinned or Today: mounting one costs about as much as the rest of the row. The lists animate their rows with the Web Animations API, from their indices (every row is 32 px), so nothing is measured. Only rows near the viewport animate. A second move before the first settles adds onto it, so the row carries on from where it is. The active pill is still a Motion `layoutId`.
+- **Drag and drop** (dnd-kit) is set up only for rows on screen, a frame after they mount: a drag starting measures every one. While a row is dragged, dnd-kit moves the rows. Drags keep global indices, scroll at the list's edges, and land among rows that weren't mounted when they began.
+- **Leaving.** A row that leaves its list animates out in its own element, put back where it was; rows that scroll out of the window just go.
+- **The keyboard** walks the trees in state order, not the DOM's, and scrolls a row into view (mounting it) before focusing it.
 
 ### 6.8 Motion settings
 

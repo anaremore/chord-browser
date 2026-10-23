@@ -806,6 +806,11 @@ export interface EventPayloads {
   'chord:edit': ChordEdit;
   /** Start renaming a folder in the sidebar (a new one, or from its menu). */
   'sidebar:rename': { nodeId: string };
+  /**
+   * Tabs about to go to the archive (Clear Today, or tidying up idle tabs), sent just before the state
+   * patch that removes them: their rows leave for the footer's Archive button (DESIGN.md §6.5).
+   */
+  'sidebar:archived': { nodeIds: string[] };
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
   'settings:section': string;
   'extensions:state': ExtensionsBarState;
@@ -888,6 +893,8 @@ export interface ShellApi {
     moveToChord(nodeId: string, chordId: string): Promise<void>;
     deleteFolder(nodeId: string): Promise<void>;
     onRename(listener: (event: { nodeId: string }) => void): () => void;
+    /** Rows about to leave for the archive (comes before the patch that removes them). */
+    onArchived(listener: (event: { nodeIds: string[] }) => void): () => void;
   };
   chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
