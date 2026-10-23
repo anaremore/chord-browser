@@ -19,5 +19,11 @@ spikes/**/results/
 # Design QA captures (scripts/dev/qa-windows.mjs)
 .qa/
 
+# Flatpak builds (flatpak/build.sh, docs/releasing/flathub.md)
+flatpak/generated-sources.json
+flatpak/.flatpak-builder/
+flatpak/build-dir/
+flatpak/repo/
+
 # Agent worktrees and local Claude Code state
 .claude/

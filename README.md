@@ -37,6 +37,31 @@ Previews aren't code-signed yet, so Windows and macOS warn you before the first 
 - **Debian and Ubuntu:** `sudo apt install ./Chord-<version>-linux-<arch>.deb`. The package sets up the browser sandbox, including on Ubuntu 23.10 and later.
 - **AppImage:** `chmod +x Chord-<version>-linux-<arch>.AppImage`, then run it. Chord never runs without its sandbox, which needs unprivileged user namespaces. Ubuntu 23.10 and later block those for apps without an AppArmor profile, so use the `.deb` there.
 
+**Linux package repositories (coming soon).** These repositories aren't live yet, so the commands below don't work today; use the `.deb` above. Once they are, `apt upgrade` and `dnf upgrade` keep Chord up to date, and a `.deb` you installed by hand moves over by itself.
+
+- **Debian and Ubuntu:**
+  ```sh
+  curl -fsSL https://dl.cloudsmith.io/public/chord-browser/chord/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/chord-archive-keyring.gpg
+  echo "deb [signed-by=/usr/share/keyrings/chord-archive-keyring.gpg] https://dl.cloudsmith.io/public/chord-browser/chord/deb/any-distro any-version main" | sudo tee /etc/apt/sources.list.d/chord.list
+  sudo apt update && sudo apt install chord
+  ```
+- **Fedora and RHEL:**
+  ```sh
+  sudo tee /etc/yum.repos.d/chord.repo <<'EOF'
+  [chord]
+  name=Chord
+  baseurl=https://dl.cloudsmith.io/public/chord-browser/chord/rpm/any-distro/any-version/$basearch
+  enabled=1
+  gpgcheck=1
+  repo_gpgcheck=1
+  gpgkey=https://dl.cloudsmith.io/public/chord-browser/chord/gpg.key
+  EOF
+  sudo dnf install chord
+  ```
+- The repositories are signed. The key's fingerprint will be listed here when they go live.
+
+**Flatpak (coming soon).** Chord isn't on Flathub yet. To build the Flatpak from source yourself, see [docs/releasing/flathub.md](docs/releasing/flathub.md#build-it-yourself).
+
 To try a build without touching your everyday profile, start it with `--user-data-dir=<folder>`, as you would Chrome.
 
 **Make Chord your default browser:** Settings → General → **Make default**. On Windows this opens Windows Settings at Chord's entry: Windows doesn't let apps make themselves the default. On macOS, the system asks you to confirm.
@@ -48,6 +73,7 @@ To try a build without touching your everyday profile, start it with `--user-dat
 | Windows | `%LOCALAPPDATA%\Chord\User Data` |
 | macOS | `~/Library/Application Support/Chord` |
 | Linux | `~/.config/Chord` |
+| Linux (Flatpak) | `~/.var/app/io.github.anaremore.chord-browser/config/Chord` |
 
 Deleting that folder resets Chord. To uninstall, use Windows' *Installed apps*, drag Chord to the Trash on macOS, or run `sudo apt remove chord`.
 
@@ -56,6 +82,7 @@ Deleting that folder resets Chord. To uninstall, use Windows' *Installed apps*, 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how Chord is built, and why.
 - [DESIGN.md](DESIGN.md): principles, design tokens, motion, components, and key flows.
 - [ROADMAP.md](ROADMAP.md): phases and milestones.
+- [docs/releasing/](docs/releasing/patch-runbook.md): the 72-hour security-patch runbook, [Flathub](docs/releasing/flathub.md), and the [apt and dnf repositories](docs/releasing/linux-repos.md).
 
 ## Building from source
 

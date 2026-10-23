@@ -346,7 +346,7 @@ jobs:
           CHORD_UPDATE_SIGNING_KEY: ${{ secrets.CHORD_UPDATE_SIGNING_KEY }}
         run: |
           if [ -z "$CHORD_UPDATE_SIGNING_KEY" ]; then
-            echo "::warning::CHORD_UPDATE_SIGNING_KEY isn't set, so this release's copies will only say it's out (docs/SECURITY-PATCHING.md, Update signing key)."
+            echo "::warning::CHORD_UPDATE_SIGNING_KEY isn't set, so this release's copies will only say it's out (docs/releasing/patch-runbook.md, Update signing key)."
           else
             node apps/desktop/scripts/sign-update-manifests.mjs dist
           fi

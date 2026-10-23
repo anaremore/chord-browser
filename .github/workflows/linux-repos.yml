@@ -1,0 +1,130 @@
+name: Linux package repos
+
+# Puts a published release's .deb and .rpm files in Chord's apt and dnf
+# repositories on Cloudsmith, which signs the repository metadata with its GPG
+# key (ARCHITECTURE.md §14.4, §15.1). Switched off until the repository
+# secret CLOUDSMITH_API_KEY exists: without it, the upload job is skipped and
+# the run is green. Setup: docs/releasing/linux-repos.md.
+#
+# Optional repository variable CLOUDSMITH_REPOSITORY (workspace/repository),
+# default chord-browser/chord. It must match the README's install steps.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to upload, e.g. v0.1.0
+        required: true
+        type: string
+      dry_run:
+        description: Check the files and the Cloudsmith login, upload nothing
+        type: boolean
+        default: false
+      republish:
+        description: Replace packages Cloudsmith already has for this version
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-repos-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Is Cloudsmith set up?
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - id: check
+        env:
+          HAS_KEY: ${{ secrets.CLOUDSMITH_API_KEY != '' }}
+        run: |
+          if [ "$HAS_KEY" = true ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CLOUDSMITH_API_KEY isn't set, so the apt and dnf repositories are off. Nothing to upload (docs/releasing/linux-repos.md)."
+          fi
+
+  upload:
+    name: Upload to Cloudsmith
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      CLOUDSMITH_REPOSITORY: ${{ vars.CLOUDSMITH_REPOSITORY || 'chord-browser/chord' }}
+    steps:
+      - name: Download the release's packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern '*.deb' --pattern '*.rpm' --pattern SHA256SUMS.txt
+          ls -l dist
+
+      # The files must be the ones the release workflow built and checksummed.
+      - name: Check them against SHA256SUMS.txt
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          debs=(*.deb)
+          rpms=(*.rpm)
+          if [ ${#debs[@]} -eq 0 ]; then
+            echo "::error::Release $TAG has no .deb files"
+            exit 1
+          fi
+          if [ ${#rpms[@]} -eq 0 ]; then
+            echo "::warning::Release $TAG has no .rpm files, so the dnf repository stays as it was"
+          fi
+          for file in "${debs[@]}" "${rpms[@]}"; do
+            awk -v f="$file" '$2 == f || $2 == "*" f { found = 1 } END { exit !found }' SHA256SUMS.txt ||
+              { echo "::error::$file isn't listed in SHA256SUMS.txt"; exit 1; }
+          done
+          sha256sum --check --ignore-missing --strict SHA256SUMS.txt
+
+      - name: Set up the Cloudsmith CLI
+        uses: cloudsmith-io/cloudsmith-cli-action@69e169e2ad9bc9a1599c2dff464061a00fe9f8ba # v3.1.1
+        with:
+          api-key: ${{ secrets.CLOUDSMITH_API_KEY }}
+          cli-version: 1.30.0
+          verify-auth: true
+
+      # any-distro/any-version: one package for every Debian/Ubuntu and
+      # Fedora/RHEL release, as the README's repository lines expect.
+      - name: Upload
+        env:
+          DRY_RUN: ${{ inputs.dry_run == true }}
+          REPUBLISH: ${{ inputs.republish == true }}
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          flags=()
+          if [ "$DRY_RUN" = true ]; then flags+=(--dry-run); fi
+          if [ "$REPUBLISH" = true ]; then flags+=(--republish); fi
+          for file in *.deb; do
+            cloudsmith push deb "$CLOUDSMITH_REPOSITORY/any-distro/any-version" "$file" "${flags[@]}"
+          done
+          for file in *.rpm; do
+            cloudsmith push rpm "$CLOUDSMITH_REPOSITORY/any-distro/any-version" "$file" "${flags[@]}"
+          done
+
+      - name: Summary
+        if: success()
+        env:
+          NOTE: ${{ inputs.dry_run && ' (dry run, nothing uploaded)' || '' }}
+        run: |
+          shopt -s nullglob
+          {
+            echo "### ${TAG} → Cloudsmith ${CLOUDSMITH_REPOSITORY}${NOTE}"
+            echo
+            for file in dist/*.deb dist/*.rpm; do echo "- \`$(basename "$file")\`"; done
+          } >> "$GITHUB_STEP_SUMMARY"

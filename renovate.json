@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Dependency policy: ARCHITECTURE.md §14.2. Electron security process: §14.3 and docs/SECURITY-PATCHING.md.",
+  "description": "Dependency policy: ARCHITECTURE.md §14.2. Electron security process: §14.3 and docs/releasing/patch-runbook.md.",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests", ":configMigration", ":maintainLockFilesWeekly"],
   "dependencyDashboard": true,
   "rangeStrategy": "pin",

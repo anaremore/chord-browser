@@ -5,6 +5,9 @@ import { userDataOverride } from './user-data';
 /** Fixed forever: data paths, Flatpak and default-browser registration use it (ARCHITECTURE.md §15.0). */
 export const APP_ID = 'com.chordbrowser.Chord';
 
+/** Flatpak sets FLATPAK_ID inside every sandbox it starts. Flathub, not Chord, updates such a copy. */
+export const inFlatpak = process.platform === 'linux' && Boolean(process.env['FLATPAK_ID']);
+
 /**
  * Must run before `ready`. Development builds use separate data ("Chord Dev")
  * so working on Chord never touches your real profile.

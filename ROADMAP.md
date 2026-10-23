@@ -70,9 +70,9 @@ Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every 
 | M1.3 Chords | chords, icons, themes and the theme library, color wheel and *Surprise me*, separate sign-ins, moving tabs across chords, trackpad swipe | | trackpad swipe checked by hand on a Mac |
 | M1.4 Command bar + archive | ranking with learned picks, history, completion, suggestions, site keywords, `@` filters, archive, sleeping tabs, ⌘⇧T | | |
 | M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows, PDFs, spelling, screen sharing, site permissions, zoom per site, **editable shortcuts** | | real password-manager sign-in checks (by hand) |
-| M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check, macOS hands-on (2026-10-22 report) | CI green on every OS, accessibility pass, performance budgets | design QA sweep, macOS re-run, the 0.1 release |
+| M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check, macOS hands-on (2026-10-22 report), accessibility pass (automated), performance budgets (launch, command bar, history) | CI green on every OS, the 200-tab sidebar budget | design QA sweep, macOS re-run, the 0.1 release |
 | Phase 2 | Duet, split view, mini window, Peek, hover previews | Codex's live-turn checks (S5, after its usage limit resets Nov 16) | Electron 46 (stable 2027-01-05) |
-| Phase 3 | link routes, in-app updates (Ed25519-signed manifests; needs your signing key), Google-free mode | Flathub, apt/dnf repos, the 72-hour patch runbook | D7 Safe Browsing (your call) |
+| Phase 3 | link routes, in-app updates (Ed25519-signed manifests; needs your signing key), Google-free mode, a Flatpak built from source, the apt/dnf upload workflow (off until Cloudsmith is set up), the 72-hour runbook (rehearsed up to publishing) | | rpm builds; yours: the Flathub app ID and submission, the Cloudsmith repository and key, D7 Safe Browsing |
 | Phase 4 | signing and notarization in the release workflow, off until your certificates exist; a Microsoft Store draft | | your certificates ([docs/releasing/signing.md](docs/releasing/signing.md)), Mac in-app updates, Electron 47, compact density |
 
 ---
@@ -263,11 +263,16 @@ Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every 
 ## Phase 3 — Links from everywhere · February 2027
 
 - **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in. **Built 2026-10-23**, with the mini window: routes apply to links from other apps and to the command bar, and Chord offers a route rather than making one (DESIGN.md §8.5).
-- **Distribution:**
-  - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.
+- **Distribution** (status 2026-10-23, [docs/releasing/](docs/releasing/patch-runbook.md)):
+  - **Flathub:** a from-source build, app ID verified through chordbrowser.com.
+    - *Done:* `flatpak/` builds Chord from source with no network, on the Electron BaseApp 26.08 ([flathub.md](docs/releasing/flathub.md)).
+    - *Yours, by hand:* Flathub's AI policy forbids AI-written manifests and AI-opened PRs, so you write the manifest that's submitted, and the submission must disclose Chord's AI-written code; reviewers may weigh that against it.
+    - *To decide:* the app ID. `com.chordbrowser.Chord` needs a page on chordbrowser.com over HTTPS for verification; `io.github.anaremore.chord-browser` works today.
   - **Cloudsmith** apt and dnf repos, GPG-signed.
-  - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests. *Built:* download in the background, then "Restart to update"; it needs the signing key made once ([docs/SECURITY-PATCHING.md](docs/SECURITY-PATCHING.md#update-signing-key)).
-  - The **72-hour patch runbook** rehearsed end to end.
+    - *Done:* `linux-repos.yml` uploads each published release's `.deb` and `.rpm`, and the README has the install steps marked "coming soon".
+    - *Yours:* the Cloudsmith repository and the `CLOUDSMITH_API_KEY` secret ([linux-repos.md](docs/releasing/linux-repos.md#switching-it-on)). `.rpm` builds are still to add to `release.yml`.
+  - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests. *Built:* download in the background, then "Restart to update"; it needs the signing key made once ([patch-runbook.md](docs/releasing/patch-runbook.md#update-signing-key)).
+  - The **72-hour patch runbook** rehearsed end to end. *Done:* written ([patch-runbook.md](docs/releasing/patch-runbook.md)) and rehearsed on 2026-10-23 up to the publish step. The first real release completes the rehearsal.
 - **D7** Safe Browsing, if you choose it.
 - **Google-free mode** (requested 2026-10-22).
   - *Why not ungoogled-chromium itself:* it's a set of patches, domain substitutions and build flags for Chromium's source. Chord runs on Electron, which builds its own Chromium, so using it would mean building Electron from source with those patches applied. That's hours of build per OS and architecture for every security release, and no maintained project does it today.

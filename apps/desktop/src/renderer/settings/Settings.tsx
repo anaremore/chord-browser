@@ -87,6 +87,13 @@ function DefaultBrowser({ platform }: { platform: SystemInfo['platform'] }) {
             }
           />
         )}
+        {status === 'system' && (
+          <Row
+            label="Make Chord your default browser"
+            description="Choose Chord in your system’s default apps settings. A Flatpak can’t change that setting itself."
+            control={null}
+          />
+        )}
         {status === 'unavailable' && (
           <Row label="Default browser" description="Installed copies of Chord can be your default browser. This is a development build." control={null} />
         )}
@@ -287,6 +294,8 @@ function Updates({ enabled }: { enabled: boolean }) {
     switch (status.state) {
       case 'unavailable':
         return <Row label="Updates" description="Installed copies of Chord check for new versions. This is a development build." control={null} />;
+      case 'managed':
+        return <Row label="Updates" description="Your software center updates Chord, along with your other Flatpak apps." control={null} />;
       case 'idle':
         return <Row label="Check for updates" description="Not checked yet." control={checkButton} />;
       case 'checking':
@@ -326,13 +335,15 @@ function Updates({ enabled }: { enabled: boolean }) {
   return (
     <div className={`${styles.group} ${styles.groupBelow}`}>
       {row}
-      <Row
-        label="Check for updates automatically"
-        description="Once a day, Chord asks GitHub whether a newer version is out, and nothing about you is sent. On Windows and in the AppImage, a new version downloads in the background and installs when Chord restarts."
-        changed={enabled !== DEFAULT_SETTINGS.checkForUpdates}
-        onReset={() => void api.settings.set({ checkForUpdates: DEFAULT_SETTINGS.checkForUpdates })}
-        control={<Switch label="Check for updates automatically" checked={enabled} onChange={(checkForUpdates) => void api.settings.set({ checkForUpdates })} />}
-      />
+      {status.state !== 'managed' && (
+        <Row
+          label="Check for updates automatically"
+          description="Once a day, Chord asks GitHub whether a newer version is out, and nothing about you is sent. On Windows and in the AppImage, a new version downloads in the background and installs when Chord restarts."
+          changed={enabled !== DEFAULT_SETTINGS.checkForUpdates}
+          onReset={() => void api.settings.set({ checkForUpdates: DEFAULT_SETTINGS.checkForUpdates })}
+          control={<Switch label="Check for updates automatically" checked={enabled} onChange={(checkForUpdates) => void api.settings.set({ checkForUpdates })} />}
+        />
+      )}
     </div>
   );
 }
