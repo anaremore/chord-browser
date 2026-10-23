@@ -10,7 +10,7 @@
  * Nothing here loads anything remote: no images, no link previews, and links
  * show their full address and open only when clicked (research §6, rule 5).
  */
-import { DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, splitCitations, type DuetMessage, type DuetProvider, type DuetScope } from '@chord/core';
+import { contextLabel, contextPercent, DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, splitCitations, type DuetContextUsage, type DuetMessage, type DuetProvider, type DuetScope } from '@chord/core';
 import type { DuetAction, DuetView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
@@ -135,12 +135,21 @@ function Reply({ message, onLink }: { message: DuetMessage; onLink(url: string):
   if (message.body.role !== 'assistant') return null;
   const numbers = new Map<string, number>();
   for (const seg of splitCitations(message.body.text)) if (seg.kind === 'citation') numbers.set(`${seg.ref}:${seg.quote}`, seg.n);
+  const citations = message.body.citations;
   const cite: Cite = (ref, quote) => {
     const n = numbers.get(`${ref}:${quote}`);
     if (n === undefined) return null;
+    // A PDF's citation names its page (found in the text Duet read).
+    const page = citations.find((c) => c.n === n)?.page;
     return (
-      <button type="button" className={styles.cite} title={`“${quote}”`} aria-label={`Source ${n}: “${quote}”`} onClick={() => act({ do: 'citation', messageId: message.id, n })}>
-        {n}
+      <button
+        type="button"
+        className={styles.cite}
+        title={`${page ? `p. ${page} · ` : ''}“${quote}”`}
+        aria-label={`Source ${n}${page ? `, page ${page}` : ''}: “${quote}”`}
+        onClick={() => act({ do: 'citation', messageId: message.id, n })}
+      >
+        {page ? `${n} · p. ${page}` : n}
       </button>
     );
   };
@@ -477,6 +486,37 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
   );
 }
 
+/* ---------- Context meter ---------- */
+
+/**
+ * How much of the model's context the chat has used, as the CLI reports it: a
+ * small pie (a ring would read as a spinner), the details on hover or focus.
+ */
+function ContextMeter({ usage, provider }: { usage: DuetContextUsage; provider: DuetProvider }) {
+  const percent = contextPercent(usage);
+  const label = contextLabel(provider, usage);
+  return (
+    <span
+      className={styles.meter}
+      role="meter"
+      tabIndex={0}
+      aria-label="Context used"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      aria-valuetext={label}
+      title={label}
+      data-full={percent >= 80 || undefined}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden>
+        <circle className={styles.meterTrack} cx="8" cy="8" r="6.5" strokeWidth="1.5" />
+        {/* A stroke as wide as the circle is round draws a wedge: the used share, clockwise from the top. */}
+        <circle className={styles.meterFill} cx="8" cy="8" r="2.75" strokeWidth="5.5" pathLength={100} strokeDasharray={`${percent} 100`} />
+      </svg>
+    </span>
+  );
+}
+
 /* ---------- Setup ---------- */
 
 function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
@@ -486,7 +526,7 @@ function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
       <p className={styles.muted}>Duet uses your own Claude Code or Codex app. Pick one; you can switch any time.</p>
       <ul className={styles.providers}>
         {view.providers.map((p) => {
-          const name = DUET_PROVIDER_NAMES[p.provider];
+          const name = p.wsl ? `${DUET_PROVIDER_NAMES[p.provider]} in WSL (${p.wsl})` : DUET_PROVIDER_NAMES[p.provider];
           const ready = p.installed && p.signedIn;
           return (
             <li key={p.provider} className={styles.provider}>
@@ -494,7 +534,9 @@ function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
                 <span className={styles.providerName}>{name}</span>
                 <span className={styles.muted}>
                   {!p.installed
-                    ? 'Not installed'
+                    ? view.lookingInWsl
+                      ? 'Looking in WSL…'
+                      : 'Not installed'
                     : `Installed ${p.version ?? ''}${p.signedIn ? ' · Signed in' : ''}${p.billing === 'api-key' ? ' · Using your API key' : ''}${p.tooOld ? ' · Needs an update' : ''}`}
                 </span>
               </div>
@@ -562,6 +604,7 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
         ) : (
           <span className={`${styles.title} ${styles.ellipsis}`}>{thread?.title || 'Duet'}</span>
         )}
+        {ready && view.context && <ContextMeter usage={view.context} provider={provider} />}
         {ready && (
           <button type="button" className={styles.chip} aria-haspopup="menu" aria-expanded={menu === 'model'} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
             {providerName} · {modelLabel}

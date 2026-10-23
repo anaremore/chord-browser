@@ -52,7 +52,7 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
         {providers.map((p) => (
           <Row
             key={p.provider}
-            label={DUET_PROVIDER_NAMES[p.provider]}
+            label={p.wsl ? `${DUET_PROVIDER_NAMES[p.provider]} in WSL (${p.wsl})` : DUET_PROVIDER_NAMES[p.provider]}
             description={
               !p.installed
                 ? 'Not installed.'

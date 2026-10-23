@@ -10,9 +10,13 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { buildPdf, SAMPLE_PDF_PAGES } from '../fixtures/pdf';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
+
+/** Requests for the test PDF, and whether each carried the sign-in cookie. */
+const pdfRequests: { signedIn: boolean }[] = [];
 
 const appDir = resolve(import.meta.dirname, '../..');
 const fake = resolve(import.meta.dirname, 'fake-claude.mjs');
@@ -30,6 +34,20 @@ test.beforeAll(async () => {
       '<select><option>card-4242-selected</option></select><input autocomplete="one-time-code" value="otp-123456">',
   };
   const server = createServer((req, res) => {
+    // A PDF behind a sign-in: /login sets the cookie and goes on to it; without the cookie it's 403.
+    if (req.url === '/login') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'chord_pdf=yes; Path=/; HttpOnly' });
+      res.end('<title>Signing in</title><meta http-equiv="refresh" content="0;url=/guide.pdf">');
+      return;
+    }
+    if (req.url?.startsWith('/guide.pdf')) {
+      const signedIn = /(^|;\s*)chord_pdf=yes/.test(req.headers.cookie ?? '');
+      pdfRequests.push({ signedIn });
+      // no-store: Duet's own copy has to come through the network, with the tab's cookies.
+      res.writeHead(signedIn ? 200 : 403, { 'content-type': signedIn ? 'application/pdf' : 'text/plain', 'cache-control': 'no-store' });
+      res.end(signedIn ? Buffer.from(buildPdf(SAMPLE_PDF_PAGES, { title: 'Field guide' })) : 'sign in first');
+      return;
+    }
     const body = pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body ?? 'not found');
@@ -240,6 +258,75 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     await app.close();
   }
 });
+
+/** Every page URL main has open (tabs, and the PDF viewer inside them). */
+const openUrls = (app: ElectronApplication) => app.evaluate(({ webContents }) => webContents.getAllWebContents().map((w) => w.getURL()));
+
+test('Duet: reads a PDF through the tab’s own session, cites its page, and shows how full the context is', async () => {
+  pdfRequests.length = 0;
+  const setup = fresh();
+  const app = await launch(setup, '/login');
+  try {
+    const shell = await shellOf(app);
+    // The tab signs in, then shows the PDF in Chromium's viewer.
+    await expect.poll(() => pdfRequests.length, { timeout: 20_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => (await openUrls(app)).some((u) => u.endsWith('/guide.pdf'))).toBe(true);
+    const panel = await openDuet(shell);
+    await setUp(panel);
+    // No meter before the CLI has reported anything.
+    await expect(panel.getByRole('meter', { name: 'Context used' })).toHaveCount(0);
+    await send(panel, 'What does this PDF say about triads?');
+    await expect(panel.getByText(/The PDF has 3 pages\. Triads sound bright\./)).toBeVisible();
+    // The page comes from the text Duet read, not from the model.
+    const pill = panel.getByRole('button', { name: /^Source 1, page 2: “A major triad sounds bright”/ });
+    await expect(pill).toHaveText('1 · p. 2');
+    await expect(panel.getByRole('button', { name: /^Read “/ })).toBeVisible();
+    // Duet's copy came over the network (no-store) with the tab's cookie: every request was signed in.
+    expect(pdfRequests.length).toBeGreaterThanOrEqual(2);
+    expect(pdfRequests.every((r) => r.signedIn)).toBe(true);
+
+    // The CLI reported 124,000 of 200,000 tokens.
+    const meter = panel.getByRole('meter', { name: 'Context used' });
+    await expect(meter).toHaveAttribute('aria-valuenow', '62');
+    await expect(meter).toHaveAttribute('aria-valuetext', /^62% of context used\. When it fills up, Claude Code compacts the conversation automatically/);
+
+    // The citation finds the quote in the PDF viewer (which goes to its page and marks it).
+    await app.evaluate(({ webContents }) => {
+      const pdf = webContents.getAllWebContents().find((w) => w.getURL().endsWith('/guide.pdf'))!;
+      pdf.on('found-in-page', (_e, result) => ((globalThis as { found?: number }).found = result.matches));
+    });
+    await pill.click();
+    await expect.poll(() => app.evaluate(() => (globalThis as { found?: number }).found ?? 0)).toBe(1);
+  } finally {
+    await app.close();
+  }
+});
+
+for (const appearance of ['light', 'dark'] as const) {
+  test(`Duet: captures a PDF citation and the context meter in ${appearance}`, async () => {
+    const app = await launch(fresh(), '/login', { CHORD_APPEARANCE: appearance });
+    try {
+      const shell = await shellOf(app);
+      await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe(appearance);
+      await expect.poll(async () => (await openUrls(app)).some((u) => u.endsWith('/guide.pdf')), { timeout: 20_000 }).toBe(true);
+      const panel = await openDuet(shell);
+      await setUp(panel);
+      await send(panel, 'What does this PDF say about triads?');
+      await expect(panel.getByRole('button', { name: /^Source 1, page 2:/ })).toBeVisible();
+      const meter = panel.getByRole('meter', { name: 'Context used' });
+      await meter.hover();
+      await shell.evaluate(() => document.fonts.ready);
+      await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-4-pdf-and-context.png`) });
+      // The tab's own page: the viewer at the quote's page, the quote marked.
+      await panel.getByRole('button', { name: /^Source 1, page 2:/ }).click();
+      const viewer = app.windows().find((p) => p.url().endsWith('/guide.pdf'))!;
+      await new Promise((r) => setTimeout(r, 1000));
+      await viewer.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-5-pdf-citation-opened.png`) });
+    } finally {
+      await app.close();
+    }
+  });
+}
 
 for (const appearance of ['light', 'dark'] as const) {
   test(`Duet: captures the panel in ${appearance} for design QA`, async () => {
