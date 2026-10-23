@@ -113,6 +113,23 @@ export interface FolderNode {
 
 export type SidebarNode = TabNode | FolderNode;
 
+/**
+ * A site in the Favorites row at the top of the sidebar, shared by every
+ * chord (ROADMAP.md Q5). Opening one switches to a tab already showing that
+ * site in the current chord, or opens it there.
+ */
+export interface Favorite {
+  id: string;
+  url: string;
+  title: string;
+  favicon: string | null;
+  rank: string;
+  createdAt: number;
+}
+
+/** The sidebar's width range (DESIGN.md §3.1): resizable, with a detent at the default. */
+export const SIDEBAR_WIDTH = { default: 248, min: 200, max: 400, detent: 8 } as const;
+
 export interface Bounds {
   x: number;
   y: number;
@@ -127,6 +144,8 @@ export interface WindowModel {
   /** The tab shown for each chord, so switching back lands where you were. */
   activeTab: Record<ChordId, NodeId | null>;
   sidebar: 'docked' | 'collapsed';
+  /** The docked sidebar's width, within SIDEBAR_WIDTH. */
+  sidebarWidth: number;
   bounds: Bounds | null;
   /** A private window: it shows only its own chord, and Chord forgets it when it closes. */
   private?: boolean;
@@ -347,6 +366,17 @@ export interface State {
   closed: ClosedTab[];
   /** Chords deleted this session, with their tabs, for Undo (newest first; not persisted). */
   deletedChords: DeletedChord[];
+  /** The Favorites row, shared by every chord. */
+  favorites: Record<string, Favorite>;
+  /** Folders deleted this session, with what was in them, for Undo (newest first; not persisted). */
+  deletedFolders: DeletedFolder[];
+}
+
+export interface DeletedFolder {
+  folder: FolderNode;
+  /** Everything that was inside, at any depth. */
+  nodes: SidebarNode[];
+  deletedAt: number;
 }
 
 export interface DeletedChord {
@@ -368,6 +398,8 @@ export const emptyState = (): State => ({
   live: {},
   closed: [],
   deletedChords: [],
+  favorites: {},
+  deletedFolders: [],
 });
 
 export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false };

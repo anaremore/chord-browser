@@ -68,6 +68,33 @@
     visibility var(--duration-instant) linear var(--spring-smooth-duration);
 }
 
+/* While the edge is dragged the sidebar (and below, the frame) follow the pointer, not a spring. */
+.window[data-resizing] .sidebar {
+  transition-duration: var(--duration-instant);
+}
+
+/* Peeking: the sidebar floats over the page under the minimal bar, on its own tinted card. */
+.window[data-sidebar='collapsed'][data-peek] .sidebar {
+  inset-block: var(--size-strip) var(--size-frame-inset);
+  inset-inline-start: var(--size-frame-inset);
+  z-index: var(--z-popover);
+  visibility: visible;
+  border-radius: var(--radius-frame);
+  background-color: var(--color-surface);
+  background-image: var(--color-tint);
+  box-shadow: var(--shadow-popover);
+  opacity: 1;
+  transform: none;
+  transition:
+    transform var(--spring-snappy-duration) var(--spring-snappy),
+    opacity var(--duration-fade-fast) var(--ease-standard);
+}
+
+/* Over the page, only the bar keeps the window's tint; the frame behind the page isn't drawn. */
+.window[data-peek] .backdrop {
+  clip-path: inset(0 0 calc(100% - var(--size-strip)) 0);
+}
+
 .header {
   display: flex;
   flex: none;
@@ -309,22 +336,52 @@ kbd {
   user-select: text;
 }
 
+/* The Today divider: a hairline, with "Clear" on hover or focus (DESIGN.md §3.2). */
 .divider {
+  position: relative;
   display: flex;
   flex: none;
+  gap: var(--space-2);
   align-items: center;
   block-size: var(--size-divider);
   padding-inline: var(--space-2);
 }
 
-.divider::after {
+.hairline {
   flex: 1;
   block-size: var(--size-hairline);
   background: var(--color-divider);
-  content: '';
+}
+
+.clear {
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+  opacity: 0;
+  transition:
+    opacity var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.clear:hover {
+  color: var(--color-fg);
+}
+
+.clear:focus-visible,
+.divider:hover .clear {
+  opacity: 1;
 }
 
 /* ---------- Tab rows ---------- */
+
+/* Holds the lists for keyboard navigation without taking part in the layout. */
+.tree {
+  display: contents;
+}
 
 .list {
   display: flex;
@@ -384,6 +441,15 @@ kbd {
   transition: background-color var(--duration-fade-fast) var(--ease-standard);
 }
 
+/* Over the divider, so nothing moves when it appears. */
+.pinZoneOver {
+  position: absolute;
+  inset-block-start: calc((var(--size-divider) - var(--size-row)) / 2);
+  inset-inline: 0;
+  z-index: var(--z-sticky);
+  background: var(--color-surface-raised);
+}
+
 .pinZone[data-over] {
   background: var(--color-item-hover);
   outline-color: var(--color-accent);
@@ -398,7 +464,7 @@ kbd {
   align-items: center;
   inline-size: 100%;
   block-size: var(--size-row);
-  padding-inline: var(--space-2);
+  padding-inline: calc(var(--space-2) + var(--space-3) * var(--depth, 0)) var(--space-2);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -408,6 +474,35 @@ kbd {
   transition:
     background-color var(--duration-fade-fast) var(--ease-standard),
     padding var(--duration-fade-fast) var(--ease-standard);
+}
+
+/* A folder's chevron turns as it opens (DESIGN.md §6.5). */
+.chevron {
+  flex: none;
+  margin-inline: calc(var(--space-1) * -1) calc(var(--space-1) * -1 + var(--space-0));
+  color: var(--color-fg-muted);
+  transition: transform var(--spring-snappy-duration) var(--spring-snappy);
+}
+
+.chevron[data-open] {
+  transform: rotate(90deg);
+}
+
+/* Renaming: laid over the folder's title (the row's padding, chevron, glyph and gaps come before it). */
+.folderInput {
+  position: absolute;
+  inset-block: var(--space-1);
+  inset-inline: calc(var(--space-2) * 5 + var(--space-3) * var(--depth, 0)) var(--space-2);
+  z-index: var(--z-sticky);
+  min-inline-size: 0;
+  padding-inline: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-xs);
+  outline: 0;
+  background: var(--color-surface-raised);
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+  color: var(--color-fg);
+  font: var(--text-body);
 }
 
 .newTab {
@@ -480,6 +575,100 @@ kbd {
 .close:focus-visible,
 .item:hover .close {
   opacity: 1;
+}
+
+/* ---------- Favorites: tiles every chord shares ---------- */
+
+.favorites {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--size-header) + var(--space-2)), 1fr));
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+/* The first favorite's drop zone covers the address pill while a tab is dragged. */
+.favoritesZone {
+  position: absolute;
+  inset-block-start: var(--size-header);
+  inset-inline: var(--space-2);
+  z-index: var(--z-sticky);
+  block-size: var(--size-url-pill);
+  background: var(--color-surface-raised);
+}
+
+.favoriteItem {
+  position: relative;
+  border-radius: var(--radius-md);
+}
+
+.favoriteItem[data-dragging] {
+  z-index: var(--z-drag);
+  box-shadow: var(--shadow-lift);
+  scale: 1.03;
+}
+
+.favoriteItem[data-drop-target] {
+  outline: var(--size-hairline) solid var(--color-accent);
+  outline-offset: calc(var(--size-hairline) * -1);
+}
+
+.favorite {
+  display: grid;
+  place-items: center;
+  inline-size: 100%;
+  block-size: var(--size-header);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-item-hover);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    transform var(--spring-press-duration) var(--spring-press);
+}
+
+.favorite:hover {
+  background: var(--color-item-active-bg);
+}
+
+.favorite:active {
+  transform: scale(0.96);
+}
+
+.favorite[aria-current='page'] {
+  background: var(--color-item-active-bg);
+  box-shadow: var(--shadow-raised);
+}
+
+/* The sidebar's edge: drag to resize (DESIGN.md §3.1). */
+.resizeHandle {
+  position: absolute;
+  inset-block: var(--size-header) 0;
+  inset-inline-end: calc(var(--space-1) * -1);
+  z-index: var(--z-sticky);
+  inline-size: var(--space-2);
+  cursor: col-resize;
+}
+
+.resizeHandle:focus-visible {
+  outline-offset: calc(var(--space-1) * -1 + var(--size-hairline));
+}
+
+/* ---------- Peek: the sidebar over the page in minimal mode (DESIGN.md §3.3, §6.5) ---------- */
+
+.edgeZone {
+  position: absolute;
+  inset-block: var(--size-strip) 0;
+  inset-inline-start: 0;
+  z-index: var(--z-sticky);
+  inline-size: var(--size-frame-inset);
+}
+
+.peekScrim {
+  position: absolute;
+  inset: 0;
 }
 
 /*
@@ -714,6 +903,12 @@ kbd {
   transform: scale(0.92);
 }
 
+.chordButton[data-drop-target] {
+  outline: var(--size-focus-ring) solid var(--color-accent);
+  outline-offset: calc(var(--size-hairline) * -1);
+  opacity: 1;
+}
+
 .chordPill {
   position: absolute;
   inset: 0;
@@ -820,6 +1015,15 @@ kbd {
 
   /* Same spring main uses for the page's bounds, so the frame and the page move as one. */
   transition: inset var(--spring-smooth-duration) var(--spring-smooth);
+}
+
+.window[data-resizing] .frame {
+  transition-duration: var(--duration-instant);
+}
+
+/* While the sidebar peeks, the frame behind the page isn't drawn: the page shows through. */
+.window[data-peek] .frame {
+  visibility: hidden;
 }
 
 :global(:root[data-platform='darwin']) .frame {

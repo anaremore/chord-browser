@@ -32,6 +32,12 @@ import { Suggestions } from './suggestions';
 import { UpdateChecker } from './updates';
 import { chromiumUserAgent } from './user-agent';
 
+// A bug in main must never put up Electron's "JavaScript error" box (a native dialog that
+// beeps on Windows). Log it and keep going, as Electron does after that box is closed.
+// The E2E suite fails any test whose run logs one of these lines.
+process.on('uncaughtException', (error) => console.error('[chord] Uncaught exception in main:', error));
+process.on('unhandledRejection', (reason) => console.error('[chord] Unhandled rejection in main:', reason));
+
 // Before `ready`: privileged schemes, identity (decides userData), sandbox for every renderer.
 registerSchemes();
 configureAppIdentity();
@@ -119,6 +125,10 @@ function registerIpc(): void {
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
   handle('menu:tab', ({ nodeId, x, y }, sender) => browser!.openTabMenu(sender, nodeId, { x, y }));
+  handle('menu:favorite', ({ favoriteId, x, y }, sender) => browser!.openFavoriteMenu(sender, favoriteId, { x, y }));
+  handle('sidebar:moveToChord', ({ nodeId, chordId }, sender) => browser!.moveToChord(senderWindow(sender), nodeId, chordId));
+  handle('sidebar:deleteFolder', ({ nodeId }, sender) => browser!.deleteFolder(senderWindow(sender), nodeId));
+  handle('layout:peek', ({ open }, sender) => browser!.setPeek(sender, open));
   handle('menu:chord', ({ chordId, x, y }, sender) => browser!.openChordMenu(sender, chordId, { x, y }));
   handle('action:run', ({ action }, sender) => {
     browser!.run(action, sender);

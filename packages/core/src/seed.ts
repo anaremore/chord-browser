@@ -1,6 +1,6 @@
 /** The state of a brand-new profile: one chord, one window, one tab. */
 import { generateKeyBetween } from 'fractional-indexing';
-import { IDLE_LIVE, emptyState, type ChordThemeSpec, type State } from './model';
+import { IDLE_LIVE, SIDEBAR_WIDTH, emptyState, type ChordThemeSpec, type State } from './model';
 
 export interface SeedOptions {
   now: number;
@@ -33,6 +33,6 @@ export function seedState({ now, newId, theme, homeUrl }: SeedOptions): State {
     createdAt: now,
   };
   state.live[tabId] = { ...IDLE_LIVE, loading: true };
-  state.windows[windowId] = { id: windowId, activeChordId: chordId, activeTab: { [chordId]: tabId }, sidebar: 'docked', bounds: null };
+  state.windows[windowId] = { id: windowId, activeChordId: chordId, activeTab: { [chordId]: tabId }, sidebar: 'docked', sidebarWidth: SIDEBAR_WIDTH.default, bounds: null };
   return state;
 }

@@ -1,5 +1,6 @@
 /** Read-only queries over State, shared by main and renderers. */
-import type { Chord, ChordId, Download, NodeId, Section, SidebarNode, State, TabNode, WindowId } from './model';
+import type { Chord, ChordId, Download, Favorite, NodeId, Section, SidebarNode, State, TabNode, WindowId } from './model';
+import { placeKey } from './rank';
 
 /** Rank order; ties (possible after reopening a closed tab) fall back to ID, which is time-ordered. */
 const byRank = (a: SidebarNode, b: SidebarNode) =>
@@ -24,6 +25,67 @@ export function tabsInOrder(state: State, chordId: ChordId): TabNode[] {
   walk('pinned', null);
   walk('today', null);
   return out;
+}
+
+/** Everything inside a folder, at any depth, parents before their children. */
+export function descendants(state: State, folderId: NodeId): SidebarNode[] {
+  const folder = state.nodes[folderId];
+  if (folder?.kind !== 'folder') return [];
+  const out: SidebarNode[] = [];
+  const walk = (parentId: NodeId) => {
+    for (const node of children(state, folder.chordId, folder.section, parentId)) {
+      out.push(node);
+      if (node.kind === 'folder') walk(node.id);
+    }
+  };
+  walk(folderId);
+  return out;
+}
+
+/** How deep a node sits: 0 at a section's root, 1 inside one folder, and so on. */
+export function depthOf(state: State, nodeId: NodeId): number {
+  let depth = 0;
+  let parentId = state.nodes[nodeId]?.parentId ?? null;
+  // The loop guard keeps a damaged tree (a cycle) from hanging.
+  while (parentId && depth < 64) {
+    depth++;
+    parentId = state.nodes[parentId]?.parentId ?? null;
+  }
+  return depth;
+}
+
+/** Whether `nodeId` is `ancestorId` or somewhere inside it. */
+export function isWithin(state: State, nodeId: NodeId, ancestorId: NodeId): boolean {
+  let current: NodeId | null = nodeId;
+  for (let guard = 0; current && guard < 64; guard++) {
+    if (current === ancestorId) return true;
+    current = state.nodes[current]?.parentId ?? null;
+  }
+  return false;
+}
+
+/** The Favorites row in order. */
+export function sortedFavorites(state: State): Favorite[] {
+  return Object.values(state.favorites).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.id < b.id ? -1 : 1));
+}
+
+/**
+ * The tab in a chord that a favorite should switch to instead of opening its
+ * page again: one on the very same page, else the most recently used one on
+ * the same site.
+ */
+export function tabForFavorite(state: State, chordId: ChordId, url: string): TabNode | null {
+  const tabs = Object.values(state.nodes).filter((n): n is TabNode => n.kind === 'tab' && n.chordId === chordId);
+  const place = placeKey(url);
+  const same = place ? tabs.filter((t) => placeKey(t.url) === place) : [];
+  const host = siteOf(url);
+  const pool = same.length > 0 ? same : host ? tabs.filter((t) => siteOf(t.url) === host) : [];
+  return pool.sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0] ?? null;
+}
+
+/** The host (and port) a web address is on, without "www.". */
+function siteOf(url: string): string | null {
+  return placeKey(url)?.split(/[/?]/, 1)[0] ?? null;
 }
 
 /** Your chords in switcher order. A private window's own chord is never among them. */

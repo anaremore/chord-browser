@@ -1,8 +1,8 @@
-import { activeTabId, chordsFor, describeLoadError, downloadsFor, isInternalUrl, sortedChords, type LiveTab, type LoadError, type TabNode } from '@chord/core';
+import { activeTabId, chordsFor, describeLoadError, downloadsFor, isInternalUrl, SIDEBAR_WIDTH, sortedChords, type LiveTab, type LoadError, type TabNode } from '@chord/core';
 import type { ChordEdit, SystemInfo } from '@chord/ipc';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig } from 'motion/react';
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
@@ -15,7 +15,7 @@ import { keycap, withKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { Onboarding } from './Onboarding';
-import { SidebarTabs } from './Tabs';
+import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
 
 /** What the frame shows when a page didn't load (DESIGN.md §9), instead of a blank page. */
@@ -65,7 +65,7 @@ function anchorRef(el: HTMLElement | null) {
   };
 }
 
-function SidebarToggle({ collapsed, info, onToggle }: { collapsed: boolean; info: SystemInfo; onToggle(): void }) {
+function SidebarToggle({ collapsed, info, onToggle, onHover }: { collapsed: boolean; info: SystemInfo; onToggle(): void; onHover?(over: boolean): void }) {
   return (
     <button
       type="button"
@@ -74,11 +74,79 @@ function SidebarToggle({ collapsed, info, onToggle }: { collapsed: boolean; info
       aria-expanded={!collapsed}
       title={withKeys(collapsed ? 'Show sidebar' : 'Hide sidebar', 'view.toggleSidebar', info)}
       onClick={onToggle}
+      onPointerEnter={() => onHover?.(true)}
+      onPointerLeave={() => onHover?.(false)}
     >
       <PanelLeft {...ICON} />
     </button>
   );
 }
+
+/** The width a drag on the sidebar's edge asks for: clamped, and caught by the detent at the default. */
+function snapWidth(width: number): number {
+  const clamped = Math.min(SIDEBAR_WIDTH.max, Math.max(SIDEBAR_WIDTH.min, width));
+  return Math.abs(clamped - SIDEBAR_WIDTH.default) <= SIDEBAR_WIDTH.detent ? SIDEBAR_WIDTH.default : Math.round(clamped);
+}
+
+/**
+ * The sidebar's edge (DESIGN.md §3.1): drag to resize between 200 and 400 px,
+ * with a gentle detent at 248; double-click goes back to 248; arrow keys
+ * nudge it. The width shows at once and reaches main once a frame.
+ */
+function ResizeHandle({ width, windowId, onLive }: { width: number; windowId: string; onLive(width: number | null): void }) {
+  const commit = (next: number) => api.state.dispatch({ t: 'window.sidebarWidth', windowId, width: next });
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Sidebar width"
+      aria-valuemin={SIDEBAR_WIDTH.min}
+      aria-valuemax={SIDEBAR_WIDTH.max}
+      aria-valuenow={width}
+      tabIndex={0}
+      className={styles.resizeHandle}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const el = e.currentTarget;
+        el.setPointerCapture(e.pointerId);
+        const startX = e.clientX;
+        let next = width;
+        let frame = 0;
+        const move = (ev: PointerEvent) => {
+          next = snapWidth(width + ev.clientX - startX);
+          onLive(next);
+          frame ||= requestAnimationFrame(() => {
+            frame = 0;
+            void commit(next);
+          });
+        };
+        const end = () => {
+          el.removeEventListener('pointermove', move);
+          el.removeEventListener('pointerup', end);
+          el.removeEventListener('pointercancel', end);
+          cancelAnimationFrame(frame);
+          void commit(next).then(() => onLive(null));
+        };
+        el.addEventListener('pointermove', move);
+        el.addEventListener('pointerup', end);
+        el.addEventListener('pointercancel', end);
+      }}
+      onDoubleClick={() => void commit(SIDEBAR_WIDTH.default)}
+      onKeyDown={(e) => {
+        const step = e.shiftKey ? 32 : 8;
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          void commit(snapWidth(width + (e.key === 'ArrowLeft' ? -step : step)));
+        }
+      }}
+    />
+  );
+}
+
+/** How long the pointer rests on the toggle before the sidebar peeks, and how long it lingers after (DESIGN.md §3.3, §6.5). */
+const PEEK_DELAY_MS = 300;
+const EDGE_PEEK_DELAY_MS = 120;
 
 function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab: boolean; info: SystemInfo }) {
   return (
@@ -170,6 +238,44 @@ export function App({ info: infoSource, mirror }: { info: Live<SystemInfo>; mirr
     if (chordId) setChordEdit({ chordId, field: 'name' });
   };
 
+  // The sidebar's width, live while its edge is dragged (main lays the page out to match).
+  const [liveWidth, setLiveWidth] = useState<number | null>(null);
+  const sidebarWidth = liveWidth ?? win?.sidebarWidth ?? SIDEBAR_WIDTH.default;
+
+  // Minimal mode's peek: the sidebar slides in over the page and away once the pointer leaves.
+  const [peek, setPeek] = useState(false);
+  const peekTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const schedulePeek = (open: boolean, delay: number) => {
+    clearTimeout(peekTimer.current);
+    peekTimer.current = setTimeout(() => setPeek(open), delay);
+  };
+  const keepPeek = () => clearTimeout(peekTimer.current);
+  // Right after you hide the sidebar the pointer is still on the toggle: it peeks only once the pointer has left it.
+  const peekArmed = useRef(false);
+  useEffect(() => {
+    if (!collapsed) setPeek(false);
+    peekArmed.current = false;
+  }, [collapsed]);
+  const hoverToggle = (over: boolean) => {
+    if (!over) {
+      peekArmed.current = true;
+      if (peek) schedulePeek(false, PEEK_DELAY_MS);
+      else keepPeek();
+    } else if (peekArmed.current) {
+      schedulePeek(true, PEEK_DELAY_MS);
+    }
+  };
+  // Main lifts the shell above the page while it peeks, and lowers it once the slide-out is done.
+  useEffect(() => {
+    if (peek) {
+      void api.layout.peek(true);
+      return;
+    }
+    const timer = setTimeout(() => void api.layout.peek(false), PEEK_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [peek]);
+  const peeking = collapsed && peek;
+
   const toggleSidebar = () => void api.action.run('view.toggleSidebar');
   const openOptions = (e: MouseEvent<HTMLButtonElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -179,13 +285,47 @@ export function App({ info: infoSource, mirror }: { info: Live<SystemInfo>; mirr
   // Motion's default ignores the OS; "user" honors reduced motion (DESIGN.md §6.6) unless Settings says not to.
   return (
     <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
-      <div className={styles.window} data-sidebar={collapsed ? 'collapsed' : 'docked'} style={style}>
+      <div
+        className={styles.window}
+        data-sidebar={collapsed ? 'collapsed' : 'docked'}
+        data-peek={peeking || undefined}
+        data-resizing={liveWidth !== null || undefined}
+        style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+      >
         <div className={styles.backdrop} aria-hidden>
           <Tint value={String(style['--color-tint' as keyof typeof style] ?? '')} transition={spring('gentle', 'colorBlend')} />
           <div className={styles.grain} />
         </div>
 
-        <nav className={styles.sidebar} aria-label="Sidebar" inert={collapsed} aria-hidden={collapsed}>
+        {/*
+          Over the page while the sidebar peeks: the pointer resting here (not in the sidebar) puts it
+          away after a moment, and a click at once. Coming from the edge, the sidebar is a few px away.
+        */}
+        {peeking && (
+          <div
+            className={styles.peekScrim}
+            aria-hidden
+            onPointerMove={() => schedulePeek(false, PEEK_DELAY_MS)}
+            onPointerDown={() => setPeek(false)}
+          />
+        )}
+        {/* Pointing at the window's left edge peeks the sidebar (DESIGN.md §3.3). */}
+        {collapsed && !peeking && (
+          <div className={styles.edgeZone} aria-hidden onPointerEnter={() => schedulePeek(true, EDGE_PEEK_DELAY_MS)} onPointerLeave={keepPeek} />
+        )}
+
+        <nav
+          className={styles.sidebar}
+          aria-label="Sidebar"
+          inert={collapsed && !peeking}
+          aria-hidden={(collapsed && !peeking) || undefined}
+          onPointerEnter={() => peeking && keepPeek()}
+          onPointerMove={() => peeking && keepPeek()}
+          onPointerLeave={() => peeking && schedulePeek(false, PEEK_DELAY_MS)}
+          onKeyDown={(e) => {
+            if (peeking && e.key === 'Escape') setPeek(false);
+          }}
+        >
           <header className={styles.header}>
             <SidebarToggle collapsed={collapsed} info={info} onToggle={toggleSidebar} />
             {!overlayChrome && <span className={styles.flex} />}
@@ -212,43 +352,49 @@ export function App({ info: infoSource, mirror }: { info: Live<SystemInfo>; mirr
             <kbd className={styles.pillKeycap}>{keycap('address.edit', info)}</kbd>
           </button>
 
-          <AnimatePresence initial={false} mode="popLayout" custom={slide}>
-            <ChordPane key={chord?.id} slide={slide} transition={spring('smooth', 'chordSlide')}>
-              <ChordHeader
-                chord={chord}
-                info={info}
-                edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
-                onDone={() => setChordEdit(null)}
-              />
-              <SidebarTabs
-                chordId={chord?.id ?? ''}
-                state={state}
-                windowId={windowId}
-                activeId={activeId}
-                info={info}
-                appearance={appearance}
-                spring={spring}
-              />
-            </ChordPane>
-          </AnimatePresence>
+          {/* One drag space: tabs move between lists, onto Favorites, and onto chords in the switcher. */}
+          <SidebarDnd state={state} chordId={chord?.id ?? ''}>
+            {!isPrivate && <FavoritesRow state={state} windowId={windowId} activeId={activeId} appearance={appearance} />}
 
-          {!collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
+            <AnimatePresence initial={false} mode="popLayout" custom={slide}>
+              <ChordPane key={chord?.id} slide={slide} transition={spring('smooth', 'chordSlide')}>
+                <ChordHeader
+                  chord={chord}
+                  info={info}
+                  edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
+                  onDone={() => setChordEdit(null)}
+                />
+                <SidebarTabs
+                  chordId={chord?.id ?? ''}
+                  state={state}
+                  windowId={windowId}
+                  activeId={activeId}
+                  info={info}
+                  appearance={appearance}
+                  spring={spring}
+                />
+              </ChordPane>
+            </AnimatePresence>
 
-          {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
+            {(!collapsed || peeking) && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
 
-          <ChordSwitcher
-            state={state}
-            windowId={windowId}
-            info={info}
-            pill={spring('snappy', 'chordSlide')}
-            leading={
-              <>
-                {!isPrivate && archiveButton}
-                {downloadsButton}
-              </>
-            }
-            onCreate={isPrivate ? null : () => void createChord()}
-          />
+            {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
+
+            <ChordSwitcher
+              state={state}
+              windowId={windowId}
+              info={info}
+              pill={spring('snappy', 'chordSlide')}
+              leading={
+                <>
+                  {!isPrivate && archiveButton}
+                  {downloadsButton}
+                </>
+              }
+              onCreate={isPrivate ? null : () => void createChord()}
+            />
+          </SidebarDnd>
+          {!collapsed && <ResizeHandle width={sidebarWidth} windowId={windowId} onLive={setLiveWidth} />}
         </nav>
 
         {/* The top bar: right of the sidebar on Windows/Linux; the whole minimal bar when collapsed (DESIGN.md §3.3). */}
@@ -256,7 +402,7 @@ export function App({ info: infoSource, mirror }: { info: Live<SystemInfo>; mirr
           <div className={styles.bar}>
             {collapsed && (
               <div className={styles.barLead}>
-                <SidebarToggle collapsed info={info} onToggle={toggleSidebar} />
+                <SidebarToggle collapsed info={info} onToggle={toggleSidebar} onHover={hoverToggle} />
                 <NavButtons live={live} hasTab={Boolean(active)} info={info} />
               </div>
             )}
