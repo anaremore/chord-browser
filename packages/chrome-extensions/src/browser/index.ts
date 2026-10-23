@@ -1,3 +1,4 @@
+// Modified by Chord contributors, 2026-10-22: the preloadPath option, and getActionState(), getActionIcon(), activateAction(), getActionMenuItems() and enableStaticRulesets() for the app. See CHORD-CHANGES.md in this package.
 import { session as electronSession } from 'electron'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
@@ -76,6 +77,9 @@ export interface ChromeExtensionOptions extends ChromeExtensionImpl {
    * @deprecated See "Packaging the preload script" in the readme.
    */
   modulePath?: string
+
+  /** Chord: where the bundled preload is (the app builds it). */
+  preloadPath?: string
 }
 
 const sessionMap = new WeakMap<Electron.Session, ElectronChromeExtensions>()
@@ -174,7 +178,7 @@ export class ElectronChromeExtensions extends EventEmitter {
     }
 
     this.listenForExtensions()
-    this.prependPreload(opts.modulePath)
+    this.prependPreload(opts.modulePath, opts.preloadPath)
   }
 
   private listenForExtensions() {
@@ -184,10 +188,10 @@ export class ElectronChromeExtensions extends EventEmitter {
     })
   }
 
-  private async prependPreload(modulePath?: string) {
+  private async prependPreload(modulePath?: string, knownPreloadPath?: string) {
     const { session } = this.ctx
 
-    const preloadPath = resolvePreloadPath(modulePath)
+    const preloadPath = knownPreloadPath ?? resolvePreloadPath(modulePath)
 
     if ('registerPreloadScript' in session) {
       session.registerPreloadScript({
@@ -282,6 +286,51 @@ export class ElectronChromeExtensions extends EventEmitter {
    */
   async dispatchRuntimeInstalled(extensionId: string, details: chrome.runtime.InstalledDetails) {
     return await this.api.runtime.dispatchInstalled(extensionId, details)
+  }
+
+  /**
+   * Chord: every extension action's state (title, badge, popup, per-tab
+   * overrides) and the active tab, as the library's own toolbar reads it.
+   * 'browser-action-updated' fires when any of it changes.
+   */
+  getActionState() {
+    return this.api.browserAction.getState()
+  }
+
+  /** Chord: an action's icon for a tab at a size in pixels. */
+  getActionIcon(extensionId: string, tabId: number | undefined, size: number) {
+    return this.api.browserAction.getIcon(extensionId, tabId, size)
+  }
+
+  /**
+   * Chord: click an action on a tab: opens its popup (through
+   * `openActionPopup`) or sends `action.onClicked`.
+   */
+  activateAction(
+    extensionId: string,
+    tab: Electron.WebContents,
+    anchorRect: { x: number; y: number; width: number; height: number },
+  ) {
+    this.checkWebContentsArgument(tab)
+    this.api.browserAction.activateClick({ eventType: 'click', extensionId, tabId: tab.id, anchorRect })
+  }
+
+  /** Chord: the extension's own items for its action button's context menu. */
+  getActionMenuItems(extensionId: string): Electron.MenuItem[] {
+    const sessionExtensions = this.ctx.session.extensions || this.ctx.session
+    const extension = sessionExtensions.getExtension(extensionId)
+    if (!extension) return []
+    const mv3 = extension.manifest?.manifest_version === 3
+    return this.ctx.store.buildMenuItems(extensionId, mv3 ? 'action' : 'browser_action')
+  }
+
+  /**
+   * Chord: turn on static declarativeNetRequest rulesets from the extension's
+   * service worker, as Chrome does at install (Electron skips that step).
+   * Resolves once the worker has been sent the request.
+   */
+  async enableStaticRulesets(extensionId: string, rulesetIds: string[]) {
+    return await this.ctx.router.queueAndSendEvent(extensionId, 'chord.enableStaticRulesets', rulesetIds)
   }
 
   /**

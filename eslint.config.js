@@ -26,7 +26,7 @@ export default defineConfig([
     },
   },
   {
-    files: ['**/scripts/**/*.{js,mjs}', 'spikes/**/*.{js,mjs}', '*.config.{js,ts}', 'apps/*/*.config.ts'],
+    files: ['**/scripts/**/*.{js,mjs}', 'spikes/**/*.{js,mjs}', '*.config.{js,ts}', 'apps/*/*.config.ts', 'packages/chrome-extensions/*.mjs'],
     languageOptions: { globals: globals.node },
   },
   {

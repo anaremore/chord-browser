@@ -1,3 +1,4 @@
+// Modified by Chord contributors, 2026-10-22: getIcon(), public getState()/activateClick(), the openActionPopup hook, the browser-action-updated event, and a Uint8Array response body. See CHORD-CHANGES.md in this package.
 import { Menu, MenuItem, protocol, nativeImage, app } from 'electron'
 import { ExtensionContext } from '../context'
 import { PopupView } from '../popup'
@@ -228,40 +229,11 @@ export class BrowserActionAPI {
           const imageSize = parseInt(fragments[2], 10)
           const resizeType = parseInt(fragments[3], 10) || ResizeType.Up
 
-          const sessionExtensions = this.ctx.session.extensions || this.ctx.session
-          const extension = sessionExtensions.getExtension(extensionId)
-
-          let iconDetails: chrome.browserAction.TabIconDetails | undefined
-
-          const action = this.actionMap.get(extensionId)
-          if (action) {
-            iconDetails = (tabId && action.tabs[tabId]?.icon) || action.icon
-          }
-
-          let iconImage
-
-          if (extension && iconDetails) {
-            if (typeof iconDetails.path === 'string') {
-              const iconAbsPath = resolveExtensionPath(extension, iconDetails.path)
-              if (iconAbsPath) iconImage = nativeImage.createFromPath(iconAbsPath)
-            } else if (typeof iconDetails.path === 'object') {
-              const imagePath = matchSize(iconDetails.path, imageSize, resizeType)
-              const iconAbsPath = imagePath && resolveExtensionPath(extension, imagePath)
-              if (iconAbsPath) iconImage = nativeImage.createFromPath(iconAbsPath)
-            } else if (typeof iconDetails.imageData === 'string') {
-              iconImage = nativeImage.createFromDataURL(iconDetails.imageData)
-            } else if (typeof iconDetails.imageData === 'object') {
-              const imageData = matchSize(iconDetails.imageData as any, imageSize, resizeType)
-              iconImage = imageData ? nativeImage.createFromDataURL(imageData) : undefined
-            }
-
-            if (iconImage?.isEmpty()) {
-              d('crx: icon image is empty', iconDetails)
-            }
-          }
+          const iconImage = this.getIcon(extensionId, tabId, imageSize, resizeType)
 
           if (iconImage) {
-            return new Response(iconImage.toPNG(), {
+            // Chord: a Uint8Array body (Buffer isn't a BodyInit in current Node typings).
+            return new Response(new Uint8Array(iconImage.toPNG()), {
               status: 200,
               headers: {
                 'Content-Type': 'image/png',
@@ -281,6 +253,52 @@ export class BrowserActionAPI {
       console.error(e)
       return new Response(null, { status: 500 })
     }
+  }
+
+  /**
+   * Chord: the action's current icon for a tab (or its default) at a size, as
+   * the crx:// protocol serves it. Undefined when there's none.
+   */
+  getIcon(
+    extensionId: string,
+    tabId: string | number | null | undefined,
+    imageSize: number,
+    resizeType: ResizeType = ResizeType.Up,
+  ): Electron.NativeImage | undefined {
+    const sessionExtensions = this.ctx.session.extensions || this.ctx.session
+    const extension = sessionExtensions.getExtension(extensionId)
+
+    let iconDetails: chrome.browserAction.TabIconDetails | undefined
+
+    const action = this.actionMap.get(extensionId)
+    if (action) {
+      iconDetails = (tabId != null && action.tabs[tabId]?.icon) || action.icon
+    }
+
+    let iconImage
+
+    if (extension && iconDetails) {
+      if (typeof iconDetails.path === 'string') {
+        const iconAbsPath = resolveExtensionPath(extension, iconDetails.path)
+        if (iconAbsPath) iconImage = nativeImage.createFromPath(iconAbsPath)
+      } else if (typeof iconDetails.path === 'object') {
+        const imagePath = matchSize(iconDetails.path, imageSize, resizeType)
+        const iconAbsPath = imagePath && resolveExtensionPath(extension, imagePath)
+        if (iconAbsPath) iconImage = nativeImage.createFromPath(iconAbsPath)
+      } else if (typeof iconDetails.imageData === 'string') {
+        iconImage = nativeImage.createFromDataURL(iconDetails.imageData)
+      } else if (typeof iconDetails.imageData === 'object') {
+        const imageData = matchSize(iconDetails.imageData as any, imageSize, resizeType)
+        iconImage = imageData ? nativeImage.createFromDataURL(imageData) : undefined
+      }
+
+      if (iconImage?.isEmpty()) {
+        d('crx: icon image is empty', iconDetails)
+        iconImage = undefined
+      }
+    }
+
+    return iconImage
   }
 
   private getAction(extensionId: string) {
@@ -342,7 +360,7 @@ export class BrowserActionAPI {
     }
   }
 
-  private getState() {
+  getState() {
     // Get state without icon data.
     const actions = Array.from(this.actionMap.entries()).map(([id, details]) => {
       const { icon, tabs, ...rest } = details
@@ -385,7 +403,7 @@ export class BrowserActionAPI {
     }
   }
 
-  private activateClick(details: ActivateDetails) {
+  activateClick(details: ActivateDetails) {
     const { extensionId, tabId, anchorRect, alignment } = details
 
     if (this.popup) {
@@ -410,6 +428,12 @@ export class BrowserActionAPI {
       const win = this.ctx.store.tabToWindow.get(tab)
       if (!win) {
         throw new Error('Unable to get BrowserWindow from active tab')
+      }
+
+      // Chord: the app shows popups in its own view when it implements this.
+      if (typeof this.ctx.store.impl.openActionPopup === 'function') {
+        this.ctx.store.impl.openActionPopup({ extensionId, tab, window: win, url: popupUrl, anchorRect })
+        return
       }
 
       this.popup = new PopupView({
@@ -524,6 +548,8 @@ export class BrowserActionAPI {
     this.queuedUpdate = true
     queueMicrotask(() => {
       this.queuedUpdate = false
+      // Chord: the app renders action buttons from getState(), so it needs every change.
+      this.ctx.emit('browser-action-updated')
       if (this.observers.size === 0) return
       d(`dispatching update to ${this.observers.size} observer(s)`)
       Array.from(this.observers).forEach((observer) => {

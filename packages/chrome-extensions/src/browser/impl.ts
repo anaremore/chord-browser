@@ -1,3 +1,4 @@
+// Modified by Chord contributors, 2026-10-22: the openActionPopup hook. See CHORD-CHANGES.md in this package.
 /** App-specific implementation details for extensions. */
 export interface ChromeExtensionImpl {
   createTab?(
@@ -19,4 +20,17 @@ export interface ChromeExtensionImpl {
     extension: Electron.Extension,
     permissions: chrome.permissions.Permissions,
   ): Promise<boolean>
+
+  /**
+   * Chord: show an extension action's popup. When implemented, the library
+   * calls this instead of opening its own popup window. `anchorRect` is what
+   * the caller passed (window-relative), when it knows one.
+   */
+  openActionPopup?(details: {
+    extensionId: string
+    tab: Electron.WebContents
+    window: Electron.BaseWindow
+    url: string
+    anchorRect: { x: number; y: number; width: number; height: number }
+  }): void
 }

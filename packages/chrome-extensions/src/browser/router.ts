@@ -1,3 +1,4 @@
+// Modified by Chord contributors, 2026-10-22: queueAndSendEvent() waits for the target extension's listener. See CHORD-CHANGES.md in this package.
 import { app, ipcMain, Session } from 'electron'
 import debug from 'debug'
 import { EventEmitter } from 'node:events'
@@ -438,11 +439,15 @@ export class ExtensionRouter {
     ...args: any[]
   ) {
     const { listeners } = this
-    let eventListeners = listeners.get(eventName)
+    // Chord: wait for the target extension's own listener. Another extension's listener for
+    // the same event used to end the wait, and the event was then sent to no one.
+    const hasTargetListener = () =>
+      (listeners.get(eventName) ?? []).some(
+        (listener) => targetExtensionId === undefined || listener.extensionId === targetExtensionId,
+      )
 
-    while (!eventListeners || eventListeners.length === 0) {
+    while (!hasTargetListener()) {
       await this.waitForListener(targetExtensionId, eventName)
-      eventListeners = listeners.get(eventName)
     }
 
     return await this.sendEventAsync(targetExtensionId, eventName, ...args)

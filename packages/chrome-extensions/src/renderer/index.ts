@@ -1,3 +1,4 @@
+// Modified by Chord contributors, 2026-10-22: the chord.enableStaticRulesets listener in extension service workers. See CHORD-CHANGES.md in this package.
 import { ipcRenderer, contextBridge, webFrame } from 'electron'
 import { addExtensionListener, removeExtensionListener } from './event'
 
@@ -752,6 +753,19 @@ export const injectExtensionAPIs = (runInMainWorld: boolean) => {
         value: chrome,
         enumerable: true,
         configurable: true,
+      })
+    }
+
+    // Chord: turn on static declarativeNetRequest rulesets when the app asks,
+    // at install or update. Chrome does this itself; Electron skips that step.
+    const workerScope = (globalThis as any).ServiceWorkerGlobalScope
+    if (!isContentScript && extensionId && typeof workerScope === 'function' && globalThis instanceof workerScope) {
+      electron.addExtensionListener(extensionId, 'chord.enableStaticRulesets', (ids: unknown) => {
+        const dnr = (chrome as any).declarativeNetRequest
+        if (!dnr?.updateEnabledRulesets || !Array.isArray(ids) || ids.length === 0) return
+        Promise.resolve(dnr.updateEnabledRulesets({ enableRulesetIds: ids })).catch((error: unknown) => {
+          console.error('Enabling static rulesets failed', error)
+        })
       })
     }
 

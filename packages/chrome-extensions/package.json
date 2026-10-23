@@ -1,0 +1,25 @@
+{
+  "name": "@chord/chrome-extensions",
+  "private": true,
+  "version": "4.9.5",
+  "description": "Chrome extension APIs for Electron: a vendored copy of the iamEvanYT fork of electron-chrome-extensions (GPL-3.0). See README.md.",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.ts"
+    },
+    "./preload": "./src/preload.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "types": "node build-types.mjs"
+  },
+  "dependencies": {
+    "debug": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.300"
+  }
+}
