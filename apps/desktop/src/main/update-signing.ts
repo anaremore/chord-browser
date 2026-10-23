@@ -16,7 +16,7 @@ export const RELEASE_DOWNLOADS = 'https://github.com/anaremore/chord-browser/rel
 
 /**
  * The manifest for this build, or null where Chord can't install updates
- * itself: macOS (unsigned apps can't update in place) and anything else.
+ * itself: macOS (no Mac updater yet, docs/releasing/signing.md) and anything else.
  * Linux names are electron-builder's own; Windows builds of each architecture
  * are made on their own runners, so the release workflow renames their
  * `latest.yml` to keep them apart.

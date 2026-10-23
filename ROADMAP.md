@@ -58,20 +58,22 @@ A milestone is done when all of these hold:
 | **3 · Links from everywhere** | — | Feb 2027 | send a site's links to the right chord, install from Flathub or apt/dnf, update in place, go Google-free |
 | **4 · Deeper** | — | Mar 2027 + | install signed builds that update themselves on every OS |
 
-## Where we are (updated 2026-10-22)
+## Where we are (updated 2026-10-23)
 
-Phase 1 is well ahead of the dates above. Every item marked done is on `main`, with unit and E2E tests, and the six release targets build and pass their smoke tests.
+Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every item marked done has unit and E2E tests, and the six release targets build and pass their smoke tests.
 
 | Milestone | Done | In progress | Left |
 |---|---|---|---|
 | M1.0 Foundations | all | | |
 | M1.1 Browsing shell | tabs, find, downloads, permission prompts, error and crash pages, sign-in popups, session restore, keyboard routing (S8) | | |
 | M1.2 Sidebar | Pinned/Today, folders, Favorites, drag and drop, resize, Clear Today, keyboard navigation, minimal bar with peek | | arc animation on archive |
-| M1.3 Chords | chords, icons, themes and the theme library, separate sign-ins, moving tabs across chords | trackpad swipe, color wheel and *Surprise me* | |
+| M1.3 Chords | chords, icons, themes and the theme library, color wheel and *Surprise me*, separate sign-ins, moving tabs across chords, trackpad swipe | | trackpad swipe checked by hand on a Mac |
 | M1.4 Command bar + archive | ranking with learned picks, history, completion, suggestions, site keywords, `@` filters, archive, sleeping tabs, ⌘⇧T | | |
-| M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows | PDFs, spellcheck, screen sharing, site permissions page, **editable shortcuts** (moved up from Phase 3) | real password-manager sign-in checks |
-| M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check | CI green on every OS, macOS hands-on on your MacBook | accessibility pass, design QA sweep, performance budgets, the 0.1 release |
-| Phase 2 | Duet (chat that can read the browser; on its branch, waiting to merge) | Codex's live-turn checks (S5, after its usage limit resets Nov 16) | split view, mini window, Peek, hover previews, Electron 46 |
+| M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows, PDFs, spelling, screen sharing, site permissions, zoom per site, **editable shortcuts** | | real password-manager sign-in checks (by hand) |
+| M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check, macOS hands-on (2026-10-22 report) | CI green on every OS, accessibility pass, performance budgets | design QA sweep, macOS re-run, the 0.1 release |
+| Phase 2 | Duet, split view, mini window, Peek, hover previews | Codex's live-turn checks (S5, after its usage limit resets Nov 16) | Electron 46 (stable 2027-01-05) |
+| Phase 3 | link routes, in-app updates (Ed25519-signed manifests; needs your signing key), Google-free mode | Flathub, apt/dnf repos, the 72-hour patch runbook | D7 Safe Browsing (your call) |
+| Phase 4 | signing and notarization in the release workflow, off until your certificates exist; a Microsoft Store draft | | your certificates ([docs/releasing/signing.md](docs/releasing/signing.md)), Mac in-app updates, Electron 47, compact density |
 
 ---
 
@@ -279,6 +281,14 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 ## Phase 4 — Deeper · March 2027 onward
 
 - **Code signing and notarization.** This unlocks macOS auto-update and removes the Gatekeeper and SmartScreen steps. An optional Microsoft Store (MSIX) channel.
+  - **Built 2026-10-23, off until your certificates exist** (ARCHITECTURE.md §15.2). Once the secrets are in the `release` environment, a tag build signs and checks itself, with no code change:
+    - macOS: Developer ID and the hardened runtime, notarized with an App Store Connect API key.
+    - Windows: Azure Artifact Signing, or a `.pfx`.
+    - Checks that stop a release that should be signed and isn't. Unsigned builds stay exactly as they are, and so do their in-app updates.
+  - **Your part:** [docs/releasing/signing.md](docs/releasing/signing.md) has the steps:
+    - Apple Developer Program, US$99 a year: about two days for an individual, longer for an organization.
+    - Artifact Signing, US$9.99 a month: 1–20 business days of identity validation. Individuals must be in the US or Canada.
+  - **Still to do:** Mac in-app updates (what they'd take is in that doc), and a Store submission. The Store package is drafted and builds, but is off.
 - **Electron 47** (around March 2027), compact density, and whatever Phase 1–3 use teaches us.
 
 ## Not planned (decided 2026-10-22)

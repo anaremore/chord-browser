@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for Chord's helper apps (Chord Helper, Renderer, GPU and Plugin) in Developer ID
+  builds. See entitlements.developer-id.plist for the app itself.
+
+  - allow-jit: renderers run V8, the GPU helper compiles shaders, and chord-data, a utility
+    process in the plain Chord Helper, runs Node's V8 (src/main/persistence.ts).
+
+  Camera, microphone and location stay on the app alone. macOS checks them on the responsible
+  process, which is Chord.app, as in Chrome's helper entitlements.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+  </dict>
+</plist>

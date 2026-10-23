@@ -78,6 +78,7 @@ Use the packaged app: either `apps/desktop/release/mac-arm64/Chord.app`, or the 
    - ✕ pauses the video and leaves you where you are.
    - Check it over a full-screen app and across Spaces.
 10. **Updates:** after installing a newer build over an older one, macOS may ask about *Chord Safe Storage* in the keychain. Always Allow should work, and your tabs should still be there.
+11. **Camera, microphone and location:** allow a site's request in Chord (a Meet test call, then a map's *show my location*). macOS asks once for each, in Chord's words ("Sites you allow can…"), and the site works after you allow it.
 
 ## Reporting
 

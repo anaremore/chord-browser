@@ -836,7 +836,7 @@ Electron security advisories **only cover Electron's own bugs**. Chromium fixes 
 | 0 h | Electron publishes a patched release. Precedent: a V8 zero-day was fixed in Chrome on 2025-06-30 and in Electron 37.2.0 on 2025-07-02 ✅. Its notes said only "Updated Chromium to 138.0.7204.97" ✅. | |
 | ≤ 1 h | Watcher opens an issue; Renovate PR is up | Automated. If the dashboard tick doesn't take, the PR comes within 4 h. |
 | ≤ 8 h | CI green on the full matrix (unit, E2E on macOS, Windows, Linux X11, Linux Wayland, arm64 + x64); Renovate automerges | Automated |
-| ≤ 12 h | Tag `vX.Y.Z` → release workflow builds, signs, notarizes, and signs manifests | Builds only; signing is deferred (§15.2) |
+| ≤ 12 h | Tag `vX.Y.Z` → release workflow builds, signs, notarizes, and signs manifests | Builds and signs manifests. Code signing and notarization are built and turn on once the certificates exist (§15.2). |
 | ≤ 24 h | Publish at `stagingPercentage: 20`; Flathub PR opened; apt/rpm repos updated | Publish only; the rest arrives in Phase 3 |
 | ≤ 48 h | Staged rollout → 100% after crash-free check (local crash logs only, since there is no telemetry; we watch issue reports) | Phase 3 |
 | ≤ 72 h | All channels patched: GitHub/updater, Cloudsmith repos, Flathub merged | GitHub Release only |
@@ -850,7 +850,7 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
 | Platform | Mechanism | Integrity |
 |---|---|---|
 | macOS | electron-updater (dmg plus **zip**, needed by Squirrel.Mac) | Squirrel.Mac checks the update against the running app's code-signing requirement ✅, plus sha512, **plus Chord's Ed25519 manifest signature** |
-| Windows | electron-updater with NSIS, differential via blockmap | Authenticode signer must match `publisherName` ✅ (⚠ the check is skipped if PowerShell can't run, so the Ed25519 check is the backstop), plus sha512, plus Ed25519 |
+| Windows | electron-updater with NSIS, differential via blockmap | Authenticode signer must match `publisherName` ✅ (⚠ the check is skipped if PowerShell can't run, so the Ed25519 check is the backstop), plus sha512, plus Ed25519. electron-updater reads `publisherName` from the installed copy's `app-update.yml`, even with Chord's custom provider ✅ (its source). Only signed builds write one, so unsigned copies keep installing unsigned updates (§15.2). |
 | Linux AppImage | electron-updater, differential | sha512 only upstream ✅ → **Chord's Ed25519 check is required** |
 | Linux deb/rpm | Signed apt/yum repos on **Cloudsmith** (OSS tier: 50 GB storage, 200 GB/month ✅). The in-app updater only notifies, because electron-updater's deb/rpm install uses `--allow-unauthenticated` / `--nogpgcheck` ✅. | GPG-signed repo metadata (`Signed-By`) |
 | Flatpak | Flathub | Flathub's GPG-verified remotes ✅ |
@@ -867,7 +867,7 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
   - **What you see:** a toast "Chord 0.2.0 is ready · Restart to update", and the same in About. A ready update also installs when you quit.
   - **Falls back to notify-only** when the manifest is unsigned or signed by another key, can't be fetched, or has no file for this build. It also stays notify-only on the `.deb` (its package manager updates it), unpacked folders, development builds, and any build made before the key existed.
   - ⚠ **No rollback.** The one-click installer and the AppImage replace Chord in place, and nothing here plans a rollback (the extension rollback in §12 is a different thing). If a new version won't start, you reinstall from the release page.
-- **macOS:** stays notify-and-download until it's signed.
+- **macOS:** stays notify-and-download, signed or not, until a Mac updater is built. What it would take on this manifest flow (per-arch `latest-mac-<arch>.yml`, signed like the others, and a check that the copy is Developer ID-signed and in a writable place) is in [docs/releasing/signing.md](docs/releasing/signing.md#macos-in-app-updates-not-built-yet). Ad-hoc copies can never update in place to a signed build: Squirrel.Mac wants the same designated requirement, and theirs is their own hash.
 
 **Ed25519 manifest signing** (built):
 - **Signing:** the release workflow signs each manifest an installed copy reads (`latest-win-<arch>.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`) with the `CHORD_UPDATE_SIGNING_KEY` secret, held in the protected `release` environment (`scripts/sign-update-manifests.mjs`).
@@ -903,12 +903,12 @@ In the packages:
 
 | Platform | Artifact | Notes |
 |---|---|---|
-| macOS | Signed, notarized **universal** (arm64 + x64) `.dmg` + `.zip` | Developer ID; notarization via notarytool API key. electron-builder's docs say to base64 the key, but the code wants a **file path**: write the `.p8` to disk in CI ✅. Entitlements start with `allow-jit` only and are added only when a test fails ✅. Icon: Icon Composer `.icon` for macOS 26 Liquid Glass, supported since electron-builder PR #9279 ✅. |
+| macOS | Signed, notarized **universal** (arm64 + x64) `.dmg` + `.zip` | Developer ID; notarization via notarytool API key. electron-builder's docs say to base64 the key, but 26.18's code wants a **file path** (base64 arrives in v27): the release workflow writes the `.p8` to disk ✅. Entitlements, as few as Chord uses, each explained in the file: `allow-jit` for the app and its helpers; camera, microphone and location on the app alone, because sites can ask for them (`build/entitlements.developer-id.plist`, `.inherit.plist`). Screen sharing and the keychain need none (§15.2). Icon: Icon Composer `.icon` for macOS 26 Liquid Glass, supported since electron-builder PR #9279 ✅. |
 | Windows | **NSIS**, per-user, one combined x64 + arm64 installer ✅ | Recommended over MSIX: it works with electron-updater, has no virtualized AppData surprises, and uses classic default-browser registration through a custom NSIS include (electron-builder writes none of those keys ✅). MSIX can declare a browser via `uap3:Protocol` ✅ but updates only through the Store or App Installer. A future Store channel would come from the same build. |
 | Linux | **deb + rpm** (primary, Cloudsmith repos), **Flatpak** (Flathub, built from source with `org.electronjs.Electron2.BaseApp` + zypak ✅), **AppImage** | electron-builder's deb/rpm post-install adds an AppArmor `userns` profile or a setuid `chrome-sandbox` as needed ✅. **AppImage:** electron-builder's launcher silently adds `--no-sandbox` when user namespaces are blocked (Ubuntu 23.10+) ✅. `app.enableSandbox()` drops that switch ([§14.1](#141-hardening)), so Chord **never runs unsandboxed**. A dialog that explains this and points the user to the deb or Flatpak is still to do. |
 
 **Preview builds today** (unsigned, [§15.2](#152-code-signing)) differ from the table above:
-- **One artifact per OS and architecture**, each built on its own native runner so it can be smoke-tested there: `Chord-<version>-win-<arch>-setup.exe`, `Chord-<version>-mac-<arch>.dmg` and `.zip`, `Chord-<version>-linux-<arch>.AppImage` and `.deb` (Linux names x64 `x86_64` or `amd64`). A universal Mac app or a combined Windows installer would double every download. Revisit when signing arrives.
+- **One artifact per OS and architecture**, each built on its own native runner so it can be smoke-tested there: `Chord-<version>-win-<arch>-setup.exe`, `Chord-<version>-mac-<arch>.dmg` and `.zip`, `Chord-<version>-linux-<arch>.AppImage` and `.deb` (Linux names x64 `x86_64` or `amd64`). A universal Mac app or a combined Windows installer would double every download. Signing works per architecture too (each Mac runner notarizes its own build), so this stays.
 - **No rpm yet.** Flatpak and package repos stay in Phase 3.
 - **AppImage uses electron-builder's static runtime** (`toolsets.appimage: '1.0.3'`, which electron-builder labels beta). The default runtime needs libfuse2, which Ubuntu 22.04 and later don't install. ✅ The static one ran Chord on Ubuntu 22.04 (WSL) without libfuse2, and is 8 MB smaller. Where user namespaces are blocked, the AppImage won't start (⚠ how it fails is unverified), and the README sends those users to the deb.
 - **deb:** electron-builder's post-install installs an AppArmor `userns` profile ✅ (present in the built package). ⚠ That it lets the sandbox run on Ubuntu 24.04 is checked by the release workflow's install smoke test, which hasn't run yet.
@@ -918,21 +918,50 @@ In the packages:
 
 ### 15.2 Code signing
 
-> **Deferred (decided 2026-10-22): focus on open source first.** Until signing is set up, builds ship unsigned. Consequences we design around:
+> **Built 2026-10-23, and off until the certificates exist** (decision D3: open source first). The release workflow signs, notarizes and checks each build by itself once the signing secrets are in the protected `release` environment, with no code change. Until then builds ship unsigned. The maintainer's steps, costs and secret names are in [docs/releasing/signing.md](docs/releasing/signing.md). While builds are unsigned, Chord designs around this:
 >
 > | Platform | Unsigned behavior | What Chord does |
 > |---|---|---|
 > | macOS | Gatekeeper blocks first launch. On macOS 15+ the user must allow it under System Settings → Privacy & Security → *Open Anyway*. **Squirrel.Mac can't auto-update unsigned apps.** Apple Silicon requires at least an ad-hoc signature to run at all. electron-builder 26.18 has no automatic ad-hoc fallback: without an identity it skips signing ✅ (its option docs and source). So Chord sets `mac.identity: '-'` (ad-hoc) and `hardenedRuntime: false`, because with an ad-hoc identity the hardened runtime's library validation rejects Electron's frameworks ✅ (electron-builder's docs and warning). Hardened runtime and `allow-jit` come back with Developer ID signing. ⚠ That the ad-hoc build launches on Apple Silicon is checked by the release workflow on `macos-26` (`codesign --verify`, then the smoke test), which hasn't run yet. ⚠ Cookie encryption keeps its key in the keychain, and keychain access is tied to the code signature. An ad-hoc signature changes with every build, so macOS may ask to allow *Chord Safe Storage* after an update. | Install steps in the README (*Try the preview*); screenshots to come. In-app update is notify-and-download only. |
 > | Windows | SmartScreen shows "Windows protected your PC" → *More info* → *Run anyway*. | Install steps in the README; electron-updater still works (no `publisherName` pin), integrity comes from the Ed25519 manifest check. |
 > | Linux | Unaffected: AppImage/deb/rpm don't use OS code signing; repos and Flathub use free GPG signing. | Normal. |
->
-> Everything below is the plan for when signing is switched on (roadmap Phase 4). Each piece is additive, so nothing built now has to change.
 
-| Platform | Plan |
+**How a build gets signed.** The release workflow's *Choose how to sign* step (`apps/desktop/scripts/signing-mode.mjs`) sees only whether each secret is set. From that it picks `CHORD_SIGNING`, which `electron-builder.config.ts` turns into electron-builder options:
+
+| `CHORD_SIGNING` | Turns on with | electron-builder | Checked before upload |
+|---|---|---|---|
+| `none` (no secrets, and every manual run) | | Exactly as before: macOS `identity: '-'`, `hardenedRuntime: false`; Windows unsigned, so `app-update.yml` pins no publisher | ad-hoc `codesign --verify`. Windows: fails if `app-update.yml` pins a publisher, since unsigned copies would then refuse unsigned updates. |
+| `developer-id` | `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | Developer ID from `CSC_LINK`'s keychain, hardened runtime, the entitlements in §15.1, `notarize: true` (notarytool with the API key, ticket stapled) | `codesign --verify --deep --strict`, a Developer ID authority, the `runtime` flag, `spctl -a -vv` = *Notarized Developer ID*, and `stapler validate`, on the app and on the copies in the `.dmg` and `.zip` |
+| `artifact-signing` | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, plus variables `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`, `WIN_PUBLISHER_NAME` | `win.azureSignOptions`, which uses the `TrustedSigning` PowerShell module; `signExts: ['.dll']`; `publisherName` pinned | `Get-AuthenticodeSignature`: `Valid`, timestamped, and signed by the pinned publisher. Run on the installer and on the installed `Chord.exe`, uninstaller and DLLs. |
+| `certificate` | `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` | signtool, SHA-256 only, publisher from the certificate's CN | the same |
+
+- A set that's only partly configured fails the build rather than shipping it unsigned.
+- After the first signed release, the variable `CHORD_REQUIRE_SIGNING` makes a tag build without its secrets fail as well.
+- Signing secrets reach only the one *Package* step that uses them, never `pnpm install`.
+
+**What electron-builder 26.18 does on its own** ✅ (its source):
+- **Entitlements:** without `entitlements` set, it applies `build/entitlements.mac.plist` if that exists. Otherwise it uses its own template (`allow-jit`, `allow-unsigned-executable-memory`, `disable-library-validation`), on every build, ad-hoc included. Chord's files are therefore named `entitlements.developer-id*.plist` and only the signed config points at them, so ad-hoc builds keep exactly the entitlements they had.
+- **Notarization:** it notarizes whenever `APPLE_*` credentials are in the environment, unless `notarize: false`. It also treats an empty `CSC_LINK` as set. So the workflow sets them only inside the signed step.
+- **Windows:** it signs `.exe` files only. Electron's own `@electron/windows-sign` signs `.dll`s too, so Chord adds them. `publisherName` comes from `azureSignOptions.publisherName`, which the service can't supply, or from the `.pfx`'s CN. Without a certificate there's none.
+
+**Keychain:** Chromium's *Chord Safe Storage* item lives in the login keychain and needs no entitlement. Its access list trusts the app's designated requirement. For a Developer ID that's the Team ID and bundle ID, which stay the same from build to build, so signed updates stop asking. The first signed build asks once, because the item still trusts the last ad-hoc hash.
+
+**Verified locally (Windows x64, 2026-10-23):**
+- The unsigned installer builds as before, and its `app-update.yml` is byte-identical to the previous config's.
+- `test:packaged` passes on the unpacked build and on the installer's payload.
+- The drafted Store package builds through makeappx.
+
+**Unverified until real certificates:**
+- ⚠ Everything signed.
+- ⚠ The `TrustedSigning` module on the `windows-11-arm` runner.
+- ⚠ That a job environment named `''` means none (manual runs).
+
+| Platform | Identity |
 |---|---|
-| macOS | Apple Developer Program membership (decision D3). |
-| Windows | **Azure Artifact Signing** (formerly Trusted Signing): $9.99/month, `win.azureSignOptions` ✅. Individuals are eligible **only in the US or Canada**; organizations in more countries. Validation takes 1–20 business days. Fallback: **SignPath Foundation** (free for OSS, but requires an existing release history, manual approval per release, and the cert subject reads "SignPath Foundation") ✅. EV certificates no longer give instant SmartScreen reputation ✅. We keep one signing identity forever, because `publisherName` pins it for updates. |
-| Linux | GPG key for repos and for AppImage detached signatures; Ed25519 update key. |
+| macOS | Apple Developer Program, US$99 a year (decision D3). A **Developer ID Application** certificate, and an **App Store Connect API key** for notarytool, which electron-builder recommends for CI ✅. In-place updates need the same Team ID forever (Squirrel.Mac). |
+| Windows | **Azure Artifact Signing** (formerly Trusted Signing): $9.99/month, `win.azureSignOptions` ✅. Individuals are eligible **only in the US or Canada**; organizations in more countries. Validation takes 1–20 business days. Fallbacks: a `.pfx` (`WIN_CSC_LINK`), though new publicly trusted certificates have come only on hardware since June 2023 ✅; or **SignPath Foundation** (free for OSS, but requires an existing release history, manual approval per release, and the cert subject reads "SignPath Foundation") ✅. EV certificates no longer give instant SmartScreen reputation ✅. We keep one signing identity forever, because `publisherName` pins it for updates. |
+| Windows Store | Optional, drafted and off: an `appx` block in the config, built by hand with `--win appx`. The Store signs and updates its own copies. Registration is free for individuals ✅. Steps and open questions are in docs/releasing/signing.md. |
+| Linux | GPG key for repos and for AppImage detached signatures; Ed25519 update key. Cloudsmith keeps its own key per repository, so this workflow provides none. |
 
 ### 15.3 Releases come only from CI
 
@@ -947,9 +976,10 @@ Tags `v*` trigger `release.yml`. It can also be run by hand, which builds and te
 4. **Upload a draft prerelease** with `SHA256SUMS.txt`. The only write permission is `contents: write`, on that job.
 5. **A maintainer publishes.**
 
-When code signing arrives (Phase 4), these steps slot in after the build:
-- Sign through the same **protected GitHub Environment** (`release`). Signing secrets are available only to tag builds on `main`, with required reviewers.
-- Notarize.
+Code signing (Phase 4, §15.2) is built into step 1 and switches on once its secrets exist:
+- Tag builds run in the same **protected GitHub Environment** (`release`), so the signing secrets reach only reviewed tag builds. A tag waits for approval twice: once before the builds, once before the draft.
+- electron-builder signs, and on macOS notarizes, as it packages.
+- The signatures are checked before the smoke test, and a build that should be signed and isn't stops the release.
 
 A laptop never holds signing keys.
 
@@ -995,7 +1025,7 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 |---|---|---|
 | **D1** | Extension library license | **Decided 2026-10-22: (a).** Chord's source is MIT. `core/rank.ts` stays MPL-2.0 because it comes from Crest. Release binaries that include the extensions library are a GPL-3 combined work: they ship the GPL-3 text and point to the source at the release tag. MIT is GPL-compatible, and so is MPL-2.0 (§3.3). The alternatives were (b) the Patron License, an ongoing sponsorship that keeps binaries non-GPL, and (c) our own `chrome.*` layer, months of work. The `ExtensionHost` seam keeps both open. Not legal advice. |
 | **D2** | Duet provider access | **Decided:** no provider agreement. Users run `claude auth login` / `codex login` themselves, as with T3 Code (§11.1). |
-| **D3** | Code signing | **Deferred:** open source first, unsigned builds, with the consequences handled in §15.2. Signing becomes roadmap Phase 4. |
+| **D3** | Code signing | **Deferred:** open source first, unsigned builds, with the consequences handled in §15.2. Signing is roadmap Phase 4. **Built 2026-10-23:** the release workflow signs and notarizes as soon as the certificates are in the `release` environment ([docs/releasing/signing.md](docs/releasing/signing.md)). Buying them is the maintainer's call. |
 | **D4** | DRM (Netflix, Spotify, Disney+) | **Open; needed by M1.6.** (a) Stock Electron: no Widevine, fastest security patches. (b) castLabs ECS: Widevine on macOS/Windows, none on Linux. Its latest stable is 44.5.1+wvcus (2026-10-03) while upstream 44 is at 44.9.3, so it trails on patches. **Recommendation: (a) for v1**, with honest copy. |
 | **D5** | Ad blocking | **Decided 2026-10-22: none built in.** Users who want it install uBlock Origin Lite from the Web Store. Spike S9 showed Electron 45 does support `declarativeNetRequest`, and uBO Lite blocks ads in Chord. |
 | **D6** | Default search engine | **Decided:** Google; others selectable. |
