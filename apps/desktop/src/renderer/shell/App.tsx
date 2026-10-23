@@ -17,6 +17,7 @@ import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extension
 import { Onboarding } from './Onboarding';
 import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
+import type { ToastStore } from './toast-store';
 
 /** What the frame shows when a page didn't load (DESIGN.md §9), instead of a blank page. */
 function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadError; canGoBack: boolean; windowId: string; tabId: string }) {
@@ -185,7 +186,7 @@ function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab:
   );
 }
 
-export function App({ info: infoSource, mirror }: { info: Live<SystemInfo>; mirror: Mirror }) {
+export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInfo>; mirror: Mirror; toasts: ToastStore }) {
   const info = useLive(infoSource);
   const state = useMirror(mirror);
   const windowId = mirror.windowId;
@@ -376,7 +377,7 @@ export function App({ info: infoSource, mirror }: { info: Live<SystemInfo>; mirr
               </ChordPane>
             </AnimatePresence>
 
-            {(!collapsed || peeking) && <Toasts transition={spring('overlay', 'sidebar')} compact={false} />}
+            {(!collapsed || peeking) && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} />}
 
             {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
 
@@ -432,7 +433,7 @@ export function App({ info: infoSource, mirror }: { info: Live<SystemInfo>; mirr
             <span className={styles.flex} />
             {(inTitleBar || collapsed) && <ExtensionButtons bar={extensionsBar} puzzleOnly={!inTitleBar} />}
             {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
-            {collapsed && <Toasts transition={spring('overlay', 'sidebar')} compact />}
+            {collapsed && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact />}
             {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
             {overlayChrome && (
               <button type="button" className={styles.iconButton} aria-label="Options" aria-haspopup="menu" title="Options" onClick={openOptions}>

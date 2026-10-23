@@ -8,7 +8,7 @@
  */
 import { join } from 'node:path';
 import type { Bounds, WindowId, WindowModel } from '@chord/core';
-import type { OverlayOpenEvent, Rect, Role } from '@chord/ipc';
+import type { OverlayOpenEvent, Rect, Role, Toast } from '@chord/ipc';
 import { size, space, springCurve, springs } from '@chord/tokens';
 import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session } from 'electron';
 import { registerCaller, send } from './ipc';
@@ -107,6 +107,9 @@ export class AppWindow {
   private overlaySeq = 0;
   /** The command bar listens only once it has started; an opening asked for before that waits here. */
   private overlayReady = false;
+  /** Toasts wait for the shell to load: one sent earlier (an update found at launch) would be lost. */
+  private shellLoaded = false;
+  private pendingToasts: Toast[] = [];
   private pendingOpen: { mode: OverlayOpenEvent['mode']; url: string; anchor: Rect | null } | null = null;
   readonly isPrivate: boolean;
   private origin: FrameOrigin;
@@ -177,10 +180,26 @@ export class AppWindow {
     this.shell.webContents.once('did-finish-load', () => {
       if (!this.window.isDestroyed()) this.window.show();
     });
+    this.shell.webContents.on('did-start-loading', () => {
+      this.shellLoaded = false;
+    });
+    this.shell.webContents.on('did-finish-load', () => {
+      this.shellLoaded = true;
+      const pending = this.pendingToasts;
+      this.pendingToasts = [];
+      for (const toast of pending) send(this.shell.webContents, 'toast:show', toast);
+    });
     // Loading again (a reload, or after a crash), the command bar isn't listening until it says so.
     this.overlay.webContents.on('did-start-loading', () => {
       this.overlayReady = false;
     });
+  }
+
+  /** A toast in this window's sidebar (or minimal bar), once its shell can show it. */
+  toast(toast: Toast): void {
+    if (this.shellLoaded) send(this.shell.webContents, 'toast:show', toast);
+    // The same toast again replaces the one waiting, as it would on screen.
+    else this.pendingToasts = [...this.pendingToasts.filter((t) => t.id !== toast.id), toast];
   }
 
   /** Show a tab's view in the content frame (or nothing: the shell's empty state shows through). */

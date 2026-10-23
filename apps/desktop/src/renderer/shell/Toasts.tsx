@@ -9,9 +9,7 @@ import { AnimatePresence, motion, type Transition } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import styles from './App.module.css';
-
-/** At most this many at once; older ones give way. */
-const MAX_TOASTS = 3;
+import { useToasts, type ToastStore } from './toast-store';
 
 function ToastCard({ toast, transition, onDone }: { toast: Toast; transition: Transition; onDone(): void }) {
   const left = useRef<number>(durations.toast);
@@ -54,17 +52,9 @@ function ToastCard({ toast, transition, onDone }: { toast: Toast; transition: Tr
   );
 }
 
-export function Toasts({ transition, compact }: { transition: Transition; compact: boolean }) {
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  useEffect(
-    () =>
-      api.toasts.onShow((toast) =>
-        // The same toast again (deleting twice) replaces the old one rather than stacking.
-        setToasts((all) => [toast, ...all.filter((t) => t.id !== toast.id)].slice(0, MAX_TOASTS)),
-      ),
-    [],
-  );
-  const dismiss = (id: string) => setToasts((all) => all.filter((t) => t.id !== id));
+export function Toasts({ store, transition, compact }: { store: ToastStore; transition: Transition; compact: boolean }) {
+  const toasts = useToasts(store);
+  const dismiss = (id: string) => store.dismiss(id);
   const shown = compact ? toasts.slice(0, 1) : toasts;
   return (
     <div className={compact ? styles.toastsInline : styles.toasts} aria-live="polite">

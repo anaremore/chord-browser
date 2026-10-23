@@ -94,39 +94,6 @@ function startSite(): Promise<{ server: Server; origin: string }> {
   );
 }
 
-// DEBUG (CI, temporary): pids, the app's own output, how closing goes, and leftovers on a reused profile.
-const debugAlive = (pid: number | undefined) => {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-const debugLastPid = new Map<string, number | undefined>();
-function debugApp(app: ElectronApplication, profile: string): ElectronApplication {
-  const pid = app.process().pid;
-  const prev = debugLastPid.get(profile);
-  console.log(`DEBUG launched pid=${pid} profile=${profile.slice(-12)} previousPid=${prev} previousAlive=${debugAlive(prev)}`);
-  debugLastPid.set(profile, pid);
-  const t0 = Date.now();
-  const log = (stream: string) => (chunk: Buffer) => {
-    for (const line of chunk.toString().split(/\r?\n/)) if (line.trim()) console.log(`APP[${pid}] +${Date.now() - t0}ms ${stream}: ${line.slice(0, 300)}`);
-  };
-  app.process().stdout?.on('data', log('out'));
-  app.process().stderr?.on('data', log('err'));
-  app.process().once('exit', (code, signal) => console.log(`DEBUG exit pid=${pid} code=${code} signal=${signal} +${Date.now() - t0}ms`));
-  const close = app.close.bind(app);
-  app.close = async () => {
-    const start = Date.now();
-    console.log(`DEBUG close start pid=${pid}`);
-    await close();
-    console.log(`DEBUG close done pid=${pid} after ${Date.now() - start}ms alive=${debugAlive(pid)}`);
-  };
-  return app;
-}
-
 async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-')), { firstRun = false } = {}): Promise<ElectronApplication> {
   // A fresh profile per launch unless a test reuses one: tests never touch a developer's real data.
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, ...env };
@@ -134,7 +101,7 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
   // Every test but first run's own starts straight in the browser (Chrome's --no-first-run, which
   // Playwright also adds by itself; CHORD_FIRST_RUN=1 asks for first run anyway).
   if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
-  return debugApp(watchForMainErrors(await electron.launch({ args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir })), profile);
+  return watchForMainErrors(await electron.launch({ args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
 }
 
 failOnMainErrors();
@@ -329,42 +296,20 @@ test('page-first keys reach Chord only when the page passes; reserved keys fire 
     };
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
     // Chord is up: the page is a tab in the sidebar.
-    try {
-      await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Keys', { timeout: 10_000 });
-    } catch (error) {
-      // DEBUG (CI): main's state against the shell's.
-      const main = await shell.evaluate(async () => {
-        const snap = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { version: number; chords: object; nodes: object; windows: object } }> } } }).chord.state.snapshot();
-        return { windowId: snap.windowId, version: snap.state.version, chords: Object.keys(snap.state.chords).length, nodes: Object.keys(snap.state.nodes).length, windows: snap.state.windows };
-      });
-      console.log(`DEBUG precondition failed ${JSON.stringify(main)} shellUrl=${shell.url()} pages=${JSON.stringify(app.windows().map((p) => p.url().slice(0, 50)))}`);
-      console.log(`DEBUG shell html ${(await shell.evaluate(() => document.querySelector('nav')?.outerHTML ?? 'no nav')).slice(0, 3000)}`);
-      throw error;
-    }
-
-    // DEBUG (CI): what main and the shell see around the first key.
-    const debug = async (label: string) => {
-      const main = await app.evaluate(({ BaseWindow, webContents }) => ({
-        windows: BaseWindow.getAllWindows().map((w) => ({ id: w.id, focused: w.isFocused(), visible: w.isVisible() })),
-        focusedWindow: BaseWindow.getFocusedWindow()?.id ?? null,
-        focusedContents: webContents.getFocusedWebContents()?.getURL().slice(0, 40) ?? null,
-      }));
-      const dom = await shell.evaluate(() => ({
-        hidden: document.querySelector('nav[aria-label="Sidebar"]')?.getAttribute('aria-hidden'),
-        rows: document.querySelectorAll('[aria-label="Today"] li').length,
-        tabs: document.querySelectorAll('[aria-label="Chords"] [role="tab"]').length,
-      }));
-      console.log(`DEBUG ${label} ${JSON.stringify({ main, dom })}`);
-    };
-    await debug('before');
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Keys');
 
     // The page ignores Ctrl+S, so it falls through to Chord: the sidebar collapses.
     await press('S');
-    for (let i = 0; i < 6; i++) {
-      await debug(`after+${i * 200}ms`);
-      await shell.waitForTimeout(200);
-    }
-    await expect(sidebar).toBeHidden();
+    await expect(sidebar)
+      .toBeHidden()
+      .catch(async (error: Error) => {
+        // Menu accelerators only reach the focused window, so say what had focus.
+        const focus = await app.evaluate(({ BaseWindow, webContents }) => ({
+          window: BaseWindow.getFocusedWindow()?.id ?? null,
+          contents: webContents.getFocusedWebContents()?.getURL().slice(0, 40) ?? null,
+        }));
+        throw new Error(`${error.message}\nFocus when Ctrl+S was sent: ${JSON.stringify(focus)}`);
+      });
     await press('S');
     await expect(sidebar).toBeVisible();
 
@@ -957,15 +902,16 @@ test('many chords: the switcher scrolls sideways with the wheel and keeps the cu
       );
     }
     await expect(strip.getByRole('tab')).toHaveCount(12);
-    // DEBUG: what the strip hears.
+    // For a failure message: the wheel events the strip receives, and whether the page is drawing frames.
     await strip.evaluate((el) => {
-      const log: string[] = ((window as unknown as { __wheelLog: string[] }).__wheelLog = []);
-      el.addEventListener('wheel', (e) => log.push(`wheel dy=${(e as WheelEvent).deltaY} t=${Math.round(performance.now())} scroll=${el.scrollLeft}`), { capture: true });
-      el.addEventListener('scroll', () => log.push(`scroll ${el.scrollLeft} t=${Math.round(performance.now())}`));
-      window.addEventListener('wheel', (e) => log.push(`window wheel target=${(e.target as HTMLElement).tagName}.${(e.target as HTMLElement).className}`), { capture: true });
-      let frames = 0;
-      const tick = () => { frames++; (window as unknown as { __frames: number }).__frames = frames; requestAnimationFrame(tick); };
-      requestAnimationFrame(tick);
+      const seen: string[] = [];
+      (window as unknown as { wheelSeen: string[] }).wheelSeen = seen;
+      el.addEventListener('wheel', (e) => seen.push(`deltaY ${(e as WheelEvent).deltaY} at scroll ${el.scrollLeft}`), { capture: true });
+      const count = () => {
+        (window as unknown as { frames: number }).frames = ((window as unknown as { frames?: number }).frames ?? 0) + 1;
+        requestAnimationFrame(count);
+      };
+      requestAnimationFrame(count);
     });
     const metrics = () => strip.evaluate((el) => ({ scroll: el.scrollLeft, overflow: el.scrollWidth - el.clientWidth, fade: el.dataset['fade'] }));
     // The newest chord is current and scrolled into view, at the end.
@@ -986,13 +932,17 @@ test('many chords: the switcher scrolls sideways with the wheel and keeps the cu
     await shell.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     const before = (await metrics()).scroll;
     await shell.mouse.wheel(0, -200);
-    try {
-      await expect.poll(async () => (await metrics()).scroll).toBeLessThan(before);
-    } catch (error) {
-      const hit = await shell.evaluate(([x, y]) => { const e = document.elementFromPoint(x!, y!); return `${e?.tagName}.${e?.className} role=${e?.getAttribute('role')}`; }, [box.x + box.width / 2, box.y + box.height / 2]);
-      console.log(`DEBUGWHEEL before=${before} hit=${hit} box=${JSON.stringify(box)} vis=${await shell.evaluate(() => document.visibilityState)} frames=${await shell.evaluate(() => (window as unknown as { __frames: number }).__frames)} log=${JSON.stringify(await shell.evaluate(() => (window as unknown as { __wheelLog: string[] }).__wheelLog))}`);
-      throw error;
-    }
+    await expect
+      .poll(async () => (await metrics()).scroll)
+      .toBeLessThan(before)
+      .catch(async (error: Error) => {
+        const why = await shell.evaluate(([x, y]) => {
+          const under = document.elementFromPoint(x!, y!);
+          const w = window as unknown as { wheelSeen: string[]; frames: number };
+          return { under: `${under?.tagName}[role=${under?.getAttribute('role')}]`, wheelSeen: w.wheelSeen, frames: w.frames, visibility: document.visibilityState };
+        }, [box.x + box.width / 2, box.y + box.height / 2]);
+        throw new Error(`${error.message}\nThe strip at the wheel: ${JSON.stringify(why)}`);
+      });
   } finally {
     await app.close();
   }

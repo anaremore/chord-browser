@@ -46,43 +46,10 @@ function startSite(packages: Map<string, Buffer> = new Map()): Promise<{ server:
   return new Promise((done) => server.listen(0, '127.0.0.1', () => done({ server, origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` })));
 }
 
-// DEBUG (CI, temporary): pids, the app's own output, how closing goes, and leftovers on a reused profile.
-const debugAlive = (pid: number | undefined) => {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-const debugLastPid = new Map<string, number | undefined>();
-function debugApp(app: ElectronApplication, profile: string): ElectronApplication {
-  const pid = app.process().pid;
-  const prev = debugLastPid.get(profile);
-  console.log(`DEBUG launched pid=${pid} profile=${profile.slice(-12)} previousPid=${prev} previousAlive=${debugAlive(prev)}`);
-  debugLastPid.set(profile, pid);
-  const t0 = Date.now();
-  const log = (stream: string) => (chunk: Buffer) => {
-    for (const line of chunk.toString().split(/\r?\n/)) if (line.trim()) console.log(`APP[${pid}] +${Date.now() - t0}ms ${stream}: ${line.slice(0, 300)}`);
-  };
-  app.process().stdout?.on('data', log('out'));
-  app.process().stderr?.on('data', log('err'));
-  app.process().once('exit', (code, signal) => console.log(`DEBUG exit pid=${pid} code=${code} signal=${signal} +${Date.now() - t0}ms`));
-  const close = app.close.bind(app);
-  app.close = async () => {
-    const start = Date.now();
-    console.log(`DEBUG close start pid=${pid}`);
-    await close();
-    console.log(`DEBUG close done pid=${pid} after ${Date.now() - start}ms alive=${debugAlive(pid)}`);
-  };
-  return app;
-}
-
 async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'))): Promise<ElectronApplication> {
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, CHORD_E2E_HOOKS: '1', ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return debugApp(watchForMainErrors(await electron.launch({ args: [appDir], env: childEnv, cwd: appDir })), profile);
+  return watchForMainErrors(await electron.launch({ args: [appDir], env: childEnv, cwd: appDir }));
 }
 
 failOnMainErrors();
@@ -105,27 +72,22 @@ async function openSettings(app: ElectronApplication, shell: Page): Promise<Page
 }
 
 test('an extension: told it was installed once, its scripts and rules run, and its button lives in the sidebar shelf', async () => {
-  const t0 = Date.now();
-  const step = (name: string) => console.log(`DEBUG ext +${Date.now() - t0}ms ${name}`);
   const { server, origin } = await startSite();
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   let app = await launch({ CHORD_HOME_URL: `${origin}/`, CHORD_LOAD_EXTENSION: FIXTURE }, profile);
   try {
     const shell = await pageWhere(app, isShell);
     const tab = await pageWhere(app, (url) => url === `${origin}/`);
-    step('launched');
     const shelf = shell.locator('[data-placement="sidebar"]');
     // Pinned by default, in the shelf, with its badge; nothing extension-related in the header.
     await expect(shelf.getByRole('button', { name: 'Chord Test, 7' })).toBeVisible({ timeout: 20_000 });
     await expect(shell.locator('[data-placement="bar"]')).toHaveCount(0);
-    step('shelf ok');
 
     // The content script ran, and the rule the manifest enables blocks (Chord's install step turns it on).
     await expect.poll(() => tab.evaluate(() => document.documentElement.dataset['chordTestExtension'])).toBe('injected');
     const fetchFrom = (path: string) => tab.evaluate((p) => fetch(p).then(() => 'loaded', () => 'blocked'), path);
     await expect.poll(() => fetchFrom('/blocked-by-extension'), { timeout: 20_000 }).toBe('blocked');
     expect(await fetchFrom('/other')).toBe('loaded');
-    step('rules ok');
 
     // Its context-menu item (made in runtime.onInstalled) joins a page's right-click menu.
     const tabId = await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)?.id, `${origin}/`);
@@ -144,7 +106,6 @@ test('an extension: told it was installed once, its scripts and rules run, and i
         [tabId, `${origin}/`] as const,
       );
     await expect.poll(menuLabels, { timeout: 20_000 }).toContain('Chord test: “chord”');
-    step('menu ok');
 
     // The popup opens from the button, sized to its page, and closes when the page closes it.
     await shelf.getByRole('button', { name: 'Chord Test, 7' }).click();
@@ -155,7 +116,6 @@ test('an extension: told it was installed once, its scripts and rules run, and i
     expect(await popup.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(300);
     await popup.locator('#close').click();
     await expect.poll(() => app.windows().some((p) => isPopup(p.url()))).toBe(false);
-    step('popup ok');
 
     // The puzzle piece lists every extension; unpinning takes the button off the shelf but not off the list.
     const overlay = await pageWhere(app, isOverlay);
@@ -168,7 +128,6 @@ test('an extension: told it was installed once, its scripts and rules run, and i
     await list.getByRole('button', { name: 'Pin Chord Test' }).click();
     await overlay.keyboard.press('Escape');
     await expect(shelf.getByRole('button', { name: 'Chord Test, 7' })).toBeVisible();
-    step('puzzle ok');
 
     // Settings can move the buttons to the title bar.
     const settings = await openSettings(app, shell);
@@ -184,25 +143,17 @@ test('an extension: told it was installed once, its scripts and rules run, and i
     await expect(bar.getByRole('button', { name: 'Extensions', exact: true })).toBeVisible();
     await expect(bar.getByRole('button', { name: 'Chord Test, 7' })).toHaveCount(0);
     await shell.getByRole('button', { name: 'Show sidebar' }).click();
-    step('collapse ok');
   } finally {
-    step('closing');
     await app.close();
-    step('closed');
   }
 
   // Next launch: it loads from what was saved, and isn't told it was installed again.
-  step('relaunching');
   app = await launch({ CHORD_HOME_URL: `${origin}/` }, profile);
-  step('relaunched');
   try {
     const shell = await pageWhere(app, isShell);
-    step('shell');
     const shelf = shell.locator('[data-placement="sidebar"]');
     await shelf.getByRole('button', { name: 'Chord Test, 7' }).click({ timeout: 20_000 });
-    step('clicked');
     const popup = await pageWhere(app, isPopup);
-    step('popup');
     await expect(popup.locator('#installs')).toHaveText('Installed 1 time(s), reason install');
   } finally {
     await app.close();

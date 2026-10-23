@@ -77,8 +77,6 @@ async function setUp(app: ElectronApplication, paths: string[], origin = () => s
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
     await expect(overlay.getByRole('dialog')).toBeVisible();
     await overlay.keyboard.type(`${origin()}${path}`);
-    const typed = await overlay.evaluate(() => ({ value: (document.querySelector('input') as HTMLInputElement | null)?.value, active: document.activeElement?.tagName, focus: document.hasFocus() }));
-    if (typed.value !== `${origin()}${path}`) console.log(`DEBUGTYPE ${JSON.stringify(typed)}`);
     await overlay.keyboard.press('Enter');
     await expect(today.getByRole('listitem').first()).toContainText(new RegExp(path.slice(1), 'i'));
   }
@@ -154,13 +152,13 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
     const third = pinned.getByRole('listitem').filter({ hasText: 'Third page' });
     const dropAt = await point(third, 6);
     await drag(shell, today.getByRole('listitem').filter({ hasText: 'Second page' }), dropAt);
-    try {
-      await expect(pinned.getByRole('listitem')).toHaveCount(3);
-    } catch (error) {
-      // DEBUG (CI): where things were at the drop.
-      console.log(`DEBUGDROP at=${JSON.stringify(dropAt)} third=${JSON.stringify(await third.boundingBox())} pinned=${await pinned.ariaSnapshot()} today=${await today.ariaSnapshot()}`);
-      throw error;
-    }
+    await expect(pinned.getByRole('listitem'))
+      .toHaveCount(3)
+      .catch(async (error: Error) => {
+        // Where things were at the drop, to tell a missed target from a wrong landing.
+        const lists = `Pinned:\n${await pinned.ariaSnapshot()}\nToday:\n${await today.ariaSnapshot()}`;
+        throw new Error(`${error.message}\nDropped at ${JSON.stringify(dropAt)}; Third page now at ${JSON.stringify(await third.boundingBox())}\n${lists}`);
+      });
     await expect(pinned.getByRole('listitem').nth(1)).toContainText('Second page');
     await expect(pinned.getByRole('button', { name: 'Second page', exact: true })).toHaveAttribute('data-parent', /.+/);
     await expect(today.getByRole('listitem')).toHaveCount(1);
