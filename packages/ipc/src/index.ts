@@ -84,7 +84,30 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('tab.reopenClosed'), windowId: id }),
   z.object({ t: z.literal('tab.navigate'), nodeId: id, url }),
   z.object({ t: z.literal('tab.cycle'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
-  z.object({ t: z.literal('node.move'), nodeId: id, section: z.enum(['pinned', 'today']), index: z.number().int().min(0).max(10_000) }),
+  z.object({
+    t: z.literal('node.move'),
+    nodeId: id,
+    section: z.enum(['pinned', 'today']),
+    index: z.number().int().min(0).max(10_000),
+    parentId: id.nullable().optional(),
+  }),
+  // Undo for a move to another chord: back to the exact spot it left.
+  z.object({
+    t: z.literal('node.moveToChord'),
+    nodeId: id,
+    chordId: id,
+    place: z.object({ section: z.enum(['pinned', 'today']), parentId: id.nullable(), rank: z.string().min(1).max(256) }).optional(),
+  }),
+  z.object({ t: z.literal('folder.rename'), nodeId: id, title: z.string().max(200) }),
+  z.object({ t: z.literal('folder.toggle'), nodeId: id, collapsed: z.boolean() }),
+  z.object({ t: z.literal('folder.restore'), nodeId: id }),
+  // Dragging a tab onto the Favorites row; the shell picks the id (a UUID).
+  z.object({ t: z.literal('favorite.add'), favoriteId: z.uuid(), nodeId: id, index: z.number().int().min(0).max(1000).optional() }),
+  z.object({ t: z.literal('favorite.move'), favoriteId: id, index: z.number().int().min(0).max(1000) }),
+  z.object({ t: z.literal('favorite.open'), windowId: id, favoriteId: id }),
+  // Undo for Clear.
+  z.object({ t: z.literal('closed.restore'), windowId: id, nodeIds: z.array(id).max(500), activate: id.nullable().optional() }),
+  z.object({ t: z.literal('window.sidebarWidth'), windowId: id, width: z.number().min(0).max(10_000) }),
   z.object({ t: z.literal('tab.pin'), nodeId: id }),
   z.object({ t: z.literal('tab.unpin'), nodeId: id }),
   z.object({ t: z.literal('download.clear') }),
@@ -288,8 +311,16 @@ export const invokeChannels = {
   'menu:app': { roles: ['shell'], request: Rect, response: z.void() },
   /** Right-click on a chord in the switcher, at this point in the window. */
   'menu:chord': { roles: ['shell'], request: z.object({ chordId: id, x: z.number(), y: z.number() }), response: z.void() },
-  /** Right-click on a tab row, at this point in the window. */
+  /** Right-click on a tab or folder row, at this point in the window. */
   'menu:tab': { roles: ['shell'], request: z.object({ nodeId: id, x: z.number(), y: z.number() }), response: z.void() },
+  /** Right-click on a favorite. */
+  'menu:favorite': { roles: ['shell'], request: z.object({ favoriteId: id, x: z.number(), y: z.number() }), response: z.void() },
+  /** Drop a tab on a chord in the switcher: it moves there, with Undo (and a reload if sign-ins differ). */
+  'sidebar:moveToChord': { roles: ['shell'], request: z.strictObject({ nodeId: id, chordId: id }), response: z.void() },
+  /** Delete a folder and what's in it, with Undo. */
+  'sidebar:deleteFolder': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
+  /** Minimal mode: lift the sidebar over the page while it peeks, and put it back. */
+  'layout:peek': { roles: ['shell'], request: z.strictObject({ open: z.boolean() }), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
   // The Settings window (chord://settings). It sees settings and one chord's theme, not tabs.
@@ -329,6 +360,8 @@ export interface EventPayloads {
   'toast:show': Toast;
   /** Start renaming a chord, or choosing its icon, in the sidebar (from its menu). */
   'chord:edit': ChordEdit;
+  /** Start renaming a folder in the sidebar (a new one, or from its menu). */
+  'sidebar:rename': { nodeId: string };
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
   'settings:section': string;
   /** The archive gained or lost entries: the archive page lists them again. */
@@ -361,11 +394,21 @@ export interface ShellApi {
   nav: { command(action: NavAction): Promise<void> };
   overlay: { open(mode: OverlayOpen['mode'], anchor?: Rect): Promise<void> };
   downloads: DownloadsApi;
-  layout: { anchor(rect: Rect | null): Promise<void> };
+  layout: {
+    anchor(rect: Rect | null): Promise<void>;
+    /** Minimal mode's sidebar peek: main lifts the shell above the page while it's open. */
+    peek(open: boolean): Promise<void>;
+  };
   menu: {
     app(anchor: Rect): Promise<void>;
     tab(nodeId: string, at: { x: number; y: number }): Promise<void>;
     chord(chordId: string, at: { x: number; y: number }): Promise<void>;
+    favorite(favoriteId: string, at: { x: number; y: number }): Promise<void>;
+  };
+  sidebar: {
+    moveToChord(nodeId: string, chordId: string): Promise<void>;
+    deleteFolder(nodeId: string): Promise<void>;
+    onRename(listener: (event: { nodeId: string }) => void): () => void;
   };
   chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
   toasts: { onShow(listener: (toast: Toast) => void): () => void };

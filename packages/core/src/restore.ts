@@ -9,8 +9,10 @@ import {
   defaultSettings,
   type ArchiveAfter,
   emptyState,
+  SIDEBAR_WIDTH,
   type Chord,
   type CustomTheme,
+  type Favorite,
   type Oklch,
   type Download,
   type MotionSettings,
@@ -36,6 +38,17 @@ export interface PersistedState {
   /** Remembered permission decisions, by origin. */
   sitePermissions?: SitePermissions;
   downloads?: Download[];
+  /** The Favorites row. */
+  favorites?: Favorite[];
+}
+
+/** Favorites that still make sense: a web address and a rank. */
+function restoreFavorites(saved: Favorite[] | undefined): Record<string, Favorite> {
+  const out: Record<string, Favorite> = {};
+  for (const f of saved ?? []) {
+    if (typeof f.id === 'string' && /^https?:/i.test(f.url) && typeof f.rank === 'string') out[f.id] = f;
+  }
+  return out;
 }
 
 /** Downloads cut off by quitting can't continue in a new session: they come back as interrupted. */
@@ -114,6 +127,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
       fresh.settings = restoreSettings(saved.settings);
       fresh.sitePermissions = restorePermissions(saved.sitePermissions);
       fresh.downloads = restoreDownloads(saved.downloads);
+      fresh.favorites = restoreFavorites(saved.favorites);
     }
     return fresh;
   }
@@ -122,6 +136,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   state.settings = restoreSettings(saved.settings);
   state.sitePermissions = restorePermissions(saved.sitePermissions);
   state.downloads = restoreDownloads(saved.downloads);
+  state.favorites = restoreFavorites(saved.favorites);
   for (const chord of saved.chords) state.chords[chord.id] = chord;
   for (const node of saved.nodes) {
     if (!state.chords[node.chordId]) continue;
@@ -142,11 +157,13 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
       activeTab[chordId] = tabId && state.nodes[tabId]?.kind === 'tab' && state.nodes[tabId]?.chordId === chordId ? tabId : null;
     }
     activeTab[activeChordId] ??= null;
-    state.windows[win.id] = { ...win, activeChordId, activeTab };
+    const width = win.sidebarWidth;
+    const sidebarWidth = typeof width === 'number' && width >= SIDEBAR_WIDTH.min && width <= SIDEBAR_WIDTH.max ? width : SIDEBAR_WIDTH.default;
+    state.windows[win.id] = { ...win, activeChordId, activeTab, sidebarWidth };
   }
   if (Object.keys(state.windows).length === 0) {
     const id = seed.newId();
-    state.windows[id] = { id, activeChordId: firstChord.id, activeTab: { [firstChord.id]: null }, sidebar: 'docked', bounds: null };
+    state.windows[id] = { id, activeChordId: firstChord.id, activeTab: { [firstChord.id]: null }, sidebar: 'docked', sidebarWidth: SIDEBAR_WIDTH.default, bounds: null };
   }
   return state;
 }

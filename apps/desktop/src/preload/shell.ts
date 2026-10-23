@@ -12,11 +12,20 @@ const api: ShellApi = {
   nav: { command: (action) => invoke('nav:command', { action }) },
   overlay: { open: (mode, anchor) => invoke('overlay:open', anchor ? { mode, anchor } : { mode }) },
   downloads: downloadsApi,
-  layout: { anchor: (rect) => invoke('layout:anchor', rect) },
+  layout: {
+    anchor: (rect) => invoke('layout:anchor', rect),
+    peek: (open) => invoke('layout:peek', { open }),
+  },
   menu: {
     app: (anchor) => invoke('menu:app', anchor),
     tab: (nodeId, at) => invoke('menu:tab', { nodeId, x: at.x, y: at.y }),
     chord: (chordId, at) => invoke('menu:chord', { chordId, x: at.x, y: at.y }),
+    favorite: (favoriteId, at) => invoke('menu:favorite', { favoriteId, x: at.x, y: at.y }),
+  },
+  sidebar: {
+    moveToChord: (nodeId, chordId) => invoke('sidebar:moveToChord', { nodeId, chordId }),
+    deleteFolder: (nodeId) => invoke('sidebar:deleteFolder', { nodeId }),
+    onRename: (listener) => subscribe('sidebar:rename', listener),
   },
   chords: { onEdit: (listener) => subscribe('chord:edit', listener) },
   toasts: { onShow: (listener) => subscribe('toast:show', listener) },

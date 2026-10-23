@@ -229,19 +229,49 @@ export interface TabMenuActions {
   reload(): void;
   duplicate(): void;
   close(): void;
+  /** Null when the page can't be a favorite (not a web page, or already one). */
+  addFavorite: (() => void) | null;
+  newFolder(): void;
+  /** The other chords, for "Move to"; `signInsDiffer` notes the reload. */
+  moveTargets: { id: string; label: string; signInsDiffer: boolean }[];
+  moveTo(chordId: string): void;
 }
 
 /** Right-click on a tab row in the sidebar. */
 export function buildTabMenu(a: TabMenuActions): Menu {
   const web = /^https?:/i.test(a.url);
+  const moveTo: MenuItemConstructorOptions[] = a.moveTargets.map((c) => ({
+    label: c.signInsDiffer ? `${c.label} (other sign-ins)` : c.label,
+    click: () => a.moveTo(c.id),
+  }));
   return Menu.buildFromTemplate([
     { label: 'Copy link', enabled: web, click: a.copyLink },
     { label: 'Copy as Markdown link', enabled: web, click: a.copyMarkdown },
     { type: 'separator' },
     { label: a.pinned ? 'Unpin tab' : 'Pin tab', accelerator: acceleratorFor('tab.pin'), click: a.togglePin },
+    { label: 'Add to Favorites', enabled: a.addFavorite !== null, click: () => a.addFavorite?.() },
+    { label: 'New folder with tab', click: a.newFolder },
+    { label: 'Move to', enabled: moveTo.length > 0, submenu: moveTo.length > 0 ? moveTo : [{ label: 'No other chords', enabled: false }] },
+    { type: 'separator' },
     { label: 'Reload', click: a.reload },
     { label: 'Duplicate', click: a.duplicate },
     { type: 'separator' },
     { label: a.pinned ? 'Close (stays pinned)' : 'Close tab', accelerator: acceleratorFor('tab.close'), click: a.close },
   ]);
+}
+
+/** Right-click on a folder row. */
+export function buildFolderMenu(a: { collapsed: boolean; toggle(): void; rename(): void; newFolderInside(): void; delete(): void }): Menu {
+  return Menu.buildFromTemplate([
+    { label: a.collapsed ? 'Open folder' : 'Close folder', click: a.toggle },
+    { label: 'Rename', click: a.rename },
+    { label: 'New folder inside', click: a.newFolderInside },
+    { type: 'separator' },
+    { label: 'Delete folder', click: a.delete },
+  ]);
+}
+
+/** Right-click on a favorite. */
+export function buildFavoriteMenu(a: { remove(): void }): Menu {
+  return Menu.buildFromTemplate([{ label: 'Remove from Favorites', click: a.remove }]);
 }

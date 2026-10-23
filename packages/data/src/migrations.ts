@@ -150,4 +150,11 @@ export const MIGRATIONS: readonly string[] = [
     INSERT INTO archive_fts(archive_fts, rowid, title, url) VALUES ('delete', old.rid, old.title, old.url);
   END;
   `,
+  // 6: the Favorites row (M1.2): sites every chord shares, in order. Icons live in favicon.
+  `
+  CREATE TABLE favorite (
+    id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+    favicon_key TEXT, rank TEXT NOT NULL, created_at INTEGER NOT NULL
+  ) STRICT;
+  `,
 ];

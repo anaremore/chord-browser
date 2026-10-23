@@ -25,7 +25,7 @@ function tab(id: string, section: TabNode['section'], idleFor: number, chordId =
 function state(tabs: TabNode[], shown: Record<string, string | null> = {}): State {
   const s = emptyState();
   for (const t of tabs) s.nodes[t.id] = t;
-  s.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: null, ...shown }, sidebar: 'docked', bounds: null };
+  s.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: null, ...shown }, sidebar: 'docked', sidebarWidth: 248, bounds: null };
   return s;
 }
 

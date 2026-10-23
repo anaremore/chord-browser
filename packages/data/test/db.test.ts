@@ -136,6 +136,33 @@ describe('chord-data', () => {
     expect(count('profile')).toBe(1);
   });
 
+  it('keeps favorites (with their icons), folders and the sidebar width across a restart', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const windowId = Object.keys(state.windows)[0]!;
+    const chordId = Object.keys(state.chords)[0]!;
+    const tabId = Object.values(state.nodes)[0]!.id;
+    state = drive(db, state, [
+      { t: 'tab.updated', nodeId: tabId, favicon: ICON },
+      { t: 'favorite.add', favoriteId: 'fav-1', nodeId: tabId },
+      { t: 'folder.create', folderId: 'folder-1', chordId, title: 'Reading', tabId },
+      { t: 'folder.toggle', nodeId: 'folder-1', collapsed: true },
+      { t: 'window.sidebarWidth', windowId, width: 320 },
+    ]);
+    db.close();
+    db = new ChordDatabase(file);
+    const saved = db.load()!;
+    expect(saved.favorites).toEqual([state.favorites['fav-1']]);
+    expect(saved.favorites![0]!.favicon).toBe(ICON);
+    expect(saved.nodes.find((n) => n.id === 'folder-1')).toMatchObject({ kind: 'folder', title: 'Reading', collapsed: true });
+    expect(saved.nodes.find((n) => n.id === tabId)).toMatchObject({ parentId: 'folder-1', section: 'pinned' });
+    expect(saved.windows[0]!.sidebarWidth).toBe(320);
+    drive(db, state, [{ t: 'favorite.remove', favoriteId: 'fav-1' }]);
+    db.close();
+    expect(count('favorite')).toBe(0);
+  });
+
   it('rolls back a batch that breaks a constraint, keeping what was there', () => {
     const db = new ChordDatabase(file);
     const state = seed();

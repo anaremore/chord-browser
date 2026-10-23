@@ -10,6 +10,7 @@ import { isInternalUrl, visibleTabs } from './idle';
 import {
   DEFAULT_PROFILE,
   IDLE_LIVE,
+  SIDEBAR_WIDTH,
   type ArchivedTab,
   type ArchiveReason,
   type Bounds,
@@ -18,11 +19,13 @@ import {
   type ClosedTab,
   type CustomTheme,
   type Download,
+  type FolderNode,
   type LiveTab,
   type NodeId,
   type PermissionDecision,
   type ProfileId,
   type Section,
+  type SidebarNode,
   type SitePermission,
   type SettingsPatch,
   type State,
@@ -30,7 +33,7 @@ import {
   type WindowId,
   type WindowModel,
 } from './model';
-import { children, sortedChords, tabsInOrder } from './select';
+import { children, descendants, isWithin, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 
 enablePatches();
 
@@ -52,8 +55,33 @@ export type Command =
   | { t: 'tab.sleep'; nodeId: NodeId }
   | { t: 'tab.navigate'; nodeId: NodeId; url: string }
   | { t: 'tab.cycle'; windowId: WindowId; direction: 1 | -1 }
-  /** Drag and drop: put a tab at a position in a section (pinned or Today) of its chord. */
-  | { t: 'node.move'; nodeId: NodeId; section: Section; index: number }
+  /**
+   * Drag and drop: put a tab or folder at a position among the children of
+   * `parentId` (a folder, or the section's root when null or absent) in its
+   * chord. Folders live in Pinned, so moving a tab into one pins it.
+   */
+  | { t: 'node.move'; nodeId: NodeId; section: Section; index: number; parentId?: NodeId | null }
+  /**
+   * Move a tab to another chord: to `place` (Undo uses the exact spot it
+   * left), else the end of Pinned if it was pinned, or the top of Today.
+   * If the chords' sign-ins differ, its page closes and reloads in the new session.
+   */
+  | { t: 'node.moveToChord'; nodeId: NodeId; chordId: ChordId; place?: { section: Section; parentId: NodeId | null; rank: string } }
+  /** A folder in Pinned: where `tabId` is (taking the tab inside), or at the end of the chord's Pinned. */
+  | { t: 'folder.create'; folderId: NodeId; chordId: ChordId; title: string; tabId?: NodeId }
+  | { t: 'folder.rename'; nodeId: NodeId; title: string }
+  | { t: 'folder.toggle'; nodeId: NodeId; collapsed: boolean }
+  /** Removes a folder and everything in it, kept for Undo. */
+  | { t: 'folder.delete'; nodeId: NodeId }
+  | { t: 'folder.restore'; nodeId: NodeId }
+  /** Add a tab's page to Favorites, at `index` (the end when absent). */
+  | { t: 'favorite.add'; favoriteId: string; nodeId: NodeId; index?: number }
+  | { t: 'favorite.remove'; favoriteId: string }
+  | { t: 'favorite.move'; favoriteId: string; index: number }
+  /** Switch to the chord's tab on that site, or open the favorite in Today. */
+  | { t: 'favorite.open'; windowId: WindowId; favoriteId: string }
+  /** Undo Clear: these tabs come back from the ⌘⇧T list to where they were; `activate` is shown again. */
+  | { t: 'closed.restore'; windowId: WindowId; nodeIds: NodeId[]; activate?: NodeId | null }
   /** Pin to the bottom of the pinned section, keeping the current page as its home. */
   | { t: 'tab.pin'; nodeId: NodeId }
   /** Unpin to the top of Today. */
@@ -63,6 +91,8 @@ export type Command =
   | { t: 'tab.live'; nodeId: NodeId; live: Partial<LiveTab> }
   | { t: 'window.bounds'; windowId: WindowId; bounds: Bounds }
   | { t: 'window.sidebar'; windowId: WindowId; sidebar: 'docked' | 'collapsed' }
+  /** Drag the sidebar's edge: clamped to SIDEBAR_WIDTH. */
+  | { t: 'window.sidebarWidth'; windowId: WindowId; width: number }
   | { t: 'settings.set'; settings: SettingsPatch }
   | { t: 'chord.theme'; chordId: ChordId; theme: Partial<ChordThemeSpec> }
   /** A new chord after the others, switched to in this window. */
@@ -105,8 +135,8 @@ export type Effect =
   | { e: 'archive.save'; nodeId: NodeId; tab: ArchivedTab }
   /** A tab came back from the archive: its saved history goes into the new view, and the entry leaves the archive. */
   | { e: 'archive.restored'; archiveId: string; nodeId: NodeId }
-  /** The window's sidebar docked or collapsed: lay the content frame out again. */
-  | { e: 'window.layout'; windowId: WindowId; sidebar: 'docked' | 'collapsed' };
+  /** The window's sidebar docked or collapsed, or changed width: lay the content frame out again. */
+  | { e: 'window.layout'; windowId: WindowId; sidebar: 'docked' | 'collapsed'; width: number; animate: boolean };
 
 export interface Context {
   now: number;
@@ -122,6 +152,12 @@ export interface Result {
 const MAX_CLOSED = 50;
 /** Deleted chords kept for Undo this session. */
 const MAX_DELETED_CHORDS = 5;
+/** Deleted folders kept for Undo this session. */
+const MAX_DELETED_FOLDERS = 10;
+/** The most favorites; the row wraps well before this. */
+const MAX_FAVORITES = 48;
+/** Longest folder name. */
+const MAX_FOLDER_TITLE = 64;
 /** The most custom themes kept. */
 const MAX_THEMES = 100;
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
@@ -150,23 +186,63 @@ function rankBetween(before: string | null, after: string | null): string {
 }
 
 /**
- * Move a tab within or between its chord's sections. Pinning keeps the page
- * it's on as the pinned home; unpinning forgets it. Returns false for a no-op.
+ * Move a tab or folder among the children of `parentId` (a folder, or the
+ * section's root) in its chord. Folders live in Pinned, and nothing moves into
+ * itself. Pinning a tab keeps the page it's on as its pinned home; unpinning
+ * forgets it. Returns false when the move isn't allowed or changes nothing.
  */
-function moveTab(draft: Draft<State>, node: Draft<TabNode>, section: Section, index: number): boolean {
-  const siblings = children(draft as State, node.chordId, section, null).filter((n) => n.id !== node.id);
+function moveNode(draft: Draft<State>, node: Draft<SidebarNode>, section: Section, index: number, parentId: NodeId | null = null): boolean {
+  if (parentId !== null) {
+    const parent = draft.nodes[parentId];
+    if (parent?.kind !== 'folder' || parent.chordId !== node.chordId || isWithin(draft as State, parentId, node.id)) return false;
+    section = parent.section;
+  }
+  if (node.kind === 'folder' && section !== 'pinned') return false;
+  const siblings = children(draft as State, node.chordId, section, parentId).filter((n) => n.id !== node.id);
   const at = Math.max(0, Math.min(index, siblings.length));
-  if (node.section === section && node.parentId === null) {
-    const current = children(draft as State, node.chordId, section, null).findIndex((n) => n.id === node.id);
+  if (node.section === section && node.parentId === parentId) {
+    const current = children(draft as State, node.chordId, section, parentId).findIndex((n) => n.id === node.id);
     if (current === at) return false;
   }
   node.rank = rankBetween(siblings[at - 1]?.rank ?? null, siblings[at]?.rank ?? null);
-  node.parentId = null;
-  if (node.section !== section) {
+  if (node.parentId !== parentId) node.parentId = parentId;
+  if (node.kind === 'tab' && node.section !== section) {
     node.section = section;
     node.pinnedUrl = section === 'pinned' ? (node.pinnedUrl ?? node.url) : null;
   }
   return true;
+}
+
+/**
+ * Tabs are leaving a chord's sidebar (deleted with a folder, moved away): the
+ * windows showing one land on the nearest tab that stays, below first (Arc's
+ * rule). Measure before they leave; call the returned function after.
+ */
+function landWindows(draft: Draft<State>, leaving: ReadonlySet<NodeId>, ctx: Context, effects: Effect[]): () => void {
+  const landing = new Map<string, NodeId | null>();
+  for (const win of Object.values(draft.windows)) {
+    for (const [chordId, tabId] of Object.entries(win.activeTab)) {
+      if (!tabId || !leaving.has(tabId)) continue;
+      const order = tabsInOrder(draft as State, chordId);
+      const at = order.findIndex((t) => t.id === tabId);
+      const stays = (t: TabNode) => !leaving.has(t.id);
+      // Inside a collapsed folder the tab isn't in the visible order: land on the first that stays.
+      const below = at >= 0 ? order.slice(at + 1).find(stays) : order.find(stays);
+      const above = at >= 0 ? order.slice(0, at).reverse().find(stays) : undefined;
+      landing.set(`${win.id}:${chordId}`, (below ?? above)?.id ?? null);
+    }
+  }
+  return () => {
+    for (const win of Object.values(draft.windows)) {
+      for (const chordId of Object.keys(win.activeTab)) {
+        const key = `${win.id}:${chordId}`;
+        if (!landing.has(key)) continue;
+        const next = landing.get(key) ?? null;
+        if (chordId === win.activeChordId) activate(draft, win.id, next, ctx, effects);
+        else win.activeTab[chordId] = next;
+      }
+    }
+  };
 }
 
 function topOfToday(state: Draft<State>, chordId: ChordId): string {
@@ -429,21 +505,195 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'node.move': {
       const node = draft.nodes[cmd.nodeId];
-      if (node?.kind === 'tab') moveTab(draft, node, cmd.section, cmd.index);
+      if (node) moveNode(draft, node, cmd.section, cmd.index, cmd.parentId ?? null);
+      return;
+    }
+
+    case 'node.moveToChord': {
+      const node = draft.nodes[cmd.nodeId];
+      const from = node ? draft.chords[node.chordId] : undefined;
+      const to = draft.chords[cmd.chordId];
+      if (node?.kind !== 'tab' || !from || !to || from.id === to.id) return;
+      const land = landWindows(draft, new Set([node.id]), ctx, effects);
+      node.chordId = to.id;
+      const place = cmd.place;
+      const parent = place?.parentId ? draft.nodes[place.parentId] : undefined;
+      if (place && (place.parentId === null || (parent?.kind === 'folder' && parent.chordId === to.id))) {
+        node.section = place.section;
+        node.parentId = place.parentId;
+        node.rank = place.rank;
+      } else {
+        node.parentId = null;
+        node.rank =
+          node.section === 'pinned' ? rankBetween(children(draft as State, to.id, 'pinned', null).at(-1)?.rank ?? null, null) : topOfToday(draft, to.id);
+      }
+      if (node.section === 'pinned') node.pinnedUrl ??= node.url;
+      else node.pinnedUrl = null;
+      // A page can't change session: with different sign-ins it closes, and loads again when shown.
+      if (from.profileId !== to.profileId && draft.live[node.id]) {
+        delete draft.live[node.id];
+        effects.push({ e: 'view.destroy', nodeId: node.id });
+      }
+      land();
+      return;
+    }
+
+    case 'folder.create': {
+      const chord = draft.chords[cmd.chordId];
+      if (!chord || draft.nodes[cmd.folderId]) return;
+      const tab = cmd.tabId ? draft.nodes[cmd.tabId] : undefined;
+      if (cmd.tabId && (tab?.kind !== 'tab' || tab.chordId !== chord.id)) return;
+      // Where the tab was, if it was pinned; otherwise the end of Pinned.
+      const inPlace = tab?.section === 'pinned';
+      const folder: FolderNode = {
+        kind: 'folder',
+        id: cmd.folderId,
+        chordId: chord.id,
+        section: 'pinned',
+        parentId: inPlace ? tab.parentId : null,
+        rank: inPlace ? tab.rank : rankBetween(children(draft as State, chord.id, 'pinned', null).at(-1)?.rank ?? null, null),
+        title: cmd.title.trim().slice(0, MAX_FOLDER_TITLE) || 'New folder',
+        collapsed: false,
+        createdAt: ctx.now,
+      };
+      draft.nodes[folder.id] = folder;
+      if (tab) moveNode(draft, tab, 'pinned', 0, folder.id);
+      return;
+    }
+
+    case 'folder.rename': {
+      const folder = draft.nodes[cmd.nodeId];
+      const title = cmd.title.trim().slice(0, MAX_FOLDER_TITLE);
+      if (folder?.kind === 'folder' && title && folder.title !== title) folder.title = title;
+      return;
+    }
+
+    case 'folder.toggle': {
+      const folder = draft.nodes[cmd.nodeId];
+      if (folder?.kind === 'folder' && folder.collapsed !== cmd.collapsed) folder.collapsed = cmd.collapsed;
+      return;
+    }
+
+    case 'folder.delete': {
+      const folder = draft.nodes[cmd.nodeId];
+      if (folder?.kind !== 'folder') return;
+      const inside = descendants(draft as State, folder.id);
+      const land = landWindows(draft, new Set(inside.filter((n) => n.kind === 'tab').map((n) => n.id)), ctx, effects);
+      draft.deletedFolders.unshift({ folder: { ...(folder as FolderNode) }, nodes: inside.map((n) => ({ ...n })), deletedAt: ctx.now });
+      if (draft.deletedFolders.length > MAX_DELETED_FOLDERS) draft.deletedFolders.length = MAX_DELETED_FOLDERS;
+      for (const node of inside) {
+        if (node.kind === 'tab' && draft.live[node.id]) effects.push({ e: 'view.destroy', nodeId: node.id });
+        delete draft.live[node.id];
+        delete draft.nodes[node.id];
+      }
+      delete draft.nodes[folder.id];
+      land();
+      return;
+    }
+
+    case 'folder.restore': {
+      const index = draft.deletedFolders.findIndex((d) => d.folder.id === cmd.nodeId);
+      if (index < 0 || draft.nodes[cmd.nodeId]) return;
+      const { folder, nodes } = draft.deletedFolders[index]!;
+      if (!draft.chords[folder.chordId]) return;
+      draft.deletedFolders.splice(index, 1);
+      // Back in its place, or at the end of Pinned if the folder it was in has gone too.
+      const parentGone = folder.parentId !== null && !draft.nodes[folder.parentId];
+      const end = rankBetween(children(draft as State, folder.chordId, 'pinned', null).at(-1)?.rank ?? null, null);
+      draft.nodes[folder.id] = parentGone ? { ...folder, parentId: null, rank: end } : folder;
+      for (const node of nodes) draft.nodes[node.id] = node;
+      return;
+    }
+
+    case 'favorite.add': {
+      const tab = draft.nodes[cmd.nodeId];
+      if (tab?.kind !== 'tab' || draft.favorites[cmd.favoriteId]) return;
+      const url = tab.pinnedUrl ?? tab.url;
+      const order = sortedFavorites(draft as State);
+      // Web pages only, one favorite per page, and a sane limit.
+      if (!/^https?:/i.test(url) || order.length >= MAX_FAVORITES || order.some((f) => f.url === url)) return;
+      const at = Math.max(0, Math.min(cmd.index ?? order.length, order.length));
+      draft.favorites[cmd.favoriteId] = {
+        id: cmd.favoriteId,
+        url,
+        title: tab.customTitle ?? tab.title,
+        favicon: tab.favicon,
+        rank: rankBetween(order[at - 1]?.rank ?? null, order[at]?.rank ?? null),
+        createdAt: ctx.now,
+      };
+      return;
+    }
+
+    case 'favorite.remove':
+      delete draft.favorites[cmd.favoriteId];
+      return;
+
+    case 'favorite.move': {
+      const favorite = draft.favorites[cmd.favoriteId];
+      if (!favorite) return;
+      const order = sortedFavorites(draft as State);
+      const others = order.filter((f) => f.id !== favorite.id);
+      const at = Math.max(0, Math.min(cmd.index, others.length));
+      if (order.findIndex((f) => f.id === favorite.id) === at) return;
+      favorite.rank = rankBetween(others[at - 1]?.rank ?? null, others[at]?.rank ?? null);
+      return;
+    }
+
+    case 'favorite.open': {
+      const win = draft.windows[cmd.windowId];
+      const favorite = draft.favorites[cmd.favoriteId];
+      if (!win || !favorite) return;
+      const existing = tabForFavorite(draft as State, win.activeChordId, favorite.url);
+      if (!existing) {
+        run(draft, { t: 'tab.open', windowId: cmd.windowId, url: favorite.url }, ctx, effects);
+        return;
+      }
+      if (win.activeTab[win.activeChordId] !== existing.id) leave(draft, win, ctx);
+      activate(draft, cmd.windowId, existing.id, ctx, effects);
+      return;
+    }
+
+    case 'closed.restore': {
+      const win = draft.windows[cmd.windowId];
+      if (!win) return;
+      const wanted = new Set(cmd.nodeIds);
+      const entries = draft.closed.filter((c) => wanted.has(c.node.id) && !draft.nodes[c.node.id]);
+      if (entries.length === 0) return;
+      for (const entry of entries) {
+        const { node } = entry;
+        const chordExists = Boolean(draft.chords[node.chordId]);
+        const keep = chordExists && (node.parentId === null || Boolean(draft.nodes[node.parentId]));
+        const chordId = chordExists ? node.chordId : win.activeChordId;
+        draft.nodes[node.id] = {
+          ...node,
+          chordId,
+          section: keep ? node.section : 'today',
+          parentId: keep ? node.parentId : null,
+          rank: keep ? node.rank : topOfToday(draft, chordId),
+        };
+        if (entry.archiveId) effects.push({ e: 'archive.restored', archiveId: entry.archiveId, nodeId: node.id });
+      }
+      draft.closed = draft.closed.filter((c) => !wanted.has(c.node.id));
+      const shown = cmd.activate ? draft.nodes[cmd.activate] : undefined;
+      if (shown?.kind === 'tab' && shown.chordId === win.activeChordId) {
+        draft.live[shown.id] = { ...IDLE_LIVE, loading: true };
+        leave(draft, win, ctx);
+        activate(draft, cmd.windowId, shown.id, ctx, effects);
+      }
       return;
     }
 
     case 'tab.pin': {
       const node = draft.nodes[cmd.nodeId];
       if (node?.kind !== 'tab' || node.section === 'pinned') return;
-      moveTab(draft, node, 'pinned', children(draft as State, node.chordId, 'pinned', null).length);
+      moveNode(draft, node, 'pinned', children(draft as State, node.chordId, 'pinned', null).length);
       return;
     }
 
     case 'tab.unpin': {
       const node = draft.nodes[cmd.nodeId];
       if (node?.kind !== 'tab' || node.section !== 'pinned') return;
-      moveTab(draft, node, 'today', 0);
+      moveNode(draft, node, 'today', 0);
       return;
     }
 
@@ -492,7 +742,17 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const win = draft.windows[cmd.windowId];
       if (!win || win.sidebar === cmd.sidebar) return;
       win.sidebar = cmd.sidebar;
-      effects.push({ e: 'window.layout', windowId: cmd.windowId, sidebar: cmd.sidebar });
+      effects.push({ e: 'window.layout', windowId: cmd.windowId, sidebar: cmd.sidebar, width: win.sidebarWidth, animate: true });
+      return;
+    }
+
+    case 'window.sidebarWidth': {
+      const win = draft.windows[cmd.windowId];
+      if (!win || !Number.isFinite(cmd.width)) return;
+      const width = Math.round(Math.min(SIDEBAR_WIDTH.max, Math.max(SIDEBAR_WIDTH.min, cmd.width)));
+      if (win.sidebarWidth === width) return;
+      win.sidebarWidth = width;
+      effects.push({ e: 'window.layout', windowId: cmd.windowId, sidebar: win.sidebar, width, animate: false });
       return;
     }
 

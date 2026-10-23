@@ -6,6 +6,7 @@ import {
   ARCHIVE_URL,
   activeTab,
   activeTabId,
+  children,
   DEFAULT_PROFILE,
   isInternalUrl,
   markdownLink,
@@ -31,7 +32,7 @@ import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
 import { IdleKeeper, type IdleTiming } from './idle';
-import { buildAppMenu, buildChordMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
+import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
 import { systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
@@ -197,6 +198,7 @@ export class Browser {
       uiSession: this.options.uiSession,
       bounds: model.bounds && placeOnDisplays(model.bounds, screen.getAllDisplays().map((d) => d.workArea)),
       sidebar: model.sidebar,
+      sidebarWidth: model.sidebarWidth,
       onBounds: (bounds) => this.store.dispatch({ t: 'window.bounds', windowId, bounds }),
     });
     this.windows.set(windowId, w);
@@ -294,8 +296,8 @@ export class Browser {
           this.archiveChanged();
           break;
         case 'window.layout': {
-          const animate = motionEnabled(this.store.state.settings, 'sidebar', systemInfo().prefersReducedMotion);
-          this.windows.get(effect.windowId)?.setSidebar(effect.sidebar, animate);
+          const animate = effect.animate && motionEnabled(this.store.state.settings, 'sidebar', systemInfo().prefersReducedMotion);
+          this.windows.get(effect.windowId)?.setSidebar(effect.sidebar, effect.width, animate);
           break;
         }
       }
@@ -416,8 +418,23 @@ export class Browser {
   openTabMenu(contents: WebContents, nodeId: NodeId, at: { x: number; y: number }): void {
     const w = this.windowFor(contents);
     const node = this.store.state.nodes[nodeId];
-    if (!w || node?.kind !== 'tab') return;
+    if (!w || !node) return;
+    if (node.kind === 'folder') {
+      w.popupMenu(
+        buildFolderMenu({
+          collapsed: node.collapsed,
+          toggle: () => this.store.dispatch({ t: 'folder.toggle', nodeId, collapsed: !node.collapsed }),
+          rename: () => send(w.shell.webContents, 'sidebar:rename', { nodeId }),
+          newFolderInside: () => this.createFolder(w, node.chordId, null, nodeId),
+          delete: () => this.deleteFolder(w, nodeId),
+        }),
+        { ...at, width: 0, height: 0 },
+      );
+      return;
+    }
     const tab: TabNode = node;
+    const state = this.store.state;
+    const from = state.chords[tab.chordId];
     w.popupMenu(
       buildTabMenu({
         url: tab.url,
@@ -428,9 +445,95 @@ export class Browser {
         reload: () => this.tabs.get(nodeId)?.webContents.reload(),
         duplicate: () => this.store.dispatch({ t: 'tab.open', windowId: w.id, url: tab.url }),
         close: () => this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId }),
+        addFavorite: this.canFavorite(tab) ? () => this.store.dispatch({ t: 'favorite.add', favoriteId: uuidv7(), nodeId }) : null,
+        newFolder: () => this.createFolder(w, tab.chordId, nodeId),
+        moveTargets: sortedChords(state)
+          .filter((c) => c.id !== tab.chordId)
+          .map((c) => ({ id: c.id, label: `${c.icon}  ${c.name}`, signInsDiffer: c.profileId !== from?.profileId })),
+        moveTo: (chordId) => this.moveToChord(w, nodeId, chordId),
       }),
       { ...at, width: 0, height: 0 },
     );
+  }
+
+  openFavoriteMenu(contents: WebContents, favoriteId: string, at: { x: number; y: number }): void {
+    const w = this.windowFor(contents);
+    if (!w || !this.store.state.favorites[favoriteId]) return;
+    w.popupMenu(buildFavoriteMenu({ remove: () => this.store.dispatch({ t: 'favorite.remove', favoriteId }) }), { ...at, width: 0, height: 0 });
+  }
+
+  /** A web page that isn't a favorite yet. */
+  private canFavorite(tab: TabNode): boolean {
+    const url = tab.pinnedUrl ?? tab.url;
+    return /^https?:/i.test(url) && !Object.values(this.store.state.favorites).some((f) => f.url === url);
+  }
+
+  /**
+   * A new folder, named "New folder" and ready to rename: around `tabId`
+   * (pinning it), or empty at the end of Pinned, or inside `parentId`.
+   */
+  createFolder(w: AppWindow, chordId: string, tabId: NodeId | null, parentId: NodeId | null = null): void {
+    const folderId = uuidv7();
+    this.store.dispatch({ t: 'folder.create', folderId, chordId, title: 'New folder', ...(tabId ? { tabId } : {}) });
+    if (!this.store.state.nodes[folderId]) return;
+    if (parentId) this.store.dispatch({ t: 'node.move', nodeId: folderId, section: 'pinned', index: Number.MAX_SAFE_INTEGER, parentId });
+    send(w.shell.webContents, 'sidebar:rename', { nodeId: folderId });
+  }
+
+  /** Delete at once and offer Undo (DESIGN.md §9: "Deleted folder 'Reading' · Undo"). */
+  deleteFolder(w: AppWindow, nodeId: NodeId): void {
+    const folder = this.store.state.nodes[nodeId];
+    if (folder?.kind !== 'folder') return;
+    this.store.dispatch({ t: 'folder.delete', nodeId });
+    send(w.shell.webContents, 'toast:show', {
+      id: `folder-deleted:${nodeId}`,
+      message: `Deleted folder “${folder.title}”`,
+      action: { label: 'Undo', command: { t: 'folder.restore', nodeId } },
+    });
+  }
+
+  /**
+   * Move a tab to another chord, with Undo back to the exact spot. With
+   * different sign-ins its page closes and reloads in the new session, and
+   * the toast says so (DESIGN.md §9).
+   */
+  moveToChord(w: AppWindow, nodeId: NodeId, chordId: string): void {
+    const state = this.store.state;
+    const tab = state.nodes[nodeId];
+    const to = state.chords[chordId];
+    if (tab?.kind !== 'tab' || !to || tab.chordId === chordId) return;
+    const from = tab.chordId;
+    const place = { section: tab.section, parentId: tab.parentId, rank: tab.rank };
+    const reloads = state.chords[from]?.profileId !== to.profileId;
+    this.store.dispatch({ t: 'node.moveToChord', nodeId, chordId });
+    send(w.shell.webContents, 'toast:show', {
+      id: `tab-moved:${nodeId}`,
+      message: reloads ? `Moved to ${to.name} (sign-ins differ, so it reloaded)` : `Moved to ${to.name}`,
+      action: { label: 'Undo', command: { t: 'node.moveToChord', nodeId, chordId: from, place } },
+    });
+  }
+
+  /** Clear: every Today tab in the chord goes to the archive, and Undo brings them back in place. */
+  private clearToday(w: AppWindow): void {
+    const state = this.store.state;
+    const chordId = state.windows[w.id]?.activeChordId;
+    if (!chordId) return;
+    const nodeIds = children(state, chordId, 'today', null).map((n) => n.id);
+    if (nodeIds.length === 0) return;
+    const shown = activeTabId(state, w.id);
+    this.store.dispatch({ t: 'tab.archive', nodeIds, reason: 'cleared' });
+    send(w.shell.webContents, 'toast:show', {
+      id: `today-cleared:${chordId}`,
+      message: `Archived ${nodeIds.length} ${nodeIds.length === 1 ? 'tab' : 'tabs'}`,
+      action: { label: 'Undo', command: { t: 'closed.restore', windowId: w.id, nodeIds, activate: shown && nodeIds.includes(shown) ? shown : null } },
+    });
+  }
+
+  /** Minimal mode's peek: the shell goes above the page while the sidebar floats over it. */
+  setPeek(contents: WebContents, open: boolean): void {
+    const w = this.windowFor(contents);
+    if (w && this.store.state.windows[w.id]?.sidebar === 'collapsed') w.setPeek(open);
+    else w?.setPeek(false);
   }
 
   openChordMenu(contents: WebContents, chordId: string, at: { x: number; y: number }): void {
@@ -583,6 +686,17 @@ export class Browser {
         return true;
       case 'tab.pin':
         if (tab) this.store.dispatch({ t: tab.section === 'pinned' ? 'tab.unpin' : 'tab.pin', nodeId: tab.id });
+        return true;
+      case 'tab.favorite':
+        if (tab && this.canFavorite(tab)) this.store.dispatch({ t: 'favorite.add', favoriteId: uuidv7(), nodeId: tab.id });
+        return true;
+      case 'folder.new': {
+        const chordId = this.store.state.windows[w.id]?.activeChordId;
+        if (chordId) this.createFolder(w, chordId, tab && !isInternalUrl(tab.url) ? tab.id : null);
+        return true;
+      }
+      case 'today.clear':
+        this.clearToday(w);
         return true;
       case 'app.settings':
         this.openSettings();

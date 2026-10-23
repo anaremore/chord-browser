@@ -6,11 +6,13 @@
 import { DEFAULT_PROFILE, firstGrapheme, formatKeys, shortcutById, sortedChords, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
+import { useDroppable } from '@dnd-kit/react';
 import { KeyRound, Plus } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { api } from './api';
 import styles from './App.module.css';
+import { CHORD_DROP } from './tree';
 
 /** New chords take the first icon and gradient nobody uses yet. */
 const ICONS = ['✦', '♪', '♫', '♩', '♬', '◆', '●', '▲', '★'];
@@ -237,6 +239,34 @@ export function ChordHeader({
   );
 }
 
+/** A chord in the switcher. Dropping a tab on another chord moves the tab there. */
+function ChordButton({ chord, selected, keys, info, pill, windowId }: { chord: Chord; selected: boolean; keys: string; info: SystemInfo; pill: Transition; windowId: string }) {
+  const { ref, isDropTarget } = useDroppable({ id: CHORD_DROP + chord.id, type: 'chord', accept: 'tab', disabled: selected });
+  // Each chord's icon wears its own accent, so the switcher previews every chord's color.
+  const accent = createChordTheme(chord.theme, { systemAppearance: info.appearance, material: info.material }).vars['--color-accent'];
+  return (
+    <button
+      ref={ref}
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      aria-label={chord.name}
+      title={keys ? `${chord.name}  ${keys}` : chord.name}
+      className={styles.chordButton}
+      data-drop-target={isDropTarget || undefined}
+      style={{ color: accent }}
+      onClick={() => void api.state.dispatch({ t: 'chord.activate', windowId, chordId: chord.id })}
+      onContextMenu={(e: MouseEvent) => {
+        e.preventDefault();
+        void api.menu.chord(chord.id, { x: e.clientX, y: e.clientY });
+      }}
+    >
+      {selected && <motion.span layoutId="chord-pill" className={styles.chordPill} transition={pill} />}
+      <span className={styles.chordGlyph}>{chord.icon}</span>
+    </button>
+  );
+}
+
 export function ChordSwitcher({
   state,
   windowId,
@@ -293,32 +323,9 @@ export function ChordSwitcher({
           if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) strip.current?.scrollBy({ left: e.deltaY });
         }}
       >
-        {chords.map((chord, index) => {
-          const selected = chord.id === current;
-          // Each chord's icon wears its own accent, so the switcher previews every chord's color.
-          const accent = createChordTheme(chord.theme, { systemAppearance: info.appearance, material: info.material }).vars['--color-accent'];
-          const keys = gotoKeys(index, info);
-          return (
-            <button
-              key={chord.id}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              aria-label={chord.name}
-              title={keys ? `${chord.name}  ${keys}` : chord.name}
-              className={styles.chordButton}
-              style={{ color: accent }}
-              onClick={() => void api.state.dispatch({ t: 'chord.activate', windowId, chordId: chord.id })}
-              onContextMenu={(e: MouseEvent) => {
-                e.preventDefault();
-                void api.menu.chord(chord.id, { x: e.clientX, y: e.clientY });
-              }}
-            >
-              {selected && <motion.span layoutId="chord-pill" className={styles.chordPill} transition={pill} />}
-              <span className={styles.chordGlyph}>{chord.icon}</span>
-            </button>
-          );
-        })}
+        {chords.map((chord, index) => (
+          <ChordButton key={chord.id} chord={chord} selected={chord.id === current} keys={gotoKeys(index, info)} info={info} pill={pill} windowId={windowId} />
+        ))}
       </div>
       <button type="button" className={styles.iconButton} aria-label="New chord" title="New chord" onClick={onCreate}>
         <Plus size={16} strokeWidth={1.75} />

@@ -40,6 +40,7 @@ const win = (id: string, activeChordId: string, activeTab: WindowModel['activeTa
   activeChordId,
   activeTab,
   sidebar: 'collapsed',
+  sidebarWidth: 300,
   bounds: { x: 10, y: 20, width: 900, height: 700, maximized: false },
 });
 

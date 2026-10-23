@@ -12,6 +12,7 @@ import {
   pickedAgain,
   placeKey,
   profilePartition,
+  SIDEBAR_WIDTH,
   terms,
   used,
   type ArchivedTab,
@@ -20,6 +21,7 @@ import {
   type ChordThemeSpec,
   type Choice,
   type Download,
+  type Favorite,
   type FolderNode,
   type PersistedState,
   type SidebarNode,
@@ -39,7 +41,6 @@ const MAX_CHOICES_PER_CHORD = 1000;
 const ARCHIVE_SEARCH_LIMIT = 20;
 /** Picks nobody repeats are forgotten after 90 days. */
 const CHOICE_LIFETIME_MS = 90 * 86_400_000;
-const SIDEBAR_WIDTH = 248;
 
 type Row = Record<string, unknown>;
 
@@ -95,7 +96,8 @@ export class ChordDatabase {
     this.db.prepare('DELETE FROM archive_item WHERE archived_at < ?').run(Date.now() - ARCHIVE_KEEP_MS);
     this.db.exec(
       `DELETE FROM favicon WHERE key NOT IN (SELECT favicon_key FROM tab WHERE favicon_key IS NOT NULL
-         UNION SELECT favicon_key FROM archive_item WHERE favicon_key IS NOT NULL)`,
+         UNION SELECT favicon_key FROM archive_item WHERE favicon_key IS NOT NULL
+         UNION SELECT favicon_key FROM favorite WHERE favicon_key IS NOT NULL)`,
     );
     this.db.prepare('DELETE FROM palette_choice WHERE last_used_at < ?').run(Date.now() - CHOICE_LIFETIME_MS);
   }
@@ -177,9 +179,23 @@ export class ChordDatabase {
         endedAt: r['ended_at'] === null ? null : num(r['ended_at']),
       }),
     );
+    const favorites = (
+      this.sql(
+        `SELECT f.*, i.mime AS icon_mime, i.data AS icon_data FROM favorite f LEFT JOIN favicon i ON i.key = f.favicon_key`,
+      ).all() as Row[]
+    ).map(
+      (r): Favorite => ({
+        id: str(r['id']),
+        url: str(r['url']),
+        title: str(r['title']),
+        favicon: typeof r['icon_mime'] === 'string' && r['icon_data'] instanceof Uint8Array ? joinDataUrl(r['icon_mime'], r['icon_data']) : null,
+        rank: str(r['rank']),
+        createdAt: num(r['created_at']),
+      }),
+    );
     if (chordRows.length === 0) {
-      const anything = Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0 || downloads.length > 0;
-      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads } : null;
+      const anything = Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0 || downloads.length > 0 || favorites.length > 0;
+      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads, favorites } : null;
     }
 
     const chords = chordRows.map(
@@ -231,11 +247,12 @@ export class ChordDatabase {
         activeChordId: str(r['active_chord_id']),
         activeTab: parseJson<WindowModel['activeTab']>(r['active_tab_by_chord'], {}),
         sidebar: r['sidebar_mode'] === 'collapsed' ? 'collapsed' : 'docked',
+        sidebarWidth: num(r['sidebar_width']),
         bounds: parseJson<WindowModel['bounds']>(r['bounds'], null),
       }),
     );
 
-    return { chords, nodes, windows, settings, sitePermissions, downloads };
+    return { chords, nodes, windows, settings, sitePermissions, downloads, favorites };
   }
 
   /** One batch, all or nothing. */
@@ -248,6 +265,7 @@ export class ChordDatabase {
         else if (op.k === 'window') this.writeWindow(op.id, op.value);
         else if (op.k === 'sitePermission') this.writeSitePermissions(op.id, op.value, now);
         else if (op.k === 'download') this.writeDownload(op.id, op.value);
+        else if (op.k === 'favorite') this.writeFavorite(op.id, op.value, now);
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
@@ -509,8 +527,20 @@ export class ChordDatabase {
     this.sql(
       `INSERT INTO window_state (id, bounds, active_chord_id, sidebar_width, sidebar_mode, active_tab_by_chord) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET bounds = excluded.bounds, active_chord_id = excluded.active_chord_id,
-         sidebar_mode = excluded.sidebar_mode, active_tab_by_chord = excluded.active_tab_by_chord`,
-    ).run(id, JSON.stringify(win.bounds), win.activeChordId, SIDEBAR_WIDTH, win.sidebar, JSON.stringify(win.activeTab));
+         sidebar_width = excluded.sidebar_width, sidebar_mode = excluded.sidebar_mode, active_tab_by_chord = excluded.active_tab_by_chord`,
+    ).run(id, JSON.stringify(win.bounds), win.activeChordId, win.sidebarWidth ?? SIDEBAR_WIDTH.default, win.sidebar, JSON.stringify(win.activeTab));
+  }
+
+  private writeFavorite(id: string, favorite: Favorite | null, now: number): void {
+    if (!favorite) {
+      this.sql('DELETE FROM favorite WHERE id = ?').run(id);
+      return;
+    }
+    const iconKey = favorite.favicon ? this.storeFavicon(favorite.favicon, now) : null;
+    this.sql(
+      `INSERT INTO favorite (id, url, title, favicon_key, rank, created_at) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET url = excluded.url, title = excluded.title, favicon_key = excluded.favicon_key, rank = excluded.rank`,
+    ).run(id, favorite.url, favorite.title, iconKey, favorite.rank, favorite.createdAt);
   }
 
   close(): void {

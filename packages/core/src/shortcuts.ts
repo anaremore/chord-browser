@@ -26,6 +26,9 @@ export type ActionId =
   | 'tab.moveDown'
   | 'tab.moveUp'
   | 'tab.pin'
+  | 'tab.favorite'
+  | 'folder.new'
+  | 'today.clear'
   | 'nav.back'
   | 'nav.forward'
   | 'nav.reload'
@@ -97,6 +100,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('tab.moveDown', 'Move tab down', 'reserved', ['Mod+Alt+Shift+ArrowDown'], ['Mod+Shift+PageDown']),
   s('tab.moveUp', 'Move tab up', 'reserved', ['Mod+Alt+Shift+ArrowUp'], ['Mod+Shift+PageUp']),
   s('tab.pin', 'Pin or unpin tab', 'page-first', ['Mod+D']),
+  // No keys: these live in menus and the command bar (DESIGN.md §8.3).
+  s('tab.favorite', 'Add this tab to Favorites', 'page-first', []),
+  s('folder.new', 'New folder with this tab', 'page-first', []),
+  s('today.clear', 'Clear Today', 'page-first', []),
   // Chords
   ...chordKeys.map((n) => s(`chord.goto${n}`, `Go to chord ${n}`, 'reserved', [`Mod+${n}`])),
   s('chord.next', 'Next chord', 'reserved', ['Mod+Alt+ArrowRight'], ['Ctrl+Alt+ArrowRight']),
