@@ -38,7 +38,7 @@ import type { SpringFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
 import { api } from './api';
 import styles from './App.module.css';
-import { keycap, withKeys } from './keys';
+import { useKeys } from './keys';
 import { CHORD_DROP, flattenPinned, levelsFor, MAX_VISUAL_DEPTH, projectDrop, type Drop, type FlatRow } from './tree';
 
 const PINNED_ZONE = 'pinned-zone';
@@ -277,6 +277,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
   const { ref, handleRef, isDragging, isDropTarget } = useSortable({ id: tab.id, index, group: section, type: 'tab', accept: ROW_ACCEPTS });
   const { dragging, projected } = drag;
   const { state, windowId, activeId, info, appearance, spring } = ctx;
+  const { withKeys } = useKeys(info);
   const isActive = tab.id === activeId;
   const lifted = isDragging || drag.moving === tab.id;
   const live = state.live[tab.id];
@@ -365,7 +366,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
           type="button"
           className={styles.close}
           aria-label={`Close ${tab.title || 'tab'}`}
-          title={withKeys(pinned ? 'Close (stays pinned)' : 'Close tab', 'tab.close', info)}
+          title={withKeys(pinned ? 'Close (stays pinned)' : 'Close tab', 'tab.close')}
           onClick={close}
         >
           <X size={14} strokeWidth={2} />
@@ -658,6 +659,7 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
   useEffect(() => api.sidebar.onRename(({ nodeId }) => setRenaming(nodeId)), []);
   const ctx: RowContext = { ...rest, renaming, setRenaming };
   const { state, info } = rest;
+  const { keycap } = useKeys(info);
   const pinned = flattenPinned(state, chordId, active?.type === 'folder' ? active.id : null);
   const today = children(state, chordId, 'today', null).filter((n): n is TabNode => n.kind === 'tab');
 
@@ -696,7 +698,7 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
       <button type="button" className={`${styles.row} ${styles.newTab}`} onClick={() => void api.overlay.open('new')}>
         <Plus size={16} strokeWidth={1.75} aria-hidden />
         <span className={styles.ellipsis}>New tab</span>
-        <kbd className={styles.rowKeycap}>{keycap('tab.new', info)}</kbd>
+        <kbd className={styles.rowKeycap}>{keycap('tab.new')}</kbd>
       </button>
 
       <ul className={styles.list} aria-label="Today">

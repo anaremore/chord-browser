@@ -208,6 +208,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
   - Linux: `.desktop` plus GIO and `xdg-settings`.
   - For now, links from other apps open in the active window; the mini window arrives in Phase 3.
 - **`chord://settings`:** search engine, auto-archive, appearance, PiP, extensions, default browser, update channel.
+- **Rebindable shortcuts** with conflict detection (moved up from Phase 3 at your request, 2026-10-23). **Done:** every action's keys can be changed in Settings → Keyboard shortcuts (DESIGN.md §14.1).
 
 ### M1.6 First run + preview release · → Mon Dec 14
 
@@ -258,7 +259,6 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 
 - **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it.
 - **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in.
-- **Rebindable shortcuts** with conflict detection.
 - **Peek** for links clicked inside pinned tabs.
 - **Distribution:**
   - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.

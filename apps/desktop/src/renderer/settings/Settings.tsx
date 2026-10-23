@@ -3,26 +3,16 @@
  * differs from the default (DESIGN.md §6.8). Changes apply at once,
  * everywhere: the window behind this one re-themes as you pick.
  */
-import {
-  DEFAULT_PROFILE,
-  DEFAULT_SETTINGS,
-  SEARCH_ENGINES,
-  SHORTCUTS,
-  formatKeys,
-  keysFor,
-  searchEngine,
-  type ArchiveAfter,
-  type MotionSettings,
-  type Shortcut,
-} from '@chord/core';
+import { DEFAULT_PROFILE, DEFAULT_SETTINGS, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Check, Info, Keyboard, Palette, Puzzle, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Check, Info, Keyboard, Palette, Puzzle, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import { AppearanceSection } from './Appearance';
+import { ShortcutsSection } from './Shortcuts';
 import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import { ExtensionsSection } from './Extensions';
 import styles from './Settings.module.css';
@@ -247,77 +237,6 @@ function Motion({ snapshot }: { snapshot: SettingsSnapshot }) {
   );
 }
 
-const SHORTCUT_GROUPS: { title: string; prefixes: string[] }[] = [
-  { title: 'Address and search', prefixes: ['address.'] },
-  { title: 'Tabs', prefixes: ['tab.'] },
-  { title: 'Navigate', prefixes: ['nav.'] },
-  { title: 'Chords', prefixes: ['chord.'] },
-  { title: 'Window and view', prefixes: ['window.', 'view.'] },
-  { title: 'Page', prefixes: ['page.'] },
-  { title: 'Chord', prefixes: ['app.'] },
-];
-
-/** ⌘1 … ⌘9 read better as one row. */
-function shortcutRows(platform: SystemInfo['platform']): { group: string; label: string; keys: string[] }[] {
-  const rows: { group: string; label: string; keys: string[] }[] = [];
-  for (const g of SHORTCUT_GROUPS) {
-    const inGroup = SHORTCUTS.filter((s: Shortcut) => g.prefixes.some((p) => s.id.startsWith(p)) && keysFor(s, platform).length > 0);
-    for (const s of inGroup) {
-      if (/^chord\.goto[2-9]$/.test(s.id)) continue;
-      const keys = keysFor(s, platform).map((k) => formatKeys(k, platform));
-      if (s.id === 'chord.goto1') rows.push({ group: g.title, label: 'Go to chord 1–9', keys: [`${keys[0]!.slice(0, -1)}1…9`] });
-      else rows.push({ group: g.title, label: s.label, keys });
-    }
-  }
-  return rows;
-}
-
-function Shortcuts({ info }: { info: SystemInfo }) {
-  const [filter, setFilter] = useState('');
-  const needle = filter.trim().toLowerCase();
-  const rows = shortcutRows(info.platform).filter(
-    (r) => !needle || r.label.toLowerCase().includes(needle) || r.keys.some((k) => k.toLowerCase().includes(needle)),
-  );
-  const groups = SHORTCUT_GROUPS.map((g) => ({ title: g.title, rows: rows.filter((r) => r.group === g.title) })).filter((g) => g.rows.length > 0);
-  return (
-    <>
-      <SectionHeader title="Keyboard shortcuts" description="Everything Chord does has a key. Shortcuts marked in menus work the same way." />
-      <label className={styles.filter}>
-        <Search size={14} strokeWidth={2} aria-hidden />
-        <input
-          type="search"
-          placeholder="Find a shortcut"
-          aria-label="Find a shortcut"
-          spellCheck={false}
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-        />
-      </label>
-      {groups.map((g) => (
-        <section key={g.title}>
-          <h2 className={styles.groupTitle}>{g.title}</h2>
-          <div className={styles.group}>
-            {g.rows.map((r) => (
-              <div key={r.label} className={styles.shortcut}>
-                <span className={styles.rowLabel}>{r.label}</span>
-                <span className={styles.keys}>
-                  {r.keys.map((k, i) => (
-                    <span key={k} className={styles.keyAlt}>
-                      {i > 0 && <span className={styles.or}>or</span>}
-                      <kbd className={styles.keycap}>{k}</kbd>
-                    </span>
-                  ))}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-      ))}
-      {groups.length === 0 && <p className={styles.sectionDescription}>No shortcut matches “{filter}”.</p>}
-    </>
-  );
-}
-
 const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 
 function checkedAgo(at: number): string {
@@ -476,7 +395,7 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
-              {section === 'shortcuts' && <Shortcuts info={info} />}
+              {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}
             </motion.div>
           </AnimatePresence>
