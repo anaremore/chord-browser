@@ -87,6 +87,7 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
   }
   if (Array.isArray(saved['themes'])) settings.themes = saved['themes'].map(validTheme).filter((t): t is CustomTheme => t !== null);
   if (typeof saved['separateSignIns'] === 'boolean') settings.separateSignIns = saved['separateSignIns'];
+  if (typeof saved['onboarded'] === 'boolean') settings.onboarded = saved['onboarded'];
   const archiveAfter = saved['archiveAfter'];
   if (typeof archiveAfter === 'string' && archiveAfter in ARCHIVE_AFTER_MS) settings.archiveAfter = archiveAfter as ArchiveAfter;
   if (typeof saved['sleepTabs'] === 'boolean') settings.sleepTabs = saved['sleepTabs'];
@@ -118,6 +119,8 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
       fresh.sitePermissions = restorePermissions(saved.sitePermissions);
       fresh.downloads = restoreDownloads(saved.downloads);
     }
+    // No chords yet: first run, unless onboarding already finished once (or --no-first-run).
+    if (seed.firstRun && saved?.settings['onboarded'] !== true) fresh.settings.onboarded = false;
     return fresh;
   }
 

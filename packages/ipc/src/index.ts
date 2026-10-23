@@ -78,7 +78,7 @@ const chordName = z.string().max(64);
 
 /** Commands a renderer may send. Engine-only commands (tab.updated, tab.live) are not accepted from renderers. */
 export const RendererCommand = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('tab.open'), windowId: id, url, background: z.boolean().optional() }),
+  z.object({ t: z.literal('tab.open'), windowId: id, url, background: z.boolean().optional(), pinned: z.boolean().optional() }),
   z.object({ t: z.literal('tab.activate'), windowId: id, nodeId: id, touch: z.boolean().optional() }),
   z.object({ t: z.literal('tab.close'), windowId: id, nodeId: id }),
   z.object({ t: z.literal('tab.reopenClosed'), windowId: id }),
@@ -95,6 +95,9 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('chord.goto'), windowId: id, index: z.number().int().min(0).max(8) }),
   z.object({ t: z.literal('chord.update'), chordId: id, name: chordName.optional(), icon: chordIcon.optional() }),
   z.object({ t: z.literal('chord.restore'), windowId: id, chordId: id }),
+  // First run (DESIGN.md §8.1) themes the chord being made, and finishes; the shell can't change other settings.
+  z.object({ t: z.literal('chord.theme'), chordId: id, theme: ChordTheme.partial() }),
+  z.object({ t: z.literal('settings.set'), settings: z.strictObject({ onboarded: z.literal(true) }) }),
   // Undo for "Keep sign-ins separate": back to shared sign-ins, or to the chord's own (Chord's IDs are UUIDs).
   z.object({ t: z.literal('chord.profile'), chordId: id, profileId: z.union([z.literal('default'), z.uuid()]) }),
   // chord.delete isn't here: main deletes, then offers Undo in a toast.
@@ -322,8 +325,9 @@ export const invokeChannels = {
   /** Put text on the clipboard (Chord's own pages have no clipboard permission of their own). */
   'settings:copyText': { roles: ['internal'], request: z.strictObject({ text: z.string().max(10_000) }), response: z.void() },
   'settings:chordSignIns': { roles: ['internal'], request: z.strictObject({ chordId: id, separate: z.boolean() }), response: z.void() },
-  'settings:defaultBrowser': { roles: ['internal'], request: z.void(), response: DefaultBrowserStatus },
-  'settings:makeDefaultBrowser': { roles: ['internal'], request: z.void(), response: DefaultBrowserStatus },
+  // Also the shell's, for first run's "Open links in Chord?".
+  'settings:defaultBrowser': { roles: ['internal', 'shell'], request: z.void(), response: DefaultBrowserStatus },
+  'settings:makeDefaultBrowser': { roles: ['internal', 'shell'], request: z.void(), response: DefaultBrowserStatus },
   'settings:updateStatus': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
   'settings:checkForUpdates': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
   // The popover: find bar and permission prompts, over the page (ARCHITECTURE.md §5).
@@ -392,6 +396,8 @@ export interface ShellApi {
   chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
+  /** First run's "Open links in Chord?" (DESIGN.md §8.1). */
+  defaultBrowser: { status(): Promise<DefaultBrowserStatus>; make(): Promise<DefaultBrowserStatus> };
 }
 
 interface DownloadsApi {

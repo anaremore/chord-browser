@@ -335,7 +335,8 @@ export class Browser {
     if (find?.target && find.target !== w.activeTabContents) find.close(false);
     const id = activeTabId(this.store.state, w.id);
     const live = id ? this.store.state.live[id] : undefined;
-    w.setTabHidden(Boolean(live?.error || live?.crashed));
+    // The frame explains errors and crashes, and holds first run's cards, instead of the page.
+    w.setTabHidden(Boolean(live?.error || live?.crashed) || !this.store.state.settings.onboarded);
     const state = this.popoverState(w);
     const json = JSON.stringify(state);
     if (this.popoverSent.get(w.id) === json) return;

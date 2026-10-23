@@ -13,6 +13,7 @@ import { ChordHeader, ChordPane, ChordSwitcher, newChordLook, Tint } from './Cho
 import { useSystemInfo } from './hooks';
 import { keycap, withKeys } from './keys';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
+import { Onboarding } from './Onboarding';
 import { SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
 
@@ -285,24 +286,30 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
         {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
 
         <div className={styles.frame}>
-          {active && live?.crashed && (
-            <div className={styles.empty} role="alert">
-              <p className={styles.emptyTitle}>This page stopped working.</p>
-              <p className={styles.emptyBody}>It’s not you. Reloading usually fixes it.</p>
-              <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
-                Reload
-              </button>
-            </div>
-          )}
-          {active && !live?.crashed && live?.error && <LoadErrorState error={live.error} canGoBack={live.canGoBack} windowId={windowId} tabId={active.id} />}
-          {!active && (
-            <div className={styles.empty}>
-              <p className={styles.emptyTitle}>Fresh chord, fresh start.</p>
-              <p className={styles.emptyBody}>Open a site, or search for anything.</p>
-              <button type="button" className={styles.emptyButton} onClick={() => void api.overlay.open('new')}>
-                New tab <kbd className={styles.inlineKeycap}>{keycap('tab.new', info)}</kbd>
-              </button>
-            </div>
+          {!state.settings.onboarded && chord ? (
+            <Onboarding chord={chord} windowId={windowId} info={info} spring={spring} />
+          ) : (
+            <>
+              {active && live?.crashed && (
+                <div className={styles.empty} role="alert">
+                  <p className={styles.emptyTitle}>This page stopped working.</p>
+                  <p className={styles.emptyBody}>It’s not you. Reloading usually fixes it.</p>
+                  <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
+                    Reload
+                  </button>
+                </div>
+              )}
+              {active && !live?.crashed && live?.error && <LoadErrorState error={live.error} canGoBack={live.canGoBack} windowId={windowId} tabId={active.id} />}
+              {!active && (
+                <div className={styles.empty}>
+                  <p className={styles.emptyTitle}>Fresh chord, fresh start.</p>
+                  <p className={styles.emptyBody}>Open a site, or search for anything.</p>
+                  <button type="button" className={styles.emptyButton} onClick={() => void api.overlay.open('new')}>
+                    New tab <kbd className={styles.inlineKeycap}>{keycap('tab.new', info)}</kbd>
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

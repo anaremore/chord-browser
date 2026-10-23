@@ -35,7 +35,7 @@ import { children, sortedChords, tabsInOrder } from './select';
 enablePatches();
 
 export type Command =
-  | { t: 'tab.open'; windowId: WindowId; url: string; background?: boolean }
+  | { t: 'tab.open'; windowId: WindowId; url: string; background?: boolean; pinned?: boolean }
   /** `touch: false` switches without counting as a visit (used while cycling recent tabs). */
   | { t: 'tab.activate'; windowId: WindowId; nodeId: NodeId; touch?: boolean }
   | { t: 'tab.close'; windowId: WindowId; nodeId: NodeId }
@@ -253,6 +253,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         createdAt: ctx.now,
       };
       draft.nodes[id] = tab;
+      // First run's "What do you open every day?" lands straight in Pinned.
+      if (cmd.pinned) moveTab(draft, draft.nodes[id] as Draft<TabNode>, 'pinned', children(draft as State, win.activeChordId, 'pinned', null).length);
       draft.live[id] = { ...IDLE_LIVE, loading: true };
       effects.push({ e: 'view.ensure', nodeId: id });
       if (!cmd.background) {
@@ -504,8 +506,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (searchSuggestions !== undefined && draft.settings.searchSuggestions !== searchSuggestions) draft.settings.searchSuggestions = searchSuggestions;
       if (checkForUpdates !== undefined && draft.settings.checkForUpdates !== checkForUpdates) draft.settings.checkForUpdates = checkForUpdates;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
-      const { separateSignIns } = cmd.settings;
+      const { separateSignIns, onboarded } = cmd.settings;
       if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;
+      if (onboarded !== undefined && draft.settings.onboarded !== onboarded) draft.settings.onboarded = onboarded;
       for (const [key, value] of Object.entries(motion ?? {}) as [keyof typeof draft.settings.motion, boolean | undefined][]) {
         if (value !== undefined && draft.settings.motion[key] !== value) draft.settings.motion[key] = value;
       }

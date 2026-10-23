@@ -217,6 +217,8 @@ export interface Settings {
   checkForUpdates: boolean;
   /** New chords keep their own sign-ins (a profile of their own) instead of sharing everyone's. */
   separateSignIns: boolean;
+  /** First run is done (DESIGN.md §8.1). Only a brand-new profile starts without it. */
+  onboarded: boolean;
   /** Today tabs unused this long go to the archive. */
   archiveAfter: ArchiveAfter;
   /** Background tabs unused for an hour free their memory, and wake when shown again. */
@@ -232,6 +234,7 @@ export const DEFAULT_SETTINGS: Settings = {
   searchSuggestions: true,
   checkForUpdates: true,
   separateSignIns: false,
+  onboarded: true,
   archiveAfter: '12h',
   sleepTabs: true,
 };
@@ -261,6 +264,7 @@ export interface SettingsPatch {
   searchSuggestions?: boolean;
   checkForUpdates?: boolean;
   separateSignIns?: boolean;
+  onboarded?: boolean;
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
 }

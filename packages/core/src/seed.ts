@@ -7,6 +7,8 @@ export interface SeedOptions {
   newId: () => string;
   theme: ChordThemeSpec;
   homeUrl: string;
+  /** A brand-new profile starts in first-run onboarding (DESIGN.md §8.1); `--no-first-run` skips it. */
+  firstRun?: boolean;
 }
 
 export function seedState({ now, newId, theme, homeUrl }: SeedOptions): State {

@@ -39,7 +39,7 @@ function childEnv(): NodeJS.ProcessEnv {
 
 /** `args` go last: a link the OS hands over comes after --single-argument, which takes the rest of the line. */
 async function start(executable: string, profile: string, args: string[] = []): Promise<Running> {
-  const child = spawn(executable, [`--user-data-dir=${profile}`, '--remote-debugging-port=0', ...args], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(executable, [`--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run', ...args], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = new Promise<number | null>((done) => child.once('exit', (code) => done(code)));
   const endpoint = await new Promise<string>((done, fail) => {
     let output = '';

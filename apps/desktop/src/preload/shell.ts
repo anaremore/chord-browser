@@ -21,6 +21,7 @@ const api: ShellApi = {
   chords: { onEdit: (listener) => subscribe('chord:edit', listener) },
   toasts: { onShow: (listener) => subscribe('toast:show', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
+  defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

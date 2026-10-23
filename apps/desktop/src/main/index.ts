@@ -218,6 +218,9 @@ if (!app.requestSingleInstanceLock()) {
       newId: () => uuidv7(),
       theme: { stops: defaultChordStops(accentRgb ? rgbToOklch(accentRgb) : null), grain: 0.2, appearance: 'auto' },
       homeUrl: HOME_URL,
+      // Chrome's --no-first-run skips it. Playwright adds that switch to every Electron it drives,
+      // so development builds can ask for first run with CHORD_FIRST_RUN=1.
+      firstRun: (!app.isPackaged && process.env['CHORD_FIRST_RUN'] === '1') || !app.commandLine.hasSwitch('no-first-run'),
     });
     if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
     // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.

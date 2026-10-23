@@ -73,11 +73,14 @@ function startSite(): Promise<{ server: Server; origin: string }> {
   );
 }
 
-async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'))): Promise<ElectronApplication> {
+async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-')), { firstRun = false } = {}): Promise<ElectronApplication> {
   // A fresh profile per launch unless a test reuses one: tests never touch a developer's real data.
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return electron.launch({ args: [appDir], env: childEnv, cwd: appDir });
+  // Every test but first run's own starts straight in the browser (Chrome's --no-first-run, which
+  // Playwright also adds by itself; CHORD_FIRST_RUN=1 asks for first run anyway).
+  if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
+  return electron.launch({ args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir });
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
@@ -448,6 +451,60 @@ test('a chord can keep its sign-ins separate, with Undo, and its sign-ins are de
   try {
     await pageWhere(app, isShell);
     await expect.poll(ownPartitions).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test('first run: name, colors and pins land in the real sidebar, and it never comes back', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile, { firstRun: true });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const welcome = shell.getByRole('dialog', { name: 'Welcome to Chord' });
+    await expect(welcome.getByRole('heading', { name: 'Hi, I’m Chord.' })).toBeVisible();
+    // The page waits behind the cards.
+    expect(await tabVisible(app)).toBe(false);
+    await welcome.getByRole('button', { name: /Make your first chord/ }).click();
+
+    // The sidebar header types along.
+    const name = welcome.getByRole('textbox', { name: 'Chord name' });
+    await expect(name).toBeFocused();
+    await name.fill('Studio');
+    await expect(shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { name: 'Studio' })).toBeVisible();
+    await name.press('Enter');
+
+    // Colors re-theme the sidebar live.
+    const tint = () => shell.evaluate(() => getComputedStyle(document.querySelector('[data-sidebar]')!).getPropertyValue('--color-tint'));
+    const before = await tint();
+    await welcome.getByRole('radio', { name: 'Sea Glass' }).click();
+    await expect.poll(tint).not.toBe(before);
+    await welcome.getByRole('button', { name: /Looks good/ }).click();
+
+    // A site you open every day lands in Pinned.
+    await expect(welcome.getByText('Chord created')).toBeVisible();
+    const site1 = welcome.getByRole('textbox', { name: 'A site you open every day' });
+    await site1.fill(`${site.origin}/second`);
+    await site1.press('Enter');
+    await expect(shell.getByRole('list', { name: 'Pinned', exact: true })).toContainText('Second page');
+    await welcome.getByRole('button', { name: /^Next/ }).click();
+
+    // A development build can't be the default browser, so that step is skipped.
+    await expect(welcome.getByRole('heading', { name: 'Three things to know' })).toBeVisible();
+    await welcome.getByRole('button', { name: /Start browsing/ }).click();
+    await expect(welcome).toHaveCount(0);
+    await expect(overlay.getByRole('dialog')).toBeVisible();
+    await expect.poll(() => tabVisible(app)).toBe(true);
+  } finally {
+    await app.close();
+  }
+
+  app = await launch({}, profile, { firstRun: true });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('dialog', { name: 'Welcome to Chord' })).toHaveCount(0);
   } finally {
     await app.close();
   }
