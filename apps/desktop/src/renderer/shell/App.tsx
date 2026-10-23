@@ -22,7 +22,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, INSTANT, reducedMotionMode, springsFor } from '../shared/motion';
-import { inNextFrame } from '../shared/frames';
+import { inNextFrame, noteRender } from '../shared/frames';
 import { markRender } from '../shared/perf';
 import { displayHost, pageTitle } from '../shared/site';
 import { chordStyle } from '../shared/theme';
@@ -231,8 +231,12 @@ function NavButtons({ live, hasTab, info }: { live: LiveTab | undefined; hasTab:
 }
 
 export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInfo>; mirror: Mirror; toasts: ToastStore }) {
-  // Every commit is marked: the perf spec checks a frame holds at most one.
-  useLayoutEffect(markRender);
+  // Every commit is marked (the perf spec checks a frame holds at most one), and main's updates that
+  // arrive in a frame that has rendered already wait for the next (shared/frames.ts).
+  useLayoutEffect(() => {
+    markRender();
+    noteRender();
+  });
   const info = useLive(infoSource);
   const state = useMirror(mirror);
   const windowId = mirror.windowId;

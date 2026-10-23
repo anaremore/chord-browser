@@ -10,6 +10,10 @@
  *
  * A hidden page paints no frames, so its work runs at once. A page that's
  * visible but gets no frame (a covered window) runs it after `NO_FRAME_MS`.
+ *
+ * Input feedback doesn't wait for this: a click's own state renders at once.
+ * A frame that has rendered already (`noteRender`) leaves the work for the
+ * next one, so it still holds a single render; work waits one frame at most.
  */
 
 const NO_FRAME_MS = 100;
@@ -18,10 +22,19 @@ const queue: (() => void)[] = [];
 let frame = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let batch = (run: () => void) => run();
+/** When the shell last rendered (performance.now()). */
+let rendered = -Infinity;
+/** The work was already left for the next frame once. */
+let held = false;
 
 /** How a frame's work runs together: the shell renders it in one React pass. */
 export function batchFrames(wrap: (run: () => void) => void): void {
   batch = wrap;
+}
+
+/** The shell rendered just now (its App committed): this frame has its render. */
+export function noteRender(): void {
+  rendered = performance.now();
 }
 
 /** Run `work` at the start of the next frame, with everything else queued for it, in order. */
@@ -29,7 +42,7 @@ export function nextFrame(work: () => void): void {
   queue.push(work);
   if (document.visibilityState !== 'visible') return flush();
   if (frame) return;
-  frame = requestAnimationFrame(flush);
+  frame = requestAnimationFrame(onFrame);
   timer = setTimeout(flush, NO_FRAME_MS);
 }
 
@@ -39,9 +52,21 @@ export const inNextFrame =
   (value: T): void =>
     nextFrame(() => listener(value));
 
+/** A frame begins (`time`): its work runs, unless it rendered already (then it's the next frame's, once). */
+function onFrame(time: number): void {
+  frame = 0;
+  if (!held && rendered >= time) {
+    held = true;
+    frame = requestAnimationFrame(onFrame);
+    return;
+  }
+  flush();
+}
+
 function flush(): void {
   cancelAnimationFrame(frame);
   frame = 0;
+  held = false;
   clearTimeout(timer);
   timer = undefined;
   const work = queue.splice(0);

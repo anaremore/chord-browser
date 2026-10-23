@@ -27,11 +27,11 @@ async function page({ visible = true } = {}) {
   return {
     ...mod,
     reported,
-    /** The next frame begins: its requestAnimationFrame callbacks run. */
-    frame() {
+    /** The next frame, which began at `time` (now, by default): its requestAnimationFrame callbacks run. */
+    frame(time = performance.now()) {
       const waiting = [...frames.values()];
       frames.clear();
-      for (const callback of waiting) callback(0);
+      for (const callback of waiting) callback(time);
     },
     framesAsked: () => frames.size,
     /** An input event reaches the window (capture phase first). */
@@ -115,6 +115,42 @@ describe('one render a frame', () => {
     vi.advanceTimersByTime(1);
     expect(ran).toEqual(['late']);
     expect(p.framesAsked()).toBe(0);
+  });
+
+  it('leaves the work for the next frame when this one has rendered already, but only once', async () => {
+    const p = await page();
+    const ran: string[] = [];
+    /** A moment after now (the clock is the test's). */
+    const later = () => {
+      vi.advanceTimersByTime(1);
+      return performance.now();
+    };
+
+    // The shell rendered in an earlier frame: this one runs the work.
+    p.noteRender();
+    p.nextFrame(() => ran.push('patch 1'));
+    p.frame(later());
+    expect(ran).toEqual(['patch 1']);
+
+    // A frame begins, and the shell renders in it (a click's own feedback) before its callbacks run:
+    // it has its render, so the work waits for the next frame.
+    p.nextFrame(() => ran.push('patch 2'));
+    let begins = performance.now();
+    p.noteRender();
+    p.frame(begins);
+    expect(ran).toEqual(['patch 1']);
+    expect(p.framesAsked()).toBe(1);
+    p.frame(later());
+    expect(ran).toEqual(['patch 1', 'patch 2']);
+
+    // Only once: a shell that renders every frame (a drag) can't keep the work waiting.
+    p.nextFrame(() => ran.push('patch 3'));
+    for (let i = 0; i < 2; i++) {
+      begins = performance.now();
+      p.noteRender();
+      p.frame(begins);
+    }
+    expect(ran).toEqual(['patch 1', 'patch 2', 'patch 3']);
   });
 
   it("doesn't let one failure hold back the rest of the frame", async () => {
