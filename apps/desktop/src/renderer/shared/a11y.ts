@@ -12,7 +12,7 @@
  * - `focusNextAfter`: when the focused control goes away (a ↺ reset that
  *   hides itself), the next one in Tab order takes the focus.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, type KeyboardEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type RefObject } from 'react';
 
 export interface RovingOptions {
   /** The widget's items, e.g. `[role="radio"]`. */
@@ -72,9 +72,14 @@ export function rovingKeyDown(event: KeyboardEvent<HTMLElement>, { items, orient
  * Roving tabindex for a composite widget: spread `ref` and `onKeyDown` on its
  * container. The Tab stop follows the current item as it changes (watched in
  * the DOM, so items can render themselves however they like).
+ *
+ * What it returns stays the same object while the options do, so a ref that
+ * wraps `ref` can be memoized on it: a new ref each render would make React
+ * attach it again on every commit, placing the Tab stop (which measures
+ * every item) and watching the widget all over again.
  */
 export function useRoving<T extends HTMLElement>(options: RovingOptions): { ref: (root: T | null) => (() => void) | undefined; onKeyDown(event: KeyboardEvent<T>): void } {
-  const { items, current, activate = false } = options;
+  const { items, current, orientation, activate = false } = options;
   const ref = useCallback(
     (root: T | null) => {
       if (!root) return undefined;
@@ -91,7 +96,11 @@ export function useRoving<T extends HTMLElement>(options: RovingOptions): { ref:
     },
     [items, current, activate],
   );
-  return { ref, onKeyDown: (event) => rovingKeyDown(event, options) };
+  const onKeyDown = useCallback(
+    (event: KeyboardEvent<T>) => rovingKeyDown(event, { items, current, orientation, activate }),
+    [items, current, orientation, activate],
+  );
+  return useMemo(() => ({ ref, onKeyDown }), [ref, onKeyDown]);
 }
 
 /** The element that had focus before the one that has it now (a field that focused itself on mount). */

@@ -13,6 +13,7 @@
 import { contextLabel, contextPercent, DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, splitCitations, type DuetContextUsage, type DuetMessage, type DuetProvider, type DuetScope } from '@chord/core';
 import type { DuetAction, DuetView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
+import { motion, useIsPresent, type Transition } from 'motion/react';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useMenu, useRoving } from '../shared/a11y';
 import { announce } from './announce';
@@ -650,7 +651,7 @@ const panelStart = (panel: HTMLElement | null) =>
  * first button, and moves to "Use this" when it appears, unless the user has
  * moved it since.
  */
-function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string): void {
+function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string, present: boolean): void {
   // Where the panel last put the keyboard.
   const placed = useRef<HTMLElement | null>(null);
   const focusStart = () => {
@@ -664,14 +665,17 @@ function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string): void
     focusStart();
   }, [step]);
   useEffect(() => {
-    if (!placed.current || document.activeElement !== placed.current) return;
+    if (!present || !placed.current || document.activeElement !== placed.current) return;
     if (panelStart(panel.current) !== placed.current) focusStart();
   });
   useEffect(() => {
+    if (!present) return;
     const before = document.hasFocus() && document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     focusStart();
     void api.focus.move('shell');
     return () => {
+      // Closing (sliding out, or gone): the keyboard leaves the panel now, not when the slide ends.
+      if (document.activeElement instanceof HTMLElement && panel.current?.contains(document.activeElement)) document.activeElement.blur();
       setTimeout(() => {
         const now = document.activeElement;
         if (now && now !== document.body) return;
@@ -679,10 +683,15 @@ function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string): void
         else void api.focus.move('page');
       }, 0);
     };
-  }, []);
+  }, [present]);
 }
 
-export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string; info: SystemInfo }) {
+/** Off the window's right edge: where the panel slides in from and out to (DESIGN.md §6.5). */
+const OFF_RIGHT = { x: '110%' };
+
+export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId: string; info: SystemInfo; slide: { enter: Transition; exit: Transition } }) {
+  // Closing, it slides out (AnimatePresence keeps it a moment): the keyboard goes back as it starts to.
+  const present = useIsPresent();
   const [menu, setMenu] = useState<'thread' | 'model' | 'scope' | null>(null);
   const panel = useRef<HTMLElement>(null);
   const modelMenu = useMenu(menu === 'model', () => setMenu(null));
@@ -691,7 +700,7 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
   useDuetAnnouncements(view);
   const thread = view.thread;
   const ready = view.provider !== null && view.providers.some((p) => p.provider === (view.thread?.provider ?? view.provider) && p.installed && p.signedIn);
-  usePanelFocus(panel, view.chordOff ? 'off' : !view.provider ? 'intro' : !ready ? 'setup' : view.firstUse ? 'first-use' : 'ready');
+  usePanelFocus(panel, view.chordOff ? 'off' : !view.provider ? 'intro' : !ready ? 'setup' : view.firstUse ? 'first-use' : 'ready', present);
   const [renaming, setRenaming] = useState(false);
   const [seed, setSeed] = useState({ text: '', n: 0 });
   const provider = view.thread?.provider ?? view.provider ?? 'claude';
@@ -701,7 +710,16 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
   const empty = view.messages.length === 0;
 
   return (
-    <aside ref={panel} className={styles.panel} aria-label="Duet" data-region="duet">
+    <motion.aside
+      ref={panel}
+      className={styles.panel}
+      aria-label="Duet"
+      data-region="duet"
+      inert={!present}
+      initial={OFF_RIGHT}
+      animate={{ x: 0, transition: slide.enter }}
+      exit={{ ...OFF_RIGHT, transition: slide.exit }}
+    >
       <header className={styles.header}>
         {renaming && thread?.id ? (
           <input
@@ -920,6 +938,6 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
           <Composer view={view} providerName={providerName} draftSeed={seed} />
         </>
       )}
-    </aside>
+    </motion.aside>
   );
 }

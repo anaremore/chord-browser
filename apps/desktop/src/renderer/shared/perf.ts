@@ -34,3 +34,22 @@ export function measureSince(name: string, start: number, detail: Record<string,
   if (performance.getEntriesByName(name, 'measure').length >= 200) performance.clearMeasures(name);
   performance.measure(name, { start: Math.max(0, start), end: performance.now(), detail });
 }
+
+/** How many marks of one name are kept before the oldest go; a measured step never makes this many. */
+const MAX_MARKS = 500;
+let markCount = 0;
+
+/**
+ * A mark each time the shell's App commits (`chord:shell-render`): the perf
+ * spec counts them per frame, since a frame should hold at most one. The
+ * buffer is emptied now and then, so it stays small.
+ */
+export function markRender(): void {
+  // Counted, and recounted only at the cap: someone else (the perf spec) may have emptied it already.
+  if (++markCount > MAX_MARKS) markCount = performance.getEntriesByName('chord:shell-render', 'mark').length + 1;
+  if (markCount > MAX_MARKS) {
+    performance.clearMarks('chord:shell-render');
+    markCount = 1;
+  }
+  performance.mark('chord:shell-render');
+}

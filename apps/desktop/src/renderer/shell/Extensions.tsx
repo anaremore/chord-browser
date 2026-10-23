@@ -9,6 +9,7 @@
 import type { ExtensionAction, ExtensionsBarState, Rect } from '@chord/ipc';
 import { Plus, Puzzle } from 'lucide-react';
 import { useEffect, useState, type MouseEvent } from 'react';
+import { inNextFrame } from '../shared/frames';
 import { api } from './api';
 import styles from './Extensions.module.css';
 
@@ -19,7 +20,8 @@ export function useExtensionsBar(): ExtensionsBarState {
   const [bar, setBar] = useState(EMPTY);
   useEffect(() => {
     let live = true;
-    const off = api.extensions.onState(setBar);
+    // In the frame with the state patches (a tab switch sends both), so they render once (shared/frames.ts).
+    const off = api.extensions.onState(inNextFrame(setBar));
     void api.extensions.state().then((state) => live && setBar(state));
     return () => {
       live = false;
