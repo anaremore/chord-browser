@@ -12,6 +12,7 @@ import { radius } from '@chord/tokens';
 import { WebContentsView, type Session } from 'electron';
 import type { AppWindow, FloatingView } from '../window';
 import { POPUP_MAX, popupPosition, popupSize } from './geometry';
+import { parseSizeMessage, SIZER_SCRIPT, SIZER_WORLD } from './sizer';
 
 export interface ExtensionPopupOptions {
   extensionId: string;
@@ -47,26 +48,31 @@ export class ExtensionPopup implements FloatingView {
         contextIsolation: true,
         nodeIntegration: false,
         webviewTag: false,
-        enablePreferredSizeMode: true,
       },
     });
     this.view.setBorderRadius(radius.md);
     // Chrome's popups are white until the page paints its own background.
     this.view.setBackgroundColor('#ffffff');
-    // A hidden view never lays out, so it would never report a size. Until it
-    // has, it lays out at full size just outside the window, where it can't be seen.
+    // Until the page has reported its size, it lays out at full size just
+    // outside the window, where it can't be seen (a hidden view wouldn't lay out).
     this.view.setBounds({ x: -POPUP_MAX.width - OFFSTAGE_GAP, y: 0, ...POPUP_MAX });
     host.showFloating(this);
 
     const contents = this.view.webContents;
-    contents.on('preferred-size-changed', (_event, preferred) => {
-      console.log('TEMP preferred', JSON.stringify(preferred), this.shown);
-      this.size = popupSize(preferred, this.host.frameBounds);
+    // The page's size, from the sizer in Chord's own isolated world (see sizer.ts for why).
+    contents.on('dom-ready', () => {
+      void contents.executeJavaScriptInIsolatedWorld(SIZER_WORLD, [{ code: SIZER_SCRIPT }]).catch(() => undefined);
+    });
+    contents.on('console-message', (details) => {
+      if (details.level !== 'debug' || details.frame !== contents.mainFrame) return;
+      const reported = parseSizeMessage(details.message);
+      if (!reported) return;
+      this.size = popupSize(reported, this.host.frameBounds);
       this.show();
     });
-    // Pages that never report a size still appear, at full size.
+    // A page that never reports a size still appears, at full size.
     contents.once('did-finish-load', () => {
-      this.showTimer = setTimeout(() => this.show(), 400);
+      this.showTimer = setTimeout(() => this.show(), 600);
     });
     contents.on('blur', () => {
       // Focus moved within Chord (a click on the sidebar or the page): close. Focus left
