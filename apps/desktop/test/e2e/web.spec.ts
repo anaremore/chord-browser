@@ -219,28 +219,7 @@ test('Settings → Site permissions: change an answer, ask again, or forget the 
     const state = () => tab.evaluate(async () => (await navigator.permissions.query({ name: 'notifications' })).state);
 
     const first = ask();
-    // DIAGNOSTIC (temporary): what the popover and the tab look like when the prompt doesn't come.
-    first.catch(() => undefined);
-    try {
-      await prompt.getByRole('button', { name: 'Allow' }).click({ timeout: 10_000 });
-    } catch (error) {
-      const views = await app.evaluate(({ BaseWindow, webContents }) =>
-        BaseWindow.getAllWindows()
-          .flatMap((w) => w.contentView.children.map((v) => ({ v: v as unknown as { webContents?: Electron.WebContents; getVisible(): boolean; getBounds(): Electron.Rectangle }, w: w.getTitle() })))
-          .map(({ v, w }) => `${w}|${v.webContents?.getURL().slice(0, 60)}|vis=${v.getVisible()}|${JSON.stringify(v.getBounds())}|focused=${v.webContents?.isFocused()}`)
-          .concat(webContents.getAllWebContents().map((c) => `wc ${c.id} ${c.getType()} ${c.getURL().slice(0, 60)} destroyed=${c.isDestroyed()}`))
-          .join('\n'),
-      );
-      const pop = await popover.evaluate(() => `vis=${document.visibilityState} html=${document.body.innerHTML.slice(0, 400)}`).catch((e: unknown) => String(e));
-      const page = await tab.evaluate(() => `url=${location.href} vis=${document.visibilityState} perm=${Notification.permission}`).catch((e: unknown) => String(e));
-      const snap = await shell.evaluate(async () => {
-        const { windowId, state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, { url?: string }> } }> } } }).chord.state.snapshot();
-        const w = state.windows[windowId]!;
-        const active = w.activeTab[w.activeChordId];
-        return `active=${active} url=${active ? state.nodes[active]?.url : ''} nodes=${Object.keys(state.nodes).length}`;
-      });
-      throw new Error(`DIAGNOSTIC\n${String(error)}\n${views}\npopover: ${pop}\ntab: ${page}\nshell: ${snap}`, { cause: error });
-    }
+    await prompt.getByRole('button', { name: 'Allow' }).click();
     expect(await first).toBe('granted');
 
     await runAction(shell, 'app.settings');

@@ -34,38 +34,16 @@ const runAction = (shell: Page, action: string) =>
   shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
 
 /** Wheel events as a trackpad sends them, `gapMs` apart, over an element of the shell. */
-function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, over = '[aria-label="Sidebar"] [aria-label="Today"]', diag = false) {
+function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, over = '[aria-label="Sidebar"] [aria-label="Today"]') {
   return shell.evaluate(
-    async ({ deltas, gapMs, over, diag }) => {
+    async ({ deltas, gapMs, over }) => {
       const target = document.querySelector(over) ?? document.querySelector('[data-swipe-area]');
-      // DIAGNOSTIC (temporary): what each event met.
-      const track = document.querySelector('[data-swiping]') ?? target?.closest('[class*="paneTrack"]');
-      const log: string[] = [
-        `reduced=${document.documentElement.hasAttribute('data-reduced-motion')} vis=${document.visibilityState} focus=${document.hasFocus()} track=${(target?.closest('[class*="paneTrack"]') as HTMLElement | null)?.clientWidth} panes=${document.querySelectorAll('[aria-label="Sidebar"] [aria-label="Today"]').length} inert=${Boolean(target?.closest('[inert]'))} track0=${Boolean(track)}`,
-      ];
-      let last = performance.now();
       for (const d of deltas) {
-        const event = new WheelEvent('wheel', { deltaX: d.x, deltaY: d.y ?? 0, deltaMode: 0, bubbles: true, cancelable: true });
-        const t0 = performance.now();
-        target!.dispatchEvent(event);
-        const t1 = performance.now();
-        const panes = document.querySelectorAll('[aria-label="Sidebar"] [aria-label="Today"]').length;
-        const swiping = document.querySelector('[data-swiping]') ? 's' : '-';
-        log.push(`${Math.round(t0 - last)}+${Math.round(t1 - t0)}${target!.isConnected ? '' : 'X'}${event.defaultPrevented ? 'p' : 'n'}${swiping}${panes}`);
-        last = t1;
+        target!.dispatchEvent(new WheelEvent('wheel', { deltaX: d.x, deltaY: d.y ?? 0, deltaMode: 0, bubbles: true, cancelable: true }));
         await new Promise((r) => setTimeout(r, gapMs));
       }
-      // After the last event: the swipe state and the selected chord, every 40 ms for a second.
-      const after: string[] = [];
-      for (let i = 0; i < (diag ? 25 : 0); i++) {
-        const swiping = document.querySelector('[data-swiping]') ? 's' : '-';
-        const selected = document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute('aria-label')?.[0] ?? '?';
-        after.push(`${swiping}${document.querySelectorAll('[aria-label="Sidebar"] [aria-label="Today"]').length}${selected}`);
-        await new Promise((r) => setTimeout(r, 40));
-      }
-      return `${log.join(' ')} | after: ${after.join(' ')}`;
     },
-    { deltas, gapMs, over, diag },
+    { deltas, gapMs, over },
   );
 }
 const steps = (count: number, x: number, y = 0) => Array.from({ length: count }, () => ({ x, y }));
@@ -98,11 +76,10 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
     const personalTint = await tint();
 
     // A slow swipe past half the width: the next chord comes in beside the current one, and wins.
-    const swiping = swipe(shell, steps(32, 6), 16, undefined, true);
+    const swiping = swipe(shell, steps(32, 6), 16);
     await expect.poll(() => paneCount(shell)).toBeGreaterThan(1);
-    const swipeLog = await swiping;
-    console.log(`[swipe diag] ${process.platform}-${process.arch} ${swipeLog}`);
-    await expect(chords.getByRole('tab', { name: 'Work' }), `DIAGNOSTIC ${swipeLog}`).toHaveAttribute('aria-selected', 'true');
+    await swiping;
+    await selected('Work');
     await expect.poll(() => paneCount(shell)).toBe(1);
     expect(await tint()).not.toBe(personalTint);
 
