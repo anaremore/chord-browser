@@ -171,8 +171,9 @@ test('the color wheel: keys turn the hue, a click moves the nearest color, and a
     const wheel = first.locator('..');
     const box = (await wheel.boundingBox())!;
     await settings.mouse.click(box.x + box.width - 6, box.y + box.height / 2);
-    await expect.poll(hue).toBeGreaterThan(85);
-    expect(await hue()).toBeLessThan(95);
+    // Wait for the hue to arrive near 90°, not just past 85: a starting hue above that (the default
+    // chord's lilac, about 300°, where there's no OS accent color) would pass before the click lands.
+    await expect.poll(async () => Math.abs((await hue()) - 90)).toBeLessThanOrEqual(5);
     await expect(first).toHaveAttribute('aria-valuetext', /vivid$/);
 
     // "+" adds a color; dragged off the wheel and let go, it's removed.
