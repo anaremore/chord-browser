@@ -210,6 +210,20 @@ async function main() {
     const result = spawnSync(command, argv, { encoding: 'utf8', maxBuffer: 64 << 20, windowsHide: true, stdio: ['ignore', 'pipe', quiet ? 'pipe' : 'inherit'] });
     return result.status === 0 ? result.stdout.trim() : null;
   };
+  /**
+   * A long docker command fed `input`, its output shown as it comes: its exit code. The output is
+   * passed on rather than inherited because wsl.exe writes each stream at file offsets of its own,
+   * so with both sent to one file (> log 2>&1) stderr overwrote stdout.
+   */
+  const dockerLive = (args, input) => {
+    const [command, argv] = dockerCommand(args);
+    const child = spawn(command, argv, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    child.stdout.pipe(process.stdout, { end: false });
+    child.stderr.pipe(process.stderr, { end: false });
+    child.stdin.on('error', () => {}); // The container can exit (a bad image, say) before reading it all.
+    child.stdin.end(input);
+    return new Promise((done) => child.on('close', (status, signal) => done(signal ? 128 : (status ?? 1))));
+  };
   /** Where Docker sees a host path: under /mnt in WSL. */
   const dockerPath = (path) => {
     if (!onWindows) return path;
@@ -248,8 +262,8 @@ async function main() {
   const haveImage = () => docker(['image', 'inspect', '--format', '{{.Id}}', image], { quiet: true }) !== null;
   if (options.rebuild || !haveImage()) {
     log(`Building ${image} (once per change to scripts/e2e-linux/Dockerfile)`);
-    const [command, argv] = dockerCommand(['build', ...(options.rebuild ? ['--pull', '--no-cache'] : []), '--build-arg', `PNPM_VERSION=${pnpmVersion}`, '--tag', image, '-']);
-    if (spawnSync(command, argv, { input: dockerfile, windowsHide: true, stdio: ['pipe', 'inherit', 'inherit'] }).status !== 0) {
+    const build = ['build', ...(options.rebuild ? ['--pull', '--no-cache'] : []), '--build-arg', `PNPM_VERSION=${pnpmVersion}`, '--tag', image, '-'];
+    if ((await dockerLive(build, dockerfile)) !== 0) {
       // Two runs that start together both build; the one that tags second fails with "already exists".
       if (!haveImage()) fail(`Building ${image} failed`);
       log(`Another run built ${image} first`);
@@ -299,11 +313,7 @@ async function main() {
 
   const where = options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)';
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
-  const [command, argv] = dockerCommand(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright }));
-  const child = spawn(command, argv, { windowsHide: true, stdio: ['pipe', 'inherit', 'inherit'] });
-  child.stdin.on('error', () => {}); // The container can exit (a bad image, say) before reading it all.
-  child.stdin.end(tar);
-  const code = await new Promise((done) => child.on('close', (status, signal) => done(signal ? 128 : (status ?? 1))));
+  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright }), tar);
 
   // Results, back where a local run leaves them. A folder the run didn't write isn't touched.
   const appInDocker = dockerPath(appDir);
