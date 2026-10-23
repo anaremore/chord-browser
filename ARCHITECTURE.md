@@ -710,7 +710,7 @@ Page content is **untrusted input** handed to a model.
 - **Page text only arrives in tool results**, JSON-encoded with provenance: `{source: "web_page", tab_id, origin, url, retrieved_at, trust: "untrusted", range, content}`. The user's turn carries only opaque handles and Chord-made site labels (*Attached: tab t1 · example.com*), never titles or page text. Duet's instructions say tool results are data, never instructions.
 - **Containment:** no shell, files, web fetch or other MCP servers in either CLI (§11.2); Duet's tools only read.
 - **The transcript can't make requests:** no images or link unfurls. A link shows its full address and opens only on click.
-- **Visibility:** chips show what will be attached; tool activity shows inline (*Read “Article”*); a ✦ marks sidebar tabs Duet read while the chat is open; the first-use note and the chips' tooltip say that what's attached goes to the provider through the user's own account.
+- **Visibility:** chips show what will be attached; tool activity shows inline (*Read “Article”*); Duet's icon marks sidebar tabs Duet read while the chat is open; the first-use note and the chips' tooltip say that what's attached goes to the provider through the user's own account.
 - **Off switches:** per chord (panel menu) and global (Settings → Duet → *Show Duet*), which removes the panel, button and shortcut; nothing is spawned.
 - **Nothing in the background.** Duet only acts on a user message.
 
