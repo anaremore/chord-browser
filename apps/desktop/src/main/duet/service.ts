@@ -11,13 +11,18 @@ import { join } from 'node:path';
 import {
   children,
   DUET_MAX_PROCESSES,
+  DUET_PDF_MAX_PAGES,
   DUET_PROCESS_IDLE_MS,
+  DUET_PROVIDERS,
   DUET_TOOLS,
   duetInstructions,
   duetPruneBefore,
   duetTool,
   isNeverReadable,
   pageResult,
+  pdfPageOf,
+  pdfPageUrl,
+  pdfText,
   readNeedsApproval,
   splitCitations,
   stripCitations,
@@ -30,6 +35,7 @@ import {
   uuidv7,
   type DuetAttachment,
   type DuetCitation,
+  type DuetContextUsage,
   type DuetMessage,
   type DuetMessageBody,
   type DuetProvider,
@@ -41,15 +47,17 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { DuetAction, DuetView } from '@chord/ipc';
-import { app } from 'electron';
+import { app, type WebContents } from 'electron';
 import type { Browser } from '../browser';
 import { send } from '../ipc';
 import type { Persistence } from '../persistence';
 import type { DuetSession, ProviderError, ToolOutput } from './adapter';
 import { ClaudeSession } from './claude';
 import { CodexSession } from './codex';
-import { claudeConfigDir, claudeProjectFolder, detect, launchFor, openSignIn, type ProviderStatus } from './detect';
-import { readPage, screenshot } from './extract';
+import { claudeConfigDir, claudeProjectFolder, detect, detectInWsl, mayBeInWsl, notInstalled, openSignIn, rememberedInWsl, type Detected, type Launch, type ProviderStatus } from './detect';
+import { readPage, screenshot, type PageRead } from './extract';
+import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
+import { extractPdf, fetchPdf, PdfError, pdfProblemCopy } from './pdf';
 
 type Decision = 'once' | 'thread' | 'denied';
 
@@ -74,7 +82,21 @@ interface ThreadState {
   /** Shown between messages after a resume fell back to a summary, or the provider changed. */
   pendingDivider: string | null;
   lastError: ProviderError | null;
+  /** How full the provider's context is, as its CLI last reported (the panel's meter). */
+  context: DuetContextUsage | null;
+  /** PDFs read in this chat, per tab: later ranges reuse them, and citations find their page in them. */
+  pdfs: Map<NodeId, PdfRead>;
 }
+
+interface PdfRead {
+  url: string;
+  pages: string[];
+  totalPages: number;
+  text: string;
+}
+
+/** WSL installs as panel.json keeps them, so a WSL-only setup is ready at launch without starting WSL. */
+type SavedWsl = Partial<Record<DuetProvider, { status: ProviderStatus; target: WslTarget }>>;
 
 interface Panel {
   open: boolean;
@@ -90,12 +112,21 @@ interface Live {
 }
 
 const THREADS_IN_MENU = 12;
+/** PDFs kept per chat for later ranges and citations; the oldest goes first. */
+const PDFS_KEPT = 3;
 /** Development and tests: a shorter idle window, so "start fresh, offer Continue" can be seen. */
 const IDLE_MS = (!app.isPackaged && Number(process.env['CHORD_DUET_IDLE_MS'])) || undefined;
 const PUSH_MS = 33;
 
 export class DuetService {
   private statuses: Partial<Record<DuetProvider, ProviderStatus>> = {};
+  /** How to start each provider: never sent to a page (a launch holds the environment). */
+  private launches: Partial<Record<DuetProvider, Launch>> = {};
+  /** Installs found inside WSL at the last look, used while Windows itself has none. */
+  private inWsl: Partial<Record<DuetProvider, Detected>> = {};
+  private wslLookup: Promise<void> | null = null;
+  /** Providers Setup is still looking for inside WSL. */
+  private lookingInWsl: DuetProvider[] = [];
   private readonly threads = new Map<string, ThreadState>();
   /** Which thread each chord's panel shows: a thread id, or a chord-keyed fresh one. */
   private readonly showing = new Map<string, string>();
@@ -130,9 +161,14 @@ export class DuetService {
     await mkdir(join(this.root, 'empty'), { recursive: true });
     await mkdir(join(this.root, 'instructions'), { recursive: true });
     try {
-      const saved = JSON.parse(await readFile(join(this.root, 'panel.json'), 'utf8')) as { drafts?: Record<string, string>; firstUseSeen?: boolean };
+      const saved = JSON.parse(await readFile(join(this.root, 'panel.json'), 'utf8')) as { drafts?: Record<string, string>; firstUseSeen?: boolean; wsl?: SavedWsl };
       this.drafts = saved.drafts ?? {};
       this.firstUseSeen = Boolean(saved.firstUseSeen);
+      for (const provider of DUET_PROVIDERS) {
+        const entry = saved.wsl?.[provider];
+        const target = asWslTarget(entry?.target);
+        if (entry?.status && target) this.inWsl[provider] = rememberedInWsl({ ...notInstalled(provider), ...entry.status, provider }, target);
+      }
     } catch {
       // First run.
     }
@@ -142,7 +178,8 @@ export class DuetService {
       const removed = (await this.persistence.duet({ op: 'prune', before }).catch(() => ({ removed: [] }))).removed ?? [];
       for (const thread of removed) void this.deleteProviderCopy(thread);
     }
-    void this.refreshProviders();
+    // Launching never starts WSL: a WSL install found earlier stands until Setup or the panel looks again.
+    void this.refreshProviders('never');
   }
 
   /* ---------- Views ---------- */
@@ -205,6 +242,8 @@ export class DuetService {
       pending: new Map(),
       pendingDivider: null,
       lastError: null,
+      context: null,
+      pdfs: new Map(),
     };
   }
 
@@ -273,11 +312,12 @@ export class DuetService {
       enabled: settings.enabled && !privateWindow,
       open: this.panel(windowId).open,
       provider: settings.provider,
-      providers: (['claude', 'codex'] as const).map((p) => this.statuses[p] ?? { provider: p, installed: false, path: null, version: null, signedIn: null, billing: null, tooOld: false }),
+      providers: DUET_PROVIDERS.map((p) => this.statuses[p] ?? notInstalled(p)),
       chordOff: chordId ? settings.offChords.includes(chordId) : false,
       firstUse: !this.firstUseSeen,
+      lookingInWsl: this.lookingInWsl,
     };
-    if (!chordId || privateWindow) return { ...base, thread: null, continueFrom: null, threads: [], messages: [], busy: false, startedAt: null, queue: [], attachments: [], attachable: [], readTabIds: [], error: null, draft: '' };
+    if (!chordId || privateWindow) return { ...base, thread: null, continueFrom: null, threads: [], messages: [], busy: false, startedAt: null, queue: [], attachments: [], attachable: [], readTabIds: [], error: null, draft: '', context: null };
     const state = await this.stateFor(chordId);
     const nodes = this.browser.store.state.nodes;
     const attachable = children(this.browser.store.state, chordId, 'pinned', null)
@@ -301,6 +341,7 @@ export class DuetService {
       readTabIds: [...state.read].filter((id) => nodes[id]),
       error: state.lastError,
       draft: this.drafts[state.thread?.id ?? `fresh:${chordId}`] ?? '',
+      context: state.context,
     };
   }
 
@@ -335,7 +376,7 @@ export class DuetService {
         const open = action.open ?? !panel.open;
         if (open !== panel.open) this.toggled.add(windowId);
         panel.open = open;
-        if (panel.open) void this.refreshProviders();
+        if (panel.open) void this.refreshProviders('if-needed');
         break;
       }
       case 'dismissFirstUse':
@@ -353,13 +394,11 @@ export class DuetService {
           this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { offChords: [...off] } } });
         }
         break;
-      case 'signIn': {
-        const status = this.statuses[action.provider] ?? (await detect(action.provider));
-        if (status.path) openSignIn(action.provider, status.path);
+      case 'signIn':
+        await this.signIn(action.provider);
         break;
-      }
       case 'refresh':
-        await this.refreshProviders();
+        await this.refreshProviders('always');
         break;
       default:
         if (!chordId || this.isPrivateChord(chordId)) return;
@@ -452,6 +491,7 @@ export class DuetService {
     const switched = state.thread.provider !== provider;
     state.thread.provider = provider;
     state.thread.model = model;
+    state.context = null;
     if (switched) {
       // A different provider can't resume the other's session: it starts primed with a summary.
       this.close(state);
@@ -544,9 +584,12 @@ export class DuetService {
       this.touch(thread.id, existing);
       return existing.session;
     }
-    const status = this.statuses[thread.provider] ?? (await detect(thread.provider));
-    this.statuses[thread.provider] = status;
-    if (!status.installed || !status.path) {
+    if (!this.statuses[thread.provider]) await this.refreshProviders('never');
+    // Still looking inside WSL (Setup just opened): that answer decides.
+    if (!this.statuses[thread.provider]?.installed && this.wslLookup) await this.wslLookup;
+    const status = this.statuses[thread.provider];
+    const launch = this.launches[thread.provider];
+    if (!status?.installed || !launch) {
       state.lastError = { kind: 'other', message: `${thread.provider === 'claude' ? 'Claude Code' : 'Codex'} isn't installed. Settings → Duet shows how to set it up.` };
       return null;
     }
@@ -560,7 +603,7 @@ export class DuetService {
     await writeFile(instructionsFile, instructions, { encoding: 'utf8', mode: 0o600 });
     const resumeId = summary ? null : thread.providerSessionId;
     const options = {
-      launch: launchFor(status.path),
+      launch,
       cwd: join(this.root, 'empty'),
       model: thread.model,
       instructions,
@@ -583,6 +626,10 @@ export class DuetService {
         this.schedulePush();
       },
       onTool: (name: string, args: Record<string, unknown>) => this.runTool(state, name, args),
+      onUsage: (usage: DuetContextUsage) => {
+        state.context = usage;
+        this.schedulePush();
+      },
       onTurnEnd: (outcome: { status: 'done' | 'interrupted' | 'error'; error?: ProviderError }) => void this.finishTurn(state, outcome),
       onExit: (error: ProviderError | null) => {
         this.live.delete(thread.id);
@@ -606,6 +653,7 @@ export class DuetService {
   private async fallBack(state: ThreadState): Promise<void> {
     const thread = state.thread!;
     thread.providerSessionId = null;
+    state.context = null;
     await this.saveThread(thread);
     const lastUser = [...state.messages].reverse().find((m) => m.body.role === 'user');
     const earlier = state.messages.filter((m) => m !== lastUser);
@@ -655,7 +703,18 @@ export class DuetService {
       if (seg.kind !== 'citation' || citations.some((c) => c.n === seg.n)) continue;
       const nodeId = state.refs.get(seg.ref) ?? null;
       const node = nodeId ? this.browser.store.state.nodes[nodeId] : undefined;
-      citations.push({ n: seg.n, ref: seg.ref, quote: seg.quote, url: node?.kind === 'tab' ? node.url : '', title: node?.kind === 'tab' ? node.title : '', tabId: node ? nodeId : null });
+      // A PDF's page comes from the text Duet read, not from the model.
+      const pdf = nodeId ? state.pdfs.get(nodeId) : undefined;
+      const page = pdf ? pdfPageOf(pdf.pages, seg.quote) : null;
+      citations.push({
+        n: seg.n,
+        ref: seg.ref,
+        quote: seg.quote,
+        url: pdf?.url ?? (node?.kind === 'tab' ? node.url : ''),
+        title: node?.kind === 'tab' ? node.title : '',
+        tabId: node ? nodeId : null,
+        ...(page ? { page } : {}),
+      });
     }
     const body: DuetMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}) };
     if (outcome.status === 'error') state.lastError = outcome.error ?? null;
@@ -794,6 +853,10 @@ export class DuetService {
       return shot ? { image: shot } : refuse('Could not take the picture.');
     }
     const page = await readPage(contents);
+    if (isPdf(page, contents.getURL())) {
+      if (tool === 'read_selection') return refuse('Duet can’t see what’s selected inside a PDF. Read the PDF with read_tab instead.');
+      return this.readPdf(state, node, contents, ref, args);
+    }
     if (!page) return refuse('That page could not be read.');
     if (tool === 'read_selection') {
       await this.activity(state, tool, `Read your selection in “${node.title || safeHost(node.url)}”`, node.url);
@@ -803,6 +866,44 @@ export class DuetService {
     const length = typeof args['length'] === 'number' ? args['length'] : undefined;
     const text = pageResult({ ref, url: page.url, text: page.text, start, ...(length ? { length } : {}), retrievedAt: Date.now() });
     await this.activity(state, tool, `Read “${node.title || safeHost(node.url)}”`, node.url);
+    return { text };
+  }
+
+  /**
+   * A PDF in Chromium's viewer: its bytes through the tab's own session, its
+   * text from pdf.js in a utility process, with [Page n] markers. Reading on
+   * from `start` reuses the same read; a new read fetches it again.
+   */
+  private async readPdf(state: ThreadState, node: TabNode, contents: WebContents, ref: string, args: Record<string, unknown>): Promise<ToolOutput> {
+    const title = node.title || safeHost(node.url);
+    const url = contents.getURL();
+    const start = typeof args['start'] === 'number' ? args['start'] : 0;
+    const length = typeof args['length'] === 'number' ? args['length'] : undefined;
+    let pdf = state.pdfs.get(node.id);
+    if (!pdf || pdf.url !== url || start === 0) {
+      try {
+        // The address the tab shows now, and where the download ends up, must both be readable.
+        const readable = (address: string) => !isNeverReadable(address, this.settings.neverSites);
+        if (!readable(url)) throw new PdfError('never');
+        const bytes = await fetchPdf(contents, url, readable);
+        const { pages, totalPages } = await extractPdf(bytes, DUET_PDF_MAX_PAGES);
+        pdf = { url, pages, totalPages, text: pdfText(pages) };
+      } catch (error) {
+        const why = error instanceof PdfError ? pdfProblemCopy(error.problem, error.detail) : pdfProblemCopy('crashed');
+        await this.activity(state, 'read_tab', `Couldn’t read “${title}”`, why, false);
+        return { text: toolResult({ refused: `Duet couldn’t read this PDF: ${why}.` }, false), isError: true };
+      }
+      state.pdfs.delete(node.id);
+      state.pdfs.set(node.id, pdf);
+      if (state.pdfs.size > PDFS_KEPT) state.pdfs.delete(state.pdfs.keys().next().value!);
+    }
+    const read = pdf.pages.length;
+    const notes = [
+      pdf.totalPages > read ? `This PDF has ${pdf.totalPages} pages; Duet read pages 1–${read}, the most it reads.` : '',
+      pdf.pages.every((p) => !p.trim()) ? 'This PDF has no text to read (it may be scanned pages); tab_screenshot shows the page on screen.' : '',
+    ].filter(Boolean);
+    const text = pageResult({ ref, url, text: pdf.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pdf: { pages: pdf.totalPages, read }, ...(notes.length ? { note: notes.join(' ') } : {}) });
+    await this.activity(state, 'read_tab', `Read “${title}”`, pdf.totalPages > read ? `PDF, pages 1–${read} of ${pdf.totalPages}` : `PDF, ${pdf.totalPages} page${pdf.totalPages === 1 ? '' : 's'}`);
     return { text };
   }
 
@@ -842,11 +943,18 @@ export class DuetService {
     if (node?.kind === 'tab') {
       this.browser.store.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
       const contents = await this.loadedContents(node.id);
-      // Scroll to the quote and mark it, as find in page does.
-      if (contents) contents.findInPage(citation.quote, { findNext: false });
+      if (!contents) return;
+      // Scroll to the quote and mark it, as find in page does (Chromium's PDF viewer included).
+      const matches = await findMatches(contents, citation.quote);
+      // A PDF quote the viewer can't find as written (a word split across lines): open its page instead.
+      // The viewer reads #page= only when it loads, so it reloads there.
+      if (!matches && citation.page && !contents.isDestroyed()) {
+        await contents.loadURL(pdfPageUrl(contents.getURL(), citation.page)).catch(() => undefined);
+        if (!contents.isDestroyed()) contents.reload();
+      }
       return;
     }
-    if (citation.url) this.browser.store.dispatch({ t: 'tab.open', windowId, url: textFragmentUrl(citation.url, citation.quote) });
+    if (citation.url) this.browser.store.dispatch({ t: 'tab.open', windowId, url: citation.page ? pdfPageUrl(citation.url, citation.page) : textFragmentUrl(citation.url, citation.quote) });
   }
 
   private async exportThread(state: ThreadState): Promise<void> {
@@ -914,13 +1022,17 @@ export class DuetService {
         await rm(join(folder, `${id}.jsonl`), { force: true }).catch(() => undefined);
         await rm(join(folder, id), { recursive: true, force: true }).catch(() => undefined);
       }
+      // Claude Code inside WSL keeps its sessions in the distro, under the distro's path to the same folder.
+      const wsl = (this.launches.claude ?? this.inWsl.claude?.launch)?.wsl;
+      if (wsl) await removeInWsl(wsl, wslClaudeSessionPaths(wsl, cwd, id));
       return;
     }
-    const status = this.statuses.codex ?? (await detect('codex'));
-    if (!status.path) return;
+    if (!this.statuses.codex) await this.refreshProviders('never');
+    const launch = this.launches.codex;
+    if (!launch) return;
     await new Promise<void>((done) => {
       const session = new CodexSession(
-        { launch: launchFor(status.path!), cwd: join(this.root, 'empty'), model: null, instructions: '', instructionsFile: '', resumeId: '__delete_only__', newSessionId: '', tools: [] },
+        { launch, cwd: join(this.root, 'empty'), model: null, instructions: '', instructionsFile: '', resumeId: '__delete_only__', newSessionId: '', tools: [] },
         { onSessionId: () => undefined, onText: () => undefined, onTool: async () => ({}), onTurnEnd: () => undefined, onExit: () => done() },
       );
       const timer = setTimeout(() => session.close(), 10_000);
@@ -933,19 +1045,79 @@ export class DuetService {
 
   /* ---------- Providers, settings ---------- */
 
-  async refreshProviders(): Promise<ProviderStatus[]> {
-    const [claude, codex] = await Promise.all([detect('claude'), detect('codex')]);
-    this.statuses = { claude, codex };
+  /**
+   * What's installed and signed in. Windows, macOS and Linux installs are
+   * checked every time. Inside WSL (Windows only, for a provider Windows
+   * doesn't have) only when asked: `always` for Check again and Settings,
+   * `if-needed` when the panel opens (while Setup shows, or the provider in
+   * use lives in WSL), `never` at launch. The look runs in the background,
+   * with a timeout, and Setup says it's looking meanwhile.
+   */
+  async refreshProviders(wsl: 'never' | 'if-needed' | 'always' = 'always'): Promise<ProviderStatus[]> {
+    const native = await Promise.all(DUET_PROVIDERS.map((p) => detect(p)));
+    for (const found of native) this.setDetected(found.status.installed ? found : (this.inWsl[found.status.provider] ?? found));
     this.schedulePush();
-    return [claude, codex];
+    const missing = native.filter((d) => !d.status.installed && mayBeInWsl(d.status.provider)).map((d) => d.status.provider);
+    if (missing.length && this.wantsWsl(wsl)) await this.lookInWsl(missing);
+    return this.providerStatuses;
+  }
+
+  private wantsWsl(wsl: 'never' | 'if-needed' | 'always'): boolean {
+    if (wsl !== 'if-needed') return wsl === 'always';
+    const chosen = this.settings.provider ? this.statuses[this.settings.provider] : undefined;
+    return !chosen?.installed || !chosen.signedIn || chosen.wsl !== null;
+  }
+
+  private lookInWsl(providers: DuetProvider[]): Promise<void> {
+    this.wslLookup ??= (async () => {
+      // The registry says whether there's a distro at all: no WSL, nothing starts and nothing shows.
+      const distro = await defaultWslDistro();
+      if (!distro) {
+        for (const p of providers) delete this.inWsl[p];
+        return;
+      }
+      this.lookingInWsl = providers;
+      this.schedulePush();
+      try {
+        const found = await detectInWsl(providers, distro);
+        // WSL didn't answer in time: keep what was known.
+        if (!found) return;
+        for (const provider of providers) {
+          const detected = found.find((d) => d.status.provider === provider);
+          if (detected) this.inWsl[provider] = detected;
+          else delete this.inWsl[provider];
+          if (!this.statuses[provider]?.installed || this.statuses[provider]?.wsl) this.setDetected(detected ?? { status: notInstalled(provider), launch: null });
+        }
+        void this.savePanel();
+      } finally {
+        this.lookingInWsl = [];
+        this.schedulePush();
+      }
+    })().finally(() => (this.wslLookup = null));
+    return this.wslLookup;
+  }
+
+  private setDetected({ status, launch }: Detected): void {
+    this.statuses[status.provider] = status;
+    if (launch) this.launches[status.provider] = launch;
+    else delete this.launches[status.provider];
   }
 
   get providerStatuses(): ProviderStatus[] {
-    return [this.statuses.claude, this.statuses.codex].filter((s): s is ProviderStatus => Boolean(s));
+    return DUET_PROVIDERS.map((p) => this.statuses[p]).filter((s): s is ProviderStatus => Boolean(s));
+  }
+
+  /** Sign in: the provider's own login in a terminal (inside WSL for a WSL install). */
+  async signIn(provider: DuetProvider): Promise<void> {
+    if (!this.statuses[provider]) await this.refreshProviders('if-needed');
+    const launch = this.launches[provider];
+    if (launch) openSignIn(provider, launch);
   }
 
   private async savePanel(): Promise<void> {
-    await writeFile(join(this.root, 'panel.json'), JSON.stringify({ drafts: this.drafts, firstUseSeen: this.firstUseSeen }), { encoding: 'utf8', mode: 0o600 }).catch(() => undefined);
+    const wsl: SavedWsl = {};
+    for (const [provider, found] of Object.entries(this.inWsl) as [DuetProvider, Detected][]) if (found.launch?.wsl) wsl[provider] = { status: found.status, target: found.launch.wsl };
+    await writeFile(join(this.root, 'panel.json'), JSON.stringify({ drafts: this.drafts, firstUseSeen: this.firstUseSeen, wsl }), { encoding: 'utf8', mode: 0o600 }).catch(() => undefined);
   }
 
   /** Quitting: replies in flight are kept as interrupted, and every provider process ends. */
@@ -972,6 +1144,34 @@ export class DuetService {
     await this.load(threadId, chordId);
     this.panel(windowId).open = true;
     this.schedulePush();
+  }
+}
+
+/** Find in page from the start, and how many matches it found (0 if it doesn't answer within a moment). */
+function findMatches(contents: WebContents, text: string): Promise<number> {
+  return new Promise((done) => {
+    let request = -1;
+    const finish = (matches: number) => {
+      clearTimeout(timer);
+      contents.off('found-in-page', onFound);
+      done(matches);
+    };
+    const onFound = (_event: unknown, result: Electron.Result) => {
+      if (result.requestId === request && result.finalUpdate) finish(result.matches);
+    };
+    const timer = setTimeout(() => finish(0), 2000);
+    contents.on('found-in-page', onFound);
+    request = contents.findInPage(text, { findNext: false });
+  });
+}
+
+/** Chromium's PDF viewer: the page's own document says application/pdf (and the extractor sees only the viewer). */
+function isPdf(page: PageRead | null, url: string): boolean {
+  if (page) return page.contentType === 'application/pdf';
+  try {
+    return /\.pdf$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
   }
 }
 

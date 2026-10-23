@@ -34,11 +34,14 @@ const openBar = (shell, mode) =>
 // skip themselves unless Chord is in the foreground); the rest render Chord alone.
 const capture = (name, { popups = false } = {}) => {
   const file = join(outDir, `${appearance}-${name}.png`);
-  const args = ['-NoProfile', '-File', captureScript, '-Title', 'Chord', '-Out', file, ...(popups ? ['-Popups'] : [])];
+  // This Chord's window only: the Chord you browse with has the same title.
+  const args = ['-NoProfile', '-File', captureScript, '-Title', 'Chord', '-ProcessId', String(chordPid), '-Out', file, ...(popups ? ['-Popups'] : [])];
   execFileSync('pwsh', args, { stdio: 'inherit' });
 };
 
 const app = await electron.launch({ args: [appDir], env, cwd: appDir });
+// Chord's main process owns its windows (app.process() is Playwright's launcher).
+const chordPid = await app.evaluate(() => process.pid);
 try {
   const find = async (match) => {
     for (let i = 0; i < 100; i++) {

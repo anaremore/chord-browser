@@ -30,11 +30,14 @@ delete env.ELECTRON_RUN_AS_NODE;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const capture = (name) => {
   const file = join(outDir, `${appearance}-${name}.png`);
-  execFileSync('pwsh', ['-NoProfile', '-File', captureScript, '-Title', 'Chord', '-Out', file], { stdio: 'inherit' });
+  // This Chord's window only: the Chord you browse with has the same title.
+  execFileSync('pwsh', ['-NoProfile', '-File', captureScript, '-Title', 'Chord', '-ProcessId', String(chordPid), '-Out', file], { stdio: 'inherit' });
   console.log(file);
 };
 
 const app = await electron.launch({ args: [appDir, '--no-first-run'], env, cwd: appDir });
+// Chord's main process owns its windows (app.process() is Playwright's launcher).
+const chordPid = await app.evaluate(() => process.pid);
 try {
   let shell;
   for (let i = 0; i < 100 && !shell; i++) {

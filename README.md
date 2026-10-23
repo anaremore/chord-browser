@@ -8,16 +8,31 @@ Windows, macOS, and Linux (X11 and Wayland) are all first-class.
 
 > **Status: early development.** Unsigned preview builds appear on [Releases](https://github.com/anaremore/chord-browser/releases) as they're cut; the first preview (0.1) is planned for mid-December 2026. See the [roadmap](ROADMAP.md).
 
-## What's planned
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/chord-dark.png">
+  <img src="docs/images/chord-light.png" alt="Chord on Windows: a sidebar tinted in the chord's colors, with pinned tabs, a folder and today's tabs, beside a Wikipedia article">
+</picture>
+
+## What's in it
+
+Everything here works on `main` today and comes with the first preview.
 
 - **Vertical sidebar:** pinned tabs that remember their home page, Today tabs that tidy themselves into an archive, nestable folders, and drag-and-drop everywhere.
 - **Chords:** separate sets of tabs, each with its own color theme and, optionally, separate sign-ins. Switch with ⌘/Ctrl+1–9 or a swipe.
 - **Command bar** (⌘/Ctrl+T): one place to search open tabs, pinned tabs, history, the archive, and actions.
 - **Minimal mode:** collapse the sidebar and Chord shrinks to one slim bar.
+- **Split view:** two to four tabs side by side, kept together in the sidebar.
+- **Peek and the mini window:** links from pinned tabs open in a Peek over the page, and links from other apps in a small window you can move into a chord.
 - **Chrome extensions**, including password managers.
 - **Pop-out video:** a playing video floats into picture-in-picture when you switch tabs.
 - **Duet** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. It can read the page or your tabs when you let it, cites what it read, and never sees your sign-in. Turn it off in Settings and it's gone.
-- **Later:** split view, Peek, and a mini window for links from other apps.
+
+| | |
+|---|---|
+| ![The command bar over a page, with open tabs, a site search and suggestions for "wiki"](docs/images/command-bar.png) | ![Split view: a Wikipedia article and an MDN page side by side](docs/images/split-view.png) |
+| **Command bar:** tabs, history, the archive and actions in one place. | **Split view:** pages side by side, one entry in the sidebar. |
+| ![Duet beside a Wikipedia article, answering from the page with a numbered citation](docs/images/duet.png) | ![Settings, Appearance: the color scheme and a library of themes for the chord](docs/images/themes.png) |
+| **Duet:** answers from your tabs, with citations you can click. | **Themes:** each chord has its own colors, light or dark. |
 
 ## Try the preview
 
@@ -111,3 +126,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues privately,
 [MIT](LICENSE). One file, the command bar's ranking (`packages/core/src/rank.ts`), is adapted from [Crest](https://github.com/pauljoda/Crest) and stays under the [Mozilla Public License 2.0](LICENSES/MPL-2.0.txt).
 
 Release builds include [electron-chrome-extensions](packages/chrome-extensions) for Chrome extension support. That library is GPL-3.0, so Chord's release builds are distributed under the [GPL-3.0](LICENSES/GPL-3.0.txt), with the source at each release's tag. Chord's own source stays MIT.
+
+Duet reads PDFs with Mozilla's [pdf.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist`), under the [Apache License 2.0](LICENSES/Apache-2.0.txt). Every build ships the files in [LICENSES](LICENSES) in its `licenses` resources folder.
