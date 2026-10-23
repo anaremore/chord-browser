@@ -177,15 +177,15 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   }, []);
 
   // The first opening shouldn't pay for this process's first fonts, styles and code paths (about
-  // 40 ms on the reference PC; the open budget is 50, ARCHITECTURE.md §1). So as soon as it has
-  // started, while the overlay is still hidden, the bar renders once, unseen, with a query (which
-  // also warms the history search), then goes again. It runs in its own process alongside the
-  // shell's start and is done well before the window shows. A real opening simply replaces it.
-  // (Not at idle: a hidden page gets no idle time, so that would wait for the first opening itself.)
+  // 40 ms on the reference PC; the open budget is 50, ARCHITECTURE.md §1). So once main says the
+  // window is up, while the overlay is still hidden, the bar renders once, unseen, with a query
+  // (which also warms the history search), then goes again. A real opening simply replaces it.
+  // Not sooner: alongside the shell's start it slows the launch. Not at idle: a hidden page gets
+  // no idle time, so that would wait for the first opening itself.
   useEffect(() => {
     let done: ReturnType<typeof setTimeout> | undefined;
-    const start = setTimeout(() => {
-      if (opened.current) return;
+    const stop = api.overlay.onWarm(() => {
+      if (opened.current || warming.current) return;
       performance.mark('chord:command-bar-warm');
       warming.current = true;
       setSession({ mode: 'new', anchor: null, openedAt: performance.now(), requestedAt: 0, initial: WARM_QUERY, seq: -1, warm: true });
@@ -200,7 +200,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       }, WARM_MS);
     });
     return () => {
-      clearTimeout(start);
+      stop();
       clearTimeout(done);
     };
   }, []);

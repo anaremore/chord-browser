@@ -139,6 +139,8 @@ export class AppWindow {
   /** The command bar listens only once it has started; an opening asked for before that waits here. */
   private overlayReady = false;
   private pendingOpen: { mode: OverlayOpenEvent['mode']; url: string; anchor: Rect | null; requestedAt: number } | null = null;
+  /** The shell has painted its first frame: the window's launch is over. */
+  private shellPainted = false;
   readonly isPrivate: boolean;
   private origin: FrameOrigin;
   private frameAnimation: ReturnType<typeof setInterval> | undefined;
@@ -575,6 +577,18 @@ export class AppWindow {
     const pending = this.pendingOpen;
     this.pendingOpen = null;
     if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, pending.requestedAt);
+    else if (this.shellPainted) send(this.overlay.webContents, 'overlay:warm', null);
+  }
+
+  /**
+   * The shell painted its first frame. Only now may the command bar warm up
+   * for its first opening (CommandBar.tsx): doing it alongside the shell's
+   * start would slow the launch.
+   */
+  markShellPainted(): void {
+    if (this.shellPainted) return;
+    this.shellPainted = true;
+    if (this.overlayReady) send(this.overlay.webContents, 'overlay:warm', null);
   }
 
   /** `seq` is the opening being closed; a close for an earlier one (racing a newer open) is ignored. */

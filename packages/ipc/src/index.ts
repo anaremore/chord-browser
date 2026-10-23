@@ -605,7 +605,8 @@ export const invokeChannels = {
   'layout:anchor': { roles: ['shell'], request: Rect.nullable(), response: z.void() },
   /**
    * Launch timing (ARCHITECTURE.md §1): the shell's sidebar is in the DOM with its handlers attached
-   * (`ready`), then its first frame is painted (`painted`). Main times the launch up to each.
+   * (`ready`), then its first frame is painted (`painted`). Main times the launch up to each, and
+   * once the window is up, lets its command bar warm up for its first opening.
    */
   'perf:shell': { roles: ['shell'], request: z.strictObject({ milestone: z.enum(['ready', 'painted']) }), response: z.void() },
   'download:action': {
@@ -759,6 +760,8 @@ export interface EventPayloads {
   'mini:state': MiniState;
   /** Main closed this opening of the overlay itself (Peek, by Esc in its page, ⌘W, or Open in Today). */
   'overlay:dismiss': { seq: number };
+  /** The window is up (its shell painted): the command bar may warm itself for its first opening now. */
+  'overlay:warm': null;
   /** Peek's page moved on (title, address) or its card moved (the window resized). */
   'peek:state': PeekState;
   'duet:state': DuetView;
@@ -958,6 +961,8 @@ export interface OverlayApi {
     onOpen(listener: (event: OverlayOpenEvent) => void): () => void;
     /** Main closed an opening itself: forget it, so it never shows again. */
     onDismiss(listener: (seq: number) => void): () => void;
+    /** The window's launch is over: warming up for the first opening won't slow it down. */
+    onWarm(listener: () => void): () => void;
     close(seq: number): Promise<void>;
     /** Listening now: main may open the command bar. */
     ready(): Promise<void>;

@@ -148,7 +148,11 @@ function registerIpc(): void {
   handle('mini:copyLink', (_request, sender) => browser!.minis.copyLink(sender));
   handle('overlay:ready', (_request, sender) => senderWindow(sender).markOverlayReady());
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
-  handle('perf:shell', ({ milestone }) => markLaunch(milestone === 'ready' ? 'shellReady' : 'shellPainted'));
+  handle('perf:shell', ({ milestone }, sender) => {
+    markLaunch(milestone === 'ready' ? 'shellReady' : 'shellPainted');
+    // The window is up: its command bar may warm up for its first opening now.
+    if (milestone === 'painted') senderWindow(sender).markShellPainted();
+  });
   handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
   handle('menu:tab', ({ nodeId, x, y }, sender) => browser!.openTabMenu(sender, nodeId, { x, y }));
   handle('menu:favorite', ({ favoriteId, x, y }, sender) => browser!.openFavoriteMenu(sender, favoriteId, { x, y }));
