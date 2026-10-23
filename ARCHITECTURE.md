@@ -34,7 +34,7 @@ Every library, API, and version below was checked on 2026-10-22. Anything not co
 
 **In scope**, in the priority order from the brief: vertical sidebar (pinned and Today tabs), chords with optional per-chord profiles, nestable folders, auto-archive, command bar, split view, mini window plus default-browser registration, Peek, and hidden-chrome mode. Hidden-chrome is now a **fully collapsible sidebar**: every sidebar feature folds away, leaving one Dia-style bar with basic controls and a combined `domain / title` field (DESIGN.md §3.3). Two additions:
 
-- **Duet**, an opt-in right-side assistant panel. It uses your own Claude Code or Codex install ([§11](#11-duet--the-assistant-panel)).
+- **Duet**, a right-side chat panel that can read your tabs when you let it. It uses your own Claude Code or Codex install and spawns nothing until you send a message ([§11](#11-duet--the-assistant-panel)).
 - **Extensions**, needed for password managers ([§12](#12-extensions)).
 
 **Not in v1:** browser-data import (Arc or otherwise; the schema doesn't preclude it later), sync, Boosts, Easels, mobile, background AI of any kind, and a Chord account or server.
@@ -101,7 +101,7 @@ chord-browser/
 │  │  ├─ popover/               hover previews, permission prompts
 │  │  └─ pages/                 chord://settings, chord://archive
 │  ├─ src/data/                 "chord-data" utility process: SQLite, search, favicons
-│  ├─ src/agent/                "chord-agent" utility process: Duet providers + MCP server
+│  ├─ src/main/duet/            Duet: CLI adapters, its tools and page extraction (in main, §11.2)
 │  ├─ test/                     unit · e2e (dev build) · packaged (smoke test of a packaged build)
 │  ├─ build/                    packaging resources: app icon; later NSIS include, entitlements
 │  └─ electron-builder.config.ts
@@ -134,28 +134,23 @@ flowchart LR
   subgraph Data["chord-data utilityProcess"]
     DB[(SQLite + FTS5)]
   end
-  subgraph Agent["chord-agent utilityProcess (only if Duet enabled)"]
-    MCP[Chord MCP server<br/>127.0.0.1, token]
-    PA[Provider adapters]
+  subgraph Duet["Duet, in main (spawns nothing until a message)"]
+    PA[Provider adapters + Chord's tools]
   end
-  PA -- stdio --> CC[[user's own `claude` CLI]]
-  PA -- stdio JSON-RPC --> CX[[user's own `codex app-server`]]
-  CC -- HTTP --> MCP
-  CX -- HTTP --> MCP
+  PA -- stdio stream-json, tools on the control channel --> CC[[user's own `claude` CLI]]
+  PA -- stdio JSON-RPC, tools as dynamicTools --> CX[[user's own `codex app-server`]]
   Shell[Shell renderer<br/>sidebar · Duet panel] <-- invoke + patches --> Main
   Overlay[Overlay renderer<br/>command bar · Peek chrome] <-- invoke --> Main
   Overlay <-- MessagePort --> Data
-  Shell <-- MessagePort --> Agent
   Main <-- MessagePort --> Data
-  Main <-- MessagePort --> Agent
   Web[Web content renderers<br/>sandboxed, no preload] -. CDP/events only .- TM
 ```
 
 | Process | Responsibilities | Why it's separate |
 |---|---|---|
-| **Main** | Lifecycle, windows, WebContentsView creation and placement, sessions and profiles, navigation policy, permissions, downloads, shortcuts, menus, default browser, updates. Holds the **authoritative in-memory Store**. | Owns every native object. It is never allowed to block: no SQLite, no search, no LLM I/O. |
+| **Main** | Lifecycle, windows, WebContentsView creation and placement, sessions and profiles, navigation policy, permissions, downloads, shortcuts, menus, default browser, updates. Holds the **authoritative in-memory Store**. | Owns every native object. It is never allowed to block: no SQLite, no search. Duet only pipes stdio to the CLIs (§11.2). |
 | **chord-data** (utilityProcess) | SQLite connection (WAL), migrations, write-behind persistence, history, archive, FTS5 search, favicon cache, backups. | Synchronous SQLite stays off main. A crash here doesn't take down windows: main buffers writes and respawns it. |
-| **chord-agent** (utilityProcess, lazy) | Duet: spawns the user's provider CLIs, hosts the Chord MCP server, streams turns. | Isolates third-party CLIs and network I/O. It is **never spawned** unless Duet is enabled, and is killed after 10 minutes idle. |
+| **Duet's CLIs** (the user's `claude` / `codex`, lazy) | One per active chat, at most 3; each answers through stdio, and Duet (in main) answers their tool calls and streams replies to the shell. | The CLIs are third-party processes doing the network and model I/O. **Nothing is spawned** until a message is sent, and each is killed after 10 minutes idle. A planned `chord-agent` utility process proved unnecessary (§11.2). |
 | **Shell renderer** (1 per window) | React UI: sidebar, content-frame shadows and placeholders, Win/Linux top strip, Duet panel, toasts, onboarding. | Our trusted UI, still sandboxed. |
 | **Overlay renderer** (1 per window, pre-warmed) | Command bar, Peek frame chrome, split-view drop zones. | Must paint above web content ([§5](#5-window-composition)). Kept mounted and hidden so it opens in < 50 ms. |
 | **Popover renderer** (1 per window, pre-warmed) | Hover previews, permission prompts. Its bounds are sized to the card. | Electron views can't pass clicks through (see [§5](#5-window-composition)), so popovers must not cover the sidebar. |
@@ -419,6 +414,8 @@ Favicons are stored once per distinct icon, keyed by content hash, and unused on
 
 **The archive, as built (migration 5):** `archive_item` with an explicit integer `rid` (so its external-content FTS5 index, `archive_fts`, survives `VACUUM`), `reason` of `auto`, `closed` or `cleared`, and `nav_state` as JSON: the tab's `navigationHistory` entries (with Chromium's `pageState`, which holds the scroll position) and index, at most 50 entries around the current one, web pages only, and capped at 1 MB. An entry is deleted when its tab comes back. Entries older than 30 days go on open. Archive writes ride the history event stream (`HistoryEvent` `archive` / `unarchive`), in order and in the same transaction as the batch they arrive with.
 
+**Duet, as built (migration 9):** `duet_thread` has no `mode` or `project_dir` (there is no developer mode), adds `scope` (`ask`, `chord`, `all`) and `last_used_at`, and takes `provider` `claude` or `codex`. `duet_message` gets an integer `rid` for its external-content FTS5 index (`duet_fts`, what `@duet` searches), a `text` column, and the `divider` role. There is no `duet_site_rule` table: the *Never* list lives in settings (`settings.duet.neverSites`), next to the per-chord off list. Deleting a thread deletes its rows; there is no soft delete (§11.5).
+
 **Favorites, as built (migration 6):** `favorite` (id, url, title, `favicon_key` into `favicon`, rank, created_at), shared by every chord and profile; the favicon clean-up keeps their icons. **Folders** use the `folder` table from migration 1, Pinned only (a tab moved into a folder is pinned there). **Sidebar width** uses `window_state.sidebar_width` from migration 1, 200–400 px.
 
 **Link routes, as built (migration 11):** `link_route` (host, chord_id, created_at), one route per host. It's numbered after Duet's (9) and split view's (10), which land separately, and only creates its own table if it isn't there.
@@ -460,7 +457,7 @@ As built (`core/idle.ts`, `main/idle.ts`):
 |---|---|---|
 | Commands and queries | `ipcRenderer.invoke` → `ipcMain.handle` | `cmd.dispatch`, `settings.get` |
 | State fan-out | `webContents.send('state.patch', {version, patches})` | sidebar updates |
-| High-frequency streams | `MessagePort`. Main creates a `MessageChannelMain` and hands one end to a utility process and the other to the renderer's preload. Ports arrive in the isolated world and are wrapped there; they are not forwarded to the main world. | layout rects (shell→main), search (overlay↔data), Duet stream (agent↔shell) |
+| High-frequency streams | `MessagePort`. Main creates a `MessageChannelMain` and hands one end to a utility process and the other to the renderer's preload. Ports arrive in the isolated world and are wrapped there; they are not forwarded to the main world. | layout rects (shell→main), search (overlay↔data) |
 
 **Channels, by role:**
 
@@ -478,8 +475,9 @@ As built (`core/idle.ts`, `main/idle.ts`):
 | `settings.get/set` | read | read | — | ✓ | |
 | `defaultBrowser.status/request` | ✓ (onboarding) | — | — | ✓ | |
 | `updates.status/check/install` | — | — | — | ✓ | |
-| `duet.port` / `duet.approve` / `duet.attach` | ✓ | — | — | — | absent if Duet is off |
-| `duet.settings.*` | — | — | — | ✓ | |
+| `duet:view` / `duet:do` / event `duet:state` | ✓ | — | — | — | as built: one zod-checked action union (send, stop, approve, attach…); main pushes the panel's view, throttled to 33 ms |
+| `duet:search` / `duet:openHit` | — | ✓ | — | — | the `@duet` filter; empty from private windows |
+| `settings:duet` | — | — | — | ✓ | detect, sign in, clear all |
 
 Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navigate`, and `setWindowOpenHandler` for anything other than its own `chord://` URL. Web content can never navigate to `chord://` or `chord-favicon://`, and isn't served them anyway (separate session, [§4](#4-process-model)).
 
@@ -575,7 +573,11 @@ Each query carries a sequence number; stale responses are dropped. The in-memory
 
 ## 11. Duet — the assistant panel
 
-Duet is an **opt-in** right-side panel for chatting about what's in the browser. It uses the user's **own** Claude Code or Codex installation and subscription. Chord runs no server, never sees credentials, and spawns nothing until Duet is turned on.
+Duet is a right-side panel for conversations on the fly, which can optionally read what's in the browser. It uses the user's **own** Claude Code or Codex installation and subscription. Chord runs no server, never reads or stores credentials, and spawns nothing until the user sends a message.
+
+**Scope (set 2026-10-22, ROADMAP.md Phase 2):** *"basic chat is enough."* Duet chats and reads. It does not open, move, close or group tabs. The organize tier, acting on pages, developer mode, API keys and local models are **out of scope** (ROADMAP.md *Not planned*). *Connect an agent* is parked (§11.5).
+
+Built in Phase 2 on spikes S10 ([docs/decisions/S10-claude-headless.md](docs/decisions/S10-claude-headless.md)) and S5 ([docs/decisions/S5-codex-restriction.md](docs/decisions/S5-codex-restriction.md)); the research behind it is [docs/research/duet.md](docs/research/duet.md).
 
 ### 11.1 Provider policy constraints (verified 2026-10-22)
 
@@ -585,113 +587,124 @@ Duet is an **opt-in** right-side panel for chatting about what's in the browser.
 - The page does **not** prevent "an end user from signing in to the unmodified Claude Code binary with their own Claude subscription".
 - Running Claude Code in a product requires the Commercial Terms and that the binary be unmodified, with its authentication methods unrestricted.
 
-**OpenAI:** `codex app-server` is the documented interface for rich clients (JSON-RPC 2.0, JSONL over stdio), and sign-in runs inside Codex. ⚠ **No published policy for third-party clients using ChatGPT subscriptions was found.**
+**OpenAI** (app-server docs, *Auth endpoints*): *"If you've built a local or open-source application using Codex app-server authentication, you can continue using it … App-server authentication has never been permitted for commercial or hosted services."* A free, local, open-source Chord using the user's own `codex login` is inside that allowance (research §3.6).
 
-**Design consequences:**
+**How Chord complies:**
 
-| Rule | How Chord complies |
+| Rule | As built |
 |---|---|
-| Use the user's unmodified binary | Chord **does not bundle** `claude` or `codex`. It detects them on `PATH` and the standard install locations and shows "Install Claude Code" / "Install Codex" links to the official instructions. |
-| Sign-in completes through the provider's own flow | Chord has **no sign-in UI**. "Sign in" opens a terminal running `claude auth login` or `codex login`, or shows the command to run. Status comes from `claude auth status` (JSON; exit code 0 when logged in) and Codex's equivalent. |
-| No credential handling | Chord never reads `~/.claude` or `~/.codex` credentials, never sets token environment variables in subscription mode, and never logs CLI auth output. |
-| No Anthropic/OpenAI branding as our feature name | The feature is **Duet**. Copy says "works with your Claude Code or Codex app" in plain text, with no logos. |
-| Avoid needing Electron as Node | We spawn the user's native `claude` binary directly, not the Agent SDK's bundled `cli.js` via `process.execPath`. The latter would require the `RunAsNode` fuse, which we disable ([§14.1](#141-hardening)). |
-| Setup is the user's own step | Decided 2026-10-22: no provider agreement is sought. The user installs and signs in to their own CLI (`claude auth login` / `codex login`), the same model T3 Code uses: it drives `@anthropic-ai/claude-agent-sdk` and `codex app-server` (checked in its repo). Anthropic says it may enforce its terms "without prior notice", so R8 tracks policy changes, and the BYO-key and local-model backstops stay on the roadmap. |
+| Use the user's unmodified binary | Chord **bundles neither CLI and ships no Anthropic code** (no Agent SDK; it is proprietary and its products "should use API keys"). `detect.ts` finds `claude` / `codex` on the login shell's `PATH` and the standard install folders, follows npm shims to the real `.exe`, and spawns it with `shell: false`. Setup links to the official install instructions. |
+| Sign-in completes through the provider's own flow | Chord has **no sign-in UI**. *Sign in* opens a terminal running `claude auth login` or `codex login`. Status comes from `claude auth status` (exit code, plus `authMethod` only) and `codex login status` (exit code). |
+| No credential handling | Chord never reads `~/.claude` or `~/.codex` credentials, sets no token variables, and never logs CLI auth output. If `authMethod` is an API key, Setup says *Using your API key*, because Claude bills it instead of the subscription. |
+| No provider branding as the feature | The feature is **Duet**. Copy names "Claude Code" and "Codex" in plain text, with no logos. |
+| No Electron-as-Node | Chord spawns the native binaries. Chord's tools are served in-process over the CLI's own stdio (§11.2), so no helper needs the RunAsNode fuse, which is off ([§14.1](#141-hardening)). |
+| Setup is the user's own step | D2: no provider agreement. Anthropic may enforce its terms "without prior notice"; R8 tracks policy changes. |
 
-A later phase adds **your own API key** (Anthropic or OpenAI APIs, stored with `safeStorage` async) and **local models** (any OpenAI-compatible local endpoint, such as Ollama or LM Studio). That keeps Duet working even if subscription access changes.
+**Versions:** minimum Claude Code 2.1.268 and Codex 0.160.0; tested with **Claude Code 2.1.309** and **codex-cli 0.160.1**. An older CLI shows *Needs an update* but isn't blocked. Features are detected from `system/init.capabilities` (Claude) and the app-server's responses (Codex). WSL-only installs aren't detected yet.
 
 ### 11.2 Runtime
 
 ```mermaid
 sequenceDiagram
   participant U as Duet panel (shell)
-  participant M as Main
-  participant A as chord-agent
-  participant C as claude (user's binary)
-  participant T as Chord MCP (in chord-agent)
-  U->>M: duet.send(threadId, text, contextRefs)
-  M->>A: turn {thread, text, resolved context}
-  A->>C: stream-json user message (stdin)
-  C->>T: tools/call tab.read {tabId}
-  T->>M: read tab (isolated-world extractor)
-  M-->>T: markdown + provenance
-  C->>T: approve {tool: folder.create}
-  T->>U: approval card
-  U-->>T: allow once
-  C-->>A: stream-json deltas
-  A-->>U: deltas over duet.port
+  participant M as Main (DuetService)
+  participant C as claude / codex (user's binary)
+  U->>M: duet:do {send, text}
+  M->>C: user turn: text + "Attached: tab t1 · example.com"
+  C->>M: tool call read_tab {tab_id: "t1"}
+  M->>M: scope check, maybe an approval card in the panel
+  M->>M: isolated-world extractor on the tab
+  M-->>C: JSON tool result (untrusted, with provenance)
+  C-->>M: streamed text with [[t1:"quote"]] citations
+  M-->>U: duet:state (throttled to 33 ms)
 ```
 
-**Claude Code adapter.** One long-lived `claude` process per active thread:
+There is no `chord-agent` process. `DuetService` (`main/duet/service.ts`) owns threads, approvals, tool calls and the CLI processes; the adapters (`claude.ts`, `codex.ts`) are thin stdio translators. Heavy work happens in the CLIs.
+
+**Processes:** one CLI per active thread, at most **3** (the least recently used is closed), each killed after **10 minutes** idle. Every exit kills the whole process tree (`taskkill /T` on Windows; Codex starts a helper). On quit, a reply in progress is saved as *Interrupted* with **Retry**.
+
+**Claude Code adapter** (`claude.ts`). The working folder is an empty Chord-owned one (`userData/duet/empty`), so no project files, CLAUDE.md or `.mcp.json` load:
 
 ```
 claude -p --input-format stream-json --output-format stream-json --verbose
        --include-partial-messages
        --session-id <uuid> | --resume <provider_session_id>
-       --model <alias>
-       --strict-mcp-config --mcp-config <inline JSON: chord MCP at 127.0.0.1:<port>, bearer token>
-       --permission-prompt-tool mcp__chord__approve
-       --append-system-prompt-file <duet-browse.md>
-       # browse mode only:
-       --restricted --tools ""
+       [--model <alias>]
+       --restricted --tools "" --disable-slash-commands --strict-mcp-config
+       --allowedTools "mcp__chord__*" --permission-prompts none
+       --append-system-prompt-file <userData/duet/instructions/<thread>.md, 0600>
+       --system-prompt-snapshot off
+env:   CLAUDE_CODE_DISABLE_CLAUDE_MDS=1  CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
 ```
 
-All flags were verified against the CLI reference on 2026-10-22.
-- `--tools ""` removes every built-in tool (Bash, file edits, WebFetch), so a browse thread can only call Chord's MCP tools.
-- `--restricted` (CLI v2.1.248+) loads only managed settings and `--settings`, isolating browse threads from the user's coding hooks and plugins.
-- Chord enforces a minimum CLI version and asks the user to run `claude update` if theirs is older.
+- Every flag was checked against 2.1.309 (`--append-system-prompt-file` is documented but hidden from `--help`). **Never `--bare`:** it ignores subscription sign-in.
+- `--tools ""` removes every built-in tool; `--restricted` skips the user's settings, hooks and plugins; the two variables skip CLAUDE.md and auto memory; `--disable-slash-commands` skips skills. `--permission-prompts none` denies anything that would prompt, so Chord's own tool server is the only gate.
+- `--system-prompt-snapshot off` makes a fix to Duet's prompt reach old threads on resume.
+- **Tools travel on the control channel.** Chord's `initialize` request declares an in-process MCP server (`sdkMcpServers: ["chord"]`); the CLI sends `tools/list` and `tools/call` as `mcp_message` control requests on stdout, and Chord answers on stdin. Nothing is on argv, and there is no port or token. S10 showed it waits 75 s for an approval without timing out.
+- **Stop:** an `interrupt` control request when `system/init.capabilities` includes `interrupt_receipt_v1` (2.1.309 does); otherwise the process tree is killed and the next message resumes the session. Both end the reply as *Interrupted*.
+- **Resume:** `--resume <id>`. If the CLI exits before `init` (*"No conversation found"*), Chord starts a fresh session primed with a summary of its own transcript and shows a *Continued with a summary* divider.
 
-**Codex adapter.** One `codex app-server` per agent process: JSON-RPC over stdio, `initialize` with `clientInfo.name = "chord"`, then threads and turns. Chord's tools are offered via the same localhost MCP server, configured through config overrides, or via `dynamicTools` on `thread/start` (marked experimental).
-- ⚠ **Unverified:** how to remove Codex's shell tool for browse mode.
-- Until spike S5 settles it, Codex browse threads run with a read-only `sandboxPolicy` and an approval policy that sends every command to Chord's approval UI.
+**Codex adapter** (`codex.ts`):
 
-**Chord MCP server:**
-- Streamable HTTP bound to `127.0.0.1` on a random port.
-- A per-process bearer token, checked for `Host`/`Origin` to block DNS rebinding.
-- Lives only as long as chord-agent.
+```
+codex app-server --disable shell_tool --disable unified_exec --disable view_image
+                 --disable image_generation --disable multi_agent --disable apps
+                 --disable plugins --disable tool_suggest --disable goals
+                 --disable browser_use --disable computer_use --disable skill_search
+                 --disable sleep_tool -c web_search="disabled"
+```
 
-### 11.3 Tools, in permission tiers
+- `initialize` (`clientInfo.name = "chord"`) → `initialized` → `mcpServerStatus/list`, then each of the user's own MCP servers is disabled by name in the thread's config (names only, never `config/read`, which can hold secrets).
+- `model/list` picks the account's default model unless the user chose one (a plan may not support the global default).
+- `thread/start` with `sandbox: "read-only"`, `approvalPolicy: "on-request"`, `cwd` = the empty folder, and Chord's tools as **`dynamicTools`** in the `chord` namespace (calls arrive as `item/tool/call`). `thread/resume` for later sessions.
+- Command and file-change approvals are **declined without asking**. **Tripwire:** any item other than `agentMessage`, `reasoning`, `userMessage`, `dynamicToolCall` or `contextCompaction` interrupts the turn and says Codex *tried something Duet doesn't allow in browse mode*.
+- **Stop:** `turn/interrupt`. **Delete:** `thread/delete`.
+- ⚠ `apply_patch` can't be switched off (research §3.3); the read-only sandbox, the auto-decline and the tripwire contain it. S5's live-turn criteria are still open (the decision doc lists them).
 
-| Tier | Tools | Approval |
-|---|---|---|
-| 0 · Context | `tabs.list` (current chord; other chords only if the user allows), `tab.read` (attached or user-allowed tabs; markdown or text; ranged), `tab.screenshot`, `history.search`, `archive.search`, `page.highlight(tabId, quote)` (scrolls to the quote and marks it) | None, but scoped to what the user attached or allowed |
-| 1 · Organize | `tab.open` (Peek or Today), `folder.create`, `node.move`, `tab.archive`, `space.create` | Approval card per call; "Allow for this thread" available |
-| 2 · Act on pages (later) | click, type, fill | Approval per action, always. Disabled on excluded sites. |
-| Developer mode | `devtools.console`, `devtools.network` (CDP via `webContents.debugger`, only for tabs the user attaches), `tab.reload`; plus the provider's normal file and shell tools in the chosen project folder | Provider's own permission flow, routed to Chord's approval UI |
+**Errors** map to plain causes and fixes: signed out (*Run `claude auth login`*), usage limit (with Codex's reset time), rate limit, overloaded, model not available, the tripwire, and *Interrupted*.
+
+### 11.3 Tools and reading scope
+
+All tools are **read-only** and named in snake_case (the Claude API's and Codex's name rules); Claude Code also sees them marked `readOnlyHint`.
+
+| Tool | Reads |
+|---|---|
+| `list_tabs` | Titles and sites of the chord's tabs (all chords under *All my tabs*) |
+| `read_tab {tab_id, start?}` | A tab's text in ranges of about **40,000 characters** (Claude Code saves larger results to a file a browse thread can't open) |
+| `read_selection {tab_id}` | The selected text |
+| `tab_screenshot {tab_id}` | A PNG at most 1280 px wide |
+| `search_history {query}` · `search_archive {query}` | Matching pages |
+
+**Reading scope** (Settings → Duet, and per chat from the panel): **Ask first** (default), **Tabs in this chord**, **All my tabs**. Tabs attached to the message are always readable. Anything else follows the scope, and *Ask first* shows an inline card: **Allow once · Allow for this chat · No** (Esc says no, ⌘↵/Ctrl+↵ allows once). Listing tabs and searching history or the archive also ask under *Ask first*.
+
+**Never readable**, whatever the scope: private windows, chords where Duet is off, sites on the *Never* list (and their subdomains), `chord://`, `chrome-extension://` and other non-web pages, and form field values. History and archive results leave out the same sites and chords.
+
+**Citations:** the prompt asks for `[[t1:"exact quote"]]` after a claim. The panel shows a numbered pill; clicking it activates the tab and finds the quote, or, if the tab is gone, opens the page with a `#:~:text=` fragment.
 
 ### 11.4 Content extraction and prompt-injection posture
 
-Page content is **untrusted input** handed to an agent that may hold tools.
+Page content is **untrusted input** handed to a model.
 
-- **Extraction:**
-  - Readability plus HTML→Markdown, run in an **isolated world** (`executeJavaScriptInIsolatedWorld`) so page scripts can't tamper with the extractor.
-  - It reads rendered text only: never form-field values, never `input[type=password]`, and not hidden or `aria-hidden` subtrees.
-  - Capped at 100k characters, with ranged reads.
-- **Provenance and delimiting:** every chunk is wrapped with its source (tab, URL, retrieved time). The Duet system prompt states that page content is data, never instructions.
-- **Capability containment:**
-  - Browse threads have no shell, no files, no fetch.
-  - Tier 1 and 2 tools need approval.
-  - `tab.open` to a URL that did not come from the user's own context needs approval even when the thread allows "organize". This closes the exfiltrate-via-URL path.
-- **Exclusions:**
-  - Private windows and `duet_site_rule = 'never'` origins can never be read.
-  - Pages with a focused password field are skipped.
-  - Each chord has a Duet off switch.
-  - The **global off** removes the panel, menus, and shortcut, and chord-agent is never spawned.
-- **Visibility:**
-  - Context chips show exactly what will be sent with each message.
-  - Tool activity is shown inline.
-  - A dot on the tab marks one that Duet is watching (console/network) in developer mode.
+- **Extraction** (`extract.ts`) runs in an **isolated world** (4400), so page scripts can't tamper with it. It takes rendered text only. It skips `input`, `textarea`, `select`, `option`, `button`, a focused `contenteditable`, `script`/`style`/`template`/`noscript`, and hidden, zero-size or off-screen elements. *Test:* the E2E types secrets into five kinds of field and checks none reach the model.
+- **Hidden characters** are stripped: Unicode tag characters (U+E0000–E007F), zero-width and bidi controls, soft hyphens.
+- **Page text only arrives in tool results**, JSON-encoded with provenance: `{source: "web_page", tab_id, origin, url, retrieved_at, trust: "untrusted", range, content}`. The user's turn carries only opaque handles and Chord-made site labels (*Attached: tab t1 · example.com*), never titles or page text. Duet's instructions say tool results are data, never instructions.
+- **Containment:** no shell, files, web fetch or other MCP servers in either CLI (§11.2); Duet's tools only read.
+- **The transcript can't make requests:** no images or link unfurls. A link shows its full address and opens only on click.
+- **Visibility:** chips show what will be attached; tool activity shows inline (*Read “Article”*); a ✦ marks sidebar tabs Duet read while the chat is open; the first-use note and the chips' tooltip say that what's attached goes to the provider through the user's own account.
+- **Off switches:** per chord (panel menu) and global (Settings → Duet → *Show Duet*), which removes the panel, button and shortcut; nothing is spawned.
 - **Nothing in the background.** Duet only acts on a user message.
 
-**Connect an agent (from Crest, Phase 2+).** The Chord MCP server is also offered to agents the user runs themselves. Settings → Agents copies a `claude mcp add …` or `codex mcp add …` line that points at a small `chord-mcp` stdio helper:
-- **Helper:** a Node single-executable build, or Go/Rust if size matters. It can't be Electron as Node, because the RunAsNode fuse is off.
-- **Transport:** a named pipe on Windows and a 0600 Unix socket elsewhere.
-- **Tool names** follow chrome-devtools-mcp, which agents already know, and carry read-only/destructive hints that map onto §11.3's tiers.
-- **Visibility:** every tab an agent touches gets a badge, a colored outline and a **Stop** button.
+### 11.5 Storage, threads and deletion
 
-Duet becomes one client of that same server. Unlike Crest, Duet keeps per-call approvals, because it reads pages that may carry prompt injection.
+- **Chord's transcript is the source of truth** (chord-data migration 9): `duet_thread` (chord, title, provider, model, provider session id, scope, times), `duet_message` (role and a JSON body) and `duet_fts`, which the command bar's **`@duet`** filter searches. A provider's session is a cache, resumed when it works.
+- **Threads:** one per chord at a time. After **12 hours** idle the panel starts fresh and offers *Continue “title”*. The Chats menu has New chat, Rename, Export as Markdown (to Downloads), Delete this chat, recent chats, and *Turn off in this chord*. Titles come from the first message. Switching provider mid-chat continues from a summary (*Switched to Codex*).
+- **Panel state** (drafts, whether the first-use note was seen) lives in `userData/duet/panel.json`.
+- **Retention:** *Keep Duet chats: Forever · 90 days · 30 days*, pruned at launch; *Clear all Duet chats* (asks twice, in place).
+- **Delete really deletes:** Chord removes its rows, then the provider's copy. For Claude, that's `<config>/projects/<Chord's empty folder>/<session>.jsonl` and its `<session>/` folder, found by exact id; for Codex, `thread/delete`. Chord reads nothing else there. Settings discloses that both CLIs keep their own copy while a chat exists. ⚠ Codex chats may also show in the user's own Codex history.
 
-**Storage.** Chord keeps its own rendering transcript in `duet_message`. Providers also keep their own local transcripts (Claude under `~/.claude/projects`, Codex under `~/.codex/sessions`); that is disclosed in settings.
+**Connect an agent (parked).** Offering Chord's tools to agents the user runs themselves (a `chord-mcp` helper, `claude mcp add …`) is parked, not deleted (ROADMAP.md). Duet doesn't need it: its tools ride the CLI's own stdio (§11.2).
+
+**Not yet:** reading PDFs (pdf.js), which Duet can see only as the viewer's page; a context-usage hint (only if both CLIs report it); Claude Code or Codex installed only inside WSL.
 
 ---
 
@@ -777,7 +790,7 @@ interface PlatformServices {
 | Fuses | `RunAsNode` **off** · `EnableCookieEncryption` **on** · `EnableNodeOptionsEnvironmentVariable` **off** · `EnableNodeCliInspectArguments` **off** · `EnableEmbeddedAsarIntegrityValidation` **on** (macOS, Windows; compiled out on Linux, so a no-op there ✅) · `OnlyLoadAppFromAsar` **on** · `GrantFileProtocolExtraPrivileges` **off** · `LoadBrowserProcessSpecificV8Snapshot` off for now (revisit for startup) · `WasmTrapHandlers` on (default). Set by electron-builder's `electronFuses` right before signing. It bundles `@electron/fuses` 1.8.0, which doesn't know `WasmTrapHandlers`, so that one keeps Electron's default. ✅ Read back with `@electron/fuses` 2.1.3 from the Windows x64 and Linux x64 builds: exactly this list. electron-builder writes the asar integrity data (an `INTEGRITY` resource on Windows, `ElectronAsarIntegrity` in macOS's Info.plist). ✅ On Windows, a one-byte change inside `app.asar` stops the app with *ASAR Integrity Violation*. With `EnableNodeCliInspectArguments` off, Playwright's `_electron.launch` can't attach to a packaged build (it needs `--inspect`), so the packaged smoke test drives it over Chromium's remote-debugging port ([§15.5](#155-testing)). |
 | IPC | §8 allowlist, sender validation, zod schemas |
 | Internal protocols | `chord://` and `chord-favicon://` registered only on the `chord-ui` session, with CSP |
-| Secrets | Only Duet BYO API keys (later). `safeStorage` **async** API, since the sync API is deprecated in 45 and removed in 46 ✅. |
+| Secrets | None. Duet uses the CLIs' own sign-in and Chord never reads or stores it (§11.1). If secrets are ever needed: `safeStorage`'s **async** API, since the sync API is deprecated in 45 and removed in 46 ✅. |
 | Permissions | Prompt or deny by default ([§9](#9-browser-engine-services)). `display-capture` goes through our picker. |
 | Safe Browsing | ⚠ Electron has no Safe Browsing. Option: Google Safe Browsing v5 Local List mode. Its terms allow non-commercial use and require attribution and disclosure. Decision D7. |
 | Duet | [§11.4](#114-content-extraction-and-prompt-injection-posture) |
@@ -949,7 +962,7 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 | Unit | Vitest | `@chord/core` reducer and policies (property tests for ordering and undo round-trips), `@chord/tokens` (contrast guarantees across random themes), `@chord/db` migrations and queries against real SQLite |
 | Component | Vitest + Testing Library | sidebar tree keyboard navigation, command bar ranking |
 | E2E | Playwright `_electron` 1.64 (experimental) | ✅ Verified in M1.0: `app.windows()` returns both the tab and the `chord://shell/` page inside `WebContentsView`s, and tests drive them directly. `browserWindow(page)` fails for `BaseWindow`, so we don't use it. Tests set `CHORD_HOME_URL` (dev builds only) so they never need the network. ⚠ Verified in M1.1: Playwright's synthetic key presses **never reach Electron's `before-input-event`**, so tests can't press reserved shortcuts. Real OS input does reach it. E2E tests open the command bar through the shell's API, and the shortcut router is covered by unit tests on the registry. A **test-only** IPC for querying state arrives with the Store in M1.1. |
-| Packaged | Playwright over CDP (`test/packaged`, `pnpm --filter @chord/desktop test:packaged`) | Starts a packaged build (the platform's unpacked output, or the file in `CHORD_APP`) with a throwaway `--user-data-dir`. Checks that the shell loads from `chord://shell/` inside the asar with its bundled font, a tab loads a local page, and Settings opens. Then it quits, relaunches, and checks that the tabs and a setting were restored, which proves the asar'd chord-data utility process and `node:sqlite` work. `_electron.launch` can't attach to a packaged build ([§14.1](#141-hardening)), so the test passes `--remote-debugging-port=0` and connects with `chromium.connectOverCDP`; it has no main-process access. ✅ Passed on Windows x64 (the unpacked build and the installer's payload) and on Linux x64 (the AppImage, in WSL). |
+| Packaged | Playwright over CDP (`test/packaged`, `pnpm --filter @chord/desktop test:packaged`) | Starts a packaged build (the platform's unpacked output, or the file in `CHORD_APP`) with a throwaway `--user-data-dir`, and on macOS with `--use-mock-keychain` so it never touches the tester's keychain: a build whose ad-hoc signature the keychain hasn't seen waits on a *Chord Safe Storage* prompt before loading any page. A macOS-only test runs a freshly re-signed copy to prove it doesn't ✅ (macOS 27, M3). Checks that the shell loads from `chord://shell/` inside the asar with its bundled font, a tab loads a local page, and Settings opens. Then it quits, relaunches, and checks that the tabs and a setting were restored, which proves the asar'd chord-data utility process and `node:sqlite` work. `_electron.launch` can't attach to a packaged build ([§14.1](#141-hardening)), so the test passes `--remote-debugging-port=0` and connects with `chromium.connectOverCDP`; it has no main-process access. ✅ Passed on Windows x64 (the unpacked build and the installer's payload) and on Linux x64 (the AppImage, in WSL). |
 | Visual | Playwright screenshots of shell and overlay | Uploaded as CI artifacts per OS × light/dark × 3 chord themes. Reviewed against DESIGN.md before any UI change is shown to you. |
 | Performance | Startup, command bar, and frame-time probes | Run in CI for trends. **Enforced** on reference hardware locally, since CI runners are noisy. |
 
@@ -976,7 +989,10 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 | **D5** | Ad blocking | **Decided 2026-10-22: none built in.** Users who want it install uBlock Origin Lite from the Web Store. Spike S9 showed Electron 45 does support `declarativeNetRequest`, and uBO Lite blocks ads in Chord. |
 | **D6** | Default search engine | **Decided:** Google; others selectable. |
 | **D7** | Phishing and malware protection | Open; not needed until Phase 3. Safe Browsing v5 Local List (non-commercial terms, attribution) vs none. |
-| **D8** | Duet timing | **Proposed in ROADMAP.md:** Phase 2, browse mode first; developer mode in Phase 4. |
+| **D8** | Duet scope and timing | **Decided 2026-10-22:** Phase 2, chat that can optionally read the browser. No organize actions, acting on pages, developer mode, API keys or local models (ROADMAP.md *Not planned*). |
+| **D9** | How Duet's tools reach the CLIs | **Decided (Phase 2, spike S10):** in-process, over each CLI's own stdio. Claude Code: an SDK-type MCP server declared in `initialize` and served on the control channel. Codex: `dynamicTools`. This replaces the localhost HTTP server (DNS-rebinding and token surface) and the `chord-mcp` helper (it can't be Electron-as-Node with the RunAsNode fuse off, and no single-executable build exists yet). Chord ships no Anthropic code. |
+| **D10** | Stopping a reply on Windows | **Decided (S10):** Claude Code's `interrupt` control request, used when `system/init.capabilities` has `interrupt_receipt_v1`; otherwise kill the process tree (`taskkill /T`) and resume next time. Codex: `turn/interrupt`. No signals, which Windows lacks. |
+| **D11** | CLIs installed only inside WSL | **Deferred:** Phase 2 detects Windows-native installs only. |
 
 ## 17. Risks
 
@@ -989,9 +1005,9 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 | R5 | Mica and frameless bugs on Windows | Medium / low | Runtime capability detection; solid fallback; visual tests on Win11. |
 | R6 | Memory with many tabs (no Chromium discarding) | Medium / medium | Sleeping tabs (§9); lazy restore; auto-archive. |
 | R7 | Linux sandbox breakage (AppArmor userns, AppImage) | Medium / high | deb/rpm/Flatpak primary; AppImage refuses to run unsandboxed. |
-| R8 | Duet policy change by a provider | Medium / medium | BYO API key and local models; feature isolated in chord-agent. |
+| R8 | Duet policy change by a provider | Medium / medium | Duet is optional and isolated behind its adapters; it can be turned off without affecting browsing. API keys and local models are not planned (D8), so a policy change could mean pausing a provider. |
 | R9 | 72-hour patch SLA depends on one person | High / high | A second maintainer with release rights before 1.0; automation does everything except the publish click. |
-| R10 | Prompt injection through page content | High / high | Browse threads have no shell or files; approval tiers; URL-exfiltration rule; exclusions (§11.4). |
+| R10 | Prompt injection through page content | High / high | Duet's tools only read; the CLIs run with no shell, files, web access or other MCP servers; page text arrives only as JSON tool results; the transcript makes no requests; exclusions (§11.4). |
 | R11 | `node:sqlite` is "release candidate" and untested in utilityProcess | Low / medium | Spike S1; `Db` interface; better-sqlite3 v13 fallback. |
 | R12 | 120 Hz in Electron unverified on ProMotion | Low / medium | Measure on your Mac; Chromium flags if needed. |
 
@@ -1000,7 +1016,8 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 - **S2** Sign-in and bot-check matrix.
 - **S3** macOS default-browser prompt.
 - **S4** `setBackgroundBlur` over a tab view.
-- **S5** Codex browse-mode tool restriction (in Duet's phase).
+- **S5** Codex browse-mode tool restriction (in Duet's phase). **Partly verified** ([docs/decisions/S5-codex-restriction.md](docs/decisions/S5-codex-restriction.md)): the recipe starts and threads are accepted; live-turn criteria wait on a Codex account with usage left.
+- **S10** Claude Code headless with Chord's tools in-process. **Pass** ([docs/decisions/S10-claude-headless.md](docs/decisions/S10-claude-headless.md)).
 - **S6** Trackpad gesture phases per OS.
 - **S8** Keyboard routing: reserved keys via `before-input-event` and page-first app-menu accelerators, with WebContentsView inside BaseWindow, on all three OSes (including hidden menus on Windows/Linux and whether macOS menu key equivalents preempt the page). **Pass on Windows** ([docs/decisions/S8-keyboard-routing.md](docs/decisions/S8-keyboard-routing.md)); Linux in CI; macOS by hand.
 - **S7** Auto picture-in-picture: controls present in Electron 45's PiP window, *back to tab* routing, and video rendering after the source view is detached (see Electron PR #50264 on occluded video). ✅ **Resolved on Windows:** docs/decisions/S7-auto-pip.md.

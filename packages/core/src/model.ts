@@ -4,7 +4,7 @@
  * and chord-data persists everything except `live` and `closed` (the archive
  * keeps closed tabs in its own table).
  */
-
+import type { DuetKeep, DuetProvider, DuetScope } from './duet';
 import type { ActionId, ShortcutOverrides } from './shortcuts';
 
 export type ChordId = string;
@@ -302,6 +302,8 @@ export interface Settings {
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
   shortcuts: ShortcutOverrides;
   spellcheck: SpellcheckSettings;
+  /** Duet, the chat panel (ARCHITECTURE.md §11). */
+  duet: DuetSettings;
   /** Where links from other apps open (Chord as the default browser): a mini window, or a new tab. */
   externalLinks: ExternalLinks;
   /** The mini window's size, as you last left it; null until you resize one (DESIGN.md §7.9). */
@@ -328,6 +330,22 @@ export interface SpellcheckSettings {
   language: string | null;
 }
 
+export interface DuetSettings {
+  /** Off removes the panel, its button, shortcut and menu items; nothing is ever spawned. */
+  enabled: boolean;
+  /** Chosen in Setup; null until then. */
+  provider: DuetProvider | null;
+  /** The provider's model alias or id; null uses its default. */
+  model: string | null;
+  keep: DuetKeep;
+  /** What new threads may read without asking. */
+  scope: DuetScope;
+  /** Sites Duet may never read or have attached (origins). */
+  neverSites: string[];
+  /** Chords where Duet is off. */
+  offChords: string[];
+}
+
 export const DEFAULT_SETTINGS: Settings = {
   searchEngine: 'google',
   motion: { followSystem: true, commandBar: true, chordSlide: true, tabMoves: true, sidebar: true, colorBlend: true },
@@ -344,6 +362,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoPip: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
+  duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
   externalLinks: 'mini',
   miniWindowSize: null,
 };
@@ -356,6 +375,7 @@ export const defaultSettings = (): Settings => ({
   themes: [],
   spellcheck: { ...DEFAULT_SETTINGS.spellcheck },
   shortcuts: {},
+  duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
 });
 
 /**
@@ -385,6 +405,7 @@ export interface SettingsPatch {
   miniWindowSize?: { width: number; height: number } | null;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
+  duet?: Partial<DuetSettings>;
 }
 
 export interface State {

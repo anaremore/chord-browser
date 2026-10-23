@@ -10,12 +10,13 @@
  * still works, so the app is started directly and driven over CDP; there is
  * no access to the main process.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 
 /** electron-builder's unpacked output for this OS and arch. */
@@ -37,9 +38,19 @@ function childEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * On macOS, cookie encryption keeps its key in the login keychain (Chord Safe
+ * Storage), and only the build that saved it may read it without asking. An
+ * ad-hoc signature changes with every build, so any other build waits on a
+ * keychain prompt before loading a single page. A test can't answer one, and
+ * shouldn't touch the tester's keychain anyway: Chromium's mock keychain
+ * keeps the key in memory.
+ */
+const keychainArgs = process.platform === 'darwin' ? ['--use-mock-keychain'] : [];
+
 /** `args` go last: a link the OS hands over comes after --single-argument, which takes the rest of the line. */
 async function start(executable: string, profile: string, args: string[] = []): Promise<Running> {
-  const child = spawn(executable, [`--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run', ...args], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(executable, [`--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run', ...keychainArgs, ...args], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = new Promise<number | null>((done) => child.once('exit', (code) => done(code)));
   const endpoint = await new Promise<string>((done, fail) => {
     let output = '';
@@ -164,7 +175,7 @@ test('links handed over by the OS open in mini windows, at launch and in a runni
     expect(pages(app.browser).some((p) => isShell(p.url()))).toBe(false);
 
     // A second launch with the same profile hands its link to the running Chord and exits: another mini window.
-    const second = spawn(executable, [`--user-data-dir=${profile}`, '--single-argument', `${site.origin}/from-second`], { env: childEnv(), stdio: 'ignore' });
+    const second = spawn(executable, [`--user-data-dir=${profile}`, ...keychainArgs, '--single-argument', `${site.origin}/from-second`], { env: childEnv(), stdio: 'ignore' });
     const code = await new Promise<number | null>((done) => second.once('exit', (c) => done(c)));
     expect(code).toBe(0);
     await pageWhere(app.browser, (url) => url === `${site.origin}/from-second`);
@@ -187,5 +198,32 @@ test('links handed over by the OS open in mini windows, at launch and in a runni
   } catch (error) {
     app.child.kill();
     throw error;
+  }
+});
+
+test('macOS: a build the keychain has never seen loads pages without asking', async () => {
+  test.skip(process.platform !== 'darwin', 'the keychain prompt is macOS-only');
+  const executable = packagedExecutable();
+  // The next build, as the keychain sees it: the same app with a new ad-hoc signature.
+  const copy = join(mkdtempSync(join(tmpdir(), 'chord-resigned-')), 'Chord.app');
+  execFileSync('cp', ['-Rc', resolve(executable, '../../..'), copy]);
+  execFileSync('plutil', ['-insert', 'ChordTestBuild', '-string', randomUUID(), join(copy, 'Contents', 'Info.plist')]);
+  execFileSync('codesign', ['--force', '--sign', '-', '--preserve-metadata=entitlements,flags', copy]);
+  try {
+    // One build after the other in the same account, as an update would run them.
+    for (const build of [executable, join(copy, 'Contents', 'MacOS', 'Chord')]) {
+      const app = await start(build, mkdtempSync(join(tmpdir(), 'chord-packaged-')), ['--single-argument', `${site.origin}/keychain`]);
+      try {
+        const shell = await pageWhere(app.browser, isShell);
+        const tab = await pageWhere(app.browser, (url) => url === `${site.origin}/keychain`);
+        await expect.poll(() => tab.title()).toBe('Smoke page');
+        await quit(app, shell);
+      } catch (error) {
+        app.child.kill();
+        throw error;
+      }
+    }
+  } finally {
+    rmSync(dirname(copy), { recursive: true, force: true });
   }
 });

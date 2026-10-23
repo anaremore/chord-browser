@@ -71,7 +71,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 | M1.4 Command bar + archive | ranking with learned picks, history, completion, suggestions, site keywords, `@` filters, archive, sleeping tabs, ⌘⇧T | | |
 | M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows | PDFs, spellcheck, screen sharing, site permissions page, **editable shortcuts** (moved up from Phase 3) | real password-manager sign-in checks |
 | M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check | CI green on every OS, macOS hands-on on your MacBook | accessibility pass, design QA sweep, performance budgets, the 0.1 release |
-| Phase 2 | | Duet (chat that can read the browser) | split view, mini window, Peek, hover previews, Electron 46 |
+| Phase 2 | Duet (chat that can read the browser; on its branch, waiting to merge) | Codex's live-turn checks (S5, after its usage limit resets Nov 16) | split view, mini window, Peek, hover previews, Electron 46 |
 
 ---
 
@@ -255,6 +255,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
   - **Threads:** one per chord, kept by Chord and resumed across restarts.
   - **Controls:** exclusions per site, plus per-chord and global off.
   - No organize actions: Duet reads, it doesn't rearrange your tabs.
+  - **Built** (ARCHITECTURE.md §11 as built; spikes S10 pass, S5 partly verified). Still to do: reading PDFs, the panel's slide-in animation, Claude Code or Codex installed only inside WSL.
 
 ## Phase 3 — Links from everywhere · February 2027
 

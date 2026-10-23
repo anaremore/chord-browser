@@ -408,7 +408,7 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | **Collapse sidebar** | The sidebar slides out to the left (`snappy`). Back/forward/reload and the URL pill glide up into the bar (shared layout), and the pill morphs into the address field. The page frame widens using the snapshot technique (`smooth`). Docking reverses every piece. |
 | **Sidebar peek** (collapsed) | The sidebar slides in *over* the page with `shadow-popover` (`snappy`) and slides away 300 ms after the pointer leaves. The page doesn't move. |
 | **Edit the address (⌘L)** | The URL pill (or, in minimal mode, the bar's address field) becomes the input where it sits: its text and position stay put while the results panel grows down beneath it (`overlay`). With *Animate into the command bar* off (§6.8), it appears instantly. |
-| **Duet panel** | The panel slides in from the right with `overlay`. The page's frame narrows through the snapshot technique: the bitmap scales over one `smooth` spring, then the real view is placed once. |
+| **Duet panel** | The panel slides in from the right with `overlay`. The page's frame narrows through the snapshot technique: the bitmap scales over one `smooth` spring, then the real view is placed once. ⚠ *Not yet:* in Phase 2 the panel appears and the page is resized once, without the slide. |
 
 ### 6.6 Reduced motion
 
@@ -576,21 +576,31 @@ Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 
 ### 7.8 `DuetPanel`
 
-- **Frame:** a `surface` frame (`radius-frame`, `shadow-frame`).
-- **Header (40 px):** thread title, a provider/model chip (e.g. "Claude Code · Sonnet"), the thread menu (New thread, All threads, Export as Markdown), and close.
+As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECTURE.md §11).
+
+- **Frame:** a `surface` frame (`radius-frame`, `shadow-frame`), 380 px, right of the page with an 8 px gap. The page's frame narrows to make room.
+- **Header (40 px):** the chat's title (click *Rename* to edit it in place), a *provider · model* chip ("Claude Code · Default") that opens the model menu, the **Chats** menu (New chat, Rename, Export as Markdown, Delete this chat, recent chats, Turn off in this chord), and close.
+- **Reading line:** "Duet can read:" with *What you attach (asks for more)* · *Tabs in this chord* · *All my tabs*, for this chat (the default is set in Settings → Duet).
 - **Messages:** `text-body`, max width 64ch.
-  - User messages sit in a soft accent-tinted bubble; assistant messages are unbubbled for calm reading.
-  - **Citations** are small numbered pills; clicking one switches to the source tab and highlights the quote.
-- **`ToolActivityRow`:** a single quiet line ("Read 3 tabs", "Searched history for 'flights'") that expands to show details.
-- **`ApprovalCard`:** shows what the tool will do, in plain words ("Create folder 'Trip' with 6 tabs"), with the target listed.
-  - Buttons: **Allow once** (⌘↵) · **Allow for this thread** · **Deny** (Esc).
-  - The card never auto-accepts.
+  - User messages sit in a soft accent-tinted bubble, with the attached tabs' titles under it; hovering shows **Copy** and, on the last one, **Edit and send again**.
+  - Assistant messages are unbubbled for calm reading: a small, safe Markdown subset with no images. A link shows its full address and opens only when clicked.
+  - **Citations** are small numbered pills inside the sentence they support. Clicking one switches to the source tab and finds the quote; if the tab is gone, it opens the page scrolled to the quote.
+  - An interrupted reply says *Interrupted* with **Retry**; an error gives the plain cause and the fix.
+  - Dividers mark *Continued with a summary* and *Switched to Codex*.
+- **`ToolActivityRow`:** a single quiet line ("Read “Article”", "Read 3 tabs · 1 more", "Searched history for 'flights'") that expands to show details.
+- **`ApprovalCard`** ("Duet is asking"): what Duet wants to read, in plain words ("Read “Pricing”", "See the list of your tabs"), with the target listed.
+  - Buttons: **Allow once** (⌘↵ / Ctrl+↵) · **Allow for this chat** · **No** (Esc).
+  - The card never auto-accepts. Once answered it shrinks to a muted line (*Allowed*, *Not allowed*).
+- **Working:** a dot and *Working… 12s* while a reply streams; text renders as it arrives, with no typing animation.
+- **Follow:** the list follows new text until you scroll up more than 40 px; then a **Jump to latest** pill appears.
 - **Composer:**
-  - `ContextChips` above the input. The current tab is attached by default as a visible, removable chip ("This tab · example.com"); excluded sites can never be attached.
-  - `@` opens a picker for tabs, pinned tabs, chords, and split panes.
-  - Enter sends; Shift+Enter adds a new line.
-  - Send is disabled until there's text.
-- **States:** *Off* (not shown at all) · *Intro* · *Setup* · *Ready, empty* · *Streaming* (stop button; partial text renders as it arrives with no typing animation) · *Needs approval* · *Provider error* (plain cause plus fix, e.g. "Claude Code isn't signed in. Run `claude auth login` in a terminal, then try again.").
+  - `ContextChips` above the input. The current tab is attached by default as a removable chip ("This tab · example.com"); sites Duet can never read are never offered. The chip's tooltip says what's sent where.
+  - `@` opens a picker of this chord's tabs.
+  - Enter sends; Shift+Enter adds a line; ↑ in an empty composer recalls your last message; Esc stops a reply.
+  - Messages sent while Duet is answering are **queued** as chips (removable) and go in order.
+  - Send turns into **Stop** while a reply streams. Each chat keeps its own draft.
+- **States:** *Off* (not shown at all) · *Off in this chord* (a note and **Turn on in this chord**) · *Intro* · *Setup* · *Ready, empty* (three suggestion chips, and *Continue “title”* after 12 hours idle) · *Streaming* · *Needs approval* · *Provider error* (plain cause plus fix, e.g. "Claude Code isn't signed in. Run `claude auth login` in a terminal, then try again.").
+- **In the sidebar:** a small ✦ on tabs Duet read while the chat is open (*Duet read this tab*).
 
 ### 7.9 Split view, Peek, mini window, hidden chrome
 
@@ -622,7 +632,7 @@ The window opens at 1200×800, centered, with the real sidebar on the left showi
 - *As built:* a brand-new profile starts here. Chrome's `--no-first-run` skips it, and development builds can force it with `CHORD_FIRST_RUN=1` (Playwright adds `--no-first-run` to every Electron app it drives). The page waits hidden behind the cards. Step 5 is left out when Chord is already the default, and in development builds, which can't be.
 - Progress shows as 6 dots: filled for required steps, hollow for optional.
 - Every optional step can be skipped with Esc.
-- Duet is **not** part of onboarding; it's opt-in later (§8.6).
+- Duet is **not** part of onboarding; it sets itself up the first time you open it (§8.6).
 
 ### 8.2 Chord switching
 
@@ -664,17 +674,16 @@ A link clicked inside a pinned tab opens in Peek instead of replacing the pinned
 
 ### 8.6 Duet: first use
 
-1. The user clicks Duet in the page actions or presses the Duet shortcut (§13). The panel opens with **Intro**:
+1. The user clicks **✦ Duet** in the top bar or presses ⌘E / Ctrl+E. The panel opens with **Intro**:
    > **Meet Duet.** Chat about this page and your tabs, using your own Claude Code or Codex app. Chord never sees your sign-in, and nothing is sent until you press Send.
-   >
-   > **Set up Duet** · *Not now*
-2. **Setup** lists what's on this computer:
-   - Claude Code — *Installed 2.x · Signed in ✓* or *Sign in* (opens a terminal running `claude auth login`).
-   - Codex — *Not installed · How to install*.
-   - The user picks a default and is done. The **API key** and **local model** options sit behind *Other ways to connect* (later phase).
-3. **Ready, empty:** "Ask about this page, your tabs, or anything you're working on." Three chips change with the page: *Summarize this page* · *What should I know before I decide?* · *Compare with my other tabs*.
-4. **First answer:** citations link back into the page; tool activity is visible; any organizing action asks first.
-5. **Turning it off** (Settings → Duet → Off) removes the panel, the button, the shortcut, and the context-menu items.
+2. **Setup** (under the intro) lists what's on this computer:
+   - Claude Code: *Installed 2.1.309 · Signed in* with **Use this**, or **Sign in** (opens a terminal running `claude auth login`). *Using your API key* shows when that's what pays.
+   - Codex: *Not installed* · **How to install**.
+   - **Check again** re-detects. The user picks one and is done; it can be changed any time from the model chip or Settings.
+3. **First-use note**, once: "What you attach goes to Claude Code through your own account. Duet reads only what's attached to your message, unless you let it see more. It never sees what you type into forms." **Got it**.
+4. **Ready, empty:** "Ask about this page, your tabs, or anything you're working on." Chips: *Summarize this page* · *What should I know before I decide?* · *Compare with my other tabs*.
+5. **First answer:** citations link back into the page; tool activity is visible; reading beyond what's attached asks first (by default).
+6. **Turning it off:** Settings → Duet → *Show Duet* removes the panel, the button and the shortcut. *Turn off in this chord* (Chats menu) does it for one chord.
 
 ---
 
@@ -766,7 +775,7 @@ Every UI change gets the following before it reaches you:
 
 ## 13. Open design questions
 
-1. **Duet shortcut** (Phase 2). ⌘E / Ctrl+E collides with web editors (Google Docs centers text with it), and §14 keeps Chord off keys pages depend on. Candidates to test in Phase 2: ⌘⌥D / Ctrl+Alt+D, or page-first ⌘E.
+1. ~~**Duet shortcut**~~ **Decided in Phase 2:** ⌘E / Ctrl+E, **page-first**. Google Docs and other editors that use it keep it; everywhere else it toggles Duet. It can be changed in Settings → Keyboard shortcuts.
 2. **Sidebar toggle shortcut.** Proposed in §14: ⌘S / Ctrl+S, page-first (Google Docs and other editors keep their own ⌘S), with Save page on ⌘⇧S. Also: *peek on hover* on by default in minimal mode, with an off switch.
 3. **Favorites row.** Arc's favicon grid sits above the chord and is shared across chords. It isn't in the brief. Add it as a later-phase item, or leave it out?
 4. **Top strip on Windows/Linux.** Show the page title next to the domain, or only the domain (calmer)? I lean domain only, with the title on hover.
@@ -869,7 +878,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 
 | Action | macOS | Windows & Linux | Phase |
 |---|---|---|---|
-| Show / hide Duet | to decide (§13) | to decide | 2 |
+| Show / hide Duet (page-first) | ⌘E | Ctrl+E | 2 |
 | Focus the pane left / right in a split | ⌘⌥[ · ⌘⌥] | Ctrl+Alt+[ · Ctrl+Alt+] | 2 |
 | Peek: keep as a tab · close | ⌘↵ · Esc | Ctrl+↵ · Esc | 3 |
 | Mini window: move into a chord | ⌘↵ | Ctrl+↵ | 3 |

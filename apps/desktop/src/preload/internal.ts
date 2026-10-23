@@ -23,6 +23,7 @@ const api: SettingsApi = {
     forgetSite: (origin) => invoke('settings:forgetSite', { origin }),
     linkRoute: (host, chordId) => invoke('settings:linkRoute', { host, chordId }),
     defaultBrowser: () => invoke('settings:defaultBrowser'),
+    duet: (request) => invoke('settings:duet', request),
     makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),
     updateStatus: () => invoke('settings:updateStatus'),
     checkForUpdates: () => invoke('settings:checkForUpdates'),
