@@ -17,6 +17,7 @@ const api: SettingsApi = {
     saveTheme: (theme) => invoke('settings:saveTheme', { theme }),
     deleteTheme: (id) => invoke('settings:deleteTheme', { id }),
     copyText: (text) => invoke('settings:copyText', { text }),
+    recordingShortcut: (recording) => invoke('settings:recordingShortcut', { recording }),
     chordSignIns: (chordId, separate) => invoke('settings:chordSignIns', { chordId, separate }),
     sitePermission: (origin, permission, decision) => invoke('settings:sitePermission', { origin, permission, decision }),
     forgetSite: (origin) => invoke('settings:forgetSite', { origin }),

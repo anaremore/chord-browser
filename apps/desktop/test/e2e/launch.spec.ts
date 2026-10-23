@@ -752,6 +752,138 @@ test('closing tabs while they load never trips an error in main', async () => {
   }
 });
 
+test('every shortcut can be changed: recorded in Settings, applied live, moved on conflict, reset, and kept', async () => {
+  const mac = process.platform === 'darwin';
+  // What the keys look like here, and how main sends them (Mod is ⌘ on macOS, Ctrl elsewhere).
+  const caps = { ctrlAltJ: mac ? '⌥⌘J' : 'Ctrl+Alt+J', ctrlF: mac ? '⌘F' : 'Ctrl+F', ctrlT: mac ? '⌘T' : 'Ctrl+T' };
+  const mod = mac ? 'meta' : 'control';
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const isSettings = (url: string) => url.startsWith('chord://settings') || url.includes('/settings/index.html');
+  /** Sends a key press through main, the way a real one reaches Chord's router. */
+  const send = (app: ElectronApplication, match: 'tab' | 'settings', keyCode: string, modifiers: string[]) =>
+    app.evaluate(
+      ({ webContents }, { match, keyCode, modifiers }) => {
+        const c = webContents.getAllWebContents().find((x) => (match === 'tab' ? x.getURL().endsWith('/second') : /settings/.test(x.getURL())))!;
+        c.focus();
+        c.sendInputEvent({ type: 'keyDown', keyCode, modifiers: modifiers as Electron.InputEvent['modifiers'] });
+        c.sendInputEvent({ type: 'keyUp', keyCode, modifiers: modifiers as Electron.InputEvent['modifiers'] });
+      },
+      { match, keyCode, modifiers },
+    );
+
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/second` }, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await pageWhere(app, (url) => url === `${site.origin}/second`);
+    await runAction(shell, 'app.shortcuts');
+    const settings = await pageWhere(app, isSettings);
+    const row = (id: string) => settings.locator(`[data-action="${id}"]`);
+    await expect(row('tab.new')).toBeVisible();
+
+    // Record a new key for New tab: the row, the sidebar's keycap and the menus all follow.
+    await row('tab.new').getByRole('button', { name: /^Change .+ for New tab$/ }).click();
+    await expect(row('tab.new').getByRole('button', { name: /^Press the new keys for New tab/ })).toBeFocused();
+    await settings.keyboard.press('ControlOrMeta+Alt+KeyJ');
+    await expect(row('tab.new').getByRole('button', { name: `Change ${caps.ctrlAltJ} for New tab` })).toBeVisible();
+    await expect(row('tab.new').getByRole('button', { name: 'Reset to default' })).toBeVisible();
+    await expect(shell.getByText(caps.ctrlAltJ).first()).toBeVisible();
+
+    // The old key no longer opens a tab; the new one does (through main's router, as a real key would).
+    await send(app, 'tab', 'T', [mod]);
+    await shell.waitForTimeout(500);
+    await expect(overlay.getByRole('dialog')).toBeHidden();
+    await send(app, 'tab', 'J', [mod, 'alt']);
+    await expect(overlay.getByRole('dialog')).toBeVisible();
+    await overlay.keyboard.press('Escape');
+    await expect(overlay.getByRole('dialog')).toBeHidden();
+
+    // While Settings records, its keys are its own: New tab's new key is recorded (here, as taken), not run.
+    await row('view.find').getByRole('button', { name: /^Add another key for Find in page$/ }).click();
+    await send(app, 'settings', 'J', [mod, 'alt']);
+    await expect(row('view.find').getByRole('alert')).toContainText(`${caps.ctrlAltJ} is used by New tab`);
+    await expect(overlay.getByRole('dialog')).toBeHidden();
+    await row('view.find').getByRole('button', { name: 'Cancel', exact: true }).click();
+
+    // A key another action uses: the row says so, and "Use it here" moves it.
+    await row('tab.new').getByRole('button', { name: 'Add another key for New tab' }).click();
+    await settings.keyboard.press('ControlOrMeta+KeyF');
+    await expect(row('tab.new').getByRole('alert')).toContainText(`${caps.ctrlF} is used by Find in page`);
+    await row('tab.new').getByRole('button', { name: 'Use it here' }).click();
+    await expect(row('tab.new').getByRole('button', { name: `Change ${caps.ctrlF} for New tab` })).toBeVisible();
+    await expect(row('view.find').getByRole('button', { name: /^Change / })).toHaveCount(0);
+
+    // A key Chord can't use says why, in place; Esc gives up.
+    await row('tab.new').getByRole('button', { name: 'Add another key for New tab' }).click();
+    await settings.keyboard.press('KeyK');
+    await expect(row('tab.new').getByRole('alert')).toContainText('so typing never sets it off');
+    await settings.keyboard.press('Escape');
+    await expect(row('tab.new').getByRole('alert')).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+
+  // Your keys come back after a relaunch, and work at once.
+  app = await launch({}, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    await runAction(shell, 'app.shortcuts');
+    const settings = await pageWhere(app, isSettings);
+    const row = (id: string) => settings.locator(`[data-action="${id}"]`);
+    await expect(row('tab.new').getByRole('button', { name: `Change ${caps.ctrlAltJ} for New tab` })).toBeVisible();
+    await expect(row('tab.new').getByRole('button', { name: `Change ${caps.ctrlF} for New tab` })).toBeVisible();
+
+    // ↺ puts one action back; "Reset all" (asked twice, in place) puts back the rest.
+    await row('tab.new').getByRole('button', { name: 'Reset to default' }).click();
+    await expect(row('tab.new').getByRole('button', { name: `Change ${caps.ctrlT} for New tab` })).toBeVisible();
+    await settings.getByRole('button', { name: 'Reset all' }).click();
+    await settings.getByRole('button', { name: 'Reset every shortcut?' }).click();
+    await expect(row('view.find').getByRole('button', { name: `Change ${caps.ctrlF} for Find in page` })).toBeVisible();
+    await expect(settings.getByRole('button', { name: /^Reset all|^Reset every/ })).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a changed page-first shortcut reaches Chord through the rebuilt menu, and its old key stops', async () => {
+  // Same limits as the routing test above: menus need a real NSEvent on macOS and an active window on Wayland.
+  test.skip(process.platform === 'darwin', 'injected keys carry no NSEvent for the macOS menu');
+  test.skip(process.env['XDG_SESSION_TYPE'] === 'wayland', 'menu accelerators need an active window; headless Weston has none');
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const tab = await pageWhere(app, (url) => url === `${site.origin}/second`);
+    await runAction(shell, 'app.shortcuts');
+    const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
+    const row = settings.locator('[data-action="view.toggleSidebar"]');
+    await row.getByRole('button', { name: /^Change .+ for Show or hide the sidebar$/ }).click();
+    await settings.keyboard.press('Control+Alt+KeyB');
+    await expect(row.getByRole('button', { name: 'Change Ctrl+Alt+B for Show or hide the sidebar' })).toBeVisible();
+    // Back to the browser window, with the page focused, as in the routing test.
+    await app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows().find((w) => w.getTitle() === 'Chord Settings')?.close());
+    const press = async (keyCode: string, modifiers: ('control' | 'alt')[]) => {
+      await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((x) => x.getURL() === url)!.focus(), `${site.origin}/second`);
+      await expect.poll(() => tab.evaluate(() => document.hasFocus())).toBe(true);
+      await app.evaluate(
+        ({ webContents }, { url, keyCode, modifiers }) => {
+          const c = webContents.getAllWebContents().find((x) => x.getURL() === url)!;
+          c.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+          c.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+        },
+        { url: `${site.origin}/second`, keyCode, modifiers },
+      );
+    };
+    const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
+    await press('S', ['control']);
+    await shell.waitForTimeout(500);
+    await expect(sidebar).toBeVisible();
+    await press('B', ['control', 'alt']);
+    await expect(sidebar).toBeHidden();
+  } finally {
+    await app.close();
+  }
+});
+
 test('a relaunch restores tabs, the sidebar and settings', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);

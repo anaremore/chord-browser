@@ -3,7 +3,7 @@
  * sit in the content frame, and every choice lands in the real sidebar as you
  * make it. That is the tour.
  */
-import { formatKeys, type Chord, type ChordThemeSpec } from '@chord/core';
+import type { Chord, ChordThemeSpec } from '@chord/core';
 import type { DefaultBrowserStatus, SystemInfo } from '@chord/ipc';
 import { PRESETS, SWATCHES, cssOklch, presetStops, type PresetId, type SwatchId } from '@chord/tokens';
 import { Check, Dices } from 'lucide-react';
@@ -11,7 +11,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { SpringFor } from '../shared/motion';
 import { api } from './api';
-import { keycap } from './keys';
+import { useKeys } from './keys';
 import styles from './Onboarding.module.css';
 import { asUrl, suggestSites } from './popular-sites';
 
@@ -261,11 +261,15 @@ function DefaultStep({ info, onNext }: { info: SystemInfo; onNext(): void }) {
 }
 
 function TipsStep({ info, onDone }: { info: SystemInfo; onDone(): void }) {
-  const jump = `${formatKeys('Mod+1', info.platform)}–9`;
+  const { keycap } = useKeys(info);
+  // "⌘1–9" while chords 1 and 9 still follow that pattern; otherwise chord 1's own key.
+  const first = keycap('chord.goto1');
+  const last = keycap('chord.goto9');
+  const jump = first && last && first.slice(0, -1) === last.slice(0, -1) && first.endsWith('1') ? `${first}–9` : first;
   const tips = [
-    { keys: keycap('tab.new', info), title: 'Search or open anything', body: 'Tabs, history, and actions, from one box.' },
-    { keys: jump, title: 'Jump between chords', body: 'Or swipe the sidebar sideways.' },
-    { keys: null, title: 'Drag a tab up to pin it', body: 'Pinned tabs stay put for good.' },
+    { keys: keycap('tab.new'), glyph: '⌘', title: 'Search or open anything', body: 'Tabs, history, and actions, from one box.' },
+    { keys: jump, glyph: '⇄', title: 'Jump between chords', body: 'Or swipe the sidebar sideways.' },
+    { keys: '', glyph: '↑', title: 'Drag a tab up to pin it', body: 'Pinned tabs stay put for good.' },
   ];
   return (
     <>
@@ -273,7 +277,13 @@ function TipsStep({ info, onDone }: { info: SystemInfo; onDone(): void }) {
       <ul className={styles.tips}>
         {tips.map((tip) => (
           <li key={tip.title} className={styles.tip}>
-            {tip.keys ? <kbd className={styles.keycap}>{tip.keys}</kbd> : <span className={styles.dragGlyph} aria-hidden>↑</span>}
+            {tip.keys ? (
+              <kbd className={styles.keycap}>{tip.keys}</kbd>
+            ) : (
+              <span className={styles.dragGlyph} aria-hidden>
+                {tip.glyph}
+              </span>
+            )}
             <span className={styles.tipText}>
               <span className={styles.tipTitle}>{tip.title}</span>
               <span className={styles.tipBody}>{tip.body}</span>

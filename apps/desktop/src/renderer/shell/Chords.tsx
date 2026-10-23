@@ -3,16 +3,17 @@
  * rename and the icon picker, the switcher in the footer, and the color
  * crossfade behind it all.
  */
-import { DEFAULT_PROFILE, chordsFor, firstGrapheme, formatKeys, shortcutById, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
+import { DEFAULT_PROFILE, chordsFor, firstGrapheme, keycapFor, type ActionId, type Chord, type ChordThemeSpec, type ShortcutOverrides, type State } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
 import { useDroppable } from '@dnd-kit/react';
 import { EyeOff, KeyRound, Plus } from 'lucide-react';
-import { motion, useIsPresent, type Transition } from 'motion/react';
+import { motion, useIsPresent, type MotionValue, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { api } from './api';
 import styles from './App.module.css';
 import { CHORD_DROP } from './tree';
+import type { PaneMotion } from './useChordSwipe';
 
 /** New chords take the first icon and gradient nobody uses yet. */
 const ICONS = ['✦', '♪', '♫', '♩', '♬', '◆', '●', '▲', '★'];
@@ -28,11 +29,10 @@ export function newChordLook(chords: Chord[]): { icon: string; theme: ChordTheme
   return { icon, theme: { stops: presetStops(preset), grain: 0.2, appearance: 'auto' } };
 }
 
-function gotoKeys(index: number, info: SystemInfo): string {
+/** The key for the nth chord (with your shortcut changes), for its tooltip. */
+function gotoKeys(index: number, info: SystemInfo, overrides: ShortcutOverrides): string {
   if (index > 8) return '';
-  const shortcut = shortcutById(`chord.goto${Math.min(index + 1, 9)}` as ActionId);
-  const keys = shortcut ? (info.platform === 'darwin' ? shortcut.mac : shortcut.other)[0] : undefined;
-  return keys ? formatKeys(keys, info.platform) : '';
+  return keycapFor(`chord.goto${index + 1}` as ActionId, info.platform, overrides);
 }
 
 /**
@@ -59,10 +59,17 @@ export function Tint({ value, transition }: { value: string; transition: Transit
   );
 }
 
+/**
+ * How a pane comes and goes (useChordSwipe.ts). A click or key slides it in
+ * 24 px from the switcher's side. A swipe's commit continues from where the
+ * fingers left it: the swipe moves the new pane, and the old one leaves with
+ * the same spring. With reduced motion, a commit crossfades.
+ */
 const PANE_VARIANTS = {
-  enter: (dir: number) => ({ opacity: 0, x: dir * 24 }),
-  center: { opacity: 1, x: 0 },
-  exit: (dir: number) => ({ opacity: 0, x: dir * -24 }),
+  enter: (m: PaneMotion) => (m.kind === 'swipe' ? { opacity: 1 } : m.kind === 'fade' ? { opacity: 0 } : { opacity: 0, x: m.dir * 24 }),
+  center: (m: PaneMotion) => (m.kind === 'swipe' ? { opacity: 1 } : m.kind === 'fade' ? { opacity: 1, transition: m.transition } : { opacity: 1, x: 0 }),
+  exit: (m: PaneMotion) =>
+    m.kind === 'swipe' ? { x: m.exitTo, transition: m.transition } : m.kind === 'fade' ? { opacity: 0, transition: m.transition } : { opacity: 0, x: m.dir * -24 },
 };
 
 /**
@@ -70,13 +77,27 @@ const PANE_VARIANTS = {
  * it sits on. While a pane slides out it's inert and hidden from assistive
  * tech, so only the chord you switched to can be reached.
  */
-export function ChordPane({ ref, slide, transition, children }: { ref?: Ref<HTMLDivElement>; slide: number; transition: Transition; children: ReactNode }) {
+export function ChordPane({
+  ref,
+  motion: paneMotion,
+  x,
+  transition,
+  children,
+}: {
+  ref?: Ref<HTMLDivElement>;
+  motion: PaneMotion;
+  /** Where a swipe has the pane (useChordSwipe.ts). */
+  x: MotionValue<number>;
+  transition: Transition;
+  children: ReactNode;
+}) {
   const present = useIsPresent();
   return (
     <motion.div
       ref={ref}
       className={styles.chordPane}
-      custom={slide}
+      style={{ x }}
+      custom={paneMotion}
       variants={PANE_VARIANTS}
       initial="enter"
       animate="center"
@@ -85,6 +106,15 @@ export function ChordPane({ ref, slide, transition, children }: { ref?: Ref<HTML
       inert={!present}
       aria-hidden={present ? undefined : true}
     >
+      {children}
+    </motion.div>
+  );
+}
+
+/** A neighbor chord's pane beside the current one while a swipe moves them; never interactive. */
+export function GhostPane({ x, children }: { x: MotionValue<number>; children: ReactNode }) {
+  return (
+    <motion.div className={`${styles.chordPane} ${styles.ghostPane}`} style={{ x }} inert aria-hidden>
       {children}
     </motion.div>
   );
@@ -338,7 +368,7 @@ export function ChordSwitcher({
         }}
       >
         {chords.map((chord, index) => (
-          <ChordButton key={chord.id} chord={chord} selected={chord.id === current} keys={gotoKeys(index, info)} info={info} pill={pill} windowId={windowId} />
+          <ChordButton key={chord.id} chord={chord} selected={chord.id === current} keys={gotoKeys(index, info, state.settings.shortcuts)} info={info} pill={pill} windowId={windowId} />
         ))}
       </div>
       {onCreate ? (

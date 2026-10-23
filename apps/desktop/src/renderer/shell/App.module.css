@@ -192,6 +192,25 @@ kbd {
   min-block-size: 0;
 }
 
+/* The chord panes' container: a swipe moves panes inside it, and only then clips them. */
+.paneTrack {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+.paneTrack[data-swiping] {
+  overflow: hidden;
+}
+
+/* A neighbor chord's pane beside the current one during a swipe. */
+.ghostPane {
+  position: absolute;
+  inset: 0;
+}
+
 .chordHeader {
   position: relative;
   display: flex;

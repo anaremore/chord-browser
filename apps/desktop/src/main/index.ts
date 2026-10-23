@@ -15,7 +15,7 @@ import {
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { delimiter, join } from 'node:path';
-import { app, clipboard, Menu, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
+import { app, clipboard, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
@@ -29,7 +29,7 @@ import { ScreenShareBroker } from './screen-share';
 import { applySpellcheck } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
 import { Persistence, removeUnusedPartitions } from './persistence';
-import { systemInfo } from './platform';
+import { platform, systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
 import { Suggestions } from './suggestions';
@@ -153,6 +153,7 @@ function registerIpc(): void {
   handle('settings:saveTheme', ({ theme }) => browser!.store.dispatch({ t: 'theme.save', theme }));
   handle('settings:deleteTheme', ({ id }) => browser!.store.dispatch({ t: 'theme.delete', id }));
   handle('settings:copyText', ({ text }) => clipboard.writeText(text));
+  handle('settings:recordingShortcut', ({ recording }, sender) => browser!.setRecordingShortcut(sender, recording));
   handle('extensions:state', (_request, sender) => browser!.extensions.barState(senderWindow(sender)));
   handle('extension:activate', ({ id, anchor }, sender) => browser!.extensions.activate(senderWindow(sender), id, anchor));
   handle('extension:menu', ({ id, x, y }, sender) => browser!.extensions.menu(senderWindow(sender), id, { x, y }));
@@ -294,6 +295,8 @@ if (!app.requestSingleInstanceLock()) {
       // Chrome's --no-first-run skips it. Playwright adds that switch to every Electron it drives,
       // so development builds can ask for first run with CHORD_FIRST_RUN=1.
       firstRun: (!app.isPackaged && process.env['CHORD_FIRST_RUN'] === '1') || !app.commandLine.hasSwitch('no-first-run'),
+      // Saved shortcut changes this OS keeps for itself are dropped.
+      platform,
     });
     if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
     // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
@@ -330,7 +333,7 @@ if (!app.requestSingleInstanceLock()) {
         ...(publisherKeyHash ? { publisherKeyHash } : {}),
       },
     });
-    Menu.setApplicationMenu(browser.appMenu);
+    browser.applyAppMenu();
     // Settings → Appearance → Color scheme is Chromium's own theme source, so web pages'
     // prefers-color-scheme follows it, as in Chrome. Development's CHORD_APPEARANCE wins.
     const followScheme = () => {

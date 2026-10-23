@@ -27,10 +27,12 @@ import {
   type State,
   type WindowModel,
 } from './model';
+import { cleanOverrides } from './bindings';
 import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
+import type { Platform } from './shortcuts';
 
 /** Everything chord-data persists; live engine state and the version never are. */
 export interface PersistedState {
@@ -133,8 +135,9 @@ export function validTheme(v: unknown): CustomTheme | null {
   return { id: t.id, name: t.name.slice(0, 40), stops: t.stops.map((s) => ({ l: s.l, c: s.c, h: s.h })), grain: t.grain };
 }
 
-function restoreSettings(saved: Record<string, unknown>): Settings {
+function restoreSettings(saved: Record<string, unknown>, platform?: Platform): Settings {
   const settings = defaultSettings();
+  settings.shortcuts = cleanOverrides(saved['shortcuts'], platform);
   const scheme = saved['colorScheme'];
   if (scheme === 'system' || scheme === 'light' || scheme === 'dark') settings.colorScheme = scheme;
   const ui = saved['interface'] as Record<string, unknown> | undefined;
@@ -181,7 +184,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   if (!saved || !saved.chords.some((c) => !c.private)) {
     const fresh = seedState(seed);
     if (saved) {
-      fresh.settings = restoreSettings(saved.settings);
+      fresh.settings = restoreSettings(saved.settings, seed.platform);
       fresh.sitePermissions = restorePermissions(saved.sitePermissions);
       fresh.downloads = restoreDownloads(saved.downloads);
       fresh.favorites = restoreFavorites(saved.favorites);
@@ -194,7 +197,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   }
 
   const state = emptyState();
-  state.settings = restoreSettings(saved.settings);
+  state.settings = restoreSettings(saved.settings, seed.platform);
   state.sitePermissions = restorePermissions(saved.sitePermissions);
   state.downloads = restoreDownloads(saved.downloads);
   state.favorites = restoreFavorites(saved.favorites);

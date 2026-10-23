@@ -26,8 +26,8 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
-import { app, BaseWindow, BrowserWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
+import type { ArchiveSnapshot, GesturePhase, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
+import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
@@ -36,6 +36,7 @@ import type { WebStore } from './extensions/webstore';
 import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
+import { setShortcutOverrides } from './shortcut-overrides';
 import { IdleKeeper, type IdleTiming } from './idle';
 import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
@@ -81,6 +82,13 @@ export interface BrowserOptions {
   };
 }
 
+/** Trackpad scroll phases forwarded to the shell, for the chord swipe. */
+const GESTURE_PHASES: Partial<Record<string, GesturePhase>> = {
+  gestureScrollBegin: 'begin',
+  gestureScrollEnd: 'end',
+  gestureFlingStart: 'fling',
+};
+
 export class Browser {
   readonly store: Store;
   readonly tabs: TabManager;
@@ -102,15 +110,20 @@ export class Browser {
   private archiveChangedTimer: ReturnType<typeof setTimeout> | undefined;
   /** Chord is quitting: windows closing now stay in the saved state, to come back at the next launch. */
   private quitting = false;
+  /** The Settings view while it records a shortcut: main acts on none of its keys until it's done. */
+  private recordingIn: WebContents | null = null;
   private readonly keyboard: KeyboardHandlers = {
     run: (action, contents) => this.run(action, contents),
     onControlUp: () => this.finishRecentCycle(),
+    paused: (contents) => contents === this.recordingIn,
   };
   /** The application menu (macOS menu bar; on Windows/Linux the ⋯ menu, whose accelerators stay live). */
-  readonly appMenu: Menu = buildAppMenu((action) => this.runInFocusedWindow(action));
+  appMenu: Menu;
 
   constructor(private readonly options: BrowserOptions) {
     this.store = new Store(options.initial);
+    setShortcutOverrides(this.store.state.settings.shortcuts);
+    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
     this.tabs = new TabManager({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
@@ -256,6 +269,11 @@ export class Browser {
       this.syncPopovers();
       this.extensions.sync();
       if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
+      // New keys apply at once: the router reads them live, and the menus are rebuilt to show and accept them.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'shortcuts')) {
+        setShortcutOverrides(change.state.settings.shortcuts);
+        this.applyAppMenu();
+      }
       if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions', 'sitePermissions'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
@@ -337,13 +355,22 @@ export class Browser {
     });
     this.windows.set(windowId, w);
     this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));
+    // A load can finish after its window has closed (quitting right after launch): only an open window syncs.
     w.popover.webContents.on('did-finish-load', () => {
+      if (this.windows.get(windowId) !== w) return;
       this.popoverSent.delete(windowId);
       this.syncPopover(w);
     });
     w.shell.webContents.on('did-finish-load', () => {
+      if (this.windows.get(windowId) !== w) return;
       this.extensions.forget(windowId);
       this.extensions.sync();
+    });
+    // The chord swipe's phases (DESIGN.md §6.4): the renderer sees only wheel events, which
+    // don't say when the fingers lift. Where the OS sends none, the shell ends on idle.
+    w.shell.webContents.on('input-event', (_event, input) => {
+      const phase = GESTURE_PHASES[input.type];
+      if (phase) send(w.shell.webContents, 'gesture:phase', phase);
     });
     this.lastWindowId ??= windowId;
     w.window.on('focus', () => {
@@ -568,6 +595,17 @@ export class Browser {
     };
   }
 
+  /** Builds the menus from the current shortcuts and installs the app menu. */
+  applyAppMenu(): void {
+    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
+    Menu.setApplicationMenu(this.appMenu);
+  }
+
+  /** Settings is (or stops) recording a shortcut in this contents. Only the Settings view may ask. */
+  setRecordingShortcut(contents: WebContents, recording: boolean): void {
+    this.recordingIn = recording && contents === this.settingsWindow?.view.webContents ? contents : null;
+  }
+
   openSettings(section?: string): void {
     if (this.settingsWindow) {
       this.settingsWindow.show(section);
@@ -575,6 +613,11 @@ export class Browser {
     }
     this.settingsWindow = new SettingsWindow(this.options.uiSession, this.lastWindow()?.window.getBounds(), section, () => {
       this.settingsWindow = null;
+      this.recordingIn = null;
+    });
+    // Recording a shortcut ends when Settings loses focus, whatever its page says.
+    this.settingsWindow.window.on('blur', () => {
+      this.recordingIn = null;
     });
     attachShortcuts(this.settingsWindow.view.webContents, this.keyboard);
     attachContextMenu(this.settingsWindow.view.webContents, {
@@ -757,7 +800,8 @@ export class Browser {
         editColors: () => {
           this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
           this.lastWindowId = w.id;
-          this.openSettings('appearance');
+          // Appearance, with the chord's colors open on the wheel.
+          this.openSettings('appearance/colors');
         },
         separateSignIns: chord.profileId !== DEFAULT_PROFILE,
         toggleSeparateSignIns: () => this.toggleSeparateSignIns(w, chordId),

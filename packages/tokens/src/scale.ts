@@ -65,6 +65,8 @@ export const size = {
   /** Settings → Appearance: a theme's light and dark orbs, the narrowest theme card, and the color-scheme previews. */
   orb: 40,
   themeCard: 144,
+  /** The theme editor's color wheel (DESIGN.md §7.7). */
+  colorWheel: 240,
   schemePreview: 104,
   /** Settings → Appearance → the theme editor's sliders. */
   sliderWidth: 200,
