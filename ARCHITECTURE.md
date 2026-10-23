@@ -855,13 +855,23 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
   - **Which release counts:** the newest by SemVer precedence. Drafts never count. SemVer pre-releases count only for someone already running one; GitHub's own pre-release flag is ignored, so previews still announce each other. Only release-page links are trusted.
   - **What you see:** a toast "Chord 0.2.0 is out · What's new" (once per version per run) and the answer in About, with "Check now".
   - **Failures:** silent, with backoff of 1 h, 2 h, 4 h, then daily.
-- **Phase 3:** in-app install on Windows and AppImage, still gated by the Ed25519 check.
+- **Phase 3 (built):** in-app install on Windows (the per-user installer) and the AppImage, gated by the Ed25519 check (`src/main/update-installer.ts`).
+  - **Trigger:** the same check. When it finds a newer release and this copy can install it, electron-updater downloads it in the background.
+  - **What you see:** a toast "Chord 0.2.0 is ready · Restart to update", and the same in About. A ready update also installs when you quit.
+  - **Falls back to notify-only** when the manifest is unsigned or signed by another key, can't be fetched, or has no file for this build. It also stays notify-only on the `.deb` (its package manager updates it), unpacked folders, development builds, and any build made before the key existed.
+  - ⚠ **No rollback.** The one-click installer and the AppImage replace Chord in place, and nothing here plans a rollback (the extension rollback in §12 is a different thing). If a new version won't start, you reinstall from the release page.
 - **macOS:** stays notify-and-download until it's signed.
 
-**Ed25519 manifest signing:**
-- The release workflow signs `latest*.yml` with a key held in a protected GitHub Environment.
-- The public key is baked into the app.
-- A custom electron-updater provider (`provider: 'custom'` ✅) wraps the GitHub provider and verifies the signature before any download.
+**Ed25519 manifest signing** (built):
+- **Signing:** the release workflow signs each manifest an installed copy reads (`latest-win-<arch>.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`) with the `CHORD_UPDATE_SIGNING_KEY` secret, held in the protected `release` environment (`scripts/sign-update-manifests.mjs`).
+  - It uploads `<manifest>.sig` beside each manifest: the base64 signature of the file's exact bytes.
+  - Each Windows architecture builds on its own runner and electron-builder names both manifests `latest.yml`, so the workflow renames them.
+  - Making the key is in [docs/SECURITY-PATCHING.md](docs/SECURITY-PATCHING.md#update-signing-key).
+- **Verifying:** the public key is baked into the app (`src/main/update-key.ts`; empty until the key exists, which keeps every copy notify-only).
+  - A custom electron-updater provider (`provider: 'custom'` ✅) fetches the manifest and its `.sig` from the release that Chord's own check chose, and refuses it unless the signature verifies (`src/main/update-signing.ts`, unit-tested).
+  - It doesn't wrap the GitHub provider, because that one picks the release itself, by GitHub's pre-release flag rather than §14.4's SemVer rule.
+  - electron-updater then checks the download against the signed manifest's sha512, so the installer is covered too.
+- **Versions:** electron-updater 6.8.11, the `v26` line that goes with electron-builder 26 (npm's `latest` tag is 6.8.9).
 - When electron-builder v27's built-in signed manifests go stable, we switch to them.
 
 ---
@@ -926,13 +936,13 @@ Tags `v*` trigger `release.yml`. It can also be run by hand, which builds and te
    - macOS: `codesign --verify` and `hdiutil verify`, then the app.
    - Linux: the installed `.deb`, with no sysctl change, so its AppArmor profile is what's tested. Then the AppImage.
    - The fuses are read back into the log.
-3. **Upload a draft prerelease** with `SHA256SUMS.txt`. The only write permission is `contents: write`, on that job.
-4. **A maintainer publishes.**
+3. **Sign the update manifests** (§14.4) in the protected `release` environment, which holds the Ed25519 key.
+4. **Upload a draft prerelease** with `SHA256SUMS.txt`. The only write permission is `contents: write`, on that job.
+5. **A maintainer publishes.**
 
-When signing arrives (Phase 4), these steps slot in after the build:
-- Sign through a **protected GitHub Environment** (`release`). Signing secrets are available only to tag builds on `main`, with required reviewers.
+When code signing arrives (Phase 4), these steps slot in after the build:
+- Sign through the same **protected GitHub Environment** (`release`). Signing secrets are available only to tag builds on `main`, with required reviewers.
 - Notarize.
-- Sign the manifests.
 
 A laptop never holds signing keys.
 
@@ -1016,3 +1026,4 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 - **S8** Keyboard routing: reserved keys via `before-input-event` and page-first app-menu accelerators, with WebContentsView inside BaseWindow, on all three OSes (including hidden menus on Windows/Linux and whether macOS menu key equivalents preempt the page). **Pass on Windows** ([docs/decisions/S8-keyboard-routing.md](docs/decisions/S8-keyboard-routing.md)); Linux in CI; macOS by hand.
 - **S7** Auto picture-in-picture: controls present in Electron 45's PiP window, *back to tab* routing, and video rendering after the source view is detached (see Electron PR #50264 on occluded video). ✅ **Resolved on Windows:** docs/decisions/S7-auto-pip.md.
 - **S9** Chrome extensions on Electron 45: real Web Store extensions, popups, DNR, isolation, library and license. **Partial on Windows:** the iamEvanYT fork of electron-chrome-extensions runs all six test extensions, while Electron alone runs two. Recommends the vendored fork, Chord's own verified installer, and GPL-3 binaries (D1 a) ([docs/decisions/S9-extensions.md](docs/decisions/S9-extensions.md)).
+- **S10** Which hosts Chord contacts on its own, read from a net log. ✅ **Resolved on Windows:** search suggestions, the default engine, spellcheck dictionary downloads (`gvt1.com`) and Web Store extension updates. Settings → Privacy → *Google-free mode* turns each off or away from Google, and a CI test fails if a session in that mode contacts a Google host ([docs/decisions/S10-google-free.md](docs/decisions/S10-google-free.md)).

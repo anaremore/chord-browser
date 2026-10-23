@@ -826,6 +826,13 @@ export class Browser {
     );
   }
 
+  /** "Chord 0.2.0 is ready": a downloaded update, whose toast restarts into it. */
+  announceUpdateReady(id: string, message: string): void {
+    const w = this.lastNormalWindow();
+    if (!w) return;
+    send(w.shell.webContents, 'toast:show', { id, message, action: { label: 'Restart to update', update: 'restart' } });
+  }
+
   /** A note for the window used last, with a link that opens as a tab there (a new Chord version, for one). */
   announce(id: string, message: string, link: { label: string; url: string }): void {
     const w = this.lastNormalWindow();

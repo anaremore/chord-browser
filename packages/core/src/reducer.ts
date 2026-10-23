@@ -10,6 +10,7 @@ import { cleanKeys } from './bindings';
 import { isInternalUrl, visibleTabs } from './idle';
 import {
   DEFAULT_PROFILE,
+  GOOGLE_FREE_ENGINE,
   IDLE_LIVE,
   MAX_ZOOM,
   MIN_ZOOM,
@@ -891,7 +892,13 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'settings.set': {
       const { searchEngine, motion, colorScheme, archiveAfter, sleepTabs, searchSuggestions, checkForUpdates, extensionButtons } = cmd.settings;
       if (extensionButtons !== undefined && draft.settings.extensionButtons !== extensionButtons) draft.settings.extensionButtons = extensionButtons;
-      if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
+      const { googleFree } = cmd.settings;
+      if (googleFree !== undefined && draft.settings.googleFree !== googleFree) draft.settings.googleFree = googleFree;
+      // Google-free mode searches with anything but Google: choosing Google is ignored, and turning the mode on moves off it.
+      if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine && !(draft.settings.googleFree && searchEngine === 'google')) {
+        draft.settings.searchEngine = searchEngine;
+      }
+      if (draft.settings.googleFree && draft.settings.searchEngine === 'google') draft.settings.searchEngine = GOOGLE_FREE_ENGINE;
       if (archiveAfter !== undefined && draft.settings.archiveAfter !== archiveAfter) draft.settings.archiveAfter = archiveAfter;
       if (sleepTabs !== undefined && draft.settings.sleepTabs !== sleepTabs) draft.settings.sleepTabs = sleepTabs;
       if (searchSuggestions !== undefined && draft.settings.searchSuggestions !== searchSuggestions) draft.settings.searchSuggestions = searchSuggestions;

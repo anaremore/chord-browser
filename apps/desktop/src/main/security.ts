@@ -33,4 +33,6 @@ export function lockToOrigins(contents: WebContents, origins: readonly string[])
 export function configureUiSession(ses: Session): void {
   ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   ses.setPermissionCheckHandler(() => false);
+  // Chord's own views never check spelling, so this session never needs a dictionary (one would download from Google's CDN).
+  ses.setSpellCheckerEnabled(false);
 }
