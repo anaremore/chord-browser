@@ -62,6 +62,10 @@ describe('dockerRunArgs', () => {
     expect(args.join(' ')).not.toContain('no-sandbox');
   });
 
+  it('turns core dumps off: 1, not 0, which a piped core_pattern (WSL 2’s) ignores', () => {
+    expect(after('--ulimit')).toEqual(['core=1:1']);
+  });
+
   it('names everything chord-e2e-* and caches the store and Electron in volumes', () => {
     expect(after('--name')).toEqual(['chord-e2e-run-x-1']);
     expect(after('--volume')).toEqual([`${STORE_VOLUME}:/home/chord/.cache/pnpm-store`, `${ELECTRON_VOLUME}:/home/chord/.cache/electron`]);

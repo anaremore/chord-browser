@@ -73,6 +73,10 @@ export function dockerRunArgs({ name, image, display, root, startedAt, playwrigh
     '--init',
     // Chromium keeps its shared memory in /dev/shm; Docker's default 64 MB isn't enough for a browser.
     '--shm-size', '2g',
+    // No core dumps. WSL 2 pipes every Linux crash, a container's included, to Windows' %TEMP%\wsl-crashes,
+    // and a renderer's core can be gigabytes (two forced crashes filled a disk). The kernel ignores a
+    // limit of 0 for a piped core_pattern; 1 is the value that makes it give up on the dump.
+    '--ulimit', 'core=1:1',
     // Chromium's sandbox. On Linux it puts each renderer in new user, PID and network namespaces,
     // which an ordinary desktop user may create (and seccomp-bpf on top). The container allows the
     // same and nothing more:
@@ -210,10 +214,15 @@ async function main() {
   const pnpmVersion = /^pnpm@(.+)$/.exec(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).packageManager ?? '')?.[1];
   if (!pnpmVersion) fail('The root package.json names no pnpm version in packageManager');
   const image = imageTag(dockerfile, pnpmVersion);
-  if (options.rebuild || docker(['image', 'inspect', '--format', '{{.Id}}', image], { quiet: true }) === null) {
+  const haveImage = () => docker(['image', 'inspect', '--format', '{{.Id}}', image], { quiet: true }) !== null;
+  if (options.rebuild || !haveImage()) {
     log(`Building ${image} (once per change to scripts/e2e-linux/Dockerfile)`);
     const [command, argv] = dockerCommand(['build', ...(options.rebuild ? ['--pull', '--no-cache'] : []), '--build-arg', `PNPM_VERSION=${pnpmVersion}`, '--tag', image, '-']);
-    if (spawnSync(command, argv, { input: dockerfile, stdio: ['pipe', 'inherit', 'inherit'] }).status !== 0) fail(`Building ${image} failed`);
+    if (spawnSync(command, argv, { input: dockerfile, stdio: ['pipe', 'inherit', 'inherit'] }).status !== 0) {
+      // Two runs that start together both build; the one that tags second fails with "already exists".
+      if (!haveImage()) fail(`Building ${image} failed`);
+      log(`Another run built ${image} first`);
+    }
   }
 
   // The working tree: tracked files and untracked ones that aren't ignored, as they are on disk.
