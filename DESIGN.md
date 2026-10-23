@@ -409,10 +409,10 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | **Toast** | Enters by sliding up 12 px and fading in (`overlay`); leaves with `fade-fast` and a 6 px drop. Up to 3 stack like a deck (older ones scale to 0.96, offset −6 px). |
 | **Command bar** | Scrim fades in (`fade-base`). The panel goes from scale 0.97, y −8 to rest, opacity 0 → 1 (`overlay`). On Enter it fades out in `fade-fast` *while* navigation starts. |
 | **New chord** | The switcher icon pops from 0.6 → 1 (`bouncy`), the sidebar slides to the new chord, and the empty-state art blooms in (`gentle`). |
-| **Collapse sidebar** | The sidebar slides out to the left (`snappy`). Back/forward/reload and the URL pill glide up into the bar (shared layout), and the pill morphs into the address field. The page frame widens using the snapshot technique (`smooth`). Docking reverses every piece. |
+| **Collapse sidebar** | The sidebar slides out to the left (`snappy`). Back/forward/reload and the URL pill glide up into the bar (shared layout), and the pill morphs into the address field. The page frame widens using the snapshot technique (`smooth`). Docking reverses every piece.<br>*As built:* the page's picture glides on `smooth` (ARCHITECTURE.md §5, *The frame snapshot*) while the sidebar slides 24 px left and fades, on `smooth` rather than `snappy`; docking reverses it. On Windows and Linux the bar's back/forward/reload sit exactly where the sidebar header had them, so they stay put: the header's slide away with the sidebar while the bar's fade in. ⚠ *Not yet:* on macOS they don't glide from the header's right end into the bar (they fade in there), and the URL pill doesn't morph into the bar's address field. |
 | **Sidebar peek** (collapsed) | The sidebar slides in *over* the page with `shadow-popover` (`snappy`) and slides away 300 ms after the pointer leaves. The page doesn't move. |
 | **Edit the address (⌘L)** | The URL pill (or, in minimal mode, the bar's address field) becomes the input where it sits: its text and position stay put while the results panel grows down beneath it (`overlay`). With *Animate into the command bar* off (§6.8), it appears instantly. |
-| **Duet panel** | The panel slides in from the right with `overlay`. The page's frame narrows through the snapshot technique: the bitmap scales over one `smooth` spring, then the real view is placed once. ⚠ *Not yet:* in Phase 2 the panel appears and the page is resized once, without the slide. |
+| **Duet panel** | The panel slides in from the right with `overlay`. The page's frame narrows through the snapshot technique: the bitmap scales over one `smooth` spring, then the real view is placed once. *As built:* closing slides it out in `fade-base` (exits are quicker) while the frame widens the same way, and the keyboard leaves the panel as it starts to go. A panel already open when the window opens is just there. |
 
 ### 6.6 Reduced motion
 
@@ -434,6 +434,8 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 - `will-change: transform` is set only during an animation, never at rest.
 - Every interaction in §6.5 has a scripted trace test. Long Animation Frames over 8 ms (120 Hz) or 16 ms (60 Hz) fail locally on reference hardware.
 - Input never waits for motion: a field is focused and typeable on the first frame of its entrance animation.
+- **One render a frame.** Updates from main (state patches, Duet's, the extension bar's) render the shell once a frame however many arrive in it, and a key or click first renders whatever is waiting (ARCHITECTURE.md §6.2).
+- **Web content moves at most twice per frame-size change** (out of sight at its new size, then into place), never per frame; the perf spec counts it.
 
 ### 6.8 Motion settings
 
@@ -445,7 +447,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Animate into the command bar | On | The ⌘L address morph and the ⌘T panel entrance |
 | Slide between chords | On | The chord switch. A trackpad swipe still follows your fingers; release just snaps. |
 | Animate tab moves | On | Pin flight, archive arc, reorder make-room, drop settle, close collapse |
-| Animate the sidebar | On | Collapse and dock, peek slide-in, folder open and close |
+| Animate the sidebar | On | Collapse and dock, peek slide-in, folder open and close, and Duet's panel opening and closing. Off, docking, collapsing and Duet take no frame snapshot at all. |
 | Blend chord colors | On | The theme crossfade when switching chords |
 
 - **Every setting in Chord, not only motion,** shows a ↺ button beside its label when it differs from the default; clicking it restores the default.

@@ -20,6 +20,7 @@ import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, INSTANT, reducedMotionMode, springsFor } from '../shared/motion';
+import { inNextFrame } from '../shared/frames';
 import { markRender } from '../shared/perf';
 import { displayHost, pageTitle } from '../shared/site';
 import { chordStyle } from '../shared/theme';
@@ -291,7 +292,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const [duet, setDuet] = useState<DuetView | null>(null);
   useEffect(() => {
     void api.duet.view().then(setDuet);
-    return api.duet.onState(setDuet);
+    // In the frame with the state patches, so it renders with them (shared/frames.ts).
+    return api.duet.onState(inNextFrame(setDuet));
   }, []);
   const duetOpen = Boolean(duet?.enabled && duet.open);
   // The panel slides in on `overlay` and out a little quicker (DESIGN.md §6.1, §6.5), with the sidebar's motion switch.

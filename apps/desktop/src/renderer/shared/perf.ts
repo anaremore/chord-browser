@@ -45,7 +45,9 @@ let markCount = 0;
  * buffer is emptied now and then, so it stays small.
  */
 export function markRender(): void {
-  if (++markCount > MAX_MARKS) {
+  // Counted, and recounted only at the cap: someone else (the perf spec) may have emptied it already.
+  if (++markCount > MAX_MARKS) markCount = performance.getEntriesByName('chord:shell-render', 'mark').length + 1;
+  if (markCount > MAX_MARKS) {
     performance.clearMarks('chord:shell-render');
     markCount = 1;
   }

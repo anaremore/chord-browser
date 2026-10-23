@@ -89,20 +89,25 @@ async function setMotion(app: ElectronApplication, shell: Page, on: boolean): Pr
 type Which = 'first' | 'private';
 
 /**
- * From now on, counts in main how often each page in the window's frame is
- * moved (`setBounds`) and pictured (`capturePage`). Optionally makes its
- * pictures fail or never come.
+ * From now on, notes in main each move of each page in the window's frame
+ * (`setBounds`: where to, and whether the page had the keyboard), and counts
+ * its pictures (`capturePage`). Optionally makes its pictures fail or never come.
  */
 async function watch(app: ElectronApplication, which: Which = 'first', capture: 'real' | 'fail' | 'hang' = 'real'): Promise<void> {
   await app.evaluate(
     ({ BaseWindow }, { origin, which, capture }) => {
       interface Watched {
-        setBounds(b: unknown): void;
-        webContents: { getURL(): string; capturePage(): Promise<unknown> };
+        setBounds(b: { x: number; y: number; width: number; height: number }): void;
+        webContents: { getURL(): string; capturePage(): Promise<unknown>; isFocused(): boolean };
+      }
+      interface Snap {
+        moves: Record<string, number>;
+        rects: Record<string, { x: number; y: number; width: number; height: number; focused: boolean }[]>;
+        captures: number;
       }
       const w = BaseWindow.getAllWindows().find((x) => x.getTitle() === (which === 'private' ? 'Chord (private window)' : 'Chord'))!;
-      const g = globalThis as unknown as { snap: { moves: Record<string, number>; captures: number } };
-      g.snap = { moves: {}, captures: 0 };
+      const g = globalThis as unknown as { snap: Snap };
+      g.snap = { moves: {}, rects: {}, captures: 0 };
       for (const v of w.contentView.children as unknown as Watched[]) {
         if (!('webContents' in v) || !v.webContents.getURL().startsWith(origin)) continue;
         const url = v.webContents.getURL();
@@ -111,6 +116,7 @@ async function watch(app: ElectronApplication, which: Which = 'first', capture: 
         own['chordSetBounds'] = setBounds;
         v.setBounds = (b) => {
           g.snap.moves[url] = (g.snap.moves[url] ?? 0) + 1;
+          (g.snap.rects[url] ??= []).push({ ...b, focused: v.webContents.isFocused() });
           setBounds(b);
         };
         const contents = v.webContents as unknown as Record<string, unknown>;
@@ -128,8 +134,21 @@ async function watch(app: ElectronApplication, which: Which = 'first', capture: 
   );
 }
 
-const watched = (app: ElectronApplication) =>
-  app.evaluate(() => (globalThis as unknown as { snap: { moves: Record<string, number>; captures: number } }).snap);
+interface Watched {
+  moves: Record<string, number>;
+  rects: Record<string, { x: number; y: number; width: number; height: number; focused: boolean }[]>;
+  captures: number;
+}
+const watched = (app: ElectronApplication) => app.evaluate(() => (globalThis as unknown as { snap: Watched }).snap);
+
+/**
+ * The snapshot's two moves of a page: first out of sight, all but its top-left
+ * pixel past the window's bottom-right corner, already at its final size; then
+ * into place. Never more, never per frame.
+ */
+function expectGlide(moves: Watched['rects'][string] | undefined, to: { x: number; y: number; width: number; height: number }, window: { width: number; height: number }) {
+  expect(moves?.map(({ x, y, width, height }) => ({ x, y, width, height }))).toEqual([{ x: window.width - 1, y: window.height - 1, width: to.width, height: to.height }, to]);
+}
 
 /** The pages in a window's frame, left to right, with their bounds; and the window's content width. */
 const pages = (app: ElectronApplication, which: Which = 'first') =>
@@ -151,7 +170,7 @@ const pages = (app: ElectronApplication, which: Which = 'first') =>
  */
 const recordPictures = (shell: Page) =>
   shell.evaluate(() => {
-    const seen = { count: 0, color: [] as number[], rects: [] as { x: number; y: number; width: number; height: number }[] };
+    const seen = { count: 0, color: [] as number[], rects: [] as { x: number; y: number; width: number; height: number }[], unseen: false, focusable: true };
     (window as unknown as { snapSeen: typeof seen }).snapSeen = seen;
     new MutationObserver(() => {
       const canvases = [...document.querySelectorAll('canvas')];
@@ -159,20 +178,34 @@ const recordPictures = (shell: Page) =>
       seen.count = canvases.length;
       seen.rects = canvases.map((c) => ({ x: parseFloat(c.style.left), y: parseFloat(c.style.top), width: parseFloat(c.style.width), height: parseFloat(c.style.height) }));
       const c = canvases[0]!;
+      // Out of screen readers' way, and never focusable.
+      seen.unseen = c.closest('[aria-hidden="true"]') !== null;
+      seen.focusable = c.tabIndex >= 0;
       seen.color = [...c.getContext('2d')!.getImageData(c.width >> 1, c.height >> 1, 1, 1).data];
     }).observe(document.body, { childList: true, subtree: true });
   });
 const picturesSeen = (shell: Page) =>
-  shell.evaluate(() => (window as unknown as { snapSeen: { count: number; color: number[]; rects: { x: number; y: number; width: number; height: number }[] } }).snapSeen);
+  shell.evaluate(() => (window as unknown as { snapSeen: { count: number; color: number[]; rects: { x: number; y: number; width: number; height: number }[]; unseen: boolean; focusable: boolean } }).snapSeen);
 const picturesNow = (shell: Page) => shell.evaluate(() => document.querySelectorAll('canvas').length);
 
 /** Saves the shell as it is now (Chord's own view only) to test-results/frame-snapshot/. */
 const saveFrame = (shell: Page, name: string) => shell.screenshot({ path: join(framesDir, `${name}.png`) }).catch(() => undefined);
 
+/**
+ * Runs `act` and, once the pictures start gliding, saves a few frames of the
+ * shell mid-glide (Chord's own view only): `<name>-1.png` and on.
+ */
+async function glide(shell: Page, name: string, act: () => Promise<unknown>): Promise<void> {
+  const gliding = shell.waitForFunction(() => [...document.querySelectorAll('canvas')].some((c) => c.style.transform !== ''), undefined, { polling: 'raf', timeout: 5000 });
+  await act();
+  await gliding;
+  for (let i = 1; i <= 3 && (await picturesNow(shell)) > 0; i++) await saveFrame(shell, `${name}-${i}`);
+}
+
 async function ready(app: ElectronApplication, home = 'Colored page'): Promise<{ shell: Page; overlay: Page }> {
   const shell = await pageWhere(app, isShell);
   const overlay = await pageWhere(app, isOverlay);
-  await expect(shell.getByRole('list', { name: 'Today' })).toContainText(home);
+  await expect(shell.getByRole('tree', { name: 'Today' })).toContainText(home);
   await expect.poll(async () => (await pages(app)).views.length).toBe(1);
   return { shell, overlay };
 }
@@ -197,26 +230,26 @@ test('docking and collapsing glide the page by its snapshot: two moves, its pict
     for (const [name, x] of [['collapse', 4], ['dock', 248]] as const) {
       await watch(app);
       await recordPictures(shell);
-      await runAction(shell, 'view.toggleSidebar');
-      // Mid-transition: the page waits out of sight, its picture in the shell where it was.
-      await expect.poll(async () => (await pages(app)).views[0]!.x, { intervals: [5] }).toBe((await pages(app)).width - 1);
-      expect((await pages(app)).views[0]!.focused).toBe(true);
-      await saveFrame(shell, `${name}-mid`);
-      await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(x);
+      // Mid-glide, the page waits out of sight and its picture glides in the shell.
+      await glide(shell, name, () => runAction(shell, 'view.toggleSidebar'));
       await expect.poll(() => picturesNow(shell)).toBe(0);
+      const { views, width, height } = await pages(app);
+      expect(views[0]!.x).toBe(x);
       expect(await tab.evaluate(() => (window as unknown as { hidden: number }).hidden)).toBe(0);
 
       const seen = await picturesSeen(shell);
       expect(seen.count).toBe(1);
+      expect(seen).toMatchObject({ unseen: true, focusable: false });
       // The picture is the page: its color, where the page was, at its size.
       for (const [i, c] of COLOR.entries()) expect(Math.abs(seen.color[i]! - c)).toBeLessThanOrEqual(2);
       expect(seen.rects[0]!.x).toBe(name === 'collapse' ? 248 : 4);
       const counts = await watched(app);
       expect(counts.captures).toBe(1);
-      // Out of sight at its final size, then into place: never per frame.
-      expect(Object.values(counts.moves)).toEqual([2]);
-      const page = (await pages(app)).views[0]!;
-      expect(page.focused).toBe(true);
+      // Out of sight at its final size, then into place: never per frame. It kept the keyboard throughout.
+      const { focused: _, ...page } = views[0]!;
+      expectGlide(counts.rects[`${site.origin}/`], page, { width, height });
+      expect(counts.rects[`${site.origin}/`]!.every((m) => m.focused)).toBe(true);
+      expect(views[0]!.focused).toBe(true);
       expect(page.width).toBe(before.width + (name === 'collapse' ? 244 : 0));
     }
   } finally {
@@ -236,16 +269,16 @@ test("Duet's panel slides in while the page's frame narrows by its snapshot, and
     for (const [name, width] of [['duet-open', full - DUET_SPACE], ['duet-close', full]] as const) {
       await watch(app);
       await recordPictures(shell);
-      await runAction(shell, 'duet.toggle');
-      await expect.poll(async () => (await pages(app)).views[0]!.x, { intervals: [5] }).toBe((await pages(app)).width - 1);
-      await saveFrame(shell, `${name}-mid`);
+      await glide(shell, name, () => runAction(shell, 'duet.toggle'));
       await expect.poll(async () => (await pages(app)).views[0]!.width).toBe(width);
       await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(248);
       if (name === 'duet-open') await expect(panel).toBeVisible();
       else await expect(panel).toBeHidden();
       await expect.poll(() => picturesNow(shell)).toBe(0);
       expect((await picturesSeen(shell)).count).toBe(1);
-      expect(Object.values((await watched(app)).moves)).toEqual([2]);
+      const { views, width: w, height } = await pages(app);
+      const { focused: _, ...page } = views[0]!;
+      expectGlide((await watched(app)).rects[`${site.origin}/`], page, { width: w, height });
     }
   } finally {
     await app.close();
@@ -260,7 +293,7 @@ test('split view: every pane is pictured and laid out with the same pane rects',
     await expect(overlay.getByRole('dialog')).toBeVisible();
     await overlay.keyboard.type(`${site.origin}/second`);
     await overlay.keyboard.press('Enter');
-    await expect(shell.getByRole('list', { name: 'Today' }).getByRole('listitem').first()).toContainText('Second page');
+    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('Second page');
     // Second page beside the first.
     await shell.evaluate(async () => {
       const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string> }>; nodes: Record<string, { id: string; kind: string; title?: string }> } }>; dispatch(c: unknown): Promise<void> } } }).chord;
@@ -275,9 +308,7 @@ test('split view: every pane is pictured and laid out with the same pane rects',
     const before = (await pages(app)).views;
     await watch(app);
     await recordPictures(shell);
-    await runAction(shell, 'view.toggleSidebar');
-    await expect.poll(async () => (await pages(app)).views[0]!.x, { intervals: [5] }).toBe((await pages(app)).width - 1);
-    await saveFrame(shell, 'split-collapse-mid');
+    await glide(shell, 'split-collapse', () => runAction(shell, 'view.toggleSidebar'));
     await expect.poll(() => picturesNow(shell)).toBe(0);
 
     // Each pane was pictured where it was…
@@ -286,13 +317,15 @@ test('split view: every pane is pictured and laid out with the same pane rects',
     expect(seen.rects.map((r) => r.x).sort((a, b) => a - b)).toEqual(before.map((v) => v.x));
     const counts = await watched(app);
     expect(counts.captures).toBe(2);
-    expect(Object.values(counts.moves)).toEqual([2, 2]);
     // …and went where the shared pane math puts it in the wider frame.
     const { views, width, height } = await pages(app);
     const frame = { x: 4, y: 40, width: width - 4 - 4, height: height - 40 - 4 };
     const total = before[0]!.width + before[1]!.width;
     const expected = paneRects(frame, 'row', [before[0]!.width / total, before[1]!.width / total]);
     expect(views.map(({ x, y, width: w, height: h }) => ({ x, y, width: w, height: h }))).toEqual(expected);
+    // Each pane moved twice: out of sight at its new size, then into place.
+    const order = [`${site.origin}/`, `${site.origin}/second`].sort((a, b) => counts.rects[a]!.at(-1)!.x - counts.rects[b]!.at(-1)!.x);
+    order.forEach((u, i) => expectGlide(counts.rects[u], expected[i]!, { width, height }));
   } finally {
     await app.close();
   }
@@ -308,18 +341,21 @@ test('a key typed into the page brings it back at once', async () => {
     await app.evaluate(({ webContents }, origin) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(origin))!.focus(), site.origin);
 
     await watch(app);
+    // The pictures glide slowly here, so the key surely comes while they do.
+    await shell.evaluate(() => document.documentElement.style.setProperty('--spring-smooth-duration', '3000ms'));
     await runAction(shell, 'view.toggleSidebar');
-    await expect.poll(async () => (await pages(app)).views[0]!.x, { intervals: [5] }).toBe((await pages(app)).width - 1);
     // A key the way a real one arrives (through main's input handling): the page is back in place
     // as main hands it the key, not when the glide would have ended.
-    const placed = await app.evaluate(({ BaseWindow, webContents }, origin) => {
+    const placed = await app.evaluate(({ webContents, BaseWindow }, origin) => {
       const page = webContents.getAllWebContents().find((c) => c.getURL().startsWith(origin))!;
+      const view = BaseWindow.getAllWindows()[0]!.contentView.children.find((v) => 'webContents' in v && v.webContents === page)!;
+      const before = view.getBounds().x;
       page.sendInputEvent({ type: 'keyDown', keyCode: 'k' });
       page.sendInputEvent({ type: 'char', keyCode: 'k' });
       page.sendInputEvent({ type: 'keyUp', keyCode: 'k' });
-      return BaseWindow.getAllWindows()[0]!.contentView.children.map((v) => v.getBounds().x);
+      return { before, after: view.getBounds().x, width: BaseWindow.getAllWindows()[0]!.getContentBounds().width };
     }, site.origin);
-    expect(placed).toContain(4);
+    expect(placed).toEqual({ before: placed.width - 1, after: 4, width: placed.width });
     await expect(tab.locator('#field')).toHaveValue('k');
     expect(Object.values((await watched(app)).moves)).toEqual([2]);
   } finally {
@@ -337,7 +373,8 @@ test('with reduced motion, or "Animate the sidebar" off, nothing is pictured and
     await recordPictures(shell);
     await runAction(shell, 'view.toggleSidebar');
     await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(4);
-    expect(await watched(app)).toEqual({ moves: { [`${site.origin}/`]: 1 }, captures: 0 });
+    // Straight to its new place: one move, no picture.
+    expect(await watched(app)).toMatchObject({ moves: { [`${site.origin}/`]: 1 }, captures: 0 });
     expect((await picturesSeen(shell)).count).toBe(0);
     await runAction(shell, 'view.toggleSidebar');
     await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(248);

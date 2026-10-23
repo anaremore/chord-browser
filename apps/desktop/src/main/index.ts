@@ -112,7 +112,10 @@ function registerIpc(): void {
   handle('cmd:dispatch', (command, sender) => {
     const w = senderWindow(sender);
     // Docking and collapsing picture the page first, so its frame can glide (ARCHITECTURE.md §5).
-    if (command.t === 'window.sidebar') return browser!.setSidebar(w, command.sidebar);
+    if (command.t === 'window.sidebar') {
+      browser!.setSidebar(w, command.sidebar);
+      return w.frameChanged();
+    }
     browser!.store.dispatch(scopeToWindow(command, w.id));
   });
   handle('nav:command', ({ action }, sender) => {
@@ -166,8 +169,10 @@ function registerIpc(): void {
   handle('layout:lift', ({ lifted }, sender) => browser!.setLifted(sender, lifted));
   handle('layout:snapshot', ({ seq, phase }, sender) => senderWindow(sender).ackSnapshot(seq, phase));
   handle('menu:chord', ({ chordId, x, y }, sender) => browser!.openChordMenu(sender, chordId, { x, y }));
-  handle('action:run', ({ action }, sender) => {
+  handle('action:run', async ({ action }, sender) => {
     browser!.run(action, sender);
+    // Docking the sidebar waits for the page's picture (ARCHITECTURE.md §5): reply once it has happened.
+    await browser!.windowFor(sender)?.frameChanged();
   });
   handle('settings:snapshot', () => browser!.settingsSnapshot());
   handle('settings:set', (settings) => browser!.store.dispatch({ t: 'settings.set', settings }));

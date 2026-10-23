@@ -225,7 +225,7 @@ const ARCHIVE_CHOICES: { value: ArchiveAfter; label: string }[] = [
 const MOTION_ROWS: { key: keyof MotionSettings; label: string; description: string }[] = [
   { key: 'followSystem', label: 'Follow system motion settings', description: "When your computer asks for less motion, Chord's animations become instant." },
   { key: 'commandBar', label: 'Animate into the command bar', description: 'The address growing into the command bar, and the new-tab panel appearing.' },
-  { key: 'sidebar', label: 'Animate the sidebar', description: 'Hiding and showing the sidebar.' },
+  { key: 'sidebar', label: 'Animate the sidebar', description: 'Hiding and showing the sidebar, and opening and closing Duet.' },
   { key: 'tabMoves', label: 'Animate tab moves', description: 'Tabs opening, closing and reordering.' },
   { key: 'chordSlide', label: 'Slide between chords', description: 'Switching chords. A trackpad swipe still follows your fingers.' },
   { key: 'colorBlend', label: 'Blend chord colors', description: 'Fading from one chord’s colors to the next.' },

@@ -697,6 +697,11 @@ export class AppWindow {
     this.snapshots.change(change, animate);
   }
 
+  /** Resolves once the frame changes asked for so far have happened (their pictures may still be gliding). */
+  frameChanged(): Promise<void> {
+    return this.snapshots.settled();
+  }
+
   /** The shell painted a snapshot's pictures (`shown`), or they arrived (`moved`). */
   ackSnapshot(seq: number, phase: 'shown' | 'moved'): void {
     this.snapshots.ack(seq, phase);

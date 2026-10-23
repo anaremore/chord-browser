@@ -171,6 +171,11 @@ export class FrameSnapshots {
     void next;
   }
 
+  /** Resolves once every change asked for so far has happened (not when its pictures arrive). */
+  settled(): Promise<void> {
+    return this.queue;
+  }
+
   /** The shell's reply for one snapshot. */
   ack(seq: number, phase: 'shown' | 'moved'): void {
     this.replies.get(`${seq}:${phase}`)?.resolve();
