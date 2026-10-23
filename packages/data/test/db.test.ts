@@ -167,6 +167,24 @@ describe('chord-data', () => {
     expect(count('profile')).toBe(1);
   });
 
+  it('keeps page zoom per site across a restart, and forgets a site set back to 100%', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    state = drive(db, state, [
+      { t: 'zoom.set', host: 'a.test', factor: 1.25 },
+      { t: 'zoom.set', host: 'b.test:8080', factor: 0.8 },
+    ]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect(db.load()!.siteZoom).toEqual({ 'a.test': 1.25, 'b.test:8080': 0.8 });
+    drive(db, state, [{ t: 'zoom.set', host: 'a.test', factor: 1 }]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect(db.load()!.siteZoom).toEqual({ 'b.test:8080': 0.8 });
+    db.close();
+  });
+
   it('keeps favorites (with their icons), folders and the sidebar width across a restart', () => {
     let db = new ChordDatabase(file);
     let state = seed();

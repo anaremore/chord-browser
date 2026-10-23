@@ -15,6 +15,7 @@ const api: PopoverApi = {
     close: () => invoke('find:close'),
   },
   permission: { respond: (id, decision) => invoke('permission:respond', { id, decision }) },
+  share: { respond: (id, sourceId, audio) => invoke('share:respond', { id, sourceId, audio }) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

@@ -54,9 +54,9 @@ A milestone is done when all of these hold:
 | | M1.4 Command bar + archive | → Nov 30 | find any tab, page, or action from ⌘T; idle tabs tidy themselves away |
 | | M1.5 Extensions + essentials | → Dec 7 | use your password manager and Chrome extensions; videos pop out when you switch away; Chord is your default browser |
 | | M1.6 First run + preview | → **Mon Dec 14** | install Chord 0.1 from GitHub on any machine and switch from Arc |
-| **2 · Side by side** | — | Jan 2027 | work in splits, hover-preview pinned tabs and folders, and chat with Duet about your tabs |
-| **3 · Links from everywhere** | — | Feb 2027 | open links from other apps in a mini window, Peek from pinned tabs, install from Flathub or apt/dnf, update in place |
-| **4 · Deeper** | — | Mar 2027 + | use Duet in developer mode, your own API keys or local models, and signed builds |
+| **2 · Side by side** | — | Jan 2027 | work in splits, open links from other apps in a mini window, Peek from pinned tabs, hover-preview pinned tabs and folders, and chat with Duet about your tabs |
+| **3 · Links from everywhere** | — | Feb 2027 | send a site's links to the right chord, install from Flathub or apt/dnf, update in place, go Google-free |
+| **4 · Deeper** | — | Mar 2027 + | install signed builds that update themselves on every OS |
 
 ## Where we are (updated 2026-10-22)
 
@@ -71,7 +71,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 | M1.4 Command bar + archive | ranking with learned picks, history, completion, suggestions, site keywords, `@` filters, archive, sleeping tabs, ⌘⇧T | | |
 | M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows | PDFs, spellcheck, screen sharing, site permissions page, **editable shortcuts** (moved up from Phase 3) | real password-manager sign-in checks |
 | M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check | CI green on every OS, macOS hands-on on your MacBook | accessibility pass, design QA sweep, performance budgets, the 0.1 release |
-| Phase 2 | | Duet browse mode | split view, hover previews, Connect an agent, Electron 46 |
+| Phase 2 | | Duet (chat that can read the browser) | split view, mini window, Peek, hover previews, Electron 46 |
 
 ---
 
@@ -243,29 +243,28 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 
 ## Phase 2 — Side by side · January 2027
 
-- **Electron 46 upgrade** first (stable Jan 5, 2027). It's our first major upgrade and the rehearsal for the 8-week cadence.
+- **Electron 46 upgrade** as soon as it's stable (Jan 5, 2027). It's our first major upgrade and the rehearsal for the 8-week cadence.
 - **Split view:** 2–4 panes, drag-to-split drop zones, saved as one unit in the sidebar, dividers, focus ring (DESIGN.md §7.9 and §8.4).
+- **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it. *(Moved up from Phase 3 on 2026-10-22: Chord can already be your default browser.)*
+- **Peek** for links clicked inside pinned tabs. *(Moved up from Phase 3 on 2026-10-22.)*
 - **Hover previews** for pinned tabs and folders, with the capture cache.
-- **Connect an agent** (from Crest): the Chord MCP server, reachable by the user's own Claude Code or Codex through a one-line `claude mcp add` setup, with a badge and a Stop button on every tab an agent touches.
-- **Duet, browse mode** (ARCHITECTURE.md §11), as one client of that server:
+- **Duet: conversations on the fly, optionally reading the browser** (ARCHITECTURE.md §11). Scope set 2026-10-22: *"basic chat is enough"*.
   - **Setup:** detects your `claude` / `codex`; "Sign in" runs `claude auth login` or `codex login` for you.
-  - **Adapters:** Claude Code (`--restricted --tools ""`) and Codex app-server.
-  - **Tools:** the Chord MCP server with context and organize tiers, approval cards, and citations that highlight the quote on the page.
-  - **Threads:** one per chord.
-  - **Controls:** exclusions, plus per-chord and global off.
-  - Spike S5, for Codex tool restriction, runs at the start of this work.
+  - **Adapters:** Claude Code (the unmodified CLI) and Codex app-server.
+  - **Reading:** tabs, selection, history and archive, scoped by a setting (default **Ask first**), with citations that highlight the quote.
+  - **Threads:** one per chord, kept by Chord and resumed across restarts.
+  - **Controls:** exclusions per site, plus per-chord and global off.
+  - No organize actions: Duet reads, it doesn't rearrange your tabs.
 
 ## Phase 3 — Links from everywhere · February 2027
 
-- **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it.
 - **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in.
-- **Peek** for links clicked inside pinned tabs.
 - **Distribution:**
   - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.
   - **Cloudsmith** apt and dnf repos, GPG-signed.
   - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests.
   - The **72-hour patch runbook** rehearsed end to end.
-- **D5** ad blocking and **D7** Safe Browsing, if you choose them.
+- **D7** Safe Browsing, if you choose it.
 - **Google-free mode** (requested 2026-10-22).
   - *Why not ungoogled-chromium itself:* it's a set of patches, domain substitutions and build flags for Chromium's source. Chord runs on Electron, which builds its own Chromium, so using it would mean building Electron from source with those patches applied. That's hours of build per OS and architecture for every security release, and no maintained project does it today.
   - *What we can do instead:* first, an **audit spike** that runs a Chord session with a network log (`--log-net-log`) and lists every Google host Chord itself contacts, apart from pages you visit. Then a switch in Settings:
@@ -277,13 +276,15 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 
 ## Phase 4 — Deeper · March 2027 onward
 
-- **Duet developer mode:**
-  - Attach a project folder to a chord.
-  - Console and network context from a localhost tab.
-  - The provider's own file and shell tools, behind Chord's approval UI.
-- **More Duet providers:** your own API keys, and local models through OpenAI-compatible endpoints.
 - **Code signing and notarization.** This unlocks macOS auto-update and removes the Gatekeeper and SmartScreen steps. An optional Microsoft Store (MSIX) channel.
 - **Electron 47** (around March 2027), compact density, and whatever Phase 1–3 use teaches us.
+
+## Not planned (decided 2026-10-22)
+
+- **Built-in ad blocking** (D5). Install uBlock Origin Lite from the Web Store; it blocks ads in Chord (spike S9).
+- **Importing** from other browsers, for now. Arc import was ruled out earlier.
+- **Duet developer mode, your own API keys, local models.** Duet stays a chat that can read the browser.
+- **Connect an agent** (the Chord MCP server for your own Claude Code or Codex) is parked, not deleted. It goes beyond chat, and can come back if you want it.
 
 ---
 
@@ -299,7 +300,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 | Never sleep or archive playing/PiP/sharing tabs; at most 2 crash reloads | M1.5 |
 | Native-messaging lookup for password managers | M1.5 |
 | Per-animation switches with ↺ reset, and ↺ on every changed setting | Each animation as it ships (DESIGN.md §6.8) |
-| Connect an agent: MCP helper, chrome-devtools-mcp tool names, badge and Stop | Phase 2 |
+| Connect an agent: MCP helper, chrome-devtools-mcp tool names, badge and Stop | Parked |
 | Link routes, remembered chord per site | Phase 3 |
 | Import guardrails with written exemptions, AGENTS.md, append-only release notes | Process, M1.1 |
 

@@ -175,7 +175,6 @@ function ThemeEditor({
   draft,
   info,
   ui,
-  mode,
   spin,
   onDone,
   onDuplicate,
@@ -183,8 +182,6 @@ function ThemeEditor({
   draft: Draft;
   info: SystemInfo;
   ui: InterfaceSettings;
-  /** The appearance the wheel shows its colors in. */
-  mode: Mode;
   spin: Transition;
   onDone(saved: CustomTheme | null): void;
   onDuplicate(draft: Draft): void;
@@ -221,7 +218,6 @@ function ThemeEditor({
         <ColorWheel
           stops={stops}
           active={Math.min(slot, stops.length - 1)}
-          mode={mode}
           onSelect={setSlot}
           onChange={(next, index) => {
             setStops(next);
@@ -430,8 +426,6 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
   const stops = current?.stops ?? presetStops('dusk');
   const grain = current?.grain ?? PRESET_GRAIN;
   const look = { info, ui };
-  // The wheel shows colors as this chord's tint will: in its own light or dark.
-  const mode: Mode = current && current.appearance !== 'auto' ? current.appearance : info.appearance;
   // Decorative, so off whenever the OS asks for less motion (DESIGN.md §6.6).
   const spin: Transition = info.prefersReducedMotion && settings.motion.followSystem ? INSTANT : { type: 'spring', ...springs.playful };
 
@@ -492,7 +486,6 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
           key={panel.key}
           draft={panel.draft}
           {...look}
-          mode={mode}
           spin={spin}
           onDuplicate={edit}
           onDone={(saved) => {

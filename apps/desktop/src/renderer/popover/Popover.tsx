@@ -4,7 +4,7 @@
  * these cards, so the rest of the page stays clickable.
  */
 import type { SitePermission } from '@chord/core';
-import type { FindState, PermissionPrompt, PopoverState, SystemInfo } from '@chord/ipc';
+import type { FindState, PermissionPrompt, PopoverState, SharePrompt, SystemInfo } from '@chord/ipc';
 import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, MapPin, Mic, Search, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useLive, type Live } from '../shared/live';
@@ -109,11 +109,87 @@ function PermissionCard({ prompt }: { prompt: PermissionPrompt }) {
   );
 }
 
+/** Chord's screen-share picker (ARCHITECTURE.md §9): a screen or a window, and the computer's sound where the OS allows. */
+function ShareCard({ prompt }: { prompt: SharePrompt }) {
+  const screens = prompt.sources.filter((s) => s.kind === 'screen');
+  const windows = prompt.sources.filter((s) => s.kind === 'window');
+  const [kind, setKind] = useState<'screen' | 'window'>(screens.length > 0 ? 'screen' : 'window');
+  const shown = kind === 'screen' ? screens : windows;
+  // One screen is the usual answer: it's picked already.
+  const [picked, setPicked] = useState<string | null>(screens.length === 1 ? screens[0]!.id : null);
+  const [audio, setAudio] = useState(false);
+  const respond = (sourceId: string | null) => void api.share.respond(prompt.id, sourceId, audio && prompt.audio);
+  return (
+    <div
+      className={`${styles.card} ${styles.shareCard}`}
+      role="alertdialog"
+      aria-label={`${prompt.host} wants to share your screen`}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') respond(null);
+      }}
+    >
+      <div className={styles.permissionHead}>
+        <p className={styles.permissionTitle}>
+          <span className={styles.host}>{prompt.host}</span> wants to share your screen
+        </p>
+        <button type="button" className={styles.iconButton} aria-label="Don't share" title="Don't share" onClick={() => respond(null)}>
+          <X {...ICON} />
+        </button>
+      </div>
+      <div className={styles.shareTabs} role="tablist" aria-label="What to share">
+        {(['screen', 'window'] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            role="tab"
+            aria-selected={kind === k}
+            className={styles.shareTab}
+            disabled={(k === 'screen' ? screens : windows).length === 0}
+            onClick={() => setKind(k)}
+          >
+            {k === 'screen' ? 'Entire screen' : 'A window'}
+          </button>
+        ))}
+      </div>
+      <div className={styles.sources} role="listbox" aria-label={kind === 'screen' ? 'Screens' : 'Windows'}>
+        {shown.map((source) => (
+          <button
+            key={source.id}
+            type="button"
+            role="option"
+            aria-selected={picked === source.id}
+            className={styles.source}
+            onClick={() => setPicked(source.id)}
+            onDoubleClick={() => respond(source.id)}
+          >
+            {source.thumbnail ? <img className={styles.thumbnail} src={source.thumbnail} alt="" draggable={false} /> : <span className={styles.thumbnail} />}
+            <span className={styles.sourceName}>{source.name}</span>
+          </button>
+        ))}
+      </div>
+      {prompt.audio && (
+        <label className={styles.shareAudio}>
+          <input type="checkbox" checked={audio} onChange={(e) => setAudio(e.target.checked)} />
+          Share your computer's sound too
+        </label>
+      )}
+      <div className={styles.actions}>
+        <button type="button" className={styles.secondary} onClick={() => respond(null)}>
+          Cancel
+        </button>
+        <button type="button" className={styles.primary} disabled={!picked} onClick={() => respond(picked)}>
+          Share
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Popover({ info: infoSource, state: stateSource }: { info: Live<SystemInfo>; state: Live<PopoverState> }) {
   const info = useLive(infoSource);
   const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
-  const hasCards = Boolean(state.find || state.permission);
+  const hasCards = Boolean(state.find || state.permission || state.share);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -134,6 +210,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
     <div ref={root} className={styles.root} style={style}>
       {state.find && <FindBar find={state.find} />}
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}
+      {state.share && <ShareCard key={state.share.id} prompt={state.share} />}
     </div>
   );
 }

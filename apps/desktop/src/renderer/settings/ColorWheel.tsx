@@ -1,22 +1,24 @@
 /**
  * The ThemePicker's color wheel (DESIGN.md §7.7). Hue runs around the ring,
- * chroma outward from the gray center, drawn in the current appearance's
- * lightness band so it shows what the tint will. Up to three handles:
+ * chroma outward from the gray center, drawn at the swatches' display
+ * lightness in both appearances, so it stays bright enough to pick from (the
+ * dark band made it muddy). The orbs and the live sidebar show the tint as
+ * each appearance draws it. Up to three handles:
  * - a click on the wheel moves the nearest one there;
  * - dragging a handle off the wheel and letting go removes it;
  * - each handle is a slider: arrow keys turn its hue, Shift+arrows its
  *   chroma, Delete removes it, and screen readers hear the nearest swatch.
  */
 import type { Oklch } from '@chord/core';
-import { cssOklch, mapToBand, oklchToRgb, size as sizes, type Appearance } from '@chord/tokens';
+import { cssOklch, oklchToRgb, size as sizes } from '@chord/tokens';
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import styles from './ColorWheel.module.css';
 import { colorToPoint, describeColor, nearestStop, pointToColor, removesOnRelease, stepColor } from './wheel';
 
 const SIZE = sizes.colorWheel;
 
-/** Paints the wheel once per appearance, at the display's pixel density. */
-function paint(canvas: HTMLCanvasElement, mode: Appearance): void {
+/** Paints the wheel once, at the display's pixel density. */
+function paint(canvas: HTMLCanvasElement): void {
   const dpr = window.devicePixelRatio || 1;
   const px = Math.round(SIZE * dpr);
   canvas.width = px;
@@ -31,7 +33,7 @@ function paint(canvas: HTMLCanvasElement, mode: Appearance): void {
       // A one-pixel soft edge instead of jaggies.
       const alpha = Math.min(1, Math.max(0, (1 - distance) * radius + 0.5));
       if (alpha === 0) continue;
-      const rgb = oklchToRgb(mapToBand(color, mode));
+      const rgb = oklchToRgb(color);
       const i = (y * px + x) * 4;
       image.data[i] = Math.round(rgb.r * 255);
       image.data[i + 1] = Math.round(rgb.g * 255);
@@ -45,13 +47,11 @@ function paint(canvas: HTMLCanvasElement, mode: Appearance): void {
 export function ColorWheel({
   stops,
   active,
-  mode,
   onSelect,
   onChange,
 }: {
   stops: Oklch[];
   active: number;
-  mode: Appearance;
   onSelect(index: number): void;
   /** New colors, and which one is selected now. */
   onChange(stops: Oklch[], active: number): void;
@@ -62,8 +62,8 @@ export function ColorWheel({
   const [drag, setDrag] = useState<{ index: number; leaving: boolean; point: { x: number; y: number } | null } | null>(null);
 
   useEffect(() => {
-    if (canvas.current) paint(canvas.current, mode);
-  }, [mode]);
+    if (canvas.current) paint(canvas.current);
+  }, []);
 
   const local = (event: PointerEvent) => {
     const r = area.current!.getBoundingClientRect();
@@ -152,7 +152,7 @@ export function ColorWheel({
             aria-valuetext={describeColor(stop)}
             title={describeColor(stop)}
             className={styles.handle}
-            style={{ transform: `translate(${p.x}px, ${p.y}px)`, backgroundColor: cssOklch(mapToBand(stop, mode)) }}
+            style={{ transform: `translate(${p.x}px, ${p.y}px)`, backgroundColor: cssOklch(stop) }}
             onFocus={() => onSelect(index)}
             onKeyDown={(e) => onKeyDown(e, index)}
           />

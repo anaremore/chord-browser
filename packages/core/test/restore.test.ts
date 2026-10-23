@@ -90,4 +90,19 @@ describe('restoreState', () => {
     const [only] = Object.values(state.windows);
     expect(only).toMatchObject({ activeChordId: 'c1', activeTab: { c1: null }, sidebar: 'docked' });
   });
+
+  it('keeps page zoom per site and spelling settings that make sense, and drops the rest', () => {
+    const saved: PersistedState = {
+      chords: [chord('c1', 'a0')],
+      nodes: [],
+      windows: [],
+      settings: { spellcheck: { enabled: false, language: 'pt-BR' } },
+      siteZoom: { 'a.test': 1.25, 'b.test': 9, 'c.test': 1, '': 1.5, 'd.test:8080': 0.5 },
+    };
+    const state = restoreState(saved, seed);
+    expect(state.siteZoom).toEqual({ 'a.test': 1.25, 'd.test:8080': 0.5 });
+    expect(state.settings.spellcheck).toEqual({ enabled: false, language: 'pt-BR' });
+    const bad = restoreState({ ...saved, settings: { spellcheck: { enabled: 'yes', language: 'not a language!' } } }, seed);
+    expect(bad.settings.spellcheck).toEqual(DEFAULT_SETTINGS.spellcheck);
+  });
 });
