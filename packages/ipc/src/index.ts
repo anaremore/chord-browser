@@ -146,6 +146,8 @@ export const SettingsPatch = z.strictObject({
   searchSuggestions: z.boolean().optional(),
   checkForUpdates: z.boolean().optional(),
   separateSignIns: z.boolean().optional(),
+  // Per action: its new keys, or null for the registry's. Main checks every combination again.
+  shortcuts: z.record(z.string().max(64), z.array(z.string().max(48)).max(8).nullable()).optional(),
   interface: z.strictObject({ contrast: z.number().min(0).max(1), glass: z.number().min(0).max(1) }).partial().optional(),
   motion: z
     .strictObject({
@@ -281,6 +283,9 @@ export interface ArchiveSnapshot {
 }
 
 /** A short-lived note in the sidebar, usually with Undo (DESIGN.md §7.5). */
+/** A trackpad scroll gesture starting, ending, or ending in a fling (momentum follows). */
+export type GesturePhase = 'begin' | 'end' | 'fling';
+
 export interface Toast {
   id: string;
   message: string;
@@ -423,6 +428,8 @@ export const invokeChannels = {
   'settings:deleteTheme': { roles: ['internal'], request: z.strictObject({ id: z.string().min(1).max(64) }), response: z.void() },
   /** Put text on the clipboard (Chord's own pages have no clipboard permission of their own). */
   'settings:copyText': { roles: ['internal'], request: z.strictObject({ text: z.string().max(10_000) }), response: z.void() },
+  // While Settings records a shortcut, main lets every key through to it (⌘T mustn't open a tab).
+  'settings:recordingShortcut': { roles: ['internal'], request: z.strictObject({ recording: z.boolean() }), response: z.void() },
   'settings:chordSignIns': { roles: ['internal'], request: z.strictObject({ chordId: id, separate: z.boolean() }), response: z.void() },
   // Also the shell's, for first run's "Open links in Chord?".
   'settings:defaultBrowser': { roles: ['internal', 'shell'], request: z.void(), response: DefaultBrowserStatus },
@@ -452,6 +459,8 @@ export interface EventPayloads {
   'settings:changed': SettingsSnapshot;
   'popover:state': PopoverState;
   'toast:show': Toast;
+  /** The shell's trackpad gesture phases, for the chord swipe's release (DESIGN.md §6.4). */
+  'gesture:phase': GesturePhase;
   /** Start renaming a chord, or choosing its icon, in the sidebar (from its menu). */
   'chord:edit': ChordEdit;
   /** Start renaming a folder in the sidebar (a new one, or from its menu). */
@@ -507,6 +516,7 @@ export interface ShellApi {
   };
   chords: { onEdit(listener: (edit: ChordEdit) => void): () => void };
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
+  gestures: { onPhase(listener: (phase: GesturePhase) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
   extensions: {
     state(): Promise<ExtensionsBarState>;
@@ -539,6 +549,8 @@ export interface SettingsApi {
     saveTheme(theme: CustomTheme): Promise<void>;
     deleteTheme(id: string): Promise<void>;
     copyText(text: string): Promise<void>;
+    /** Settings is recording a shortcut: main doesn't act on keys pressed in it until this is turned off (or it loses focus). */
+    recordingShortcut(recording: boolean): Promise<void>;
     /** Keep a chord's sign-ins separate, or share them again (its tabs reload; the window offers Undo). */
     chordSignIns(chordId: string, separate: boolean): Promise<void>;
     /** Whether Chord opens web links from other apps; `unavailable` in development builds. */

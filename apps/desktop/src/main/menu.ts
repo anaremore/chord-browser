@@ -11,9 +11,12 @@
 import { keysFor, shortcutById, type ActionId, type Platform } from '@chord/core';
 import { Menu, shell, type MenuItemConstructorOptions } from 'electron';
 import { platform } from './platform';
+import { shortcutOverrides } from './shortcut-overrides';
 
 const ACCELERATOR_PARTS: Record<string, string> = {
   Mod: 'CmdOrCtrl',
+  // The Windows or Super key (Electron's name for it).
+  Meta: 'Super',
   ArrowLeft: 'Left',
   ArrowRight: 'Right',
   ArrowUp: 'Up',
@@ -27,10 +30,10 @@ const toAccelerator = (keys: string) =>
     .map((part) => ACCELERATOR_PARTS[part] ?? part)
     .join('+');
 
-/** Every key combination for an action, as Electron accelerators (first is the primary). */
+/** Every key combination for an action (with your changes), as Electron accelerators (first is the primary). */
 export function acceleratorsFor(id: ActionId, p: Platform = platform): string[] {
   const shortcut = shortcutById(id);
-  return shortcut ? keysFor(shortcut, p).map(toAccelerator) : [];
+  return shortcut ? keysFor(shortcut, p, shortcutOverrides()).map(toAccelerator) : [];
 }
 
 /** The primary key combination for an action, as an Electron accelerator. */

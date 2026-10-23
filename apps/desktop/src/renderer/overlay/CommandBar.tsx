@@ -7,7 +7,7 @@
  * keyword or `@filter` followed by Tab narrows the bar to a chip, and the
  * engine's suggestions slot in under the local rows when they arrive.
  */
-import { formatKeys, parseInput, shortcutById, type ActionId, type SearchEngineId } from '@chord/core';
+import { keycapFor, parseInput, type ActionId, type SearchEngineId } from '@chord/core';
 import type { HistorySearch, OverlayOpenEvent, SystemInfo } from '@chord/ipc';
 import {
   AppWindow,
@@ -101,12 +101,6 @@ const ANCHORED_MIN_WIDTH = 560;
 const EDGE = 8;
 /** Suggestions wait for a pause this long in typing, so not every keystroke goes out. */
 const SUGGEST_DELAY_MS = 120;
-
-function keycapFor(action: ActionId, platform: SystemInfo['platform']): string {
-  const sc = shortcutById(action);
-  const first = sc ? (platform === 'darwin' ? sc.mac : sc.other)[0] : undefined;
-  return first ? formatKeys(first, platform) : '';
-}
 
 function hintFor(result: Result, mode: Session['mode']): { text: string; key: string } {
   if (result.kind === 'scope') return { text: result.scope.kind === 'keyword' ? `Search ${scopeLabel(result.scope).name}` : 'Show only these', key: result.scope.kind === 'keyword' ? 'Tab' : '↵' };
@@ -465,7 +459,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                       {result.kind === 'chord' && <span className={styles.resultDetail}>Chord</span>}
                       {result.kind === 'archive' && <span className={styles.chip}>Archived</span>}
                       {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
-                      {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform)}</kbd>}
+                      {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform, state.settings.shortcuts)}</kbd>}
                       {isSelected && (
                         <span className={styles.hint}>
                           {hint.text} <kbd className={styles.keycap}>{hint.key}</kbd>

@@ -6,6 +6,7 @@
  */
 import { generateKeyBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
+import { cleanKeys } from './bindings';
 import { isInternalUrl, visibleTabs } from './idle';
 import {
   DEFAULT_PROFILE,
@@ -37,6 +38,7 @@ import {
   type WindowId,
   type WindowModel,
 } from './model';
+import { shortcutById, type ActionId } from './shortcuts';
 import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 
 enablePatches();
@@ -899,6 +901,12 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       }
       for (const [key, value] of Object.entries(cmd.settings.interface ?? {}) as [keyof typeof draft.settings.interface, number | undefined][]) {
         if (value !== undefined && draft.settings.interface[key] !== clamp01(value)) draft.settings.interface[key] = clamp01(value);
+      }
+      // Shortcuts: each listed action gets its new keys (checked again here), or null goes back to the registry's.
+      for (const [id, keys] of Object.entries(cmd.settings.shortcuts ?? {}) as [ActionId, readonly string[] | null | undefined][]) {
+        if (keys === undefined || !shortcutById(id)) continue;
+        if (keys === null) delete draft.settings.shortcuts[id];
+        else draft.settings.shortcuts[id] = cleanKeys(id, keys);
       }
       return;
     }
