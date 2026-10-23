@@ -39,7 +39,8 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     '/signin':
       `<title>Signed out</title><button id="signin" onclick="window.open('/signin-popup', 'auth', 'width=420,height=560')">Sign in</button>` +
       `<script>addEventListener('message', (e) => { if (e.data === 'signed-in') document.title = 'Signed in'; });</script>`,
-    '/signin-popup': `<title>Sign in</title><button id="done" onclick="window.opener.postMessage('signed-in', '*'); window.close()">Continue</button>`,
+    // It closes just after the click, not inside it: closing mid-click races Playwright's own click bookkeeping.
+    '/signin-popup': `<title>Sign in</title><button id="done" onclick="window.opener.postMessage('signed-in', '*'); setTimeout(() => window.close(), 50)">Continue</button>`,
     '/long': '<title>Long page</title><div style="height: 6000px">A long page</div>',
     // A playing video with no media file: a canvas, streamed into a <video>. The muted one is a background loop.
     '/video': videoPage('Video', ''),
@@ -297,10 +298,21 @@ test('page-first keys reach Chord only when the page passes; reserved keys fire 
       }, key);
     };
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
+    // Chord is up: the page is a tab in the sidebar.
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Keys');
 
     // The page ignores Ctrl+S, so it falls through to Chord: the sidebar collapses.
     await press('S');
-    await expect(sidebar).toBeHidden();
+    await expect(sidebar)
+      .toBeHidden()
+      .catch(async (error: Error) => {
+        // Menu accelerators only reach the focused window, so say what had focus.
+        const focus = await app.evaluate(({ BaseWindow, webContents }) => ({
+          window: BaseWindow.getFocusedWindow()?.id ?? null,
+          contents: webContents.getFocusedWebContents()?.getURL().slice(0, 40) ?? null,
+        }));
+        throw new Error(`${error.message}\nFocus when Ctrl+S was sent: ${JSON.stringify(focus)}`);
+      });
     await press('S');
     await expect(sidebar).toBeVisible();
 
@@ -736,6 +748,22 @@ test('a private window keeps to itself: no shared sign-ins, no history, and noth
   }
 });
 
+test('quitting right after launch, before the windows have loaded, trips no error in main', async () => {
+  // Two windows to restore, so more is still loading when the quit comes.
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
+  const shell = await pageWhere(app, isShell);
+  await runAction(shell, 'window.new');
+  await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
+  await app.close();
+  // Quit as soon as a window's page exists, while it (and the other window) may still be loading.
+  for (let i = 0; i < 3; i++) {
+    app = await launch({}, profile);
+    await app.firstWindow();
+    await app.close();
+  }
+});
+
 test('closing tabs while they load never trips an error in main', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
@@ -1016,11 +1044,19 @@ test('many chords: the switcher scrolls sideways with the wheel and keeps the cu
     await expect(strip.getByRole('tab', { name: 'Chord 12' })).toBeInViewport();
     await expect.poll(async () => (await metrics()).fade).not.toBe('none');
 
-    // A plain mouse wheel moves it back toward the start.
-    const box = (await strip.boundingBox())!;
-    await shell.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    // A plain mouse wheel (up and down) moves it back toward the start. First let the smooth scroll to the
+    // newest chord finish: a scroll animation still running would put the strip back where it was going.
+    await expect
+      .poll(async () => {
+        const a = (await metrics()).scroll;
+        await shell.waitForTimeout(150);
+        return (await metrics()).scroll === a;
+      })
+      .toBe(true);
     const before = (await metrics()).scroll;
-    await shell.mouse.wheel(0, -200);
+    // The wheel event goes to the strip itself, as the swipe tests' do: one injected through the input
+    // pipeline (mouse.wheel) sometimes never reached the page at all on CI (no wheel event in the DOM).
+    await strip.evaluate((el) => el.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, deltaMode: 0, bubbles: true, cancelable: true })));
     await expect.poll(async () => (await metrics()).scroll).toBeLessThan(before);
   } finally {
     await app.close();
@@ -1150,6 +1186,8 @@ test('a permission prompt asks once, and the answer is remembered for the site',
     const ask = () => tab.evaluate(() => Notification.requestPermission());
 
     const first = ask();
+    // If a step below fails, report that step, not this request dying with the app.
+    first.catch(() => {});
     const prompt = popover.getByRole('alertdialog');
     await expect(prompt).toContainText('127.0.0.1');
     await expect(prompt).toContainText('Show notifications');

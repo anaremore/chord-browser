@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { crx3, extensionIdOf, folderFiles, keyPair, sha256Hex, spki, zip } from '../fixtures/crx';
+import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 const appDir = resolve(import.meta.dirname, '../..');
 const FIXTURE = resolve(appDir, 'test/fixtures/extension');
@@ -48,8 +49,10 @@ function startSite(packages: Map<string, Buffer> = new Map()): Promise<{ server:
 async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'))): Promise<ElectronApplication> {
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, CHORD_E2E_HOOKS: '1', ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return electron.launch({ args: [appDir], env: childEnv, cwd: appDir });
+  return watchForMainErrors(await electron.launch({ args: [appDir], env: childEnv, cwd: appDir }));
 }
+
+failOnMainErrors();
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
   await expect.poll(() => app.windows().some((p) => match(p.url())), { timeout: 20_000 }).toBe(true);

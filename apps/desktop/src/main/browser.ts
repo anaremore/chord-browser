@@ -309,7 +309,7 @@ export class Browser {
       ensureTab: (nodeId) => this.tabs.ensure(nodeId)?.webContents,
       toast: (windowId, message, action) => {
         const w = this.windows.get(windowId);
-        if (w) send(w.shell.webContents, 'toast:show', { id: `extension:${Date.now()}`, message, ...(action ? { action } : {}) });
+        if (w) w.toast({ id: `extension:${Date.now()}`, message, ...(action ? { action } : {}) });
       },
       openSettings: (section) => this.openSettings(section),
       changed: () => this.settingsWindow?.update(this.settingsSnapshot()),
@@ -363,7 +363,7 @@ export class Browser {
       cantStop: (nodeId, host) => {
         const windowId = this.windowShowing(nodeId);
         const w = windowId ? this.windows.get(windowId) : undefined;
-        if (w) send(w.shell.webContents, 'toast:show', { id: `share:${nodeId}`, message: `Chord can't stop this share. Use ${host}'s own Stop button.` });
+        if (w) w.toast({ id: `share:${nodeId}`, message: `Chord can't stop this share. Use ${host}'s own Stop button.` });
       },
     });
     this.idle = new IdleKeeper(
@@ -898,13 +898,13 @@ export class Browser {
       this.tabs.closeFloating(nodeId);
       if (this.store.state.windows[w.id]?.activeChordId !== chordId) this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
       this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
-      send(w.shell.webContents, 'toast:show', { id: `mini-moved:${nodeId}`, message: `Opened in ${chord.name} (sign-ins differ, so it loaded again)` });
+      w.toast({ id: `mini-moved:${nodeId}`, message: `Opened in ${chord.name} (sign-ins differ, so it loaded again)` });
     }
     if (w.window.isMinimized()) w.window.restore();
     w.window.focus();
     const offer = this.routeOffer(url, chordId, w);
     if (offer) {
-      send(w.shell.webContents, 'toast:show', {
+      w.toast({
         id: `route-offer:${offer}`,
         message: `Always open ${offer} in ${chord.name}?`,
         action: { label: 'Always', command: { t: 'linkRoute.set', host: offer, chordId } },
@@ -1063,7 +1063,7 @@ export class Browser {
     const folder = this.store.state.nodes[nodeId];
     if (folder?.kind !== 'folder') return;
     this.store.dispatch({ t: 'folder.delete', nodeId });
-    send(w.shell.webContents, 'toast:show', {
+    w.toast({
       id: `folder-deleted:${nodeId}`,
       message: `Deleted folder “${folder.title}”`,
       action: { label: 'Undo', command: { t: 'folder.restore', nodeId } },
@@ -1087,7 +1087,7 @@ export class Browser {
     const reloads = state.chords[from]?.profileId !== to.profileId;
     this.store.dispatch({ t: 'node.moveToChord', nodeId, chordId });
     const offer = this.routeOffer(tab.url, chordId, w);
-    send(w.shell.webContents, 'toast:show', {
+    w.toast({
       id: `tab-moved:${nodeId}`,
       message: reloads ? `Moved to ${to.name} (sign-ins differ, so it reloaded)` : `Moved to ${to.name}`,
       action: { label: 'Undo', command: { t: 'node.moveToChord', nodeId, chordId: from, place } },
@@ -1110,7 +1110,7 @@ export class Browser {
     const archives = !isPrivateChord(state, chordId);
     if (archives) this.store.dispatch({ t: 'tab.archive', nodeIds, reason: 'cleared' });
     else for (const nodeId of nodeIds) this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId });
-    send(w.shell.webContents, 'toast:show', {
+    w.toast({
       id: `today-cleared:${chordId}`,
       message: `${archives ? 'Archived' : 'Closed'} ${nodeIds.length} ${nodeIds.length === 1 ? 'tab' : 'tabs'}`,
       action: { label: 'Undo', command: { t: 'closed.restore', windowId: w.id, nodeIds, activate: shown && nodeIds.includes(shown) ? shown : null } },
@@ -1128,7 +1128,7 @@ export class Browser {
     const nodeIds = splitMembers(state, splitId).map((t) => t.id);
     const focus = activeTabId(state, w.id);
     this.store.dispatch({ t: 'split.separate', splitId });
-    send(w.shell.webContents, 'toast:show', {
+    w.toast({
       id: `split-separated:${splitId}`,
       message: 'Separated split tabs',
       action: {
@@ -1192,14 +1192,14 @@ export class Browser {
   announceUpdateReady(id: string, message: string): void {
     const w = this.lastNormalWindow();
     if (!w) return;
-    send(w.shell.webContents, 'toast:show', { id, message, action: { label: 'Restart to update', update: 'restart' } });
+    w.toast({ id, message, action: { label: 'Restart to update', update: 'restart' } });
   }
 
   /** A note for the window used last, with a link that opens as a tab there (a new Chord version, for one). */
   announce(id: string, message: string, link: { label: string; url: string }): void {
     const w = this.lastNormalWindow();
     if (!w) return;
-    send(w.shell.webContents, 'toast:show', { id, message, action: { label: link.label, command: { t: 'tab.open', windowId: w.id, url: link.url } } });
+    w.toast({ id, message, action: { label: link.label, command: { t: 'tab.open', windowId: w.id, url: link.url } } });
   }
 
   /**
@@ -1210,7 +1210,7 @@ export class Browser {
     const chord = this.store.state.chords[chordId];
     if (!chord || chord.private) return;
     this.store.dispatch({ t: 'chord.delete', chordId });
-    send(w.shell.webContents, 'toast:show', {
+    w.toast({
       id: `chord-deleted:${chordId}`,
       message: `Deleted “${chord.name}”`,
       action: { label: 'Undo', command: { t: 'chord.restore', windowId: w.id, chordId } },
@@ -1233,7 +1233,7 @@ export class Browser {
     const previous = chord.profileId;
     this.store.dispatch({ t: 'chord.profile', chordId, profileId: separate ? uuidv7() : DEFAULT_PROFILE });
     if (!w) return;
-    send(w.shell.webContents, 'toast:show', {
+    w.toast({
       id: `chord-signins:${chordId}`,
       message: separate ? `“${chord.name}” keeps its own sign-ins now. Its tabs reloaded, signed out.` : `“${chord.name}” shares sign-ins with your other chords again.`,
       action: { label: 'Undo', command: { t: 'chord.profile', chordId, profileId: previous } },

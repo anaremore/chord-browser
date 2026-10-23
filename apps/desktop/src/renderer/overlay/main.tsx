@@ -3,17 +3,18 @@ import { createRoot } from 'react-dom/client';
 import '../assets/fonts/fonts.css';
 import '../shared/global.css';
 import { createMirror } from '../shared/mirror';
+import { live } from '../shared/live';
 import { applySystem } from '../shared/system';
 import { api } from './api';
 import { CommandBar } from './CommandBar';
 
-const info = await api.system.info();
-applySystem(info);
-api.system.onChange(applySystem);
+const info = await live(() => api.system.info(), (listener) => api.system.onChange(listener));
+applySystem(info.get());
+info.subscribe(() => applySystem(info.get()));
 const mirror = await createMirror(api.state);
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <CommandBar initialInfo={info} mirror={mirror} />
+    <CommandBar info={info} mirror={mirror} />
   </StrictMode>,
 );

@@ -5,14 +5,18 @@ import '../assets/fonts/fonts.css';
 import '../shared/global.css';
 import { batchFrames, nextFrame } from '../shared/frames';
 import { createMirror } from '../shared/mirror';
+import { live } from '../shared/live';
 import { afterNextPaint } from '../shared/perf';
 import { applySystem } from '../shared/system';
 import { api } from './api';
 import { App } from './App';
+import { createToastStore } from './toast-store';
 
-const info = await api.system.info();
-applySystem(info);
-api.system.onChange(applySystem);
+// First, before anything awaits: a toast main sends while the shell is starting still lands.
+const toasts = createToastStore((listener) => api.toasts.onShow(listener));
+const info = await live(() => api.system.info(), (listener) => api.system.onChange(listener));
+applySystem(info.get());
+info.subscribe(() => applySystem(info.get()));
 // Patches render once a frame, however many arrive in it (a tab switch sends several): a frame's
 // updates from main run together, in one React pass (shared/frames.ts).
 batchFrames(flushSync);
@@ -41,7 +45,7 @@ function ReportFirstPaint({ children }: { children: ReactNode }) {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ReportFirstPaint>
-      <App initialInfo={info} mirror={mirror} />
+      <App info={info} mirror={mirror} toasts={toasts} />
     </ReportFirstPaint>
   </StrictMode>,
 );

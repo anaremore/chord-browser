@@ -13,9 +13,7 @@ import { AnimatePresence, motion, type Transition } from 'motion/react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { api } from './api';
 import styles from './App.module.css';
-
-/** At most this many at once; older ones give way. */
-const MAX_TOASTS = 3;
+import { useToasts, type ToastStore } from './toast-store';
 
 /** A toast leaving with the focus inside hands it to the sidebar's tabs, so the keyboard isn't left nowhere. */
 function keepFocusFrom(card: HTMLElement | null): void {
@@ -126,17 +124,9 @@ function ToastCard({ toast, transition, compact, onDone }: { toast: Toast; trans
 }
 
 /** `undoKeys`: this stack answers ⌘Z (the one in view; both show while the collapsed sidebar peeks). */
-export function Toasts({ transition, compact, undoKeys, mac }: { transition: Transition; compact: boolean; undoKeys: boolean; mac: boolean }) {
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  useEffect(
-    () =>
-      api.toasts.onShow((toast) =>
-        // The same toast again (deleting twice) replaces the old one rather than stacking.
-        setToasts((all) => [toast, ...all.filter((t) => t.id !== toast.id)].slice(0, MAX_TOASTS)),
-      ),
-    [],
-  );
-  const dismiss = (id: string) => setToasts((all) => all.filter((t) => t.id !== id));
+export function Toasts({ store, transition, compact, undoKeys, mac }: { store: ToastStore; transition: Transition; compact: boolean; undoKeys: boolean; mac: boolean }) {
+  const toasts = useToasts(store);
+  const dismiss = (id: string) => store.dismiss(id);
   const shown = compact ? toasts.slice(0, 1) : toasts;
 
   // ⌘Z / Ctrl+Z undoes what the newest toast offers to undo (DESIGN.md §7.5), unless a text field wants the key.

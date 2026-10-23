@@ -160,6 +160,8 @@ async function setUp(app: ElectronApplication, paths: string[]) {
 }
 
 const GAP = 8;
+/** A pane's narrowest (SPLIT.minPane in @chord/core). */
+const MIN_PANE = 320;
 
 test('a tab dropped on the page splits the frame; clicks move focus, keys act on the focused pane, dividers resize', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
@@ -202,7 +204,10 @@ test('a tab dropped on the page splits the frame; clicks move focus, keys act on
     await shell.mouse.move(cx - 160, cy, { steps: 6 });
     await shell.mouse.up();
     await expect.poll(async () => (await splitState(shell)).sizes[0]!).toBeLessThan(0.45);
-    await expect.poll(async () => (await pageViews(app))[0]!.width).toBeLessThan(left!.width - 120);
+    // Well over 120 px narrower, unless that would take it under a pane's minimum (on a small screen, it does).
+    const narrowed = Math.max(MIN_PANE, left!.width - 120);
+    await expect.poll(async () => (await pageViews(app))[0]!.width).toBeLessThanOrEqual(narrowed);
+    expect((await pageViews(app))[0]!.width).toBeGreaterThanOrEqual(MIN_PANE);
     const moved = (await splitState(shell)).sizes;
     expect(moved[0]! + moved[1]!).toBeCloseTo(1, 6);
     await divider.dblclick();

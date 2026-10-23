@@ -109,9 +109,13 @@ export class Persistence {
     this.schedule();
   }
 
-  /** History, archived tabs and learned picks for what was typed in the command bar. */
+  /**
+   * History, archived tabs and learned picks for what was typed in the command bar.
+   * Pending writes go first, so a page visited or a tab archived a moment ago is found.
+   */
   async search(query: string, chordId: string | null): Promise<SearchResult> {
     try {
+      await this.flush();
       const response = await this.request({ type: 'search', query, chordId, now: Date.now() });
       return response.ok && response.search ? response.search : { history: [], choices: [], archive: [] };
     } catch {

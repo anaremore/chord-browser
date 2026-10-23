@@ -6,6 +6,7 @@
 import type { MiniState, SystemInfo } from '@chord/ipc';
 import { Check, ChevronDown, Globe, Link2, Lock } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useLive, type Live } from '../shared/live';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './MiniBar.module.css';
@@ -14,13 +15,11 @@ import styles from './MiniBar.module.css';
 const NEUTRAL = { theme: { stops: [{ l: 0.72, c: 0, h: 0 }], grain: 0.15, appearance: 'auto' as const } };
 const COPIED_MS = 1200;
 
-export function MiniBar({ initialInfo, initialState }: { initialInfo: SystemInfo; initialState: MiniState }) {
-  const [info, setInfo] = useState(initialInfo);
-  const [state, setState] = useState(initialState);
+export function MiniBar({ info: infoSource, state: stateSource }: { info: Live<SystemInfo>; state: Live<MiniState> }) {
+  const info = useLive(infoSource);
+  const state = useLive(stateSource);
   const [copied, setCopied] = useState(false);
   const chevron = useRef<HTMLButtonElement>(null);
-  useEffect(() => api.system.onChange(setInfo), []);
-  useEffect(() => api.mini.onState(setState), []);
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), COPIED_MS);

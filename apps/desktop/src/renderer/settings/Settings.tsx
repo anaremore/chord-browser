@@ -8,6 +8,7 @@ import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, Upd
 import { Check, EyeOff, Info, Keyboard, MessagesSquare, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
+import { useLive, type Live } from '../shared/live';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
@@ -372,12 +373,10 @@ function About({ about, snapshot }: { about: AboutInfo; snapshot: SettingsSnapsh
 
 /* ---------- Window ---------- */
 
-export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo: SystemInfo; initialSnapshot: SettingsSnapshot; about: AboutInfo }) {
-  const [info, setInfo] = useState(initialInfo);
-  const [snapshot, setSnapshot] = useState(initialSnapshot);
+export function Settings({ info: infoSource, snapshot: snapshotSource, about }: { info: Live<SystemInfo>; snapshot: Live<SettingsSnapshot>; about: AboutInfo }) {
+  const info = useLive(infoSource);
+  const snapshot = useLive(snapshotSource);
   const [section, setSection] = useState<SectionId>(initialSection);
-  useEffect(() => api.system.onChange(setInfo), []);
-  useEffect(() => api.settings.onChange(setSnapshot), []);
   // Each "Edit colors…" from a chord's menu is a new request to open the editor.
   const [editColors, setEditColors] = useState(() => (initialHash()?.colors ? 1 : 0));
   useEffect(

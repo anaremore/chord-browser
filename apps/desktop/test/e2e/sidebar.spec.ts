@@ -83,9 +83,32 @@ async function setUp(app: ElectronApplication, paths: string[], origin = () => s
   return { shell, overlay, today, pinned: shell.getByRole('tree', { name: 'Pinned' }) };
 }
 
+/**
+ * Where a row is once it has stopped moving. Rows glide into place (after
+ * "New folder" they spring for about 700 ms), so a box read mid-glide sends a
+ * drag somewhere the row no longer is. Settled means the same box on four
+ * reads 100 ms apart; two reads in the same frame would match while it moves.
+ */
+async function settledBox(target: Locator) {
+  let last: Awaited<ReturnType<Locator['boundingBox']>> = null;
+  let same = 0;
+  await expect
+    .poll(
+      async () => {
+        const box = await target.boundingBox();
+        same = box && last && box.x === last.x && box.y === last.y && box.width === last.width && box.height === last.height ? same + 1 : 0;
+        last = box;
+        return same;
+      },
+      { intervals: [100] },
+    )
+    .toBeGreaterThanOrEqual(3);
+  return last!;
+}
+
 /** Drag with the mouse the way a hand does: pick up, travel, settle, let go. */
 async function drag(shell: Page, from: Locator, to: { x: number; y: number }) {
-  const a = (await from.boundingBox())!;
+  const a = await settledBox(from);
   await shell.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
   await shell.mouse.down();
   await shell.mouse.move(a.x + a.width / 2, a.y + a.height / 2 + 6, { steps: 4 });
@@ -98,7 +121,7 @@ async function drag(shell: Page, from: Locator, to: { x: number; y: number }) {
 }
 
 const point = async (target: Locator, dy: number, dx = 0) => {
-  const b = (await target.boundingBox())!;
+  const b = await settledBox(target);
   return { x: b.x + b.width / 2 + dx, y: b.y + dy };
 };
 
@@ -132,8 +155,15 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
 
     // Drag Second (in Today) into the folder, just above Third: it's pinned there.
     const third = pinned.getByRole('treeitem').filter({ hasText: 'Third page' });
-    await drag(shell, today.getByRole('treeitem').filter({ hasText: 'Second page' }), await point(third, 6));
-    await expect(pinned.getByRole('treeitem')).toHaveCount(3);
+    const dropAt = await point(third, 6);
+    await drag(shell, today.getByRole('treeitem').filter({ hasText: 'Second page' }), dropAt);
+    await expect(pinned.getByRole('treeitem'))
+      .toHaveCount(3)
+      .catch(async (error: Error) => {
+        // Where things were at the drop, to tell a missed target from a wrong landing.
+        const lists = `Pinned:\n${await pinned.ariaSnapshot()}\nToday:\n${await today.ariaSnapshot()}`;
+        throw new Error(`${error.message}\nDropped at ${JSON.stringify(dropAt)}; Third page now at ${JSON.stringify(await third.boundingBox())}\n${lists}`);
+      });
     await expect(pinned.getByRole('treeitem').nth(1)).toContainText('Second page');
     await expect(pinned.getByRole('treeitem', { name: 'Second page', exact: true })).toHaveAttribute('data-parent', /.+/);
     await expect(today.getByRole('treeitem')).toHaveCount(1);
@@ -375,6 +405,8 @@ test('a tab dropped on another chord moves there, reloading signed out when that
     await chords.getByRole('tab', { name: 'Personal' }).click();
     const { overlay } = { overlay: await pageWhere(app, isOverlay) };
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
+    // Type once it's open: keys sent before its field has focus go nowhere.
+    await expect(overlay.getByRole('dialog')).toBeVisible();
     await overlay.keyboard.type(`${site.origin}/whoami`);
     await overlay.keyboard.press('Enter');
     const whoami = () => app.windows().find((p) => p.url() === `${site.origin}/whoami`)?.title();
