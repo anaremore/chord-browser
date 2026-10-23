@@ -949,7 +949,8 @@ Details Chord follows from the [API reference](https://developers.google.com/saf
 
 **What it doesn't do (yet):**
 - ⚠ Chrome's download protection (file reputation, `badbinurl`, client-side detection) isn't part of the public API: only addresses on the malware and unwanted-software lists hold a download.
-- ⚠ No Real-Time Mode (the Global Cache) and no Oblivious HTTP relay: Local List Mode only, as decided.
+- ⚠ No Real-Time Mode (the Global Cache) and no Oblivious HTTP relay: Local List Mode only, as decided. So Google sees the IP address a list update or a `hashes.search` comes from, as with any request to it.
+- ⚠ The key is readable in every copy, as it is in any desktop client; restricting it to the Safe Browsing API in Google's console is what limits its use. Every copy shares its quota: past it, requests fail and checks come out SAFE until the quota resets (the quota can be raised in the console).
 - ⚠ A navigation can't be held while the service is asked, so a flagged page can load for the length of that request (on a local prefix match only) before the warning replaces it.
 - Subresources (scripts, images) aren't checked, as in Chrome's hash-prefix modes.
 
