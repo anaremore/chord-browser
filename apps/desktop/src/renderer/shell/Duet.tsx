@@ -670,7 +670,10 @@ function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string, prese
   });
   useEffect(() => {
     if (!present) return;
-    const before = document.hasFocus() && document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    // What had the keyboard before the panel: never the panel's own button (the step's effect, run first, may
+    // have focused it), which is still there, inert, while the panel slides out, so focusing it would do nothing.
+    const now = document.activeElement;
+    const before = document.hasFocus() && now instanceof HTMLElement && now !== document.body && !panel.current?.contains(now) ? now : null;
     focusStart();
     void api.focus.move('shell');
     return () => {
