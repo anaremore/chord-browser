@@ -35,6 +35,8 @@ import { seedForPerformance } from './perf-seed';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
+import { SAFE_BROWSING_KEY } from './safe-browsing/key';
+import { listsFile, SafeBrowsing, safeBrowsingEndpoint } from './safe-browsing/service';
 import { configureUiSession, hardenAllWebContents } from './security';
 import { Suggestions } from './suggestions';
 import { UpdateInstaller } from './update-installer';
@@ -67,11 +69,34 @@ let persistence: Persistence | undefined;
 let duet: DuetService | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker();
+
+/**
+ * Safe Browsing (ARCHITECTURE.md §14.5): Google's v5 API in Local List Mode.
+ * Release builds carry the API key; development builds can point it at a
+ * test server instead (CHORD_SAFE_BROWSING_URL, ignored when packaged), and
+ * then send it no key. Without either it's unavailable and never runs.
+ */
+const safeBrowsing = new SafeBrowsing(
+  {
+    endpoint: safeBrowsingEndpoint(SAFE_BROWSING_KEY, app.isPackaged ? undefined : process.env['CHORD_SAFE_BROWSING_URL'] || undefined),
+    file: listsFile(app.getPath('userData')),
+    workerPath: join(import.meta.dirname, 'safe-browsing.js'),
+    firstUpdateMs: app.isPackaged ? 15_000 : 500,
+  },
+  () => {
+    const settings = browser?.store.state.settings;
+    return Boolean(settings?.safeBrowsing && !settings.googleFree);
+  },
+);
+
 const downloads = new DownloadManager({
   state: () => browser!.store.state,
   dispatch: (command) => browser!.store.dispatch(command),
   newId: () => uuidv7(),
   defaultSession: () => profileSession('default'),
+  // Every download, a private window's too, is checked while Safe Browsing is on (its final address and redirects).
+  screen: (urls) => (safeBrowsing.active ? safeBrowsing.check(urls, 'download').then((v) => (v.verdict === 'unsafe' ? v.kind : null)) : null),
+  onHeld: (download) => browser?.showHeldDownload(download.privateWindow),
 });
 let profileSession: (profileId: string) => Session;
 const updates = new UpdateChecker({
@@ -125,6 +150,11 @@ function registerIpc(): void {
     w.openOverlay(mode, mode === 'edit' ? browser!.activeUrl(w.id) : '', anchor ?? null, 'shell');
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
+  handle('safeBrowsing:status', () => safeBrowsing.status());
+  // First run's step and the one-time offer, each with the notice on screen.
+  handle('safeBrowsing:choose', ({ on }) => browser!.store.dispatch({ t: 'settings.set', settings: { safeBrowsing: on, safeBrowsingAsked: true } }));
+  handle('safeBrowsing:back', ({ nodeId }, sender) => browser!.safeBrowsingAction(sender, nodeId, 'back'));
+  handle('safeBrowsing:proceed', ({ nodeId }, sender) => browser!.safeBrowsingAction(sender, nodeId, 'proceed'));
   handle('history:search', ({ query }, sender) =>
     fromPrivateWindow(sender) ? { history: [], choices: [], archive: [] } : persistence!.search(query, activeChordOf(sender)),
   );
@@ -275,6 +305,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', (event) => {
     // Every window open now comes back next launch, so their closing isn't forgetting them.
     browser?.prepareToQuit();
+    // Downloads Safe Browsing held, never kept: their unfinished files go.
+    downloads.discardHeld();
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
@@ -385,6 +417,14 @@ if (!app.requestSingleInstanceLock()) {
       },
       onChange: (change) => store.record(change.patches, change.state),
       releaseProfile,
+      safeBrowsing: {
+        enabled: () => safeBrowsing.active,
+        check: (urls) => safeBrowsing.check(urls, 'frame'),
+        offer: () => {
+          const s = browser?.store.state.settings;
+          return Boolean(safeBrowsing.available && s && !s.safeBrowsing && !s.safeBrowsingAsked && !s.googleFree);
+        },
+      },
       extensions: {
         root: join(app.getPath('userData'), 'Extensions'),
         preloadPath: join(import.meta.dirname, '../preload/extensions.cjs'),
@@ -410,7 +450,10 @@ if (!app.requestSingleInstanceLock()) {
       if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'spellcheck' || p.path[1] === 'googleFree'))) {
         for (const ses of [ui, ...profiles.values()]) applySpellcheck(ses, change.state.settings.spellcheck, change.state.settings.googleFree);
       }
+      // Safe Browsing starts or stops with its switch, and with Google-free mode (which keeps it off).
+      if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'safeBrowsing' || p.path[1] === 'googleFree'))) safeBrowsing.sync();
     });
+    safeBrowsing.sync();
     // Before any of Chord's own pages loads (a text field there is what starts a dictionary download).
     applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
     duet = new DuetService(browser, persistence, app.getPath('userData'));
@@ -424,6 +467,10 @@ if (!app.requestSingleInstanceLock()) {
       observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
         launch: () => launchTimings(),
+        /** Safe Browsing's state, and how long its checks took (ms). */
+        safeBrowsing: () => ({ status: safeBrowsing.status(), timings: safeBrowsing.timings() }),
+        /** Check addresses as a page's navigation would (for timing it). */
+        safeBrowsingCheck: (urls: string[]) => safeBrowsing.check(urls, 'frame'),
         contextMenu: (contentsId: number) => contextMenus.get(contentsId)?.map((item) => item.label) ?? null,
         /** Choose an item in a page's last right-click menu, as clicking it would. */
         chooseContextMenuItem: (contentsId: number, label: string) => contextMenus.get(contentsId)?.find((item) => item.label === label)?.choose(),

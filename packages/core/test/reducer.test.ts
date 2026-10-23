@@ -205,6 +205,42 @@ describe('reducer', () => {
     expect(t.state.settings).toMatchObject({ googleFree: true, searchEngine: 'kagi' });
   });
 
+  it('Safe Browsing: on only with its notice answered, and Google-free mode keeps it off', () => {
+    const t = setup();
+    expect(t.state.settings).toMatchObject({ safeBrowsing: false, safeBrowsingAsked: false });
+    // Turning it on (Settings shows the notice beside the switch) counts as answering it.
+    t.run({ t: 'settings.set', settings: { safeBrowsing: true } });
+    expect(t.state.settings).toMatchObject({ safeBrowsing: true, safeBrowsingAsked: true });
+    t.run({ t: 'settings.set', settings: { safeBrowsing: false } });
+    expect(t.state.settings).toMatchObject({ safeBrowsing: false, safeBrowsingAsked: true });
+    t.run({ t: 'settings.set', settings: { safeBrowsing: true } });
+    // Google-free mode turns it off, and it can't come back on while the mode is on.
+    t.run({ t: 'settings.set', settings: { googleFree: true } });
+    expect(t.state.settings.safeBrowsing).toBe(false);
+    expect(t.run({ t: 'settings.set', settings: { safeBrowsing: true } }).patches).toHaveLength(0);
+    // Off again, it stays off until you turn it on.
+    t.run({ t: 'settings.set', settings: { googleFree: false } });
+    expect(t.state.settings.safeBrowsing).toBe(false);
+    t.run({ t: 'settings.set', settings: { safeBrowsing: true } });
+    expect(t.state.settings.safeBrowsing).toBe(true);
+    // "Not now" on the offer: asked, still off.
+    const u = setup();
+    u.run({ t: 'settings.set', settings: { safeBrowsing: false, safeBrowsingAsked: true } });
+    expect(u.state.settings).toMatchObject({ safeBrowsing: false, safeBrowsingAsked: true });
+  });
+
+  it('a tab’s Safe Browsing warning is kept and cleared like its other live state', () => {
+    const t = setup();
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://example.com/' });
+    const nodeId = tabsInOrder(t.state, 'c1')[0]!.id;
+    const threat = { kind: 'phishing' as const, url: 'https://evil.example/', frameUrl: null };
+    t.run({ t: 'tab.live', nodeId, live: { threat } });
+    expect(t.state.live[nodeId]!.threat).toEqual(threat);
+    expect(t.run({ t: 'tab.live', nodeId, live: { threat: { ...threat } } }).patches).toHaveLength(0);
+    t.run({ t: 'tab.live', nodeId, live: { threat: null } });
+    expect(t.state.live[nodeId]!.threat).toBeNull();
+  });
+
   it("updates a chord's theme and clamps grain", () => {
     const t = setup();
     t.run({ t: 'chord.theme', chordId: 'c1', theme: { grain: 3, appearance: 'dark' } });

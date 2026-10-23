@@ -1,0 +1,156 @@
+/* Safe Browsing's warning in the content frame (DESIGN.md §9): a load error's layout, with a shield in the danger color. */
+
+.warning {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: center;
+  max-inline-size: calc(var(--size-settings-content) * 0.8);
+  padding: var(--space-8) var(--space-6);
+  text-align: center;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  inline-size: var(--space-12);
+  block-size: var(--space-12);
+  margin-block-end: var(--space-2);
+  border-radius: var(--radius-full);
+  background: color-mix(in oklab, var(--color-danger) 14%, transparent);
+  color: var(--color-danger);
+}
+
+.title {
+  margin: 0;
+  font: var(--text-heading);
+  letter-spacing: var(--text-heading-tracking);
+  text-wrap: balance;
+}
+
+.body {
+  margin: 0;
+  color: var(--color-fg-muted);
+  text-wrap: pretty;
+}
+
+/* "Learn more about …": a link to Google's page, opened as a tab. */
+.learn,
+.advisory {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-hit-min);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-decoration: underline;
+  text-decoration-thickness: var(--size-hairline);
+  text-underline-offset: var(--space-1);
+  cursor: pointer;
+}
+
+.learn {
+  margin-block-end: var(--space-4);
+  color: var(--color-accent);
+  font: var(--text-body);
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  block-size: var(--size-row);
+  padding-inline: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-full);
+  font: var(--text-label);
+  transition: transform var(--spring-press-duration) var(--spring-press);
+}
+
+.primary {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+.secondary {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.primary:active,
+.secondary:active {
+  transform: scale(0.97);
+}
+
+/* "Visit anyway" waits behind this. */
+.details {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-block-start: var(--space-2);
+}
+
+.summary {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-row);
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-full);
+  color: var(--color-fg-muted);
+  font: var(--text-label);
+  list-style: none;
+  cursor: pointer;
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary:hover {
+  background: var(--color-item-hover);
+}
+
+.chevron {
+  transition: transform var(--duration-fade-fast) var(--ease-standard);
+}
+
+.details[open] .chevron {
+  transform: rotate(90deg);
+}
+
+.more {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: center;
+  padding-block-start: var(--space-2);
+}
+
+.note {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  text-wrap: pretty;
+}
+
+/* "Advisory provided by Google", which every warning carries. */
+.advisory {
+  margin-block-start: var(--space-4);
+  color: var(--color-fg-subtle);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+}
+
+@media (forced-colors: active) {
+  .icon {
+    background: transparent;
+    color: CanvasText;
+  }
+
+  .primary {
+    border: var(--size-hairline) solid ButtonText;
+  }
+}

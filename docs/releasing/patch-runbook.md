@@ -235,6 +235,30 @@ Installed copies on Windows and the AppImage install an update only when its man
 
 If the old key leaks, rotate at once. If it's lost, step 7 applies to everyone.
 
+### Safe Browsing key
+
+Release builds carry Google's Safe Browsing API key, put in at build time (ARCHITECTURE.md §14.5). Without it a build works, and Settings → Privacy says Safe Browsing isn't in it.
+
+1. **The secret.** In the `release` environment, the environment secret `CHORD_SAFE_BROWSING_KEY`. The release workflow's *Check the Safe Browsing key* step warns when it's missing, and every *Package* step passes it to the build. Nothing else reads it.
+2. **Restrict the key** in the Google Cloud console (*APIs & Services → Credentials*): *API restrictions → Restrict key → Safe Browsing API*. A desktop app can't be restricted by referrer or IP, and the key is readable inside every copy, so this is what limits what it can be used for.
+3. **Check the first release that has it.** The *Check the Safe Browsing key* step logs no warning. On an installed copy, Settings → Privacy shows the switch, and after a minute "entries on this computer, updated just now".
+4. **Rotating.** Make a new key, replace the secret, release. Copies already installed keep using the old key until they update, so revoke the old one only after most have: a copy whose key stops working answers every check SAFE (Google's rule for errors), and Settings says the lists couldn't update.
+
+**By hand, with the real key, in a development build** (never commit the key, never paste it into an issue):
+
+1. In a terminal, set it for that terminal only. PowerShell: `$env:CHORD_SAFE_BROWSING_KEY = '<the key>'`; bash: `export CHORD_SAFE_BROWSING_KEY='<the key>'`. Make sure `CHORD_SAFE_BROWSING_URL` isn't set, or the test server wins.
+2. `pnpm dev` (it builds main with the key). Don't run the E2E suite from this terminal: its build would carry the key too.
+3. In Chord, Settings → Privacy → turn on *Warn before suspected phishing and malware*. Within about a minute the row under it shows the lists' entries.
+4. Visit Google's test pages at <https://testsafebrowsing.appspot.com/>:
+   - *s/phishing.html*: the warning "This site may be trying to trick you.", with *Learn more about phishing* and *Advisory provided by Google*.
+   - *s/malware.html*: "This site may harm your computer."
+   - *s/unwanted.html*: "This site may try to install unwanted software."
+   - *s/malware_in_iframe.html*: the warning, saying part of the page comes from a listed site.
+   - *s/content.exe* and *s/pua.exe* (the download tests): each may or may not be held. Chrome judges those files with download checks Chord doesn't have (ARCHITECTURE.md §14.5); Chord holds a download only when its address is on the malware or unwanted-software list. When one is held: the downloads panel opens on it, the file is `content.exe.crdownload` in the Downloads folder, and *Delete* removes it.
+5. *Details → Visit anyway* on one of them; visit it again: no warning until you quit.
+6. Turn on Google-free mode: the Safe Browsing row says it's off, and no more requests go to `safebrowsing.googleapis.com`.
+7. Close the terminal (the key goes with it) and clear its scrollback.
+
 ## Known gaps
 
 - **CI has to be green on `main`** for a bump to merge. A red `main` (as on 2026-10-23, while an unrelated fix was in progress) delays every security release; fix it first.

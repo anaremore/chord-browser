@@ -10,6 +10,7 @@ export * from './page';
 export * from './rank';
 export * from './reducer';
 export * from './restore';
+export * from './safe-browsing';
 export * from './seed';
 export * from './select';
 export * from './shortcuts';

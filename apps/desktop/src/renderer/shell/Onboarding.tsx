@@ -3,10 +3,10 @@
  * sit in the content frame, and every choice lands in the real sidebar as you
  * make it. That is the tour.
  */
-import type { Chord, ChordThemeSpec } from '@chord/core';
+import { SAFE_BROWSING_NOTICE, type Chord, type ChordThemeSpec } from '@chord/core';
 import type { DefaultBrowserStatus, SystemInfo } from '@chord/ipc';
 import { PRESETS, SWATCHES, cssOklch, presetStops, type PresetId, type SwatchId } from '@chord/tokens';
-import { Check, Dices } from 'lucide-react';
+import { Check, Dices, ShieldCheck } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useRoving } from '../shared/a11y';
@@ -17,13 +17,15 @@ import { useKeys } from './keys';
 import styles from './Onboarding.module.css';
 import { asUrl, suggestSites } from './popular-sites';
 
-type Step = 'welcome' | 'name' | 'theme' | 'pins' | 'default' | 'tips';
+type Step = 'welcome' | 'name' | 'theme' | 'pins' | 'default' | 'safety' | 'tips';
 const STEPS: { step: Step; optional: boolean }[] = [
   { step: 'welcome', optional: false },
   { step: 'name', optional: false },
   { step: 'theme', optional: false },
   { step: 'pins', optional: true },
   { step: 'default', optional: true },
+  // Safe Browsing's notice, which Google's terms want seen before it's on. Not skippable with Esc: it's a choice.
+  { step: 'safety', optional: false },
   { step: 'tips', optional: false },
 ];
 
@@ -269,6 +271,30 @@ function DefaultStep({ info, onNext }: { info: SystemInfo; onNext(): void }) {
   );
 }
 
+/** Safe Browsing (ARCHITECTURE.md §14.5): on unless you say not now, with the notice in full first. */
+function SafetyStep({ onNext }: { onNext(): void }) {
+  const choose = (on: boolean) => {
+    void api.safeBrowsing.choose(on);
+    onNext();
+  };
+  return (
+    <>
+      <p className={styles.eyebrow}>
+        <ShieldCheck size={14} strokeWidth={2.5} aria-hidden /> Safe Browsing
+      </p>
+      <h1 className={styles.title}>Warn you before risky sites?</h1>
+      <p className={styles.body}>{SAFE_BROWSING_NOTICE}</p>
+      <div className={styles.actions}>
+        <button type="button" className={styles.quiet} onClick={() => choose(false)}>
+          Not now
+        </button>
+        <span className={styles.spacer} />
+        <Primary onClick={() => choose(true)}>Turn on warnings</Primary>
+      </div>
+    </>
+  );
+}
+
 function TipsStep({ info, onDone }: { info: SystemInfo; onDone(): void }) {
   const { keycap } = useKeys(info);
   // "⌘1–9" while chords 1 and 9 still follow that pattern; otherwise chord 1's own key.
@@ -311,11 +337,14 @@ function TipsStep({ info, onDone }: { info: SystemInfo; onDone(): void }) {
 export function Onboarding({ chord, windowId, info, spring }: { chord: Chord; windowId: string; info: SystemInfo; spring: SpringFor }) {
   const [index, setIndex] = useState(0);
   const [defaultStatus, setDefaultStatus] = useState<DefaultBrowserStatus | null>(null);
+  const [safeBrowsing, setSafeBrowsing] = useState(false);
   const card = useRef<HTMLDivElement>(null);
   useEffect(() => void api.defaultBrowser.status().then(setDefaultStatus), []);
+  useEffect(() => void api.safeBrowsing.status().then((s) => setSafeBrowsing(s.available)), []);
 
   // Development builds can't be the default browser, and a default one needn't ask: skip that step.
-  const steps = STEPS.filter((s) => s.step !== 'default' || defaultStatus === 'not-default');
+  // A build without Safe Browsing (no API key) doesn't offer it.
+  const steps = STEPS.filter((s) => (s.step !== 'default' || defaultStatus === 'not-default') && (s.step !== 'safety' || safeBrowsing));
   const current = steps[Math.min(index, steps.length - 1)]!;
   const next = () => setIndex((i) => Math.min(i + 1, steps.length - 1));
   const finish = () => {
@@ -369,6 +398,7 @@ export function Onboarding({ chord, windowId, info, spring }: { chord: Chord; wi
           {current.step === 'theme' && <ThemeStep chord={chord} onNext={next} />}
           {current.step === 'pins' && <PinsStep windowId={windowId} onNext={next} />}
           {current.step === 'default' && <DefaultStep info={info} onNext={next} />}
+          {current.step === 'safety' && <SafetyStep onNext={next} />}
           {current.step === 'tips' && <TipsStep info={info} onDone={finish} />}
         </motion.div>
       </AnimatePresence>
