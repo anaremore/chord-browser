@@ -1,0 +1,1075 @@
+/**
+ * Duet in main (ARCHITECTURE.md §11): threads per chord, provider sessions,
+ * Chord's tools with their tiers, scope and approvals, and what each window's
+ * panel shows. Chord's transcript (chord-data, migration 8) is the source of
+ * truth; a provider's session is a cache that's resumed when it still works
+ * and replaced, primed with a summary, when it doesn't.
+ */
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  children,
+  DUET_MAX_PROCESSES,
+  DUET_PROCESS_IDLE_MS,
+  DUET_TOOLS,
+  duetInstructions,
+  duetPruneBefore,
+  duetTool,
+  isNeverReadable,
+  pageResult,
+  readNeedsApproval,
+  splitCitations,
+  stripCitations,
+  textFragmentUrl,
+  threadTitle,
+  threadToShow,
+  toolResult,
+  transcriptSummary,
+  urlsInText,
+  urlTaint,
+  userTurnText,
+  uuidv7,
+  type DuetAttachment,
+  type DuetCitation,
+  type DuetMessage,
+  type DuetMessageBody,
+  type DuetProvider,
+  type DuetScope,
+  type DuetThread,
+  type DuetToolName,
+  type DuetUndo,
+  type NodeId,
+  type TabNode,
+  type WindowId,
+} from '@chord/core';
+import type { DuetAction, DuetView } from '@chord/ipc';
+import type { Browser } from '../browser';
+import { send } from '../ipc';
+import type { Persistence } from '../persistence';
+import type { DuetSession, ProviderError, ToolOutput } from './adapter';
+import { ClaudeSession } from './claude';
+import { CodexSession } from './codex';
+import { claudeConfigDir, claudeProjectFolder, detect, launchFor, openSignIn, type ProviderStatus } from './detect';
+import { readPage, screenshot } from './extract';
+
+type Decision = 'once' | 'thread' | 'denied';
+
+interface ThreadState {
+  chordId: string;
+  /** Null until the first message is sent: a fresh thread isn't saved before then. */
+  thread: DuetThread | null;
+  messages: DuetMessage[];
+  /** Opaque tab handles ("t3") ↔ node ids, so the model never sees titles or URLs it didn't ask for. */
+  refs: Map<string, NodeId>;
+  /** Tabs attached to any message in the thread: readable without asking. */
+  attached: Set<NodeId>;
+  /** "Allow for this chat": tool names. open_tab with a tainted URL is never covered. */
+  grants: Set<string>;
+  /** URLs from the user's own context (typed, attached, their history and tabs): not tainted. */
+  trusted: Set<string>;
+  /** Text tools returned this thread, for the URL echo check. */
+  toolTexts: string[];
+  /** Tabs Duet read in this thread: a badge in the sidebar while it's open. */
+  read: Set<NodeId>;
+  queue: string[];
+  streaming: DuetMessage | null;
+  startedAt: number | null;
+  windowId: WindowId | null;
+  pending: Map<string, (decision: Decision) => void>;
+  /** Shown between messages after a resume fell back to a summary, or the provider changed. */
+  pendingDivider: string | null;
+  lastError: ProviderError | null;
+}
+
+interface Panel {
+  open: boolean;
+  /** The current tab chip was removed for this tab. */
+  removedCurrent: NodeId | null;
+  extra: NodeId[];
+}
+
+interface Live {
+  session: DuetSession;
+  lastUsed: number;
+  idle: ReturnType<typeof setTimeout> | undefined;
+}
+
+const THREADS_IN_MENU = 12;
+const PUSH_MS = 33;
+
+export class DuetService {
+  private statuses: Partial<Record<DuetProvider, ProviderStatus>> = {};
+  private readonly threads = new Map<string, ThreadState>();
+  /** Which thread each chord's panel shows: a thread id, or a chord-keyed fresh one. */
+  private readonly showing = new Map<string, string>();
+  private readonly continueFrom = new Map<string, { id: string; title: string } | null>();
+  private readonly panels = new Map<WindowId, Panel>();
+  private readonly live = new Map<string, Live>();
+  private drafts: Record<string, string> = {};
+  private recent = new Map<string, { id: string; title: string; lastUsedAt: number }[]>();
+  private pushTimer: ReturnType<typeof setTimeout> | undefined;
+  private firstUseSeen = false;
+  private readonly root: string;
+
+  constructor(
+    private readonly browser: Browser,
+    private readonly persistence: Persistence,
+    userData: string,
+  ) {
+    this.root = join(userData, 'duet');
+    browser.store.subscribe((change) => {
+      if (change.patches.some((p) => p.path[0] === 'windows' || p.path[0] === 'settings' || p.path[0] === 'nodes' || p.path[0] === 'chords')) this.schedulePush();
+    });
+    void this.init();
+  }
+
+  private get settings() {
+    return this.browser.store.state.settings.duet;
+  }
+
+  private async init(): Promise<void> {
+    await mkdir(join(this.root, 'empty'), { recursive: true });
+    await mkdir(join(this.root, 'instructions'), { recursive: true });
+    try {
+      const saved = JSON.parse(await readFile(join(this.root, 'panel.json'), 'utf8')) as { drafts?: Record<string, string>; firstUseSeen?: boolean };
+      this.drafts = saved.drafts ?? {};
+      this.firstUseSeen = Boolean(saved.firstUseSeen);
+    } catch {
+      // First run.
+    }
+    // Keep Duet chats: threads past their date go, the provider's copy with them.
+    const before = duetPruneBefore(this.settings.keep, Date.now());
+    if (before !== null) {
+      const removed = (await this.persistence.duet({ op: 'prune', before }).catch(() => ({ removed: [] }))).removed ?? [];
+      for (const thread of removed) void this.deleteProviderCopy(thread);
+    }
+    void this.refreshProviders();
+  }
+
+  /* ---------- Views ---------- */
+
+  private panel(windowId: WindowId): Panel {
+    let p = this.panels.get(windowId);
+    if (!p) {
+      p = { open: false, removedCurrent: null, extra: [] };
+      this.panels.set(windowId, p);
+    }
+    return p;
+  }
+
+  forgetWindow(windowId: WindowId): void {
+    this.panels.delete(windowId);
+  }
+
+  private chordOf(windowId: WindowId): string | null {
+    return this.browser.store.state.windows[windowId]?.activeChordId ?? null;
+  }
+
+  private isPrivateChord(chordId: string): boolean {
+    return Boolean(this.browser.store.state.chords[chordId]?.private);
+  }
+
+  /** The thread a chord's panel shows, loading it (or the choice of a fresh one) the first time. */
+  private async stateFor(chordId: string): Promise<ThreadState> {
+    const key = this.showing.get(chordId);
+    if (key && this.threads.has(key)) return this.threads.get(key)!;
+    const result = await this.persistence.duet({ op: 'threads', chordId, limit: THREADS_IN_MENU }).catch(() => ({ threads: [] as DuetThread[] }));
+    const threads = result.threads ?? [];
+    this.recent.set(chordId, threads.map((t) => ({ id: t.id, title: t.title, lastUsedAt: t.lastUsedAt })));
+    const { current, continueFrom } = threadToShow(threads, Date.now());
+    this.continueFrom.set(chordId, continueFrom ? { id: continueFrom.id, title: continueFrom.title } : null);
+    return current ? this.load(current.id, chordId) : this.fresh(chordId);
+  }
+
+  private fresh(chordId: string): ThreadState {
+    const key = `fresh:${chordId}`;
+    const state = this.blank(chordId, null);
+    this.threads.set(key, state);
+    this.showing.set(chordId, key);
+    return state;
+  }
+
+  private blank(chordId: string, thread: DuetThread | null): ThreadState {
+    return {
+      chordId,
+      thread,
+      messages: [],
+      refs: new Map(),
+      attached: new Set(),
+      grants: new Set(),
+      trusted: new Set(),
+      toolTexts: [],
+      read: new Set(),
+      queue: [],
+      streaming: null,
+      startedAt: null,
+      windowId: null,
+      pending: new Map(),
+      pendingDivider: null,
+      lastError: null,
+    };
+  }
+
+  private async load(threadId: string, chordId: string): Promise<ThreadState> {
+    const existing = this.threads.get(threadId);
+    if (existing) {
+      this.showing.set(chordId, threadId);
+      return existing;
+    }
+    const result = await this.persistence.duet({ op: 'thread', threadId });
+    const state = this.blank(chordId, result.thread ?? null);
+    state.messages = result.messages ?? [];
+    // Handles and attachments carry over, so earlier tabs stay readable and citations resolve.
+    for (const m of state.messages) {
+      if (m.body.role === 'user') {
+        for (const a of m.body.attachments) {
+          const node = this.nodeByUrl(chordId, a.url);
+          if (node) {
+            state.refs.set(a.ref, node);
+            state.attached.add(node);
+          }
+          state.trusted.add(a.url);
+        }
+        for (const url of urlsInText(m.body.text)) state.trusted.add(url);
+      }
+      // A reply cut off by quitting stays as it was, marked interrupted (with Retry).
+      if (m.body.role === 'assistant' && m.body.status === 'streaming') m.body = { ...m.body, status: 'interrupted' };
+    }
+    this.threads.set(threadId, state);
+    this.showing.set(chordId, threadId);
+    return state;
+  }
+
+  private nodeByUrl(chordId: string, url: string): NodeId | null {
+    for (const node of Object.values(this.browser.store.state.nodes)) if (node.kind === 'tab' && node.chordId === chordId && node.url === url) return node.id;
+    return null;
+  }
+
+  private activeTab(windowId: WindowId): TabNode | null {
+    const model = this.browser.store.state.windows[windowId];
+    const id = model ? model.activeTab[model.activeChordId] : null;
+    const node = id ? this.browser.store.state.nodes[id] : undefined;
+    return node?.kind === 'tab' ? node : null;
+  }
+
+  private readable(node: TabNode): boolean {
+    return !this.isPrivateChord(node.chordId) && !isNeverReadable(node.url, this.settings.neverSites);
+  }
+
+  /** The chips above the composer: the current tab (unless removed), then anything added. */
+  private attachments(windowId: WindowId): TabNode[] {
+    const panel = this.panel(windowId);
+    const out: TabNode[] = [];
+    const current = this.activeTab(windowId);
+    if (current && panel.removedCurrent !== current.id && this.readable(current)) out.push(current);
+    for (const id of panel.extra) {
+      const node = this.browser.store.state.nodes[id];
+      if (node?.kind === 'tab' && !out.includes(node) && this.readable(node)) out.push(node);
+    }
+    return out;
+  }
+
+  async view(windowId: WindowId): Promise<DuetView> {
+    const chordId = this.chordOf(windowId);
+    const settings = this.settings;
+    const privateWindow = chordId ? this.isPrivateChord(chordId) : false;
+    const base = {
+      enabled: settings.enabled && !privateWindow,
+      open: this.panel(windowId).open,
+      provider: settings.provider,
+      providers: (['claude', 'codex'] as const).map((p) => this.statuses[p] ?? { provider: p, installed: false, path: null, version: null, signedIn: null, billing: null, tooOld: false }),
+      chordOff: chordId ? settings.offChords.includes(chordId) : false,
+      firstUse: !this.firstUseSeen,
+    };
+    if (!chordId || privateWindow) return { ...base, thread: null, continueFrom: null, threads: [], messages: [], busy: false, startedAt: null, queue: [], attachments: [], attachable: [], readTabIds: [], error: null, draft: '' };
+    const state = await this.stateFor(chordId);
+    const nodes = this.browser.store.state.nodes;
+    const attachable = children(this.browser.store.state, chordId, 'pinned', null)
+      .concat(children(this.browser.store.state, chordId, 'today', null))
+      .filter((n): n is TabNode => n.kind === 'tab' && this.readable(n))
+      .map((n) => ({ nodeId: n.id, title: n.title || n.url, url: n.url }));
+    const current = this.activeTab(windowId);
+    return {
+      ...base,
+      thread: state.thread
+        ? { id: state.thread.id, title: state.thread.title, scope: state.thread.scope, provider: state.thread.provider, model: state.thread.model }
+        : { id: null, title: '', scope: settings.scope, provider: settings.provider ?? 'claude', model: settings.model },
+      continueFrom: state.thread ? null : (this.continueFrom.get(chordId) ?? null),
+      threads: this.recent.get(chordId) ?? [],
+      messages: state.streaming ? [...state.messages.filter((m) => m.id !== state.streaming!.id), state.streaming] : state.messages,
+      busy: Boolean(state.streaming),
+      startedAt: state.startedAt,
+      queue: state.queue,
+      attachments: this.attachments(windowId).map((n) => ({ nodeId: n.id, title: n.title || n.url, url: n.url, current: n.id === current?.id })),
+      attachable,
+      readTabIds: [...state.read].filter((id) => nodes[id]),
+      error: state.lastError,
+      draft: this.drafts[state.thread?.id ?? `fresh:${chordId}`] ?? '',
+    };
+  }
+
+  private schedulePush(): void {
+    if (this.pushTimer) return;
+    this.pushTimer = setTimeout(() => {
+      this.pushTimer = undefined;
+      void this.pushAll();
+    }, PUSH_MS);
+  }
+
+  private async pushAll(): Promise<void> {
+    for (const w of this.browser.allWindows) {
+      if (w.window.isDestroyed()) continue;
+      const view = await this.view(w.id);
+      w.setDuetWidth(view.enabled && view.open ? this.browser.duetWidth : 0);
+      send(w.shell.webContents, 'duet:state', view);
+    }
+  }
+
+  /* ---------- Actions from the panel ---------- */
+
+  async act(windowId: WindowId, action: DuetAction): Promise<void> {
+    const chordId = this.chordOf(windowId);
+    switch (action.do) {
+      case 'toggle': {
+        const panel = this.panel(windowId);
+        panel.open = action.open ?? !panel.open;
+        if (panel.open) void this.refreshProviders();
+        break;
+      }
+      case 'dismissFirstUse':
+        this.firstUseSeen = true;
+        void this.savePanel();
+        break;
+      case 'setup':
+        this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { provider: action.provider } } });
+        break;
+      case 'signIn': {
+        const status = this.statuses[action.provider] ?? (await detect(action.provider));
+        if (status.path) openSignIn(action.provider, status.path);
+        break;
+      }
+      case 'refresh':
+        await this.refreshProviders();
+        break;
+      default:
+        if (!chordId || this.isPrivateChord(chordId)) return;
+        await this.threadAction(windowId, chordId, action);
+    }
+    this.schedulePush();
+  }
+
+  private async threadAction(windowId: WindowId, chordId: string, action: DuetAction): Promise<void> {
+    const state = await this.stateFor(chordId);
+    const panel = this.panel(windowId);
+    switch (action.do) {
+      case 'send':
+        return this.send(windowId, state, action.text);
+      case 'stop':
+        state.queue = [];
+        if (state.thread) this.live.get(state.thread.id)?.session.stop();
+        return;
+      case 'retry': {
+        const lastUser = [...state.messages].reverse().find((m) => m.body.role === 'user');
+        if (lastUser?.body.role === 'user') return this.send(windowId, state, lastUser.body.text, lastUser.body.attachments);
+        return;
+      }
+      case 'unqueue':
+        state.queue.splice(action.index, 1);
+        return;
+      case 'approve': {
+        const resolve = state.pending.get(action.messageId);
+        state.pending.delete(action.messageId);
+        resolve?.(action.decision);
+        return;
+      }
+      case 'undo':
+        return this.undo(windowId, state, action.messageId);
+      case 'new':
+        this.close(state);
+        this.continueFrom.set(chordId, state.thread ? { id: state.thread.id, title: state.thread.title } : (this.continueFrom.get(chordId) ?? null));
+        this.fresh(chordId);
+        return;
+      case 'open':
+        await this.load(action.threadId, chordId);
+        return;
+      case 'continue': {
+        const from = this.continueFrom.get(chordId);
+        if (from) await this.load(from.id, chordId);
+        return;
+      }
+      case 'delete':
+        return this.deleteThread(chordId, action.threadId);
+      case 'rename':
+        if (state.thread && state.thread.id === action.threadId) {
+          state.thread.title = action.title.trim().slice(0, 80) || state.thread.title;
+          await this.saveThread(state.thread);
+          await this.refreshRecent(chordId);
+        }
+        return;
+      case 'scope':
+        if (state.thread) {
+          state.thread.scope = action.scope;
+          await this.saveThread(state.thread);
+        } else {
+          this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { scope: action.scope } } });
+        }
+        return;
+      case 'model':
+        return this.setModel(state, action.provider, action.model);
+      case 'attach':
+        if (!panel.extra.includes(action.nodeId)) panel.extra.push(action.nodeId);
+        if (panel.removedCurrent === action.nodeId) panel.removedCurrent = null;
+        return;
+      case 'detach': {
+        panel.extra = panel.extra.filter((id) => id !== action.nodeId);
+        if (this.activeTab(windowId)?.id === action.nodeId) panel.removedCurrent = action.nodeId;
+        return;
+      }
+      case 'draft':
+        this.drafts[state.thread?.id ?? `fresh:${chordId}`] = action.text.slice(0, 20_000);
+        void this.savePanel();
+        return;
+      case 'citation':
+        return this.openCitation(windowId, state, action.messageId, action.n);
+      case 'export':
+        return this.exportThread(state);
+    }
+  }
+
+  private async setModel(state: ThreadState, provider: DuetProvider, model: string | null): Promise<void> {
+    if (!state.thread) {
+      this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { provider, model } } });
+      return;
+    }
+    const switched = state.thread.provider !== provider;
+    state.thread.provider = provider;
+    state.thread.model = model;
+    if (switched) {
+      // A different provider can't resume the other's session: it starts primed with a summary.
+      this.close(state);
+      state.thread.providerSessionId = null;
+      state.pendingDivider = `Switched to ${provider === 'claude' ? 'Claude Code' : 'Codex'}`;
+    } else {
+      this.close(state);
+    }
+    await this.saveThread(state.thread);
+  }
+
+  /* ---------- Sending and sessions ---------- */
+
+  private async send(windowId: WindowId, state: ThreadState, text: string, reuse?: DuetAttachment[]): Promise<void> {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (state.streaming) {
+      // Follow-ups wait their turn instead of being refused (they show as queued).
+      state.queue.push(trimmed);
+      return;
+    }
+    const provider = state.thread?.provider ?? this.settings.provider;
+    if (!provider) return;
+    const now = Date.now();
+    if (!state.thread) {
+      const thread: DuetThread = {
+        id: uuidv7(),
+        chordId: state.chordId,
+        title: threadTitle(trimmed),
+        provider,
+        model: this.settings.model,
+        providerSessionId: null,
+        scope: this.settings.scope,
+        createdAt: now,
+        updatedAt: now,
+        lastUsedAt: now,
+      };
+      state.thread = thread;
+      this.threads.delete(`fresh:${state.chordId}`);
+      this.threads.set(thread.id, state);
+      this.showing.set(state.chordId, thread.id);
+      const draftKey = `fresh:${state.chordId}`;
+      delete this.drafts[draftKey];
+      this.continueFrom.set(state.chordId, null);
+      await this.saveThread(thread);
+    }
+    const thread = state.thread;
+    state.windowId = windowId;
+    state.lastError = null;
+
+    const attachments: DuetAttachment[] = reuse ?? this.attachments(windowId).map((node) => ({ ref: this.refFor(state, node.id), url: node.url, title: node.title || node.url }));
+    for (const a of attachments) {
+      const node = state.refs.get(a.ref);
+      if (node) state.attached.add(node);
+      state.trusted.add(a.url);
+    }
+    for (const url of urlsInText(trimmed)) state.trusted.add(url);
+
+    if (state.pendingDivider) {
+      await this.addMessage(state, { role: 'divider', text: state.pendingDivider });
+      state.pendingDivider = null;
+    }
+    await this.addMessage(state, { role: 'user', text: trimmed, attachments });
+    delete this.drafts[thread.id];
+    thread.lastUsedAt = now;
+    thread.updatedAt = now;
+    await this.saveThread(thread);
+    void this.refreshRecent(state.chordId);
+
+    state.streaming = { id: uuidv7(), threadId: thread.id, createdAt: Date.now(), body: { role: 'assistant', text: '', citations: [], status: 'streaming' } };
+    state.startedAt = Date.now();
+    this.schedulePush();
+    const session = await this.sessionFor(state);
+    if (!session) {
+      await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Duet couldn't start. Check Settings → Duet." } });
+      return;
+    }
+    session.send(userTurnText(trimmed, attachments));
+  }
+
+  private refFor(state: ThreadState, nodeId: NodeId): string {
+    for (const [ref, id] of state.refs) if (id === nodeId) return ref;
+    const ref = `t${state.refs.size + 1}`;
+    state.refs.set(ref, nodeId);
+    return ref;
+  }
+
+  private async sessionFor(state: ThreadState, summary?: string): Promise<DuetSession | null> {
+    const thread = state.thread!;
+    const existing = this.live.get(thread.id);
+    if (existing?.session.alive) {
+      this.touch(thread.id, existing);
+      return existing.session;
+    }
+    const status = this.statuses[thread.provider] ?? (await detect(thread.provider));
+    this.statuses[thread.provider] = status;
+    if (!status.installed || !status.path) {
+      state.lastError = { kind: 'other', message: `${thread.provider === 'claude' ? 'Claude Code' : 'Codex'} isn't installed. Settings → Duet shows how to set it up.` };
+      return null;
+    }
+    // At most a few CLI processes: the least recently used idle one makes room.
+    if (this.live.size >= DUET_MAX_PROCESSES) {
+      const idle = [...this.live.entries()].filter(([, l]) => !l.session.busy).sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0];
+      if (idle) this.drop(idle[0]);
+    }
+    const instructions = duetInstructions(summary);
+    const instructionsFile = join(this.root, 'instructions', `${thread.id}.md`);
+    await writeFile(instructionsFile, instructions, { encoding: 'utf8', mode: 0o600 });
+    const resumeId = summary ? null : thread.providerSessionId;
+    const options = {
+      launch: launchFor(status.path),
+      cwd: join(this.root, 'empty'),
+      model: thread.model,
+      instructions,
+      instructionsFile,
+      resumeId,
+      newSessionId: randomUUID(),
+      tools: DUET_TOOLS,
+    };
+    let resumeFailed = false;
+    const events = {
+      onSessionId: (id: string) => {
+        if (thread.providerSessionId !== id) {
+          thread.providerSessionId = id;
+          void this.saveThread(thread);
+        }
+      },
+      onText: (delta: string) => {
+        if (!state.streaming || state.streaming.body.role !== 'assistant') return;
+        state.streaming.body = { ...state.streaming.body, text: state.streaming.body.text + delta };
+        this.schedulePush();
+      },
+      onTool: (name: string, args: Record<string, unknown>) => this.runTool(state, name, args),
+      onTurnEnd: (outcome: { status: 'done' | 'interrupted' | 'error'; error?: ProviderError }) => void this.finishTurn(state, outcome),
+      onExit: (error: ProviderError | null) => {
+        this.live.delete(thread.id);
+        if (error?.kind === 'resume-failed') {
+          resumeFailed = true;
+          void this.fallBack(state);
+          return;
+        }
+        if (error && state.streaming) void this.finishTurn(state, { status: 'error', error });
+      },
+    };
+    const session = thread.provider === 'claude' ? new ClaudeSession(options, events) : new CodexSession(options, events);
+    if (resumeFailed) return null;
+    const live: Live = { session, lastUsed: Date.now(), idle: undefined };
+    this.live.set(thread.id, live);
+    this.touch(thread.id, live);
+    return session;
+  }
+
+  /** The stored session is gone (deleted, CLI upgraded, other provider): start again from a summary. */
+  private async fallBack(state: ThreadState): Promise<void> {
+    const thread = state.thread!;
+    thread.providerSessionId = null;
+    await this.saveThread(thread);
+    const lastUser = [...state.messages].reverse().find((m) => m.body.role === 'user');
+    const earlier = state.messages.filter((m) => m !== lastUser);
+    // The divider goes before the message that's being answered again.
+    if (lastUser) {
+      const index = state.messages.indexOf(lastUser);
+      const divider: DuetMessage = { id: uuidv7(), threadId: thread.id, createdAt: lastUser.createdAt - 1, body: { role: 'divider', text: 'Continued with a summary' } };
+      state.messages.splice(index, 0, divider);
+      await this.persistence.duet({ op: 'saveMessage', message: divider }).catch(() => undefined);
+    }
+    const session = await this.sessionFor(state, transcriptSummary(earlier) || undefined);
+    if (session && lastUser?.body.role === 'user') session.send(userTurnText(lastUser.body.text, lastUser.body.attachments));
+    else if (!session) await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Duet couldn't start." } });
+  }
+
+  private touch(threadId: string, live: Live): void {
+    live.lastUsed = Date.now();
+    clearTimeout(live.idle);
+    live.idle = setTimeout(() => {
+      if (!live.session.busy) this.drop(threadId);
+    }, DUET_PROCESS_IDLE_MS);
+    live.idle.unref?.();
+  }
+
+  private drop(threadId: string): void {
+    const live = this.live.get(threadId);
+    if (!live) return;
+    clearTimeout(live.idle);
+    this.live.delete(threadId);
+    live.session.close();
+  }
+
+  private close(state: ThreadState): void {
+    if (state.thread) this.drop(state.thread.id);
+  }
+
+  private async finishTurn(state: ThreadState, outcome: { status: 'done' | 'interrupted' | 'error'; error?: ProviderError }): Promise<void> {
+    const streaming = state.streaming;
+    if (!streaming || streaming.body.role !== 'assistant') return;
+    state.streaming = null;
+    state.startedAt = null;
+    for (const resolve of state.pending.values()) resolve('denied');
+    state.pending.clear();
+    const text = streaming.body.text;
+    const citations: DuetCitation[] = [];
+    for (const seg of splitCitations(text)) {
+      if (seg.kind !== 'citation' || citations.some((c) => c.n === seg.n)) continue;
+      const nodeId = state.refs.get(seg.ref) ?? null;
+      const node = nodeId ? this.browser.store.state.nodes[nodeId] : undefined;
+      citations.push({ n: seg.n, ref: seg.ref, quote: seg.quote, url: node?.kind === 'tab' ? node.url : '', title: node?.kind === 'tab' ? node.title : '', tabId: node ? nodeId : null });
+    }
+    const body: DuetMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}) };
+    if (outcome.status === 'error') state.lastError = outcome.error ?? null;
+    if (text.trim() || outcome.status !== 'done') {
+      const message = { ...streaming, body };
+      state.messages.push(message);
+      await this.persistence.duet({ op: 'saveMessage', message }).catch(() => undefined);
+    }
+    if (state.thread) {
+      state.thread.updatedAt = Date.now();
+      state.thread.lastUsedAt = Date.now();
+      await this.saveThread(state.thread);
+      const live = this.live.get(state.thread.id);
+      if (live) this.touch(state.thread.id, live);
+    }
+    this.schedulePush();
+    const next = state.queue.shift();
+    if (next && state.windowId && outcome.status !== 'error') void this.send(state.windowId, state, next);
+  }
+
+  private async addMessage(state: ThreadState, body: DuetMessageBody): Promise<DuetMessage> {
+    const message: DuetMessage = { id: uuidv7(), threadId: state.thread!.id, createdAt: Date.now(), body };
+    state.messages.push(message);
+    await this.persistence.duet({ op: 'saveMessage', message }).catch(() => undefined);
+    this.schedulePush();
+    return message;
+  }
+
+  private async updateMessage(message: DuetMessage, body: DuetMessageBody): Promise<void> {
+    message.body = body;
+    await this.persistence.duet({ op: 'saveMessage', message }).catch(() => undefined);
+    this.schedulePush();
+  }
+
+  private async saveThread(thread: DuetThread): Promise<void> {
+    await this.persistence.duet({ op: 'saveThread', thread }).catch(() => undefined);
+  }
+
+  private async refreshRecent(chordId: string): Promise<void> {
+    const result = await this.persistence.duet({ op: 'threads', chordId, limit: THREADS_IN_MENU }).catch(() => ({ threads: [] as DuetThread[] }));
+    this.recent.set(chordId, (result.threads ?? []).map((t) => ({ id: t.id, title: t.title, lastUsedAt: t.lastUsedAt })));
+    this.schedulePush();
+  }
+
+  /* ---------- Tools ---------- */
+
+  /** Ask in the thread (an approval card), and keep the answer as a record. */
+  private async ask(state: ThreadState, tool: string, description: string, target: string[], reason: string | undefined, tainted = false): Promise<{ decision: Decision; message: DuetMessage }> {
+    const message = await this.addMessage(state, { role: 'approval', tool, description, target, ...(reason ? { reason } : {}), ...(tainted ? { tainted: true } : {}), decision: 'pending' });
+    const decision = await new Promise<Decision>((resolve) => state.pending.set(message.id, resolve));
+    if (decision === 'thread' && !tainted) state.grants.add(tool);
+    if (message.body.role === 'approval') await this.updateMessage(message, { ...message.body, decision });
+    return { decision, message };
+  }
+
+  private async activity(state: ThreadState, tool: string, summary: string, detail = '', ok = true): Promise<void> {
+    await this.addMessage(state, { role: 'tool', tool, summary, detail, ok });
+  }
+
+  private resolveTab(state: ThreadState, ref: unknown): TabNode | null {
+    const id = typeof ref === 'string' ? state.refs.get(ref) : undefined;
+    const node = id ? this.browser.store.state.nodes[id] : undefined;
+    return node?.kind === 'tab' ? node : null;
+  }
+
+  private tabsInScope(state: ThreadState): TabNode[] {
+    const scope: DuetScope = state.thread?.scope ?? 'ask';
+    const nodes = Object.values(this.browser.store.state.nodes).filter((n): n is TabNode => n.kind === 'tab' && this.readable(n));
+    return scope === 'all' ? nodes : nodes.filter((n) => n.chordId === state.chordId);
+  }
+
+  private async runTool(state: ThreadState, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
+    const spec = duetTool(name);
+    if (!spec || !state.thread) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
+    try {
+      if (spec.tier === 0) return await this.readTool(state, spec.name, args);
+      return await this.organizeTool(state, spec.name, args);
+    } catch (error) {
+      return { text: toolResult({ error: error instanceof Error ? error.message : String(error) }, false), isError: true };
+    }
+  }
+
+  private async readTool(state: ThreadState, tool: DuetToolName, args: Record<string, unknown>): Promise<ToolOutput> {
+    const thread = state.thread!;
+    const refuse = (why: string) => ({ text: toolResult({ refused: why }, false), isError: true });
+    if (tool === 'list_tabs' || tool === 'search_history' || tool === 'search_archive') {
+      if (readNeedsApproval({ scope: thread.scope, attached: false, sameChord: true, tool, granted: state.grants.has(tool) })) {
+        const what = tool === 'list_tabs' ? 'See the list of your tabs' : tool === 'search_history' ? `Search your history for “${String(args['query'] ?? '')}”` : `Search your archive for “${String(args['query'] ?? '')}”`;
+        const { decision } = await this.ask(state, tool, what, [], undefined);
+        if (decision === 'denied') return refuse('The user said no to this. Carry on without it, or ask them.');
+      }
+      if (tool === 'list_tabs') {
+        const tabs = this.tabsInScope(state).map((n) => {
+          state.trusted.add(n.url);
+          return { tab_id: this.refFor(state, n.id), title: n.title, site: safeHost(n.url), attached: state.attached.has(n.id) };
+        });
+        await this.activity(state, tool, `Listed ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`);
+        return { text: toolResult({ tabs }) };
+      }
+      const query = String(args['query'] ?? '').slice(0, 200);
+      if (tool === 'search_history') {
+        const result = await this.persistence.search(query, state.chordId);
+        const hits = result.history.slice(0, 20).map((h) => {
+          state.trusted.add(h.url);
+          return { title: h.title, url: h.url, last_visit: new Date(h.lastVisitAt).toISOString() };
+        });
+        await this.activity(state, tool, `Searched history for “${query}”`, `${hits.length} found`);
+        return { text: toolResult({ results: hits }) };
+      }
+      const page = await this.persistence.archiveList(query, 20);
+      const hits = page.items.map((a) => {
+        state.trusted.add(a.url);
+        return { title: a.title, url: a.url, archived: new Date(a.archivedAt).toISOString() };
+      });
+      await this.activity(state, tool, `Searched the archive for “${query}”`, `${hits.length} found`);
+      return { text: toolResult({ results: hits }) };
+    }
+
+    // read_tab, read_selection, tab_screenshot
+    const node = tool === 'read_selection' && args['tab_id'] === undefined ? this.firstAttached(state) : this.resolveTab(state, args['tab_id']);
+    if (!node) return refuse('No such tab. Use list_tabs or an attached tab id.');
+    if (!this.readable(node)) return refuse('Duet can never read this page (a private window, a Chord page, or a site the user keeps private).');
+    const needs = readNeedsApproval({ scope: thread.scope, attached: state.attached.has(node.id), sameChord: node.chordId === state.chordId, tool, granted: state.grants.has(`read:${node.id}`) || state.grants.has(tool) });
+    if (needs) {
+      const verb = tool === 'tab_screenshot' ? 'Take a picture of' : 'Read';
+      const { decision } = await this.ask(state, tool, `${verb} “${node.title || safeHost(node.url)}”`, [node.url], undefined);
+      if (decision === 'denied') return refuse('The user said no to reading that tab. Carry on without it, or ask them.');
+      if (decision === 'thread') state.grants.add(tool);
+    }
+    const contents = await this.loadedContents(node.id);
+    if (!contents) return refuse('That tab could not be loaded.');
+    state.read.add(node.id);
+    const ref = this.refFor(state, node.id);
+    if (tool === 'tab_screenshot') {
+      const shot = await screenshot(contents);
+      await this.activity(state, tool, `Looked at “${node.title || safeHost(node.url)}”`, node.url, Boolean(shot));
+      return shot ? { image: shot } : refuse('Could not take the picture.');
+    }
+    const page = await readPage(contents);
+    if (!page) return refuse('That page could not be read.');
+    if (tool === 'read_selection') {
+      await this.activity(state, tool, `Read your selection in “${node.title || safeHost(node.url)}”`, node.url);
+      const text = pageResult({ ref, url: page.url, text: page.selection, retrievedAt: Date.now() });
+      state.toolTexts.push(page.selection.slice(0, 20_000));
+      return { text };
+    }
+    const start = typeof args['start'] === 'number' ? args['start'] : 0;
+    const length = typeof args['length'] === 'number' ? args['length'] : undefined;
+    const text = pageResult({ ref, url: page.url, text: page.text, start, ...(length ? { length } : {}), retrievedAt: Date.now() });
+    state.toolTexts.push(page.text.slice(0, 40_000));
+    await this.activity(state, tool, `Read “${node.title || safeHost(node.url)}”`, node.url);
+    return { text };
+  }
+
+  private firstAttached(state: ThreadState): TabNode | null {
+    for (const id of state.attached) {
+      const node = this.browser.store.state.nodes[id];
+      if (node?.kind === 'tab') return node;
+    }
+    return null;
+  }
+
+  /** The tab's page, loading it if it's asleep or wasn't opened since launch. */
+  private async loadedContents(nodeId: NodeId) {
+    const view = this.browser.tabs.ensure(nodeId);
+    const contents = view?.webContents;
+    if (!contents) return null;
+    if (contents.isLoading()) {
+      await new Promise<void>((done) => {
+        const timer = setTimeout(done, 15_000);
+        contents.once('did-stop-loading', () => {
+          clearTimeout(timer);
+          done();
+        });
+      });
+    }
+    return contents.isDestroyed() ? null : contents;
+  }
+
+  private async organizeTool(state: ThreadState, tool: DuetToolName, args: Record<string, unknown>): Promise<ToolOutput> {
+    const store = this.browser.store;
+    const reason = typeof args['reason'] === 'string' ? args['reason'].slice(0, 300) : undefined;
+    const tabs = (Array.isArray(args['tab_ids']) ? args['tab_ids'] : [])
+      .map((ref) => this.resolveTab(state, ref))
+      .filter((n): n is TabNode => n !== null && n.chordId === state.chordId && !this.isPrivateChord(n.chordId));
+    const named = tabs.map((n) => n.title || n.url);
+    const refuse = (why: string) => ({ text: toolResult({ refused: why }, false), isError: true });
+    const windowId = state.windowId ?? this.browser.allWindows.find((w) => store.state.windows[w.id]?.activeChordId === state.chordId)?.id ?? null;
+    const position = (n: TabNode) => {
+      const siblings = children(store.state, n.chordId, n.section, n.parentId);
+      return { nodeId: n.id, section: n.section, parentId: n.parentId, index: Math.max(0, siblings.findIndex((s) => s.id === n.id)) };
+    };
+
+    let description: string;
+    let tainted = false;
+    let url = '';
+    switch (tool) {
+      case 'create_folder':
+        if (tabs.length === 0) return refuse('None of those tabs are in this chord.');
+        description = `Create folder “${String(args['title'] ?? 'New folder').slice(0, 80)}” with ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`;
+        break;
+      case 'move_tabs':
+        if (tabs.length === 0) return refuse('None of those tabs are in this chord.');
+        description = `Move ${tabs.length} tab${tabs.length === 1 ? '' : 's'} to ${args['to'] === 'pinned' ? 'Pinned' : 'Today'}`;
+        break;
+      case 'close_tabs':
+        if (tabs.length === 0) return refuse('None of those tabs are in this chord.');
+        description = `Close ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`;
+        break;
+      default: {
+        url = String(args['url'] ?? '');
+        let parsed: URL;
+        try {
+          parsed = new URL(url);
+        } catch {
+          return refuse('That is not a web address.');
+        }
+        if (!/^https?:$/.test(parsed.protocol)) return refuse('Duet only opens web addresses.');
+        const taint = urlTaint(parsed.href, state.trusted, state.toolTexts);
+        tainted = taint.tainted;
+        description = `Open ${parsed.href}`;
+      }
+    }
+    // Rule of Two: anything that changes the browser asks, unless allowed for this chat (never for a tainted URL).
+    if (tainted || !state.grants.has(tool)) {
+      const { decision } = await this.ask(state, tool, description, tool === 'open_tab' ? [url] : named, reason, tainted);
+      if (decision === 'denied') return refuse('The user said no. Do not try again unless they ask.');
+    }
+
+    let undo: DuetUndo;
+    if (tool === 'create_folder') {
+      const before = tabs.map(position);
+      const folderId = uuidv7();
+      store.dispatch({ t: 'folder.create', folderId, chordId: state.chordId, title: String(args['title'] ?? 'New folder').slice(0, 80), tabId: tabs[0]!.id });
+      for (const tab of tabs.slice(1)) store.dispatch({ t: 'node.move', nodeId: tab.id, section: 'pinned', index: Number.MAX_SAFE_INTEGER, parentId: folderId });
+      undo = { kind: 'move', moves: before, deleteFolderId: folderId };
+    } else if (tool === 'move_tabs') {
+      const before = tabs.map(position);
+      const section = args['to'] === 'pinned' ? 'pinned' : 'today';
+      for (const tab of tabs) store.dispatch({ t: 'node.move', nodeId: tab.id, section, index: Number.MAX_SAFE_INTEGER, parentId: null });
+      undo = { kind: 'move', moves: before };
+    } else if (tool === 'close_tabs') {
+      if (!windowId) return refuse('No window to act in.');
+      for (const tab of tabs) store.dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
+      undo = { kind: 'reopen', tabs: tabs.map((t) => ({ url: t.url, title: t.title })) };
+    } else {
+      if (!windowId) return refuse('No window to act in.');
+      const before = new Set(Object.keys(store.state.nodes));
+      store.dispatch({ t: 'tab.open', windowId, url, background: args['background'] !== false });
+      const opened = Object.keys(store.state.nodes).filter((id) => !before.has(id));
+      undo = { kind: 'close', tabIds: opened };
+    }
+    // The record stays with the approval: Undo puts things back.
+    const record = [...state.messages].reverse().find((m) => m.body.role === 'approval' && m.body.tool === tool);
+    if (record?.body.role === 'approval') await this.updateMessage(record, { ...record.body, undo });
+    await this.activity(state, tool, description);
+    return { text: toolResult({ done: description }, false) };
+  }
+
+  private async undo(windowId: WindowId, state: ThreadState, messageId: string): Promise<void> {
+    const message = state.messages.find((m) => m.id === messageId);
+    if (message?.body.role !== 'approval' || !message.body.undo || message.body.undone) return;
+    const undo = message.body.undo;
+    const store = this.browser.store;
+    if (undo.kind === 'reopen') {
+      for (const tab of undo.tabs) store.dispatch({ t: 'tab.open', windowId, url: tab.url, background: true });
+    } else if (undo.kind === 'close') {
+      for (const id of undo.tabIds) if (store.state.nodes[id]) store.dispatch({ t: 'tab.close', windowId, nodeId: id });
+    } else {
+      for (const move of [...undo.moves].reverse()) store.dispatch({ t: 'node.move', nodeId: move.nodeId, section: move.section, index: move.index, parentId: move.parentId });
+      if (undo.deleteFolderId && store.state.nodes[undo.deleteFolderId]) {
+        const left = Object.values(store.state.nodes).some((n) => n.parentId === undo.deleteFolderId);
+        if (!left) store.dispatch({ t: 'folder.delete', nodeId: undo.deleteFolderId });
+      }
+    }
+    await this.updateMessage(message, { ...message.body, undone: true });
+  }
+
+  /* ---------- Citations, export ---------- */
+
+  private async openCitation(windowId: WindowId, state: ThreadState, messageId: string, n: number): Promise<void> {
+    const message = state.messages.find((m) => m.id === messageId);
+    if (message?.body.role !== 'assistant') return;
+    const citation = message.body.citations.find((c) => c.n === n);
+    if (!citation) return;
+    const node = citation.tabId ? this.browser.store.state.nodes[citation.tabId] : undefined;
+    if (node?.kind === 'tab') {
+      this.browser.store.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
+      const contents = await this.loadedContents(node.id);
+      // Scroll to the quote and mark it, as find in page does.
+      if (contents) contents.findInPage(citation.quote, { findNext: false });
+      return;
+    }
+    if (citation.url) this.browser.store.dispatch({ t: 'tab.open', windowId, url: textFragmentUrl(citation.url, citation.quote) });
+  }
+
+  private async exportThread(state: ThreadState): Promise<void> {
+    if (!state.thread) return;
+    const lines = [`# ${state.thread.title}`, ''];
+    for (const m of state.messages) {
+      if (m.body.role === 'user') lines.push(`**You:** ${m.body.text}`, '');
+      else if (m.body.role === 'assistant') {
+        lines.push(`**Duet:** ${stripCitations(m.body.text)}`, '');
+        for (const c of m.body.citations) lines.push(`[${c.n}] ${c.title} — ${c.url} — “${c.quote}”`);
+        if (m.body.citations.length) lines.push('');
+      } else if (m.body.role === 'approval') lines.push(`*${m.body.description}: ${m.body.decision}*`, '');
+    }
+    const { downloadsDir } = await import('../downloads');
+    const safe = state.thread.title.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60) || 'Duet chat';
+    const file = join(downloadsDir(), `${safe}.md`);
+    await writeFile(file, lines.join('\n'), 'utf8');
+    const shell = state.windowId ? this.browser.window(state.windowId)?.shell.webContents : undefined;
+    if (shell) send(shell, 'toast:show', { id: `duet-export:${state.thread.id}`, message: `Saved “${safe}.md” to Downloads` });
+  }
+
+  /* ---------- Deleting ---------- */
+
+  private async deleteThread(chordId: string, threadId: string): Promise<void> {
+    const state = this.threads.get(threadId);
+    if (state) {
+      this.close(state);
+      this.threads.delete(threadId);
+    }
+    const removed = (await this.persistence.duet({ op: 'deleteThread', threadId }).catch(() => ({ removed: [] }))).removed ?? [];
+    for (const thread of removed) await this.deleteProviderCopy(thread);
+    delete this.drafts[threadId];
+    if (this.showing.get(chordId) === threadId) this.fresh(chordId);
+    await this.refreshRecent(chordId);
+  }
+
+  async clearAll(): Promise<void> {
+    for (const id of [...this.live.keys()]) this.drop(id);
+    this.threads.clear();
+    this.showing.clear();
+    const removed = (await this.persistence.duet({ op: 'deleteAll' }).catch(() => ({ removed: [] }))).removed ?? [];
+    for (const thread of removed) await this.deleteProviderCopy(thread);
+    this.recent.clear();
+    this.drafts = {};
+    void this.savePanel();
+    this.schedulePush();
+  }
+
+  /**
+   * "Delete really deletes": the provider's own copy of a thread, by its exact
+   * session id. Claude keeps it under Chord's working-directory project folder;
+   * Codex deletes its rollout through its own API. Nothing else is read.
+   */
+  async deleteProviderCopy(thread: DuetThread): Promise<void> {
+    const id = thread.providerSessionId;
+    if (!id || !/^[A-Za-z0-9-]{8,80}$/.test(id)) return;
+    if (thread.provider === 'claude') {
+      const folder = join(claudeConfigDir(), 'projects', claudeProjectFolder(join(this.root, 'empty')));
+      await rm(join(folder, `${id}.jsonl`), { force: true }).catch(() => undefined);
+      await rm(join(folder, id), { recursive: true, force: true }).catch(() => undefined);
+      return;
+    }
+    const status = this.statuses.codex ?? (await detect('codex'));
+    if (!status.path) return;
+    await new Promise<void>((done) => {
+      const session = new CodexSession(
+        { launch: launchFor(status.path!), cwd: join(this.root, 'empty'), model: null, instructions: '', instructionsFile: '', resumeId: '__delete_only__', newSessionId: '', tools: [] },
+        { onSessionId: () => undefined, onText: () => undefined, onTool: async () => ({}), onTurnEnd: () => undefined, onExit: () => done() },
+      );
+      const timer = setTimeout(() => session.close(), 10_000);
+      void session.deleteThread(id).finally(() => {
+        clearTimeout(timer);
+        session.close();
+      });
+    });
+  }
+
+  /* ---------- Providers, settings ---------- */
+
+  async refreshProviders(): Promise<ProviderStatus[]> {
+    const [claude, codex] = await Promise.all([detect('claude'), detect('codex')]);
+    this.statuses = { claude, codex };
+    this.schedulePush();
+    return [claude, codex];
+  }
+
+  get providerStatuses(): ProviderStatus[] {
+    return [this.statuses.claude, this.statuses.codex].filter((s): s is ProviderStatus => Boolean(s));
+  }
+
+  private async savePanel(): Promise<void> {
+    await writeFile(join(this.root, 'panel.json'), JSON.stringify({ drafts: this.drafts, firstUseSeen: this.firstUseSeen }), { encoding: 'utf8', mode: 0o600 }).catch(() => undefined);
+  }
+
+  /** Quitting: replies in flight are kept as interrupted, and every provider process ends. */
+  async quit(): Promise<void> {
+    for (const state of this.threads.values()) {
+      if (state.streaming && state.streaming.body.role === 'assistant' && state.thread) {
+        const message = { ...state.streaming, body: { ...state.streaming.body, status: 'interrupted' as const } };
+        await this.persistence.duet({ op: 'saveMessage', message }).catch(() => undefined);
+      }
+    }
+    for (const id of [...this.live.keys()]) this.drop(id);
+  }
+
+  /** Command bar @duet. */
+  async search(query: string) {
+    const result = await this.persistence.duet({ op: 'search', query, limit: 20 }).catch(() => ({ hits: [] }));
+    return result.hits ?? [];
+  }
+
+  /** Open a thread found by @duet in this window, on its chord. */
+  async openHit(windowId: WindowId, chordId: string, threadId: string): Promise<void> {
+    if (!this.browser.store.state.chords[chordId]) return;
+    this.browser.store.dispatch({ t: 'chord.activate', windowId, chordId });
+    await this.load(threadId, chordId);
+    this.panel(windowId).open = true;
+    this.schedulePush();
+  }
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
+  }
+}

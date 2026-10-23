@@ -19,6 +19,7 @@ const api: SettingsApi = {
     copyText: (text) => invoke('settings:copyText', { text }),
     chordSignIns: (chordId, separate) => invoke('settings:chordSignIns', { chordId, separate }),
     defaultBrowser: () => invoke('settings:defaultBrowser'),
+    duet: (request) => invoke('settings:duet', request),
     makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),
     updateStatus: () => invoke('settings:updateStatus'),
     checkForUpdates: () => invoke('settings:checkForUpdates'),

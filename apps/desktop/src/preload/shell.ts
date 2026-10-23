@@ -29,6 +29,7 @@ const api: ShellApi = {
   },
   chords: { onEdit: (listener) => subscribe('chord:edit', listener) },
   toasts: { onShow: (listener) => subscribe('toast:show', listener) },
+  duet: { view: () => invoke('duet:view'), act: (action) => invoke('duet:do', action), onState: (listener) => subscribe('duet:state', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
   extensions: {
     state: () => invoke('extensions:state'),

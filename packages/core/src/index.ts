@@ -1,4 +1,5 @@
 export * from './idle';
+export * from './duet';
 export * from './ids';
 export * from './input';
 export * from './keywords';

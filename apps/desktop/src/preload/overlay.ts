@@ -13,6 +13,10 @@ const api: OverlayApi = {
   },
   action: { run: (action) => invoke('action:run', { action }) },
   downloads: downloadsApi,
+  duet: {
+    search: (query) => invoke('duet:search', { query }),
+    open: (chordId, threadId) => invoke('duet:openHit', { chordId, threadId }),
+  },
   history: {
     search: (query) => invoke('history:search', { query }),
     choose: (text, destination, address) => invoke('history:choose', address ? { text, destination, address } : { text, destination }),

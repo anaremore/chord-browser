@@ -18,6 +18,7 @@ import type {
   State,
   WindowModel,
 } from '@chord/core';
+import type { DuetOp, DuetResult } from './duet';
 
 /** The latest value of one saved entity, or null to delete it. */
 export type WriteOp =
@@ -97,11 +98,13 @@ export type DataRequest =
   | { id: number; type: 'archive.get'; archiveId: string }
   /** The newest entry archived for one of these reasons (⌘⇧T after a restart). */
   | { id: number; type: 'archive.latest'; reasons: ArchiveReason[] }
+  /** Duet's threads and messages (./duet.ts). */
+  | { id: number; type: 'duet'; op: DuetOp }
   | { id: number; type: 'close' };
 
 /** chord-data → main. */
 export type DataResponse =
-  | { id: number; ok: true; saved?: PersistedState | null; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null }
+  | { id: number; ok: true; saved?: PersistedState | null; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult }
   | { id: number; ok: false; error: string };
 
 /** The part of an Immer patch this needs. */
@@ -197,3 +200,5 @@ export function opsForState(state: State): WriteOp[] {
   ];
   return ops.filter((op) => !isPrivate(op, state));
 }
+
+export type { DuetOp, DuetResult } from './duet';

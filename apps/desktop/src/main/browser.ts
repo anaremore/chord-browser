@@ -28,6 +28,7 @@ import {
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
 import type { ArchiveSnapshot, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
+import { size } from '@chord/tokens';
 import { app, BaseWindow, BrowserWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
@@ -90,6 +91,19 @@ export class Browser {
   private settingsWindow: SettingsWindow | null = null;
   private recent: { windowId: WindowId; order: NodeId[]; index: number } | null = null;
   readonly idle: IdleKeeper;
+  /** Duet (set once main has it): the panel's toggle and window bookkeeping. */
+  duet: { act(windowId: WindowId, action: { do: 'toggle' }): Promise<void>; forgetWindow(windowId: WindowId): void } | null = null;
+  /** Duet's panel width (DESIGN.md §3: 380, 320–560). */
+  readonly duetWidth = size.duetWidth;
+
+  /** A window by id (Duet acts in the window a message came from). */
+  window(id: WindowId): AppWindow | undefined {
+    return this.windows.get(id);
+  }
+
+  get allWindows(): AppWindow[] {
+    return [...this.windows.values()];
+  }
   private readonly autoPip: AutoPip;
   private readonly archivedHistory = new Map<string, NavState | null>();
   /** Archive entries being restored, so a double click brings a tab back once. */
@@ -328,6 +342,7 @@ export class Browser {
       });
     }
     w.window.on('closed', () => {
+      this.duet?.forgetWindow(windowId);
       this.windows.delete(windowId);
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
@@ -897,6 +912,9 @@ export class Browser {
         if (chordId && Object.keys(this.store.state.chords).length > 1) this.deleteChord(w, chordId);
         return true;
       }
+      case 'duet.toggle':
+        void this.duet?.act(w.id, { do: 'toggle' });
+        return true;
       case 'chord.separateSignIns': {
         const chordId = this.store.state.windows[w.id]?.activeChordId;
         if (chordId) this.toggleSeparateSignIns(w, chordId);

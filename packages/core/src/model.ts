@@ -4,6 +4,7 @@
  * and chord-data persists everything except `live` and `closed` (the archive
  * keeps closed tabs in its own table).
  */
+import type { DuetKeep, DuetProvider, DuetScope } from './duet';
 
 export type ChordId = string;
 export type NodeId = string;
@@ -295,6 +296,24 @@ export interface Settings {
   sleepTabs: boolean;
   /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
   autoPip: boolean;
+  /** Duet, the chat panel (ARCHITECTURE.md §11). */
+  duet: DuetSettings;
+}
+
+export interface DuetSettings {
+  /** Off removes the panel, its button, shortcut and menu items; nothing is ever spawned. */
+  enabled: boolean;
+  /** Chosen in Setup; null until then. */
+  provider: DuetProvider | null;
+  /** The provider's model alias or id; null uses its default. */
+  model: string | null;
+  keep: DuetKeep;
+  /** What new threads may read without asking. */
+  scope: DuetScope;
+  /** Sites Duet may never read or have attached (origins). */
+  neverSites: string[];
+  /** Chords where Duet is off. */
+  offChords: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -311,6 +330,7 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveAfter: '12h',
   sleepTabs: true,
   autoPip: true,
+  duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -319,6 +339,7 @@ export const defaultSettings = (): Settings => ({
   motion: { ...DEFAULT_SETTINGS.motion },
   interface: { ...DEFAULT_SETTINGS.interface },
   themes: [],
+  duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
 });
 
 /**
@@ -343,6 +364,7 @@ export interface SettingsPatch {
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
   autoPip?: boolean;
+  duet?: Partial<DuetSettings>;
 }
 
 export interface State {
