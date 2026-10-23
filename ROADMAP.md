@@ -88,9 +88,9 @@ Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every 
 
 | # | Question | Needed by | My default |
 |---|---|---|---|
-| Q4 | Google search suggestions while typing. They make the command bar feel faster, but every keystroke goes to Google. | M1.1 | **On**, with a clear switch in Settings |
-| Q5 | Favorites: the row of app tiles at the top of the sidebar, shared across chords. Arc had them and your Dia screenshot shows them. | M1.2 | **Yes**, in M1.2 |
-| Q6 | Sidebar toggle shortcut: ⌘S / Ctrl+S (matches Arc, shadows "Save page") or ⌘⇧S / Ctrl+Shift+S | M1.2 | ⌘S, with Save page on ⌘⇧S |
+| Q4 | Google search suggestions while typing. They make the command bar feel faster, but every keystroke goes to Google. | M1.1 | **Decided:** on, with the switch in Settings → General (built) |
+| Q5 | Favorites: the row of app tiles at the top of the sidebar, shared across chords. Arc had them and your Dia screenshot shows them. | M1.2 | **Decided:** yes (built) |
+| Q6 | Sidebar toggle shortcut: ⌘S / Ctrl+S (matches Arc, shadows "Save page") or ⌘⇧S / Ctrl+Shift+S | M1.2 | **Decided:** ⌘S; Save page on ⌘⇧S (built; Save page itself is still to come) |
 | D1 | Extension library license (ARCHITECTURE.md §16) | M1.5 | **Decided:** GPL-3 combined binaries; source is MIT |
 | D4 | DRM for Netflix and Spotify (ARCHITECTURE.md §16) | M1.6 | Stock Electron in v1, no DRM |
 
