@@ -12,7 +12,9 @@ const config: Configuration = {
   productName: 'Chord',
   // The workspace name (@chord/desktop) would otherwise name the per-user
   // install folder: %LOCALAPPDATA%\Programs\@chorddesktop.
-  extraMetadata: { name: 'chord' },
+  // License: Chord's source is MIT (one MPL-2.0 file), but a build includes the GPL-3.0-only
+  // extensions library, so what we distribute is a GPL-3.0-only combined work (decision D1).
+  extraMetadata: { name: 'chord', license: 'GPL-3.0-only' },
   copyright: 'Copyright © Chord contributors',
   directories: { output: 'release', buildResources: 'build' },
   // The bundler inlines every dependency (electron.vite.config.ts), so the
