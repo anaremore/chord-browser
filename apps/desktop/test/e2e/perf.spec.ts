@@ -9,7 +9,7 @@
  * budget miss fails. How to run it and read the report: docs/testing/performance.md.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { cpus, release, tmpdir, totalmem } from 'node:os';
@@ -116,7 +116,8 @@ function record(row: Omit<Row, 'cpuBusy'>): void {
   rows.push(row as Row);
   if (!ENFORCE) return;
   for (const c of row.checks) {
-    expect.soft(['miss', 'no data'], `${row.name} (${row.scenario}${row.motion ? `, motion ${row.motion}` : ''}): ${c.label} ${c.value} ${c.unit}, budget ${c.limit}`).not.toContain(c.status);
+    const what = `${row.name} (${row.scenario}${row.motion ? `, motion ${row.motion}` : ''}): ${c.label} ${c.value} ${c.unit}, budget ${c.limit}`;
+    expect.soft(c.status, what).not.toMatch(/^(miss|no data)$/);
   }
 }
 
@@ -134,8 +135,14 @@ const max = (xs: readonly number[]) => (xs.length ? Math.max(...xs) : NaN);
 test.afterAll(() => {
   const out = resolve(appDir, 'test-results');
   mkdirSync(out, { recursive: true });
+  const file = join(out, 'perf.json');
+  // A failed test restarts Playwright's worker, and this file's state with it; the measures the worker
+  // before it took are already in the report (Playwright empties test-results when a run starts).
+  const earlier = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as { results: Row[]; environment: Environment | null }) : null;
+  if (earlier) rows.unshift(...earlier.results);
+  environment ??= earlier?.environment ?? null;
   const report = { version: 1, date: new Date().toISOString(), enforced: ENFORCE, budgets: BUDGET, environment, results: rows };
-  writeFileSync(join(out, 'perf.json'), `${JSON.stringify(report, null, 2)}\n`);
+  writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`);
   console.log(table());
 });
 
