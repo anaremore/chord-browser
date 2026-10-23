@@ -37,7 +37,7 @@ Everything here works on `main` today and comes with the first preview.
 
 ## Try the preview
 
-Download the file for your system from the latest [release](https://github.com/anaremore/chord-browser/releases). `arm64` builds are for Apple silicon Macs and ARM PCs; `x64` (`amd64`, `x86_64` on Linux) for Intel and AMD.
+Download the file for your system from the latest [release](https://github.com/anaremore/chord-browser/releases). `arm64` builds (`aarch64` for the `.rpm`) are for Apple silicon Macs and ARM PCs; `x64` (`amd64` or `x86_64` on Linux) for Intel and AMD.
 
 Previews aren't code-signed yet, so Windows and macOS warn you before the first launch; the steps below get you past that. Once releases are signed (each release's notes say whether it is), the Gatekeeper and SmartScreen steps go away. Each release lists the files' SHA-256 checksums in `SHA256SUMS.txt`. Chord tells you when a new version is out (you can turn that off in Settings → About), but it doesn't install updates itself yet: download the new version and install it over the old one. Your tabs and settings stay.
 
@@ -51,9 +51,10 @@ Previews aren't code-signed yet, so Windows and macOS warn you before the first 
 
 **Linux:**
 - **Debian and Ubuntu:** `sudo apt install ./Chord-<version>-linux-<arch>.deb`. The package sets up the browser sandbox, including on Ubuntu 23.10 and later.
+- **Fedora, RHEL and derivatives:** `sudo dnf install ./Chord-<version>-linux-<arch>.rpm`.
 - **AppImage:** `chmod +x Chord-<version>-linux-<arch>.AppImage`, then run it. Chord never runs without its sandbox, which needs unprivileged user namespaces. Ubuntu 23.10 and later block those for apps without an AppArmor profile, so use the `.deb` there.
 
-**Linux package repositories (coming soon).** These repositories aren't live yet, so the commands below don't work today; use the `.deb` above. Once they are, `apt upgrade` and `dnf upgrade` keep Chord up to date, and a `.deb` you installed by hand moves over by itself.
+**Linux package repositories (coming soon).** These repositories aren't live yet, so the commands below don't work today; use the `.deb` or `.rpm` above. Once they are, `apt upgrade` and `dnf upgrade` keep Chord up to date, and a `.deb` or `.rpm` you installed by hand moves over by itself.
 
 - **Debian and Ubuntu:**
   ```sh
@@ -91,7 +92,7 @@ To try a build without touching your everyday profile, start it with `--user-dat
 | Linux | `~/.config/Chord` |
 | Linux (Flatpak) | `~/.var/app/io.github.anaremore.chord-browser/config/Chord` |
 
-Deleting that folder resets Chord. To uninstall, use Windows' *Installed apps*, drag Chord to the Trash on macOS, or run `sudo apt remove chord`.
+Deleting that folder resets Chord. To uninstall, use Windows' *Installed apps*, drag Chord to the Trash on macOS, or run `sudo apt remove chord` (Debian, Ubuntu) or `sudo dnf remove chord` (Fedora, RHEL).
 
 ## Documents
 
