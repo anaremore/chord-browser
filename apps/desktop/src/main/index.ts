@@ -141,6 +141,7 @@ function registerIpc(): void {
   handle('sidebar:moveToChord', ({ nodeId, chordId }, sender) => browser!.moveToChord(senderWindow(sender), nodeId, chordId));
   handle('sidebar:deleteFolder', ({ nodeId }, sender) => browser!.deleteFolder(senderWindow(sender), nodeId));
   handle('layout:peek', ({ open }, sender) => browser!.setPeek(sender, open));
+  handle('layout:lift', ({ lifted }, sender) => browser!.setLifted(sender, lifted));
   handle('menu:chord', ({ chordId, x, y }, sender) => browser!.openChordMenu(sender, chordId, { x, y }));
   handle('action:run', ({ action }, sender) => {
     browser!.run(action, sender);

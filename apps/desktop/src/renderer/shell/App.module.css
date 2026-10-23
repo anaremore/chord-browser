@@ -1,6 +1,11 @@
 /* Window shell (DESIGN.md §3). Tokens only: lint rejects raw values. */
 
 .window {
+  /* Where the content frame is (same rules as .frame's insets), for what's laid over it. */
+  --frame-top: var(--size-strip);
+  --frame-left: var(--size-sidebar-width);
+  --frame-right: calc(var(--size-frame-inset) + var(--duet-space, var(--space-0)));
+
   position: fixed;
   inset: 0;
   background: var(--color-base);
@@ -1063,6 +1068,145 @@ kbd {
 :global(:root[data-motion-off~='sidebar']) .window .sidebar,
 :global(:root[data-motion-off~='sidebar']) .window .frame {
   transition-duration: var(--duration-instant);
+}
+
+/* ---------- Split view (DESIGN.md §7.9, §8.4) ---------- */
+
+:global(:root[data-platform='darwin']) .window {
+  --frame-top: var(--size-frame-inset);
+}
+
+:global(:root) .window[data-sidebar='collapsed'] {
+  --frame-top: var(--size-strip);
+  --frame-left: var(--size-frame-inset);
+}
+
+/* Each pane is its own rounded frame, 8 px from the next; the frame itself isn't drawn. */
+.frame[data-split] {
+  display: block;
+  background: none;
+  box-shadow: none;
+}
+
+.pane {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-frame);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-frame);
+  outline: var(--size-focus-ring) solid transparent;
+  outline-offset: var(--size-focus-ring);
+  transition: outline-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+/* The focused pane: a 2 px accent ring at 50%, in the gap. */
+.pane[data-focused] {
+  outline-color: color-mix(in oklab, var(--color-accent) 50%, transparent);
+}
+
+/* Invisible until hovered, then a 4 × 32 px pill; the cursor shows the way it resizes. */
+.paneDivider {
+  position: absolute;
+  z-index: var(--z-raised);
+  display: grid;
+  place-items: center;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.paneDivider[data-direction='column'] {
+  cursor: row-resize;
+}
+
+.paneDivider::after {
+  inline-size: var(--space-1);
+  block-size: var(--space-8);
+  border-radius: var(--radius-full);
+  background: color-mix(in oklab, var(--color-fg) 30%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-fade-fast) var(--ease-standard);
+  content: '';
+}
+
+.paneDivider[data-direction='column']::after {
+  inline-size: var(--space-8);
+  block-size: var(--space-1);
+}
+
+.paneDivider:hover::after,
+.paneDivider:focus-visible::after,
+.paneDivider[data-active]::after {
+  opacity: 1;
+}
+
+.paneDivider:focus-visible {
+  outline: none;
+}
+
+/*
+ * While a tab is dragged the shell is lifted over the page so the drop zones
+ * show: what it draws over the frame steps aside, and the page shows through.
+ */
+:global(:root) .window[data-lifted] .frame {
+  visibility: hidden;
+}
+
+.window[data-lifted] .backdrop {
+  clip-path: polygon(
+    evenodd,
+    0 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 0,
+    var(--frame-left) var(--frame-top),
+    var(--frame-left) calc(100% - var(--size-frame-inset)),
+    calc(100% - var(--frame-right)) calc(100% - var(--size-frame-inset)),
+    calc(100% - var(--frame-right)) var(--frame-top),
+    var(--frame-left) var(--frame-top)
+  );
+}
+
+.dropLayer {
+  position: absolute;
+  inset-block: var(--frame-top) var(--size-frame-inset);
+  inset-inline: var(--frame-left) var(--frame-right);
+  pointer-events: none;
+}
+
+.dropTarget {
+  position: absolute;
+  inset: 0;
+}
+
+/* Where the tab would go: the accent at 12%, ringed with 2 px at 50%. */
+.dropZone {
+  position: absolute;
+  border-radius: var(--radius-frame);
+  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+  box-shadow: inset 0 0 0 var(--size-focus-ring) color-mix(in oklab, var(--color-accent) 50%, transparent);
+  transition-duration: var(--spring-snappy-duration);
+  transition-property: left, top, width, height;
+  transition-timing-function: var(--spring-snappy);
+}
+
+/* Settings → Motion → "Animate tab moves" off: zones and rings jump. */
+:global(:root[data-motion-off~='tabMoves']) .dropZone,
+:global(:root[data-motion-off~='tabMoves']) .pane {
+  transition-duration: var(--duration-instant);
+}
+
+/* A split's row: its tabs' icons in a line. */
+.splitIcons {
+  display: flex;
+  flex: none;
+  gap: var(--space-0);
+}
+
+/* The open split's tab whose pane has focus. */
+.row[data-focused-pane] {
+  background: var(--color-item-hover);
 }
 
 .empty {

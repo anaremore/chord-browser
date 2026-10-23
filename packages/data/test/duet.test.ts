@@ -79,7 +79,8 @@ describe('Duet store (migration 9)', () => {
     v8.close();
 
     db = new ChordDatabase(file);
-    expect(db.version).toBe(9);
+    // Upgraded through Duet's migration to the latest (later features add their own).
+    expect(db.version).toBe(MIGRATIONS.length);
     db.duet({ op: 'saveThread', thread: thread('a', 1) });
     db.duet({ op: 'saveMessage', message: message('m1', 'a', 'Hello after the upgrade') });
     expect(db.duet({ op: 'search', query: 'upgrade', limit: 10 }).hits?.map((h) => h.messageId)).toEqual(['m1']);

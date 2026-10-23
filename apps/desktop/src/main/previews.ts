@@ -176,6 +176,8 @@ export class Previews {
         thumbnail: picture ? `data:image/jpeg;base64,${picture.toString('base64')}` : null,
       };
     }
+    // A pinned split's row already shows its tabs side by side; it has no card of its own.
+    if (node.kind !== 'folder') return null;
     const tabs = folderTabs(state, node.chordId, node.id);
     return {
       ...look,

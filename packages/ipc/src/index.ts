@@ -130,7 +130,29 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('settings.set'), settings: z.strictObject({ onboarded: z.literal(true) }) }),
   // Undo for "Keep sign-ins separate": back to shared sign-ins, or to the chord's own (Chord's IDs are UUIDs).
   z.object({ t: z.literal('chord.profile'), chordId: id, profileId: z.union([z.literal('default'), z.uuid()]) }),
-  // chord.delete isn't here: main deletes, then offers Undo in a toast.
+  // Split view (DESIGN.md §8.4): drop a tab on the page, drag a divider, drag a pane out, Undo for separating, ⌘⌥[ / ⌘⌥].
+  z.object({
+    t: z.literal('split.add'),
+    windowId: id,
+    withId: id,
+    nodeId: id.optional(),
+    url: url.optional(),
+    index: z.number().int().min(0).max(4).optional(),
+    direction: z.enum(['row', 'column']).optional(),
+  }),
+  z.object({ t: z.literal('split.resize'), splitId: id, sizes: z.array(z.number().positive().max(1)).min(2).max(4) }),
+  z.object({ t: z.literal('split.remove'), nodeId: id }),
+  z.object({
+    t: z.literal('split.join'),
+    windowId: id,
+    splitId: id,
+    nodeIds: z.array(id).min(2).max(4),
+    direction: z.enum(['row', 'column']),
+    sizes: z.array(z.number().positive().max(1)).min(2).max(4).optional(),
+    focus: id.optional(),
+  }),
+  z.object({ t: z.literal('split.focus'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
+  // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
 // Compile-time check: every renderer command is a real core command.
@@ -417,14 +439,15 @@ export const OverlayOpen = z.object({
    * editing the current tab. `downloads`: the downloads panel, anchored on the
    * button that opened it (`anchor`).
    */
-  mode: z.enum(['new', 'edit', 'downloads', 'extensions']),
+  mode: z.enum(['new', 'edit', 'downloads', 'extensions', 'split']),
   anchor: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
 });
 export type OverlayOpen = z.infer<typeof OverlayOpen>;
 
 /** What main tells the overlay when it opens. */
 export interface OverlayOpenEvent {
-  mode: 'new' | 'edit' | 'downloads' | 'extensions';
+  /** `split`: the command bar for "Split with…": what you pick opens beside the current tab. */
+  mode: 'new' | 'edit' | 'downloads' | 'extensions' | 'split';
   /** Where the address sits, for the anchored placement (window coordinates). */
   anchor: Rect | null;
   /** The current tab's address, prefilled in edit mode. */
@@ -585,6 +608,8 @@ export const invokeChannels = {
   'sidebar:deleteFolder': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   /** Minimal mode: lift the sidebar over the page while it peeks, and put it back. */
   'layout:peek': { roles: ['shell'], request: z.strictObject({ open: z.boolean() }), response: z.void() },
+  /** A tab is being dragged from the sidebar: lift the shell over the page for split drop zones, and put it back. */
+  'layout:lift': { roles: ['shell'], request: z.strictObject({ lifted: z.boolean() }), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
   // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
@@ -704,6 +729,8 @@ export interface ShellApi {
     anchor(rect: Rect | null): Promise<void>;
     /** Minimal mode's sidebar peek: main lifts the shell above the page while it's open. */
     peek(open: boolean): Promise<void>;
+    /** While a tab is dragged, the shell sits above the page so split view's drop zones show over it. */
+    lift(lifted: boolean): Promise<void>;
   };
   menu: {
     app(anchor: Rect): Promise<void>;
