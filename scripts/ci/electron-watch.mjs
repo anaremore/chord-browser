@@ -1,4 +1,4 @@
-// Electron security watch (ARCHITECTURE.md §14.3, runbook docs/SECURITY-PATCHING.md).
+// Electron security watch (ARCHITECTURE.md §14.3, runbook docs/releasing/patch-runbook.md).
 //
 // Electron's security advisories cover only Electron's own bugs. Fixes from
 // Chromium, V8, Skia, ANGLE and PDFium show up only in release notes, so no
@@ -24,7 +24,7 @@ export const RELEASES_URL = 'https://releases.electronjs.org/releases.json';
 export const SCHEDULE_URL = 'https://releases.electronjs.org/schedule.json';
 const NOTES_URL = 'https://api.github.com/repos/electron/electron/releases/tags/';
 const PACKAGE_JSON = 'apps/desktop/package.json';
-const RUNBOOK = 'docs/SECURITY-PATCHING.md';
+const RUNBOOK = 'docs/releasing/patch-runbook.md';
 
 export const LABELS = [
   { name: 'security', color: 'b60205', description: 'Security fix or security process' },
@@ -198,8 +198,8 @@ export function securityIssue({ current, newest, findings, repoUrl, branch = 'ma
       '- [ ] **T+8 h** CI is green on every OS and the PR is merged (automerge, or merge by hand)',
       `- [ ] **T+8 h** Smoke test on \`main\`: Chord starts; Settings → About shows Electron ${upgradeTo}${chrome ? ` and Chromium ${chrome}` : ''}`,
       '- [ ] **T+12 h** Release tagged; the release workflow built it',
-      '- [ ] **T+24 h** Release published; the update check offers it',
-      '- [ ] **T+72 h** Every channel has it; close this issue with a link to the release',
+      '- [ ] **T+24 h** Release published; the update check offers it, and the apt and dnf repositories have it (once they are live)',
+      '- [ ] **T+72 h** Every channel has it (Flathub too, once Chord is there); close this issue with a link to the release',
       '',
       `<sub>Opened by [electron-watch](${runUrl}). One issue per Electron version; closing it doesn't reopen.</sub>`,
     ].join('\n'),

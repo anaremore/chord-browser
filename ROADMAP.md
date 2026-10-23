@@ -72,6 +72,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 | M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows | PDFs, spellcheck, screen sharing, site permissions page, **editable shortcuts** (moved up from Phase 3) | real password-manager sign-in checks |
 | M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check | CI green on every OS, macOS hands-on on your MacBook | accessibility pass, design QA sweep, performance budgets, the 0.1 release |
 | Phase 2 | | Duet (chat that can read the browser) | split view, mini window, Peek, hover previews, Electron 46 |
+| Phase 3 (2026-10-23) | Flatpak built from source, apt/dnf upload workflow (switched off), 72-hour runbook rehearsed up to publishing | | Flathub submission and app ID, Cloudsmith account and key, rpm builds, in-app updates, link routes, Google-free mode, D7 |
 
 ---
 
@@ -259,11 +260,16 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 ## Phase 3 — Links from everywhere · February 2027
 
 - **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in.
-- **Distribution:**
-  - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.
+- **Distribution** (status 2026-10-23, [docs/releasing/](docs/releasing/patch-runbook.md)):
+  - **Flathub:** a from-source build, app ID verified through chordbrowser.com.
+    - *Done:* `flatpak/` builds Chord from source with no network, on the Electron BaseApp 26.08 ([flathub.md](docs/releasing/flathub.md)).
+    - *Yours, by hand:* Flathub's AI policy forbids AI-written manifests and AI-opened PRs, so you write the manifest that's submitted, and the submission must disclose Chord's AI-written code; reviewers may weigh that against it.
+    - *To decide:* the app ID. `com.chordbrowser.Chord` needs a page on chordbrowser.com over HTTPS for verification; `io.github.anaremore.chord-browser` works today.
   - **Cloudsmith** apt and dnf repos, GPG-signed.
+    - *Done:* `linux-repos.yml` uploads each published release's `.deb` and `.rpm`, and the README has the install steps marked "coming soon".
+    - *Yours:* the Cloudsmith repository and the `CLOUDSMITH_API_KEY` secret ([linux-repos.md](docs/releasing/linux-repos.md#switching-it-on)). `.rpm` builds are still to add to `release.yml`.
   - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests.
-  - The **72-hour patch runbook** rehearsed end to end.
+  - The **72-hour patch runbook** rehearsed end to end. *Done:* written ([patch-runbook.md](docs/releasing/patch-runbook.md)) and rehearsed on 2026-10-23 up to the publish step. The first real release completes the rehearsal.
 - **D7** Safe Browsing, if you choose it.
 - **Google-free mode** (requested 2026-10-22).
   - *Why not ungoogled-chromium itself:* it's a set of patches, domain substitutions and build flags for Chromium's source. Chord runs on Electron, which builds its own Chromium, so using it would mean building Electron from source with those patches applied. That's hours of build per OS and architecture for every security release, and no maintained project does it today.

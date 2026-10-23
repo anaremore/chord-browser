@@ -7,16 +7,22 @@
  *   "Make default" opens Settings → Default apps at Chord's page.
  * - macOS: Launch Services, which shows the system's own confirmation.
  * - Linux: xdg-settings, through Electron and directly.
+ * - Flatpak: neither. The sandbox has no view of the system's choice and no
+ *   portal changes it, so Settings points to the system's own settings; the
+ *   .desktop file's MIME types are what list Chord there.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { DefaultBrowserStatus } from '@chord/ipc';
 import { app, shell } from 'electron';
 import { APP_ID } from './identity';
 import { progIdIn } from './os-links';
 
-export type DefaultBrowserStatus = 'default' | 'not-default' | 'unavailable';
+export type { DefaultBrowserStatus };
 
 const run = promisify(execFile);
+/** Flatpak sets FLATPAK_ID inside every sandbox it starts. */
+const inFlatpak = process.platform === 'linux' && Boolean(process.env['FLATPAK_ID']);
 /** The ProgId the Windows installer registers for web links (build/installer.nsh). */
 const WINDOWS_PROG_ID = 'ChordHTML';
 const URL_ASSOCIATIONS = 'HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https';
@@ -38,12 +44,13 @@ async function windowsHttpsProgId(): Promise<string | null> {
 /** Development builds aren't registered with the OS, so they can't be the default. */
 export async function defaultBrowserStatus(): Promise<DefaultBrowserStatus> {
   if (!app.isPackaged) return 'unavailable';
+  if (inFlatpak) return 'system';
   if (process.platform === 'win32') return (await windowsHttpsProgId()) === WINDOWS_PROG_ID ? 'default' : 'not-default';
   return app.isDefaultProtocolClient('https') ? 'default' : 'not-default';
 }
 
 export async function makeDefaultBrowser(): Promise<void> {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged || inFlatpak) return;
   if (process.platform === 'win32') {
     // Matches the RegisteredApplications value the installer writes.
     await shell.openExternal('ms-settings:defaultapps?registeredAppUser=Chord');

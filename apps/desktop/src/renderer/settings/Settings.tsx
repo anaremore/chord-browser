@@ -81,6 +81,13 @@ function DefaultBrowser({ platform }: { platform: SystemInfo['platform'] }) {
             }
           />
         )}
+        {status === 'system' && (
+          <Row
+            label="Make Chord your default browser"
+            description="Choose Chord in your system’s default apps settings. A Flatpak can’t change that setting itself."
+            control={null}
+          />
+        )}
         {status === 'unavailable' && (
           <Row label="Default browser" description="Installed copies of Chord can be your default browser. This is a development build." control={null} />
         )}

@@ -111,10 +111,10 @@ chord-browser/
 │  ├─ db/                       schema, migrations, prepared queries
 │  ├─ tokens/                   design tokens → CSS vars + TS; chord theme generator
 │  └─ ui/                       shared React primitives (Button, Keycap, Favicon, Toast…)
-├─ flatpak/                     Flathub manifest (built from source)
+├─ flatpak/                     Flatpak manifest (built from source), metainfo, .desktop, build.sh (§15.1)
 ├─ scripts/                     asset generators (grain, icon); later release, manifest signing, Electron release watcher
-├─ docs/                        SECURITY-PATCHING.md, decision records, design QA captures
-└─ .github/workflows/           ci.yml · release.yml · electron-watch.yml
+├─ docs/                        releasing/ (patch runbook, Flathub, apt/dnf), decision records, design QA captures
+└─ .github/workflows/           ci.yml · release.yml · electron-watch.yml · linux-repos.yml
 ```
 
 ---
@@ -809,15 +809,15 @@ Electron security advisories **only cover Electron's own bugs**. Chromium fixes 
   3. On a hit, it opens **one P0 issue per version**. The issue is labeled `security` + `p0` and assigned to the `SECURITY_ONCALL` repo variable (default: the owner).
   4. It then ticks the Dependency Dashboard's "run again" checkbox, so Renovate runs now rather than within 4 hours. ⚠ Mend doesn't document that as an API.
   5. Separately, it opens an issue 30 days before our major's end-of-life, using `schedule.json`.
-- **Runbook:** [docs/SECURITY-PATCHING.md](docs/SECURITY-PATCHING.md).
+- **Runbook:** [docs/releasing/patch-runbook.md](docs/releasing/patch-runbook.md), rehearsed on 2026-10-23 up to the publish step.
 
 | T+ | Step | Today |
 |---|---|---|
 | 0 h | Electron publishes a patched release. Precedent: a V8 zero-day was fixed in Chrome on 2025-06-30 and in Electron 37.2.0 on 2025-07-02 ✅. Its notes said only "Updated Chromium to 138.0.7204.97" ✅. | |
 | ≤ 1 h | Watcher opens an issue; Renovate PR is up | Automated. If the dashboard tick doesn't take, the PR comes within 4 h. |
 | ≤ 8 h | CI green on the full matrix (unit, E2E on macOS, Windows, Linux X11, Linux Wayland, arm64 + x64); Renovate automerges | Automated |
-| ≤ 12 h | Tag `vX.Y.Z` → release workflow builds, signs, notarizes, and signs manifests | Builds only; signing is deferred (§15.2) |
-| ≤ 24 h | Publish at `stagingPercentage: 20`; Flathub PR opened; apt/rpm repos updated | Publish only; the rest arrives in Phase 3 |
+| ≤ 12 h | Tag `vX.Y.Z` → release workflow builds, signs, notarizes, and signs manifests | Builds only, in about 5 minutes ✅; signing is deferred (§15.2) |
+| ≤ 24 h | Publish at `stagingPercentage: 20`; Flathub PR opened; apt/rpm repos updated | Publish. Publishing uploads to the apt/dnf repos (`linux-repos.yml`), switched off until Cloudsmith is set up. Flathub isn't live, and its updates are by hand |
 | ≤ 48 h | Staged rollout → 100% after crash-free check (local crash logs only, since there is no telemetry; we watch issue reports) | Phase 3 |
 | ≤ 72 h | All channels patched: GitHub/updater, Cloudsmith repos, Flathub merged | GitHub Release only |
 
@@ -860,13 +860,15 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
 | Identifier | Value | Where it matters |
 |---|---|---|
 | Product name | Chord | window titles, menus, installer |
-| App ID (reverse DNS of **chordbrowser.com**, which we control) | `com.chordbrowser.Chord` | macOS bundle ID, Windows AppUserModelID, Linux `.desktop` file name, Flatpak/Flathub app ID (Flathub verifies domain ownership), `userData` folder name |
+| App ID (reverse DNS of **chordbrowser.com**, which we control) | `com.chordbrowser.Chord` | macOS bundle ID, Windows AppUserModelID, Linux `.desktop` file name (deb, rpm, AppImage), `userData` folder name |
+| Flatpak app ID | **To decide before submitting to Flathub.** `com.chordbrowser.Chord` once Flathub can verify the domain (it needs a page on it over HTTPS); otherwise `io.github.anaremore.chord-browser`, which `flatpak/` uses for now ([docs/releasing/flathub.md](docs/releasing/flathub.md#the-app-id)) | the Flatpak's `.desktop` file, Wayland `app_id` and data folder (`~/.var/app/<id>`); hard to change once on Flathub |
 | Executable | `chord` (Linux), `Chord.exe`, `Chord.app` | packaging, default-browser registration |
 | Internal schemes | `chord://`, `chord-favicon://` | only on the `chord-ui` session (§4) |
 | Future web uses of the domain | site, install guides, `security@` contact for SECURITY.md (Cloudflare Email Routing), optional `dl.` CNAME for package repos | no rush |
 
 In the packages:
 - **Linux:** the `.desktop` file is `com.chordbrowser.Chord.desktop` with `StartupWMClass=com.chordbrowser.Chord` ✅ (checked in the built `.deb` and AppImage). `desktopName` in `apps/desktop/package.json` sets it; Electron uses the same value as the Wayland `app_id` and X11 `WM_CLASS`, and electron-builder's `linux.syncDesktopName` names the file after it.
+- **Flatpak:** the build overrides `desktopName` with `$FLATPAK_ID.desktop` (`extraMetadata`), so the app ID, `.desktop` file, Wayland `app_id` and X11 class all match whichever Flatpak ID is chosen.
 - **Windows:** the one-click per-user installer names its folder after the npm package name, so the packaged `package.json` is renamed `chord`: `%LOCALAPPDATA%\Programs\chord` (⚠ read from electron-builder's NSIS source; the release workflow logs where it installs). The installer is `Chord-<version>-win-<arch>-setup.exe`; its uninstall entry's GUID derives from the app ID.
 
 ### 15.1 Targets
@@ -879,7 +881,9 @@ In the packages:
 
 **Preview builds today** (unsigned, [§15.2](#152-code-signing)) differ from the table above:
 - **One artifact per OS and architecture**, each built on its own native runner so it can be smoke-tested there: `Chord-<version>-win-<arch>-setup.exe`, `Chord-<version>-mac-<arch>.dmg` and `.zip`, `Chord-<version>-linux-<arch>.AppImage` and `.deb` (Linux names x64 `x86_64` or `amd64`). A universal Mac app or a combined Windows installer would double every download. Revisit when signing arrives.
-- **No rpm yet.** Flatpak and package repos stay in Phase 3.
+- **No rpm yet.**
+- **Flatpak, ahead of Phase 3:** `flatpak/` builds Chord from source with no network during the build, on `org.electronjs.Electron2.BaseApp` 26.08 with zypak. `flatpak-node-generator` turns `pnpm-lock.yaml` into offline sources, and `electron-builder --linux dir` packages it with the same fuses. `flatpak/build.sh` builds it in a throwaway container. It isn't on Flathub: Flathub's AI policy means the manifest it gets is written by hand ([docs/releasing/flathub.md](docs/releasing/flathub.md)).
+- **apt and dnf repositories, ahead of Phase 3:** `linux-repos.yml` uploads each published release's `.deb` and `.rpm` to Cloudsmith. It's switched off until the maintainer creates the repository and the `CLOUDSMITH_API_KEY` secret ([docs/releasing/linux-repos.md](docs/releasing/linux-repos.md)).
 - **AppImage uses electron-builder's static runtime** (`toolsets.appimage: '1.0.3'`, which electron-builder labels beta). The default runtime needs libfuse2, which Ubuntu 22.04 and later don't install. ✅ The static one ran Chord on Ubuntu 22.04 (WSL) without libfuse2, and is 8 MB smaller. Where user namespaces are blocked, the AppImage won't start (⚠ how it fails is unverified), and the README sends those users to the deb.
 - **deb:** electron-builder's post-install installs an AppArmor `userns` profile ✅ (present in the built package). ⚠ That it lets the sandbox run on Ubuntu 24.04 is checked by the release workflow's install smoke test, which hasn't run yet.
 - **Icon** (DESIGN.md §2): SVG masters in `apps/desktop/build/`. `icon.svg` is drawn on Apple's 1024 px grid; `icon-16.svg`, `icon-24.svg` and `icon-32.svg` redraw it on whole pixels for those sizes. `pnpm --filter @chord/desktop icons` (`scripts/build-icons.mjs`) draws them with Chromium in a hidden Electron page and writes the committed `icon.icns` (16–1024 px), `icon.ico` (16–256 px) and `icons/NxN.png` (Linux hicolor sizes, 16–512 px). Windows and Linux get the body cropped to fill the square, without the macOS shadow. electron-builder copies an `.ico` or `.icns` named in its config as is rather than converting it ✅ (its icon converter's source), so each size ships as drawn.
@@ -915,6 +919,9 @@ Tags `v*` trigger `release.yml`. It can also be run by hand, which builds and te
    - The fuses are read back into the log.
 3. **Upload a draft prerelease** with `SHA256SUMS.txt`. The only write permission is `contents: write`, on that job.
 4. **A maintainer publishes.**
+5. **Publishing starts `linux-repos.yml`**, which checks the release's `.deb` and `.rpm` files against `SHA256SUMS.txt` and uploads them to the Cloudsmith apt and dnf repositories ([docs/releasing/linux-repos.md](docs/releasing/linux-repos.md)). Until the `CLOUDSMITH_API_KEY` secret exists, its upload job is skipped. Flathub updates are a pull request in Flathub's own repository, made by hand ([docs/releasing/flathub.md](docs/releasing/flathub.md#each-release)).
+
+The step-by-step for a security release, including what to do when one platform's build fails, is [docs/releasing/patch-runbook.md](docs/releasing/patch-runbook.md).
 
 When signing arrives (Phase 4), these steps slot in after the build:
 - Sign through a **protected GitHub Environment** (`release`). Signing secrets are available only to tag builds on `main`, with required reviewers.
