@@ -34,9 +34,9 @@ const runAction = (shell: Page, action: string) =>
   shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
 
 /** Wheel events as a trackpad sends them, `gapMs` apart, over an element of the shell. */
-function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, over = '[aria-label="Sidebar"] [aria-label="Today"]') {
+function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, over = '[aria-label="Sidebar"] [aria-label="Today"]', diag = false) {
   return shell.evaluate(
-    async ({ deltas, gapMs, over }) => {
+    async ({ deltas, gapMs, over, diag }) => {
       const target = document.querySelector(over) ?? document.querySelector('[data-swipe-area]');
       // DIAGNOSTIC (temporary): what each event met.
       const track = document.querySelector('[data-swiping]') ?? target?.closest('[class*="paneTrack"]');
@@ -57,7 +57,7 @@ function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, 
       }
       // After the last event: the swipe state and the selected chord, every 40 ms for a second.
       const after: string[] = [];
-      for (let i = 0; i < 25; i++) {
+      for (let i = 0; i < (diag ? 25 : 0); i++) {
         const swiping = document.querySelector('[data-swiping]') ? 's' : '-';
         const selected = document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute('aria-label')?.[0] ?? '?';
         after.push(`${swiping}${document.querySelectorAll('[aria-label="Sidebar"] [aria-label="Today"]').length}${selected}`);
@@ -65,7 +65,7 @@ function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, 
       }
       return `${log.join(' ')} | after: ${after.join(' ')}`;
     },
-    { deltas, gapMs, over },
+    { deltas, gapMs, over, diag },
   );
 }
 const steps = (count: number, x: number, y = 0) => Array.from({ length: count }, () => ({ x, y }));
@@ -98,7 +98,7 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
     const personalTint = await tint();
 
     // A slow swipe past half the width: the next chord comes in beside the current one, and wins.
-    const swiping = swipe(shell, steps(32, 6), 16);
+    const swiping = swipe(shell, steps(32, 6), 16, undefined, true);
     await expect.poll(() => paneCount(shell)).toBeGreaterThan(1);
     const swipeLog = await swiping;
     console.log(`[swipe diag] ${process.platform}-${process.arch} ${swipeLog}`);
