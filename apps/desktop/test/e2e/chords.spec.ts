@@ -55,7 +55,15 @@ function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, 
         last = t1;
         await new Promise((r) => setTimeout(r, gapMs));
       }
-      return log.join(' ');
+      // After the last event: the swipe state and the selected chord, every 40 ms for a second.
+      const after: string[] = [];
+      for (let i = 0; i < 25; i++) {
+        const swiping = document.querySelector('[data-swiping]') ? 's' : '-';
+        const selected = document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute('aria-label')?.[0] ?? '?';
+        after.push(`${swiping}${document.querySelectorAll('[aria-label="Sidebar"] [aria-label="Today"]').length}${selected}`);
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      return `${log.join(' ')} | after: ${after.join(' ')}`;
     },
     { deltas, gapMs, over },
   );
@@ -93,6 +101,7 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
     const swiping = swipe(shell, steps(32, 6), 16);
     await expect.poll(() => paneCount(shell)).toBeGreaterThan(1);
     const swipeLog = await swiping;
+    console.log(`[swipe diag] ${process.platform}-${process.arch} ${swipeLog}`);
     await expect(chords.getByRole('tab', { name: 'Work' }), `DIAGNOSTIC ${swipeLog}`).toHaveAttribute('aria-selected', 'true');
     await expect.poll(() => paneCount(shell)).toBe(1);
     expect(await tint()).not.toBe(personalTint);
