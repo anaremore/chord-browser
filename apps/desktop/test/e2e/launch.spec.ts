@@ -1037,25 +1037,14 @@ test('many chords: the switcher scrolls sideways with the wheel and keeps the cu
       );
     }
     await expect(strip.getByRole('tab')).toHaveCount(12);
-    // For a failure message: the wheel events the strip receives, and whether the page is drawing frames.
-    await strip.evaluate((el) => {
-      const seen: string[] = [];
-      (window as unknown as { wheelSeen: string[] }).wheelSeen = seen;
-      el.addEventListener('wheel', (e) => seen.push(`deltaY ${(e as WheelEvent).deltaY} at scroll ${el.scrollLeft}`), { capture: true });
-      const count = () => {
-        (window as unknown as { frames: number }).frames = ((window as unknown as { frames?: number }).frames ?? 0) + 1;
-        requestAnimationFrame(count);
-      };
-      requestAnimationFrame(count);
-    });
     const metrics = () => strip.evaluate((el) => ({ scroll: el.scrollLeft, overflow: el.scrollWidth - el.clientWidth, fade: el.dataset['fade'] }));
     // The newest chord is current and scrolled into view, at the end.
     await expect.poll(async () => (await metrics()).overflow).toBeGreaterThan(0);
     await expect(strip.getByRole('tab', { name: 'Chord 12' })).toBeInViewport();
     await expect.poll(async () => (await metrics()).fade).not.toBe('none');
 
-    // A plain mouse wheel moves it back toward the start. First let the smooth scroll to the newest chord
-    // finish: a compositor-driven scroll animation still running would put the strip back where it was going.
+    // A plain mouse wheel (up and down) moves it back toward the start. First let the smooth scroll to the
+    // newest chord finish: a scroll animation still running would put the strip back where it was going.
     await expect
       .poll(async () => {
         const a = (await metrics()).scroll;
@@ -1063,21 +1052,11 @@ test('many chords: the switcher scrolls sideways with the wheel and keeps the cu
         return (await metrics()).scroll === a;
       })
       .toBe(true);
-    const box = (await strip.boundingBox())!;
-    await shell.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     const before = (await metrics()).scroll;
-    await shell.mouse.wheel(0, -200);
-    await expect
-      .poll(async () => (await metrics()).scroll)
-      .toBeLessThan(before)
-      .catch(async (error: Error) => {
-        const why = await shell.evaluate(([x, y]) => {
-          const under = document.elementFromPoint(x!, y!);
-          const w = window as unknown as { wheelSeen: string[]; frames: number };
-          return { under: `${under?.tagName}[role=${under?.getAttribute('role')}]`, wheelSeen: w.wheelSeen, frames: w.frames, visibility: document.visibilityState };
-        }, [box.x + box.width / 2, box.y + box.height / 2]);
-        throw new Error(`${error.message}\nThe strip at the wheel: ${JSON.stringify(why)}`);
-      });
+    // The wheel event goes to the strip itself, as the swipe tests' do: one injected through the input
+    // pipeline (mouse.wheel) sometimes never reached the page at all on CI (no wheel event in the DOM).
+    await strip.evaluate((el) => el.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, deltaMode: 0, bubbles: true, cancelable: true })));
+    await expect.poll(async () => (await metrics()).scroll).toBeLessThan(before);
   } finally {
     await app.close();
   }
