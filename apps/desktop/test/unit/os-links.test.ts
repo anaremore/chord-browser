@@ -9,6 +9,14 @@ describe('urlsFromArgv', () => {
     ]);
   });
 
+  it('finds the link after --single-argument when a hand-off added switches in between', () => {
+    expect(urlsFromArgv(['/opt/Chord/chord', '--single-argument', '--original-process-start-time=13', 'https://x.example/', 'https://y.example/'])).toEqual([
+      'https://x.example/',
+    ]);
+    // Development: Electron's own app-folder argument can land after it too.
+    expect(urlsFromArgv(['electron', '--single-argument', '/work/chord/apps/desktop', 'https://x.example/'])).toEqual(['https://x.example/']);
+  });
+
   it('collects web links from a plain command line and skips switches and Chord itself', () => {
     expect(urlsFromArgv(['/opt/Chord/chord', '--no-sandbox', 'https://a.example/', 'http://b.example/x', 'https://a.example/'])).toEqual([
       'https://a.example/',

@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -22,11 +22,15 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     // "No icon", the way example.com says it; and an icon that claims to be a PNG but isn't.
     '/no-icon': '<title>No icon</title><link rel="icon" href="data:,">',
     '/bad-icon': '<title>Bad icon</title><link rel="icon" href="/bad.png">',
+    // Signing in sets a cookie; /whoami reports whether this chord's sign-ins have it.
+    '/login': `<title>Login</title><script>document.cookie = 'account=alex; path=/; max-age=3600'; document.title = 'Signed in';</script>`,
+    '/whoami': `<title>Whoami</title><script>document.title = document.cookie.includes('account=alex') ? 'Alex' : 'Signed out';</script>`,
     // A "Sign in with…" flow: a sized popup reports back through window.opener, then closes.
     '/signin':
       `<title>Signed out</title><button id="signin" onclick="window.open('/signin-popup', 'auth', 'width=420,height=560')">Sign in</button>` +
       `<script>addEventListener('message', (e) => { if (e.data === 'signed-in') document.title = 'Signed in'; });</script>`,
     '/signin-popup': `<title>Sign in</title><button id="done" onclick="window.opener.postMessage('signed-in', '*'); window.close()">Continue</button>`,
+    '/long': '<title>Long page</title><div style="height: 6000px">A long page</div>',
   };
   const server = createServer((req, res) => {
     // Search suggestions (CHORD_SUGGEST_URL) in the OpenSearch shape the engines use; every question is logged.
@@ -282,6 +286,13 @@ test('Settings opens from the shell and its changes apply live', async () => {
     // Search engine: the command bar offers the new engine at once.
     await settings.getByRole('radio', { name: /DuckDuckGo/ }).click();
     await expect(settings.getByRole('radio', { name: /DuckDuckGo/ })).toHaveAttribute('aria-checked', 'true');
+    // Tabs: how long before Today tabs are archived, and sleeping.
+    const archiveAfter = settings.getByRole('radiogroup', { name: 'Archive Today tabs after' });
+    await archiveAfter.getByRole('radio', { name: 'A week' }).click();
+    await expect(archiveAfter.getByRole('radio', { name: 'A week' })).toHaveAttribute('aria-checked', 'true');
+    const sleepSwitch = settings.getByRole('switch', { name: "Sleep tabs you're not using" });
+    await sleepSwitch.click();
+    await expect(sleepSwitch).toHaveAttribute('aria-checked', 'false');
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type('chord browser');
     await expect(overlay.getByRole('option').first()).toContainText('Search DuckDuckGo');
@@ -380,6 +391,63 @@ test('a sign-in popup keeps its opener, opens at the size it asked for, and repo
     await popup.locator('#done').click();
     await expect.poll(() => tab.title()).toBe('Signed in');
     await expect.poll(() => app.windows().some((p) => p.url() === `${site.origin}/signin-popup`)).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a chord can keep its sign-ins separate, with Undo, and its sign-ins are deleted once unused', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const ownPartitions = () => (existsSync(join(profile, 'Partitions')) ? readdirSync(join(profile, 'Partitions')).filter((n) => n.startsWith('p-')) : []);
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/login` }, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await pageWhere(app, (url) => url === `${site.origin}/login`);
+    const visit = async (path: string) => {
+      await openCommandBar(shell, overlay, 'new');
+      await overlay.keyboard.type(`${site.origin}${path}`);
+      await overlay.keyboard.press('Enter');
+    };
+    const whoami = () => app.windows().find((p) => p.url() === `${site.origin}/whoami`)?.title();
+
+    // A new chord shares sign-ins by default: Work sees Personal's account.
+    await shell.getByRole('button', { name: 'New chord' }).click();
+    await shell.getByRole('textbox', { name: 'Chord name' }).fill('Work');
+    await shell.getByRole('textbox', { name: 'Chord name' }).press('Enter');
+    await visit('/whoami');
+    await expect.poll(whoami).toBe('Alex');
+
+    // Keeping Work's sign-ins separate reloads its tab, signed out, and marks the chord.
+    await runAction(shell, 'chord.separateSignIns');
+    await expect.poll(whoami).toBe('Signed out');
+    await expect(shell.getByRole('img', { name: 'Keeps its own sign-ins' })).toBeVisible();
+    expect(ownPartitions()).toHaveLength(1);
+
+    // Undo shares them again.
+    await shell.getByRole('button', { name: 'Undo' }).click();
+    await expect.poll(whoami).toBe('Alex');
+    await expect(shell.getByRole('img', { name: 'Keeps its own sign-ins' })).toHaveCount(0);
+
+    // Settings → General lists every chord with its own switch.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
+    const workSwitch = settings.getByRole('switch', { name: 'Keep sign-ins separate for Work' });
+    await expect(workSwitch).toHaveAttribute('aria-checked', 'false');
+    await workSwitch.click();
+    await expect(workSwitch).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(whoami).toBe('Signed out');
+    await workSwitch.click();
+    await expect.poll(whoami).toBe('Alex');
+  } finally {
+    await app.close();
+  }
+
+  // Nothing uses Work's own sign-ins any more, so the next launch deletes them from disk.
+  app = await launch({}, profile);
+  try {
+    await pageWhere(app, isShell);
+    await expect.poll(ownPartitions).toEqual([]);
   } finally {
     await app.close();
   }
@@ -800,6 +868,127 @@ test('history: a page you visited and closed is found again from the command bar
         return found;
       })
       .toBeGreaterThan(0);
+  } finally {
+    await app.close();
+  }
+});
+
+const isArchive = (url: string) => url.startsWith('chord://archive') || url.includes('/archive/index.html');
+
+test('sleeping: a tab hidden long enough frees its page, and wakes where it was', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/long`, CHORD_SLEEP_AFTER_MS: '700', CHORD_IDLE_CHECK_MS: '200' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today).toContainText('Long page');
+    const long = await pageWhere(app, (url) => url === `${site.origin}/long`);
+    await long.evaluate(() => window.scrollTo(0, 1500));
+    // Chromium saves a page's scroll position with its history about once a second (more margin for slow CI).
+    await long.waitForTimeout(2500);
+
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/second`);
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('listitem').first()).toContainText('Second page');
+
+    // Hidden past the limit: its page closes, and its row says it's asleep.
+    const row = today.getByRole('button', { name: 'Long page', exact: true });
+    await expect(row).toHaveAttribute('data-asleep', 'true', { timeout: 10_000 });
+    await expect.poll(() => app.windows().some((p) => p.url() === `${site.origin}/long`)).toBe(false);
+
+    // Shown again: the same page, scrolled where it was.
+    await row.click();
+    const woken = await pageWhere(app, (url) => url === `${site.origin}/long`);
+    await expect.poll(() => woken.evaluate(() => window.scrollY)).toBeGreaterThan(1000);
+    await expect(row).not.toHaveAttribute('data-asleep');
+  } finally {
+    await app.close();
+  }
+});
+
+test('the archive: unused tabs are tidied away, come back from the archive page, and ⌘⇧T reopens closed ones', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_ARCHIVE_AFTER_MS: '900', CHORD_IDLE_CHECK_MS: '200' }, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today).toContainText('First page');
+    // Give the first tab some history: First → Second.
+    const first = await pageWhere(app, (url) => url === `${site.origin}/`);
+    await first.click('#next');
+    await expect(today).toContainText('Second page');
+
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/third`);
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('listitem').first()).toContainText('Third page');
+
+    // Unused past the limit: Second page goes to the archive; the tab on screen stays.
+    await expect(today.getByRole('listitem')).toHaveCount(1, { timeout: 10_000 });
+    await expect(today).toContainText('Third page');
+
+    // The command bar's @archive lists it, newest first, before anything is typed.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('@archive ');
+    await expect(overlay.getByTestId('scope-chip')).toHaveText('Archive');
+    await expect(overlay.getByRole('option').first()).toContainText('Second page');
+    await expect(overlay.getByRole('option').first()).toContainText('Archived');
+    await overlay.keyboard.press('Escape');
+
+    // ⌘Y / Ctrl+H opens the archive as a tab.
+    await runAction(shell, 'app.history');
+    const archive = await pageWhere(app, isArchive);
+    await expect(today).toContainText('Archive');
+    const bringBack = archive.getByRole('button', { name: 'Bring back Second page' });
+    await expect(archive.getByRole('list', { name: 'Today' })).toBeVisible();
+    await expect(bringBack).toBeVisible();
+
+    // Search narrows by title or address.
+    const search = archive.getByRole('textbox', { name: 'Search the archive' });
+    await search.fill('third');
+    await expect(archive.getByText('Nothing in the archive matches “third”.')).toBeVisible();
+    await search.fill('seco');
+    await expect(bringBack).toBeVisible();
+
+    // Bringing it back puts it in the sidebar without leaving the archive.
+    await bringBack.click();
+    await expect(archive.getByRole('status')).toContainText('Second page is back');
+    await expect(today).toContainText('Second page');
+    await expect(bringBack).toHaveCount(0);
+
+    // With its history: Back goes to the first page.
+    await today.getByRole('button', { name: 'Second page', exact: true }).click();
+    const second = await pageWhere(app, (url) => url === `${site.origin}/second`);
+    await expect.poll(() => second.evaluate(() => history.length)).toBe(2);
+
+    // ⌘⇧T: what you close comes back in place.
+    await today.getByRole('listitem').filter({ hasText: 'Second page' }).hover();
+    await today.getByRole('button', { name: /^Close Second page/ }).click();
+    await expect(today).not.toContainText('Second page');
+    await runAction(shell, 'tab.reopen');
+    await expect(today).toContainText('Second page');
+    // Close it again, to reopen after a restart.
+    await today.getByRole('listitem').filter({ hasText: 'Second page' }).hover();
+    await today.getByRole('button', { name: /^Close Second page/ }).click();
+    await expect(today).not.toContainText('Second page');
+  } finally {
+    await app.close();
+  }
+
+  // After a restart, ⌘⇧T still knows what you closed, history and all.
+  app = await launch({}, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const today = shell.getByRole('list', { name: 'Today' });
+    // (Everything else hidden for a second was tidied away last time, at this test's short limit.)
+    await expect(today).toBeAttached();
+    await expect(today).not.toContainText('Second page');
+    await runAction(shell, 'tab.reopen');
+    await expect(today).toContainText('Second page');
+    const second = await pageWhere(app, (url) => url === `${site.origin}/second`);
+    await expect.poll(() => second.evaluate(() => history.length)).toBe(2);
   } finally {
     await app.close();
   }

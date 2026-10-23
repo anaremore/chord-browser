@@ -126,4 +126,28 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (chord_id, text, destination)
   ) STRICT;
   `,
+  // 5: the archive (M1.4): Today tabs that were closed, cleared or unused, with their
+  // back/forward history (nav_state, JSON). An entry leaves when its tab comes back.
+  // rid is an explicit rowid, so the search index survives VACUUM.
+  `
+  CREATE TABLE archive_item (
+    rid INTEGER PRIMARY KEY,
+    id TEXT NOT NULL UNIQUE, profile_id TEXT NOT NULL, chord_id TEXT NOT NULL,
+    url TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', favicon_key TEXT, nav_state TEXT,
+    reason TEXT NOT NULL CHECK (reason IN ('auto','closed','cleared')),
+    archived_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX archive_recent ON archive_item(profile_id, archived_at DESC);
+
+  CREATE VIRTUAL TABLE archive_fts USING fts5(
+    title, url, content='archive_item', content_rowid='rid',
+    tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3 4'
+  );
+  CREATE TRIGGER archive_fts_insert AFTER INSERT ON archive_item BEGIN
+    INSERT INTO archive_fts(rowid, title, url) VALUES (new.rid, new.title, new.url);
+  END;
+  CREATE TRIGGER archive_fts_delete AFTER DELETE ON archive_item BEGIN
+    INSERT INTO archive_fts(archive_fts, rowid, title, url) VALUES ('delete', old.rid, old.title, old.url);
+  END;
+  `,
 ];

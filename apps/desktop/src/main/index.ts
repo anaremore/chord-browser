@@ -1,4 +1,4 @@
-import { restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
+import { ARCHIVE_AFTER_MS, IDLE_CHECK_MS, SLEEP_AFTER_MS, profilePartition, restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { join } from 'node:path';
@@ -11,7 +11,7 @@ import { handle } from './ipc';
 import { DownloadManager } from './downloads';
 import { PermissionBroker } from './permissions';
 import { openable, urlsFromArgv } from './os-links';
-import { Persistence } from './persistence';
+import { Persistence, removeUnusedPartitions } from './persistence';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
@@ -27,6 +27,12 @@ app.enableSandbox();
 // Google is the default search engine (decided 2026-10-22). Tests override the
 // first page so CI never depends on the network.
 const HOME_URL = (!app.isPackaged && process.env['CHORD_HOME_URL']) || 'https://www.google.com/';
+
+/** Development and tests only: a duration in ms from the environment, for archiving and sleeping in seconds rather than hours. */
+function devMs(name: string): number | null {
+  const value = app.isPackaged ? NaN : Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
 
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
@@ -113,6 +119,7 @@ function registerIpc(): void {
   handle('settings:saveTheme', ({ theme }) => browser!.store.dispatch({ t: 'theme.save', theme }));
   handle('settings:deleteTheme', ({ id }) => browser!.store.dispatch({ t: 'theme.delete', id }));
   handle('settings:copyText', ({ text }) => clipboard.writeText(text));
+  handle('settings:chordSignIns', ({ chordId, separate }) => browser!.setSeparateSignIns(chordId, separate));
   handle('settings:defaultBrowser', () => defaultBrowserStatus());
   handle('settings:updateStatus', () => updates.status());
   handle('settings:checkForUpdates', () => updates.checkNow());
@@ -125,6 +132,10 @@ function registerIpc(): void {
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
+  handle('archive:snapshot', (_request, sender) => browser!.archiveSnapshot(sender));
+  handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
+  handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
+  handle('archive:remove', ({ archiveId }) => browser!.removeArchived(archiveId));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -189,7 +200,7 @@ if (!app.requestSingleInstanceLock()) {
     profileSession = (profileId: string) => {
       let ses = profiles.get(profileId);
       if (!ses) {
-        ses = session.fromPartition(profileId === 'default' ? 'persist:default' : `persist:p-${profileId}`);
+        ses = session.fromPartition(profilePartition(profileId));
         permissions.attach(ses);
         downloads.attach(ses);
         profiles.set(profileId, ses);
@@ -209,6 +220,8 @@ if (!app.requestSingleInstanceLock()) {
       homeUrl: HOME_URL,
     });
     if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
+    // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
+    await removeUnusedPartitions(app.getPath('userData'), new Set(Object.values(initial.chords).map((c) => c.profileId)));
 
     const store = persistence;
     browser = new Browser({
@@ -217,6 +230,12 @@ if (!app.requestSingleInstanceLock()) {
       profileSession,
       permissions,
       history: (event) => store.history(event),
+      archive: { entry: (which) => store.archiveEntry(which) },
+      idle: {
+        checkMs: devMs('CHORD_IDLE_CHECK_MS') ?? IDLE_CHECK_MS,
+        archiveAfterMs: (setting) => (setting === 'never' ? null : (devMs('CHORD_ARCHIVE_AFTER_MS') ?? ARCHIVE_AFTER_MS[setting])),
+        sleepAfterMs: devMs('CHORD_SLEEP_AFTER_MS') ?? SLEEP_AFTER_MS,
+      },
       onChange: (change) => store.record(change.patches, change.state),
     });
     Menu.setApplicationMenu(browser.appMenu);

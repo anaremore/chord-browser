@@ -1,7 +1,7 @@
 /**
  * What the command bar shows for a query (DESIGN.md §7.3, ARCHITECTURE.md §10):
- * the address or search for the text, open tabs in every chord, history,
- * other chords and actions, ranked by the signals in core/rank.ts (from
+ * the address or search for the text, open tabs in every chord, archived tabs,
+ * history, other chords and actions, ranked by the signals in core/rank.ts (from
  * Crest): how well the text matches, how often and recently a page was used,
  * whether a tab is pinned, and what was picked before for the same text.
  *
@@ -25,6 +25,7 @@ import {
   sortedChords,
   usagePoints,
   type ActionId,
+  type ArchivedTab,
   type Chord,
   type SiteKeyword,
   type State,
@@ -33,7 +34,7 @@ import {
 import type { HistorySearch } from '@chord/ipc';
 import { displayHost, pageTitle } from '../shared/site';
 
-export type Filter = 'tabs' | 'pinned' | 'history' | 'chords' | 'actions';
+export type Filter = 'tabs' | 'pinned' | 'history' | 'archive' | 'chords' | 'actions';
 export type Scope = { kind: 'keyword'; keyword: SiteKeyword } | { kind: 'filter'; filter: Filter };
 
 export type Result =
@@ -41,16 +42,19 @@ export type Result =
   | { kind: 'open'; key: string; title: string; detail: string; url: string; search: boolean; suggested?: boolean }
   | { kind: 'tab'; key: string; title: string; detail: string; tab: TabNode; chordName: string | null }
   | { kind: 'history'; key: string; title: string; detail: string; url: string }
+  /** A tab in the archive: picking it brings the tab back, history and all. */
+  | { kind: 'archive'; key: string; title: string; detail: string; url: string; archiveId: string }
   | { kind: 'action'; key: string; title: string; action: ActionId }
   | { kind: 'chord'; key: string; title: string; chord: Chord }
   /** A way to narrow the bar: search a site, or show one kind of result. */
   | { kind: 'scope'; key: string; title: string; detail: string; scope: Scope };
 
-/** The narrowing filters (DESIGN.md §7.3), in the order `@` lists them. `@archive` joins when the archive does. */
+/** The narrowing filters (DESIGN.md §7.3), in the order `@` lists them. */
 export const FILTERS: readonly { id: Filter; token: string; name: string; placeholder: string }[] = [
   { id: 'tabs', token: '@tabs', name: 'Tabs', placeholder: 'Search open tabs' },
   { id: 'pinned', token: '@pinned', name: 'Pinned', placeholder: 'Search pinned tabs' },
   { id: 'history', token: '@history', name: 'History', placeholder: 'Search history' },
+  { id: 'archive', token: '@archive', name: 'Archive', placeholder: 'Search the archive' },
   { id: 'chords', token: '@chords', name: 'Chords', placeholder: 'Search chords' },
   { id: 'actions', token: '@actions', name: 'Actions', placeholder: 'Search actions' },
 ];
@@ -78,6 +82,7 @@ export function scopeLabel(scope: Scope): { name: string; placeholder: string } 
 /** Actions that work in this milestone; the list grows with each feature. */
 const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'tab.reopen', title: 'Reopen closed tab', words: 'reopen closed tab undo restore' },
+  { action: 'app.history', title: 'Archive', words: 'archive archived history closed tabs' },
   { action: 'tab.close', title: 'Close tab', words: 'close tab' },
   { action: 'tab.pin', title: 'Pin or unpin tab', words: 'pin unpin tab keep' },
   { action: 'address.copy', title: 'Copy page address', words: 'copy url address link' },
@@ -100,7 +105,7 @@ const ACTIONS: { action: ActionId; title: string; words: string }[] = [
 ];
 
 /** The most rows of each kind, and in all. A filter shows more of its one kind. */
-const LIMIT = { tab: 5, history: 6, chord: 3, action: 3 } as const;
+const LIMIT = { tab: 5, archive: 4, history: 6, chord: 3, action: 3 } as const;
 const MAX_ROWS = 12;
 /** A filter lists everything of its kind; the panel scrolls. */
 const FILTER_ROWS = 50;
@@ -112,6 +117,15 @@ const LEADS_AT_USAGE = 120;
 const LEADS_AT_RECENCY = 100;
 
 const tabTitle = (t: TabNode) => pageTitle(t) || displayHost(t.url) || 'New tab';
+
+const archiveResult = (a: ArchivedTab): Result => ({
+  kind: 'archive',
+  key: `archive:${a.id}`,
+  title: a.title || shortUrl(a.url),
+  detail: shortUrl(a.url),
+  url: a.url,
+  archiveId: a.id,
+});
 
 /** "github.com/anaremore/chord-browser": the address without scheme or `www.`. */
 export function shortUrl(url: string): string {
@@ -132,6 +146,7 @@ export function destinationOf(result: Result): string | null {
     case 'tab':
       return placeKey(result.tab.url) ?? `tab:${result.tab.id}`;
     case 'history':
+    case 'archive':
       return placeKey(result.url);
     case 'chord':
       return `chord:${result.chord.id}`;
@@ -150,7 +165,7 @@ export function destinationOf(result: Result): string | null {
  */
 export function completionFor(typed: string, lead: Result | undefined): string {
   if (!typed || /\s/.test(typed) || typed.includes('://')) return '';
-  if (lead?.kind !== 'tab' && lead?.kind !== 'history') return '';
+  if (lead?.kind !== 'tab' && lead?.kind !== 'history' && lead?.kind !== 'archive') return '';
   const place = placeKey(lead.kind === 'tab' ? lead.tab.url : lead.url);
   if (!place) return '';
   const lower = typed.toLowerCase();
@@ -219,6 +234,9 @@ export function buildResults(
     const intent: Result = { kind: 'open', key: 'open', title: q, detail: `Search ${k.name}`, url: keywordSearchUrl(k, q), search: true };
     const pages: Result[] = [
       ...tabs.filter((t) => onSite(t.url) && matchScore(q, tabTitle(t), shortUrl(t.url)) !== null).map(tabResult),
+      ...(history?.archive ?? [])
+        .filter((a) => onSite(a.url) && matchScore(q, a.title || shortUrl(a.url), shortUrl(a.url)) !== null)
+        .map(archiveResult),
       ...(history?.history ?? [])
         .filter((h) => onSite(h.url) && matchScore(q, h.title || shortUrl(h.url), shortUrl(h.url)) !== null)
         .map((h): Result => ({ kind: 'history', key: `history:${placeKey(h.url)}`, title: h.title || shortUrl(h.url), detail: shortUrl(h.url), url: h.url })),
@@ -289,6 +307,30 @@ export function buildResults(
     const place = placeKey(intent.url);
     if (place) claimed.add(place);
   }
+  // Archived tabs before history: the same page, but it comes back with its own back/forward
+  // history. It ranks with the page's use, and recent archiving counts as recent use.
+  const usageOf = new Map<string, number>();
+  for (const h of history?.history ?? []) {
+    const place = placeKey(h.url);
+    if (place) usageOf.set(place, Math.max(usageOf.get(place) ?? 0, usagePoints(h.frecency)));
+  }
+  for (const a of history?.archive ?? []) {
+    const place = placeKey(a.url);
+    if (!place || claimed.has(place)) continue;
+    claimed.add(place);
+    const title = a.title || shortUrl(a.url);
+    const match = matchScore(q, title, shortUrl(a.url));
+    if (match === null) continue;
+    const result = archiveResult(a);
+    const usage = Math.max(usageOf.get(place) ?? 0, recencyPoints(a.archivedAt, now));
+    scored.push({
+      result,
+      kind: 'archive',
+      score: match + usage + learned(result),
+      mayLead: (prefixes(q, title) || prefixes(q, shortUrl(a.url))) && usage >= LEADS_AT_USAGE,
+    });
+  }
+
   for (const h of history?.history ?? []) {
     const place = placeKey(h.url);
     if (!place || claimed.has(place)) continue;
@@ -400,6 +442,13 @@ function filtered(
         (h) => ({ kind: 'history', key: `history:${placeKey(h.url)}`, title: h.title || shortUrl(h.url), detail: shortUrl(h.url), url: h.url }),
       );
     }
+    case 'archive':
+      return ranked(
+        history?.archive ?? [],
+        (a) => matchScore(q, a.title || shortUrl(a.url), shortUrl(a.url)),
+        (a) => (q ? recencyPoints(a.archivedAt, now) : a.archivedAt / 1e12),
+        archiveResult,
+      );
     case 'chords':
       return ranked(
         sortedChords(state).filter((c) => c.id !== activeChordId),

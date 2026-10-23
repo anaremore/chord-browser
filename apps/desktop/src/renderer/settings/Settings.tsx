@@ -4,12 +4,14 @@
  * everywhere: the window behind this one re-themes as you pick.
  */
 import {
+  DEFAULT_PROFILE,
   DEFAULT_SETTINGS,
   SEARCH_ENGINES,
   SHORTCUTS,
   formatKeys,
   keysFor,
   searchEngine,
+  type ArchiveAfter,
   type MotionSettings,
   type Shortcut,
 } from '@chord/core';
@@ -21,7 +23,7 @@ import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import { AppearanceSection } from './Appearance';
-import { ResetButton, Row, SectionHeader, Switch } from './controls';
+import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import styles from './Settings.module.css';
 
 const SECTIONS = [
@@ -90,11 +92,43 @@ function DefaultBrowser({ platform }: { platform: SystemInfo['platform'] }) {
   );
 }
 
+/** Which chords share sign-ins (DESIGN.md: "Keep sign-ins separate", never "profile"). */
+function SignIns({ snapshot }: { snapshot: SettingsSnapshot }) {
+  const { settings, chords } = snapshot;
+  return (
+    <>
+      <h2 className={styles.groupTitle}>
+        Sign-ins
+        <ResetButton visible={settings.separateSignIns !== DEFAULT_SETTINGS.separateSignIns} onReset={() => void api.settings.set({ separateSignIns: DEFAULT_SETTINGS.separateSignIns })} />
+      </h2>
+      <div className={styles.group}>
+        <Row
+          label="New chords keep their own sign-ins"
+          description="Off: every chord shares your accounts (Google and the rest). On: each new chord starts signed out, with its own cookies."
+          control={<Switch label="New chords keep their own sign-ins" checked={settings.separateSignIns} onChange={(separateSignIns) => void api.settings.set({ separateSignIns })} />}
+        />
+        {chords.map((chord) => {
+          const separate = chord.profileId !== DEFAULT_PROFILE;
+          return (
+            <Row
+              key={chord.id}
+              label={`${chord.icon}  ${chord.name}`}
+              description={separate ? 'Keeps its own sign-ins.' : 'Shares sign-ins with your other chords.'}
+              control={<Switch label={`Keep sign-ins separate for ${chord.name}`} checked={separate} onChange={(value) => void api.settings.chordSignIns(chord.id, value)} />}
+            />
+          );
+        })}
+      </div>
+      <p className={styles.groupNote}>Changing a chord reloads its tabs. A chord on its own starts signed out; Undo brings its old sign-ins back.</p>
+    </>
+  );
+}
+
 function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
   const engine = snapshot.settings.searchEngine;
   return (
     <>
-      <SectionHeader title="General" description="How Chord searches, and whether it opens your links." />
+      <SectionHeader title="General" description="How Chord searches, which chords share sign-ins, and whether it opens your links." />
       <h2 className={styles.groupTitle}>
         Search engine
         <ResetButton visible={engine !== DEFAULT_SETTINGS.searchEngine} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
@@ -130,10 +164,47 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
           }
         />
       </div>
+
+      <h2 className={styles.groupTitle}>Tabs</h2>
+      <div className={styles.group}>
+        <Row
+          label="Archive Today tabs after"
+          description="Tabs you haven't looked at in this long move to the archive. Pinned tabs, and tabs playing or sharing, stay."
+          changed={snapshot.settings.archiveAfter !== DEFAULT_SETTINGS.archiveAfter}
+          onReset={() => void api.settings.set({ archiveAfter: DEFAULT_SETTINGS.archiveAfter })}
+          control={
+            <Segmented<ArchiveAfter>
+              label="Archive Today tabs after"
+              value={snapshot.settings.archiveAfter}
+              options={ARCHIVE_CHOICES}
+              onChange={(archiveAfter) => void api.settings.set({ archiveAfter })}
+            />
+          }
+        />
+        <Row
+          label="Sleep tabs you're not using"
+          description="Tabs hidden for an hour free their memory, and pick up where you left off when you come back."
+          changed={snapshot.settings.sleepTabs !== DEFAULT_SETTINGS.sleepTabs}
+          onReset={() => void api.settings.set({ sleepTabs: DEFAULT_SETTINGS.sleepTabs })}
+          control={
+            <Switch label="Sleep tabs you're not using" checked={snapshot.settings.sleepTabs} onChange={(sleepTabs) => void api.settings.set({ sleepTabs })} />
+          }
+        />
+      </div>
+
+      <SignIns snapshot={snapshot} />
       <DefaultBrowser platform={info.platform} />
     </>
   );
 }
+
+const ARCHIVE_CHOICES: { value: ArchiveAfter; label: string }[] = [
+  { value: '12h', label: '12 hours' },
+  { value: '24h', label: 'A day' },
+  { value: '7d', label: 'A week' },
+  { value: '30d', label: 'A month' },
+  { value: 'never', label: 'Never' },
+];
 
 const MOTION_ROWS: { key: keyof MotionSettings; label: string; description: string }[] = [
   { key: 'followSystem', label: 'Follow system motion settings', description: "When your computer asks for less motion, Chord's animations become instant." },

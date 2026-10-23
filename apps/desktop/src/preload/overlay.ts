@@ -19,6 +19,7 @@ const api: OverlayApi = {
   search: {
     suggest: (query, engine) => invoke('search:suggest', engine ? { query, engine } : { query }),
   },
+  archive: { restore: (archiveId) => invoke('archive:restore', { archiveId }) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

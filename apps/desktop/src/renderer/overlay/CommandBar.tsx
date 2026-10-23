@@ -11,6 +11,8 @@ import { formatKeys, parseInput, shortcutById, type ActionId, type SearchEngineI
 import type { HistorySearch, OverlayOpenEvent, SystemInfo } from '@chord/ipc';
 import {
   AppWindow,
+  Archive,
+  ArchiveRestore,
   ArrowDown,
   ArrowUp,
   Code,
@@ -67,6 +69,7 @@ type Where = 'here' | 'background' | 'front';
 
 const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'tab.reopen': RotateCcw,
+  'app.history': Archive,
   'tab.close': X,
   'tab.pin': Pin,
   'address.copy': Link,
@@ -88,7 +91,7 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'app.shortcuts': Keyboard,
 };
 
-const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, chords: Layers, actions: Command };
+const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, archive: Archive, chords: Layers, actions: Command };
 const scopeIcon = (scope: Scope) => (scope.kind === 'filter' ? FILTER_ICONS[scope.filter] : Search);
 
 /** Anchored panels are at least this wide, so results have room beside a narrow sidebar. */
@@ -109,6 +112,7 @@ function hintFor(result: Result, mode: Session['mode']): { text: string; key: st
   if (result.kind === 'action') return { text: 'Run', key: '↵' };
   if (result.kind === 'chord') return { text: 'Switch to chord', key: '↵' };
   if (result.kind === 'history') return { text: mode === 'edit' ? 'Go' : 'Open', key: '↵' };
+  if (result.kind === 'archive') return { text: 'Bring back', key: '↵' };
   if (result.search) return { text: 'Search', key: '↵' };
   return { text: mode === 'edit' ? 'Go' : 'Open', key: '↵' };
 }
@@ -165,10 +169,10 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
 
   // History and learned picks come from chord-data as the person types. A reply for older text is
   // dropped; until the new one lands, the last reply keeps rows from flickering away. `@history`
-  // asks even before anything is typed, for recent pages.
+  // asks even before anything is typed, as does `@archive`: recent pages, newest archived tabs.
   const [history, setHistory] = useState<HistorySearch | null>(null);
   const searchSeq = useRef(0);
-  const historyFilter = scope?.kind === 'filter' && scope.filter === 'history';
+  const historyFilter = scope?.kind === 'filter' && (scope.filter === 'history' || scope.filter === 'archive');
   useEffect(() => {
     if (!session || session.mode === 'downloads' || (!query.trim() && !historyFilter)) return;
     const seq = ++searchSeq.current;
@@ -253,7 +257,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
     const typed = query.trim();
     const destination = destinationOf(result);
     if (typed && typed !== session?.initial && destination && !scope) {
-      const address = result.kind === 'open' || result.kind === 'history' ? result.url : result.kind === 'tab' ? result.tab.url : undefined;
+      const address = result.kind === 'open' || result.kind === 'history' || result.kind === 'archive' ? result.url : result.kind === 'tab' ? result.tab.url : undefined;
       void api.history.choose(typed, destination, address && /^https?:/i.test(address) ? address : undefined);
     }
     if (result.kind === 'open' || result.kind === 'history') {
@@ -263,6 +267,8 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       void dispatch({ t: 'tab.activate', windowId, nodeId: result.tab.id });
     } else if (result.kind === 'chord') {
       void dispatch({ t: 'chord.activate', windowId, chordId: result.chord.id });
+    } else if (result.kind === 'archive') {
+      void api.archive.restore(result.archiveId);
     }
     close();
     // Actions run after the bar closes, so focus is back on the page (print, devtools, zoom act on it).
@@ -414,13 +420,15 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                       ? (ACTION_ICONS[result.action] ?? CornerDownLeft)
                       : result.kind === 'history'
                         ? History
-                        : result.kind === 'scope'
-                          ? scopeIcon(result.scope)
-                          : result.kind === 'open'
-                            ? result.search
-                              ? Search
-                              : Globe
-                            : null;
+                        : result.kind === 'archive'
+                          ? ArchiveRestore
+                          : result.kind === 'scope'
+                            ? scopeIcon(result.scope)
+                            : result.kind === 'open'
+                              ? result.search
+                                ? Search
+                                : Globe
+                              : null;
                   const isSelected = i === current;
                   const hint = hintFor(result, session.mode);
                   return (
@@ -444,11 +452,12 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                         Icon && <Icon className={styles.resultIcon} size={16} strokeWidth={1.75} aria-hidden />
                       )}
                       <span className={styles.resultTitle}>{result.title}</span>
-                      {(result.kind === 'open' || result.kind === 'tab' || result.kind === 'history') && result.detail && (
+                      {(result.kind === 'open' || result.kind === 'tab' || result.kind === 'history' || result.kind === 'archive') && result.detail && (
                         <span className={styles.resultDetail}>{result.detail}</span>
                       )}
                       {result.kind === 'scope' && <span className={styles.chip}>{result.detail}</span>}
                       {result.kind === 'chord' && <span className={styles.resultDetail}>Chord</span>}
+                      {result.kind === 'archive' && <span className={styles.chip}>Archived</span>}
                       {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
                       {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform)}</kbd>}
                       {isSelected && (

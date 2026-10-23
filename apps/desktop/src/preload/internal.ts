@@ -17,6 +17,7 @@ const api: SettingsApi = {
     saveTheme: (theme) => invoke('settings:saveTheme', { theme }),
     deleteTheme: (id) => invoke('settings:deleteTheme', { id }),
     copyText: (text) => invoke('settings:copyText', { text }),
+    chordSignIns: (chordId, separate) => invoke('settings:chordSignIns', { chordId, separate }),
     defaultBrowser: () => invoke('settings:defaultBrowser'),
     makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),
     updateStatus: () => invoke('settings:updateStatus'),
