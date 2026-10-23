@@ -132,6 +132,25 @@ describe('chord-data', () => {
     expect(restoreState(saved, { now: 9, newId: ctx.newId, theme: state.chords[Object.keys(state.chords)[0]!]!.theme, homeUrl: 'x' }).extensions).toEqual(state.extensions);
   });
 
+  it('keeps a split view through a restart, and forgets it once it dissolves', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const windowId = Object.keys(state.windows)[0]!;
+    const first = Object.values(state.nodes)[0]!.id;
+    state = drive(db, state, [{ t: 'split.add', windowId, withId: first, url: 'https://beside.test/', direction: 'column' }]);
+    const split = Object.values(state.nodes).find((n) => n.kind === 'split')!;
+    state = drive(db, state, [{ t: 'split.resize', splitId: split.id, sizes: [0.3, 0.7] }]);
+    db.close();
+    db = new ChordDatabase(file);
+    const back = restoreState(db.load(), { now: 0, newId: ctx.newId, theme: state.chords[split.chordId]!.theme, homeUrl: 'https://home.test/' });
+    expect(back.nodes[split.id]).toMatchObject({ kind: 'split', direction: 'column', sizes: [0.3, 0.7] });
+    expect(Object.values(back.nodes).filter((n) => n.parentId === split.id)).toHaveLength(2);
+    drive(db, state, [{ t: 'split.separate', splitId: split.id }]);
+    db.close();
+    expect(count('split')).toBe(0);
+  });
+
   it('deletes closed tabs and unused icons', () => {
     let db = new ChordDatabase(file);
     let state = seed();
@@ -182,6 +201,30 @@ describe('chord-data', () => {
     db.close();
     db = new ChordDatabase(file);
     expect(db.load()!.siteZoom).toEqual({ 'b.test:8080': 0.8 });
+    db.close();
+  });
+
+  it('keeps link routes across a restart, and forgets one that was removed', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const chordId = Object.keys(state.chords)[0]!;
+    state = drive(db, state, [
+      { t: 'linkRoute.set', host: 'github.com', chordId },
+      { t: 'linkRoute.set', host: 'linear.app', chordId },
+    ]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect(
+      db
+        .load()!
+        .linkRoutes!.map((r) => r.host)
+        .sort(),
+    ).toEqual(['github.com', 'linear.app']);
+    drive(db, state, [{ t: 'linkRoute.delete', host: 'github.com' }]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect(db.load()!.linkRoutes).toEqual([{ host: 'linear.app', chordId, createdAt: expect.any(Number) }]);
     db.close();
   });
 

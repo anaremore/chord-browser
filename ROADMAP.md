@@ -71,7 +71,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 | M1.4 Command bar + archive | ranking with learned picks, history, completion, suggestions, site keywords, `@` filters, archive, sleeping tabs, ⌘⇧T | | |
 | M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows | PDFs, spellcheck, screen sharing, site permissions page, **editable shortcuts** (moved up from Phase 3) | real password-manager sign-in checks |
 | M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check | CI green on every OS, macOS hands-on on your MacBook | accessibility pass, design QA sweep, performance budgets, the 0.1 release |
-| Phase 2 | | Duet (chat that can read the browser) | split view, mini window, Peek, hover previews, Electron 46 |
+| Phase 2 | Duet (chat that can read the browser; on its branch, waiting to merge) | Codex's live-turn checks (S5, after its usage limit resets Nov 16) | split view, mini window, Peek, hover previews, Electron 46 |
 
 ---
 
@@ -206,7 +206,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
   - Windows: the NSIS include that writes the registry keys, plus a deep link to Settings.
   - macOS: `Info.plist` and the system prompt.
   - Linux: `.desktop` plus GIO and `xdg-settings`.
-  - For now, links from other apps open in the active window; the mini window arrives in Phase 3.
+  - Links from other apps open in a mini window (Phase 2, below); Settings → General can make them tabs instead.
 - **`chord://settings`:** search engine, auto-archive, appearance, PiP, extensions, default browser, update channel.
 - **Rebindable shortcuts** with conflict detection (moved up from Phase 3 at your request, 2026-10-23). **Done:** every action's keys can be changed in Settings → Keyboard shortcuts (DESIGN.md §14.1).
 
@@ -245,9 +245,9 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 
 - **Electron 46 upgrade** as soon as it's stable (Jan 5, 2027). It's our first major upgrade and the rehearsal for the 8-week cadence.
 - **Split view:** 2–4 panes, drag-to-split drop zones, saved as one unit in the sidebar, dividers, focus ring (DESIGN.md §7.9 and §8.4).
-- **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it. *(Moved up from Phase 3 on 2026-10-22: Chord can already be your default browser.)*
-- **Peek** for links clicked inside pinned tabs. *(Moved up from Phase 3 on 2026-10-22.)*
-- **Hover previews** for pinned tabs and folders, with the capture cache.
+- **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it. *(Moved up from Phase 3 on 2026-10-22: Chord can already be your default browser.)* **Built 2026-10-23** (DESIGN.md §7.9).
+- **Peek** for links clicked inside pinned tabs. *(Moved up from Phase 3 on 2026-10-22.)* **Built 2026-10-23**, with *Open link in Peek* in any tab's menu, private windows included (DESIGN.md §8.5).
+- **Hover previews** for pinned tabs and folders, with the capture cache. *(Built 2026-10-23: ARCHITECTURE.md §9, with a switch in Settings → Privacy.)*
 - **Duet: conversations on the fly, optionally reading the browser** (ARCHITECTURE.md §11). Scope set 2026-10-22: *"basic chat is enough"*.
   - **Setup:** detects your `claude` / `codex`; "Sign in" runs `claude auth login` or `codex login` for you.
   - **Adapters:** Claude Code (the unmodified CLI) and Codex app-server.
@@ -255,14 +255,15 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
   - **Threads:** one per chord, kept by Chord and resumed across restarts.
   - **Controls:** exclusions per site, plus per-chord and global off.
   - No organize actions: Duet reads, it doesn't rearrange your tabs.
+  - **Built** (ARCHITECTURE.md §11 as built; spikes S10 pass, S5 partly verified). Still to do: reading PDFs, the panel's slide-in animation, Claude Code or Codex installed only inside WSL.
 
 ## Phase 3 — Links from everywhere · February 2027
 
-- **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in.
+- **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in. **Built 2026-10-23**, with the mini window: routes apply to links from other apps and to the command bar, and Chord offers a route rather than making one (DESIGN.md §8.5).
 - **Distribution:**
   - **Flathub:** a from-source manifest; app ID verified through chordbrowser.com.
   - **Cloudsmith** apt and dnf repos, GPG-signed.
-  - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests.
+  - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests. *Built:* download in the background, then "Restart to update"; it needs the signing key made once ([docs/SECURITY-PATCHING.md](docs/SECURITY-PATCHING.md#update-signing-key)).
   - The **72-hour patch runbook** rehearsed end to end.
 - **D7** Safe Browsing, if you choose it.
 - **Google-free mode** (requested 2026-10-22).
@@ -273,6 +274,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
     - spellcheck dictionaries from a non-Google host (`session.setSpellCheckerDictionaryDownloadURL`), or local only;
     - plus anything else the audit finds.
   - *Kept honest by a test:* CI fails if a fresh session in this mode contacts a Google domain on its own.
+  - *Built:* the audit is [S10](docs/decisions/S10-google-free.md). The switch is in Settings → Privacy: a non-Google engine (your choice), so its suggestions too; spelling only with dictionaries already downloaded; no background Web Store update checks. The test is `test/e2e/google-free.spec.ts`. A new profile's first tab is still Google, because the mode can't be on yet.
 
 ## Phase 4 — Deeper · March 2027 onward
 
@@ -301,7 +303,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 | Native-messaging lookup for password managers | M1.5 |
 | Per-animation switches with ↺ reset, and ↺ on every changed setting | Each animation as it ships (DESIGN.md §6.8) |
 | Connect an agent: MCP helper, chrome-devtools-mcp tool names, badge and Stop | Parked |
-| Link routes, remembered chord per site | Phase 3 |
+| Link routes, remembered chord per site | Done (2026-10-23, with the mini window) |
 | Import guardrails with written exemptions, AGENTS.md, append-only release notes | Process, M1.1 |
 
 Skipped on purpose: Crest Passwords (we use extensions), its 19-host blocklist, memory-pressure unloading (Electron has no pressure event), and its heraldic visual identity (trademarked).

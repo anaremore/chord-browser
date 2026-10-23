@@ -408,7 +408,7 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | **Collapse sidebar** | The sidebar slides out to the left (`snappy`). Back/forward/reload and the URL pill glide up into the bar (shared layout), and the pill morphs into the address field. The page frame widens using the snapshot technique (`smooth`). Docking reverses every piece. |
 | **Sidebar peek** (collapsed) | The sidebar slides in *over* the page with `shadow-popover` (`snappy`) and slides away 300 ms after the pointer leaves. The page doesn't move. |
 | **Edit the address (⌘L)** | The URL pill (or, in minimal mode, the bar's address field) becomes the input where it sits: its text and position stay put while the results panel grows down beneath it (`overlay`). With *Animate into the command bar* off (§6.8), it appears instantly. |
-| **Duet panel** | The panel slides in from the right with `overlay`. The page's frame narrows through the snapshot technique: the bitmap scales over one `smooth` spring, then the real view is placed once. |
+| **Duet panel** | The panel slides in from the right with `overlay`. The page's frame narrows through the snapshot technique: the bitmap scales over one `smooth` spring, then the real view is placed once. ⚠ *Not yet:* in Phase 2 the panel appears and the page is resized once, without the slide. |
 
 ### 6.6 Reduced motion
 
@@ -526,9 +526,10 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 ### 7.6 `HoverPreview`
 
 - 280 px card next to the sidebar, aligned to the hovered row and clamped to the window.
-- **Pinned tab:** a 280×175 thumbnail (last capture, WebP), title (`text-label`), domain (`text-small`, muted), and "Opened 2 h ago" (`text-micro`). A tab never captured shows its favicon on its tint.
+- **Pinned tab:** a 280×175 thumbnail (last capture, JPEG), title (`text-label`), domain (`text-small`, muted), and "Opened 2 h ago" (`text-micro`). A tab never captured shows its favicon on its tint.
 - **Folder:** the folder title, then up to 6 rows (favicon and title), then "and 4 more".
-- **Timing:** appears after `delay-hover-intent`. While one is visible, moving to another row swaps instantly: content crossfades, position glides (`snappy`). Hidden while dragging or resizing.
+- **Timing:** appears after `delay-hover-intent`. While one is visible, moving to another row swaps instantly: content crossfades, position glides (`snappy`). Hidden while dragging, resizing or peeking, and on a click, scroll or key.
+- **Off switch:** Settings → Privacy → Show page previews (on by default). Off deletes the pictures.
 
 ### 7.7 `ThemePicker`
 
@@ -576,21 +577,31 @@ Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 
 ### 7.8 `DuetPanel`
 
-- **Frame:** a `surface` frame (`radius-frame`, `shadow-frame`).
-- **Header (40 px):** thread title, a provider/model chip (e.g. "Claude Code · Sonnet"), the thread menu (New thread, All threads, Export as Markdown), and close.
+As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECTURE.md §11).
+
+- **Frame:** a `surface` frame (`radius-frame`, `shadow-frame`), 380 px, right of the page with an 8 px gap. The page's frame narrows to make room.
+- **Header (40 px):** the chat's title (click *Rename* to edit it in place), a *provider · model* chip ("Claude Code · Default") that opens the model menu, the **Chats** menu (New chat, Rename, Export as Markdown, Delete this chat, recent chats, Turn off in this chord), and close.
+- **Reading line:** "Duet can read:" with *What you attach (asks for more)* · *Tabs in this chord* · *All my tabs*, for this chat (the default is set in Settings → Duet).
 - **Messages:** `text-body`, max width 64ch.
-  - User messages sit in a soft accent-tinted bubble; assistant messages are unbubbled for calm reading.
-  - **Citations** are small numbered pills; clicking one switches to the source tab and highlights the quote.
-- **`ToolActivityRow`:** a single quiet line ("Read 3 tabs", "Searched history for 'flights'") that expands to show details.
-- **`ApprovalCard`:** shows what the tool will do, in plain words ("Create folder 'Trip' with 6 tabs"), with the target listed.
-  - Buttons: **Allow once** (⌘↵) · **Allow for this thread** · **Deny** (Esc).
-  - The card never auto-accepts.
+  - User messages sit in a soft accent-tinted bubble, with the attached tabs' titles under it; hovering shows **Copy** and, on the last one, **Edit and send again**.
+  - Assistant messages are unbubbled for calm reading: a small, safe Markdown subset with no images. A link shows its full address and opens only when clicked.
+  - **Citations** are small numbered pills inside the sentence they support. Clicking one switches to the source tab and finds the quote; if the tab is gone, it opens the page scrolled to the quote.
+  - An interrupted reply says *Interrupted* with **Retry**; an error gives the plain cause and the fix.
+  - Dividers mark *Continued with a summary* and *Switched to Codex*.
+- **`ToolActivityRow`:** a single quiet line ("Read “Article”", "Read 3 tabs · 1 more", "Searched history for 'flights'") that expands to show details.
+- **`ApprovalCard`** ("Duet is asking"): what Duet wants to read, in plain words ("Read “Pricing”", "See the list of your tabs"), with the target listed.
+  - Buttons: **Allow once** (⌘↵ / Ctrl+↵) · **Allow for this chat** · **No** (Esc).
+  - The card never auto-accepts. Once answered it shrinks to a muted line (*Allowed*, *Not allowed*).
+- **Working:** a dot and *Working… 12s* while a reply streams; text renders as it arrives, with no typing animation.
+- **Follow:** the list follows new text until you scroll up more than 40 px; then a **Jump to latest** pill appears.
 - **Composer:**
-  - `ContextChips` above the input. The current tab is attached by default as a visible, removable chip ("This tab · example.com"); excluded sites can never be attached.
-  - `@` opens a picker for tabs, pinned tabs, chords, and split panes.
-  - Enter sends; Shift+Enter adds a new line.
-  - Send is disabled until there's text.
-- **States:** *Off* (not shown at all) · *Intro* · *Setup* · *Ready, empty* · *Streaming* (stop button; partial text renders as it arrives with no typing animation) · *Needs approval* · *Provider error* (plain cause plus fix, e.g. "Claude Code isn't signed in. Run `claude auth login` in a terminal, then try again.").
+  - `ContextChips` above the input. The current tab is attached by default as a removable chip ("This tab · example.com"); sites Duet can never read are never offered. The chip's tooltip says what's sent where.
+  - `@` opens a picker of this chord's tabs.
+  - Enter sends; Shift+Enter adds a line; ↑ in an empty composer recalls your last message; Esc stops a reply.
+  - Messages sent while Duet is answering are **queued** as chips (removable) and go in order.
+  - Send turns into **Stop** while a reply streams. Each chat keeps its own draft.
+- **States:** *Off* (not shown at all) · *Off in this chord* (a note and **Turn on in this chord**) · *Intro* · *Setup* · *Ready, empty* (three suggestion chips, and *Continue “title”* after 12 hours idle) · *Streaming* · *Needs approval* · *Provider error* (plain cause plus fix, e.g. "Claude Code isn't signed in. Run `claude auth login` in a terminal, then try again.").
+- **In the sidebar:** a small ✦ on tabs Duet read while the chat is open (*Duet read this tab*).
 
 ### 7.9 Split view, Peek, mini window, hidden chrome
 
@@ -598,7 +609,7 @@ Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 |---|---|
 | **Split view** | 2–4 panes, each its own rounded frame, separated by 8 px gaps. The focused pane gets a 2 px accent ring at 50% in the gap. Dividers are invisible until hovered, then show a 4×32 px pill (`fg` at 30%); the cursor shows the resize direction. Minimum pane width 320 px; double-click a divider to equalize. **In the sidebar** a split is one row: up to 4 favicons in a line plus a joined title ("Docs + Figma"), expandable to show its members. |
 | **Peek** | Scrim plus a card up to 88% of the frame (max 1200×900), `radius-lg`, `shadow-modal`, with a 40 px header (domain · *Open in Today* ⌘↵ · *Close* Esc). It enters from scale 0.92 at the click point (`overlay`). Promoting it grows the card into the frame (`smooth`) and the page becomes a Today tab. |
-| **Mini window** | A small window (remembers its size; default 900×640) with a 36 px bar showing the domain, **Open in ▾ [chord]**, and close. Neutral tint. Promoting it fades the window out, and the tab lands in the chosen chord's Today with the pin bloom. On Wayland the compositor places the window. |
+| **Mini window** | A small window (remembers its size; default 900×640) with a 36 px bar showing the domain, **Open in ▾ [chord]**, and close. Neutral tint. Promoting it fades the window out, and the tab lands in the chosen chord's Today with the pin bloom. On Wayland the compositor places the window.<br>**As built:** each link gets its own mini window, cascaded from the middle of the screen. The bar shows a lock or globe with the domain, *Copy link*, and a split button: **Open in [icon] [chord]** moves the page (⌘↵ / Ctrl+Enter), and ▾ picks another chord from a menu, which moves it there at once. Close is the window's own caption control (traffic lights on macOS, the caption buttons on Windows and Linux), as for Chord's other windows. A thin line along the bar's bottom shows loading. Chord launched just to open a link shows only the mini window. ⚠ Not yet: the pin bloom on arrival (the tab just appears at the top of Today), and the fade on Linux (it closes at once). |
 | **Auto picture-in-picture** | Leave a tab while its video plays and the video pops out into a floating window over everything, including other apps. Come back and it slides home inline.<br>**The window is Chromium's native PiP window**, the same one Chrome and Dia use. Its controls appear on hover: ↖ *back to tab* (top-left), the site's origin (top-center), ✕ (top-right), play/pause with the site's skip buttons (e.g. −10 / +30), and a progress bar. Chord doesn't restyle or animate this window; the OS and Chromium own it.<br>**In the sidebar** the tab's speaker icon becomes a PiP glyph (Lucide `picture-in-picture-2`). Clicking the glyph brings the video home.<br>**Settings:** *Pop out playing videos when you switch away* (on by default), plus a per-site "Don't pop out" in the site menu.<br>Details and limits: ARCHITECTURE.md §9. |
 | **Minimal mode** (sidebar collapsed; the brief's "hidden chrome") | Specified in §3.3. Toggled by the bar's ◧ button, the sidebar's collapse button, the command bar ("Hide sidebar"), or the toggle shortcut. Peek reveal: pointing within 6 px of the left edge for 120 ms, or hovering ◧ for 300 ms. In OS fullscreen the bar itself auto-hides. |
 
@@ -622,7 +633,7 @@ The window opens at 1200×800, centered, with the real sidebar on the left showi
 - *As built:* a brand-new profile starts here. Chrome's `--no-first-run` skips it, and development builds can force it with `CHORD_FIRST_RUN=1` (Playwright adds `--no-first-run` to every Electron app it drives). The page waits hidden behind the cards. Step 5 is left out when Chord is already the default, and in development builds, which can't be.
 - Progress shows as 6 dots: filled for required steps, hollow for optional.
 - Every optional step can be skipped with Esc.
-- Duet is **not** part of onboarding; it's opt-in later (§8.6).
+- Duet is **not** part of onboarding; it sets itself up the first time you open it (§8.6).
 
 ### 8.2 Chord switching
 
@@ -648,25 +659,33 @@ Triggers: two-finger swipe on the sidebar (§6.4) · ⌘/Ctrl+1–9 · clicking 
 2. **On drop:** the frame divides with the snapshot technique (`smooth`). The sidebar row morphs into a `SplitRow`.
 3. **Resize** by dragging the gaps. The focused pane follows the cursor or click; ⌘⌥[ / ⌘⌥] (Ctrl+Alt+[ / ]) moves focus. (⌘⌥←/→ is taken by chord switching.)
 4. **Close a pane:** the others expand (`smooth`). A split of one dissolves back into a normal tab. Each step can be undone from a toast.
-5. Splits are saved as a unit in Pinned or Today and come back exactly as they were.
+5. Splits are saved as a unit in Pinned or Today (and in folders) and come back exactly as they were. A private window can split too; like everything else there, it's never saved.
+6. A split is something you set up on purpose: auto-archive skips its tabs (off screen they can still sleep, like any tab), and Clear leaves it in Today. Pinning or unpinning one of its tabs moves the whole split. To let its tabs go, close them or *Separate tabs* (Undo in a toast).
 
 ### 8.5 Peek (from pinned tabs)
 
 A link clicked inside a pinned tab opens in Peek instead of replacing the pinned page. ↵ keeps it (*Open in Today*); Esc dismisses it. Peek's back stack is its own.
 
+**As built:**
+- Only links to another site open Peek (`docs.google.com` → `mail.google.com` stays in place). A link you follow, by click or Enter, counts; a page redirecting itself doesn't. ⌘/Ctrl-click still opens a background tab.
+- Any tab can open a link in Peek from its right-click menu (*Open link in Peek*). That's how a private window peeks: it has no pinned tabs. Nothing from a private window's Peek is kept.
+- Keeping it is ⌘↵ / Ctrl+Enter (plain ↵ belongs to the page). Esc, a click outside the card, or ⌘W closes it; so does switching tabs or chords.
+- While Peek is open, find (⌘F), zoom, reload, back, print and copy link act on Peek's page.
+
+**Links from other apps and link routes** (from Crest). A link another app hands Chord opens in a mini window (§7.9), or as a new tab if you choose that in Settings → General. A site can have a **link route** to a chord: its links from other apps go straight there as tabs, and so do addresses you type in the command bar, even from another chord. Chord never makes a route on its own. The second time in a session you move a site's page to the same chord, Chord asks. Moving a tab, the question is a second line on its toast: *Moved to Work* · Undo, then *Always open linear.app here?* · Always. From a mini window it's a toast of its own: *Always open linear.app in Work?* Settings → General → Link routes lists them, and you can change, add or remove one there.
+
 ### 8.6 Duet: first use
 
-1. The user clicks Duet in the page actions or presses the Duet shortcut (§13). The panel opens with **Intro**:
+1. The user clicks **✦ Duet** in the top bar or presses ⌘E / Ctrl+E. The panel opens with **Intro**:
    > **Meet Duet.** Chat about this page and your tabs, using your own Claude Code or Codex app. Chord never sees your sign-in, and nothing is sent until you press Send.
-   >
-   > **Set up Duet** · *Not now*
-2. **Setup** lists what's on this computer:
-   - Claude Code — *Installed 2.x · Signed in ✓* or *Sign in* (opens a terminal running `claude auth login`).
-   - Codex — *Not installed · How to install*.
-   - The user picks a default and is done. The **API key** and **local model** options sit behind *Other ways to connect* (later phase).
-3. **Ready, empty:** "Ask about this page, your tabs, or anything you're working on." Three chips change with the page: *Summarize this page* · *What should I know before I decide?* · *Compare with my other tabs*.
-4. **First answer:** citations link back into the page; tool activity is visible; any organizing action asks first.
-5. **Turning it off** (Settings → Duet → Off) removes the panel, the button, the shortcut, and the context-menu items.
+2. **Setup** (under the intro) lists what's on this computer:
+   - Claude Code: *Installed 2.1.309 · Signed in* with **Use this**, or **Sign in** (opens a terminal running `claude auth login`). *Using your API key* shows when that's what pays.
+   - Codex: *Not installed* · **How to install**.
+   - **Check again** re-detects. The user picks one and is done; it can be changed any time from the model chip or Settings.
+3. **First-use note**, once: "What you attach goes to Claude Code through your own account. Duet reads only what's attached to your message, unless you let it see more. It never sees what you type into forms." **Got it**.
+4. **Ready, empty:** "Ask about this page, your tabs, or anything you're working on." Chips: *Summarize this page* · *What should I know before I decide?* · *Compare with my other tabs*.
+5. **First answer:** citations link back into the page; tool activity is visible; reading beyond what's attached asks first (by default).
+6. **Turning it off:** Settings → Duet → *Show Duet* removes the panel, the button and the shortcut. *Turn off in this chord* (Chats menu) does it for one chord.
 
 ---
 
@@ -758,7 +777,7 @@ Every UI change gets the following before it reaches you:
 
 ## 13. Open design questions
 
-1. **Duet shortcut** (Phase 2). ⌘E / Ctrl+E collides with web editors (Google Docs centers text with it), and §14 keeps Chord off keys pages depend on. Candidates to test in Phase 2: ⌘⌥D / Ctrl+Alt+D, or page-first ⌘E.
+1. ~~**Duet shortcut**~~ **Decided in Phase 2:** ⌘E / Ctrl+E, **page-first**. Google Docs and other editors that use it keep it; everywhere else it toggles Duet. It can be changed in Settings → Keyboard shortcuts.
 2. **Sidebar toggle shortcut.** Proposed in §14: ⌘S / Ctrl+S, page-first (Google Docs and other editors keep their own ⌘S), with Save page on ⌘⇧S. Also: *peek on hover* on by default in minimal mode, with an off switch.
 3. **Favorites row.** Arc's favicon grid sits above the chord and is shared across chords. It isn't in the brief. Add it as a later-phase item, or leave it out?
 4. **Top strip on Windows/Linux.** Show the page title next to the domain, or only the domain (calmer)? I lean domain only, with the title on hover.
@@ -861,8 +880,10 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 
 | Action | macOS | Windows & Linux | Phase |
 |---|---|---|---|
-| Show / hide Duet | to decide (§13) | to decide | 2 |
+| Show / hide Duet (page-first) | ⌘E | Ctrl+E | 2 |
 | Focus the pane left / right in a split | ⌘⌥[ · ⌘⌥] | Ctrl+Alt+[ · Ctrl+Alt+] | 2 |
+| Split with… (the command bar picks what opens beside the current tab) | ⇧⌘\ | Ctrl+Shift+\ | 2 |
+| Separate split tabs | (menus and the command bar) | (menus and the command bar) | 2 |
 | Peek: keep as a tab · close | ⌘↵ · Esc | Ctrl+↵ · Esc | 3 |
 | Mini window: move into a chord | ⌘↵ | Ctrl+↵ | 3 |
 

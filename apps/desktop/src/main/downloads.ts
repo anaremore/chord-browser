@@ -14,7 +14,7 @@ import { safeFilename, uniquePath } from './files';
 const REPORT_MS = 250;
 
 /** The Downloads folder. Development builds can point it elsewhere so tests never touch the real one. */
-function downloadsDir(): string {
+export function downloadsDir(): string {
   const override = process.env['CHORD_DOWNLOADS_DIR'];
   return !app.isPackaged && override ? override : app.getPath('downloads');
 }

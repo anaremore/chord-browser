@@ -15,6 +15,7 @@ const api: ShellApi = {
   layout: {
     anchor: (rect) => invoke('layout:anchor', rect),
     peek: (open) => invoke('layout:peek', { open }),
+    lift: (lifted) => invoke('layout:lift', { lifted }),
   },
   menu: {
     app: (anchor) => invoke('menu:app', anchor),
@@ -29,8 +30,10 @@ const api: ShellApi = {
   },
   chords: { onEdit: (listener) => subscribe('chord:edit', listener) },
   toasts: { onShow: (listener) => subscribe('toast:show', listener) },
+  duet: { view: () => invoke('duet:view'), act: (action) => invoke('duet:do', action), onState: (listener) => subscribe('duet:state', listener) },
   gestures: { onPhase: (listener) => subscribe('gesture:phase', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
+  updates: { restart: () => invoke('update:restart') },
   extensions: {
     state: () => invoke('extensions:state'),
     onState: (listener) => subscribe('extensions:state', listener),
@@ -40,6 +43,7 @@ const api: ShellApi = {
   },
   defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
   share: { stop: (nodeId) => invoke('share:stop', { nodeId }) },
+  preview: { hover: (target) => invoke('preview:hover', target) },
   perf: { shell: (milestone) => invoke('perf:shell', { milestone }) },
 };
 

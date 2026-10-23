@@ -46,6 +46,7 @@
     "@dnd-kit/abstract": "0.5.1",
     "@dnd-kit/dom": "0.5.1",
     "@dnd-kit/react": "0.5.1",
+    "electron-updater": "6.8.11",
     "immer": "11.2.9",
     "lucide-react": "1.61.0",
     "motion": "14.6.0",

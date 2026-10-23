@@ -39,6 +39,18 @@ describe('private windows and persistence', () => {
     expect(all.some((op) => op.k === 'window' && op.id === windowId)).toBe(true);
   });
 
+  it('allows a split in a private window, and never writes it', () => {
+    const opened = drive(seeded, [
+      { t: 'window.create', windowId: 'p1', from: windowId, privateChordId: 'pc' },
+      { t: 'tab.open', windowId: 'p1', url: 'https://secret.test/' },
+    ]);
+    const shown = opened.state.windows['p1']!.activeTab['pc']!;
+    const { state, ops } = drive(opened.state, [{ t: 'split.add', windowId: 'p1', withId: shown, url: 'https://beside.test/' }]);
+    expect(Object.values(state.nodes).some((node) => node.kind === 'split' && node.chordId === 'pc')).toBe(true);
+    expect(ops.filter((op) => op.value !== null && op.k === 'node')).toEqual([]);
+    expect(opsForState(state).some((op) => op.k === 'node' && op.value?.chordId === 'pc')).toBe(false);
+  });
+
   it('still saves the normal window next to it', () => {
     const { ops } = drive(seeded, [
       { t: 'window.create', windowId: 'p1', from: windowId, privateChordId: 'pc' },

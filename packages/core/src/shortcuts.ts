@@ -31,6 +31,10 @@ export type ActionId =
   | 'tab.favorite'
   | 'folder.new'
   | 'today.clear'
+  | 'split.with'
+  | 'split.focusNext'
+  | 'split.focusPrevious'
+  | 'split.separate'
   | 'nav.back'
   | 'nav.forward'
   | 'nav.reload'
@@ -41,6 +45,7 @@ export type ActionId =
   | 'chord.previous'
   | 'chord.delete'
   | 'chord.separateSignIns'
+  | 'duet.toggle'
   | 'window.new'
   | 'window.newPrivate'
   | 'window.close'
@@ -106,6 +111,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('tab.favorite', 'Add this tab to Favorites', 'page-first', []),
   s('folder.new', 'New folder with this tab', 'page-first', []),
   s('today.clear', 'Clear Today', 'page-first', []),
+  // Split view (DESIGN.md §8.4). The backslash reads as a divider; no Alt, so AltGr's letters (ś, ß…) stay typeable.
+  s('split.with', 'Split with…', 'reserved', ['Mod+Shift+\\']),
+  s('split.focusPrevious', 'Focus the pane to the left', 'reserved', ['Mod+Alt+['], ['Ctrl+Alt+[']),
+  s('split.focusNext', 'Focus the pane to the right', 'reserved', ['Mod+Alt+]'], ['Ctrl+Alt+]']),
+  s('split.separate', 'Separate split tabs', 'page-first', []),
   // Chords
   ...chordKeys.map((n) => s(`chord.goto${n}`, `Go to chord ${n}`, 'reserved', [`Mod+${n}`])),
   s('chord.next', 'Next chord', 'reserved', ['Mod+Alt+ArrowRight'], ['Ctrl+Alt+ArrowRight']),
@@ -113,6 +123,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // No keys: deleting is a deliberate act, from the chord's menu or the command bar.
   s('chord.delete', 'Delete this chord', 'page-first', []),
   s('chord.separateSignIns', 'Keep sign-ins separate for this chord', 'page-first', []),
+  // Duet (DESIGN.md §13.1): page-first, so web editors that use ⌘E / Ctrl+E keep it; Chrome uses these keys too.
+  s('duet.toggle', 'Show or hide Duet', 'page-first', ['Mod+E']),
   // Window and view
   s('window.new', 'New window', 'reserved', ['Mod+N']),
   s('window.newPrivate', 'New private window', 'reserved', ['Mod+Shift+N']),

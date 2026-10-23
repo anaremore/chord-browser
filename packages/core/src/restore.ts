@@ -9,6 +9,7 @@ import {
   defaultSettings,
   type ArchiveAfter,
   emptyState,
+  GOOGLE_FREE_ENGINE,
   MAX_ZOOM,
   MIN_ZOOM,
   SIDEBAR_WIDTH,
@@ -19,6 +20,7 @@ import {
   type Oklch,
   type Download,
   type InstalledExtension,
+  type LinkRoute,
   type MotionSettings,
   type Settings,
   type SidebarNode,
@@ -30,9 +32,11 @@ import {
 import { cleanOverrides } from './bindings';
 import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
+import { routeHost } from './links';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
 import type { Platform } from './shortcuts';
+import { settleSplits, shownWith } from './split';
 
 /** Everything chord-data persists; live engine state and the version never are. */
 export interface PersistedState {
@@ -49,6 +53,28 @@ export interface PersistedState {
   favorites?: Favorite[];
   /** Page zoom by host. */
   siteZoom?: Record<string, number>;
+  /** Link routes: a site's links open in a chord. */
+  linkRoutes?: LinkRoute[];
+}
+
+/** Routes that still make sense: a plausible host, pointing at a chord that's still there (and isn't a private window's). */
+function restoreRoutes(saved: LinkRoute[] | undefined, chords: Record<string, Chord>): Record<string, LinkRoute> {
+  const out: Record<string, LinkRoute> = {};
+  for (const route of saved ?? []) {
+    const host = typeof route?.host === 'string' ? routeHost(route.host) : null;
+    const chord = typeof route?.chordId === 'string' ? chords[route.chordId] : undefined;
+    if (!host || host !== route.host || !chord || chord.private) continue;
+    out[host] = { host, chordId: chord.id, createdAt: typeof route.createdAt === 'number' ? route.createdAt : 0 };
+  }
+  return out;
+}
+
+/** The mini window's remembered size, if it's a sensible one. */
+function restoreMiniSize(saved: unknown): Settings['miniWindowSize'] {
+  if (!saved || typeof saved !== 'object') return null;
+  const { width, height } = saved as Record<string, unknown>;
+  const ok = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 360 && n <= 4000;
+  return ok(width) && ok(height) ? { width: Math.round(width), height: Math.round(height) } : null;
 }
 
 /** A dictionary language code, as Chromium names them: `en-US`, `pt-BR`, `es-419`, `fr`. */
@@ -157,6 +183,9 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
     if (typeof saved[key] === 'boolean') settings[key] = saved[key];
   }
   if (typeof saved['autoPip'] === 'boolean') settings.autoPip = saved['autoPip'];
+  if (saved['externalLinks'] === 'mini' || saved['externalLinks'] === 'tab') settings.externalLinks = saved['externalLinks'];
+  settings.miniWindowSize = restoreMiniSize(saved['miniWindowSize']);
+  if (typeof saved['pagePreviews'] === 'boolean') settings.pagePreviews = saved['pagePreviews'];
   const spellcheck = saved['spellcheck'] as Record<string, unknown> | undefined;
   if (spellcheck && typeof spellcheck === 'object') {
     if (typeof spellcheck['enabled'] === 'boolean') settings.spellcheck.enabled = spellcheck['enabled'];
@@ -165,12 +194,25 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   }
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
+  if (typeof saved['googleFree'] === 'boolean') settings.googleFree = saved['googleFree'];
+  if (settings.googleFree && settings.searchEngine === 'google') settings.searchEngine = GOOGLE_FREE_ENGINE;
   const motion = saved['motion'];
   if (motion && typeof motion === 'object') {
     for (const key of Object.keys(settings.motion) as (keyof MotionSettings)[]) {
       const value = (motion as Record<string, unknown>)[key];
       if (typeof value === 'boolean') settings.motion[key] = value;
     }
+  }
+  const duet = saved['duet'] as Record<string, unknown> | undefined;
+  if (duet && typeof duet === 'object') {
+    if (typeof duet['enabled'] === 'boolean') settings.duet.enabled = duet['enabled'];
+    if (duet['provider'] === 'claude' || duet['provider'] === 'codex') settings.duet.provider = duet['provider'];
+    if (typeof duet['model'] === 'string' && duet['model'].length <= 100) settings.duet.model = duet['model'];
+    if (duet['keep'] === 'forever' || duet['keep'] === '90d' || duet['keep'] === '30d') settings.duet.keep = duet['keep'];
+    if (duet['scope'] === 'ask' || duet['scope'] === 'chord' || duet['scope'] === 'all') settings.duet.scope = duet['scope'];
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length <= 300).slice(0, 500) : []);
+    settings.duet.neverSites = strings(duet['neverSites']);
+    settings.duet.offChords = strings(duet['offChords']);
   }
   return settings;
 }
@@ -205,14 +247,20 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   state.siteZoom = restoreZoom(saved.siteZoom);
   // A private window's chord is never saved; if one ever were, it doesn't come back.
   for (const chord of saved.chords) if (!chord.private) state.chords[chord.id] = chord;
+  state.linkRoutes = restoreRoutes(saved.linkRoutes, state.chords);
   for (const node of saved.nodes) {
     if (!state.chords[node.chordId]) continue;
     state.nodes[node.id] = { ...node };
   }
-  // Children whose folder is gone move to the section root rather than vanish.
+  // Children whose folder (or split) is gone move to the section root rather than vanish.
   for (const node of Object.values(state.nodes)) {
     if (node.parentId && !state.nodes[node.parentId]) node.parentId = null;
   }
+  // Splits come back whole: two to four panes, sizes that match (split.ts).
+  for (const node of Object.values(state.nodes)) {
+    if (node.kind === 'split') node.sizes = Array.isArray(node.sizes) ? node.sizes.filter((s) => typeof s === 'number') : [];
+  }
+  settleSplits(state);
   // No live entries: every tab starts unloaded, and gets one when its page starts loading.
 
   const firstChord = sortedChords(state)[0]!;
@@ -226,9 +274,11 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
       if (!state.chords[chordId]) continue;
       activeTab[chordId] = tabId && state.nodes[tabId]?.kind === 'tab' && state.nodes[tabId]?.chordId === chordId ? tabId : null;
     }
+    // A split shows all its panes, so it's the whole group that one window keeps.
     const showing = activeTab[activeChordId];
-    if (showing && shown.has(showing)) activeTab[activeChordId] = null;
-    else if (showing) shown.add(showing);
+    const group = showing ? shownWith(state, showing) : [];
+    if (group.some((id) => shown.has(id))) activeTab[activeChordId] = null;
+    else for (const id of group) shown.add(id);
     activeTab[activeChordId] ??= null;
     const width = win.sidebarWidth;
     const sidebarWidth = typeof width === 'number' && width >= SIDEBAR_WIDTH.min && width <= SIDEBAR_WIDTH.max ? width : SIDEBAR_WIDTH.default;

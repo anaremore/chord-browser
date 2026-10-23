@@ -4,7 +4,7 @@
  * and chord-data persists everything except `live` and `closed` (the archive
  * keeps closed tabs in its own table).
  */
-
+import type { DuetKeep, DuetProvider, DuetScope } from './duet';
 import type { ActionId, ShortcutOverrides } from './shortcuts';
 
 export type ChordId = string;
@@ -113,7 +113,31 @@ export interface FolderNode {
   createdAt: number;
 }
 
-export type SidebarNode = TabNode | FolderNode;
+/** Panes side by side (`row`) or stacked (`column`). */
+export type SplitDirection = 'row' | 'column';
+
+/**
+ * A split view (DESIGN.md §7.9, §8.4): 2–4 tabs shown together, saved as one
+ * unit in Pinned or Today. Its tabs are its children (their `parentId` is the
+ * split), in pane order; `sizes` are their shares of the frame, in the same
+ * order, summing to 1.
+ */
+export interface SplitNode {
+  kind: 'split';
+  id: NodeId;
+  chordId: ChordId;
+  section: Section;
+  parentId: NodeId | null;
+  rank: string;
+  direction: SplitDirection;
+  sizes: number[];
+  createdAt: number;
+}
+
+export type SidebarNode = TabNode | FolderNode | SplitNode;
+
+/** Split view's limits (DESIGN.md §7.9): up to 4 panes, none narrower than 320 px, 8 px apart. */
+export const SPLIT = { maxPanes: 4, minPane: 320, gap: 8 } as const;
 
 /**
  * A site in the Favorites row at the top of the sidebar, shared by every
@@ -299,16 +323,63 @@ export interface Settings {
   sleepTabs: boolean;
   /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
   autoPip: boolean;
+  /** Hovering a pinned tab or folder shows a preview; pinned pages are kept as small pictures in `<userData>/Captures/` (DESIGN.md §7.6). */
+  pagePreviews: boolean;
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
   shortcuts: ShortcutOverrides;
   spellcheck: SpellcheckSettings;
+  /**
+   * Chord itself never contacts Google (docs/decisions/S10-google-free.md): a
+   * non-Google search engine (so its suggestions aren't Google's either),
+   * spelling only with dictionaries already downloaded, and no background
+   * Web Store update checks. Pages you visit can still load from Google.
+   */
+  googleFree: boolean;
+  /** Duet, the chat panel (ARCHITECTURE.md §11). */
+  duet: DuetSettings;
+  /** Where links from other apps open (Chord as the default browser): a mini window, or a new tab. */
+  externalLinks: ExternalLinks;
+  /** The mini window's size, as you last left it; null until you resize one (DESIGN.md §7.9). */
+  miniWindowSize: { width: number; height: number } | null;
 }
+
+export type ExternalLinks = 'mini' | 'tab';
+
+/**
+ * A link route (from Crest): links to this site, from other apps or typed in
+ * the command bar, open in this chord. `host` matches itself and its
+ * subdomains (`github.com` covers `gist.github.com`).
+ */
+export interface LinkRoute {
+  host: string;
+  chordId: ChordId;
+  createdAt: number;
+}
+
+/** What Google-free mode searches with until you pick another (any engine but Google). */
+export const GOOGLE_FREE_ENGINE: SearchEngineId = 'duckduckgo';
 
 /** Spelling in text fields (ARCHITECTURE.md §9). */
 export interface SpellcheckSettings {
   enabled: boolean;
   /** A dictionary language like `en-US` (Windows and Linux); null follows the system. macOS always uses its own. */
   language: string | null;
+}
+
+export interface DuetSettings {
+  /** Off removes the panel, its button, shortcut and menu items; nothing is ever spawned. */
+  enabled: boolean;
+  /** Chosen in Setup; null until then. */
+  provider: DuetProvider | null;
+  /** The provider's model alias or id; null uses its default. */
+  model: string | null;
+  keep: DuetKeep;
+  /** What new threads may read without asking. */
+  scope: DuetScope;
+  /** Sites Duet may never read or have attached (origins). */
+  neverSites: string[];
+  /** Chords where Duet is off. */
+  offChords: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -325,8 +396,13 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveAfter: '12h',
   sleepTabs: true,
   autoPip: true,
+  pagePreviews: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
+  googleFree: false,
+  duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
+  externalLinks: 'mini',
+  miniWindowSize: null,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -337,6 +413,7 @@ export const defaultSettings = (): Settings => ({
   themes: [],
   spellcheck: { ...DEFAULT_SETTINGS.spellcheck },
   shortcuts: {},
+  duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
 });
 
 /**
@@ -361,9 +438,14 @@ export interface SettingsPatch {
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
   autoPip?: boolean;
+  pagePreviews?: boolean;
   spellcheck?: Partial<SpellcheckSettings>;
+  externalLinks?: ExternalLinks;
+  miniWindowSize?: { width: number; height: number } | null;
+  googleFree?: boolean;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
+  duet?: Partial<DuetSettings>;
 }
 
 export interface State {
@@ -393,6 +475,8 @@ export interface State {
   deletedFolders: DeletedFolder[];
   /** Page zoom you chose for a site, by host (1 isn't stored). Shared by every chord, like permissions. */
   siteZoom: Record<string, number>;
+  /** Link routes, by host. */
+  linkRoutes: Record<string, LinkRoute>;
 }
 
 export interface DeletedFolder {
@@ -424,6 +508,7 @@ export const emptyState = (): State => ({
   favorites: {},
   deletedFolders: [],
   siteZoom: {},
+  linkRoutes: {},
 });
 
 export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false };

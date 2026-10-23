@@ -4,16 +4,18 @@
  * Returns Immer patches (for mirrors and persistence) and effects (for main to
  * carry out against real WebContentsViews).
  */
-import { generateKeyBetween } from 'fractional-indexing';
+import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
 import { cleanKeys } from './bindings';
 import { isInternalUrl, visibleTabs } from './idle';
 import {
   DEFAULT_PROFILE,
+  GOOGLE_FREE_ENGINE,
   IDLE_LIVE,
   MAX_ZOOM,
   MIN_ZOOM,
   SIDEBAR_WIDTH,
+  SPLIT,
   PRIVATE_CHORD_THEME,
   extensionKey,
   privateProfileId,
@@ -34,19 +36,37 @@ import {
   type Section,
   type SidebarNode,
   type SitePermission,
+  type SplitDirection,
+  type SplitNode,
   type SettingsPatch,
   type State,
   type TabNode,
   type WindowId,
   type WindowModel,
 } from './model';
+import { routeFor, routeHost } from './links';
 import { shortcutById, type ActionId } from './shortcuts';
 import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
+import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
 
 enablePatches();
 
 export type Command =
-  | { t: 'tab.open'; windowId: WindowId; url: string; background?: boolean; pinned?: boolean }
+  /**
+   * A new tab at the top of Today. With `route`, a link route for its site
+   * (from the command bar) puts it in that chord instead, and the window goes there.
+   */
+  | { t: 'tab.open'; windowId: WindowId; url: string; background?: boolean; pinned?: boolean; route?: boolean }
+  /**
+   * A page that wasn't a tab yet (Peek, a mini window) becomes one as `nodeId`:
+   * main has already given TabManager its live page, so it keeps its history.
+   * It lands at the top of `chordId`'s Today (the window's chord by default),
+   * and the window goes there.
+   */
+  | { t: 'tab.adopt'; windowId: WindowId; nodeId: NodeId; chordId?: ChordId; url: string; title: string; favicon?: string | null; live?: Partial<LiveTab> }
+  /** Send a site's links to a chord (from Crest); a site has at most one route. */
+  | { t: 'linkRoute.set'; host: string; chordId: ChordId }
+  | { t: 'linkRoute.delete'; host: string }
   /** `touch: false` switches without counting as a visit (used while cycling recent tabs). */
   | { t: 'tab.activate'; windowId: WindowId; nodeId: NodeId; touch?: boolean }
   | { t: 'tab.close'; windowId: WindowId; nodeId: NodeId }
@@ -149,6 +169,27 @@ export type Command =
   | { t: 'permission.forget'; origin: string }
   /** The page zoom you chose for a site; 1 forgets it. */
   | { t: 'zoom.set'; host: string; factor: number }
+  /**
+   * Split view (DESIGN.md §8.4): show `nodeId` (or a new tab for `url`) as a
+   * pane beside `withId`, at pane `index` (the end when absent). `withId`'s
+   * split grows, or a new one takes `withId`'s place, running `direction`. A
+   * tab already in that split moves to `index`. The window shows the split,
+   * focused on the pane added.
+   */
+  | { t: 'split.add'; windowId: WindowId; withId: NodeId; nodeId?: NodeId; url?: string; index?: number; direction?: SplitDirection }
+  /** Panes' shares after a divider was dragged (or double-clicked to even them out), in pane order. */
+  | { t: 'split.resize'; splitId: NodeId; sizes: number[] }
+  /** A pane's tab leaves its split, to just after it in the sidebar. A split of one dissolves. */
+  | { t: 'split.remove'; nodeId: NodeId }
+  /** Every pane becomes its own tab again, where the split was. */
+  | { t: 'split.separate'; splitId: NodeId }
+  /**
+   * Undo for separating: these tabs become split `splitId` again where the
+   * first of them is, in this order, and the window shows it (focused on `focus`).
+   */
+  | { t: 'split.join'; windowId: WindowId; splitId: NodeId; nodeIds: NodeId[]; direction: SplitDirection; sizes?: number[]; focus?: NodeId }
+  /** Focus the pane before (-1) or after (1) the focused one (⌘⌥[ / ⌘⌥]). */
+  | { t: 'split.focus'; windowId: WindowId; direction: 1 | -1 }
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -191,6 +232,8 @@ const MAX_FOLDER_TITLE = 64;
 /** The most custom themes kept. */
 const MAX_THEMES = 100;
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+/** The mini window's remembered size stays within what a window can sensibly be. */
+const clampSize = (n: number) => Math.round(Math.min(4000, Math.max(360, Number.isFinite(n) ? n : 0)));
 /** Finished downloads kept in the list; older ones drop off. */
 const MAX_DOWNLOADS = 100;
 /** Removed extensions kept for Undo. */
@@ -200,12 +243,49 @@ const MAX_CHORD_NAME = 64;
 /** A new window opens this far down and right of the one it came from. */
 const CASCADE = 28;
 
+/** Commands that can add, move or take away a split's panes: splits settle after them (split.ts). */
+const CHANGES_SPLITS: ReadonlySet<Command['t']> = new Set<Command['t']>([
+  'tab.close',
+  'tab.archive',
+  'tab.reopenClosed',
+  'closed.restore',
+  'node.move',
+  'node.moveToChord',
+  'folder.delete',
+  'folder.restore',
+  'chord.delete',
+  'chord.restore',
+  'tab.pin',
+  'tab.unpin',
+  'window.close',
+  'split.add',
+  'split.resize',
+  'split.remove',
+  'split.separate',
+  'split.join',
+]);
+
+/** What a window's content frame holds: its panes and how they share it. */
+function paneKey(state: State, windowId: WindowId): string {
+  const shown = shownTabs(state, windowId);
+  const split = shown.length > 1 ? splitOf(state, shown[0]!) : null;
+  return JSON.stringify([shown, split?.direction, split?.sizes]);
+}
+
 export function apply(state: State, command: Command, ctx: Context): Result {
   const effects: Effect[] = [];
+  const settles = CHANGES_SPLITS.has(command.t);
   const [next, patches] = produceWithPatches(state, (draft) => {
     run(draft, command, ctx, effects);
+    if (settles) settleSplits(draft as State);
   });
   if (patches.length === 0) return { state, patches, effects };
+  // A window whose panes (or how they share the frame) changed lays them out again.
+  if (settles) {
+    for (const win of Object.values(next.windows)) {
+      if (paneKey(state, win.id) !== paneKey(next, win.id)) effects.push({ e: 'view.show', windowId: win.id, nodeId: win.activeTab[win.activeChordId] ?? null });
+    }
+  }
   // Bump the version as its own step so it is part of the patch stream.
   const [versioned, versionPatches] = produceWithPatches(next, (draft) => {
     draft.version += 1;
@@ -244,7 +324,65 @@ function moveNode(draft: Draft<State>, node: Draft<SidebarNode>, section: Sectio
     node.section = section;
     node.pinnedUrl = section === 'pinned' ? (node.pinnedUrl ?? node.url) : null;
   }
+  // A split takes its panes along: they pin or unpin with it.
+  if (node.kind === 'split' && node.section !== section) {
+    for (const pane of splitMembers(draft as State, node.id)) {
+      pane.section = section;
+      pane.pinnedUrl = section === 'pinned' ? (pane.pinnedUrl ?? pane.url) : null;
+    }
+    node.section = section;
+  }
   return true;
+}
+
+/** The pane to land on when `nodeId` leaves a split: the one after it, else the one before. */
+function paneNeighbor(panes: readonly NodeId[], nodeId: NodeId): NodeId | null {
+  const at = panes.indexOf(nodeId);
+  const rest = panes.filter((id) => id !== nodeId);
+  if (rest.length === 0) return null;
+  return rest[Math.min(Math.max(at, 0), rest.length - 1)] ?? null;
+}
+
+/**
+ * Take a tab out of its split, to just after the split among the split's
+ * siblings. The panes left keep their shares relative to each other.
+ */
+function leaveSplit(draft: Draft<State>, tab: Draft<TabNode>, split: Draft<SplitNode>): void {
+  const panes = splitMembers(draft as State, split.id);
+  const at = panes.findIndex((p) => p.id === tab.id);
+  if (at < 0) return;
+  if (panes.length > 2) split.sizes = normalizeSizes(split.sizes.filter((_, i) => i !== at), panes.length - 1);
+  const siblings = children(draft as State, split.chordId, split.section, split.parentId);
+  const next = siblings[siblings.findIndex((n) => n.id === split.id) + 1];
+  tab.parentId = split.parentId;
+  tab.rank = rankBetween(split.rank, next?.rank ?? null);
+}
+
+/** Put a tab into a split as pane `index`, keeping the others' order and making room for it. */
+function joinSplit(draft: Draft<State>, tab: Draft<TabNode>, split: Draft<SplitNode>, index: number): void {
+  const others = splitMembers(draft as State, split.id).filter((p) => p.id !== tab.id);
+  const wasPane = tab.parentId === split.id;
+  const before = splitMembers(draft as State, split.id);
+  const at = Math.max(0, Math.min(index, others.length));
+  tab.rank = rankBetween(others[at - 1]?.rank ?? null, others[at]?.rank ?? null);
+  tab.parentId = split.id;
+  if (tab.section !== split.section) {
+    tab.section = split.section;
+    tab.pinnedUrl = split.section === 'pinned' ? (tab.pinnedUrl ?? tab.url) : null;
+  }
+  if (wasPane) {
+    // Moving a pane: its share moves with it.
+    const share = split.sizes[before.findIndex((p) => p.id === tab.id)] ?? 1 / before.length;
+    const rest = split.sizes.filter((_, i) => before[i]?.id !== tab.id);
+    rest.splice(at, 0, share);
+    split.sizes = normalizeSizes(rest, before.length);
+  } else {
+    // A new pane gets an even share; the others shrink in proportion.
+    const n = others.length + 1;
+    const rest = normalizeSizes(split.sizes, others.length).map((s) => (s * (n - 1)) / n);
+    rest.splice(at, 0, 1 / n);
+    split.sizes = rest;
+  }
 }
 
 /**
@@ -297,9 +435,9 @@ function toArchive(node: TabNode, reason: ArchiveReason, ctx: Context, effects: 
   return id;
 }
 
-/** The window other than `windowId` that shows this tab, if any: a tab shows in one window at a time. */
+/** The window other than `windowId` that shows this tab (alone or as a pane), if any: a tab shows in one window at a time. */
 function shownByOther(draft: Draft<State>, nodeId: NodeId, windowId: WindowId): Draft<WindowModel> | undefined {
-  return Object.values(draft.windows).find((w) => w.id !== windowId && w.activeTab[w.activeChordId] === nodeId);
+  return Object.values(draft.windows).find((w) => w.id !== windowId && shownTabs(draft as State, w.id).includes(nodeId));
 }
 
 /** A chord's most recently used tab that no other window is showing (and isn't `skip`). */
@@ -341,10 +479,12 @@ function activate(
   const win = draft.windows[windowId];
   if (!win) return;
   win.activeTab[win.activeChordId] = nodeId;
-  // A window showing this tab lets it go first (a view has one parent): it falls back to its
-  // most recently used tab that's free, and its effects come first so the page never has two homes.
-  const other = nodeId ? shownByOther(draft, nodeId, windowId) : undefined;
-  if (other) {
+  // A window showing this tab (or another pane of its split) lets it go first (a view has one
+  // parent): it falls back to its most recently used tab that's free, and its effects come first
+  // so the page never has two homes.
+  const group = nodeId ? shownWith(draft as State, nodeId) : [];
+  for (const other of Object.values(draft.windows)) {
+    if (other.id === windowId || !shownTabs(draft as State, other.id).some((id) => group.includes(id))) continue;
     const fallback = recentFree(draft, other.activeChordId, other.id, nodeId);
     other.activeTab[other.activeChordId] = fallback;
     if (fallback) effects.push({ e: 'view.ensure', nodeId: fallback });
@@ -375,14 +515,17 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.open': {
       const win = draft.windows[cmd.windowId];
       if (!win) return;
+      // A route sends the site to its chord; a private window keeps everything to itself.
+      const routed = cmd.route && !win.private ? routeFor(draft as State, cmd.url) : null;
+      const chordId = routed && chordsFor(draft as State, cmd.windowId).some((c) => c.id === routed) ? routed : win.activeChordId;
       const id = ctx.newId();
       const tab: TabNode = {
         kind: 'tab',
         id,
-        chordId: win.activeChordId,
+        chordId,
         section: 'today',
         parentId: null,
-        rank: topOfToday(draft, win.activeChordId),
+        rank: topOfToday(draft, chordId),
         url: cmd.url,
         title: '',
         pinnedUrl: null,
@@ -393,13 +536,58 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       };
       draft.nodes[id] = tab;
       // First run's "What do you open every day?" lands straight in Pinned (never in a private window).
-      if (cmd.pinned && !win.private) moveNode(draft, draft.nodes[id]!, 'pinned', children(draft as State, win.activeChordId, 'pinned', null).length);
+      if (cmd.pinned && !win.private) moveNode(draft, draft.nodes[id]!, 'pinned', children(draft as State, chordId, 'pinned', null).length);
       draft.live[id] = { ...IDLE_LIVE, loading: true };
       effects.push({ e: 'view.ensure', nodeId: id });
       if (!cmd.background) {
         leave(draft, win, ctx);
+        if (win.activeChordId !== chordId) win.activeChordId = chordId;
         activate(draft, cmd.windowId, id, ctx, effects);
       }
+      return;
+    }
+
+    case 'tab.adopt': {
+      const win = draft.windows[cmd.windowId];
+      if (!win || draft.nodes[cmd.nodeId]) return;
+      const chordId = cmd.chordId ?? win.activeChordId;
+      // The window must be allowed to show that chord: a private window only its own, others never a private one.
+      if (!chordsFor(draft as State, cmd.windowId).some((c) => c.id === chordId)) return;
+      draft.nodes[cmd.nodeId] = {
+        kind: 'tab',
+        id: cmd.nodeId,
+        chordId,
+        section: 'today',
+        parentId: null,
+        rank: topOfToday(draft, chordId),
+        url: cmd.url,
+        title: cmd.title,
+        pinnedUrl: null,
+        customTitle: null,
+        favicon: cmd.favicon ?? null,
+        lastActiveAt: ctx.now,
+        createdAt: ctx.now,
+      };
+      draft.live[cmd.nodeId] = { ...IDLE_LIVE, ...cmd.live };
+      leave(draft, win, ctx);
+      if (win.activeChordId !== chordId) win.activeChordId = chordId;
+      activate(draft, cmd.windowId, cmd.nodeId, ctx, effects);
+      return;
+    }
+
+    case 'linkRoute.set': {
+      const host = routeHost(cmd.host);
+      const chord = draft.chords[cmd.chordId];
+      if (!host || !chord || chord.private) return;
+      const existing = draft.linkRoutes[host];
+      if (existing?.chordId === chord.id) return;
+      draft.linkRoutes[host] = { host, chordId: chord.id, createdAt: existing?.createdAt ?? ctx.now };
+      return;
+    }
+
+    case 'linkRoute.delete': {
+      const host = routeHost(cmd.host) ?? cmd.host;
+      if (draft.linkRoutes[host]) delete draft.linkRoutes[host];
       return;
     }
 
@@ -419,18 +607,24 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.close': {
       const node = draft.nodes[cmd.nodeId];
       if (node?.kind !== 'tab') return;
+      // Closing a pane: the split's other panes stay on screen, and the window lands on one of them.
+      const split = splitOf(draft as State, node.id);
+      const panes = split ? splitMembers(draft as State, split.id).map((t) => t.id) : [];
       const order = tabsInOrder(draft as State, node.chordId);
       const index = order.findIndex((t) => t.id === node.id);
       // Arc's rule: land on the tab below, or above if this was the last one (one no other window shows).
       const isClosing = (t: TabNode) => t.id === node.id;
+      const landingFor = (windowId: WindowId) => (split ? paneNeighbor(panes, node.id) : null) ?? nearestFree(draft, order, index, windowId, isClosing);
       // A pinned tab never goes away: closing unloads it and takes it home to its pinned page.
       if (node.section === 'pinned') {
+        // A pinned pane leaves its split as it closes, and waits just after it.
+        if (split) leaveSplit(draft, node, split as Draft<SplitNode>);
         if (node.pinnedUrl && node.url !== node.pinnedUrl) node.url = node.pinnedUrl;
         delete draft.live[cmd.nodeId];
         effects.push({ e: 'view.destroy', nodeId: cmd.nodeId });
         for (const win of Object.values(draft.windows)) {
           if (win.activeTab[node.chordId] !== cmd.nodeId) continue;
-          const neighbor = nearestFree(draft, order, index, win.id, isClosing);
+          const neighbor = landingFor(win.id);
           if (node.chordId === win.activeChordId) activate(draft, win.id, neighbor, ctx, effects);
           else win.activeTab[node.chordId] = neighbor;
         }
@@ -442,13 +636,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const closed: ClosedTab = { node: { ...(node as TabNode) }, windowId: cmd.windowId, closedAt: ctx.now, archiveId };
       draft.closed.unshift(closed);
       if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
+      // The panes left keep their shares relative to each other; ⌘⇧T puts this one back in the split.
+      if (split) leaveSplit(draft, node, split as Draft<SplitNode>);
       delete draft.nodes[cmd.nodeId];
       delete draft.live[cmd.nodeId];
       effects.push({ e: 'view.destroy', nodeId: cmd.nodeId });
       for (const win of Object.values(draft.windows)) {
         for (const [chordId, tabId] of Object.entries(win.activeTab)) {
           if (tabId !== cmd.nodeId) continue;
-          const neighbor = nearestFree(draft, order, index, win.id, isClosing);
+          const neighbor = landingFor(win.id);
           if (chordId === win.activeChordId) activate(draft, win.id, neighbor, ctx, effects);
           else win.activeTab[chordId] = neighbor;
         }
@@ -563,7 +759,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.sleep': {
       const node = draft.nodes[cmd.nodeId];
       if (node?.kind !== 'tab' || !draft.live[cmd.nodeId]) return;
-      if (Object.values(draft.windows).some((w) => w.activeTab[w.activeChordId] === cmd.nodeId)) return;
+      if (Object.values(draft.windows).some((w) => shownTabs(draft as State, w.id).includes(cmd.nodeId))) return;
       delete draft.live[cmd.nodeId];
       effects.push({ e: 'view.sleep', nodeId: cmd.nodeId });
       return;
@@ -766,14 +962,16 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.pin': {
       const node = draft.nodes[cmd.nodeId];
       if (node?.kind !== 'tab' || node.section === 'pinned' || isPrivateChord(draft as State, node.chordId)) return;
-      moveNode(draft, node, 'pinned', children(draft as State, node.chordId, 'pinned', null).length);
+      // A pane pins its whole split: the panes stay together.
+      const unit = (splitOf(draft as State, node.id) as Draft<SplitNode> | null) ?? node;
+      moveNode(draft, unit, 'pinned', children(draft as State, node.chordId, 'pinned', null).length);
       return;
     }
 
     case 'tab.unpin': {
       const node = draft.nodes[cmd.nodeId];
       if (node?.kind !== 'tab' || node.section !== 'pinned') return;
-      moveNode(draft, node, 'today', 0);
+      moveNode(draft, (splitOf(draft as State, node.id) as Draft<SplitNode> | null) ?? node, 'today', 0);
       return;
     }
 
@@ -893,14 +1091,32 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'settings.set': {
       const { searchEngine, motion, colorScheme, archiveAfter, sleepTabs, searchSuggestions, checkForUpdates, extensionButtons } = cmd.settings;
       if (extensionButtons !== undefined && draft.settings.extensionButtons !== extensionButtons) draft.settings.extensionButtons = extensionButtons;
-      if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
+      const { googleFree } = cmd.settings;
+      if (googleFree !== undefined && draft.settings.googleFree !== googleFree) draft.settings.googleFree = googleFree;
+      // Google-free mode searches with anything but Google: choosing Google is ignored, and turning the mode on moves off it.
+      if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine && !(draft.settings.googleFree && searchEngine === 'google')) {
+        draft.settings.searchEngine = searchEngine;
+      }
+      if (draft.settings.googleFree && draft.settings.searchEngine === 'google') draft.settings.searchEngine = GOOGLE_FREE_ENGINE;
       if (archiveAfter !== undefined && draft.settings.archiveAfter !== archiveAfter) draft.settings.archiveAfter = archiveAfter;
       if (sleepTabs !== undefined && draft.settings.sleepTabs !== sleepTabs) draft.settings.sleepTabs = sleepTabs;
       if (searchSuggestions !== undefined && draft.settings.searchSuggestions !== searchSuggestions) draft.settings.searchSuggestions = searchSuggestions;
       if (checkForUpdates !== undefined && draft.settings.checkForUpdates !== checkForUpdates) draft.settings.checkForUpdates = checkForUpdates;
-      const { autoPip } = cmd.settings;
+      const { autoPip, pagePreviews } = cmd.settings;
       if (autoPip !== undefined && draft.settings.autoPip !== autoPip) draft.settings.autoPip = autoPip;
+      if (pagePreviews !== undefined && draft.settings.pagePreviews !== pagePreviews) draft.settings.pagePreviews = pagePreviews;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
+      if (cmd.settings.duet) {
+        const duet = cmd.settings.duet;
+        const current = draft.settings.duet;
+        if (duet.enabled !== undefined && current.enabled !== duet.enabled) current.enabled = duet.enabled;
+        if (duet.provider !== undefined && current.provider !== duet.provider) current.provider = duet.provider;
+        if (duet.model !== undefined && current.model !== duet.model) current.model = duet.model;
+        if (duet.keep !== undefined && current.keep !== duet.keep) current.keep = duet.keep;
+        if (duet.scope !== undefined && current.scope !== duet.scope) current.scope = duet.scope;
+        if (duet.neverSites) current.neverSites = [...new Set(duet.neverSites)];
+        if (duet.offChords) current.offChords = [...new Set(duet.offChords)];
+      }
       const { separateSignIns, onboarded } = cmd.settings;
       if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;
       if (onboarded !== undefined && draft.settings.onboarded !== onboarded) draft.settings.onboarded = onboarded;
@@ -909,6 +1125,13 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       }
       for (const [key, value] of Object.entries(cmd.settings.interface ?? {}) as [keyof typeof draft.settings.interface, number | undefined][]) {
         if (value !== undefined && draft.settings.interface[key] !== clamp01(value)) draft.settings.interface[key] = clamp01(value);
+      }
+      const { externalLinks, miniWindowSize } = cmd.settings;
+      if (externalLinks !== undefined && draft.settings.externalLinks !== externalLinks) draft.settings.externalLinks = externalLinks;
+      if (miniWindowSize !== undefined) {
+        const size = miniWindowSize && { width: clampSize(miniWindowSize.width), height: clampSize(miniWindowSize.height) };
+        const same = size && draft.settings.miniWindowSize?.width === size.width && draft.settings.miniWindowSize.height === size.height;
+        if (!same && !(size === null && draft.settings.miniWindowSize === null)) draft.settings.miniWindowSize = size;
       }
       const { spellcheck } = cmd.settings;
       if (spellcheck?.enabled !== undefined && draft.settings.spellcheck.enabled !== spellcheck.enabled) draft.settings.spellcheck.enabled = spellcheck.enabled;
@@ -1134,6 +1357,151 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (grain !== undefined && theme.grain !== grain) theme.grain = clamp01(grain);
       if (appearance && theme.appearance !== appearance) theme.appearance = appearance;
       if (themeId !== undefined && theme.themeId !== themeId) theme.themeId = themeId;
+      return;
+    }
+
+    case 'split.add': {
+      const win = draft.windows[cmd.windowId];
+      const beside = draft.nodes[cmd.withId];
+      if (!win || beside?.kind !== 'tab' || beside.chordId !== win.activeChordId) return;
+      let split = splitOf(draft as State, beside.id) as Draft<SplitNode> | null;
+      const existing = cmd.nodeId ? draft.nodes[cmd.nodeId] : undefined;
+      if (cmd.nodeId && (existing?.kind !== 'tab' || existing.chordId !== beside.chordId || existing.id === beside.id)) return;
+      if (!cmd.nodeId && !cmd.url) return;
+      // A split holds four panes at most (a pane moving within it is fine).
+      if (split && existing?.parentId !== split.id && splitMembers(draft as State, split.id).length >= SPLIT.maxPanes) return;
+      let tab = existing as Draft<TabNode> | undefined;
+      if (!tab) {
+        const id = ctx.newId();
+        draft.nodes[id] = {
+          kind: 'tab',
+          id,
+          chordId: beside.chordId,
+          section: beside.section,
+          parentId: null,
+          rank: topOfToday(draft, beside.chordId),
+          url: cmd.url!,
+          title: '',
+          pinnedUrl: null,
+          customTitle: null,
+          favicon: null,
+          lastActiveAt: ctx.now,
+          createdAt: ctx.now,
+        };
+        draft.live[id] = { ...IDLE_LIVE, loading: true };
+        effects.push({ e: 'view.ensure', nodeId: id });
+        tab = draft.nodes[id] as Draft<TabNode>;
+      }
+      // Out of any other split first (that one settles afterwards).
+      const from = splitOf(draft as State, tab.id) as Draft<SplitNode> | null;
+      if (from && from.id !== split?.id) leaveSplit(draft, tab, from);
+      if (!split) {
+        // A new split takes the place of the tab it's made beside.
+        const id = ctx.newId();
+        draft.nodes[id] = {
+          kind: 'split',
+          id,
+          chordId: beside.chordId,
+          section: beside.section,
+          parentId: beside.parentId,
+          rank: beside.rank,
+          direction: cmd.direction ?? 'row',
+          sizes: [1],
+          createdAt: ctx.now,
+        };
+        beside.parentId = id;
+        beside.rank = generateKeyBetween(null, null);
+        split = draft.nodes[id] as Draft<SplitNode>;
+      }
+      joinSplit(draft, tab, split, cmd.index ?? SPLIT.maxPanes);
+      leave(draft, win, ctx);
+      activate(draft, cmd.windowId, tab.id, ctx, effects);
+      return;
+    }
+
+    case 'split.resize': {
+      const split = draft.nodes[cmd.splitId];
+      if (split?.kind !== 'split') return;
+      const n = splitMembers(draft as State, split.id).length;
+      if (cmd.sizes.length !== n) return;
+      const sizes = normalizeSizes(cmd.sizes, n);
+      if (sizes.every((s, i) => Math.abs(s - (split.sizes[i] ?? 0)) < 1e-4)) return;
+      split.sizes = sizes;
+      return;
+    }
+
+    case 'split.remove': {
+      const node = draft.nodes[cmd.nodeId];
+      const split = node ? (splitOf(draft as State, node.id) as Draft<SplitNode> | null) : null;
+      if (node?.kind !== 'tab' || !split) return;
+      leaveSplit(draft, node, split);
+      return;
+    }
+
+    case 'split.separate': {
+      const split = draft.nodes[cmd.splitId];
+      if (split?.kind !== 'split') return;
+      // The panes take the split's place, in order.
+      const panes = splitMembers(draft as State, split.id);
+      const siblings = children(draft as State, split.chordId, split.section, split.parentId);
+      const at = siblings.findIndex((n) => n.id === split.id);
+      const ranks = generateNKeysBetween(siblings[at - 1]?.rank ?? null, siblings[at + 1]?.rank ?? null, panes.length);
+      panes.forEach((pane, i) => {
+        pane.parentId = split.parentId;
+        pane.rank = ranks[i]!;
+      });
+      delete draft.nodes[split.id];
+      return;
+    }
+
+    case 'split.join': {
+      const win = draft.windows[cmd.windowId];
+      const tabs = cmd.nodeIds.map((id) => draft.nodes[id]).filter((n): n is Draft<TabNode> => n?.kind === 'tab');
+      const first = tabs[0];
+      if (!win || !first || tabs.length < 2 || tabs.length > SPLIT.maxPanes || draft.nodes[cmd.splitId]) return;
+      if (tabs.some((t) => t.chordId !== first.chordId)) return;
+      for (const tab of tabs) {
+        const from = splitOf(draft as State, tab.id) as Draft<SplitNode> | null;
+        if (from) leaveSplit(draft, tab, from);
+      }
+      draft.nodes[cmd.splitId] = {
+        kind: 'split',
+        id: cmd.splitId,
+        chordId: first.chordId,
+        section: first.section,
+        parentId: first.parentId,
+        rank: first.rank,
+        direction: cmd.direction,
+        sizes: normalizeSizes(cmd.sizes ?? equalSizes(tabs.length), tabs.length),
+        createdAt: ctx.now,
+      };
+      const ranks = generateNKeysBetween(null, null, tabs.length);
+      tabs.forEach((tab, i) => {
+        tab.parentId = cmd.splitId;
+        tab.rank = ranks[i]!;
+        if (tab.section !== first.section) {
+          tab.section = first.section;
+          tab.pinnedUrl = first.section === 'pinned' ? (tab.pinnedUrl ?? tab.url) : null;
+        }
+      });
+      const focus = cmd.focus && tabs.some((t) => t.id === cmd.focus) ? cmd.focus : first.id;
+      if (win.activeChordId !== first.chordId) return;
+      leave(draft, win, ctx);
+      activate(draft, cmd.windowId, focus, ctx, effects);
+      return;
+    }
+
+    case 'split.focus': {
+      const win = draft.windows[cmd.windowId];
+      const active = win ? win.activeTab[win.activeChordId] : null;
+      const split = active ? splitOf(draft as State, active) : null;
+      if (!win || !active || !split) return;
+      const panes = splitMembers(draft as State, split.id);
+      const at = panes.findIndex((p) => p.id === active);
+      const next = panes[at + cmd.direction];
+      if (!next) return;
+      leave(draft, win, ctx);
+      activate(draft, cmd.windowId, next.id, ctx, effects);
       return;
     }
   }

@@ -14,8 +14,13 @@ import {
   type Chord,
   type CustomTheme,
   type InterfaceSettings,
+  type LinkRoute,
   type Command,
   type DownloadAction,
+  type DuetHit,
+  type DuetMessage,
+  type DuetProvider,
+  type DuetScope,
   type SearchEngineId,
   type Settings,
   type SettingsPatch as CoreSettingsPatch,
@@ -26,8 +31,8 @@ import {
 } from '@chord/core';
 import { z } from 'zod';
 
-/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs). */
-export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive';
+/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs); `preview` draws hover previews; `mini` is a mini window's bar. */
+export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive' | 'preview' | 'mini';
 
 export const Platform = z.enum(['darwin', 'win32', 'linux']);
 export type Platform = z.infer<typeof Platform>;
@@ -79,7 +84,10 @@ const chordName = z.string().max(64);
 
 /** Commands a renderer may send. Engine-only commands (tab.updated, tab.live) are not accepted from renderers. */
 export const RendererCommand = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('tab.open'), windowId: id, url, background: z.boolean().optional(), pinned: z.boolean().optional() }),
+  z.object({ t: z.literal('tab.open'), windowId: id, url, background: z.boolean().optional(), pinned: z.boolean().optional(), route: z.boolean().optional() }),
+  // Link routes (from Crest): "Always open linear.app in Work?" answers with linkRoute.set.
+  z.object({ t: z.literal('linkRoute.set'), host: z.string().min(1).max(253), chordId: id }),
+  z.object({ t: z.literal('linkRoute.delete'), host: z.string().min(1).max(253) }),
   z.object({ t: z.literal('tab.activate'), windowId: id, nodeId: id, touch: z.boolean().optional() }),
   z.object({ t: z.literal('tab.close'), windowId: id, nodeId: id }),
   z.object({ t: z.literal('tab.reopenClosed'), windowId: id }),
@@ -126,7 +134,29 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('settings.set'), settings: z.strictObject({ onboarded: z.literal(true) }) }),
   // Undo for "Keep sign-ins separate": back to shared sign-ins, or to the chord's own (Chord's IDs are UUIDs).
   z.object({ t: z.literal('chord.profile'), chordId: id, profileId: z.union([z.literal('default'), z.uuid()]) }),
-  // chord.delete isn't here: main deletes, then offers Undo in a toast.
+  // Split view (DESIGN.md §8.4): drop a tab on the page, drag a divider, drag a pane out, Undo for separating, ⌘⌥[ / ⌘⌥].
+  z.object({
+    t: z.literal('split.add'),
+    windowId: id,
+    withId: id,
+    nodeId: id.optional(),
+    url: url.optional(),
+    index: z.number().int().min(0).max(4).optional(),
+    direction: z.enum(['row', 'column']).optional(),
+  }),
+  z.object({ t: z.literal('split.resize'), splitId: id, sizes: z.array(z.number().positive().max(1)).min(2).max(4) }),
+  z.object({ t: z.literal('split.remove'), nodeId: id }),
+  z.object({
+    t: z.literal('split.join'),
+    windowId: id,
+    splitId: id,
+    nodeIds: z.array(id).min(2).max(4),
+    direction: z.enum(['row', 'column']),
+    sizes: z.array(z.number().positive().max(1)).min(2).max(4).optional(),
+    focus: id.optional(),
+  }),
+  z.object({ t: z.literal('split.focus'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
+  // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
 // Compile-time check: every renderer command is a real core command.
@@ -142,11 +172,14 @@ export const SettingsPatch = z.strictObject({
   archiveAfter: z.enum(archiveAfterIds).optional(),
   sleepTabs: z.boolean().optional(),
   autoPip: z.boolean().optional(),
+  pagePreviews: z.boolean().optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
   extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
   searchSuggestions: z.boolean().optional(),
   checkForUpdates: z.boolean().optional(),
+  googleFree: z.boolean().optional(),
   separateSignIns: z.boolean().optional(),
+  externalLinks: z.enum(['mini', 'tab']).optional(),
   spellcheck: z
     .strictObject({ enabled: z.boolean(), language: z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/).nullable() })
     .partial()
@@ -162,6 +195,18 @@ export const SettingsPatch = z.strictObject({
       tabMoves: z.boolean(),
       sidebar: z.boolean(),
       colorBlend: z.boolean(),
+    })
+    .partial()
+    .optional(),
+  duet: z
+    .strictObject({
+      enabled: z.boolean(),
+      provider: z.enum(['claude', 'codex']).nullable(),
+      model: z.string().max(100).nullable(),
+      keep: z.enum(['forever', '90d', '30d']),
+      scope: z.enum(['ask', 'chord', 'all']),
+      neverSites: z.array(z.string().max(300)).max(500),
+      offChords: z.array(z.string().max(64)).max(500),
     })
     .partial()
     .optional(),
@@ -198,6 +243,9 @@ export type UpdateStatus =
   | { state: 'checking' }
   | { state: 'current'; checkedAt: number }
   | { state: 'available'; checkedAt: number; version: string; url: string }
+  /** Installing itself (Windows installer, AppImage): downloading in the background, then waiting for a restart. */
+  | { state: 'downloading'; checkedAt: number; version: string; url: string; percent: number }
+  | { state: 'ready'; checkedAt: number; version: string; url: string }
   | { state: 'failed'; checkedAt: number };
 
 export const DefaultBrowserStatus = z.enum(['default', 'not-default', 'unavailable']);
@@ -214,6 +262,31 @@ export interface SettingsSnapshot {
   sitePermissions: SitePermissions;
   /** Spelling dictionaries Chord can use (Windows and Linux); empty on macOS, where the system's own checks spelling. */
   spellcheckLanguages: string[];
+  /** Settings → General → Link routes, by site. */
+  linkRoutes: LinkRoute[];
+}
+
+/** What a mini window's bar shows (DESIGN.md §7.9): the page, and the chord "Open in" puts it in. */
+export interface MiniState {
+  url: string;
+  host: string;
+  title: string;
+  /** Loaded over https: the bar shows a lock. */
+  secure: boolean;
+  loading: boolean;
+  /** The chord "Open in" moves the page to; null when there's none it can go to. */
+  target: { id: string; name: string; icon: string } | null;
+}
+
+/** What Peek's chrome shows (DESIGN.md §7.9, §8.5). */
+export interface PeekState {
+  url: string;
+  host: string;
+  title: string;
+  /** The card, in window coordinates; the page sits in it below the header. */
+  card: Rect;
+  /** Where the card grows from: the click that opened it. */
+  origin: { x: number; y: number } | null;
 }
 
 /** One extension's toolbar button, for the window's current tab. */
@@ -282,6 +355,52 @@ export interface SharePrompt {
 }
 
 /** Everything the popover shows: cards stack top-right over the page. */
+/** One row of a folder's hover preview. */
+export interface PreviewRow {
+  title: string;
+  url: string;
+  favicon: string | null;
+}
+
+/** A hover preview (DESIGN.md §7.6): what main sends the preview view to draw, in the hovered tab's chord colors. */
+export type PreviewCard = {
+  theme: ChordThemeSpec;
+  interface: InterfaceSettings;
+  /** Crossfade between cards (Settings → Motion → Animate the sidebar, and reduced motion). */
+  animate: boolean;
+} & (
+  | {
+      kind: 'tab';
+      id: string;
+      title: string;
+      url: string;
+      favicon: string | null;
+      /** "Opened 2 h ago". */
+      opened: string;
+      /** The last picture of the page, as a data URL; null shows its icon on its tint. */
+      thumbnail: string | null;
+    }
+  | {
+      kind: 'folder';
+      id: string;
+      title: string;
+      /** The first six tabs inside, nested folders flattened. */
+      rows: PreviewRow[];
+      /** "and 4 more". */
+      more: number;
+    }
+);
+
+/** The sidebar row the pointer rests on (shell coordinates), or null when it leaves. */
+export const PreviewTarget = z
+  .object({
+    nodeId: id,
+    top: z.number().min(-10_000).max(100_000),
+    bottom: z.number().min(-10_000).max(100_000),
+  })
+  .nullable();
+export type PreviewTarget = z.infer<typeof PreviewTarget>;
+
 export interface PopoverState {
   theme: ChordThemeSpec | null;
   interface: InterfaceSettings;
@@ -323,7 +442,10 @@ export type GesturePhase = 'begin' | 'end' | 'fling';
 export interface Toast {
   id: string;
   message: string;
-  action?: { label: string; command: RendererCommand };
+  /** Most run a command in the shell's store (Undo); "Restart to update" asks main to install. */
+  action?: { label: string; command: RendererCommand } | { label: string; update: 'restart' };
+  /** A second line with its own action, about the same thing ("Always open linear.app here?" under "Moved to Work"). */
+  also?: { message: string; action: { label: string; command: RendererCommand } };
 }
 
 export interface ChordEdit {
@@ -349,20 +471,26 @@ export const OverlayOpen = z.object({
    * editing the current tab. `downloads`: the downloads panel, anchored on the
    * button that opened it (`anchor`).
    */
-  mode: z.enum(['new', 'edit', 'downloads', 'extensions']),
+  mode: z.enum(['new', 'edit', 'downloads', 'extensions', 'split']),
   anchor: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
 });
 export type OverlayOpen = z.infer<typeof OverlayOpen>;
 
 /** What main tells the overlay when it opens. */
 export interface OverlayOpenEvent {
-  mode: 'new' | 'edit' | 'downloads' | 'extensions';
+  /**
+   * `peek`: Peek's chrome around a link from a pinned tab (main opens it; the shell can't).
+   * `split`: the command bar for "Split with…": what you pick opens beside the current tab.
+   */
+  mode: 'new' | 'edit' | 'downloads' | 'extensions' | 'split' | 'peek';
   /** Where the address sits, for the anchored placement (window coordinates). */
   anchor: Rect | null;
   /** The current tab's address, prefilled in edit mode. */
   url: string;
   /** Which opening this is: a close for an earlier one is ignored (it can arrive after a newer open). */
   seq: number;
+  /** Peek's page and card, in peek mode. */
+  peek?: PeekState;
   /**
    * When main got the request to open (the shortcut, or the shell's button), in
    * epoch ms (`performance.timeOrigin + performance.now()`). The command bar
@@ -382,9 +510,90 @@ export interface StatePatchEvent {
   patches: unknown[];
 }
 
+/* ---------- Duet (ARCHITECTURE.md §11) ---------- */
+
+export const DuetProviderSchema = z.enum(['claude', 'codex']);
+const duetScope = z.enum(['ask', 'chord', 'all']);
+
+/** What the panel asks main to do. Everything is checked again in main (scope, private, never-sites). */
+export const DuetAction = z.discriminatedUnion('do', [
+  z.object({ do: z.literal('toggle'), open: z.boolean().optional() }),
+  z.object({ do: z.literal('dismissFirstUse') }),
+  z.object({ do: z.literal('setup'), provider: DuetProviderSchema }),
+  /** Duet off (or back on) in the window's current chord. */
+  z.object({ do: z.literal('chordOff'), off: z.boolean() }),
+  z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }),
+  z.object({ do: z.literal('refresh') }),
+  z.object({ do: z.literal('send'), text: z.string().min(1).max(50_000) }),
+  z.object({ do: z.literal('stop') }),
+  z.object({ do: z.literal('retry') }),
+  z.object({ do: z.literal('unqueue'), index: z.number().int().min(0).max(100) }),
+  z.object({ do: z.literal('approve'), messageId: id, decision: z.enum(['once', 'thread', 'denied']) }),
+  z.object({ do: z.literal('new') }),
+  z.object({ do: z.literal('open'), threadId: id }),
+  z.object({ do: z.literal('continue') }),
+  z.object({ do: z.literal('delete'), threadId: id }),
+  z.object({ do: z.literal('rename'), threadId: id, title: z.string().min(1).max(80) }),
+  z.object({ do: z.literal('scope'), scope: duetScope }),
+  z.object({ do: z.literal('model'), provider: DuetProviderSchema, model: z.string().max(100).nullable() }),
+  z.object({ do: z.literal('attach'), nodeId: id }),
+  z.object({ do: z.literal('detach'), nodeId: id }),
+  z.object({ do: z.literal('draft'), text: z.string().max(20_000) }),
+  z.object({ do: z.literal('citation'), messageId: id, n: z.number().int().min(1).max(500) }),
+  z.object({ do: z.literal('export') }),
+]);
+export type DuetAction = z.infer<typeof DuetAction>;
+
+export interface DuetProviderInfo {
+  provider: DuetProvider;
+  installed: boolean;
+  path: string | null;
+  version: string | null;
+  signedIn: boolean | null;
+  billing: 'subscription' | 'api-key' | 'other' | null;
+  tooOld: boolean;
+}
+
+/** What one window's Duet panel shows (pushed as `duet:state`). */
+export interface DuetView {
+  /** Duet is on (Settings) and this isn't a private window. */
+  enabled: boolean;
+  open: boolean;
+  provider: DuetProvider | null;
+  providers: DuetProviderInfo[];
+  chordOff: boolean;
+  /** The transparency card hasn't been dismissed yet. */
+  firstUse: boolean;
+  thread: { id: string | null; title: string; scope: DuetScope; provider: DuetProvider; model: string | null } | null;
+  continueFrom: { id: string; title: string } | null;
+  threads: { id: string; title: string; lastUsedAt: number }[];
+  messages: DuetMessage[];
+  busy: boolean;
+  startedAt: number | null;
+  queue: string[];
+  attachments: { nodeId: string; title: string; url: string; current: boolean }[];
+  attachable: { nodeId: string; title: string; url: string }[];
+  readTabIds: string[];
+  error: { kind: string; message: string } | null;
+  draft: string;
+}
+
 /** Renderer → main requests (`ipcRenderer.invoke`). */
 export const invokeChannels = {
-  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive'], request: z.void(), response: SystemInfo },
+  'duet:view': { roles: ['shell'], request: z.void(), response: z.custom<DuetView>() },
+  'duet:do': { roles: ['shell'], request: DuetAction, response: z.void() },
+  /** The command bar's @duet. */
+  'duet:search': { roles: ['overlay'], request: z.strictObject({ query: z.string().max(200) }), response: z.custom<DuetHit[]>() },
+  'duet:openHit': { roles: ['overlay'], request: z.strictObject({ chordId: id, threadId: id }), response: z.void() },
+  /** Settings → Duet: the providers on this computer, sign in, clear all chats. */
+  'settings:duet': {
+    roles: ['internal'],
+    request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }), z.object({ do: z.literal('clearAll') })]),
+    response: z.custom<DuetProviderInfo[]>(),
+  },
+  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview', 'mini'], request: z.void(), response: SystemInfo },
+  'preview:hover': { roles: ['shell'], request: PreviewTarget, response: z.void() },
+  'preview:size': { roles: ['preview'], request: z.object({ width: z.number().min(0).max(2000), height: z.number().min(0).max(2000) }), response: z.void() },
   'state:snapshot': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<StateSnapshot>() },
   'cmd:dispatch': { roles: ['shell', 'overlay'], request: RendererCommand, response: z.void() },
   'nav:command': { roles: ['shell', 'overlay'], request: z.object({ action: NavAction }), response: z.void() },
@@ -447,6 +656,8 @@ export const invokeChannels = {
   'sidebar:deleteFolder': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   /** Minimal mode: lift the sidebar over the page while it peeks, and put it back. */
   'layout:peek': { roles: ['shell'], request: z.strictObject({ open: z.boolean() }), response: z.void() },
+  /** A tab is being dragged from the sidebar: lift the shell over the page for split drop zones, and put it back. */
+  'layout:lift': { roles: ['shell'], request: z.strictObject({ lifted: z.boolean() }), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
   // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
@@ -481,6 +692,8 @@ export const invokeChannels = {
   'settings:makeDefaultBrowser': { roles: ['internal', 'shell'], request: z.void(), response: DefaultBrowserStatus },
   'settings:updateStatus': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
   'settings:checkForUpdates': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
+  // "Restart to update", from Settings → About or the update's toast.
+  'update:restart': { roles: ['internal', 'shell'], request: z.void(), response: z.void() },
   // Settings → Site permissions: change one decision (null asks again next time), or forget a site.
   'settings:sitePermission': {
     roles: ['internal'],
@@ -488,6 +701,17 @@ export const invokeChannels = {
     response: z.void(),
   },
   'settings:forgetSite': { roles: ['internal'], request: z.strictObject({ origin: siteOrigin }), response: z.void() },
+  /** Settings → General → Link routes: send a site's links to a chord, or (null) stop. */
+  'settings:linkRoute': { roles: ['internal'], request: z.strictObject({ host: z.string().min(1).max(253), chordId: id.nullable() }), response: z.void() },
+  // A mini window's bar (DESIGN.md §7.9): links from other apps open there.
+  'mini:state': { roles: ['mini'], request: z.void(), response: z.custom<MiniState>() },
+  /** Move the page into its "Open in" chord, as a tab with its history. */
+  'mini:promote': { roles: ['mini'], request: z.void(), response: z.void() },
+  /** "Open in ▾": the chords, below this rect; picking one moves the page there. */
+  'mini:chooseChord': { roles: ['mini'], request: Rect, response: z.void() },
+  'mini:copyLink': { roles: ['mini'], request: z.void(), response: z.void() },
+  /** Peek's "Open in Today": the page becomes a tab, history and all. Closing goes through overlay:close. */
+  'peek:expand': { roles: ['overlay'], request: z.void(), response: z.void() },
   // Screen sharing (ARCHITECTURE.md §9): the picker answers; the sidebar's Stop ends a share.
   'share:respond': {
     roles: ['popover'],
@@ -517,6 +741,8 @@ export interface EventPayloads {
   'overlay:open': OverlayOpenEvent;
   'settings:changed': SettingsSnapshot;
   'popover:state': PopoverState;
+  /** What the hover preview shows, or null to clear it. */
+  'preview:card': PreviewCard | null;
   'toast:show': Toast;
   /** The shell's trackpad gesture phases, for the chord swipe's release (DESIGN.md §6.4). */
   'gesture:phase': GesturePhase;
@@ -530,6 +756,12 @@ export interface EventPayloads {
   /** The archive gained or lost entries: the archive page lists them again. */
   'archive:changed': null;
   'archive:snapshot': ArchiveSnapshot;
+  'mini:state': MiniState;
+  /** Main closed this opening of the overlay itself (Peek, by Esc in its page, ⌘W, or Open in Today). */
+  'overlay:dismiss': { seq: number };
+  /** Peek's page moved on (title, address) or its card moved (the window resized). */
+  'peek:state': PeekState;
+  'duet:state': DuetView;
 }
 
 export type InvokeChannel = keyof typeof invokeChannels;
@@ -561,6 +793,8 @@ export interface ShellApi {
     anchor(rect: Rect | null): Promise<void>;
     /** Minimal mode's sidebar peek: main lifts the shell above the page while it's open. */
     peek(open: boolean): Promise<void>;
+    /** While a tab is dragged, the shell sits above the page so split view's drop zones show over it. */
+    lift(lifted: boolean): Promise<void>;
   };
   menu: {
     app(anchor: Rect): Promise<void>;
@@ -577,6 +811,8 @@ export interface ShellApi {
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
   gestures: { onPhase(listener: (phase: GesturePhase) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
+  /** "Restart to update" from a toast. */
+  updates: { restart(): Promise<void> };
   extensions: {
     state(): Promise<ExtensionsBarState>;
     onState(listener: (state: ExtensionsBarState) => void): () => void;
@@ -586,8 +822,12 @@ export interface ShellApi {
   };
   /** First run's "Open links in Chord?" (DESIGN.md §8.1). */
   defaultBrowser: { status(): Promise<DefaultBrowserStatus>; make(): Promise<DefaultBrowserStatus> };
+  /** Duet's panel in this window (ARCHITECTURE.md §11). */
+  duet: { view(): Promise<DuetView>; act(action: DuetAction): Promise<void>; onState(listener: (view: DuetView) => void): () => void };
   /** Stop a tab's screen share (its sidebar row shows it's sharing). */
   share: { stop(nodeId: string): Promise<void> };
+  /** The pinned tab or folder row the pointer rests on, for its hover preview (null when it leaves). */
+  preview: { hover(target: PreviewTarget): Promise<void> };
   /** Launch timing: the sidebar is ready to use, then painted. */
   perf: { shell(milestone: 'ready' | 'painted'): Promise<void> };
 }
@@ -620,13 +860,19 @@ export interface SettingsApi {
     /** Change one remembered decision for a site (null asks again), or forget the site entirely. */
     sitePermission(origin: string, permission: SitePermission, decision: 'allow' | 'block' | null): Promise<void>;
     forgetSite(origin: string): Promise<void>;
+    /** Send a site's links to a chord, or (null) stop. */
+    linkRoute(host: string, chordId: string | null): Promise<void>;
     defaultBrowser(): Promise<DefaultBrowserStatus>;
     /** Asks the OS to make Chord the default (on Windows, opens Settings → Default apps), then reports again. */
     makeDefaultBrowser(): Promise<DefaultBrowserStatus>;
     /** The update check's last answer, and asking again now. */
     updateStatus(): Promise<UpdateStatus>;
     checkForUpdates(): Promise<UpdateStatus>;
+    /** Install the downloaded update and reopen Chord. */
+    restartToUpdate(): Promise<void>;
     about(): Promise<AboutInfo>;
+    /** Settings → Duet: which providers are installed and signed in; sign in; clear all chats. */
+    duet(request: { do: 'detect' } | { do: 'signIn'; provider: DuetProvider } | { do: 'clearAll' }): Promise<DuetProviderInfo[]>;
     openUrl(url: string): Promise<void>;
   };
   extensions: {
@@ -634,6 +880,21 @@ export interface SettingsApi {
     remove(profileId: string, id: string): Promise<void>;
     options(profileId: string, id: string): Promise<void>;
     update(): Promise<number>;
+  };
+}
+
+/** `window.chord` in a mini window's bar. */
+export interface MiniApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  mini: {
+    state(): Promise<MiniState>;
+    onState(listener: (state: MiniState) => void): () => void;
+    promote(): Promise<void>;
+    chooseChord(anchor: Rect): Promise<void>;
+    copyLink(): Promise<void>;
   };
 }
 
@@ -650,6 +911,19 @@ export interface ArchiveApi {
     onChange(listener: () => void): () => void;
     restore(archiveId: string): Promise<void>;
     remove(archiveId: string): Promise<void>;
+  };
+}
+
+/** `window.chord` in the hover-preview view. */
+export interface PreviewApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  preview: {
+    onCard(listener: (card: PreviewCard | null) => void): () => void;
+    /** The card's size; 0 × 0 hides the view. */
+    size(width: number, height: number): Promise<void>;
   };
 }
 
@@ -682,6 +956,8 @@ export interface OverlayApi {
   state: StateApi;
   overlay: {
     onOpen(listener: (event: OverlayOpenEvent) => void): () => void;
+    /** Main closed an opening itself: forget it, so it never shows again. */
+    onDismiss(listener: (seq: number) => void): () => void;
     close(seq: number): Promise<void>;
     /** Listening now: main may open the command bar. */
     ready(): Promise<void>;
@@ -702,4 +978,11 @@ export interface OverlayApi {
     suggest(query: string, engine?: SearchEngineId): Promise<string[]>;
   };
   archive: { restore(archiveId: string): Promise<void> };
+  /** Peek's chrome: its page's title and address as they change, and "Open in Today". */
+  peek: {
+    onState(listener: (state: PeekState) => void): () => void;
+    expand(): Promise<void>;
+  };
+  /** @duet: Duet chats by their words, and opening one. */
+  duet: { search(query: string): Promise<DuetHit[]>; open(chordId: string, threadId: string): Promise<void> };
 }

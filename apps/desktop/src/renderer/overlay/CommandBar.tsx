@@ -7,37 +7,9 @@
  * keyword or `@filter` followed by Tab narrows the bar to a chip, and the
  * engine's suggestions slot in under the local rows when they arrive.
  */
-import { keycapFor, parseInput, type ActionId, type SearchEngineId } from '@chord/core';
-import type { HistorySearch, OverlayOpenEvent, SystemInfo } from '@chord/ipc';
-import {
-  AppWindow,
-  Archive,
-  ArchiveRestore,
-  ArrowDown,
-  ArrowUp,
-  Code,
-  Command,
-  CornerDownLeft,
-  Globe,
-  History,
-  Keyboard,
-  Layers,
-  Link,
-  Maximize,
-  PanelLeft,
-  Pin,
-  Printer,
-  RotateCcw,
-  RotateCw,
-  Search,
-  Settings,
-  SquareTerminal,
-  TextSearch,
-  Trash2,
-  X,
-  ZoomIn,
-  ZoomOut,
-} from 'lucide-react';
+import { keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
+import type { HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
+import { AppWindow, Archive, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, MessagesSquare, PanelLeft, Pin, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
@@ -50,6 +22,7 @@ import { api } from './api';
 import styles from './CommandBar.module.css';
 import { DownloadsPanel } from './DownloadsPanel';
 import { ExtensionsPanel } from './ExtensionsPanel';
+import { PeekChrome } from './Peek';
 import { buildResults, completionFor, destinationOf, scopeFor, scopeLabel, type Filter, type Result, type Scope } from './results';
 
 interface Session {
@@ -63,6 +36,8 @@ interface Session {
   initial: string;
   /** Main's number for this opening; closing names it. */
   seq: number;
+  /** Peek's page and card, when the overlay is Peek's chrome. */
+  peek?: PeekState;
   /** Not an opening: the unseen warm-up render while the overlay is still hidden (see below). */
   warm?: boolean;
 }
@@ -86,12 +61,17 @@ interface Keystroke {
   committed: number | null;
 }
 
+/** Whether the overlay is the command bar, in any of its modes (rather than a panel or Peek's chrome). */
+const isCommandBar = (session: Session | null): session is Session & { mode: 'new' | 'edit' | 'split' } =>
+  session?.mode === 'new' || session?.mode === 'edit' || session?.mode === 'split';
+
 /**
  * Where a result opens (DESIGN.md §7.3): ↵ here (this tab when editing its
- * address), ⌘↵ / Ctrl+↵ a new background tab, ⇧↵ a new tab in front. ⇧↵ is
- * a new window in the spec; it opens a tab until Chord has more than one window.
+ * address), ⌘↵ / Ctrl+↵ a new background tab, ⇧↵ a new tab in front, ⌥↵
+ * beside the current tab in a split (as ↵ does in "Split with…"). ⇧↵ is a
+ * new window in the spec; it opens a tab until Chord has more than one window.
  */
-type Where = 'here' | 'background' | 'front';
+type Where = 'here' | 'background' | 'front' | 'split';
 
 const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'tab.reopen': RotateCcw,
@@ -117,7 +97,7 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'app.shortcuts': Keyboard,
 };
 
-const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, archive: Archive, chords: Layers, actions: Command };
+const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, archive: Archive, duet: MessagesSquare, chords: Layers, actions: Command };
 const scopeIcon = (scope: Scope) => (scope.kind === 'filter' ? FILTER_ICONS[scope.filter] : Search);
 
 /** Anchored panels are at least this wide, so results have room beside a narrow sidebar. */
@@ -128,11 +108,13 @@ const SUGGEST_DELAY_MS = 120;
 
 function hintFor(result: Result, mode: Session['mode']): { text: string; key: string } {
   if (result.kind === 'scope') return { text: result.scope.kind === 'keyword' ? `Search ${scopeLabel(result.scope).name}` : 'Show only these', key: result.scope.kind === 'keyword' ? 'Tab' : '↵' };
+  if (mode === 'split') return { text: 'Open in split', key: '↵' };
   if (result.kind === 'tab') return { text: 'Switch to tab', key: '↵' };
   if (result.kind === 'action') return { text: 'Run', key: '↵' };
   if (result.kind === 'chord') return { text: 'Switch to chord', key: '↵' };
   if (result.kind === 'history') return { text: mode === 'edit' ? 'Go' : 'Open', key: '↵' };
   if (result.kind === 'archive') return { text: 'Bring back', key: '↵' };
+  if (result.kind === 'duet') return { text: 'Open chat', key: '↵' };
   if (result.search) return { text: 'Search', key: '↵' };
   return { text: mode === 'edit' ? 'Go' : 'Open', key: '↵' };
 }
@@ -177,6 +159,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
         requestedAt: event.requestedAt,
         initial: event.mode === 'edit' ? event.url : '',
         seq: event.seq,
+        ...(event.peek ? { peek: event.peek } : {}),
       });
       setQuery(event.mode === 'edit' ? event.url : '');
       setSelected(0);
@@ -184,9 +167,13 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       setMayComplete(false);
       setSuggested(null);
     });
+    const stopDismiss = api.overlay.onDismiss((seq) => setSession((current) => (current?.seq === seq ? null : current)));
     // Listening: an opening that waited for this (a brand-new window's) comes now.
     void api.overlay.ready();
-    return stop;
+    return () => {
+      stop();
+      stopDismiss();
+    };
   }, []);
 
   // The first opening shouldn't pay for this process's first fonts, styles and code paths (about
@@ -234,6 +221,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       input.scrollLeft = 0;
     }
     // The open budget: from the request in main to this opening's first frame (and on to its paint).
+    if (!isCommandBar(session)) return;
     const { requestedAt, openedAt, mode } = session;
     const start = fromEpoch(requestedAt);
     const committed = performance.now();
@@ -244,6 +232,19 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   // dropped; until the new one lands, the last reply keeps rows from flickering away. `@history`
   // asks even before anything is typed, as does `@archive`: recent pages, newest archived tabs.
   const [history, setHistory] = useState<HistorySearch | null>(null);
+  // @duet: Duet chats by their words, from chord-data.
+  const [duetHits, setDuetHits] = useState<DuetHit[]>([]);
+  const duetFilter = scope?.kind === 'filter' && scope.filter === 'duet';
+  useEffect(() => {
+    if (!duetFilter || !query.trim()) return setDuetHits([]);
+    let current = true;
+    void api.duet.search(query.trim()).then((hits) => {
+      if (current) setDuetHits(hits);
+    });
+    return () => {
+      current = false;
+    };
+  }, [duetFilter, query]);
   const searchSeq = useRef(0);
   const keystroke = useRef<Keystroke | null>(null);
   /** The reply that answers the timed keystroke: when its search went out, and how long chord-data took. */
@@ -251,7 +252,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   /** The text the latest search asked about, so a keystroke's own search isn't asked again after it renders. */
   const searched = useRef<string | null>(null);
   const historyFilter = scope?.kind === 'filter' && (scope.filter === 'history' || scope.filter === 'archive');
-  const wantsHistory = (text: string) => Boolean(session) && session?.mode !== 'downloads' && session?.mode !== 'extensions' && (text.trim() !== '' || historyFilter);
+  const wantsHistory = (text: string) => isCommandBar(session) && (text.trim() !== '' || historyFilter);
   const searchHistory = (text: string, typed: Keystroke | null) => {
     const seq = ++searchSeq.current;
     searched.current = text;
@@ -279,8 +280,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   useEffect(() => {
     const text = query.trim();
     const wanted =
-      session &&
-      session.mode !== 'downloads' &&
+      isCommandBar(session) &&
       state.settings.searchSuggestions &&
       engineForSuggestions !== null &&
       text !== session.initial &&
@@ -309,7 +309,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   );
 
   const results = useMemo(
-    () => (session && session.mode !== 'downloads' && session.mode !== 'extensions' ? buildResults(query, state, windowId, session.mode, history, Date.now(), { scope, suggestions }) : []),
+    () => (isCommandBar(session) ? buildResults(query, state, windowId, session.mode, history, Date.now(), { scope, suggestions, duetHits }) : []),
     [session, query, state, windowId, history, scope, suggestions],
   );
   const current = Math.min(selected, Math.max(0, results.length - 1));
@@ -374,15 +374,25 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       const address = result.kind === 'open' || result.kind === 'history' || result.kind === 'archive' ? result.url : result.kind === 'tab' ? result.tab.url : undefined;
       void api.history.choose(typed, destination, address && /^https?:/i.test(address) ? address : undefined);
     }
+    // Beside the current tab, in a split (DESIGN.md §8.4): a page opens as a new pane; a tab of this chord moves in.
+    const splitTab = result.kind === 'tab' && result.tab.chordId === win?.activeChordId && result.tab.id !== activeId ? result.tab : null;
+    if (where === 'split' && activeId && (splitTab || result.kind === 'open' || result.kind === 'history')) {
+      if (splitTab) void dispatch({ t: 'split.add', windowId, withId: activeId, nodeId: splitTab.id });
+      else if (result.kind === 'open' || result.kind === 'history') void dispatch({ t: 'split.add', windowId, withId: activeId, url: result.url });
+      close();
+      return;
+    }
     if (result.kind === 'open' || result.kind === 'history') {
       if (session?.mode === 'edit' && activeId && where === 'here') void dispatch({ t: 'tab.navigate', nodeId: activeId, url: result.url });
-      else void dispatch({ t: 'tab.open', windowId, url: result.url, background: where === 'background' });
+      else void dispatch({ t: 'tab.open', windowId, url: result.url, background: where === 'background', route: true });
     } else if (result.kind === 'tab') {
       void dispatch({ t: 'tab.activate', windowId, nodeId: result.tab.id });
     } else if (result.kind === 'chord') {
       void dispatch({ t: 'chord.activate', windowId, chordId: result.chord.id });
     } else if (result.kind === 'archive') {
       void api.archive.restore(result.archiveId);
+    } else if (result.kind === 'duet') {
+      void api.duet.open(result.chordId, result.threadId);
     }
     close();
     // Actions run after the bar closes, so focus is back on the page (print, devtools, zoom act on it).
@@ -390,6 +400,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   };
 
   const whereFor = (event: KeyboardEvent | MouseEvent): Where => {
+    if (session?.mode === 'split' || event.altKey) return 'split';
     if (info.platform === 'darwin' ? event.metaKey : event.ctrlKey) return 'background';
     return event.shiftKey ? 'front' : 'here';
   };
@@ -440,6 +451,23 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
 
   if (!session) return null;
 
+  if (session.mode === 'peek' && session.peek) {
+    return (
+      <MotionConfig reducedMotion={reducedMotionMode(state.settings)}>
+        <div className={styles.root} style={style}>
+          <PeekChrome
+            key={session.openedAt}
+            initial={session.peek}
+            info={info}
+            transition={spring('gentle', 'commandBar')}
+            enter={spring('overlay', 'commandBar')}
+            onClose={close}
+          />
+        </div>
+      </MotionConfig>
+    );
+  }
+
   // The downloads and extensions panels share the overlay: modal like the command bar, but without dimming the page.
   if (session.mode === 'downloads' || session.mode === 'extensions') {
     return (
@@ -469,7 +497,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   const entrance = anchored ? { opacity: 0, y: -4 } : { opacity: 0, scale: 0.97, y: -8 };
   const InputIcon = query && results[0]?.kind === 'open' && !results[0].search ? Globe : Search;
   const label = scope ? scopeLabel(scope) : null;
-  const placeholder = label?.placeholder ?? 'Search or enter address';
+  const placeholder = label?.placeholder ?? (session.mode === 'split' ? 'Split with a tab or a page' : 'Search or enter address');
   const ScopeIcon = scope ? scopeIcon(scope) : null;
 
   return (
@@ -548,6 +576,8 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                         ? History
                         : result.kind === 'archive'
                           ? ArchiveRestore
+                          : result.kind === 'duet'
+                            ? MessagesSquare
                           : result.kind === 'scope'
                             ? scopeIcon(result.scope)
                             : result.kind === 'open'
@@ -584,6 +614,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                       {result.kind === 'scope' && <span className={styles.chip}>{result.detail}</span>}
                       {result.kind === 'chord' && <span className={styles.resultDetail}>Chord</span>}
                       {result.kind === 'archive' && <span className={styles.chip}>Archived</span>}
+                      {result.kind === 'duet' && <span className={styles.resultDetail}>{result.detail}</span>}
                       {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
                       {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform, state.settings.shortcuts)}</kbd>}
                       {isSelected && (

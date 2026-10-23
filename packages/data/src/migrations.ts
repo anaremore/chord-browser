@@ -177,4 +177,49 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (profile_id, host)
   ) STRICT;
   `,
+  // 9: Duet (ARCHITECTURE.md §11): Chord's own transcript is the source of truth; a provider's
+  // session (provider_session_id) is a cache, resumed when it works. Message bodies are JSON
+  // (packages/core/src/duet.ts); text is what the command bar's @duet searches.
+  `
+  CREATE TABLE duet_thread (
+    id TEXT PRIMARY KEY, chord_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL CHECK (provider IN ('claude','codex')), model TEXT, provider_session_id TEXT,
+    scope TEXT NOT NULL DEFAULT 'ask' CHECK (scope IN ('ask','chord','all')),
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX duet_thread_chord ON duet_thread(chord_id, last_used_at DESC);
+  CREATE TABLE duet_message (
+    rid INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE,
+    thread_id TEXT NOT NULL REFERENCES duet_thread(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('user','assistant','tool','approval','divider')),
+    text TEXT NOT NULL DEFAULT '', body TEXT NOT NULL, created_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX duet_message_thread ON duet_message(thread_id, created_at, rid);
+  CREATE VIRTUAL TABLE duet_fts USING fts5(text, content='duet_message', content_rowid='rid', tokenize='unicode61 remove_diacritics 2');
+  CREATE TRIGGER duet_message_ai AFTER INSERT ON duet_message BEGIN
+    INSERT INTO duet_fts(rowid, text) VALUES (new.rid, new.text);
+  END;
+  CREATE TRIGGER duet_message_ad AFTER DELETE ON duet_message BEGIN
+    INSERT INTO duet_fts(duet_fts, rowid, text) VALUES ('delete', old.rid, old.text);
+  END;
+  CREATE TRIGGER duet_message_au AFTER UPDATE OF text ON duet_message BEGIN
+    INSERT INTO duet_fts(duet_fts, rowid, text) VALUES ('delete', old.rid, old.text);
+    INSERT INTO duet_fts(rowid, text) VALUES (new.rid, new.text);
+  END;
+  `,
+  // 10: split view (Phase 2; 9 is Duet's). A split is a node of kind 'split'; its panes are its
+  // child tabs, in rank order. layout is {direction:'row'|'column', sizes:number[]} (shares in pane order).
+  `
+  CREATE TABLE IF NOT EXISTS split (
+    node_id TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+    layout TEXT NOT NULL
+  ) STRICT;
+  `,
+  // 11: link routes (from Crest): a site's links open in a chord. A route to a chord that's gone is
+  // dropped at restore. It only adds its own table, if it isn't there yet.
+  `
+  CREATE TABLE IF NOT EXISTS link_route (
+    host TEXT PRIMARY KEY, chord_id TEXT NOT NULL, created_at INTEGER NOT NULL
+  ) STRICT;
+  `,
 ];

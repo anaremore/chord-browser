@@ -5,6 +5,7 @@
  * tabs are playing, sharing, or in picture-in-picture).
  */
 import type { ArchiveAfter, NodeId, State, TabNode } from './model';
+import { shownTabs } from './split';
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -33,27 +34,26 @@ export const isInternalUrl = (url: string) => /^chord:\/\//i.test(url);
 /** The archive page's address. */
 export const ARCHIVE_URL = 'chord://archive/';
 
-/** Tabs on screen in any window: never archived or slept. */
+/** Tabs on screen in any window (every pane of a split shown): never archived or slept. */
 export function visibleTabs(state: State): Set<NodeId> {
   const out = new Set<NodeId>();
-  for (const win of Object.values(state.windows)) {
-    const id = win.activeTab[win.activeChordId];
-    if (id) out.add(id);
-  }
+  for (const win of Object.values(state.windows)) for (const id of shownTabs(state, win.id)) out.add(id);
   return out;
 }
 
 /**
  * Today tabs unused for at least `afterMs`, oldest first. Pinned tabs never
- * go, nor does a private window's tab (nothing of it is kept); nor do tabs on
- * screen, or ones the engine says are busy (`busy`:
- * playing, sharing the camera or screen, in picture-in-picture).
+ * go, nor does a private window's tab (nothing of it is kept), nor a split's
+ * pane (you put it there on purpose); nor do tabs on screen, or ones the
+ * engine says are busy (`busy`: playing, sharing the camera or screen, in
+ * picture-in-picture).
  */
 export function archiveCandidates(state: State, now: number, afterMs: number | null, busy: ReadonlySet<NodeId> = new Set()): NodeId[] {
   if (afterMs === null) return [];
   const visible = visibleTabs(state);
   return Object.values(state.nodes)
     .filter((n): n is TabNode => n.kind === 'tab' && n.section === 'today' && !state.chords[n.chordId]?.private)
+    .filter((t) => !(t.parentId && state.nodes[t.parentId]?.kind === 'split'))
     .filter((t) => !visible.has(t.id) && !busy.has(t.id) && now - t.lastActiveAt >= afterMs)
     .sort((a, b) => a.lastActiveAt - b.lastActiveAt)
     .map((t) => t.id);

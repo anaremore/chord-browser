@@ -1,8 +1,10 @@
 export * from './idle';
+export * from './duet';
 export * from './ids';
 export * from './bindings';
 export * from './input';
 export * from './keywords';
+export * from './links';
 export * from './model';
 export * from './page';
 export * from './rank';
@@ -11,4 +13,5 @@ export * from './restore';
 export * from './seed';
 export * from './select';
 export * from './shortcuts';
+export * from './split';
 export * from './text';

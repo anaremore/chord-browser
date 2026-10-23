@@ -1,16 +1,18 @@
 /**
  * One Chord window (ARCHITECTURE.md §5). Views, bottom to top:
  *   shell    Chord's UI, full window, transparent
- *   tab      the active tab, inset and rounded (index 1)
+ *   tabs     the active tab, or 2–4 split panes, inset and rounded (from index 1)
  *   popover  find bar and permission prompts: sized to its cards, at the frame's top-right
+ *   preview  a pinned tab's or folder's hover preview, beside the sidebar (DESIGN.md §7.6)
  *   floating an extension's popup, under its button (at most one)
- *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L
+ *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L (and Peek's scrim and header)
+ *   peek     Peek's page, in the card the overlay draws (DESIGN.md §7.9)
  */
 import { join } from 'node:path';
-import type { Bounds, WindowId, WindowModel } from '@chord/core';
-import type { OverlayOpenEvent, Rect, Role } from '@chord/ipc';
-import { frameRadius, size, space, springCurve, springs } from '@chord/tokens';
-import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session } from 'electron';
+import { paneRects, type Bounds, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
+import type { OverlayOpenEvent, PeekState, Rect, Role } from '@chord/ipc';
+import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
+import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session, type WebContents } from 'electron';
 import { registerCaller, send } from './ipc';
 import { epochNow, markLaunch } from './perf';
 import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
@@ -43,8 +45,18 @@ function frameOrigin(sidebar: SidebarMode, sidebarWidth: number): FrameOrigin {
 
 const FRAME_SPRING = springCurve(springs.smooth);
 const FRAME_TICK_MS = 1000 / 60;
+/** The hover preview glides between rows on `snappy` (DESIGN.md §7.6). */
+const PREVIEW_SPRING = springCurve(springs.snappy);
+/** The preview page pads its card so the whole shadow shows (more below); the card's own edge sits this far in. */
+const PREVIEW_PAD = space[6];
 
-export type UiSurface = 'shell' | 'overlay' | 'popover' | 'settings' | 'archive';
+/** How split panes share the content frame (DESIGN.md §7.9). */
+export interface PaneLayout {
+  direction: SplitDirection;
+  sizes: number[];
+}
+
+export type UiSurface = 'shell' | 'overlay' | 'popover' | 'preview' | 'settings' | 'archive' | 'mini';
 
 /** A view that floats over the page until something else happens (an extension's popup). */
 export interface FloatingView {
@@ -60,9 +72,18 @@ const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
   shell: { preload: 'shell', role: 'shell' },
   overlay: { preload: 'overlay', role: 'overlay' },
   popover: { preload: 'popover', role: 'popover' },
+  preview: { preload: 'preview', role: 'preview' },
   settings: { preload: 'internal', role: 'internal' },
   archive: { preload: 'archive', role: 'archive' },
+  mini: { preload: 'mini', role: 'mini' },
 };
+
+/** Peek's card: up to 88% of the content frame, at most 1200 × 900, centered in it (DESIGN.md §7.9). */
+const PEEK_SHARE = 0.88;
+const PEEK_MAX = { width: 1200, height: 900 } as const;
+
+/** What a Peek shows, apart from where its card is (main works that out from the window). */
+export type PeekInfo = Omit<PeekState, 'card'>;
 
 function uiUrl(surface: UiSurface): string {
   const dev = process.env['ELECTRON_RENDERER_URL'];
@@ -98,9 +119,18 @@ export class AppWindow {
   readonly shell: WebContentsView;
   readonly overlay: WebContentsView;
   readonly popover: WebContentsView;
-  private tabView: WebContentsView | null = null;
-  /** The page is hidden while the frame shows why it didn't load (or that it crashed). */
-  private tabHidden = false;
+  readonly preview: WebContentsView;
+  private previewSize = { width: 0, height: 0 };
+  /** The hovered row's top and bottom, while a preview is wanted. */
+  private previewAnchor: { top: number; bottom: number } | null = null;
+  private previewGlide = false;
+  private previewAnimation: ReturnType<typeof setInterval> | undefined;
+  /** The pages shown: one tab, or a split's panes in order. */
+  private panes: WebContentsView[] = [];
+  private focusedPane = 0;
+  private paneLayout: PaneLayout | null = null;
+  /** Pages hidden while the frame shows why they didn't load (or that they crashed). */
+  private hiddenPanes = new Set<WebContentsView>();
   private popoverSize = { width: 0, height: 0 };
   private focusPopoverWhenShown = false;
   private anchor: Rect | null = null;
@@ -114,9 +144,18 @@ export class AppWindow {
   private frameAnimation: ReturnType<typeof setInterval> | undefined;
   /** Minimal mode's peek: the shell sits above the page so the sidebar can float over it. */
   private peeking = false;
+  /** A tab is being dragged from the sidebar: the shell sits above the pages to show split drop zones. */
+  private lifted = false;
   /** The page is in HTML fullscreen (a video): it covers the whole window, above Chord's own views. */
   private pageFullScreen = false;
   private floating: FloatingView | null = null;
+  /** Peek: its page, and what its chrome in the overlay shows. */
+  private peekView: WebContentsView | null = null;
+  private peek: PeekInfo | null = null;
+  private peekSeq = 0;
+  private peekTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Duet's panel on the right (0 when closed): the page's frame ends before it, with a gap. */
+  private duetWidth = 0;
 
   constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds }: AppWindowOptions) {
     this.id = id;
@@ -136,11 +175,14 @@ export class AppWindow {
     this.shell = createUiView(uiSession, 'shell');
     this.popover = createUiView(uiSession, 'popover');
     this.popover.setVisible(false);
+    this.preview = createUiView(uiSession, 'preview');
+    this.preview.setVisible(false);
     this.overlay = createUiView(uiSession, 'overlay');
     this.overlay.setVisible(false);
     // Tab views go in at index 1, between the shell and the popover.
     this.window.contentView.addChildView(this.shell);
     this.window.contentView.addChildView(this.popover);
+    this.window.contentView.addChildView(this.preview);
     this.window.contentView.addChildView(this.overlay);
 
     this.layout();
@@ -156,6 +198,7 @@ export class AppWindow {
     };
     this.window.on('resize', () => {
       this.closeFloating();
+      this.hidePreview();
       this.layout();
       reportBounds();
     });
@@ -165,15 +208,17 @@ export class AppWindow {
 
     const onTheme = () => {
       if (platform !== 'darwin') this.window.setTitleBarOverlay?.(titleBarOverlay(forced));
-      for (const view of [this.shell, this.popover, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
+      for (const view of [this.shell, this.popover, this.preview, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
     };
     nativeTheme.on('updated', onTheme);
     this.window.on('closed', () => {
       this.closeFloating();
+      clearTimeout(this.peekTimer);
       nativeTheme.off('updated', onTheme);
       clearTimeout(boundsTimer);
       clearInterval(this.frameAnimation);
-      for (const view of [this.shell, this.popover, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
+      clearInterval(this.previewAnimation);
+      for (const view of [this.shell, this.popover, this.preview, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
     });
 
     markLaunch('windowCreated');
@@ -190,27 +235,198 @@ export class AppWindow {
     });
   }
 
-  /** Show a tab's view in the content frame (or nothing: the shell's empty state shows through). */
-  showTab(view: WebContentsView | null): void {
-    if (this.tabView === view) return;
-    this.closeFloating();
-    // Fullscreen belonged to the page going away; Chord's frame comes back for the next one.
-    if (this.pageFullScreen) this.leavePageFullScreen();
-    if (this.tabView) this.window.contentView.removeChildView(this.tabView);
-    this.tabView = view;
-    if (view) {
-      view.setVisible(!this.tabHidden);
-      // Just above the shell; or, while the sidebar peeks over the page, just below it.
-      this.window.contentView.addChildView(view, this.peeking ? 0 : 1);
+  /** The focused page: the active tab, or the focused pane of a split. */
+  private get tabView(): WebContentsView | null {
+    return this.panes[this.focusedPane] ?? null;
+  }
+
+  /** Whether the shell sits above the pages (the sidebar peeking, or a drag showing drop zones). */
+  private get shellRaised(): boolean {
+    return this.peeking || this.lifted;
+  }
+
+  /**
+   * Show tabs' views in the content frame: one, or a split's panes laid out
+   * by `layout`, with `focused` the one that takes the keyboard. None: the
+   * shell's empty state shows through.
+   */
+  showTabs(views: readonly WebContentsView[], focused: number, layout: PaneLayout | null): void {
+    const next = views.slice(0, 4);
+    const focus = next[focused] ?? next[0] ?? null;
+    const focusChanged = focus !== this.tabView;
+    const same = next.length === this.panes.length && next.every((v, i) => v === this.panes[i]);
+    this.paneLayout = next.length > 1 ? layout : null;
+    if (same && !focusChanged) {
       this.layout();
-      if (!this.overlayVisible) view.webContents.focus();
-    } else if (!this.overlayVisible) {
-      this.shell.webContents.focus();
+      return;
     }
+    if (focusChanged) {
+      this.closeFloating();
+      // Fullscreen belonged to the page going away; Chord's frame comes back for the next one.
+      if (this.pageFullScreen) this.leavePageFullScreen();
+    }
+    const root = this.window.contentView;
+    for (const view of this.panes) if (!next.includes(view)) root.removeChildView(view);
+    for (const view of next) {
+      view.setVisible(!this.hiddenPanes.has(view));
+      // Just above the shell; or, while the shell is raised over the pages, just below it. Panes never overlap.
+      if (!this.panes.includes(view)) root.addChildView(view, this.shellRaised ? 0 : 1);
+    }
+    this.panes = [...next];
+    this.focusedPane = focus ? next.indexOf(focus) : 0;
+    this.layout();
+    if (this.overlayVisible || !focusChanged) return;
+    (focus?.webContents ?? this.shell.webContents).focus();
   }
 
   get activeTabContents() {
     return this.tabView?.webContents ?? null;
+  }
+
+  /* ---------- Peek (DESIGN.md §7.9, §8.5) ---------- */
+
+  /** Peek's page, while one is open. */
+  get peekContents() {
+    return this.peek ? (this.peekView?.webContents ?? null) : null;
+  }
+
+  /** Which opening of the overlay is Peek's, so a close for it (overlay:close) closes the Peek. */
+  get peekOverlaySeq(): number | null {
+    return this.peek ? this.peekSeq : null;
+  }
+
+  /**
+   * Open Peek over the frame: the overlay draws the scrim and the card's
+   * header, growing from the click; the page goes into the card once the
+   * card has landed (`delayMs`), so it never pops in ahead of it.
+   */
+  openPeek(view: WebContentsView, info: PeekInfo, delayMs: number): void {
+    if (!this.overlayReady || this.window.isDestroyed()) return;
+    this.closeFloating();
+    this.hidePreview();
+    this.peek = info;
+    this.peekView = view;
+    view.setBorderRadius(radius.lg);
+    // The find bar goes above Peek's page, at its card's corner.
+    const root = this.window.contentView;
+    root.removeChildView(this.popover);
+    root.addChildView(this.popover);
+    this.overlayVisible = true;
+    this.overlay.setVisible(true);
+    // Esc and ⌘↵ work from the first frame; the page takes focus once it's in the card.
+    this.overlay.webContents.focus();
+    this.peekSeq = ++this.overlaySeq;
+    send(this.overlay.webContents, 'overlay:open', { mode: 'peek', anchor: null, url: info.url, seq: this.peekSeq, peek: this.peekState(), requestedAt: epochNow() });
+    clearTimeout(this.peekTimer);
+    this.peekTimer = setTimeout(() => {
+      if (this.peekView !== view || this.window.isDestroyed()) return;
+      root.addChildView(view, root.children.indexOf(this.popover));
+      this.layout();
+      view.webContents.focus();
+    }, delayMs);
+    this.layout();
+  }
+
+  /** The page moved on (address, title): Peek's header follows. */
+  updatePeek(info: Partial<PeekInfo>): void {
+    if (!this.peek) return;
+    this.peek = { ...this.peek, ...info };
+    send(this.overlay.webContents, 'peek:state', this.peekState());
+  }
+
+  /** Take Peek's page out of the window (it closes, or becomes a tab) and put the overlay away. */
+  closePeek(): WebContentsView | null {
+    const view = this.peekView;
+    clearTimeout(this.peekTimer);
+    if (this.peek) send(this.overlay.webContents, 'overlay:dismiss', { seq: this.peekSeq });
+    this.peek = null;
+    this.peekView = null;
+    if (this.window.isDestroyed()) return view;
+    const root = this.window.contentView;
+    if (view && root.children.includes(view)) root.removeChildView(view);
+    // Back where it lives: above the pages, below the hover preview and the command bar.
+    root.removeChildView(this.popover);
+    root.addChildView(this.popover, root.children.indexOf(this.preview));
+    if (this.overlayVisible) {
+      this.overlayVisible = false;
+      this.overlay.setVisible(false);
+    }
+    this.layout();
+    (this.tabView?.webContents ?? this.shell.webContents).focus();
+    return view;
+  }
+
+  /**
+   * "Open in Today": Peek's page grows from its card to the whole frame
+   * (`smooth`; as a tab of its own it replaces a split), then `done` makes it
+   * the tab. With motion off it's immediate.
+   */
+  growPeekToFrame(animate: boolean, done: () => void): void {
+    const view = this.peekView;
+    if (!view || !this.peek || this.window.isDestroyed()) return done();
+    clearTimeout(this.peekTimer);
+    const root = this.window.contentView;
+    if (!root.children.includes(view)) root.addChildView(view, root.children.indexOf(this.popover));
+    const from = this.peekPageRect();
+    const to = this.frameRect();
+    if (!animate) return done();
+    const start = performance.now();
+    const timer = setInterval(() => {
+      if (this.window.isDestroyed() || view.webContents.isDestroyed()) {
+        clearInterval(timer);
+        return;
+      }
+      const elapsed = performance.now() - start;
+      const k = FRAME_SPRING.at(elapsed);
+      view.setBounds({
+        x: Math.round(from.x + (to.x - from.x) * k),
+        y: Math.round(from.y + (to.y - from.y) * k),
+        width: Math.round(from.width + (to.width - from.width) * k),
+        height: Math.round(from.height + (to.height - from.height) * k),
+      });
+      if (elapsed >= FRAME_SPRING.durationMs) {
+        clearInterval(timer);
+        done();
+      }
+    }, FRAME_TICK_MS);
+  }
+
+  private peekState(): PeekState {
+    return { ...this.peek!, card: this.peekCard() };
+  }
+
+  /** The content frame, in window coordinates (left of Duet's panel when it's open). */
+  private frameRect(): Rect {
+    const { width: windowWidth, height } = this.window.getContentBounds();
+    const width = this.duetWidth > 0 ? Math.max(0, windowWidth - this.duetWidth - space[2]) : windowWidth;
+    const x = Math.round(this.origin.left);
+    const y = Math.round(this.origin.top);
+    return { x, y, width: Math.max(0, width - x - size.frameInset), height: Math.max(0, height - y - size.frameInset) };
+  }
+
+  /** Each pane's rect in the frame: a split's, or the frame for one tab. The shell draws them with the same math. */
+  private paneRectsIn(frame: Rect): Rect[] {
+    return this.paneLayout && this.panes.length > 1 ? paneRects(frame, this.paneLayout.direction, this.paneLayout.sizes) : [frame];
+  }
+
+  /** Peek's card floats over the focused pane. */
+  private peekCard(): Rect {
+    const whole = this.frameRect();
+    const frame = this.paneRectsIn(whole)[this.focusedPane] ?? whole;
+    const width = Math.round(Math.min(frame.width * PEEK_SHARE, PEEK_MAX.width));
+    const height = Math.round(Math.min(frame.height * PEEK_SHARE, PEEK_MAX.height));
+    return { x: Math.round(frame.x + (frame.width - width) / 2), y: Math.round(frame.y + (frame.height - height) / 2), width, height };
+  }
+
+  /** Peek's page: the card below its 40 px header. */
+  private peekPageRect(): Rect {
+    const card = this.peekCard();
+    return { x: card.x, y: card.y + size.header, width: card.width, height: Math.max(0, card.height - size.header) };
+  }
+
+  /** Every page shown in the frame: a split's panes, or the one tab. */
+  get paneContents(): WebContents[] {
+    return this.panes.map((v) => v.webContents);
   }
 
   /**
@@ -223,6 +439,7 @@ export class AppWindow {
     if (!on) return this.leavePageFullScreen();
     this.pageFullScreen = true;
     this.closeFloating();
+    this.hidePreview();
     this.closeOverlay();
     const root = this.window.contentView;
     root.removeChildView(this.tabView);
@@ -237,17 +454,16 @@ export class AppWindow {
     if (view && !this.window.isDestroyed()) {
       const root = this.window.contentView;
       root.removeChildView(view);
-      root.addChildView(view, this.peeking ? 0 : 1);
+      root.addChildView(view, this.shellRaised ? 0 : 1);
       view.setBorderRadius(frameRadius[platform]);
     }
     this.layout();
   }
 
-  /** Hide the page so the frame behind it can explain an error or a crash. */
-  setTabHidden(hidden: boolean): void {
-    if (this.tabHidden === hidden) return;
-    this.tabHidden = hidden;
-    this.tabView?.setVisible(!hidden);
+  /** Hide these pages so the frame behind them can explain an error or a crash. */
+  setHiddenPanes(hidden: ReadonlySet<WebContents>): void {
+    this.hiddenPanes = new Set(this.panes.filter((v) => hidden.has(v.webContents)));
+    for (const view of this.panes) view.setVisible(!this.hiddenPanes.has(view));
   }
 
   /** The popover reports its cards' size; 0 × 0 hides it. */
@@ -268,6 +484,69 @@ export class AppWindow {
     else this.focusPopoverWhenShown = true;
   }
 
+  /**
+   * Show the hover preview beside the sidebar, its top level with the hovered
+   * row (DESIGN.md §7.6). It appears once its page reports a size; while one
+   * is up, the next glides to its row (`animate`) instead of jumping.
+   */
+  anchorPreview(anchor: { top: number; bottom: number }, animate: boolean): void {
+    this.previewGlide = animate && this.preview.getVisible();
+    this.previewAnchor = anchor;
+    this.placePreview();
+  }
+
+  /** The preview page reports its card's size; 0 × 0 hides it. */
+  setPreviewSize(width: number, height: number): void {
+    this.previewSize = { width: Math.ceil(width), height: Math.ceil(height) };
+    this.placePreview();
+  }
+
+  hidePreview(): void {
+    this.previewAnchor = null;
+    clearInterval(this.previewAnimation);
+    this.previewAnimation = undefined;
+    if (!this.window.isDestroyed()) this.preview.setVisible(false);
+  }
+
+  /**
+   * Where the preview goes: level with the row, kept inside the window. The
+   * view starts at the sidebar's edge, never over it: a view takes the pointer
+   * even where it's transparent, and the rows' buttons and the resize handle
+   * are there.
+   */
+  private placePreview(): void {
+    if (this.window.isDestroyed()) return;
+    const { width: w, height: h } = this.previewSize;
+    if (!this.previewAnchor || w === 0 || h === 0) {
+      this.preview.setVisible(false);
+      return;
+    }
+    const content = this.window.getContentBounds();
+    const x = Math.round(this.origin.left);
+    const y = Math.max(0, Math.min(Math.round(this.previewAnchor.top) - PREVIEW_PAD, content.height - h));
+    const from = this.preview.getBounds();
+    clearInterval(this.previewAnimation);
+    this.previewAnimation = undefined;
+    if (!this.previewGlide || !this.preview.getVisible() || from.y === y) {
+      this.preview.setBounds({ x, y, width: w, height: h });
+      this.preview.setVisible(true);
+      return;
+    }
+    const start = performance.now();
+    const step = () => {
+      if (this.window.isDestroyed()) return clearInterval(this.previewAnimation);
+      const elapsed = performance.now() - start;
+      const k = PREVIEW_SPRING.at(elapsed);
+      this.preview.setBounds({ x, y: Math.round(from.y + (y - from.y) * k), width: w, height: h });
+      if (elapsed >= PREVIEW_SPRING.durationMs) {
+        clearInterval(this.previewAnimation);
+        this.previewAnimation = undefined;
+      }
+    };
+    this.previewAnimation = setInterval(step, FRAME_TICK_MS);
+    step();
+  }
+
   setAnchor(rect: Rect | null): void {
     this.anchor = rect;
   }
@@ -278,6 +557,7 @@ export class AppWindow {
    */
   openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null, requestedAt = epochNow()): void {
     this.closeFloating();
+    this.hidePreview();
     if (!this.overlayReady) {
       // A brand-new window: the command bar opens as soon as it's listening.
       this.pendingOpen = { mode, url, anchor, requestedAt };
@@ -300,6 +580,8 @@ export class AppWindow {
   /** `seq` is the opening being closed; a close for an earlier one (racing a newer open) is ignored. */
   closeOverlay(seq = this.overlaySeq): void {
     if (!this.overlayVisible || seq !== this.overlaySeq) return;
+    // Peek's chrome closes with Peek (Browser does both).
+    if (this.peek && seq === this.peekSeq) return;
     this.overlayVisible = false;
     this.overlay.setVisible(false);
     (this.tabView?.webContents ?? this.shell.webContents).focus();
@@ -312,6 +594,7 @@ export class AppWindow {
    */
   setSidebar(sidebar: SidebarMode, width: number, animate: boolean): void {
     this.closeFloating();
+    this.hidePreview();
     clearInterval(this.frameAnimation);
     this.frameAnimation = undefined;
     if (sidebar === 'docked') this.setPeek(false);
@@ -344,11 +627,30 @@ export class AppWindow {
    */
   setPeek(open: boolean): void {
     if (this.peeking === open || this.window.isDestroyed()) return;
+    const raised = this.shellRaised;
     this.peeking = open;
+    this.hidePreview();
+    if (raised !== this.shellRaised) this.placeShell();
+  }
+
+  /**
+   * Dragging a tab from the sidebar: the shell goes above the pages so it can
+   * draw split view's drop zones over them (DESIGN.md §8.4), and back after.
+   * Its transparent parts let the pages show through.
+   */
+  setLifted(on: boolean): void {
+    if (this.lifted === on || this.window.isDestroyed()) return;
+    const raised = this.shellRaised;
+    this.lifted = on;
+    if (on) this.hidePreview();
+    if (raised !== this.shellRaised) this.placeShell();
+  }
+
+  private placeShell(): void {
     const root = this.window.contentView;
     root.removeChildView(this.shell);
-    // Above the page, below the popover and the command bar; or back at the bottom.
-    root.addChildView(this.shell, open ? root.children.indexOf(this.popover) : 0);
+    // Above the pages, below the popover and the command bar; or back at the bottom.
+    root.addChildView(this.shell, this.shellRaised ? root.children.indexOf(this.popover) : 0);
   }
 
   /** Float a view over the page, below the command bar. Whatever floated before closes. */
@@ -376,19 +678,43 @@ export class AppWindow {
     return { width, height, frameTop: Math.round(this.origin.top) };
   }
 
+  /** Duet's panel opened (its width) or closed (0). The page makes room for it. */
+  setDuetWidth(width: number): void {
+    if (this.duetWidth === width) return;
+    this.duetWidth = width;
+    this.closeFloating();
+    this.layout();
+  }
+
   /** The content frame: inset from the window, right of the sidebar (if docked), below the strip on Windows/Linux. */
   private layout(): void {
-    const { width, height } = this.window.getContentBounds();
+    const { width: windowWidth, height } = this.window.getContentBounds();
+    // With Duet open, the frame ends before its panel and the gap between them.
+    const width = this.duetWidth > 0 ? Math.max(0, windowWidth - this.duetWidth - space[2]) : windowWidth;
     const inset = size.frameInset;
     const x = Math.round(this.origin.left);
     const y = Math.round(this.origin.top);
-    this.shell.setBounds({ x: 0, y: 0, width, height });
-    this.overlay.setBounds({ x: 0, y: 0, width, height });
-    if (this.pageFullScreen) this.tabView?.setBounds({ x: 0, y: 0, width, height });
-    else this.tabView?.setBounds({ x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) });
-    // The popover hangs from the frame's top-right corner; its cards carry their own margin.
+    this.shell.setBounds({ x: 0, y: 0, width: windowWidth, height });
+    this.overlay.setBounds({ x: 0, y: 0, width: windowWidth, height });
+    const frame = { x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) };
+    // The shell draws each pane's frame with the same math (DESIGN.md §7.9: 8 px gaps).
+    const rects = this.paneRectsIn(frame);
+    this.panes.forEach((view, i) => {
+      if (this.pageFullScreen && view === this.tabView) view.setBounds({ x: 0, y: 0, width: windowWidth, height });
+      else view.setBounds(rects[i] ?? frame);
+    });
     const { width: pw, height: ph } = this.popoverSize;
-    this.popover.setBounds({ x: Math.max(x, width - inset - pw), y, width: pw, height: ph });
+    // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.
+    if (this.peek) {
+      const page = this.peekPageRect();
+      this.popover.setBounds({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph });
+      if (this.peekView && this.window.contentView.children.includes(this.peekView)) this.peekView.setBounds(page);
+      send(this.overlay.webContents, 'peek:state', this.peekState());
+      return;
+    }
+    // The popover (find, permission prompts) hangs from the focused pane's top-right corner; its cards carry their own margin.
+    const pane = rects[this.focusedPane] ?? frame;
+    this.popover.setBounds({ x: Math.max(pane.x, pane.x + pane.width - pw), y: pane.y, width: pw, height: ph });
   }
 
   /**

@@ -9,7 +9,7 @@
  * a filter (`@tabs`, `@history`, …) shows only that kind. The engine's search
  * suggestions come last, so they never move the rows above them.
  */
-import {
+import { type DuetHit,
   abbreviationScore,
   habit,
   keywordFor,
@@ -22,6 +22,7 @@ import {
   recencyPoints,
   searchEngine,
   searchUrl,
+  shownTabs,
   chordsFor,
   usagePoints,
   type ActionId,
@@ -34,7 +35,7 @@ import {
 import type { HistorySearch } from '@chord/ipc';
 import { displayHost, pageTitle } from '../shared/site';
 
-export type Filter = 'tabs' | 'pinned' | 'history' | 'archive' | 'chords' | 'actions';
+export type Filter = 'tabs' | 'pinned' | 'history' | 'archive' | 'duet' | 'chords' | 'actions';
 export type Scope = { kind: 'keyword'; keyword: SiteKeyword } | { kind: 'filter'; filter: Filter };
 
 export type Result =
@@ -44,6 +45,8 @@ export type Result =
   | { kind: 'history'; key: string; title: string; detail: string; url: string }
   /** A tab in the archive: picking it brings the tab back, history and all. */
   | { kind: 'archive'; key: string; title: string; detail: string; url: string; archiveId: string }
+  /** A Duet chat whose words match (@duet): picking it opens the chat. */
+  | { kind: 'duet'; key: string; title: string; detail: string; threadId: string; chordId: string }
   | { kind: 'action'; key: string; title: string; action: ActionId }
   | { kind: 'chord'; key: string; title: string; chord: Chord }
   /** A way to narrow the bar: search a site, or show one kind of result. */
@@ -55,6 +58,7 @@ export const FILTERS: readonly { id: Filter; token: string; name: string; placeh
   { id: 'pinned', token: '@pinned', name: 'Pinned', placeholder: 'Search pinned tabs' },
   { id: 'history', token: '@history', name: 'History', placeholder: 'Search history' },
   { id: 'archive', token: '@archive', name: 'Archive', placeholder: 'Search the archive' },
+  { id: 'duet', token: '@duet', name: 'Duet chats', placeholder: 'Search Duet chats' },
   { id: 'chords', token: '@chords', name: 'Chords', placeholder: 'Search chords' },
   { id: 'actions', token: '@actions', name: 'Actions', placeholder: 'Search actions' },
 ];
@@ -157,6 +161,7 @@ export function destinationOf(result: Result): string | null {
     case 'action':
       return `action:${result.action}`;
     case 'scope':
+    case 'duet':
       return null;
   }
 }
@@ -191,16 +196,42 @@ export interface Narrowing {
   scope?: Scope | null;
   /** The engine's suggestions for the text, newest reply. */
   suggestions?: readonly string[];
+  /** Duet chats matching the text (@duet), newest reply. */
+  duetHits?: readonly DuetHit[];
 }
 
+/**
+ * The command bar's rows. In `split` mode ("Split with…", DESIGN.md §8.4)
+ * only what can open beside the current tab: pages to open, and this
+ * chord's other tabs that aren't on screen.
+ */
 export function buildResults(
   query: string,
   state: State,
   windowId: string,
-  mode: 'new' | 'edit',
+  mode: 'new' | 'edit' | 'split',
   history: HistorySearch | null = null,
   now = Date.now(),
-  { scope = null, suggestions = [] }: Narrowing = {},
+  narrowing: Narrowing = {},
+): Result[] {
+  const all = resultsFor(query, state, windowId, mode === 'split' ? 'new' : mode, history, now, narrowing);
+  if (mode !== 'split') return all;
+  const win = state.windows[windowId];
+  const onScreen = new Set(shownTabs(state, windowId));
+  return all.filter((r) => {
+    if (r.kind === 'tab') return r.tab.chordId === win?.activeChordId && !onScreen.has(r.tab.id);
+    return r.kind === 'open' || r.kind === 'history' || r.kind === 'scope';
+  });
+}
+
+function resultsFor(
+  query: string,
+  state: State,
+  windowId: string,
+  mode: 'new' | 'edit',
+  history: HistorySearch | null,
+  now: number,
+  { scope = null, suggestions = [], duetHits = [] }: Narrowing,
 ): Result[] {
   const q = query.trim();
   const win = state.windows[windowId];
@@ -221,6 +252,9 @@ export function buildResults(
   const suggestionRows = (into: (text: string) => string): Result[] =>
     suggestions.map((text) => ({ kind: 'open', key: `suggest:${text}`, title: text, detail: '', url: into(text), search: true, suggested: true }));
 
+  if (scope?.kind === 'filter' && scope.filter === 'duet') {
+    return duetHits.map((h) => ({ kind: 'duet', key: `duet:${h.messageId}`, title: h.threadTitle || 'Duet chat', detail: h.snippet, threadId: h.threadId, chordId: h.chordId }));
+  }
   if (scope?.kind === 'filter') return filtered(scope.filter, q, state, windowId, win?.activeChordId ?? null, activeId ?? null, tabs, tabResult, history, now);
 
   if (!q) {
@@ -470,5 +504,8 @@ function filtered(
         () => 0,
         (a) => ({ kind: 'action', key: `action:${a.action}`, title: a.title, action: a.action }),
       );
+    case 'duet':
+      // Answered by chord-data (buildResults' duetHits), not ranked here.
+      return [];
   }
 }

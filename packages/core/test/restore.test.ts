@@ -85,6 +85,13 @@ describe('restoreState', () => {
     expect(state.settings).toEqual(DEFAULT_SETTINGS);
   });
 
+  it('restores Google-free mode, and never with Google as its engine', () => {
+    const restored = (settings: Record<string, unknown>) => restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings }, seed).settings;
+    expect(restored({ googleFree: true, searchEngine: 'brave' })).toMatchObject({ googleFree: true, searchEngine: 'brave' });
+    expect(restored({ googleFree: true, searchEngine: 'google' })).toMatchObject({ googleFree: true, searchEngine: 'duckduckgo' });
+    expect(restored({ googleFree: 'yes' })).toMatchObject({ googleFree: false, searchEngine: 'google' });
+  });
+
   it('always has a window to open', () => {
     const state = restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings: {} }, seed);
     const [only] = Object.values(state.windows);

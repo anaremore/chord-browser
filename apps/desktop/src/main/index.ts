@@ -20,12 +20,14 @@ import { delimiter, join } from 'node:path';
 import { app, clipboard, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
+import { openSignIn } from './duet/detect';
+import { DuetService } from './duet/service';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
 import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
-import { observeContextMenusForTests } from './context-menu';
+import { observeContextMenusForTests, type ObservedItem } from './context-menu';
 import { PermissionBroker } from './permissions';
 import { ScreenShareBroker } from './screen-share';
 import { applySpellcheck } from './spellcheck';
@@ -36,6 +38,7 @@ import { platform, systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
 import { Suggestions } from './suggestions';
+import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
 import { chromiumUserAgent } from './user-agent';
 
@@ -62,6 +65,7 @@ function devNumber(name: string): number | null {
 
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
+let duet: DuetService | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker();
 const downloads = new DownloadManager({
@@ -74,9 +78,12 @@ let profileSession: (profileId: string) => Session;
 const updates = new UpdateChecker({
   enabled: () => browser?.store.state.settings.checkForUpdates ?? false,
   onAvailable: (release) => browser?.announce(`update:${release.version}`, `${release.name} is out`, { label: 'What’s new', url: release.url }),
+  onReady: (release) => browser?.announceUpdateReady(`update:${release.version}`, `${release.name} is ready`),
+  installer: new UpdateInstaller(),
 });
 const suggestions = new Suggestions({
-  enabled: () => browser?.store.state.settings.searchSuggestions ?? false,
+  // Google-free mode never searches with Google (core enforces it); this is the backstop.
+  enabled: () => (browser?.store.state.settings.searchSuggestions ?? false) && !(browser?.store.state.settings.googleFree && browser.store.state.settings.searchEngine === 'google'),
   engine: () => browser?.store.state.settings.searchEngine ?? 'google',
 });
 
@@ -128,7 +135,17 @@ function registerIpc(): void {
     if (chordId && !fromPrivateWindow(sender)) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
   });
   handle('downloads:openFolder', () => downloads.openFolder());
-  handle('overlay:close', ({ seq }, sender) => senderWindow(sender).closeOverlay(seq));
+  handle('overlay:close', ({ seq }, sender) => browser!.closeOverlay(sender, seq));
+  handle('peek:expand', (_request, sender) => browser!.expandPeek(sender));
+  // A mini window's bar (DESIGN.md §7.9): each acts on the mini window it's in.
+  handle('mini:state', (_request, sender) => {
+    const state = browser!.minis.stateFor(sender);
+    if (!state) throw new Error('No mini window for this sender');
+    return state;
+  });
+  handle('mini:promote', (_request, sender) => browser!.minis.promote(sender));
+  handle('mini:chooseChord', (anchor, sender) => browser!.minis.chooseChord(sender, anchor));
+  handle('mini:copyLink', (_request, sender) => browser!.minis.copyLink(sender));
   handle('overlay:ready', (_request, sender) => senderWindow(sender).markOverlayReady());
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('perf:shell', ({ milestone }) => markLaunch(milestone === 'ready' ? 'shellReady' : 'shellPainted'));
@@ -138,6 +155,7 @@ function registerIpc(): void {
   handle('sidebar:moveToChord', ({ nodeId, chordId }, sender) => browser!.moveToChord(senderWindow(sender), nodeId, chordId));
   handle('sidebar:deleteFolder', ({ nodeId }, sender) => browser!.deleteFolder(senderWindow(sender), nodeId));
   handle('layout:peek', ({ open }, sender) => browser!.setPeek(sender, open));
+  handle('layout:lift', ({ lifted }, sender) => browser!.setLifted(sender, lifted));
   handle('menu:chord', ({ chordId, x, y }, sender) => browser!.openChordMenu(sender, chordId, { x, y }));
   handle('action:run', ({ action }, sender) => {
     browser!.run(action, sender);
@@ -177,21 +195,41 @@ function registerIpc(): void {
   handle('settings:defaultBrowser', () => defaultBrowserStatus());
   handle('settings:updateStatus', () => updates.status());
   handle('settings:checkForUpdates', () => updates.checkNow());
+  handle('update:restart', () => updates.restart());
   handle('settings:makeDefaultBrowser', async () => {
     await makeDefaultBrowser();
     return defaultBrowserStatus();
   });
   handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
   handle('popover:size', ({ width, height }, sender) => senderWindow(sender).setPopoverSize(width, height));
+  handle('preview:hover', (target, sender) => browser!.previewHover(senderWindow(sender), target));
+  handle('preview:size', ({ width, height }, sender) => senderWindow(sender).setPreviewSize(width, height));
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
+  handle('duet:view', (_request, sender) => duet!.view(senderWindow(sender).id));
+  handle('duet:do', (action, sender) => duet!.act(senderWindow(sender).id, action));
+  handle('duet:search', ({ query }, sender) => (fromPrivateWindow(sender) ? [] : duet!.search(query)));
+  handle('duet:openHit', ({ chordId, threadId }, sender) => duet!.openHit(senderWindow(sender).id, chordId, threadId));
+  handle('settings:duet', async (request) => {
+    if (request.do === 'signIn') {
+      const status = duet!.providerStatuses.find((s) => s.provider === request.provider) ?? (await duet!.refreshProviders()).find((s) => s.provider === request.provider);
+      if (status?.path) openSignIn(request.provider, status.path);
+      return duet!.providerStatuses;
+    }
+    if (request.do === 'clearAll') {
+      await duet!.clearAll();
+      return duet!.providerStatuses;
+    }
+    return duet!.refreshProviders();
+  });
   handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
   handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
   handle('settings:sitePermission', ({ origin, permission, decision }) =>
     browser!.store.dispatch({ t: 'permission.set', origin, permissions: [permission], decision }),
   );
   handle('settings:forgetSite', ({ origin }) => browser!.store.dispatch({ t: 'permission.forget', origin }));
+  handle('settings:linkRoute', ({ host, chordId }) => browser!.setLinkRoute(host, chordId));
   handle('archive:snapshot', (_request, sender) => browser!.archiveSnapshot(sender));
   handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
   handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
@@ -237,7 +275,11 @@ if (!app.requestSingleInstanceLock()) {
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
-    void persistence.close().finally(() => app.quit());
+    // Duet first: replies in flight are kept as interrupted, and provider processes end.
+    void (duet?.quit() ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => persistence!.close())
+      .finally(() => app.quit());
   });
 
   void app.whenReady().then(async () => {
@@ -269,7 +311,8 @@ if (!app.requestSingleInstanceLock()) {
         permissions.attach(ses, priv ? profileId : null);
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
         screenShare.attach(ses);
-        applySpellcheck(ses, browser?.store.state.settings.spellcheck ?? DEFAULT_SETTINGS.spellcheck);
+        const settings = browser?.store.state.settings ?? DEFAULT_SETTINGS;
+        applySpellcheck(ses, settings.spellcheck, settings.googleFree);
         profiles.set(profileId, ses);
       }
       return ses;
@@ -356,21 +399,25 @@ if (!app.requestSingleInstanceLock()) {
     followScheme();
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
-      // Spelling settings apply to every profile's session at once.
-      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'spellcheck')) {
-        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck);
+      // Spelling settings (and where dictionaries come from) apply to every profile's session at once.
+      if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'spellcheck' || p.path[1] === 'googleFree'))) {
+        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck, change.state.settings.googleFree);
       }
     });
+    duet = new DuetService(browser, persistence, app.getPath('userData'));
+    browser.duet = duet;
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu; and launch timing.
     if (dev('CHORD_E2E_HOOKS')) {
       // Right-click menus are read, not shown: their labels, newest last, by page.
-      const contextMenus = new Map<number, string[]>();
-      observeContextMenusForTests((contents, labels) => contextMenus.set(contents.id, labels));
+      const contextMenus = new Map<number, ObservedItem[]>();
+      observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
         launch: () => launchTimings(),
-        contextMenu: (contentsId: number) => contextMenus.get(contentsId) ?? null,
+        contextMenu: (contentsId: number) => contextMenus.get(contentsId)?.map((item) => item.label) ?? null,
+        /** Choose an item in a page's last right-click menu, as clicking it would. */
+        chooseContextMenuItem: (contentsId: number, label: string) => contextMenus.get(contentsId)?.find((item) => item.label === label)?.choose(),
         extensionMenuLabels: (contentsId: number, params: Partial<ContextMenuParams>) => {
           const contents = webContents.fromId(contentsId);
           return contents ? browser!.extensions.contextMenuItems(contents, params as ContextMenuParams).map((item) => item.label) : [];
@@ -379,8 +426,9 @@ if (!app.requestSingleInstanceLock()) {
     }
     // Extensions load before any page does, so their content scripts reach restored tabs.
     await browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean));
-    browser.start();
+    // Launched to open a link: just its mini window, quickly; your windows come back when you want them.
     if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
+    else browser.start();
     updates.start();
   });
 

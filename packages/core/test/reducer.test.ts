@@ -185,6 +185,26 @@ describe('reducer', () => {
     expect(t.run({ t: 'settings.set', settings: { searchSuggestions: false } }).patches).toHaveLength(0);
   });
 
+  it('Google-free mode never searches with Google, and keeps a non-Google choice', () => {
+    const t = setup();
+    expect(t.state.settings).toMatchObject({ googleFree: false, searchEngine: 'google' });
+    // Turning it on moves off Google.
+    t.run({ t: 'settings.set', settings: { googleFree: true } });
+    expect(t.state.settings).toMatchObject({ googleFree: true, searchEngine: 'duckduckgo' });
+    // Any other engine can be chosen; Google can't.
+    t.run({ t: 'settings.set', settings: { searchEngine: 'brave' } });
+    expect(t.run({ t: 'settings.set', settings: { searchEngine: 'google' } }).patches).toHaveLength(0);
+    expect(t.state.settings.searchEngine).toBe('brave');
+    // Off again: the choice stays, and Google can be chosen once more.
+    t.run({ t: 'settings.set', settings: { googleFree: false } });
+    expect(t.state.settings.searchEngine).toBe('brave');
+    t.run({ t: 'settings.set', settings: { searchEngine: 'google' } });
+    expect(t.state.settings.searchEngine).toBe('google');
+    // Turning it on with a choice in the same change takes that choice.
+    t.run({ t: 'settings.set', settings: { googleFree: true, searchEngine: 'kagi' } });
+    expect(t.state.settings).toMatchObject({ googleFree: true, searchEngine: 'kagi' });
+  });
+
   it("updates a chord's theme and clamps grain", () => {
     const t = setup();
     t.run({ t: 'chord.theme', chordId: 'c1', theme: { grain: 3, appearance: 'dark' } });

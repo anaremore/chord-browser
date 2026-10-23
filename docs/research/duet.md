@@ -278,6 +278,21 @@ codex app-server --listen stdio://
   - WSL works by running its server inside the distro.
 - ✅ **On policy:** Theo asked the Claude Code team publicly to bless the integration in [PR #179](https://github.com/pingdotgg/t3code/pull/179) (merged 2026-03-20); no Anthropic reply is recorded there.
 
+**Conversation UI patterns Duet borrowed (Phase 2).** Read from a read-only snapshot at commit `51273020db3245f4ec29514a419d29b5dcb012dc`; every one was **reimplemented** in `apps/desktop/src/renderer/shell/Duet.tsx` with Chord's tokens. No code was copied, so no MIT notice is needed in Chord's files (the source comment credits the patterns). Chord's UI never names the project.
+
+| Pattern | Where it is in T3 Code (`apps/web/src/…`) | In Duet |
+|---|---|---|
+| Follow new output, re-arm within 40 px of the bottom, a *Jump to latest* pill | `components/chat/MessagesTimeline.logic.ts` (`TIMELINE_FOLLOW_REARM_THRESHOLD_PX = 40`), `components/chat/useTimelineFollow.ts` | `FOLLOW_PX = 40` and the pill |
+| Consecutive tool activity folds into one quiet row that expands | `components/chat/TimelineWorkGroupRows.tsx`, `components/chat/WorkLog.tsx` | `ToolRow` (*Read “Article”*, *Read 3 tabs · 1 more*) |
+| Follow-ups sent while a reply streams are queued, shown as chips, removable | `components/chat/QueuedRunsControl.tsx`, `components/chat/queuedMessageEdit.ts` | the queue chips above the composer; main sends them in order |
+| Enter sends, Shift+Enter is a new line, ↑ recalls what you sent | `components/chat/ChatComposer.tsx`, `components/chat/useComposerCommandKey.ts` | the composer (↑ in an empty composer) |
+| Copy a message; edit the last one and send it again | `components/chat/MessageCopyButton.tsx`, `components/chat/TimelineUserMessageRow.tsx` | the user bubble's actions |
+| Elapsed time while the agent works | `components/chat/AgentElapsed.tsx` | *Working… 12s* |
+| A draft per thread, kept across switches | `composerDraftStore.ts` | drafts in `userData/duet/panel.json`, per chat |
+| Model picker as a chip; rename and delete a thread | `components/chat/ComposerFooterControls.tsx`, `components/chat/ChatHeader.tsx`, `components/Sidebar.tsx` | the *provider · model* chip and the Chats menu |
+
+Not adopted: the minimap, terminals, plans, subagents, worktrees, image attachments, and a context-usage meter (Duet would show one only if both CLIs reported usage).
+
 ### 4.2 Others (one line each)
 - **[Agent Client Protocol](https://agentclientprotocol.com):**
   - [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp) is built on the SDK and defaults to the *bundled* binary; it checks `claude auth status --json`.

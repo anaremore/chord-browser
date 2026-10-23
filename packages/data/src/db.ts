@@ -23,7 +23,9 @@ import {
   type Download,
   type Favorite,
   type InstalledExtension,
+  type LinkRoute,
   type FolderNode,
+  type SplitNode,
   type PersistedState,
   type SidebarNode,
   type SitePermissions,
@@ -31,6 +33,7 @@ import {
   type WindowModel,
 } from '@chord/core';
 import type { ArchiveEntry, ArchivePage, HistoryEvent, NavState, SearchResult, WriteOp } from './index';
+import { runDuet, type DuetOp, type DuetResult } from './duet';
 import { MIGRATIONS } from './migrations';
 
 /** The profile every chord belongs to until "Keep sign-ins separate" exists. */
@@ -210,6 +213,9 @@ export class ChordDatabase {
     );
     const siteZoom: Record<string, number> = {};
     for (const r of this.sql('SELECT host, factor FROM site_zoom WHERE profile_id = ?').all(DEFAULT_PROFILE) as Row[]) siteZoom[str(r['host'])] = num(r['factor']);
+    const linkRoutes = (this.sql('SELECT host, chord_id, created_at FROM link_route').all() as Row[]).map(
+      (r): LinkRoute => ({ host: str(r['host']), chordId: str(r['chord_id']), createdAt: num(r['created_at']) }),
+    );
     if (chordRows.length === 0) {
       const anything =
         Object.keys(settings).length > 0 ||
@@ -235,10 +241,11 @@ export class ChordDatabase {
 
     const nodeRows = this.sql(
       `SELECT n.*, t.url, t.title AS tab_title, t.pinned_url, t.custom_title, t.last_active_at,
-              f.title AS folder_title, f.collapsed, i.mime AS icon_mime, i.data AS icon_data
+              f.title AS folder_title, f.collapsed, s.layout AS split_layout, i.mime AS icon_mime, i.data AS icon_data
          FROM node n
          LEFT JOIN tab t ON t.node_id = n.id
          LEFT JOIN folder f ON f.node_id = n.id
+         LEFT JOIN split s ON s.node_id = n.id
          LEFT JOIN favicon i ON i.key = t.favicon_key
         WHERE n.deleted_at IS NULL`,
     ).all() as Row[];
@@ -261,6 +268,17 @@ export class ChordDatabase {
       } else if (r['kind'] === 'folder' && typeof r['folder_title'] === 'string') {
         const folder: FolderNode = { ...base, kind: 'folder', section: 'pinned', title: r['folder_title'], collapsed: num(r['collapsed']) === 1 };
         nodes.push(folder);
+      } else if (r['kind'] === 'split' && typeof r['split_layout'] === 'string') {
+        // Restore checks the panes and sizes (core settleSplits); here they're just read back.
+        const layout = parseJson<{ direction?: unknown; sizes?: unknown }>(r['split_layout'], {});
+        const split: SplitNode = {
+          ...base,
+          kind: 'split',
+          section: r['section'] === 'pinned' ? 'pinned' : 'today',
+          direction: layout.direction === 'column' ? 'column' : 'row',
+          sizes: Array.isArray(layout.sizes) ? layout.sizes.filter((s): s is number => typeof s === 'number') : [],
+        };
+        nodes.push(split);
       }
     }
 
@@ -275,7 +293,7 @@ export class ChordDatabase {
       }),
     );
 
-    return { chords, nodes, windows, settings, sitePermissions, downloads, extensions, favorites, siteZoom };
+    return { chords, nodes, windows, settings, sitePermissions, downloads, extensions, favorites, siteZoom, linkRoutes };
   }
 
   /** One batch, all or nothing. */
@@ -291,6 +309,7 @@ export class ChordDatabase {
         else if (op.k === 'favorite') this.writeFavorite(op.id, op.value, now);
         else if (op.k === 'extension') this.writeExtension(op.id, op.value);
         else if (op.k === 'siteZoom') this.writeSiteZoom(op.id, op.value, now);
+        else if (op.k === 'linkRoute') this.writeLinkRoute(op.id, op.value);
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
@@ -452,6 +471,11 @@ export class ChordDatabase {
     ).map(archivedTab);
   }
 
+  /** Duet's threads and messages (packages/data/src/duet.ts). */
+  duet(op: DuetOp): DuetResult {
+    return runDuet((text) => this.sql(text), op);
+  }
+
   /** One entry, with the history it needs to come back. */
   archiveGet(id: string): ArchiveEntry | null {
     const row = this.sql(`${ARCHIVE_SELECT} WHERE a.id = ?`).get(id) as Row | undefined;
@@ -512,19 +536,38 @@ export class ChordDatabase {
     ).run(id, node.chordId, node.parentId, node.section, node.kind, node.rank, node.createdAt, now);
     if (node.kind === 'folder') {
       this.sql('DELETE FROM tab WHERE node_id = ?').run(id);
+      this.sql('DELETE FROM split WHERE node_id = ?').run(id);
       this.sql(
         `INSERT INTO folder (node_id, title, collapsed) VALUES (?, ?, ?)
          ON CONFLICT(node_id) DO UPDATE SET title = excluded.title, collapsed = excluded.collapsed`,
       ).run(id, node.title, node.collapsed ? 1 : 0);
       return;
     }
+    if (node.kind === 'split') {
+      this.sql('DELETE FROM tab WHERE node_id = ?').run(id);
+      this.sql('DELETE FROM folder WHERE node_id = ?').run(id);
+      this.sql('INSERT INTO split (node_id, layout) VALUES (?, ?) ON CONFLICT(node_id) DO UPDATE SET layout = excluded.layout').run(
+        id,
+        JSON.stringify({ direction: node.direction, sizes: node.sizes }),
+      );
+      return;
+    }
     this.sql('DELETE FROM folder WHERE node_id = ?').run(id);
+    this.sql('DELETE FROM split WHERE node_id = ?').run(id);
     const iconKey = node.favicon ? this.storeFavicon(node.favicon, now) : null;
     this.sql(
       `INSERT INTO tab (node_id, pinned_url, custom_title, url, title, favicon_key, last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(node_id) DO UPDATE SET pinned_url = excluded.pinned_url, custom_title = excluded.custom_title, url = excluded.url,
          title = excluded.title, favicon_key = excluded.favicon_key, last_active_at = excluded.last_active_at`,
     ).run(id, node.pinnedUrl, node.customTitle, node.url, node.title, iconKey, node.lastActiveAt);
+  }
+
+  private writeLinkRoute(host: string, route: LinkRoute | null): void {
+    if (route === null) this.sql('DELETE FROM link_route WHERE host = ?').run(host);
+    else
+      this.sql(
+        'INSERT INTO link_route (host, chord_id, created_at) VALUES (?, ?, ?) ON CONFLICT(host) DO UPDATE SET chord_id = excluded.chord_id',
+      ).run(host, route.chordId, route.createdAt);
   }
 
   private writeSiteZoom(host: string, factor: number | null, now: number): void {
