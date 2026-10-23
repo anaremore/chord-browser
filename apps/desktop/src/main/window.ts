@@ -173,7 +173,10 @@ export class AppWindow {
       for (const view of [this.shell, this.popover, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
     });
 
-    this.shell.webContents.once('did-finish-load', () => this.window.show());
+    // Quitting right after launch can close the window before its shell has loaded.
+    this.shell.webContents.once('did-finish-load', () => {
+      if (!this.window.isDestroyed()) this.window.show();
+    });
     // Loading again (a reload, or after a crash), the command bar isn't listening until it says so.
     this.overlay.webContents.on('did-start-loading', () => {
       this.overlayReady = false;

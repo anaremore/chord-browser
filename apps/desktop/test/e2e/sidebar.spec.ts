@@ -152,8 +152,15 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
 
     // Drag Second (in Today) into the folder, just above Third: it's pinned there.
     const third = pinned.getByRole('listitem').filter({ hasText: 'Third page' });
-    await drag(shell, today.getByRole('listitem').filter({ hasText: 'Second page' }), await point(third, 6));
-    await expect(pinned.getByRole('listitem')).toHaveCount(3);
+    const dropAt = await point(third, 6);
+    await drag(shell, today.getByRole('listitem').filter({ hasText: 'Second page' }), dropAt);
+    try {
+      await expect(pinned.getByRole('listitem')).toHaveCount(3);
+    } catch (error) {
+      // DEBUG (CI): where things were at the drop.
+      console.log(`DEBUGDROP at=${JSON.stringify(dropAt)} third=${JSON.stringify(await third.boundingBox())} pinned=${await pinned.ariaSnapshot()} today=${await today.ariaSnapshot()}`);
+      throw error;
+    }
     await expect(pinned.getByRole('listitem').nth(1)).toContainText('Second page');
     await expect(pinned.getByRole('button', { name: 'Second page', exact: true })).toHaveAttribute('data-parent', /.+/);
     await expect(today.getByRole('listitem')).toHaveCount(1);

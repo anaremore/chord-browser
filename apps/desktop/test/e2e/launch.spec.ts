@@ -800,6 +800,22 @@ test('a private window keeps to itself: no shared sign-ins, no history, and noth
   }
 });
 
+test('quitting right after launch, before the windows have loaded, trips no error in main', async () => {
+  // Two windows to restore, so more is still loading when the quit comes.
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
+  const shell = await pageWhere(app, isShell);
+  await runAction(shell, 'window.new');
+  await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
+  await app.close();
+  // Quit as soon as a window's page exists, while it (and the other window) may still be loading.
+  for (let i = 0; i < 3; i++) {
+    app = await launch({}, profile);
+    await app.firstWindow();
+    await app.close();
+  }
+});
+
 test('closing tabs while they load never trips an error in main', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
