@@ -3,9 +3,9 @@
  * frame's top-right without blocking it. Main sizes the view to exactly
  * these cards, so the rest of the page stays clickable.
  */
-import type { SitePermission } from '@chord/core';
+import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
 import type { FindState, PermissionPrompt, PopoverState, SharePrompt, SystemInfo } from '@chord/ipc';
-import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, MapPin, Mic, Search, X } from 'lucide-react';
+import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, MapPin, Mic, Search, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useLive, type Live } from '../shared/live';
 import { chordStyle } from '../shared/theme';
@@ -185,11 +185,41 @@ function ShareCard({ prompt }: { prompt: SharePrompt }) {
   );
 }
 
+/**
+ * Safe Browsing's one-time offer (ARCHITECTURE.md §14.5), for a profile from
+ * before it existed: its notice in full, then on or not now. Either answer
+ * is final; Settings → Privacy can change it later.
+ */
+function SafeBrowsingOffer() {
+  const choose = (on: boolean) => void api.safeBrowsing.choose(on);
+  return (
+    <div className={styles.card} role="dialog" aria-labelledby="safe-browsing-offer" aria-describedby="safe-browsing-notice">
+      <div className={styles.permissionHead}>
+        <ShieldCheck className={styles.offerIcon} {...ICON} aria-hidden />
+        <p id="safe-browsing-offer" className={styles.permissionTitle}>
+          <span className={styles.host}>Warn you before risky sites?</span>
+        </p>
+      </div>
+      <p id="safe-browsing-notice" className={styles.offerNotice}>
+        {SAFE_BROWSING_NOTICE}
+      </p>
+      <div className={styles.actions}>
+        <button type="button" className={styles.secondary} onClick={() => choose(false)}>
+          Not now
+        </button>
+        <button type="button" className={styles.primary} onClick={() => choose(true)}>
+          Turn on
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Popover({ info: infoSource, state: stateSource }: { info: Live<SystemInfo>; state: Live<PopoverState> }) {
   const info = useLive(infoSource);
   const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
-  const hasCards = Boolean(state.find || state.permission || state.share);
+  const hasCards = Boolean(state.find || state.permission || state.share || state.safeBrowsingOffer);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -211,6 +241,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
       {state.find && <FindBar find={state.find} />}
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}
       {state.share && <ShareCard key={state.share.id} prompt={state.share} />}
+      {state.safeBrowsingOffer && <SafeBrowsingOffer />}
     </div>
   );
 }

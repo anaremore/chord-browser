@@ -5,6 +5,7 @@
  * keeps closed tabs in its own table).
  */
 import type { DuetKeep, DuetProvider, DuetScope } from './duet';
+import type { PageThreat, ThreatKind } from './safe-browsing';
 import type { ActionId, ShortcutOverrides } from './shortcuts';
 
 export type ChordId = string;
@@ -196,6 +197,8 @@ export interface LiveTab {
   pip: boolean;
   /** The page is sharing your screen or a window (getDisplayMedia, ARCHITECTURE.md §9). */
   sharing: boolean;
+  /** Safe Browsing suspects the page (or a frame in it): the frame shows a warning instead (ARCHITECTURE.md §14.5). */
+  threat: PageThreat | null;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -218,10 +221,15 @@ export interface Download {
   endedAt: number | null;
   /** Started in this private window: listed only there, never saved, and forgotten when it closes (the file stays). */
   privateWindow?: WindowId;
+  /**
+   * Safe Browsing suspects where it came from: Chord holds it, paused, until
+   * you keep or delete it. Never saved: a held download comes back as interrupted.
+   */
+  threat?: ThreatKind;
 }
 
-/** What the downloads panel can do with one download. */
-export type DownloadAction = 'open' | 'show' | 'pause' | 'resume' | 'cancel' | 'retry' | 'remove';
+/** What the downloads panel can do with one download. `keep` and `discard` answer a held one. */
+export type DownloadAction = 'open' | 'show' | 'pause' | 'resume' | 'cancel' | 'retry' | 'remove' | 'keep' | 'discard';
 
 /** A Chrome extension installed in a profile (ARCHITECTURE.md §12). */
 export interface InstalledExtension {
@@ -335,6 +343,14 @@ export interface Settings {
    * Web Store update checks. Pages you visit can still load from Google.
    */
   googleFree: boolean;
+  /**
+   * Safe Browsing (ARCHITECTURE.md §14.5): warnings before suspected phishing
+   * and malware sites and downloads, from Google's lists. Off in Google-free
+   * mode, and never on before its notice was shown.
+   */
+  safeBrowsing: boolean;
+  /** Safe Browsing's notice has been shown and answered (first run, the one-time offer, or Settings). */
+  safeBrowsingAsked: boolean;
   /** Duet, the chat panel (ARCHITECTURE.md §11). */
   duet: DuetSettings;
   /** Where links from other apps open (Chord as the default browser): a mini window, or a new tab. */
@@ -400,6 +416,9 @@ export const DEFAULT_SETTINGS: Settings = {
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
   googleFree: false,
+  // Off until its notice has been seen: first run shows it (and turns it on), older profiles get a one-time offer.
+  safeBrowsing: false,
+  safeBrowsingAsked: false,
   duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
   externalLinks: 'mini',
   miniWindowSize: null,
@@ -443,6 +462,9 @@ export interface SettingsPatch {
   externalLinks?: ExternalLinks;
   miniWindowSize?: { width: number; height: number } | null;
   googleFree?: boolean;
+  /** Ignored while Google-free mode is on. Turning it on counts as having seen its notice. */
+  safeBrowsing?: boolean;
+  safeBrowsingAsked?: boolean;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
   duet?: Partial<DuetSettings>;
@@ -511,7 +533,7 @@ export const emptyState = (): State => ({
   linkRoutes: {},
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, threat: null };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

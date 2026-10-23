@@ -162,6 +162,80 @@
   color: var(--color-fg);
 }
 
+/* A download Safe Browsing holds: the warning, then Delete and Keep anyway. */
+.held {
+  display: flex;
+  flex: 1;
+  gap: var(--space-3);
+  align-items: flex-start;
+  min-inline-size: 0;
+  padding: var(--space-2);
+}
+
+.heldIcon {
+  flex: none;
+  margin-block-start: var(--space-1);
+  color: var(--color-danger);
+}
+
+.heldStatus {
+  color: var(--color-fg);
+  font: var(--text-small);
+}
+
+.heldActions,
+.heldLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+}
+
+.heldLinks {
+  flex-direction: column;
+  gap: 0;
+  align-items: flex-start;
+}
+
+.heldActions {
+  margin-block-start: var(--space-1);
+}
+
+.heldDelete {
+  block-size: var(--size-hit-min);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font: var(--text-label);
+  transition: transform var(--spring-press-duration) var(--spring-press);
+}
+
+.heldDelete:active {
+  transform: scale(0.97);
+}
+
+.heldLink {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--size-hit-min);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-subtle);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+  text-decoration: underline;
+  text-decoration-thickness: var(--size-hairline);
+  text-underline-offset: var(--space-1);
+  cursor: pointer;
+}
+
+.download[data-state='held']:hover {
+  background: transparent;
+}
+
 .downloadsFooter {
   display: flex;
   justify-content: flex-end;

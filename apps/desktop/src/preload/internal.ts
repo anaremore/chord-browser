@@ -30,6 +30,7 @@ const api: SettingsApi = {
     restartToUpdate: () => invoke('update:restart'),
     about: () => invoke('settings:about'),
     openUrl: (url) => invoke('settings:openUrl', { url }),
+    safeBrowsing: () => invoke('safeBrowsing:status'),
   },
   extensions: {
     install: (input) => invoke('extensions:install', { input }),
