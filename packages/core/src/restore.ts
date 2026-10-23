@@ -172,6 +172,17 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
       if (typeof value === 'boolean') settings.motion[key] = value;
     }
   }
+  const duet = saved['duet'] as Record<string, unknown> | undefined;
+  if (duet && typeof duet === 'object') {
+    if (typeof duet['enabled'] === 'boolean') settings.duet.enabled = duet['enabled'];
+    if (duet['provider'] === 'claude' || duet['provider'] === 'codex') settings.duet.provider = duet['provider'];
+    if (typeof duet['model'] === 'string' && duet['model'].length <= 100) settings.duet.model = duet['model'];
+    if (duet['keep'] === 'forever' || duet['keep'] === '90d' || duet['keep'] === '30d') settings.duet.keep = duet['keep'];
+    if (duet['scope'] === 'ask' || duet['scope'] === 'chord' || duet['scope'] === 'all') settings.duet.scope = duet['scope'];
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length <= 300).slice(0, 500) : []);
+    settings.duet.neverSites = strings(duet['neverSites']);
+    settings.duet.offChords = strings(duet['offChords']);
+  }
   return settings;
 }
 

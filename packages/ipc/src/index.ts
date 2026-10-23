@@ -16,6 +16,10 @@ import {
   type InterfaceSettings,
   type Command,
   type DownloadAction,
+  type DuetHit,
+  type DuetMessage,
+  type DuetProvider,
+  type DuetScope,
   type SearchEngineId,
   type Settings,
   type SettingsPatch as CoreSettingsPatch,
@@ -162,6 +166,18 @@ export const SettingsPatch = z.strictObject({
       tabMoves: z.boolean(),
       sidebar: z.boolean(),
       colorBlend: z.boolean(),
+    })
+    .partial()
+    .optional(),
+  duet: z
+    .strictObject({
+      enabled: z.boolean(),
+      provider: z.enum(['claude', 'codex']).nullable(),
+      model: z.string().max(100).nullable(),
+      keep: z.enum(['forever', '90d', '30d']),
+      scope: z.enum(['ask', 'chord', 'all']),
+      neverSites: z.array(z.string().max(300)).max(500),
+      offChords: z.array(z.string().max(64)).max(500),
     })
     .partial()
     .optional(),
@@ -376,8 +392,87 @@ export interface StatePatchEvent {
   patches: unknown[];
 }
 
+/* ---------- Duet (ARCHITECTURE.md §11) ---------- */
+
+export const DuetProviderSchema = z.enum(['claude', 'codex']);
+const duetScope = z.enum(['ask', 'chord', 'all']);
+
+/** What the panel asks main to do. Everything is checked again in main (scope, private, never-sites). */
+export const DuetAction = z.discriminatedUnion('do', [
+  z.object({ do: z.literal('toggle'), open: z.boolean().optional() }),
+  z.object({ do: z.literal('dismissFirstUse') }),
+  z.object({ do: z.literal('setup'), provider: DuetProviderSchema }),
+  /** Duet off (or back on) in the window's current chord. */
+  z.object({ do: z.literal('chordOff'), off: z.boolean() }),
+  z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }),
+  z.object({ do: z.literal('refresh') }),
+  z.object({ do: z.literal('send'), text: z.string().min(1).max(50_000) }),
+  z.object({ do: z.literal('stop') }),
+  z.object({ do: z.literal('retry') }),
+  z.object({ do: z.literal('unqueue'), index: z.number().int().min(0).max(100) }),
+  z.object({ do: z.literal('approve'), messageId: id, decision: z.enum(['once', 'thread', 'denied']) }),
+  z.object({ do: z.literal('new') }),
+  z.object({ do: z.literal('open'), threadId: id }),
+  z.object({ do: z.literal('continue') }),
+  z.object({ do: z.literal('delete'), threadId: id }),
+  z.object({ do: z.literal('rename'), threadId: id, title: z.string().min(1).max(80) }),
+  z.object({ do: z.literal('scope'), scope: duetScope }),
+  z.object({ do: z.literal('model'), provider: DuetProviderSchema, model: z.string().max(100).nullable() }),
+  z.object({ do: z.literal('attach'), nodeId: id }),
+  z.object({ do: z.literal('detach'), nodeId: id }),
+  z.object({ do: z.literal('draft'), text: z.string().max(20_000) }),
+  z.object({ do: z.literal('citation'), messageId: id, n: z.number().int().min(1).max(500) }),
+  z.object({ do: z.literal('export') }),
+]);
+export type DuetAction = z.infer<typeof DuetAction>;
+
+export interface DuetProviderInfo {
+  provider: DuetProvider;
+  installed: boolean;
+  path: string | null;
+  version: string | null;
+  signedIn: boolean | null;
+  billing: 'subscription' | 'api-key' | 'other' | null;
+  tooOld: boolean;
+}
+
+/** What one window's Duet panel shows (pushed as `duet:state`). */
+export interface DuetView {
+  /** Duet is on (Settings) and this isn't a private window. */
+  enabled: boolean;
+  open: boolean;
+  provider: DuetProvider | null;
+  providers: DuetProviderInfo[];
+  chordOff: boolean;
+  /** The transparency card hasn't been dismissed yet. */
+  firstUse: boolean;
+  thread: { id: string | null; title: string; scope: DuetScope; provider: DuetProvider; model: string | null } | null;
+  continueFrom: { id: string; title: string } | null;
+  threads: { id: string; title: string; lastUsedAt: number }[];
+  messages: DuetMessage[];
+  busy: boolean;
+  startedAt: number | null;
+  queue: string[];
+  attachments: { nodeId: string; title: string; url: string; current: boolean }[];
+  attachable: { nodeId: string; title: string; url: string }[];
+  readTabIds: string[];
+  error: { kind: string; message: string } | null;
+  draft: string;
+}
+
 /** Renderer → main requests (`ipcRenderer.invoke`). */
 export const invokeChannels = {
+  'duet:view': { roles: ['shell'], request: z.void(), response: z.custom<DuetView>() },
+  'duet:do': { roles: ['shell'], request: DuetAction, response: z.void() },
+  /** The command bar's @duet. */
+  'duet:search': { roles: ['overlay'], request: z.strictObject({ query: z.string().max(200) }), response: z.custom<DuetHit[]>() },
+  'duet:openHit': { roles: ['overlay'], request: z.strictObject({ chordId: id, threadId: id }), response: z.void() },
+  /** Settings → Duet: the providers on this computer, sign in, clear all chats. */
+  'settings:duet': {
+    roles: ['internal'],
+    request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }), z.object({ do: z.literal('clearAll') })]),
+    response: z.custom<DuetProviderInfo[]>(),
+  },
   'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive'], request: z.void(), response: SystemInfo },
   'state:snapshot': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<StateSnapshot>() },
   'cmd:dispatch': { roles: ['shell', 'overlay'], request: RendererCommand, response: z.void() },
@@ -519,6 +614,7 @@ export interface EventPayloads {
   /** The archive gained or lost entries: the archive page lists them again. */
   'archive:changed': null;
   'archive:snapshot': ArchiveSnapshot;
+  'duet:state': DuetView;
 }
 
 export type InvokeChannel = keyof typeof invokeChannels;
@@ -575,6 +671,8 @@ export interface ShellApi {
   };
   /** First run's "Open links in Chord?" (DESIGN.md §8.1). */
   defaultBrowser: { status(): Promise<DefaultBrowserStatus>; make(): Promise<DefaultBrowserStatus> };
+  /** Duet's panel in this window (ARCHITECTURE.md §11). */
+  duet: { view(): Promise<DuetView>; act(action: DuetAction): Promise<void>; onState(listener: (view: DuetView) => void): () => void };
   /** Stop a tab's screen share (its sidebar row shows it's sharing). */
   share: { stop(nodeId: string): Promise<void> };
 }
@@ -614,6 +712,8 @@ export interface SettingsApi {
     updateStatus(): Promise<UpdateStatus>;
     checkForUpdates(): Promise<UpdateStatus>;
     about(): Promise<AboutInfo>;
+    /** Settings → Duet: which providers are installed and signed in; sign in; clear all chats. */
+    duet(request: { do: 'detect' } | { do: 'signIn'; provider: DuetProvider } | { do: 'clearAll' }): Promise<DuetProviderInfo[]>;
     openUrl(url: string): Promise<void>;
   };
   extensions: {
@@ -689,4 +789,6 @@ export interface OverlayApi {
     suggest(query: string, engine?: SearchEngineId): Promise<string[]>;
   };
   archive: { restore(archiveId: string): Promise<void> };
+  /** @duet: Duet chats by their words, and opening one. */
+  duet: { search(query: string): Promise<DuetHit[]>; open(chordId: string, threadId: string): Promise<void> };
 }
