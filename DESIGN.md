@@ -111,11 +111,11 @@ Every sidebar feature folds away. What remains is one 40 px bar with the basics,
 ```
 macOS
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ ● ● ●  ◧  ‹ › ⟳   youtube.com / I Can't Believe What I Saw in Paris…    ✦ Duet │ ← 40 px bar, chord-tinted
+│ ● ● ●  ◧  ‹ › ⟳   youtube.com / I Can't Believe What I Saw in Paris…    ◫ Duet │ ← 40 px bar, chord-tinted
 │ ╭──────────────────────────────────────────────────────────────────────────╮ │
 │ │                                web page                                  │ │
 Windows / Linux
-│ ◧  ‹ › ⟳   youtube.com / I Can't Believe What I Saw in Paris…   ✦ Duet   ─ ▢ ✕ │
+│ ◧  ‹ › ⟳   youtube.com / I Can't Believe What I Saw in Paris…   ◫ Duet   ─ ▢ ✕ │
 │ ╭──────────────────────────────────────────────────────────────────────────╮ │
 ```
 
@@ -127,7 +127,7 @@ Windows / Linux
 | Drag region | Everything not interactive drags the window. Double-click follows the platform (maximize on Windows/Linux; the macOS title-bar preference). |
 | Downloads | Present only while a download is active or just finished. |
 | Extension actions | Only the puzzle piece, which lists every extension, so popups stay one click away while the header stays clean. With Settings → Extensions → "Show extension buttons: In the title bar", the pinned buttons sit here too: before ⋯ on Windows/Linux, and in the sidebar's header row on macOS (its title bar) while the sidebar is docked. |
-| Duet | `✦ Duet` text button when Duet is enabled; absent otherwise. |
+| Duet | Duet's icon (two speech bubbles, `◫` in the diagrams) and the word *Duet*, when Duet is enabled; absent otherwise. The same icon marks Duet everywhere: Settings, the command bar, and tabs Duet read. ✦ stays Chord's own mark and the first chord's icon. |
 | Window controls | Windows/Linux caption buttons (WCO). On macOS the traffic lights sit at the far left instead. |
 
 - **The bar carries the chord's tint and grain** (same generator), so you always know which chord you're in without one extra element.
@@ -607,7 +607,7 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
   - Messages sent while Duet is answering are **queued** as chips (removable) and go in order.
   - Send turns into **Stop** while a reply streams. Each chat keeps its own draft.
 - **States:** *Off* (not shown at all) · *Off in this chord* (a note and **Turn on in this chord**) · *Intro* · *Setup* · *Ready, empty* (three suggestion chips, and *Continue “title”* after 12 hours idle) · *Streaming* · *Needs approval* · *Provider error* (plain cause plus fix, e.g. "Claude Code isn't signed in. Run `claude auth login` in a terminal, then try again.").
-- **In the sidebar:** a small ✦ on tabs Duet read while the chat is open (*Duet read this tab*).
+- **In the sidebar:** Duet's icon, small, on tabs Duet read while the chat is open (*Duet read this tab*).
 
 ### 7.9 Split view, Peek, mini window, hidden chrome
 
@@ -682,7 +682,7 @@ A link clicked inside a pinned tab opens in Peek instead of replacing the pinned
 
 ### 8.6 Duet: first use
 
-1. The user clicks **✦ Duet** in the top bar or presses ⌘E / Ctrl+E. The panel opens with **Intro**:
+1. The user clicks **Duet** in the top bar or presses ⌘E / Ctrl+E. The panel opens with **Intro**:
    > **Meet Duet.** Chat about this page and your tabs, using your own Claude Code or Codex app. Chord never sees your sign-in, and nothing is sent until you press Send.
 2. **Setup** (under the intro) lists what's on this computer:
    - Claude Code: *Installed 2.1.309 · Signed in* with **Use this**, or **Sign in** (opens a terminal running `claude auth login`). *Using your API key* shows when that's what pays.

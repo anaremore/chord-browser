@@ -9,11 +9,12 @@
  */
 import { keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
 import type { HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
-import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, MessagesSquare, PanelLeft, Pin, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, PanelLeft, Pin, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { Favicon } from '../shared/Favicon';
+import { DuetIcon } from '../shared/icons';
 import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
@@ -100,9 +101,10 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'split.focusNext': Columns2,
   'split.focusPrevious': Columns2,
   'app.shortcuts': Keyboard,
+  'duet.toggle': DuetIcon,
 };
 
-const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, archive: Archive, duet: MessagesSquare, chords: Layers, actions: Command };
+const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, archive: Archive, duet: DuetIcon, chords: Layers, actions: Command };
 const scopeIcon = (scope: Scope) => (scope.kind === 'filter' ? FILTER_ICONS[scope.filter] : Search);
 
 /** Anchored panels are at least this wide, so results have room beside a narrow sidebar. */
@@ -589,7 +591,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                         : result.kind === 'archive'
                           ? ArchiveRestore
                           : result.kind === 'duet'
-                            ? MessagesSquare
+                            ? DuetIcon
                           : result.kind === 'scope'
                             ? scopeIcon(result.scope)
                             : result.kind === 'open'
