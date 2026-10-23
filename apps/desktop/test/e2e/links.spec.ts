@@ -296,7 +296,7 @@ test('a link route sends a site’s links to its chord, from other apps and the 
       );
     }
     expect((await snapshot(shell)).state.linkRoutes).toEqual({});
-    await expect(shell.getByText('Always open localhost links in Work?')).toBeVisible();
+    await expect(shell.getByText('Always open localhost in Work?')).toBeVisible();
     await shell.getByRole('button', { name: 'Always' }).click();
     await expect.poll(async () => (await snapshot(shell)).state.linkRoutes['localhost']?.chordId).toBe(work);
 

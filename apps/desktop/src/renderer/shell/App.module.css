@@ -781,6 +781,13 @@ kbd {
   white-space: nowrap;
 }
 
+/* In the sidebar a longer message wraps rather than lose its end ("…in Work?"); the minimal bar's stays one line. */
+.toasts .toastMessage {
+  padding-block: var(--space-2);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .toastAction {
   flex: none;
   padding: var(--space-1) var(--space-2);

@@ -670,7 +670,7 @@ A link clicked inside a pinned tab opens in Peek instead of replacing the pinned
 - Keeping it is ⌘↵ / Ctrl+Enter (plain ↵ belongs to the page). Esc, a click outside the card, or ⌘W closes it; so does switching tabs or chords.
 - While Peek is open, find (⌘F), zoom, reload, back, print and copy link act on Peek's page.
 
-**Links from other apps and link routes** (from Crest). A link another app hands Chord opens in a mini window (§7.9), or as a new tab if you choose that in Settings → General. A site can have a **link route** to a chord: its links from other apps go straight there as tabs, and so do addresses you type in the command bar, even from another chord. Chord never makes a route on its own. The second time in a session you move a site's page to the same chord, a toast asks *Always open linear.app links in Work?*. Settings → General → Link routes lists them, and you can change, add or remove one there.
+**Links from other apps and link routes** (from Crest). A link another app hands Chord opens in a mini window (§7.9), or as a new tab if you choose that in Settings → General. A site can have a **link route** to a chord: its links from other apps go straight there as tabs, and so do addresses you type in the command bar, even from another chord. Chord never makes a route on its own. The second time in a session you move a site's page to the same chord, a toast asks *Always open linear.app in Work?*. Settings → General → Link routes lists them, and you can change, add or remove one there.
 
 ### 8.6 Duet: first use
 

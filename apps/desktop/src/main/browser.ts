@@ -815,7 +815,7 @@ export class Browser {
     this.routeOffered.add(host);
     send(w.shell.webContents, 'toast:show', {
       id: `route-offer:${host}`,
-      message: `Always open ${host} links in ${chord.name}?`,
+      message: `Always open ${host} in ${chord.name}?`,
       action: { label: 'Always', command: { t: 'linkRoute.set', host, chordId } },
     });
   }
