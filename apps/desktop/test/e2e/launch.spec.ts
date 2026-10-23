@@ -8,6 +8,13 @@ import { _electron as electron, expect, test, type ElectronApplication, type Loc
 const appDir = resolve(import.meta.dirname, '../..');
 const capturesDir = resolve(appDir, 'test-results', 'captures');
 
+/** A page whose video plays a canvas stream (no media files, no network). */
+const videoPage = (title: string, attrs: string) =>
+  `<title>${title}</title><canvas id="c" width="640" height="360" hidden></canvas><video id="v" width="640" height="360" ${attrs}></video>` +
+  `<script>const c = document.getElementById('c'), g = c.getContext('2d'); let n = 0;` +
+  `setInterval(() => { g.fillStyle = 'hsl(' + (n++ * 7) % 360 + ' 70% 50%)'; g.fillRect(0, 0, 640, 360); }, 40);` +
+  `const v = document.getElementById('v'); v.srcObject = c.captureStream(25); v.play();</script>`;
+
 /** A few tiny pages so navigation works without the network. */
 function startSite(): Promise<{ server: Server; origin: string }> {
   const pages: Record<string, string> = {
@@ -28,6 +35,9 @@ function startSite(): Promise<{ server: Server; origin: string }> {
       `<script>addEventListener('message', (e) => { if (e.data === 'signed-in') document.title = 'Signed in'; });</script>`,
     '/signin-popup': `<title>Sign in</title><button id="done" onclick="window.opener.postMessage('signed-in', '*'); window.close()">Continue</button>`,
     '/long': '<title>Long page</title><div style="height: 6000px">A long page</div>',
+    // A playing video with no media file: a canvas, streamed into a <video>. The muted one is a background loop.
+    '/video': videoPage('Video', ''),
+    '/muted-video': videoPage('Muted video', 'muted'),
   };
   const server = createServer((req, res) => {
     if (req.url === '/bad.png') {
@@ -426,6 +436,83 @@ test('a chord can keep its sign-ins separate, with Undo, and its sign-ins are de
   try {
     await pageWhere(app, isShell);
     await expect.poll(ownPartitions).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a playing video pops out when you switch away, and comes home when you return', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/video` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const video = await pageWhere(app, (url) => url === `${site.origin}/video`);
+    const pip = () => video.evaluate(() => document.pictureInPictureElement?.id ?? null);
+    const paused = () => video.evaluate(() => document.querySelector('video')!.paused);
+    await expect.poll(() => video.evaluate(() => document.querySelector('video')!.currentTime)).toBeGreaterThan(0.3);
+    const today = shell.getByRole('list', { name: 'Today' });
+    const row = (name: string) => today.getByRole('button', { name, exact: true });
+
+    // Switching to another tab pops the video out, and its row says so.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/second`);
+    await overlay.keyboard.press('Enter');
+    await expect.poll(pip).toBe('v');
+    const bringBack = shell.getByRole('button', { name: 'Bring the video back' });
+    await expect(bringBack).toBeVisible();
+
+    // The glyph brings it home: its tab is shown and the video plays on, inline.
+    await bringBack.click();
+    await expect.poll(pip).toBeNull();
+    await expect(row('Video')).toHaveAttribute('aria-current', 'page');
+    expect(await paused()).toBe(false);
+    await expect(bringBack).toHaveCount(0);
+
+    // The PiP window's "Back to tab" ends PiP with the video still playing (Electron says nothing else):
+    // Chord brings the tab back.
+    await row('Second page').click();
+    await expect.poll(pip).toBe('v');
+    await video.evaluate(() => document.exitPictureInPicture());
+    await expect(row('Video')).toHaveAttribute('aria-current', 'page');
+
+    // Its ✕ pauses the video as PiP ends: you stay where you are.
+    await row('Second page').click();
+    await expect.poll(pip).toBe('v');
+    await video.evaluate(() => {
+      document.querySelector('video')!.pause();
+      return document.exitPictureInPicture();
+    });
+    await expect(bringBack).toHaveCount(0);
+    await shell.waitForTimeout(600);
+    await expect(row('Second page')).toHaveAttribute('aria-current', 'page');
+
+    // Turned off in Settings, switching away leaves the video where it is.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
+    await settings.getByRole('switch', { name: 'Pop out playing videos when you switch away' }).click();
+    await row('Video').click();
+    await video.evaluate(() => document.querySelector('video')!.play());
+    await row('Second page').click();
+    await shell.waitForTimeout(800);
+    expect(await pip()).toBeNull();
+  } finally {
+    await app.close();
+  }
+});
+
+test('a muted background video stays in its page when you switch away', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/muted-video` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const video = await pageWhere(app, (url) => url === `${site.origin}/muted-video`);
+    await expect.poll(() => video.evaluate(() => document.querySelector('video')!.currentTime)).toBeGreaterThan(0.3);
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/second`);
+    await overlay.keyboard.press('Enter');
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Second page');
+    await shell.waitForTimeout(800);
+    expect(await video.evaluate(() => document.pictureInPictureElement)).toBeNull();
   } finally {
     await app.close();
   }

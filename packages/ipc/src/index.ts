@@ -112,6 +112,7 @@ export const SettingsPatch = z.strictObject({
   searchEngine: z.enum(engineIds).optional(),
   archiveAfter: z.enum(archiveAfterIds).optional(),
   sleepTabs: z.boolean().optional(),
+  autoPip: z.boolean().optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
   separateSignIns: z.boolean().optional(),
   interface: z.strictObject({ contrast: z.number().min(0).max(1), glass: z.number().min(0).max(1) }).partial().optional(),

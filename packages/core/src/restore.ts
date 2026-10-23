@@ -90,6 +90,7 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
   const archiveAfter = saved['archiveAfter'];
   if (typeof archiveAfter === 'string' && archiveAfter in ARCHIVE_AFTER_MS) settings.archiveAfter = archiveAfter as ArchiveAfter;
   if (typeof saved['sleepTabs'] === 'boolean') settings.sleepTabs = saved['sleepTabs'];
+  if (typeof saved['autoPip'] === 'boolean') settings.autoPip = saved['autoPip'];
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
   const motion = saved['motion'];

@@ -55,7 +55,8 @@ export class IdleKeeper {
       const { state, dispatch, tabs, isCapturing } = this.deps;
       const busy = new Set<NodeId>();
       for (const id of Object.keys(state().nodes)) {
-        if (state().live[id]?.audible || tabs.isPlaying(id) || isCapturing(id)) busy.add(id);
+        const live = state().live[id];
+        if (live?.audible || live?.pip || tabs.isPlaying(id) || isCapturing(id)) busy.add(id);
       }
       // Picture-in-picture means asking the page, so only for tabs that would otherwise go.
       const settings = state().settings;

@@ -501,6 +501,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
       if (archiveAfter !== undefined && draft.settings.archiveAfter !== archiveAfter) draft.settings.archiveAfter = archiveAfter;
       if (sleepTabs !== undefined && draft.settings.sleepTabs !== sleepTabs) draft.settings.sleepTabs = sleepTabs;
+      const { autoPip } = cmd.settings;
+      if (autoPip !== undefined && draft.settings.autoPip !== autoPip) draft.settings.autoPip = autoPip;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
       const { separateSignIns } = cmd.settings;
       if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;
