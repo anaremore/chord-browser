@@ -9,7 +9,9 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import type { DuetContextUsage } from '@chord/core';
 import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionOptions } from './adapter';
+import { cliPath, spawnSpec } from './launch';
 
 /** Default-on features that add tools (research §3.3). Unknown names are ignored by older versions. */
 export const CODEX_FEATURES_OFF = [
@@ -51,6 +53,20 @@ export function codexError(info: string, message: string): ProviderError {
   return { kind, message: errorCopy('codex', kind, kind === 'usage-limit' && retry ? `It resets ${retry}.` : kind === 'other' ? message.slice(0, 300) : '') };
 }
 
+/**
+ * How full the context is, from `thread/tokenUsage/updated` (codex-cli
+ * 0.160.1's generated schema: `tokenUsage: {total, last, modelContextWindow:
+ * number | null}`): the last request's tokens against the window Codex
+ * reports. A null window hides the meter; sizes are never guessed.
+ */
+export function codexContextUsage(params: Record<string, unknown>): DuetContextUsage | null {
+  const info = params['tokenUsage'] as { last?: { totalTokens?: unknown }; modelContextWindow?: unknown } | undefined;
+  const window = info?.modelContextWindow;
+  const used = info?.last?.totalTokens;
+  if (typeof window !== 'number' || !(window > 0) || typeof used !== 'number' || !(used > 0)) return null;
+  return { used, window };
+}
+
 export class CodexSession implements DuetSession {
   readonly provider = 'codex' as const;
   private readonly child: ChildProcess;
@@ -68,14 +84,8 @@ export class CodexSession implements DuetSession {
     private readonly options: SessionOptions,
     private readonly events: SessionEvents,
   ) {
-    this.child = spawn(options.launch.command, [...options.launch.prefix, ...codexArgs()], {
-      cwd: options.cwd,
-      shell: false,
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: options.launch.env,
-      detached: process.platform !== 'win32',
-    });
+    const spec = spawnSpec(options.launch, codexArgs(), { cwd: options.cwd });
+    this.child = spawn(spec.command, spec.args, { cwd: spec.cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: spec.env, detached: process.platform !== 'win32' });
     this.child.on('error', () => this.exit({ kind: 'crashed', message: errorCopy('codex', 'crashed', "Chord couldn't start it.") }));
     this.child.on('exit', () => {
       if (this.turnRunning) this.endTurn('error', { kind: 'crashed', message: errorCopy('codex', 'crashed') });
@@ -113,7 +123,13 @@ export class CodexSession implements DuetSession {
 
   close(): void {
     if (this.ended) return;
-    killTree(this.child.pid);
+    const pid = this.child.pid;
+    if (!this.options.launch.wsl) return killTree(pid);
+    // Inside WSL, the end of stdin is what reaches Codex; wsl.exe goes after a grace period.
+    this.child.stdin?.end();
+    setTimeout(() => {
+      if (!this.ended) killTree(pid);
+    }, 2000).unref();
   }
 
   /** Delete a thread's rollout through Codex itself (Duet's "delete really deletes"). */
@@ -156,7 +172,8 @@ export class CodexSession implements DuetSession {
     }
     const started = await this.call('thread/start', {
       ...(model ? { model } : {}),
-      cwd: this.options.cwd,
+      // Inside WSL, the distro's path to the same empty folder.
+      cwd: cliPath(this.options.launch, this.options.cwd),
       sandbox: 'read-only',
       approvalPolicy: 'on-request',
       developerInstructions: this.options.instructions,
@@ -233,6 +250,11 @@ export class CodexSession implements DuetSession {
       case 'item/agentMessage/delta':
         if (typeof p['delta'] === 'string') this.events.onText(p['delta']);
         return;
+      case 'thread/tokenUsage/updated': {
+        const usage = p['threadId'] === undefined || p['threadId'] === this.threadId ? codexContextUsage(p) : null;
+        if (usage) this.events.onUsage?.(usage);
+        return;
+      }
       case 'item/started':
       case 'item/completed': {
         const type = (p['item'] as { type?: string } | undefined)?.type ?? '';

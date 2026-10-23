@@ -10,8 +10,9 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { DuetToolSpec } from '@chord/core';
+import type { DuetContextUsage, DuetToolSpec } from '@chord/core';
 import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionOptions, type ToolOutput } from './adapter';
+import { cliPath, spawnSpec } from './launch';
 
 const SERVER = 'chord';
 
@@ -53,6 +54,36 @@ export function claudeError(category: string, text: string): ProviderError {
   return { kind, message: errorCopy('claude', kind, kind === 'other' ? text.slice(0, 300) : '') };
 }
 
+interface TokenUsage {
+  input_tokens?: unknown;
+  cache_creation_input_tokens?: unknown;
+  cache_read_input_tokens?: unknown;
+  output_tokens?: unknown;
+}
+
+const count = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0);
+/** What one request put in the context: everything it read (cached or not) plus what it wrote. */
+const inContext = (u: TokenUsage | null | undefined) => (u ? count(u.input_tokens) + count(u.cache_creation_input_tokens) + count(u.cache_read_input_tokens) + count(u.output_tokens) : 0);
+
+/**
+ * How full the context is after a turn, from a stream-json `result` (checked
+ * against 2.1.309): the window is `modelUsage[<model>].contextWindow`, the
+ * tokens are the turn's last request (`usage.iterations`, else the last
+ * message's usage). No window reported, no meter: sizes are never guessed.
+ */
+export function claudeContextUsage(result: Record<string, unknown>, model: string | null, lastMessage: TokenUsage | null = null): DuetContextUsage | null {
+  const models = result['modelUsage'];
+  if (!models || typeof models !== 'object') return null;
+  const windows = Object.entries(models as Record<string, { contextWindow?: unknown } | null>).filter(([, m]) => count(m?.contextWindow) > 0);
+  // The chat's own model; another one there (a background helper) never sets the window.
+  const entry = (model ? windows.find(([id]) => id === model) : undefined) ?? (windows.length === 1 ? windows[0] : undefined);
+  if (!entry) return null;
+  const usage = result['usage'] as (TokenUsage & { iterations?: unknown }) | undefined;
+  const iterations = Array.isArray(usage?.iterations) ? (usage.iterations as TokenUsage[]) : [];
+  const used = inContext(iterations.at(-1) ?? lastMessage ?? usage);
+  return used > 0 ? { used, window: count(entry[1]!.contextWindow) } : null;
+}
+
 /** The MCP side of Chord's tools, answered on the control channel. */
 async function mcpReply(message: { id?: unknown; method?: string; params?: Record<string, unknown> }, tools: readonly DuetToolSpec[], call: (name: string, args: Record<string, unknown>) => Promise<ToolOutput>) {
   const { id, method, params } = message;
@@ -87,19 +118,21 @@ export class ClaudeSession implements DuetSession {
   private stderr = '';
   private ended = false;
   private interrupting = false;
+  /** The chat's model (system/init, then each reply's), and its last request's usage: the context meter. */
+  private model: string | null = null;
+  private lastUsage: TokenUsage | null = null;
 
   constructor(
     private readonly options: SessionOptions,
     private readonly events: SessionEvents,
   ) {
-    this.child = spawn(options.launch.command, [...options.launch.prefix, ...claudeArgs(options)], {
+    // The same flags whether it runs here or inside WSL; there, the instructions file is the distro's path to it.
+    const spec = spawnSpec(options.launch, claudeArgs({ ...options, instructionsFile: cliPath(options.launch, options.instructionsFile) }), {
       cwd: options.cwd,
-      shell: false,
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
       // The user's environment is left alone (an ANTHROPIC_API_KEY there is theirs: research §1.7).
-      env: { ...options.launch.env, CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
+      env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
     });
+    this.child = spawn(spec.command, spec.args, { cwd: spec.cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: spec.env });
     this.child.stderr?.on('data', (d: Buffer) => {
       this.stderr = (this.stderr + d.toString()).slice(-4000);
     });
@@ -124,6 +157,7 @@ export class ClaudeSession implements DuetSession {
 
   send(text: string): void {
     this.turnRunning = true;
+    this.lastUsage = null;
     this.write({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] }, parent_tool_use_id: null });
   }
 
@@ -188,6 +222,7 @@ export class ClaudeSession implements DuetSession {
         if (m['subtype'] === 'init') {
           this.initialized = true;
           this.capabilities = Array.isArray(m['capabilities']) ? (m['capabilities'] as string[]) : [];
+          if (typeof m['model'] === 'string') this.model = m['model'];
           if (typeof m['session_id'] === 'string') this.events.onSessionId(m['session_id']);
         } else if (m['subtype'] === 'api_retry') {
           const error = m['error'] as { category?: string } | string | undefined;
@@ -195,11 +230,20 @@ export class ClaudeSession implements DuetSession {
         }
         return;
       case 'stream_event': {
-        const delta = (m['event'] as { delta?: { type?: string; text?: string } } | undefined)?.delta;
+        const event = m['event'] as { type?: string; delta?: { type?: string; text?: string }; usage?: TokenUsage } | undefined;
+        if (m['parent_tool_use_id'] == null && event?.type === 'message_delta' && event.usage) this.lastUsage = event.usage;
+        const delta = event?.delta;
         if (delta?.type === 'text_delta' && delta.text) this.events.onText(delta.text);
         return;
       }
+      case 'assistant': {
+        const message = m['message'] as { model?: unknown } | undefined;
+        if (m['parent_tool_use_id'] == null && typeof message?.model === 'string') this.model = message.model;
+        return;
+      }
       case 'result': {
+        const usage = claudeContextUsage(m, this.model, this.lastUsage);
+        if (usage) this.events.onUsage?.(usage);
         const subtype = String(m['subtype'] ?? '');
         if (subtype === 'success' && !m['is_error']) return this.endTurn('done');
         // An interrupt Chord asked for ends the turn as an error during execution.

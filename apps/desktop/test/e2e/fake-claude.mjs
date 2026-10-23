@@ -23,8 +23,14 @@ const flag = (name) => {
 if (args[0] === '--version') {
   // FAKE_CLAUDE_SLOW_VERSION=<ms>: answer late, the way a slow machine does, so Duet is open before it has found Claude.
   await new Promise((done) => setTimeout(done, Number(process.env.FAKE_CLAUDE_SLOW_VERSION ?? 0)));
-  process.stdout.write('2.1.309 (Claude Code)\n');
+  // FAKE_CLAUDE_VERSION plays an older Claude Code (1.x has no `auth` command).
+  process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.309'} (Claude Code)\n`);
   process.exit(0);
+}
+// Logged where the tests can see it; the folder may not exist yet (inside WSL it's a fresh /tmp one).
+if (args[0] === 'auth' && process.env.CLAUDE_CONFIG_DIR) {
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true });
+  appendFileSync(join(process.env.CLAUDE_CONFIG_DIR, 'auth-asked'), `${args.join(' ')}\n`);
 }
 if (args[0] === 'auth' && args[1] === 'status') {
   process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }));
@@ -68,16 +74,35 @@ const say = async (text, slow = false) => {
   }
   return true;
 };
+// Usage as Claude Code 2.1.309 reports it: the turn's requests in usage.iterations, the window in modelUsage.
+const MODEL = 'claude-fake-1';
+let turns = 0;
+const usage = () => {
+  const used = { input_tokens: 2, cache_creation_input_tokens: 1998, cache_read_input_tokens: 120_000 + 4000 * (turns - 1), output_tokens: 2000 };
+  return {
+    usage: { ...used, iterations: [{ ...used, type: 'message' }] },
+    modelUsage: { [MODEL]: { inputTokens: 2, outputTokens: 2000, cacheReadInputTokens: used.cache_read_input_tokens, cacheCreationInputTokens: 1998, contextWindow: 200_000, maxOutputTokens: 32_000 } },
+  };
+};
 const finish = (ok) => {
   appendFileSync(sessionFile, `${JSON.stringify({ at: Date.now() })}\n`);
-  if (ok) write({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: session });
-  else write({ type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_streaming', session_id: session });
+  if (ok) write({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: session, ...usage() });
+  else write({ type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_streaming', session_id: session, ...usage() });
 };
 
 async function turn(text) {
   interrupted = false;
+  turns++;
   const ref = /Attached: tab (t\d+)/.exec(text)?.[1];
   if (/long/i.test(text)) return finish(await say(Array.from({ length: 400 }, (_, i) => `word${i} `).join(''), true));
+  if (/pdf/i.test(text) && ref) {
+    // Quotes the second line of page 2: Chord, not the model, works out which page that is.
+    const result = JSON.parse(toolText(await callTool('read_tab', { tab_id: ref })) || '{}');
+    if (!result.content) return finish(await say(`I couldn't read it: ${result.data?.refused ?? 'no text'}`));
+    const page2 = (String(result.content).split('[Page 2]')[1] ?? '').trim().split('\n');
+    const quote = (page2[1] ?? page2[0] ?? '').split(/\s+/).slice(0, 5).join(' ');
+    return finish(await say(`The PDF has ${result.pages?.total} pages. Triads sound bright. [[${ref}:"${quote}"]]`));
+  }
   if (/summar/i.test(text) && ref) {
     const page = JSON.parse(toolText(await callTool('read_tab', { tab_id: ref })) || '{}');
     const quote = String(page.content ?? '').split(/\s+/).slice(0, 4).join(' ');
@@ -111,7 +136,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (m.type === 'user') {
     if (!inited) {
       inited = true;
-      write({ type: 'system', subtype: 'init', session_id: session, tools: ['mcp__chord__read_tab'], capabilities: ['interrupt_receipt_v1'], claude_code_version: '2.1.309' });
+      write({ type: 'system', subtype: 'init', session_id: session, model: MODEL, tools: ['mcp__chord__read_tab'], capabilities: ['interrupt_receipt_v1'], claude_code_version: '2.1.309' });
     }
     void turn(m.message.content.map((c) => c.text).join(''));
   }

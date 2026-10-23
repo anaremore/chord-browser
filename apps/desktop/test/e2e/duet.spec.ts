@@ -4,15 +4,20 @@
  * keeps its "session files" in a temp CLAUDE_CONFIG_DIR, so resume, fallback
  * and deletion of the provider's copy can be checked on disk.
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { buildPdf, SAMPLE_PDF_PAGES } from '../fixtures/pdf';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
+
+/** Requests for the test PDF, and whether each carried the sign-in cookie. */
+const pdfRequests: { signedIn: boolean }[] = [];
 
 const appDir = resolve(import.meta.dirname, '../..');
 const fake = resolve(import.meta.dirname, 'fake-claude.mjs');
@@ -30,6 +35,20 @@ test.beforeAll(async () => {
       '<select><option>card-4242-selected</option></select><input autocomplete="one-time-code" value="otp-123456">',
   };
   const server = createServer((req, res) => {
+    // A PDF behind a sign-in: /login sets the cookie and goes on to it; without the cookie it's 403.
+    if (req.url === '/login') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'chord_pdf=yes; Path=/; HttpOnly' });
+      res.end('<title>Signing in</title><meta http-equiv="refresh" content="0;url=/guide.pdf">');
+      return;
+    }
+    if (req.url?.startsWith('/guide.pdf')) {
+      const signedIn = /(^|;\s*)chord_pdf=yes/.test(req.headers.cookie ?? '');
+      pdfRequests.push({ signedIn });
+      // no-store: Duet's own copy has to come through the network, with the tab's cookies.
+      res.writeHead(signedIn ? 200 : 403, { 'content-type': signedIn ? 'application/pdf' : 'text/plain', 'cache-control': 'no-store' });
+      res.end(signedIn ? Buffer.from(buildPdf(SAMPLE_PDF_PAGES, { title: 'Field guide' })) : 'sign in first');
+      return;
+    }
     const body = pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body ?? 'not found');
@@ -240,6 +259,209 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     await app.close();
   }
 });
+
+test('Duet: a Claude Code too old for browse mode isn’t asked whether it’s signed in, and Setup says to update it', async () => {
+  const setup = fresh();
+  const app = await launch(setup, '/article', { FAKE_CLAUDE_VERSION: '1.0.34' });
+  try {
+    const shell = await shellOf(app);
+    const panel = await openDuet(shell);
+    await expect(panel.getByText('Installed 1.0.34 · Needs an update')).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'How to update' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
+    // `claude auth status` would be a prompt to 1.x: it was never run.
+    expect(existsSync(join(setup.config, 'auth-asked'))).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
+/** Every page URL main has open (tabs, and the PDF viewer inside them). */
+const openUrls = (app: ElectronApplication) => app.evaluate(({ webContents }) => webContents.getAllWebContents().map((w) => w.getURL()));
+
+test('Duet: reads a PDF through the tab’s own session, cites its page, and shows how full the context is', async () => {
+  pdfRequests.length = 0;
+  const setup = fresh();
+  const app = await launch(setup, '/login');
+  try {
+    const shell = await shellOf(app);
+    // The tab signs in, then shows the PDF in Chromium's viewer.
+    await expect.poll(() => pdfRequests.length, { timeout: 20_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => (await openUrls(app)).some((u) => u.endsWith('/guide.pdf'))).toBe(true);
+    const panel = await openDuet(shell);
+    await setUp(panel);
+    // No meter before the CLI has reported anything.
+    await expect(panel.getByRole('meter', { name: 'Context used' })).toHaveCount(0);
+    await send(panel, 'What does this PDF say about triads?');
+    await expect(panel.getByText(/The PDF has 3 pages\. Triads sound bright\./)).toBeVisible();
+    // The page comes from the text Duet read, not from the model.
+    const pill = panel.getByRole('button', { name: /^Source 1, page 2: “A major triad sounds bright”/ });
+    await expect(pill).toHaveText('1 · p. 2');
+    await expect(panel.getByRole('button', { name: /^Read “/ })).toBeVisible();
+    // Duet's copy came over the network (no-store) with the tab's cookie: every request was signed in.
+    expect(pdfRequests.length).toBeGreaterThanOrEqual(2);
+    expect(pdfRequests.every((r) => r.signedIn)).toBe(true);
+
+    // The CLI reported 124,000 of 200,000 tokens.
+    const meter = panel.getByRole('meter', { name: 'Context used' });
+    await expect(meter).toHaveAttribute('aria-valuenow', '62');
+    await expect(meter).toHaveAttribute('aria-valuetext', /^62% of context used\. When it fills up, Claude Code compacts the conversation automatically/);
+
+    // The citation finds the quote in the PDF viewer (which goes to its page and marks it).
+    await app.evaluate(({ webContents }) => {
+      const pdf = webContents.getAllWebContents().find((w) => w.getURL().endsWith('/guide.pdf'))!;
+      pdf.on('found-in-page', (_e, result) => ((globalThis as { found?: number }).found = result.matches));
+    });
+    await pill.click();
+    await expect.poll(() => app.evaluate(() => (globalThis as { found?: number }).found ?? 0)).toBe(1);
+  } finally {
+    await app.close();
+  }
+});
+
+/**
+ * Claude Code installed only inside WSL, for real: the fake CLI runs inside the default distro
+ * through wsl.exe. Opt-in (CHORD_E2E_WSL=1), as it needs Windows with WSL and node in the distro.
+ * CLAUDE_CONFIG_DIR reaches the distro through WSLENV, the way a user's own setting would.
+ */
+test('Duet: Claude Code inside WSL is offered in Setup, answers through wsl.exe, and deleting the chat deletes its session there', async () => {
+  test.skip(!(process.platform === 'win32' && process.env['CHORD_E2E_WSL'] === '1'), 'Needs WSL with node in the default distro: set CHORD_E2E_WSL=1');
+  test.setTimeout(120_000);
+  const wsl = (args: string[]) => new Promise<string>((done) => execFile('wsl.exe', args, { windowsHide: true }, (_e, out) => done(String(out))));
+  const linuxFake = fake.replace(/^([A-Za-z]):/, (_m, drive: string) => `/mnt/${drive.toLowerCase()}`).replace(/\\/g, '/');
+  const config = `/tmp/chord-e2e-wsl-${Date.now()}`;
+  const sessions = () => wsl(['-e', 'sh', '-c', `ls ${config}/projects/*/*.jsonl 2>/dev/null`]).then((out) => out.trim().split('\n').filter(Boolean));
+  const app = await launch(fresh(), '/article', {
+    CHORD_DUET_CLAUDE: '',
+    CHORD_DUET_CLAUDE_WSL: `node ${linuxFake}`,
+    CLAUDE_CONFIG_DIR: config,
+    WSLENV: [process.env['WSLENV'], 'CLAUDE_CONFIG_DIR/u'].filter(Boolean).join(':'),
+  });
+  try {
+    const shell = await shellOf(app);
+    const panel = await openDuet(shell);
+    await expect(panel.getByText(/^Claude Code in WSL \(.+\)$/)).toBeVisible({ timeout: 60_000 });
+    await expect(panel.getByText('Installed 2.1.309 · Signed in')).toBeVisible();
+    await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-wsl-setup.png`) });
+    await setUp(panel);
+    await send(panel, 'Summarize this page');
+    await expect(panel.getByText('Here is the gist.')).toBeVisible({ timeout: 30_000 });
+    expect(await sessions()).toHaveLength(1);
+    await panel.getByRole('button', { name: 'Chats' }).click();
+    await panel.getByRole('menuitem', { name: 'Delete this chat' }).click();
+    await expect.poll(sessions, { timeout: 30_000 }).toHaveLength(0);
+  } finally {
+    await app.close();
+    await wsl(['-e', 'rm', '-rf', '--', config]);
+  }
+});
+
+/**
+ * The window as the user sees it. The shell and each tab are separate views,
+ * so the shell's own screenshot has a hole where the tab sits: the tab's own
+ * screenshot is drawn there (clipped to the frame's corners), in the shell, by
+ * a canvas. Only Chord's own pages are captured. `crop` (CSS pixels) cuts a
+ * part out, drawn `zoom` times larger.
+ */
+async function windowPicture(app: ElectronApplication, shell: Page, tab: Page, options: { crop?: { x: number; y: number; width: number; height: number }; zoom?: number } = {}): Promise<Buffer> {
+  const bounds = await app.evaluate(({ BaseWindow }, url) => {
+    const find = (views: Electron.View[], x: number, y: number): Electron.Rectangle | null => {
+      for (const view of views) {
+        const b = view.getBounds();
+        const contents = (view as Partial<Electron.WebContentsView>).webContents;
+        if (contents && !contents.isDestroyed() && contents.getURL() === url) return { ...b, x: x + b.x, y: y + b.y };
+        const inner = find(view.children, x + b.x, y + b.y);
+        if (inner) return inner;
+      }
+      return null;
+    };
+    for (const win of BaseWindow.getAllWindows()) {
+      const found = find(win.contentView.children, 0, 0);
+      if (found) return found;
+    }
+    return null;
+  }, tab.url());
+  expect(bounds).not.toBeNull();
+  await shell.evaluate(() => document.fonts.ready);
+  const [base, page] = await Promise.all([shell.screenshot({ scale: 'css' }), tab.screenshot({ scale: 'css' })]);
+  const png = await shell.evaluate(
+    async ({ base, page, at, crop, zoom }) => {
+      const bitmap = (b64: string) => createImageBitmap(new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], { type: 'image/png' }));
+      const [shellImage, tabImage] = await Promise.all([bitmap(base), bitmap(page)]);
+      const whole = new OffscreenCanvas(shellImage.width, shellImage.height);
+      const ctx = whole.getContext('2d')!;
+      ctx.drawImage(shellImage, 0, 0);
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(at.x, at.y, at.width, at.height, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--radius-frame')) || 0);
+      ctx.clip();
+      ctx.drawImage(tabImage, at.x, at.y, at.width, at.height);
+      ctx.restore();
+      const area = crop ?? { x: 0, y: 0, width: whole.width, height: whole.height };
+      const out = new OffscreenCanvas(Math.round(area.width * zoom), Math.round(area.height * zoom));
+      const octx = out.getContext('2d')!;
+      octx.imageSmoothingQuality = 'high';
+      octx.drawImage(whole, area.x, area.y, area.width, area.height, 0, 0, out.width, out.height);
+      const bytes = new Uint8Array(await (await out.convertToBlob({ type: 'image/png' })).arrayBuffer());
+      let text = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(text);
+    },
+    { base: base.toString('base64'), page: page.toString('base64'), at: bounds!, crop: options.crop ?? null, zoom: options.zoom ?? 1 },
+  );
+  return Buffer.from(png, 'base64');
+}
+
+for (const appearance of ['light', 'dark'] as const) {
+  test(`Duet: captures a PDF citation and the context meter in ${appearance}`, async () => {
+    const app = await launch(fresh(), '/login', { CHORD_APPEARANCE: appearance });
+    try {
+      const shell = await shellOf(app);
+      await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe(appearance);
+      await expect.poll(async () => (await openUrls(app)).some((u) => u.endsWith('/guide.pdf')), { timeout: 20_000 }).toBe(true);
+      // As a user would: the PDF is open (Chromium's viewer done loading, its zoom set) before Duet opens beside it.
+      await expect
+        .poll(
+          () =>
+            app.evaluate(({ webContents }) => {
+              const tab = webContents.getAllWebContents().find((w) => w.getURL().endsWith('/guide.pdf'));
+              return Boolean(tab && !tab.isLoading() && tab.mainFrame.framesInSubtree.some((f) => f.url.startsWith('chrome-extension://')));
+            }),
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+      await new Promise((r) => setTimeout(r, 1000));
+      const panel = await openDuet(shell);
+      await setUp(panel);
+      await send(panel, 'What does this PDF say about triads?');
+      const pill = panel.getByRole('button', { name: /^Source 1, page 2:/ });
+      await expect(pill).toBeVisible();
+      const meter = panel.getByRole('meter', { name: 'Context used' });
+      await expect(meter).toHaveAttribute('aria-valuenow', '62');
+      // Following the citation: the viewer finds the quote on page 2 and marks it.
+      await app.evaluate(({ webContents }) => {
+        const pdf = webContents.getAllWebContents().find((w) => w.getURL().endsWith('/guide.pdf'))!;
+        pdf.on('found-in-page', (_e, result) => ((globalThis as { found?: number }).found = result.matches));
+      });
+      await pill.click();
+      await expect.poll(() => app.evaluate(() => (globalThis as { found?: number }).found ?? 0)).toBe(1);
+      // At rest: the pointer off the pill and the meter, the viewer done scrolling to the match.
+      await shell.mouse.move(120, 400);
+      await new Promise((r) => setTimeout(r, 600));
+      const viewer = app.windows().find((p) => p.url().endsWith('/guide.pdf'))!;
+      mkdirSync(capturesDir, { recursive: true });
+      const name = (step: string) => resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-${step}.png`);
+      writeFileSync(name('4-pdf-citation-and-context'), await windowPicture(app, shell, viewer));
+      // Close up: the header's meter and the reply's "1 · p. 2", twice as large.
+      const box = (await panel.boundingBox())!;
+      const reply = (await panel.getByText(/Triads sound bright\./).boundingBox())!;
+      const crop = { x: box.x, y: box.y, width: box.width, height: reply.y + reply.height + 16 - box.y };
+      writeFileSync(name('5-context-meter-and-citation-closeup'), await windowPicture(app, shell, viewer, { crop, zoom: 2 }));
+    } finally {
+      await app.close();
+    }
+  });
+}
 
 for (const appearance of ['light', 'dark'] as const) {
   test(`Duet: captures the panel in ${appearance} for design QA`, async () => {

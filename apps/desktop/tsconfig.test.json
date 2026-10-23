@@ -18,6 +18,7 @@
     "test/e2e",
     "test/fixtures",
     "test/packaged",
+    "test/run-temp.ts",
     "src/renderer/env.d.ts"
   ]
 }

@@ -18,6 +18,8 @@ The spike is `spikes/s10-duet/claude.mjs` (session, tools, interrupt) and `auth.
 | Where does the CLI keep the session? | `<config>/projects/<cwd with non-alphanumerics as dashes>/<session>.jsonl`. With Chord's own empty folder as cwd, the project folder is Chord's alone, so deleting a chat deletes exactly that file (and a `<session>/` folder if present). |
 | Signed in? | `claude auth status` exits 0 when signed in; Chord reads only `authMethod` from its JSON (to say *Using your API key* when that is what pays). |
 | Built-in tools reachable? | No: with `--tools ""` the model sees only `mcp__chord__*`, and `--permission-prompts none` denies anything else. |
+| How full is the context? (2026-10-23) | Each `result` carries `usage` with `iterations` (one per request in the turn: `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`) and `modelUsage[<model>]` with `contextWindow` (1,000,000 for `claude-haiku-5-5`) and `maxOutputTokens`. `system/init.model` names the model. Duet's context meter uses these (ARCHITECTURE.md §11.2). |
+| Inside WSL? (2026-10-23) | `wsl.exe -e` passes every argument through unchanged, the empty `--tools ""` included. The protocol, tools, resume and deleting the session file work through it (checked with the fake CLI inside Ubuntu 22.04; this computer's WSL has only Claude Code 1.0.34, too old for browse mode). |
 
 ## How it's tested without the CLI
 

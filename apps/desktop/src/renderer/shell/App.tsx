@@ -15,6 +15,7 @@ import {
 } from '@chord/core';
 import type { ChordEdit, DuetView, SystemInfo } from '@chord/ipc';
 import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
+import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useLive, type Live } from '../shared/live';
@@ -575,7 +576,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                   title={`Duet  ${keycap('duet.toggle')}`.trim()}
                   onClick={() => void api.duet.act({ do: 'toggle' })}
                 >
-                  ✦ Duet
+                  <DuetIcon {...ICON} aria-hidden />
+                  Duet
                 </button>
               )}
               {overlayChrome && (

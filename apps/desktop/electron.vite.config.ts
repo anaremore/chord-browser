@@ -8,12 +8,13 @@ const src = (path: string) => resolve(import.meta.dirname, 'src', path);
 export default defineConfig({
   main: {
     // Bundle everything (workspace packages are TypeScript sources); only
-    // electron and Node built-ins stay external. Two entries: main itself,
-    // and chord-data's utility process (ARCHITECTURE.md §4).
+    // electron and Node built-ins stay external. Three entries: main itself,
+    // chord-data's utility process (ARCHITECTURE.md §4), and the PDF reader
+    // Duet starts for each PDF it reads (§11.4; pdf.js stays out of main).
     build: {
       externalizeDeps: false,
       rolldownOptions: {
-        input: { index: src('main/index.ts'), data: src('data/worker.ts') },
+        input: { index: src('main/index.ts'), data: src('data/worker.ts'), pdf: src('pdf/worker.ts') },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },
       },
