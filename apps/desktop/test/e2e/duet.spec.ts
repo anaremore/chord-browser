@@ -16,6 +16,7 @@ failOnMainErrors();
 
 const appDir = resolve(import.meta.dirname, '../..');
 const fake = resolve(import.meta.dirname, 'fake-claude.mjs');
+const capturesDir = resolve(appDir, 'test-results', 'captures');
 
 let site: { server: Server; origin: string };
 test.beforeAll(async () => {
@@ -231,3 +232,31 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     await app.close();
   }
 });
+
+for (const appearance of ['light', 'dark'] as const) {
+  test(`Duet: captures the panel in ${appearance} for design QA`, async () => {
+    const app = await launch(fresh(), '/article', { CHORD_APPEARANCE: appearance });
+    try {
+      const shell = await shellOf(app);
+      await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe(appearance);
+      const capture = async (step: string) => {
+        await shell.evaluate(() => document.fonts.ready);
+        await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-${step}.png`) });
+      };
+      const panel = await openDuet(shell);
+      await expect(panel.getByText('Meet Duet.')).toBeVisible();
+      await capture('1-setup');
+      await panel.getByRole('button', { name: 'Use this' }).first().click();
+      await expect(panel.getByRole('button', { name: 'Got it' })).toBeVisible();
+      await capture('2-first-use');
+      await panel.getByRole('button', { name: 'Got it' }).click();
+      await send(panel, 'Summarize this page');
+      await expect(panel.getByText('Here is the gist.')).toBeVisible();
+      await send(panel, 'list my tabs');
+      await expect(panel.getByRole('group', { name: 'Duet is asking' })).toBeVisible();
+      await capture('3-conversation');
+    } finally {
+      await app.close();
+    }
+  });
+}

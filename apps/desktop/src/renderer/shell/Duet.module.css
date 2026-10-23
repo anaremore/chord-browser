@@ -342,6 +342,10 @@
   margin: 0 0 var(--space-2);
 }
 
+.reply > :last-child {
+  margin-block-end: 0;
+}
+
 .reply ul,
 .reply ol {
   padding-inline-start: var(--space-5);

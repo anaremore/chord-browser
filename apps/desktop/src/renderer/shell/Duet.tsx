@@ -42,19 +42,23 @@ const host = (url: string) => {
 
 /* ---------- Text: a small, safe Markdown subset, no HTML, no images ---------- */
 
-function Inline({ text, onLink }: { text: string; onLink(url: string): void }) {
+/** Renders a citation marker as a pill, in place (see Reply). */
+type Cite = (ref: string, quote: string) => ReactNode;
+
+function Inline({ text, onLink, cite }: { text: string; onLink(url: string): void; cite: Cite }) {
   const parts: ReactNode[] = [];
-  const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|!?\[([^\]\n]{0,200})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
+  const pattern = /\[\[(t\d{1,4}):"([^"\]\n]{1,300})"\]\]|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|!?\[([^\]\n]{0,200})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
   let last = 0;
   for (const m of text.matchAll(pattern)) {
     if (m.index > last) parts.push(text.slice(last, m.index));
     const key = `${m.index}`;
-    if (m[1]) parts.push(<code key={key}>{m[1].slice(1, -1)}</code>);
-    else if (m[2]) parts.push(<strong key={key}>{m[2].slice(2, -2)}</strong>);
-    else if (m[3]) parts.push(<em key={key}>{m[3].slice(1, -1)}</em>);
+    if (m[1]) parts.push(<Fragment key={key}>{cite(m[1], m[2]!)}</Fragment>);
+    else if (m[3]) parts.push(<code key={key}>{m[3].slice(1, -1)}</code>);
+    else if (m[4]) parts.push(<strong key={key}>{m[4].slice(2, -2)}</strong>);
+    else if (m[5]) parts.push(<em key={key}>{m[5].slice(1, -1)}</em>);
     else {
-      const url = m[5] ?? m[6]!;
-      const label = m[4];
+      const url = m[7] ?? m[8]!;
+      const label = m[6];
       // The full address always shows; nothing loads until it's clicked.
       parts.push(
         <button key={key} type="button" className={styles.link} title={url} onClick={() => onLink(url)}>
@@ -68,7 +72,7 @@ function Inline({ text, onLink }: { text: string; onLink(url: string): void }) {
   return <>{parts}</>;
 }
 
-function Markdown({ text, onLink }: { text: string; onLink(url: string): void }) {
+function Markdown({ text, onLink, cite }: { text: string; onLink(url: string): void; cite: Cite }) {
   const blocks: ReactNode[] = [];
   const lines = text.split('\n');
   let i = 0;
@@ -86,7 +90,7 @@ function Markdown({ text, onLink }: { text: string; onLink(url: string): void })
     if (heading) {
       blocks.push(
         <p key={i} className={styles.heading}>
-          <Inline text={heading[2]!} onLink={onLink} />
+          <Inline text={heading[2]!} onLink={onLink} cite={cite} />
         </p>,
       );
       i++;
@@ -101,7 +105,7 @@ function Markdown({ text, onLink }: { text: string; onLink(url: string): void })
         <List key={i}>
           {items.map((item, n) => (
             <li key={n}>
-              <Inline text={item} onLink={onLink} />
+              <Inline text={item} onLink={onLink} cite={cite} />
             </li>
           ))}
         </List>,
@@ -116,36 +120,30 @@ function Markdown({ text, onLink }: { text: string; onLink(url: string): void })
     while (i < lines.length && lines[i]!.trim() && !lines[i]!.startsWith('```') && !/^(#{1,4})\s/.test(lines[i]!) && !/^\s*([-*]|\d+\.)\s+/.test(lines[i]!)) para.push(lines[i++]!);
     blocks.push(
       <p key={i}>
-        <Inline text={para.join('\n')} onLink={onLink} />
+        <Inline text={para.join('\n')} onLink={onLink} cite={cite} />
       </p>,
     );
   }
   return <>{blocks}</>;
 }
 
-/** A reply: Markdown with numbered citation pills where Duet quoted a tab. */
+/** A reply: Markdown with numbered citation pills, in the sentence where Duet quoted a tab. */
 function Reply({ message, onLink }: { message: DuetMessage; onLink(url: string): void }) {
   if (message.body.role !== 'assistant') return null;
-  const body = message.body;
-  const segments = splitCitations(body.text);
+  const numbers = new Map<string, number>();
+  for (const seg of splitCitations(message.body.text)) if (seg.kind === 'citation') numbers.set(`${seg.ref}:${seg.quote}`, seg.n);
+  const cite: Cite = (ref, quote) => {
+    const n = numbers.get(`${ref}:${quote}`);
+    if (n === undefined) return null;
+    return (
+      <button type="button" className={styles.cite} title={`“${quote}”`} aria-label={`Source ${n}: “${quote}”`} onClick={() => act({ do: 'citation', messageId: message.id, n })}>
+        {n}
+      </button>
+    );
+  };
   return (
     <div className={styles.reply}>
-      {segments.map((seg, i) =>
-        seg.kind === 'text' ? (
-          <Markdown key={i} text={seg.text} onLink={onLink} />
-        ) : (
-          <button
-            key={i}
-            type="button"
-            className={styles.cite}
-            title={`“${seg.quote}”`}
-            aria-label={`Source ${seg.n}: “${seg.quote}”`}
-            onClick={() => act({ do: 'citation', messageId: message.id, n: seg.n })}
-          >
-            {seg.n}
-          </button>
-        ),
-      )}
+      <Markdown text={message.body.text} onLink={onLink} cite={cite} />
     </div>
   );
 }
@@ -671,7 +669,7 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
           {view.firstUse && (
             <div className={styles.firstUse} role="note">
               <p>
-                What you attach goes to {providerName} through your own account. Duet reads only what’s attached to your message, unless you let it see more. It always asks before it changes your tabs.
+                What you attach goes to {providerName} through your own account. Duet reads only what’s attached to your message, unless you let it see more. It never sees what you type into forms.
               </p>
               <button type="button" className={styles.secondary} onClick={() => act({ do: 'dismissFirstUse' })}>
                 Got it
