@@ -32,6 +32,12 @@ import { Suggestions } from './suggestions';
 import { UpdateChecker } from './updates';
 import { chromiumUserAgent } from './user-agent';
 
+// A bug in main must never put up Electron's "JavaScript error" box (a native dialog that
+// beeps on Windows). Log it and keep going, as Electron does after that box is closed.
+// The E2E suite fails any test whose run logs one of these lines.
+process.on('uncaughtException', (error) => console.error('[chord] Uncaught exception in main:', error));
+process.on('unhandledRejection', (reason) => console.error('[chord] Unhandled rejection in main:', reason));
+
 // Before `ready`: privileged schemes, identity (decides userData), sandbox for every renderer.
 registerSchemes();
 configureAppIdentity();
