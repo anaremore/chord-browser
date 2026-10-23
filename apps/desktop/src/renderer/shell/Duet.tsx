@@ -17,6 +17,9 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEv
 import { api } from './api';
 import styles from './Duet.module.css';
 
+/** The scope switch's own labels: short enough for three to sit side by side in the panel. */
+const DUET_SCOPE_SHORT: Record<DuetScope, string> = { ask: 'Ask first', chord: 'This chord', all: 'All tabs' };
+
 const act = (action: DuetAction) => void api.duet.act(action);
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
 /** Follow new output unless you've scrolled further up than this (T3 Code's re-arm distance). */
@@ -692,19 +695,22 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
             </div>
           )}
           <div className={styles.scopeRow}>
-            <span className={styles.muted}>Duet can read:</span>
-            <select
-              className={styles.scope}
-              aria-label="What Duet can read"
-              value={thread?.scope ?? 'ask'}
-              onChange={(e) => act({ do: 'scope', scope: e.target.value as DuetScope })}
-            >
+            <span className={styles.muted}>Reads</span>
+            <div className={styles.scope} role="radiogroup" aria-label="What Duet can read">
               {(['ask', 'chord', 'all'] as const).map((s) => (
-                <option key={s} value={s}>
-                  {s === 'ask' ? 'What you attach (asks for more)' : DUET_SCOPE_NAMES[s]}
-                </option>
+                <button
+                  key={s}
+                  type="button"
+                  role="radio"
+                  aria-checked={(thread?.scope ?? 'ask') === s}
+                  className={styles.scopeOption}
+                  title={s === 'ask' ? 'What you attach, and asks before reading more' : DUET_SCOPE_NAMES[s]}
+                  onClick={() => act({ do: 'scope', scope: s satisfies DuetScope })}
+                >
+                  {DUET_SCOPE_SHORT[s]}
+                </button>
               ))}
-            </select>
+            </div>
           </div>
           {empty ? (
             <div className={styles.empty}>
