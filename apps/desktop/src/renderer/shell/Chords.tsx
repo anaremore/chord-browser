@@ -332,12 +332,15 @@ export function ChordSwitcher({
   const strip = useRef<HTMLDivElement>(null);
   // More chords than fit: the strip scrolls sideways (no scrollbar), fading at whichever edge hides some.
   const [fade, setFade] = useState<'none' | 'start' | 'end' | 'both'>('none');
+  /** Whether some chord was out of sight at the last measurement (a scroll, a resize, a new chord). */
+  const overflows = useRef(false);
   useEffect(() => {
     const el = strip.current;
     if (!el) return;
     const update = () => {
       const before = el.scrollLeft > 1;
       const after = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      overflows.current = before || after;
       setFade(before && after ? 'both' : before ? 'start' : after ? 'end' : 'none');
     };
     update();
@@ -349,8 +352,11 @@ export function ChordSwitcher({
       observer.disconnect();
     };
   }, [chords.length]);
-  // The chord you're in is always in view.
+  // The chord you're in is always in view. Only scrolled to when some chord is out of sight:
+  // scrolling into view lays out the whole window on the spot, which right after a switch (a chord's
+  // sidebar just rendered) costs most of a frame (ARCHITECTURE.md §1).
   useEffect(() => {
+    if (!overflows.current) return;
     strip.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
   }, [current, chords.length]);
   return (

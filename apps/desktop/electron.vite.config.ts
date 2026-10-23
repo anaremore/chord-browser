@@ -46,7 +46,8 @@ export default defineConfig({
     base: '/',
     build: {
       // Smaller bundles parse faster at launch (cold-start budget, ARCHITECTURE.md §1).
-      minify: true,
+      // CHORD_NO_MINIFY=1 keeps names readable for profiling (docs/testing/performance.md).
+      minify: !process.env['CHORD_NO_MINIFY'],
       rolldownOptions: {
         input: {
           shell: src('renderer/shell/index.html'),

@@ -363,6 +363,12 @@ export interface OverlayOpenEvent {
   url: string;
   /** Which opening this is: a close for an earlier one is ignored (it can arrive after a newer open). */
   seq: number;
+  /**
+   * When main got the request to open (the shortcut, or the shell's button), in
+   * epoch ms (`performance.timeOrigin + performance.now()`). The command bar
+   * measures its open budget from here (ARCHITECTURE.md §1).
+   */
+  requestedAt: number;
 }
 
 export interface StateSnapshot {
@@ -388,6 +394,11 @@ export const invokeChannels = {
   'overlay:ready': { roles: ['overlay'], request: z.void(), response: z.void() },
   /** The shell reports where the URL pill / address field sits, for anchored ⌘L. */
   'layout:anchor': { roles: ['shell'], request: Rect.nullable(), response: z.void() },
+  /**
+   * Launch timing (ARCHITECTURE.md §1): the shell's sidebar is in the DOM with its handlers attached
+   * (`ready`), then its first frame is painted (`painted`). Main times the launch up to each.
+   */
+  'perf:shell': { roles: ['shell'], request: z.strictObject({ milestone: z.enum(['ready', 'painted']) }), response: z.void() },
   'download:action': {
     roles: ['shell', 'overlay'],
     request: z.object({ id, action: z.enum(['open', 'show', 'pause', 'resume', 'cancel', 'retry', 'remove']) }),
@@ -577,6 +588,8 @@ export interface ShellApi {
   defaultBrowser: { status(): Promise<DefaultBrowserStatus>; make(): Promise<DefaultBrowserStatus> };
   /** Stop a tab's screen share (its sidebar row shows it's sharing). */
   share: { stop(nodeId: string): Promise<void> };
+  /** Launch timing: the sidebar is ready to use, then painted. */
+  perf: { shell(milestone: 'ready' | 'painted'): Promise<void> };
 }
 
 interface DownloadsApi {

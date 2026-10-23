@@ -12,6 +12,7 @@ import type { OverlayOpenEvent, Rect, Role } from '@chord/ipc';
 import { frameRadius, size, space, springCurve, springs } from '@chord/tokens';
 import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session } from 'electron';
 import { registerCaller, send } from './ipc';
+import { epochNow, markLaunch } from './perf';
 import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
 import { lockToOrigins } from './security';
 import { originOf } from './urls';
@@ -107,7 +108,7 @@ export class AppWindow {
   private overlaySeq = 0;
   /** The command bar listens only once it has started; an opening asked for before that waits here. */
   private overlayReady = false;
-  private pendingOpen: { mode: OverlayOpenEvent['mode']; url: string; anchor: Rect | null } | null = null;
+  private pendingOpen: { mode: OverlayOpenEvent['mode']; url: string; anchor: Rect | null; requestedAt: number } | null = null;
   readonly isPrivate: boolean;
   private origin: FrameOrigin;
   private frameAnimation: ReturnType<typeof setInterval> | undefined;
@@ -175,9 +176,13 @@ export class AppWindow {
       for (const view of [this.shell, this.popover, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
     });
 
+    markLaunch('windowCreated');
     // Quitting right after launch can close the window before its shell has loaded.
     this.shell.webContents.once('did-finish-load', () => {
-      if (!this.window.isDestroyed()) this.window.show();
+      markLaunch('shellLoaded');
+      if (this.window.isDestroyed()) return;
+      this.window.show();
+      markLaunch('windowShown');
     });
     // Loading again (a reload, or after a crash), the command bar isn't listening until it says so.
     this.overlay.webContents.on('did-start-loading', () => {
@@ -267,18 +272,21 @@ export class AppWindow {
     this.anchor = rect;
   }
 
-  /** `anchor` places the downloads panel by its button; ⌘L uses the address the shell reported. */
-  openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null): void {
+  /**
+   * `anchor` places the downloads panel by its button; ⌘L uses the address the shell reported.
+   * `requestedAt` is when the opening was asked for: the command bar's open budget counts from it.
+   */
+  openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null, requestedAt = epochNow()): void {
     this.closeFloating();
     if (!this.overlayReady) {
       // A brand-new window: the command bar opens as soon as it's listening.
-      this.pendingOpen = { mode, url, anchor };
+      this.pendingOpen = { mode, url, anchor, requestedAt };
       return;
     }
     this.overlayVisible = true;
     this.overlay.setVisible(true);
     this.overlay.webContents.focus();
-    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq });
+    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq, requestedAt });
   }
 
   /** The command bar has started and listens for openings (it says so after every load). */
@@ -286,7 +294,7 @@ export class AppWindow {
     this.overlayReady = true;
     const pending = this.pendingOpen;
     this.pendingOpen = null;
-    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor);
+    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, pending.requestedAt);
   }
 
   /** `seq` is the opening being closed; a close for an earlier one (racing a newer open) is ignored. */

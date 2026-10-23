@@ -645,4 +645,15 @@ describe('Clear Today and its Undo', () => {
     expect(restored.effects.filter((e) => e.e === 'archive.restored')).toHaveLength(2);
     expect(t.state.closed).toEqual([]);
   });
+
+  it('brings back every tab of a big Clear, not just the last 50 closed', () => {
+    const t = setup();
+    for (let i = 0; i < 120; i++) t.run({ t: 'tab.open', windowId: 'w1', url: `https://site.test/${i}`, background: true });
+    const ids = children(t.state, 'c1', 'today', null).map((n) => n.id);
+    expect(ids).toHaveLength(120);
+    t.run({ t: 'tab.archive', nodeIds: ids, reason: 'cleared' });
+    expect(children(t.state, 'c1', 'today', null)).toEqual([]);
+    t.run({ t: 'closed.restore', windowId: 'w1', nodeIds: ids });
+    expect(children(t.state, 'c1', 'today', null).map((n) => n.id)).toEqual(ids);
+  });
 });

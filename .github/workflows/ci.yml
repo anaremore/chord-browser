@@ -34,7 +34,8 @@ jobs:
   e2e:
     name: E2E · ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The performance spec adds about 4 minutes on a fast machine.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -102,6 +103,16 @@ jobs:
         with:
           name: captures-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
           path: apps/desktop/test-results/captures/
+          if-no-files-found: ignore
+
+      # Performance budgets (test/e2e/perf.spec.ts): reported here for trends, enforced only on
+      # reference hardware (docs/testing/performance.md).
+      - name: Upload performance report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
+          path: apps/desktop/test-results/perf.json
           if-no-files-found: ignore
 
       - name: Upload failure details
