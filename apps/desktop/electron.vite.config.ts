@@ -30,6 +30,7 @@ export default defineConfig({
           shell: src('preload/shell.ts'),
           overlay: src('preload/overlay.ts'),
           popover: src('preload/popover.ts'),
+          preview: src('preload/preview.ts'),
           internal: src('preload/internal.ts'),
           archive: src('preload/archive.ts'),
           // The extension library's preload (GPL-3.0, packages/chrome-extensions): extension
@@ -52,6 +53,7 @@ export default defineConfig({
           shell: src('renderer/shell/index.html'),
           overlay: src('renderer/overlay/index.html'),
           popover: src('renderer/popover/index.html'),
+          preview: src('renderer/preview/index.html'),
           settings: src('renderer/settings/index.html'),
           archive: src('renderer/archive/index.html'),
         },

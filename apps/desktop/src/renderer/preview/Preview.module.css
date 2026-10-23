@@ -1,0 +1,155 @@
+/* Hover previews (DESIGN.md §7.6): one raised card beside the sidebar. Tokens only. */
+
+/* Sized by its card, anchored top-left; the padding leaves room for the whole shadow (main's PREVIEW_PAD at the top and sides). */
+.root {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  box-sizing: border-box;
+  inline-size: max-content;
+  padding: var(--space-6) var(--space-6) var(--space-10);
+  color: var(--color-fg);
+}
+
+.card {
+  box-sizing: border-box;
+  inline-size: var(--size-preview-width);
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-popover);
+  pointer-events: none;
+  animation: card-in var(--spring-overlay-duration) var(--spring-overlay);
+}
+
+/* Moving to another row swaps the content with a quick crossfade. */
+.content {
+  animation: content-in var(--duration-fade-fast) var(--ease-standard);
+}
+
+.root[data-still] .card,
+.root[data-still] .content {
+  animation: none;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateX(calc(var(--space-1) * -1));
+  }
+}
+
+@keyframes content-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ---------- Pinned tab ---------- */
+
+.thumb {
+  aspect-ratio: 280 / 175;
+  overflow: hidden;
+  background: var(--color-base);
+  box-shadow: 0 var(--size-hairline) 0 var(--color-divider);
+}
+
+.picture {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.fallback {
+  display: grid;
+  place-items: center;
+  block-size: 100%;
+  background: var(--color-tint), var(--color-base);
+}
+
+/* The site's icon, large, where its page would be. */
+.bigIcon {
+  display: grid;
+  transform: scale(2.5);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+.title {
+  overflow: hidden;
+  margin: 0;
+  font: var(--text-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host {
+  overflow: hidden;
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opened {
+  margin: var(--space-1) 0 0;
+  color: var(--color-fg-subtle);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+}
+
+/* ---------- Folder ---------- */
+
+.folder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+.folderTitle {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin: 0;
+  font: var(--text-label);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-block-size: var(--size-hit-min);
+  color: var(--color-fg);
+  font: var(--text-body);
+}
+
+.ellipsis {
+  overflow: hidden;
+  min-inline-size: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.more {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}

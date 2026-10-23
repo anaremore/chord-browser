@@ -5,7 +5,7 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Check, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Check, Info, Keyboard, LockKeyhole, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
@@ -23,6 +23,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'motion', label: 'Motion', icon: Sparkles },
   { id: 'sites', label: 'Site permissions', icon: ShieldCheck },
+  { id: 'privacy', label: 'Privacy', icon: LockKeyhole },
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
@@ -222,6 +223,24 @@ const MOTION_ROWS: { key: keyof MotionSettings; label: string; description: stri
   { key: 'colorBlend', label: 'Blend chord colors', description: 'Fading from one chord’s colors to the next.' },
 ];
 
+/** What Chord keeps on this computer that you might not expect (DESIGN.md §7.6). */
+function Privacy({ snapshot }: { snapshot: SettingsSnapshot }) {
+  return (
+    <>
+      <SectionHeader title="Privacy" description="What Chord keeps on this computer to make browsing smoother." />
+      <div className={styles.group}>
+        <Row
+          label="Show page previews"
+          description="Hovering a pinned tab or folder shows a preview. Chord keeps a small picture of each pinned page on this computer for it; turning this off deletes them."
+          changed={snapshot.settings.pagePreviews !== DEFAULT_SETTINGS.pagePreviews}
+          onReset={() => void api.settings.set({ pagePreviews: DEFAULT_SETTINGS.pagePreviews })}
+          control={<Switch label="Show page previews" checked={snapshot.settings.pagePreviews} onChange={(pagePreviews) => void api.settings.set({ pagePreviews })} />}
+        />
+      </div>
+    </>
+  );
+}
+
 function Motion({ snapshot }: { snapshot: SettingsSnapshot }) {
   const motionSettings = snapshot.settings.motion;
   return (
@@ -412,6 +431,7 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} editColors={editColors} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
+              {section === 'privacy' && <Privacy snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}

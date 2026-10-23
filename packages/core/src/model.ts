@@ -299,6 +299,8 @@ export interface Settings {
   sleepTabs: boolean;
   /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
   autoPip: boolean;
+  /** Hovering a pinned tab or folder shows a preview; pinned pages are kept as small pictures in `<userData>/Captures/` (DESIGN.md §7.6). */
+  pagePreviews: boolean;
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
   shortcuts: ShortcutOverrides;
   spellcheck: SpellcheckSettings;
@@ -325,6 +327,7 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveAfter: '12h',
   sleepTabs: true,
   autoPip: true,
+  pagePreviews: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
 };
@@ -361,6 +364,7 @@ export interface SettingsPatch {
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
   autoPip?: boolean;
+  pagePreviews?: boolean;
   spellcheck?: Partial<SpellcheckSettings>;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;

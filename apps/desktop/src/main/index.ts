@@ -179,6 +179,8 @@ function registerIpc(): void {
   });
   handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
   handle('popover:size', ({ width, height }, sender) => senderWindow(sender).setPopoverSize(width, height));
+  handle('preview:hover', (target, sender) => browser!.previewHover(senderWindow(sender), target));
+  handle('preview:size', ({ width, height }, sender) => senderWindow(sender).setPreviewSize(width, height));
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));

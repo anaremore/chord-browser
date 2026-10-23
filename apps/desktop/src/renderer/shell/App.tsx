@@ -31,6 +31,7 @@ import { Onboarding } from './Onboarding';
 import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
 import { useChordSwipe, type PaneMotion } from './useChordSwipe';
+import { usePreviewHover } from './usePreviewHover';
 
 /** What the frame shows when a page didn't load (DESIGN.md §9), instead of a blank page. */
 function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadError; canGoBack: boolean; windowId: string; tabId: string }) {
@@ -310,6 +311,8 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
     blend: state.settings.motion.colorBlend,
   });
   const paneMotion: PaneMotion = swipe.paneMotion ?? { kind: 'slide', dir: slide };
+  // Hover previews of pinned tabs and folders (DESIGN.md §7.6): only with the sidebar docked and still.
+  usePreviewHover(rootRef, !collapsed && liveWidth === null && swipe.paneMotion === null && state.settings.pagePreviews && state.settings.onboarded);
   const tintOf = (chordId: string) => String(chordStyle(state.chords[chordId], info, state.settings.interface).style['--color-tint' as keyof CSSProperties] ?? '');
 
   const toggleSidebar = () => void api.action.run('view.toggleSidebar');

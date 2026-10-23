@@ -247,7 +247,7 @@ Phase 1 is well ahead of the dates above. Every item marked done is on `main`, w
 - **Split view:** 2–4 panes, drag-to-split drop zones, saved as one unit in the sidebar, dividers, focus ring (DESIGN.md §7.9 and §8.4).
 - **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it. *(Moved up from Phase 3 on 2026-10-22: Chord can already be your default browser.)*
 - **Peek** for links clicked inside pinned tabs. *(Moved up from Phase 3 on 2026-10-22.)*
-- **Hover previews** for pinned tabs and folders, with the capture cache.
+- **Hover previews** for pinned tabs and folders, with the capture cache. *(Built 2026-10-23: ARCHITECTURE.md §9, with a switch in Settings → Privacy.)*
 - **Duet: conversations on the fly, optionally reading the browser** (ARCHITECTURE.md §11). Scope set 2026-10-22: *"basic chat is enough"*.
   - **Setup:** detects your `claude` / `codex`; "Sign in" runs `claude auth login` or `codex login` for you.
   - **Adapters:** Claude Code (the unmodified CLI) and Codex app-server.
