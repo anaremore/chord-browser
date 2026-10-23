@@ -66,7 +66,7 @@ step "$(cat /etc/fedora-release), $(uname -m)"
 
 step 'dnf install, on a bare Fedora image'
 dnf -y -q install --setopt=install_weak_deps=False /tmp/chord.rpm
-rpm -qi chord | grep -E '^(Name|Version|Architecture|Summary|License|URL) '
+rpm -qi chord | grep -E '^(Name|Version|Architecture|Summary|License|URL) *:'
 
 step 'Every library that Chord and its helpers link is installed'
 missing=$(for file in /opt/Chord/chord /opt/Chord/chrome-sandbox /opt/Chord/chrome_crashpad_handler /opt/Chord/*.so*; do

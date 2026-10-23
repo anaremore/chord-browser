@@ -235,6 +235,22 @@ const config: Configuration = {
     vendor: 'Chord contributors',
     // rpm's Group tag. Fedora no longer uses it; fpm would write "default".
     packageCategory: 'Applications/Internet',
+    // electron-builder's list, then what Chord's binary links that the list doesn't bring on a bare
+    // Fedora (libgbm, libasound), and libsecret, which the .deb asks for too: Chromium keeps the
+    // cookie encryption key with it. Each alternative is Fedora/RHEL's name, then openSUSE's.
+    depends: [
+      'gtk3',
+      'libnotify',
+      'nss',
+      'libXScrnSaver',
+      '(libXtst or libXtst6)',
+      'xdg-utils',
+      'at-spi2-core',
+      '(libuuid or libuuid1)',
+      '(mesa-libgbm or libgbm1)',
+      '(alsa-lib or libasound2)',
+      '(libsecret or libsecret-1-0)',
+    ],
     // electron-builder's script with one change; the file says what and why.
     afterInstall: RPM_AFTER_INSTALL,
     fpm: [
