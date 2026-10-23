@@ -10,6 +10,9 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { failOnMainErrors, watchForMainErrors } from './main-errors';
+
+failOnMainErrors();
 
 const appDir = resolve(import.meta.dirname, '../..');
 
@@ -34,7 +37,7 @@ async function launch(env: Record<string, string>): Promise<ElectronApplication>
   // A fresh profile per launch: tests never touch a developer's real data.
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: mkdtempSync(join(tmpdir(), 'chord-e2e-')), ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return electron.launch({ args: [appDir], env: childEnv, cwd: appDir });
+  return watchForMainErrors(await electron.launch({ args: [appDir], env: childEnv, cwd: appDir }));
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {

@@ -77,6 +77,7 @@ export class ExtensionPopup implements FloatingView {
     contents.on('blur', () => {
       // Focus moved within Chord (a click on the sidebar or the page): close. Focus left
       // Chord (another app): stay, so a code can be copied in. Open devtools also keep it.
+      if (this.host.window.isDestroyed() || contents.isDestroyed()) return;
       if (this.host.window.isFocused() && !contents.isDevToolsOpened()) this.close('blur');
     });
     contents.on('before-input-event', (event, input) => {

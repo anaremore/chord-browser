@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 const appDir = resolve(import.meta.dirname, '../..');
 const capturesDir = resolve(appDir, 'test-results', 'captures');
@@ -64,6 +65,13 @@ function startSite(): Promise<{ server: Server; origin: string }> {
       );
       return;
     }
+    // A page that keeps loading for a while: for closing tabs mid-load.
+    if (req.url?.startsWith('/slow')) {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.write('<title>Slow page</title><p>Still loading');
+      setTimeout(() => res.end('…done</p>'), 3000).unref();
+      return;
+    }
     if (req.url === '/bad.png') {
       res.writeHead(200, { 'content-type': 'image/png' });
       res.end('this is not a png');
@@ -92,35 +100,10 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
   // Every test but first run's own starts straight in the browser (Chrome's --no-first-run, which
   // Playwright also adds by itself; CHORD_FIRST_RUN=1 asks for first run anyway).
   if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
-  const app = await electron.launch({ args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir });
-  watchForMainErrors(app);
-  return app;
+  return watchForMainErrors(await electron.launch({ args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
 }
 
-/**
- * Errors main logged instead of showing Electron's error box (src/main/index.ts).
- * Any one fails the test that caused it, with its stack, so a bug in main can't
- * hide behind a test that otherwise passed.
- */
-const mainErrors: string[] = [];
-function watchForMainErrors(app: ElectronApplication): void {
-  let log = '';
-  app.process().stderr?.on('data', (chunk: Buffer) => {
-    log += chunk.toString();
-    const at = log.search(/\[chord\] (Uncaught exception|Unhandled rejection) in main/);
-    if (at < 0) {
-      log = log.slice(-200);
-      return;
-    }
-    // Keep the message and its stack together, then start over.
-    mainErrors.push(log.slice(at, at + 2000));
-    log = '';
-  });
-}
-test.afterEach(() => {
-  const errors = mainErrors.splice(0);
-  expect(errors, errors.join('\n---\n')).toEqual([]);
-});
+failOnMainErrors();
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
   await expect.poll(() => app.windows().some((p) => match(p.url())), { timeout: 20_000 }).toBe(true);
@@ -745,6 +728,25 @@ test('a private window keeps to itself: no shared sign-ins, no history, and noth
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type('Third');
     await expect(overlay.getByRole('option').filter({ hasText: 'Third page' })).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('closing tabs while they load never trips an error in main', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    for (let i = 0; i < 3; i++) {
+      await openCommandBar(shell, overlay, 'new');
+      await overlay.keyboard.type(`${site.origin}/slow?${i}`);
+      await overlay.keyboard.press('Enter');
+      await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Slow page');
+      await runAction(shell, 'tab.close');
+    }
+    // Give a torn-down page time to fire its last events; failOnMainErrors checks what main logged.
+    await shell.waitForTimeout(1000);
   } finally {
     await app.close();
   }

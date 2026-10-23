@@ -174,10 +174,9 @@ export class TabManager {
     const dispatch = (command: Command) => {
       if (current()) this.deps.dispatch(command);
     };
-    const history = () => ({
-      canGoBack: contents.navigationHistory.canGoBack(),
-      canGoForward: contents.navigationHistory.canGoForward(),
-    });
+    // A page being torn down still fires did-stop-loading; its history is gone by then.
+    const history = () =>
+      contents.isDestroyed() ? {} : { canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward() };
     const live = (patch: Partial<LiveTab>) => dispatch({ t: 'tab.live', nodeId, live: patch });
 
     contents.on('did-start-loading', () => live({ loading: true, crashed: false }));
@@ -236,7 +235,7 @@ export class TabManager {
     });
 
     contents.on('render-process-gone', (_event, details) => {
-      if (details.reason === 'clean-exit') return;
+      if (details.reason === 'clean-exit' || !current()) return;
       // Reload automatically at most twice, then show "This page stopped" (borrowed from Crest).
       const attempts = this.crashReloads.get(nodeId) ?? 0;
       if (attempts < MAX_CRASH_RELOADS) {
