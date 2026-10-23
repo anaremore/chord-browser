@@ -1,5 +1,6 @@
 import {
   ARCHIVE_AFTER_MS,
+  DEFAULT_SETTINGS,
   IDLE_CHECK_MS,
   SLEEP_AFTER_MS,
   isPrivateProfile,
@@ -22,7 +23,10 @@ import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
 import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
+import { observeContextMenusForTests } from './context-menu';
 import { PermissionBroker } from './permissions';
+import { ScreenShareBroker } from './screen-share';
+import { applySpellcheck } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo } from './platform';
@@ -56,6 +60,7 @@ function devMs(name: string): number | null {
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
 const permissions = new PermissionBroker();
+const screenShare = new ScreenShareBroker();
 const downloads = new DownloadManager({
   state: () => browser!.store.state,
   dispatch: (command) => browser!.store.dispatch(command),
@@ -177,6 +182,12 @@ function registerIpc(): void {
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
+  handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
+  handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
+  handle('settings:sitePermission', ({ origin, permission, decision }) =>
+    browser!.store.dispatch({ t: 'permission.set', origin, permissions: [permission], decision }),
+  );
+  handle('settings:forgetSite', ({ origin }) => browser!.store.dispatch({ t: 'permission.forget', origin }));
   handle('archive:snapshot', (_request, sender) => browser!.archiveSnapshot(sender));
   handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
   handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
@@ -252,6 +263,8 @@ if (!app.requestSingleInstanceLock()) {
         const priv = isPrivateProfile(profileId);
         permissions.attach(ses, priv ? profileId : null);
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
+        screenShare.attach(ses);
+        applySpellcheck(ses, browser?.store.state.settings.spellcheck ?? DEFAULT_SETTINGS.spellcheck);
         profiles.set(profileId, ses);
       }
       return ses;
@@ -299,6 +312,7 @@ if (!app.requestSingleInstanceLock()) {
       uiSession: ui,
       profileSession,
       permissions,
+      screenShare,
       history: (event) => store.history(event),
       archive: { entry: (which) => store.archiveEntry(which) },
       idle: {
@@ -328,12 +342,20 @@ if (!app.requestSingleInstanceLock()) {
     followScheme();
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
+      // Spelling settings apply to every profile's session at once.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'spellcheck')) {
+        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck);
+      }
     });
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu.
     if (dev('CHORD_E2E_HOOKS')) {
+      // Right-click menus are read, not shown: their labels, newest last, by page.
+      const contextMenus = new Map<number, string[]>();
+      observeContextMenusForTests((contents, labels) => contextMenus.set(contents.id, labels));
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
+        contextMenu: (contentsId: number) => contextMenus.get(contentsId) ?? null,
         extensionMenuLabels: (contentsId: number, params: Partial<ContextMenuParams>) => {
           const contents = webContents.fromId(contentsId);
           return contents ? browser!.extensions.contextMenuItems(contents, params as ContextMenuParams).map((item) => item.label) : [];

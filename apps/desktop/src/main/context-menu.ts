@@ -120,10 +120,23 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
   return items;
 }
 
+/**
+ * End-to-end tests only (index.ts sets it behind CHORD_E2E_HOOKS): sees each
+ * menu's labels instead of a native menu opening on the screen.
+ */
+let observeForTests: ((contents: WebContents, labels: string[]) => void) | null = null;
+export function observeContextMenusForTests(observer: (contents: WebContents, labels: string[]) => void): void {
+  observeForTests = observer;
+}
+
 export function attachContextMenu(contents: WebContents, deps: ContextMenuDeps): void {
   contents.on('context-menu', (_event, params) => {
     const items = buildContextMenu(contents, params, deps);
     if (items.length === 0) return;
+    if (observeForTests) {
+      observeForTests(contents, items.filter((item) => item.type !== 'separator').map((item) => item.label ?? ''));
+      return;
+    }
     // At the click (or the focused element, from the keyboard), not wherever the pointer is.
     const place = deps.placement();
     Menu.buildFromTemplate(items).popup({

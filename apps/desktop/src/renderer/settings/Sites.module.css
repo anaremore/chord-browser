@@ -1,0 +1,50 @@
+/* Settings → Site permissions, and General → Spelling's language picker. Tokens only. */
+
+.empty {
+  margin: 0;
+  padding: var(--space-6) var(--space-1);
+  color: var(--color-fg-muted);
+}
+
+/* The site's name, with Forget at the far end. */
+.siteTitle {
+  justify-content: space-between;
+}
+
+.siteName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forget {
+  flex: none;
+  block-size: var(--size-hit-min);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.forget:hover {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.select {
+  flex: none;
+  max-inline-size: calc(var(--size-preview-width) * 0.8);
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+}
+
+.select:disabled {
+  opacity: 0.5;
+}

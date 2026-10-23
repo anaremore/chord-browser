@@ -721,6 +721,11 @@ kbd {
   background: var(--color-item-hover);
 }
 
+/* Sharing the screen: the same slot, in the color that says "live". */
+.sharing {
+  color: var(--color-danger);
+}
+
 /* ---------- Footer ---------- */
 
 .footer {

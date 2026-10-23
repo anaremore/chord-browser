@@ -39,6 +39,7 @@ const api: ShellApi = {
     install: (input) => invoke('extensions:install', { input }),
   },
   defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
+  share: { stop: (nodeId) => invoke('share:stop', { nodeId }) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

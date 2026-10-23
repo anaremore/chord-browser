@@ -9,7 +9,7 @@
 import { join } from 'node:path';
 import type { Bounds, WindowId, WindowModel } from '@chord/core';
 import type { OverlayOpenEvent, Rect, Role } from '@chord/ipc';
-import { size, space, springCurve, springs } from '@chord/tokens';
+import { frameRadius, size, space, springCurve, springs } from '@chord/tokens';
 import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session } from 'electron';
 import { registerCaller, send } from './ipc';
 import { platform, systemInfo, titleBarOverlay, windowChromeOptions } from './platform';
@@ -113,6 +113,8 @@ export class AppWindow {
   private frameAnimation: ReturnType<typeof setInterval> | undefined;
   /** Minimal mode's peek: the shell sits above the page so the sidebar can float over it. */
   private peeking = false;
+  /** The page is in HTML fullscreen (a video): it covers the whole window, above Chord's own views. */
+  private pageFullScreen = false;
   private floating: FloatingView | null = null;
 
   constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds }: AppWindowOptions) {
@@ -187,6 +189,8 @@ export class AppWindow {
   showTab(view: WebContentsView | null): void {
     if (this.tabView === view) return;
     this.closeFloating();
+    // Fullscreen belonged to the page going away; Chord's frame comes back for the next one.
+    if (this.pageFullScreen) this.leavePageFullScreen();
     if (this.tabView) this.window.contentView.removeChildView(this.tabView);
     this.tabView = view;
     if (view) {
@@ -202,6 +206,36 @@ export class AppWindow {
 
   get activeTabContents() {
     return this.tabView?.webContents ?? null;
+  }
+
+  /**
+   * A page entered or left HTML fullscreen. Electron makes the window
+   * fullscreen itself; Chord lifts the page above its own views and lets it
+   * fill the window, square-cornered, then puts the frame back.
+   */
+  setPageFullScreen(on: boolean): void {
+    if (this.pageFullScreen === on || this.window.isDestroyed() || !this.tabView) return;
+    if (!on) return this.leavePageFullScreen();
+    this.pageFullScreen = true;
+    this.closeFloating();
+    this.closeOverlay();
+    const root = this.window.contentView;
+    root.removeChildView(this.tabView);
+    root.addChildView(this.tabView);
+    this.tabView.setBorderRadius(0);
+    this.layout();
+  }
+
+  private leavePageFullScreen(): void {
+    this.pageFullScreen = false;
+    const view = this.tabView;
+    if (view && !this.window.isDestroyed()) {
+      const root = this.window.contentView;
+      root.removeChildView(view);
+      root.addChildView(view, this.peeking ? 0 : 1);
+      view.setBorderRadius(frameRadius[platform]);
+    }
+    this.layout();
   }
 
   /** Hide the page so the frame behind it can explain an error or a crash. */
@@ -342,7 +376,8 @@ export class AppWindow {
     const y = Math.round(this.origin.top);
     this.shell.setBounds({ x: 0, y: 0, width, height });
     this.overlay.setBounds({ x: 0, y: 0, width, height });
-    this.tabView?.setBounds({ x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) });
+    if (this.pageFullScreen) this.tabView?.setBounds({ x: 0, y: 0, width, height });
+    else this.tabView?.setBounds({ x, y, width: Math.max(0, width - x - inset), height: Math.max(0, height - y - inset) });
     // The popover hangs from the frame's top-right corner; its cards carry their own margin.
     const { width: pw, height: ph } = this.popoverSize;
     this.popover.setBounds({ x: Math.max(x, width - inset - pw), y, width: pw, height: ph });

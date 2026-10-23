@@ -17,7 +17,6 @@ import {
   sortedChords,
   tabsInOrder,
   uuidv7,
-  zoomStep,
   type ActionId,
   type ArchiveReason,
   type Effect,
@@ -41,6 +40,9 @@ import { setShortcutOverrides } from './shortcut-overrides';
 import { IdleKeeper, type IdleTiming } from './idle';
 import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
+import type { ScreenShareBroker } from './screen-share';
+import { SiteZoom } from './site-zoom';
+import { spellcheckLanguages } from './spellcheck';
 import { systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
@@ -62,6 +64,8 @@ export interface BrowserOptions {
   archive: { entry(which: { archiveId: string } | { reasons: ArchiveReason[] }): Promise<ArchiveEntry | null> };
   /** When idle tabs are archived and put to sleep. */
   idle: IdleTiming;
+  /** Answers getDisplayMedia with Chord's picker; connected here once the store exists. */
+  screenShare: ScreenShareBroker;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
   /** A private window closed: drop its session (cookies, storage, cache) and anything kept for it. */
@@ -99,6 +103,7 @@ export class Browser {
   private recent: { windowId: WindowId; order: NodeId[]; index: number } | null = null;
   readonly idle: IdleKeeper;
   private readonly autoPip: AutoPip;
+  private readonly siteZoom: SiteZoom;
   private readonly archivedHistory = new Map<string, NavState | null>();
   /** Archive entries being restored, so a double click brings a tab back once. */
   private readonly restoring = new Set<string>();
@@ -137,11 +142,20 @@ export class Browser {
         attachShortcuts(contents, this.keyboard);
         this.extensions.tabCreated(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
-        // Whatever a page asked for is denied once it's gone or replaced by another page.
+        this.siteZoom.attach(contents);
+        // Whatever a page asked for is denied once it's gone or replaced by another page; a share ends.
         contents.on('did-start-navigation', (details) => {
-          if (details.isMainFrame && !details.isSameDocument) options.permissions.forgetTab(nodeId);
+          if (!details.isMainFrame || details.isSameDocument) return;
+          options.permissions.forgetTab(nodeId);
+          options.screenShare.forgetTab(nodeId);
         });
-        contents.once('destroyed', () => options.permissions.forgetTab(nodeId));
+        contents.once('destroyed', () => {
+          options.permissions.forgetTab(nodeId);
+          options.screenShare.forgetTab(nodeId);
+        });
+        // A page going fullscreen (a video) covers the whole window; Esc, or the page, brings Chord back.
+        contents.on('enter-html-full-screen', () => this.windowFor(contents)?.setPageFullScreen(true));
+        contents.on('leave-html-full-screen', () => this.windowFor(contents)?.setPageFullScreen(false));
         attachContextMenu(contents, {
           surface: 'web',
           inspect: true,
@@ -221,6 +235,25 @@ export class Browser {
         w.window.focus();
       },
     });
+    this.siteZoom = new SiteZoom({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      isPrivate: (contents) => {
+        const node = this.store.state.nodes[this.tabs.nodeFor(contents) ?? ''];
+        return node ? isPrivateChord(this.store.state, node.chordId) : false;
+      },
+    });
+    options.screenShare.connect({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      onChange: () => this.syncPopovers(),
+      cantStop: (nodeId, host) => {
+        const windowId = this.windowShowing(nodeId);
+        const w = windowId ? this.windows.get(windowId) : undefined;
+        if (w) send(w.shell.webContents, 'toast:show', { id: `share:${nodeId}`, message: `Chord can't stop this share. Use ${host}'s own Stop button.` });
+      },
+    });
     this.idle = new IdleKeeper(
       {
         state: () => this.store.state,
@@ -241,7 +274,7 @@ export class Browser {
         setShortcutOverrides(change.state.settings.shortcuts);
         this.applyAppMenu();
       }
-      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions'].includes(String(p.path[0])))) {
+      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions', 'sitePermissions'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
       if (change.patches.some((p) => p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'interface'))) {
@@ -482,6 +515,7 @@ export class Browser {
       interface: state.settings.interface,
       find: find && find.target === w.activeTabContents ? find.state : null,
       permission: this.options.permissions.promptFor(activeTabId(state, w.id)),
+      share: this.options.screenShare.promptFor(activeTabId(state, w.id)),
     };
   }
 
@@ -556,6 +590,8 @@ export class Browser {
       chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
       extensions: this.extensions.infos(),
       chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId })),
+      sitePermissions: state.sitePermissions,
+      spellcheckLanguages: spellcheckLanguages(),
     };
   }
 
@@ -877,10 +913,11 @@ export class Browser {
       }
       case 'view.zoomIn':
       case 'view.zoomOut':
-        activeContents?.setZoomFactor(zoomStep(activeContents.getZoomFactor(), action === 'view.zoomIn' ? 1 : -1));
+        // Remembered for the site, as in Chrome.
+        if (activeContents) this.siteZoom.step(activeContents, action === 'view.zoomIn' ? 1 : -1);
         return true;
       case 'view.zoomReset':
-        activeContents?.setZoomFactor(1);
+        if (activeContents) this.siteZoom.reset(activeContents);
         return true;
       case 'page.print':
         activeContents?.print();

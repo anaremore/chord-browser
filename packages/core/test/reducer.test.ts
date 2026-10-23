@@ -41,6 +41,26 @@ function setup(): { state: State; ctx: Context; run: (cmd: Command) => ReturnTyp
 const titles = (state: State) => tabsInOrder(state, 'c1').map((t) => t.url);
 
 describe('reducer', () => {
+  it('remembers page zoom per site, clamped to Chromium’s range, and forgets 100%', () => {
+    const t = setup();
+    t.run({ t: 'zoom.set', host: 'a.test', factor: 1.25 });
+    t.run({ t: 'zoom.set', host: 'b.test', factor: 12 });
+    expect(t.state.siteZoom).toEqual({ 'a.test': 1.25, 'b.test': 5 });
+    t.run({ t: 'zoom.set', host: 'a.test', factor: 1.0000001 });
+    expect(t.state.siteZoom).toEqual({ 'b.test': 5 });
+  });
+
+  it('forgets everything decided for a site, and spelling settings change field by field', () => {
+    const t = setup();
+    t.run({ t: 'permission.set', origin: 'https://a.test', permissions: ['camera', 'notifications'], decision: 'allow' });
+    t.run({ t: 'permission.forget', origin: 'https://a.test' });
+    expect(t.state.sitePermissions).toEqual({});
+    t.run({ t: 'settings.set', settings: { spellcheck: { language: 'fr' } } });
+    expect(t.state.settings.spellcheck).toEqual({ enabled: true, language: 'fr' });
+    t.run({ t: 'settings.set', settings: { spellcheck: { enabled: false } } });
+    expect(t.state.settings.spellcheck).toEqual({ enabled: false, language: 'fr' });
+  });
+
   it('gives new chords their own sign-ins when Settings says so', () => {
     const t = setup();
     const theme = { stops: [{ l: 0.72, c: 0.12, h: 30 }], grain: 0.2, appearance: 'auto' as const };

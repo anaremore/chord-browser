@@ -30,7 +30,7 @@ import { DragDropProvider, useDroppable } from '@dnd-kit/react';
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
-import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, Undo2, X } from 'lucide-react';
+import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Undo2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { Favicon } from '../shared/Favicon';
@@ -289,6 +289,8 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
   const unloaded = pinned && asleep;
   // Its video popped out when you switched away (auto picture-in-picture).
   const popped = Boolean(live?.pip);
+  // It's sharing your screen: the slot shows a Stop button instead, which matters more.
+  const sharing = Boolean(live?.sharing);
   const dispatch = api.state.dispatch;
   const close = () => void dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
   const shownDepth = isDragging && projected ? projected.depth : depth;
@@ -327,7 +329,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
         // A pinned tab that hasn't been opened yet reads quieter (DESIGN.md §7.2).
         data-unloaded={unloaded || undefined}
         data-asleep={asleep || undefined}
-        data-pip={popped || undefined}
+        data-pip={popped || sharing || undefined}
         aria-current={isActive ? 'page' : undefined}
         title={pageTitle(tab) || tab.url}
         onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
@@ -340,7 +342,17 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
         )}
         <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
       </button>
-      {popped && (
+      {sharing ? (
+        <button
+          type="button"
+          className={`${styles.pip} ${styles.sharing}`}
+          aria-label="Stop sharing your screen"
+          title="Stop sharing your screen"
+          onClick={() => void api.share.stop(tab.id)}
+        >
+          <ScreenShare size={14} strokeWidth={2} />
+        </button>
+      ) : popped && (
         <button
           type="button"
           className={styles.pip}
