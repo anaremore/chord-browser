@@ -32,10 +32,9 @@
   overflow: visible;
 }
 
-/* A cutout in the card's color where each note overlaps the one above. */
-.note {
-  stroke: var(--color-surface-raised);
-  stroke-width: 1.2;
+/* The cutout in the card's color where each note overlaps the one above (the icon's, in the icon's plate color). */
+.cut {
+  fill: var(--color-surface-raised);
 }
 
 .hello {
