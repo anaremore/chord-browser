@@ -186,7 +186,7 @@ function ShareCard({ prompt }: { prompt: SharePrompt }) {
 }
 
 /**
- * Safe Browsing's one-time offer (ARCHITECTURE.md §14.1), for a profile from
+ * Safe Browsing's one-time offer (ARCHITECTURE.md §14.5), for a profile from
  * before it existed: its notice in full, then on or not now. Either answer
  * is final; Settings → Privacy can change it later.
  */

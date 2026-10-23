@@ -4,7 +4,7 @@
  * Progress goes into the store a few times a second, so the sidebar's
  * button and the downloads panel follow along, and the list is remembered.
  *
- * With Safe Browsing on (§14.1), a download's addresses (its redirects too)
+ * With Safe Browsing on (§14.5), a download's addresses (its redirects too)
  * are checked as it starts, and it's written as `<name>.crdownload`, as
  * Chrome does: it gets its real name only once it has finished and isn't
  * suspected. Nothing waits for the check. One that's suspected stops and

@@ -42,6 +42,8 @@ const SEVERITY: ThreatKind[] = ['malware', 'phishing', 'unwanted'];
 
 /** The cache keeps at most this many prefixes (it's in memory only). */
 const MAX_CACHE = 20_000;
+/** How long a list the service left out of an answer waits before it's asked for again. */
+const LEFT_OUT_WAIT_MS = 30 * 60_000;
 
 interface List {
   name: ListName;
@@ -162,8 +164,14 @@ export class SafeBrowsingDatabase {
    * match is dropped, so the next update is a full one. Returns the names
    * that failed.
    */
-  apply(updates: readonly HashListUpdate[], now: number): ListName[] {
+  apply(updates: readonly HashListUpdate[], now: number, asked: readonly ListName[] = []): ListName[] {
     const failed: ListName[] = [];
+    // A list asked for that the answer left out waits half an hour, as if it had said so, rather than being asked for again at once.
+    for (const name of asked) {
+      if (updates.some((u) => u.name === name)) continue;
+      const list = this.lists.get(name) ?? { name, version: new Uint8Array(0), prefixes: new Uint32Array(0), checksum: null, nextAt: 0 };
+      this.lists.set(name, { ...list, nextAt: Math.max(list.nextAt, now + LEFT_OUT_WAIT_MS) });
+    }
     for (const update of updates) {
       const name = LIST_NAMES.find((n) => n === update.name);
       if (!name) continue;

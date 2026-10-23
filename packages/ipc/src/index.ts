@@ -422,7 +422,7 @@ export interface PopoverState {
 }
 
 /**
- * Safe Browsing on this computer (ARCHITECTURE.md §14.1), for Settings and
+ * Safe Browsing on this computer (ARCHITECTURE.md §14.5), for Settings and
  * first run. `available`: this build has Google's API key (or, in
  * development, a test server); without it Chord never turns it on.
  */
@@ -652,7 +652,7 @@ export const invokeChannels = {
     request: z.object({ id, action: z.enum(['open', 'show', 'pause', 'resume', 'cancel', 'retry', 'remove', 'keep', 'discard']) }),
     response: z.void(),
   },
-  // Safe Browsing (ARCHITECTURE.md §14.1). Settings and first run read whether it's available.
+  // Safe Browsing (ARCHITECTURE.md §14.5). Settings and first run read whether it's available.
   'safeBrowsing:status': { roles: ['shell', 'internal'], request: z.void(), response: z.custom<SafeBrowsingStatus>() },
   /** First run's step and the one-time offer: on or off, having seen the notice. */
   'safeBrowsing:choose': { roles: ['shell', 'popover'], request: z.strictObject({ on: z.boolean() }), response: z.void() },

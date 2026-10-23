@@ -271,7 +271,7 @@ function DefaultStep({ info, onNext }: { info: SystemInfo; onNext(): void }) {
   );
 }
 
-/** Safe Browsing (ARCHITECTURE.md §14.1): on unless you say not now, with the notice in full first. */
+/** Safe Browsing (ARCHITECTURE.md §14.5): on unless you say not now, with the notice in full first. */
 function SafetyStep({ onNext }: { onNext(): void }) {
   const choose = (on: boolean) => {
     void api.safeBrowsing.choose(on);

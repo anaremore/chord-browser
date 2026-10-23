@@ -71,7 +71,7 @@ const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker();
 
 /**
- * Safe Browsing (ARCHITECTURE.md §14.1): Google's v5 API in Local List Mode.
+ * Safe Browsing (ARCHITECTURE.md §14.5): Google's v5 API in Local List Mode.
  * Release builds carry the API key; development builds can point it at a
  * test server instead (CHORD_SAFE_BROWSING_URL, ignored when packaged), and
  * then send it no key. Without either it's unavailable and never runs.

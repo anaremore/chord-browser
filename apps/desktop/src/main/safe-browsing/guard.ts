@@ -1,5 +1,5 @@
 /**
- * Where Safe Browsing meets pages (ARCHITECTURE.md §14.1): every navigation
+ * Where Safe Browsing meets pages (ARCHITECTURE.md §14.5): every navigation
  * of a tab, Peek, mini window or popup, in every window (private ones too),
  * is checked as it starts and at each redirect, frames included.
  *

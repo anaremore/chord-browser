@@ -1,5 +1,5 @@
 /**
- * Safe Browsing (ARCHITECTURE.md §14.1, decision D7): what a warning says.
+ * Safe Browsing (ARCHITECTURE.md §14.5, decision D7): what a warning says.
  * Google's terms for the Safe Browsing API shape every line here
  * (developers.google.com/safe-browsing/v4/usage-limits): a warning never says
  * a page is certainly unsafe, links to Google's page about the threat, and

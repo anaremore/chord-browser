@@ -1,5 +1,5 @@
 /**
- * Safe Browsing's worker thread (ARCHITECTURE.md §14.1): it holds Google's
+ * Safe Browsing's worker thread (ARCHITECTURE.md §14.5): it holds Google's
  * lists, decodes and checks their updates, saves them, and hashes the
  * addresses Chord checks, so none of that runs on main. It never touches the
  * network (main fetches, with the API key) and never writes what you browse:
@@ -55,12 +55,13 @@ export async function handle(message: WorkerRequest): Promise<unknown> {
     }
     case 'due':
       return {
-        lists: db.due(message.now).map((l) => ({ name: l.name, version: l.version ? Buffer.from(l.version).toString('base64url') : null })),
+        // Standard base64 with padding: the protobuf JSON mapping's own form for bytes.
+        lists: db.due(message.now).map((l) => ({ name: l.name, version: l.version ? Buffer.from(l.version).toString('base64') : null })),
         nextUpdateAt: db.nextUpdateAt(),
       } satisfies DueResult;
     case 'update': {
       const updates = message.json ? batchGetFromJson(JSON.parse(new TextDecoder().decode(message.body))) : decodeBatchGet(message.body);
-      const failed = db.apply(updates, message.now);
+      const failed = db.apply(updates, message.now, message.asked ?? []);
       save(message.now);
       return { failed, entries: db.entries, nextUpdateAt: db.nextUpdateAt() } satisfies UpdateResult;
     }

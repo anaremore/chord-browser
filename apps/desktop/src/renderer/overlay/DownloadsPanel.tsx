@@ -25,7 +25,7 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const EDGE = 8;
 
 /**
- * A download Safe Browsing suspects (ARCHITECTURE.md §14.1): paused, never
+ * A download Safe Browsing suspects (ARCHITECTURE.md §14.5): paused, never
  * opened, until you delete it or keep it. Google's page about the threat and
  * its advisory open as tabs.
  */

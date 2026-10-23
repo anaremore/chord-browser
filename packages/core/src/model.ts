@@ -197,7 +197,7 @@ export interface LiveTab {
   pip: boolean;
   /** The page is sharing your screen or a window (getDisplayMedia, ARCHITECTURE.md §9). */
   sharing: boolean;
-  /** Safe Browsing suspects the page (or a frame in it): the frame shows a warning instead (ARCHITECTURE.md §14.1). */
+  /** Safe Browsing suspects the page (or a frame in it): the frame shows a warning instead (ARCHITECTURE.md §14.5). */
   threat: PageThreat | null;
 }
 
@@ -344,7 +344,7 @@ export interface Settings {
    */
   googleFree: boolean;
   /**
-   * Safe Browsing (ARCHITECTURE.md §14.1): warnings before suspected phishing
+   * Safe Browsing (ARCHITECTURE.md §14.5): warnings before suspected phishing
    * and malware sites and downloads, from Google's lists. Off in Google-free
    * mode, and never on before its notice was shown.
    */

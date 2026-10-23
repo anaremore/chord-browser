@@ -1,5 +1,5 @@
 /**
- * Safe Browsing in main (ARCHITECTURE.md §14.1, decision D7): Google's Safe
+ * Safe Browsing in main (ARCHITECTURE.md §14.5, decision D7): Google's Safe
  * Browsing API v5 in Local List Mode. The worker thread (worker.ts) holds the
  * lists and does the hashing; this side schedules list updates, does the
  * network, and answers checks for navigations and downloads.
@@ -232,7 +232,7 @@ export class SafeBrowsing {
     for (const prefix of prefixes) {
       const bytes = Buffer.alloc(4);
       bytes.writeUInt32BE(prefix);
-      params.append('hashPrefixes', bytes.toString('base64url'));
+      params.append('hashPrefixes', bytes.toString('base64'));
     }
     const request = this.get('/v5/hashes:search', params, SEARCH_TIMEOUT_MS).then(
       (answer) => {
@@ -271,7 +271,7 @@ export class SafeBrowsing {
       for (const list of due.lists) if (list.version) params.append('version', list.version);
       const answer = await this.get('/v5/hashLists:batchGet', params, UPDATE_TIMEOUT_MS);
       if (!this.running) return;
-      const result = await this.request<UpdateResult>({ type: 'update', body: answer.body, json: answer.json, now: Date.now() });
+      const result = await this.request<UpdateResult>({ type: 'update', body: answer.body, json: answer.json, now: Date.now(), asked: due.lists.map((l) => l.name) });
       this.updateFailures = 0;
       this.failing = result.failed.length > 0;
       this.entries = result.entries;

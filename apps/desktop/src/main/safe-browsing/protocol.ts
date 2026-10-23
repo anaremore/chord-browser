@@ -4,10 +4,10 @@ import type { CheckStep, ListName, Purpose, Verdict } from './database';
 export type WorkerRequest =
   /** Read the lists saved at `file` (if any). Everything after waits for it. */
   | { type: 'open'; file: string }
-  /** Which lists may be asked for now, with their versions (base64url). */
+  /** Which lists may be asked for now, with their versions (base64). */
   | { type: 'due'; now: number }
-  /** A hashLists.batchGet answer: apply it and save the lists. */
-  | { type: 'update'; body: Uint8Array; json: boolean; now: number }
+  /** A hashLists.batchGet answer to asking for `asked`: apply it and save the lists. */
+  | { type: 'update'; body: Uint8Array; json: boolean; now: number; asked?: ListName[] }
   /** The service failed: ask again no sooner than `at` (saved, so a restart respects it too). */
   | { type: 'defer'; at: number }
   | { type: 'check'; urls: string[]; purpose: Purpose; now: number }

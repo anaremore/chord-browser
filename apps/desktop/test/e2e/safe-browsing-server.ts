@@ -64,7 +64,7 @@ export async function startSafeBrowsingServer({ noise = 0 }: { noise?: number } 
     if (url.pathname === '/v5/hashLists:batchGet') {
       body = encodeBatchGet(url.searchParams.getAll('names').map(list));
     } else if (url.pathname === '/v5/hashes:search') {
-      const asked = new Set(url.searchParams.getAll('hashPrefixes').map((p) => Buffer.from(p, 'base64url').readUInt32BE(0)));
+      const asked = new Set(url.searchParams.getAll('hashPrefixes').map((p) => Buffer.from(p, 'base64').readUInt32BE(0)));
       const fullHashes = [...threats]
         .map(([hex, threat]) => ({ hash: Buffer.from(hex, 'hex'), threat }))
         .filter(({ hash }) => asked.has(prefixOf(hash)))

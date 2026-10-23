@@ -25,6 +25,7 @@ Everything here works on `main` today and comes with the first preview.
 - **Peek and the mini window:** links from pinned tabs open in a Peek over the page, and links from other apps in a small window you can move into a chord.
 - **Chrome extensions**, including password managers.
 - **Pop-out video:** a playing video floats into picture-in-picture when you switch tabs.
+- **Safe Browsing:** a warning before suspected phishing and malware sites and downloads, from Google's lists, checked on your computer. Release builds only (it needs Chord's API key); off in Google-free mode.
 - **Duet** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. It can read the page or your tabs when you let it, cites what it read, and never sees your sign-in. Turn it off in Settings and it's gone.
 
 | | |

@@ -1,5 +1,5 @@
 /**
- * Safe Browsing's warning (ARCHITECTURE.md §14.1, DESIGN.md §9): in the
+ * Safe Browsing's warning (ARCHITECTURE.md §14.5, DESIGN.md §9): in the
  * content frame, like a load error, instead of a page (or a page with a
  * frame) on one of Google's lists. Its wording never says the site is
  * certainly unsafe. The way out is the main button; "Visit anyway" waits

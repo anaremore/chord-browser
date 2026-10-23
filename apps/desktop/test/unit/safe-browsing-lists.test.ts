@@ -197,6 +197,13 @@ describe('list updates', () => {
     expect(db.nextUpdateAt()).toBe(500_000);
   });
 
+  it('waits half an hour before asking again for a list the answer left out', () => {
+    const db = new SafeBrowsingDatabase();
+    db.apply([fullList('se-4b', [1], { minimumWaitMs: 60_000 })], 0, ['se-4b', 'mw-4b', 'uws-4b']);
+    expect(db.due(61_000)).toEqual([{ name: 'se-4b', version: Buffer.from('se-4b-v1') }]);
+    expect(db.due(30 * 60_000).map((l) => l.name)).toEqual(['se-4b', 'mw-4b', 'uws-4b']);
+  });
+
   it('saves the lists and reads them back; a damaged list is left out', () => {
     const db = new SafeBrowsingDatabase();
     db.apply([fullList('se-4b', [10, 20, 30]), fullList('mw-4b', [7])], 0);

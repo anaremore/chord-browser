@@ -1,7 +1,7 @@
 /**
  * Settings → Privacy: what Chord sends and what it keeps.
  *
- * Safe Browsing (ARCHITECTURE.md §14.1): warnings before suspected phishing
+ * Safe Browsing (ARCHITECTURE.md §14.5): warnings before suspected phishing
  * and malware, from Google's lists. Its notice sits beside the switch, so
  * it's read before it's on, as Google's terms ask. Builds without Google's
  * API key can't turn it on, and Google-free mode keeps it off.

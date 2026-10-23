@@ -85,7 +85,7 @@ jobs:
           HAS_WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD != '' }}
         run: node apps/desktop/scripts/signing-mode.mjs
 
-      # Google's Safe Browsing API key goes into the build (electron.vite.config.ts, ARCHITECTURE.md §14.1).
+      # Google's Safe Browsing API key goes into the build (electron.vite.config.ts, ARCHITECTURE.md §14.5).
       # It's a secret of the protected `release` environment, so manual runs build without it. Only whether
       # it's set reaches this step. Without it the build still works; Settings shows Safe Browsing as unavailable.
       - name: Check the Safe Browsing key
@@ -94,7 +94,7 @@ jobs:
           HAS_SAFE_BROWSING_KEY: ${{ secrets.CHORD_SAFE_BROWSING_KEY != '' }}
         run: |
           if [ "$HAS_SAFE_BROWSING_KEY" != "true" ]; then
-            echo "::warning::CHORD_SAFE_BROWSING_KEY isn't set, so this build has no Safe Browsing: Settings → Privacy shows it as unavailable (ARCHITECTURE.md §14.1)."
+            echo "::warning::CHORD_SAFE_BROWSING_KEY isn't set, so this build has no Safe Browsing: Settings → Privacy shows it as unavailable (ARCHITECTURE.md §14.5)."
           fi
 
       - name: Package

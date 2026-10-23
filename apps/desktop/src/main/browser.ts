@@ -93,7 +93,7 @@ export interface BrowserOptions {
   onChange?(change: Change): void;
   /** A private window closed: drop its session (cookies, storage, cache) and anything kept for it. */
   releaseProfile(profileId: string): void;
-  /** Safe Browsing (ARCHITECTURE.md §14.1): checks pages while it's on, and whether to offer turning it on. */
+  /** Safe Browsing (ARCHITECTURE.md §14.5): checks pages while it's on, and whether to offer turning it on. */
   safeBrowsing: {
     enabled(): boolean;
     check(urls: string[]): Promise<Verdict>;

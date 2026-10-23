@@ -1,5 +1,5 @@
 /**
- * Safe Browsing (ARCHITECTURE.md §14.1) against a stand-in for Google's v5
+ * Safe Browsing (ARCHITECTURE.md §14.5) against a stand-in for Google's v5
  * API (safe-browsing-server.ts): a flagged page, redirect or frame shows the
  * warning and "Visit anyway" holds for the session; a flagged download is
  * held until kept or deleted; with the setting off nothing is checked, and
@@ -178,7 +178,7 @@ test('a flagged page shows the warning; Visit anyway lets the site through for t
     await expect(warning.getByRole('button', { name: 'Visit anyway' })).toBeHidden();
     // Only the 4-byte prefix went to the service, never the address; the page didn't stay loaded.
     const search = service.requests.find((r) => r.path === '/v5/hashes:search')!;
-    expect(search.params.getAll('hashPrefixes').map((p) => Buffer.from(p, 'base64url').length)).toEqual([4]);
+    expect(search.params.getAll('hashPrefixes').map((p) => Buffer.from(p, 'base64').length)).toEqual([4]);
     expect(search.params.toString()).not.toContain('phish');
     await expect.poll(() => pageUrls(app)).not.toContain(`${site.origin}/phish.html`);
     await setScheme(app, 'light');
