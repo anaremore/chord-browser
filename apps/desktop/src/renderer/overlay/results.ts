@@ -1,7 +1,7 @@
 /**
  * What the command bar shows for a query (DESIGN.md §7.3, ARCHITECTURE.md §10):
- * the address or search for the text, open tabs in every chord, history,
- * other chords and actions, ranked by the signals in core/rank.ts (from
+ * the address or search for the text, open tabs in every chord, archived tabs,
+ * history, other chords and actions, ranked by the signals in core/rank.ts (from
  * Crest): how well the text matches, how often and recently a page was used,
  * whether a tab is pinned, and what was picked before for the same text.
  */
@@ -30,12 +30,15 @@ export type Result =
   | { kind: 'open'; key: string; title: string; detail: string; url: string; search: boolean }
   | { kind: 'tab'; key: string; title: string; detail: string; tab: TabNode; chordName: string | null }
   | { kind: 'history'; key: string; title: string; detail: string; url: string }
+  /** A tab in the archive: picking it brings the tab back, history and all. */
+  | { kind: 'archive'; key: string; title: string; detail: string; url: string; archiveId: string }
   | { kind: 'action'; key: string; title: string; action: ActionId }
   | { kind: 'chord'; key: string; title: string; chord: Chord };
 
 /** Actions that work in this milestone; the list grows with each feature. */
 const ACTIONS: { action: ActionId; title: string; words: string }[] = [
   { action: 'tab.reopen', title: 'Reopen closed tab', words: 'reopen closed tab undo restore' },
+  { action: 'app.history', title: 'Archive', words: 'archive archived history closed tabs' },
   { action: 'tab.close', title: 'Close tab', words: 'close tab' },
   { action: 'tab.pin', title: 'Pin or unpin tab', words: 'pin unpin tab keep' },
   { action: 'address.copy', title: 'Copy page address', words: 'copy url address link' },
@@ -58,7 +61,7 @@ const ACTIONS: { action: ActionId; title: string; words: string }[] = [
 ];
 
 /** The most rows of each kind, and in all. */
-const LIMIT = { tab: 5, history: 6, chord: 3, action: 3 } as const;
+const LIMIT = { tab: 5, archive: 4, history: 6, chord: 3, action: 3 } as const;
 const MAX_ROWS = 12;
 /** An open tab scores above the same match in history; a pinned one above that (Crest's signals). */
 const OPEN_TAB_POINTS = 150;
@@ -88,6 +91,7 @@ export function destinationOf(result: Result): string | null {
     case 'tab':
       return placeKey(result.tab.url) ?? `tab:${result.tab.id}`;
     case 'history':
+    case 'archive':
       return placeKey(result.url);
     case 'chord':
       return `chord:${result.chord.id}`;
@@ -176,6 +180,30 @@ export function buildResults(
     const place = placeKey(intent.url);
     if (place) claimed.add(place);
   }
+  // Archived tabs before history: the same page, but it comes back with its own back/forward
+  // history. It ranks with the page's use, and recent archiving counts as recent use.
+  const usageOf = new Map<string, number>();
+  for (const h of history?.history ?? []) {
+    const place = placeKey(h.url);
+    if (place) usageOf.set(place, Math.max(usageOf.get(place) ?? 0, usagePoints(h.frecency)));
+  }
+  for (const a of history?.archive ?? []) {
+    const place = placeKey(a.url);
+    if (!place || claimed.has(place)) continue;
+    claimed.add(place);
+    const title = a.title || shortUrl(a.url);
+    const match = matchScore(q, title, shortUrl(a.url));
+    if (match === null) continue;
+    const result: Result = { kind: 'archive', key: `archive:${a.id}`, title, detail: shortUrl(a.url), url: a.url, archiveId: a.id };
+    const usage = Math.max(usageOf.get(place) ?? 0, recencyPoints(a.archivedAt, now));
+    scored.push({
+      result,
+      kind: 'archive',
+      score: match + usage + learned(result),
+      mayLead: (prefixes(q, title) || prefixes(q, shortUrl(a.url))) && usage >= LEADS_AT_USAGE,
+    });
+  }
+
   for (const h of history?.history ?? []) {
     const place = placeKey(h.url);
     if (!place || claimed.has(place)) continue;

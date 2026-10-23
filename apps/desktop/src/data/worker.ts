@@ -29,6 +29,18 @@ process.parentPort.on('message', (event) => {
         if (!db) throw new Error('chord-data: search before open');
         reply({ id: request.id, ok: true, search: db.search(request.query, request.chordId, request.now) });
         break;
+      case 'archive.list':
+        if (!db) throw new Error('chord-data: archive before open');
+        reply({ id: request.id, ok: true, archive: db.archiveList(request.query, request.limit) });
+        break;
+      case 'archive.get':
+        if (!db) throw new Error('chord-data: archive before open');
+        reply({ id: request.id, ok: true, entry: db.archiveGet(request.archiveId) });
+        break;
+      case 'archive.latest':
+        if (!db) throw new Error('chord-data: archive before open');
+        reply({ id: request.id, ok: true, entry: db.archiveLatest(request.reasons) });
+        break;
       case 'close':
         db?.close();
         db = null;

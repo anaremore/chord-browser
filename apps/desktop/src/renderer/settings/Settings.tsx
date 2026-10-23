@@ -10,6 +10,7 @@ import {
   SHORTCUTS,
   formatKeys,
   keysFor,
+  type ArchiveAfter,
   type MotionSettings,
   type Shortcut,
 } from '@chord/core';
@@ -21,7 +22,7 @@ import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import { AppearanceSection } from './Appearance';
-import { ResetButton, Row, SectionHeader, Switch } from './controls';
+import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import styles from './Settings.module.css';
 
 const SECTIONS = [
@@ -147,11 +148,47 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
           </button>
         ))}
       </div>
+
+      <h2 className={styles.groupTitle}>Tabs</h2>
+      <div className={styles.group}>
+        <Row
+          label="Archive Today tabs after"
+          description="Tabs you haven't looked at in this long move to the archive. Pinned tabs, and tabs playing or sharing, stay."
+          changed={snapshot.settings.archiveAfter !== DEFAULT_SETTINGS.archiveAfter}
+          onReset={() => void api.settings.set({ archiveAfter: DEFAULT_SETTINGS.archiveAfter })}
+          control={
+            <Segmented<ArchiveAfter>
+              label="Archive Today tabs after"
+              value={snapshot.settings.archiveAfter}
+              options={ARCHIVE_CHOICES}
+              onChange={(archiveAfter) => void api.settings.set({ archiveAfter })}
+            />
+          }
+        />
+        <Row
+          label="Sleep tabs you're not using"
+          description="Tabs hidden for an hour free their memory, and pick up where you left off when you come back."
+          changed={snapshot.settings.sleepTabs !== DEFAULT_SETTINGS.sleepTabs}
+          onReset={() => void api.settings.set({ sleepTabs: DEFAULT_SETTINGS.sleepTabs })}
+          control={
+            <Switch label="Sleep tabs you're not using" checked={snapshot.settings.sleepTabs} onChange={(sleepTabs) => void api.settings.set({ sleepTabs })} />
+          }
+        />
+      </div>
+
       <SignIns snapshot={snapshot} />
       <DefaultBrowser platform={info.platform} />
     </>
   );
 }
+
+const ARCHIVE_CHOICES: { value: ArchiveAfter; label: string }[] = [
+  { value: '12h', label: '12 hours' },
+  { value: '24h', label: 'A day' },
+  { value: '7d', label: 'A week' },
+  { value: '30d', label: 'A month' },
+  { value: 'never', label: 'Never' },
+];
 
 const MOTION_ROWS: { key: keyof MotionSettings; label: string; description: string }[] = [
   { key: 'followSystem', label: 'Follow system motion settings', description: "When your computer asks for less motion, Chord's animations become instant." },

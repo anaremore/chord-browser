@@ -6,9 +6,12 @@
  */
 import { generateKeyBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
+import { isInternalUrl, visibleTabs } from './idle';
 import {
   DEFAULT_PROFILE,
   IDLE_LIVE,
+  type ArchivedTab,
+  type ArchiveReason,
   type Bounds,
   type ChordId,
   type ChordThemeSpec,
@@ -25,6 +28,7 @@ import {
   type State,
   type TabNode,
   type WindowId,
+  type WindowModel,
 } from './model';
 import { children, sortedChords, tabsInOrder } from './select';
 
@@ -36,6 +40,16 @@ export type Command =
   | { t: 'tab.activate'; windowId: WindowId; nodeId: NodeId; touch?: boolean }
   | { t: 'tab.close'; windowId: WindowId; nodeId: NodeId }
   | { t: 'tab.reopenClosed'; windowId: WindowId }
+  /** Send Today tabs to the archive: unused for a while (`auto`) or Clear (`cleared`). */
+  | { t: 'tab.archive'; nodeIds: NodeId[]; reason: 'auto' | 'cleared' }
+  /**
+   * Bring a tab back from the archive as `nodeId` (main picks it, so it can
+   * load the tab's saved history into the view first), at the top of its
+   * chord's Today. `activate` switches to it; otherwise it waits in the sidebar.
+   */
+  | { t: 'archive.restore'; windowId: WindowId; nodeId: NodeId; tab: ArchivedTab; activate: boolean }
+  /** Free a background tab's page; it reloads, with its history, when shown again. */
+  | { t: 'tab.sleep'; nodeId: NodeId }
   | { t: 'tab.navigate'; nodeId: NodeId; url: string }
   | { t: 'tab.cycle'; windowId: WindowId; direction: 1 | -1 }
   /** Drag and drop: put a tab at a position in a section (pinned or Today) of its chord. */
@@ -85,6 +99,12 @@ export type Effect =
   | { e: 'view.show'; windowId: WindowId; nodeId: NodeId | null }
   | { e: 'view.navigate'; nodeId: NodeId; url: string }
   | { e: 'view.destroy'; nodeId: NodeId }
+  /** Close the tab's page but keep its back/forward history and scroll position for when it's shown again. */
+  | { e: 'view.sleep'; nodeId: NodeId }
+  /** A tab is going to the archive: save it, with its history, before its view is destroyed. */
+  | { e: 'archive.save'; nodeId: NodeId; tab: ArchivedTab }
+  /** A tab came back from the archive: its saved history goes into the new view, and the entry leaves the archive. */
+  | { e: 'archive.restored'; archiveId: string; nodeId: NodeId }
   /** The window's sidebar docked or collapsed: lay the content frame out again. */
   | { e: 'window.layout'; windowId: WindowId; sidebar: 'docked' | 'collapsed' };
 
@@ -154,6 +174,30 @@ function topOfToday(state: Draft<State>, chordId: ChordId): string {
   return generateKeyBetween(null, first?.rank ?? null);
 }
 
+/**
+ * Ask main to archive a tab that's about to go (before its view does), and
+ * return the archive entry's id. Chord's own pages (the archive itself) just
+ * close: there's nothing worth keeping.
+ */
+function toArchive(node: TabNode, reason: ArchiveReason, ctx: Context, effects: Effect[]): string | null {
+  if (isInternalUrl(node.url)) return null;
+  const id = ctx.newId();
+  const tab: ArchivedTab = { id, chordId: node.chordId, url: node.url, title: node.title, favicon: node.favicon, reason, archivedAt: ctx.now };
+  effects.push({ e: 'archive.save', nodeId: node.id, tab });
+  return id;
+}
+
+/**
+ * The tab a window shows stops being used now. It counts as used until a
+ * moment ago, so idle time (archiving, sleeping) runs from when you left it,
+ * and it stays just behind the tab you're going to in recently-used order.
+ */
+function leave(draft: Draft<State>, win: Draft<WindowModel>, ctx: Context): void {
+  const id = win.activeTab[win.activeChordId];
+  const node = id ? draft.nodes[id] : undefined;
+  if (node?.kind === 'tab') node.lastActiveAt = ctx.now - 1;
+}
+
 function activate(
   draft: Draft<State>,
   windowId: WindowId,
@@ -177,6 +221,7 @@ function activate(
 function switchChord(draft: Draft<State>, windowId: WindowId, chordId: ChordId, ctx: Context, effects: Effect[]): void {
   const win = draft.windows[windowId];
   if (!win || !draft.chords[chordId] || win.activeChordId === chordId) return;
+  leave(draft, win, ctx);
   win.activeChordId = chordId;
   let tabId = win.activeTab[chordId] ?? null;
   if (!tabId || draft.nodes[tabId]?.kind !== 'tab') {
@@ -210,7 +255,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       draft.nodes[id] = tab;
       draft.live[id] = { ...IDLE_LIVE, loading: true };
       effects.push({ e: 'view.ensure', nodeId: id });
-      if (!cmd.background) activate(draft, cmd.windowId, id, ctx, effects);
+      if (!cmd.background) {
+        leave(draft, win, ctx);
+        activate(draft, cmd.windowId, id, ctx, effects);
+      }
       return;
     }
 
@@ -218,8 +266,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const node = draft.nodes[cmd.nodeId];
       const win = draft.windows[cmd.windowId];
       if (node?.kind !== 'tab' || !win) return;
+      const touch = cmd.touch ?? true;
+      if (touch && win.activeTab[win.activeChordId] !== cmd.nodeId) leave(draft, win, ctx);
       if (node.chordId !== win.activeChordId) win.activeChordId = node.chordId;
-      activate(draft, cmd.windowId, cmd.nodeId, ctx, effects, cmd.touch ?? true);
+      activate(draft, cmd.windowId, cmd.nodeId, ctx, effects, touch);
       return;
     }
 
@@ -242,7 +292,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         }
         return;
       }
-      const closed: ClosedTab = { node: { ...(node as TabNode) }, windowId: cmd.windowId, closedAt: ctx.now };
+      // A closed Today tab goes to the archive; ⌘⇧T brings it back to the same place.
+      const archiveId = toArchive(node as TabNode, 'closed', ctx, effects);
+      const closed: ClosedTab = { node: { ...(node as TabNode) }, windowId: cmd.windowId, closedAt: ctx.now, archiveId };
       draft.closed.unshift(closed);
       if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
       delete draft.nodes[cmd.nodeId];
@@ -277,8 +329,93 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       };
       draft.nodes[restored.id] = restored;
       draft.live[restored.id] = { ...IDLE_LIVE, loading: true };
+      if (entry.archiveId) effects.push({ e: 'archive.restored', archiveId: entry.archiveId, nodeId: restored.id });
+      leave(draft, win, ctx);
       if (win.activeChordId !== chordId) win.activeChordId = chordId;
       activate(draft, cmd.windowId, restored.id, ctx, effects);
+      return;
+    }
+
+    case 'tab.archive': {
+      // Tidying up never takes a tab from under you; Clear can (it's what you asked for).
+      const onScreen = cmd.reason === 'auto' ? visibleTabs(draft as State) : new Set<NodeId>();
+      const tabs = cmd.nodeIds
+        .map((id) => draft.nodes[id])
+        .filter((n): n is Draft<TabNode> => n?.kind === 'tab' && n.section === 'today' && !onScreen.has(n.id));
+      if (tabs.length === 0) return;
+      const gone = new Set(tabs.map((t) => t.id));
+      // Where each window lands if its tab goes: the nearest tab that stays, below first (Arc's rule).
+      const landing = new Map<string, NodeId | null>();
+      for (const win of Object.values(draft.windows)) {
+        for (const [chordId, tabId] of Object.entries(win.activeTab)) {
+          if (!tabId || !gone.has(tabId)) continue;
+          const order = tabsInOrder(draft as State, chordId);
+          const at = order.findIndex((t) => t.id === tabId);
+          const stays = (t: TabNode) => !gone.has(t.id);
+          const below = order.slice(at + 1).find(stays);
+          const above = order.slice(0, Math.max(0, at)).reverse().find(stays);
+          landing.set(`${win.id}:${chordId}`, (below ?? above)?.id ?? null);
+        }
+      }
+      for (const tab of tabs) {
+        const archiveId = toArchive(tab as TabNode, cmd.reason, ctx, effects);
+        // Clearing is something you did, so ⌘⇧T can undo it; tidying up after idle tabs isn't.
+        if (cmd.reason === 'cleared') draft.closed.unshift({ node: { ...(tab as TabNode) }, windowId: '', closedAt: ctx.now, archiveId });
+        delete draft.nodes[tab.id];
+        delete draft.live[tab.id];
+        effects.push({ e: 'view.destroy', nodeId: tab.id });
+      }
+      if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
+      for (const win of Object.values(draft.windows)) {
+        for (const chordId of Object.keys(win.activeTab)) {
+          const key = `${win.id}:${chordId}`;
+          if (!landing.has(key)) continue;
+          const next = landing.get(key) ?? null;
+          if (chordId === win.activeChordId) activate(draft, win.id, next, ctx, effects);
+          else win.activeTab[chordId] = next;
+        }
+      }
+      return;
+    }
+
+    case 'archive.restore': {
+      const win = draft.windows[cmd.windowId];
+      if (!win || draft.nodes[cmd.nodeId]) return;
+      const chordId = draft.chords[cmd.tab.chordId] ? cmd.tab.chordId : win.activeChordId;
+      draft.nodes[cmd.nodeId] = {
+        kind: 'tab',
+        id: cmd.nodeId,
+        chordId,
+        section: 'today',
+        parentId: null,
+        rank: topOfToday(draft, chordId),
+        url: cmd.tab.url,
+        title: cmd.tab.title,
+        pinnedUrl: null,
+        customTitle: null,
+        favicon: cmd.tab.favicon,
+        lastActiveAt: ctx.now,
+        createdAt: ctx.now,
+      };
+      // If it's also on the ⌘⇧T list, it isn't closed any more.
+      const listed = draft.closed.findIndex((c) => c.archiveId === cmd.tab.id);
+      if (listed >= 0) draft.closed.splice(listed, 1);
+      effects.push({ e: 'archive.restored', archiveId: cmd.tab.id, nodeId: cmd.nodeId });
+      if (cmd.activate) {
+        draft.live[cmd.nodeId] = { ...IDLE_LIVE, loading: true };
+        leave(draft, win, ctx);
+        if (win.activeChordId !== chordId) win.activeChordId = chordId;
+        activate(draft, cmd.windowId, cmd.nodeId, ctx, effects);
+      }
+      return;
+    }
+
+    case 'tab.sleep': {
+      const node = draft.nodes[cmd.nodeId];
+      if (node?.kind !== 'tab' || !draft.live[cmd.nodeId]) return;
+      if (Object.values(draft.windows).some((w) => w.activeTab[w.activeChordId] === cmd.nodeId)) return;
+      delete draft.live[cmd.nodeId];
+      effects.push({ e: 'view.sleep', nodeId: cmd.nodeId });
       return;
     }
 
@@ -317,6 +454,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (order.length === 0) return;
       const current = order.findIndex((t) => t.id === win.activeTab[win.activeChordId]);
       const next = order[(current + cmd.direction + order.length) % order.length]!;
+      if (next.id !== win.activeTab[win.activeChordId]) leave(draft, win, ctx);
       activate(draft, cmd.windowId, next.id, ctx, effects);
       return;
     }
@@ -359,8 +497,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'settings.set': {
-      const { searchEngine, motion, colorScheme } = cmd.settings;
+      const { searchEngine, motion, colorScheme, archiveAfter, sleepTabs } = cmd.settings;
       if (searchEngine !== undefined && draft.settings.searchEngine !== searchEngine) draft.settings.searchEngine = searchEngine;
+      if (archiveAfter !== undefined && draft.settings.archiveAfter !== archiveAfter) draft.settings.archiveAfter = archiveAfter;
+      if (sleepTabs !== undefined && draft.settings.sleepTabs !== sleepTabs) draft.settings.sleepTabs = sleepTabs;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
       const { separateSignIns } = cmd.settings;
       if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;

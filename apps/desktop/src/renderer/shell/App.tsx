@@ -1,6 +1,6 @@
-import { activeTabId, describeLoadError, sortedChords, type LiveTab, type LoadError, type TabNode } from '@chord/core';
+import { activeTabId, describeLoadError, isInternalUrl, sortedChords, type LiveTab, type LoadError, type TabNode } from '@chord/core';
 import type { ChordEdit, SystemInfo } from '@chord/ipc';
-import { ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
+import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig } from 'motion/react';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useMirror, type Mirror } from '../shared/mirror';
@@ -125,8 +125,10 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const activeId = activeTabId(state, windowId);
   const active = activeId ? (state.nodes[activeId] as TabNode | undefined) : undefined;
   const live = activeId ? state.live[activeId] : undefined;
-  const host = active ? displayHost(active.url) : '';
-  const title = active ? pageTitle(active) : '';
+  // Chord's own pages (the archive) go by their name, not an address.
+  const internal = active ? isInternalUrl(active.url) : false;
+  const host = active ? (internal ? active.title || 'Chord' : displayHost(active.url)) : '';
+  const title = active && !internal ? pageTitle(active) : '';
   const overlayChrome = info.windowChrome.kind === 'overlay';
   const secure = active?.url.startsWith('https:') ?? false;
   const collapsed = win?.sidebar === 'collapsed';
@@ -145,6 +147,12 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
   const [downloadsSeenAt, setDownloadsSeenAt] = useState(() => Date.now());
   const downloads = summarizeDownloads(state.downloads, downloadsSeenAt);
   const downloadsButton = <DownloadsButton summary={downloads} onOpen={() => setDownloadsSeenAt(Date.now())} />;
+  const archiveLabel = withKeys('Archive', 'app.history', info);
+  const archiveButton = (
+    <button type="button" className={styles.downloadsButton} aria-label="Archive" title={archiveLabel} onClick={() => void api.action.run('app.history')}>
+      <Archive {...ICON} />
+    </button>
+  );
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
   useEffect(() => api.chords.onEdit(setChordEdit), []);
   const createChord = async () => {
@@ -183,7 +191,13 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             title={active?.url ?? ''}
             onClick={() => void api.overlay.open('edit')}
           >
-            {secure ? <Lock size={12} strokeWidth={2} aria-hidden /> : <Globe size={12} strokeWidth={2} aria-hidden />}
+            {internal ? (
+              <Archive size={12} strokeWidth={2} aria-hidden />
+            ) : secure ? (
+              <Lock size={12} strokeWidth={2} aria-hidden />
+            ) : (
+              <Globe size={12} strokeWidth={2} aria-hidden />
+            )}
             <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
             <kbd className={styles.pillKeycap}>{keycap('address.edit', info)}</kbd>
           </button>
@@ -215,7 +229,12 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
             windowId={windowId}
             info={info}
             pill={spring('snappy', 'chordSlide')}
-            leading={downloadsButton}
+            leading={
+              <>
+                {archiveButton}
+                {downloadsButton}
+              </>
+            }
             onCreate={() => void createChord()}
           />
         </nav>

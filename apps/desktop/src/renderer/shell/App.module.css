@@ -423,6 +423,16 @@ kbd {
   color: var(--color-fg-muted);
 }
 
+/* Asleep or not loaded yet: the icon fades a little (DESIGN.md §7.2). */
+.row[data-asleep] > :first-child {
+  opacity: 0.7;
+}
+
+.rowGlyph {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+
 .activePill {
   position: absolute;
   inset: 0;

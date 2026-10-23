@@ -16,6 +16,7 @@ const api: OverlayApi = {
     search: (query) => invoke('history:search', { query }),
     choose: (text, destination, address) => invoke('history:choose', address ? { text, destination, address } : { text, destination }),
   },
+  archive: { restore: (archiveId) => invoke('archive:restore', { archiveId }) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

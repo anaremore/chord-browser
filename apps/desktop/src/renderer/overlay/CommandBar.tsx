@@ -6,6 +6,8 @@
 import { formatKeys, shortcutById, type ActionId } from '@chord/core';
 import type { HistorySearch, OverlayOpenEvent, SystemInfo } from '@chord/ipc';
 import {
+  Archive,
+  ArchiveRestore,
   ArrowDown,
   ArrowUp,
   Code,
@@ -53,6 +55,7 @@ interface Session {
 
 const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'tab.reopen': RotateCcw,
+  'app.history': Archive,
   'tab.close': X,
   'tab.pin': Pin,
   'address.copy': Link,
@@ -89,6 +92,7 @@ function hintFor(result: Result, mode: Session['mode']): string {
   if (result.kind === 'action') return 'Run';
   if (result.kind === 'chord') return 'Switch to chord';
   if (result.kind === 'history') return mode === 'edit' ? 'Go' : 'Open';
+  if (result.kind === 'archive') return 'Bring back';
   if (result.search) return 'Search';
   return mode === 'edit' ? 'Go' : 'Open';
 }
@@ -160,7 +164,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
     const typed = query.trim();
     const destination = destinationOf(result);
     if (typed && typed !== session?.initial && destination) {
-      const address = result.kind === 'open' || result.kind === 'history' ? result.url : result.kind === 'tab' ? result.tab.url : undefined;
+      const address = result.kind === 'open' || result.kind === 'history' || result.kind === 'archive' ? result.url : result.kind === 'tab' ? result.tab.url : undefined;
       void api.history.choose(typed, destination, address && /^https?:/i.test(address) ? address : undefined);
     }
     if (result.kind === 'open' || result.kind === 'history') {
@@ -170,6 +174,8 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       void dispatch({ t: 'tab.activate', windowId, nodeId: result.tab.id });
     } else if (result.kind === 'chord') {
       void dispatch({ t: 'chord.activate', windowId, chordId: result.chord.id });
+    } else if (result.kind === 'archive') {
+      void api.archive.restore(result.archiveId);
     }
     close();
     // Actions run after the bar closes, so focus is back on the page (print, devtools, zoom act on it).
@@ -268,7 +274,9 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                     ? (ACTION_ICONS[result.action] ?? CornerDownLeft)
                     : result.kind === 'history'
                       ? History
-                      : result.kind === 'open'
+                      : result.kind === 'archive'
+                        ? ArchiveRestore
+                        : result.kind === 'open'
                         ? result.search
                           ? Search
                           : Globe
@@ -295,10 +303,11 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                         Icon && <Icon className={styles.resultIcon} size={16} strokeWidth={1.75} aria-hidden />
                       )}
                       <span className={styles.resultTitle}>{result.title}</span>
-                      {(result.kind === 'open' || result.kind === 'tab' || result.kind === 'history') && result.detail && (
+                      {(result.kind === 'open' || result.kind === 'tab' || result.kind === 'history' || result.kind === 'archive') && result.detail && (
                         <span className={styles.resultDetail}>{result.detail}</span>
                       )}
                       {result.kind === 'chord' && <span className={styles.resultDetail}>Chord</span>}
+                      {result.kind === 'archive' && <span className={styles.chip}>Archived</span>}
                       {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
                       {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform)}</kbd>}
                       {isSelected && (

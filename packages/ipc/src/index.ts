@@ -4,9 +4,12 @@
  * Main validates every request against this table; web content gets no IPC.
  */
 import {
+  ARCHIVE_AFTER_MS,
   SEARCH_ENGINES,
   SHORTCUTS,
   type ActionId as CoreActionId,
+  type ArchiveAfter,
+  type ArchivedTab,
   type Choice,
   type Chord,
   type CustomTheme,
@@ -22,7 +25,8 @@ import {
 } from '@chord/core';
 import { z } from 'zod';
 
-export type Role = 'shell' | 'overlay' | 'popover' | 'internal';
+/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs). */
+export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive';
 
 export const Platform = z.enum(['darwin', 'win32', 'linux']);
 export type Platform = z.infer<typeof Platform>;
@@ -102,8 +106,12 @@ void _commandsMatch;
 
 const engineIds = SEARCH_ENGINES.map((e) => e.id) as [SearchEngineId, ...SearchEngineId[]];
 
+const archiveAfterIds = Object.keys(ARCHIVE_AFTER_MS) as [ArchiveAfter, ...ArchiveAfter[]];
+
 export const SettingsPatch = z.strictObject({
   searchEngine: z.enum(engineIds).optional(),
+  archiveAfter: z.enum(archiveAfterIds).optional(),
+  sleepTabs: z.boolean().optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
   separateSignIns: z.boolean().optional(),
   interface: z.strictObject({ contrast: z.number().min(0).max(1), glass: z.number().min(0).max(1) }).partial().optional(),
@@ -161,10 +169,24 @@ export interface PopoverState {
   permission: PermissionPrompt | null;
 }
 
-/** History pages and learned picks for a command bar query (chord-data's SearchResult). */
+/** History pages, archived tabs and learned picks for a command bar query (chord-data's SearchResult). */
 export interface HistorySearch {
   history: { url: string; title: string; visitCount: number; typedCount: number; lastVisitAt: number; frecency: number }[];
   choices: Choice[];
+  archive: ArchivedTab[];
+}
+
+/** The archive page's entries, newest first (chord-data's ArchivePage). */
+export interface ArchiveList {
+  items: ArchivedTab[];
+  more: boolean;
+}
+
+/** What the archive page needs besides its entries: its chord's look, and every chord's name. */
+export interface ArchiveSnapshot {
+  theme: ChordThemeSpec | null;
+  interface: InterfaceSettings;
+  chords: Pick<Chord, 'id' | 'name' | 'icon'>[];
 }
 
 /** A short-lived note in the sidebar, usually with Undo (DESIGN.md §7.5). */
@@ -226,7 +248,7 @@ export interface StatePatchEvent {
 
 /** Renderer → main requests (`ipcRenderer.invoke`). */
 export const invokeChannels = {
-  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal'], request: z.void(), response: SystemInfo },
+  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive'], request: z.void(), response: SystemInfo },
   'state:snapshot': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<StateSnapshot>() },
   'cmd:dispatch': { roles: ['shell', 'overlay'], request: RendererCommand, response: z.void() },
   'nav:command': { roles: ['shell', 'overlay'], request: z.object({ action: NavAction }), response: z.void() },
@@ -248,6 +270,20 @@ export const invokeChannels = {
     request: z.object({ text: z.string().max(1000), destination: z.string().min(1).max(2048), address: url.optional() }),
     response: z.void(),
   },
+  /**
+   * Bring an archived tab back. From the command bar it opens and is shown;
+   * from the archive page it waits in its chord's sidebar, so you can bring back several.
+   */
+  'archive:restore': { roles: ['overlay', 'archive'], request: z.strictObject({ archiveId: id }), response: z.void() },
+  // The archive page (chord://archive), a tab of its own role.
+  'archive:snapshot': { roles: ['archive'], request: z.void(), response: z.custom<ArchiveSnapshot>() },
+  'archive:list': {
+    roles: ['archive'],
+    request: z.strictObject({ query: z.string().max(1000), limit: z.number().int().min(1).max(5000) }),
+    response: z.custom<ArchiveList>(),
+  },
+  /** Forget an archived tab for good. */
+  'archive:remove': { roles: ['archive'], request: z.strictObject({ archiveId: id }), response: z.void() },
   /** Windows/Linux options button: pop the app menu below this rect. */
   'menu:app': { roles: ['shell'], request: Rect, response: z.void() },
   /** Right-click on a chord in the switcher, at this point in the window. */
@@ -295,6 +331,9 @@ export interface EventPayloads {
   'chord:edit': ChordEdit;
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
   'settings:section': string;
+  /** The archive gained or lost entries: the archive page lists them again. */
+  'archive:changed': null;
+  'archive:snapshot': ArchiveSnapshot;
 }
 
 export type InvokeChannel = keyof typeof invokeChannels;
@@ -364,6 +403,22 @@ export interface SettingsApi {
   };
 }
 
+/** `window.chord` on the archive page. */
+export interface ArchiveApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  archive: {
+    snapshot(): Promise<ArchiveSnapshot>;
+    onSnapshot(listener: (snapshot: ArchiveSnapshot) => void): () => void;
+    list(query: string, limit: number): Promise<ArchiveList>;
+    onChange(listener: () => void): () => void;
+    restore(archiveId: string): Promise<void>;
+    remove(archiveId: string): Promise<void>;
+  };
+}
+
 /** `window.chord` in the popover (find bar, permission prompts). */
 export interface PopoverApi {
   system: {
@@ -399,4 +454,5 @@ export interface OverlayApi {
     search(query: string): Promise<HistorySearch>;
     choose(text: string, destination: string, address?: string): Promise<void>;
   };
+  archive: { restore(archiveId: string): Promise<void> };
 }

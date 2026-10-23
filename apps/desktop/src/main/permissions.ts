@@ -65,10 +65,18 @@ export interface PermissionDeps {
   onChange(): void;
 }
 
+const CAPTURE: readonly SitePermission[] = ['camera', 'microphone'];
+
 export class PermissionBroker {
   private deps: PermissionDeps | null = null;
   private readonly pending: Pending[] = [];
   private nextId = 1;
+  /**
+   * Tabs whose page was given the camera or microphone. Electron can't say
+   * whether a page is still using them, so this holds until the page goes;
+   * such tabs are never slept or archived (ARCHITECTURE.md §9).
+   */
+  private readonly capturing = new Set<NodeId>();
 
   /** Called once Browser exists; sessions can be attached before that. */
   connect(deps: PermissionDeps): void {
@@ -84,7 +92,10 @@ export class PermissionBroker {
       const nodeId = this.deps?.nodeFor(contents);
       if (!wanted || !origin || !nodeId || !this.deps) return callback(false);
       const remembered = rememberedDecision(this.deps.state(), origin, wanted);
-      if (remembered) return callback(remembered === 'allow');
+      if (remembered) {
+        if (remembered === 'allow') this.granted(nodeId, wanted);
+        return callback(remembered === 'allow');
+      }
       this.pending.push({ id: this.nextId++, nodeId, origin, host: new URL(origin).host, permissions: wanted, answer: callback });
       this.deps.onChange();
     });
@@ -111,20 +122,32 @@ export class PermissionBroker {
     if (decision !== 'dismiss') {
       this.deps?.dispatch({ t: 'permission.set', origin: prompt!.origin, permissions: prompt!.permissions, decision });
     }
+    if (decision === 'allow') this.granted(prompt!.nodeId, prompt!.permissions);
     prompt!.answer(decision === 'allow');
     // Other requests from the same site for the same things are answered too.
     for (const other of this.pending.filter((p) => p.origin === prompt!.origin && this.deps)) {
       const remembered = rememberedDecision(this.deps!.state(), other.origin, other.permissions);
       if (remembered) {
         this.pending.splice(this.pending.indexOf(other), 1);
+        if (remembered === 'allow') this.granted(other.nodeId, other.permissions);
         other.answer(remembered === 'allow');
       }
     }
     this.deps?.onChange();
   }
 
-  /** A tab navigated away or closed: whatever it asked for is denied. */
+  /** Whether the tab's page was given the camera or microphone. */
+  isCapturing(nodeId: NodeId): boolean {
+    return this.capturing.has(nodeId);
+  }
+
+  private granted(nodeId: NodeId, permissions: readonly SitePermission[]): void {
+    if (permissions.some((p) => CAPTURE.includes(p))) this.capturing.add(nodeId);
+  }
+
+  /** A tab navigated away or closed: whatever it asked for is denied, and whatever it was given ends. */
   forgetTab(nodeId: NodeId): void {
+    this.capturing.delete(nodeId);
     let changed = false;
     for (let i = this.pending.length - 1; i >= 0; i--) {
       if (this.pending[i]!.nodeId !== nodeId) continue;

@@ -6,11 +6,13 @@
  */
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { PersistedState, State } from '@chord/core';
+import type { ArchiveReason, PersistedState, State } from '@chord/core';
 import {
   opKey,
   opsForState,
   opsFromPatches,
+  type ArchiveEntry,
+  type ArchivePage,
   type DataRequest,
   type DataResponse,
   type HistoryEvent,
@@ -98,20 +100,42 @@ export class Persistence {
     this.schedule();
   }
 
-  /** A visit, a late title, or a command bar pick. */
+  /** A visit, a late title, a command bar pick, or a tab going to (or leaving) the archive. */
   history(event: HistoryEvent): void {
     if (this.closed) return;
     this.events.push(event);
     this.schedule();
   }
 
-  /** History and learned picks for what was typed in the command bar. */
+  /** History, archived tabs and learned picks for what was typed in the command bar. */
   async search(query: string, chordId: string | null): Promise<SearchResult> {
     try {
       const response = await this.request({ type: 'search', query, chordId, now: Date.now() });
-      return response.ok && response.search ? response.search : { history: [], choices: [] };
+      return response.ok && response.search ? response.search : { history: [], choices: [], archive: [] };
     } catch {
-      return { history: [], choices: [] };
+      return { history: [], choices: [], archive: [] };
+    }
+  }
+
+  /** The archive page's entries. Pending writes go first, so a tab archived a moment ago is there. */
+  async archiveList(query: string, limit: number): Promise<ArchivePage> {
+    try {
+      await this.flush();
+      const response = await this.request({ type: 'archive.list', query, limit });
+      return response.ok && response.archive ? response.archive : { items: [], more: false };
+    } catch {
+      return { items: [], more: false };
+    }
+  }
+
+  /** One archive entry with its history, or the newest one archived for `reasons`. */
+  async archiveEntry(which: { archiveId: string } | { reasons: ArchiveReason[] }): Promise<ArchiveEntry | null> {
+    try {
+      await this.flush();
+      const response = await this.request('archiveId' in which ? { type: 'archive.get', archiveId: which.archiveId } : { type: 'archive.latest', reasons: which.reasons });
+      return response.ok ? (response.entry ?? null) : null;
+    } catch {
+      return null;
     }
   }
 

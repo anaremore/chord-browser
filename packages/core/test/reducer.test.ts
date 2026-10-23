@@ -293,3 +293,110 @@ describe('reducer', () => {
     expect(mirror).toEqual(t.state);
   });
 });
+
+describe('archive and sleep', () => {
+  const open = (t: ReturnType<typeof setup>, ...hosts: string[]) => {
+    for (const h of hosts) t.run({ t: 'tab.open', windowId: 'w1', url: `https://${h}.test/` });
+  };
+
+  it('closing a Today tab archives it first, keeping it on the ⌘⇧T list with its archive entry', () => {
+    const t = setup();
+    open(t, 'a', 'b');
+    const result = t.run({ t: 'tab.close', windowId: 'w1', nodeId: 'id-001' });
+    const saveAt = result.effects.findIndex((e) => e.e === 'archive.save');
+    const destroyAt = result.effects.findIndex((e) => e.e === 'view.destroy');
+    expect(saveAt).toBeGreaterThanOrEqual(0);
+    // Saved before the view goes, so its back/forward history can still be read.
+    expect(saveAt).toBeLessThan(destroyAt);
+    const save = result.effects[saveAt] as Extract<(typeof result.effects)[number], { e: 'archive.save' }>;
+    expect(save.tab).toMatchObject({ url: 'https://a.test/', reason: 'closed', chordId: 'c1' });
+    expect(t.state.closed[0]!.archiveId).toBe(save.tab.id);
+
+    const reopened = t.run({ t: 'tab.reopenClosed', windowId: 'w1' });
+    expect(reopened.effects[0]).toEqual({ e: 'archive.restored', archiveId: save.tab.id, nodeId: 'id-001' });
+  });
+
+  it("closing Chord's own page doesn't archive it", () => {
+    const t = setup();
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'chord://archive/' });
+    const result = t.run({ t: 'tab.close', windowId: 'w1', nodeId: 'id-001' });
+    expect(result.effects.some((e) => e.e === 'archive.save')).toBe(false);
+    expect(t.state.closed[0]!.archiveId).toBeNull();
+  });
+
+  it('auto-archive takes idle tabs quietly: not onto the ⌘⇧T list, never the one on screen', () => {
+    const t = setup();
+    open(t, 'a', 'b', 'c');
+    // c is on screen.
+    const result = t.run({ t: 'tab.archive', nodeIds: ['id-001', 'id-002', 'id-003'], reason: 'auto' });
+    expect(titles(t.state)).toEqual(['https://c.test/']);
+    expect(t.state.closed).toEqual([]);
+    expect(result.effects.filter((e) => e.e === 'archive.save')).toHaveLength(2);
+    expect(t.state.windows['w1']!.activeTab['c1']).toBe('id-003');
+  });
+
+  it('Clear archives the Today tabs you can see, lands on what stays, and ⌘⇧T brings them back', () => {
+    const t = setup();
+    open(t, 'a', 'b');
+    t.run({ t: 'tab.pin', nodeId: 'id-001' });
+    t.run({ t: 'tab.archive', nodeIds: ['id-002'], reason: 'cleared' });
+    expect(t.state.windows['w1']!.activeTab['c1']).toBe('id-001');
+    expect(t.state.closed).toHaveLength(1);
+    t.run({ t: 'tab.reopenClosed', windowId: 'w1' });
+    expect(titles(t.state)).toEqual(['https://a.test/', 'https://b.test/']);
+  });
+
+  it('brings a tab back from the archive into its chord, shown or waiting in the sidebar', () => {
+    const t = setup();
+    open(t, 'a');
+    const tab = { id: 'arch-1', chordId: 'c1', url: 'https://old.test/', title: 'Old', favicon: null, reason: 'auto' as const, archivedAt: 5 };
+    const waiting = t.run({ t: 'archive.restore', windowId: 'w1', nodeId: 'n-1', tab, activate: false });
+    expect(titles(t.state)[0]).toBe('https://old.test/');
+    expect(t.state.windows['w1']!.activeTab['c1']).toBe('id-001');
+    expect(t.state.live['n-1']).toBeUndefined();
+    expect(waiting.effects).toEqual([{ e: 'archive.restored', archiveId: 'arch-1', nodeId: 'n-1' }]);
+
+    const shown = t.run({ t: 'archive.restore', windowId: 'w1', nodeId: 'n-2', tab: { ...tab, id: 'arch-2' }, activate: true });
+    expect(t.state.windows['w1']!.activeTab['c1']).toBe('n-2');
+    const kinds = shown.effects.map((e) => e.e);
+    // The saved history is handed over before the view is made.
+    expect(kinds.indexOf('archive.restored')).toBeLessThan(kinds.indexOf('view.ensure'));
+  });
+
+  it('a tab brought back from the archive leaves the ⌘⇧T list', () => {
+    const t = setup();
+    open(t, 'a', 'b');
+    t.run({ t: 'tab.close', windowId: 'w1', nodeId: 'id-001' });
+    const entry = t.state.closed[0]!;
+    const tab = { id: entry.archiveId!, chordId: 'c1', url: entry.node.url, title: '', favicon: null, reason: 'closed' as const, archivedAt: 1 };
+    t.run({ t: 'archive.restore', windowId: 'w1', nodeId: 'n-1', tab, activate: false });
+    expect(t.state.closed).toEqual([]);
+  });
+
+  it('sleeps hidden tabs only, dropping their live state', () => {
+    const t = setup();
+    open(t, 'a', 'b');
+    t.run({ t: 'tab.live', nodeId: 'id-001', live: { loading: false } });
+    expect(t.run({ t: 'tab.sleep', nodeId: 'id-002' }).effects).toEqual([]);
+    const result = t.run({ t: 'tab.sleep', nodeId: 'id-001' });
+    expect(result.effects).toEqual([{ e: 'view.sleep', nodeId: 'id-001' }]);
+    expect(t.state.live['id-001']).toBeUndefined();
+    expect(t.state.nodes['id-001']).toBeDefined();
+  });
+
+  it('a tab counts as used until you leave it, so idle time starts then', () => {
+    const t = setup();
+    open(t, 'a', 'b');
+    // An hour later, switch from b to a.
+    const later = apply(t.state, { t: 'tab.activate', windowId: 'w1', nodeId: 'id-001' }, { now: 3_600_000, newId: () => 'unused' }).state;
+    expect((later.nodes['id-001'] as TabNode).lastActiveAt).toBe(3_600_000);
+    // b was in use until just now, and stays just behind a in recently-used order.
+    expect((later.nodes['id-002'] as TabNode).lastActiveAt).toBe(3_599_999);
+  });
+
+  it('changes the archive and sleep settings', () => {
+    const t = setup();
+    t.run({ t: 'settings.set', settings: { archiveAfter: '7d', sleepTabs: false } });
+    expect(t.state.settings).toMatchObject({ archiveAfter: '7d', sleepTabs: false });
+  });
+});

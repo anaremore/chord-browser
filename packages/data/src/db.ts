@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
+  ARCHIVE_KEEP_MS,
   foldChoiceText,
   frecencyOn,
   pickedAgain,
@@ -13,6 +14,8 @@ import {
   profilePartition,
   terms,
   used,
+  type ArchivedTab,
+  type ArchiveReason,
   type Chord,
   type ChordThemeSpec,
   type Choice,
@@ -24,7 +27,7 @@ import {
   type TabNode,
   type WindowModel,
 } from '@chord/core';
-import type { HistoryEvent, SearchResult, WriteOp } from './index';
+import type { ArchiveEntry, ArchivePage, HistoryEvent, NavState, SearchResult, WriteOp } from './index';
 import { MIGRATIONS } from './migrations';
 
 /** The profile every chord belongs to until "Keep sign-ins separate" exists. */
@@ -32,6 +35,8 @@ const DEFAULT_PROFILE = 'default';
 /** History rows a search ranks; the command bar shows a handful. */
 const SEARCH_LIMIT = 50;
 const MAX_CHOICES_PER_CHORD = 1000;
+/** Archive matches the command bar ranks. */
+const ARCHIVE_SEARCH_LIMIT = 20;
 /** Picks nobody repeats are forgotten after 90 days. */
 const CHOICE_LIFETIME_MS = 90 * 86_400_000;
 const SIDEBAR_WIDTH = 248;
@@ -62,6 +67,22 @@ function splitDataUrl(url: string): { key: string; mime: string; data: Uint8Arra
 
 const joinDataUrl = (mime: string, data: Uint8Array) => `data:${mime};base64,${Buffer.from(data).toString('base64')}`;
 
+/** Archive entries with their icons. */
+const ARCHIVE_SELECT = `SELECT a.*, i.mime AS icon_mime, i.data AS icon_data FROM archive_item a LEFT JOIN favicon i ON i.key = a.favicon_key`;
+
+function archivedTab(r: Row): ArchivedTab {
+  const reason = str(r['reason']);
+  return {
+    id: str(r['id']),
+    chordId: str(r['chord_id']),
+    url: str(r['url']),
+    title: str(r['title']),
+    favicon: typeof r['icon_mime'] === 'string' && r['icon_data'] instanceof Uint8Array ? joinDataUrl(r['icon_mime'], r['icon_data']) : null,
+    reason: reason === 'closed' || reason === 'cleared' ? reason : 'auto',
+    archivedAt: num(r['archived_at']),
+  };
+}
+
 export class ChordDatabase {
   private readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
@@ -70,8 +91,12 @@ export class ChordDatabase {
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
     this.migrate();
-    // Icons no tab uses any more, and picks unused for their lifetime.
-    this.db.exec('DELETE FROM favicon WHERE key NOT IN (SELECT favicon_key FROM tab WHERE favicon_key IS NOT NULL)');
+    // Archived tabs past their keep-by date, icons nothing uses any more, and picks unused for their lifetime.
+    this.db.prepare('DELETE FROM archive_item WHERE archived_at < ?').run(Date.now() - ARCHIVE_KEEP_MS);
+    this.db.exec(
+      `DELETE FROM favicon WHERE key NOT IN (SELECT favicon_key FROM tab WHERE favicon_key IS NOT NULL
+         UNION SELECT favicon_key FROM archive_item WHERE favicon_key IS NOT NULL)`,
+    );
     this.db.prepare('DELETE FROM palette_choice WHERE last_used_at < ?').run(Date.now() - CHOICE_LIFETIME_MS);
   }
 
@@ -230,6 +255,19 @@ export class ChordDatabase {
   }
 
   private record(event: HistoryEvent): void {
+    if (event.k === 'archive') {
+      const { tab, nav } = event;
+      const icon = tab.favicon ? this.storeFavicon(tab.favicon, tab.archivedAt) : null;
+      this.sql(
+        `INSERT INTO archive_item (id, profile_id, chord_id, url, title, favicon_key, nav_state, reason, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+      ).run(tab.id, DEFAULT_PROFILE, tab.chordId, tab.url, tab.title, icon, nav ? JSON.stringify(nav) : null, tab.reason, tab.archivedAt);
+      return;
+    }
+    if (event.k === 'unarchive') {
+      this.sql('DELETE FROM archive_item WHERE id = ?').run(event.id);
+      return;
+    }
     if (event.k === 'title') {
       const place = placeKey(event.url);
       if (place && event.title) {
@@ -311,6 +349,7 @@ export class ChordDatabase {
             lastVisitAt: num(r['last_visit_at']),
             frecency: frecencyOn(num(r['decay_day']), now),
           }));
+    const archive = words.length === 0 ? [] : this.archiveMatching(words, ARCHIVE_SEARCH_LIMIT, 'bm25(archive_fts)');
     const text = foldChoiceText(query);
     const choices: Choice[] =
       chordId && text
@@ -322,7 +361,67 @@ export class ChordDatabase {
             ) as Row[]
           ).map((r) => ({ text: str(r['text']), destination: str(r['destination']), uses: num(r['uses']), lastUsedAt: num(r['last_used_at']) }))
         : [];
-    return { history, choices };
+    return { history, choices, archive };
+  }
+
+  /**
+   * The archive page: the newest `limit` entries whose title or address has
+   * every typed word (as a prefix), or contains the text when it's one letter.
+   */
+  archiveList(query: string, limit: number): ArchivePage {
+    const trimmed = query.trim();
+    const words = terms(trimmed).filter((w) => [...w].length >= 2);
+    let rows: Row[];
+    if (!trimmed) {
+      rows = this.sql(`${ARCHIVE_SELECT} WHERE a.profile_id = ? ORDER BY a.archived_at DESC, a.rid DESC LIMIT ?`).all(DEFAULT_PROFILE, limit + 1) as Row[];
+    } else if (words.length === 0) {
+      const like = `%${trimmed.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      rows = this.sql(
+        `${ARCHIVE_SELECT} WHERE a.profile_id = ? AND (a.title LIKE ? ESCAPE '\\' OR a.url LIKE ? ESCAPE '\\')
+          ORDER BY a.archived_at DESC, a.rid DESC LIMIT ?`,
+      ).all(DEFAULT_PROFILE, like, like, limit + 1) as Row[];
+    } else {
+      return this.archivePage(this.archiveMatching(words, limit + 1, 'a.archived_at DESC, a.rid DESC'), limit);
+    }
+    return this.archivePage(rows.map(archivedTab), limit);
+  }
+
+  private archivePage(items: ArchivedTab[], limit: number): ArchivePage {
+    return { items: items.slice(0, limit), more: items.length > limit };
+  }
+
+  private archiveMatching(words: string[], limit: number, order: string): ArchivedTab[] {
+    const match = words.map((w) => `"${w.replaceAll('"', '""')}"*`).join(' ');
+    return (
+      this.sql(
+        `${ARCHIVE_SELECT} JOIN archive_fts ON archive_fts.rowid = a.rid
+          WHERE archive_fts MATCH ? AND a.profile_id = ? ORDER BY ${order} LIMIT ?`,
+      ).all(match, DEFAULT_PROFILE, limit) as Row[]
+    ).map(archivedTab);
+  }
+
+  /** One entry, with the history it needs to come back. */
+  archiveGet(id: string): ArchiveEntry | null {
+    const row = this.sql(`${ARCHIVE_SELECT} WHERE a.id = ?`).get(id) as Row | undefined;
+    return row ? { tab: archivedTab(row), nav: parseJson<NavState | null>(row['nav_state'], null) } : null;
+  }
+
+  /** The newest entry archived for one of `reasons`: what ⌘⇧T reopens once this session's list runs out. */
+  archiveLatest(reasons: readonly ArchiveReason[]): ArchiveEntry | null {
+    if (reasons.length === 0) return null;
+    const row = this.sql(
+      `${ARCHIVE_SELECT} WHERE a.profile_id = ? AND a.reason IN (${reasons.map(() => '?').join(', ')})
+        ORDER BY a.archived_at DESC, a.rid DESC LIMIT 1`,
+    ).get(DEFAULT_PROFILE, ...reasons) as Row | undefined;
+    return row ? { tab: archivedTab(row), nav: parseJson<NavState | null>(row['nav_state'], null) } : null;
+  }
+
+  /** A `data:` icon, stored once by content hash; returns its key. */
+  private storeFavicon(url: string, now: number): string | null {
+    const icon = splitDataUrl(url);
+    if (!icon) return null;
+    this.sql('INSERT INTO favicon (key, data, mime, fetched_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO NOTHING').run(icon.key, icon.data, icon.mime, now);
+    return icon.key;
   }
 
   private writeChord(id: string, chord: Chord | null, now: number): void {
@@ -368,15 +467,12 @@ export class ChordDatabase {
       return;
     }
     this.sql('DELETE FROM folder WHERE node_id = ?').run(id);
-    const icon = node.favicon ? splitDataUrl(node.favicon) : null;
-    if (icon) {
-      this.sql('INSERT INTO favicon (key, data, mime, fetched_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO NOTHING').run(icon.key, icon.data, icon.mime, now);
-    }
+    const iconKey = node.favicon ? this.storeFavicon(node.favicon, now) : null;
     this.sql(
       `INSERT INTO tab (node_id, pinned_url, custom_title, url, title, favicon_key, last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(node_id) DO UPDATE SET pinned_url = excluded.pinned_url, custom_title = excluded.custom_title, url = excluded.url,
          title = excluded.title, favicon_key = excluded.favicon_key, last_active_at = excluded.last_active_at`,
-    ).run(id, node.pinnedUrl, node.customTitle, node.url, node.title, icon?.key ?? null, node.lastActiveAt);
+    ).run(id, node.pinnedUrl, node.customTitle, node.url, node.title, iconKey, node.lastActiveAt);
   }
 
   private writeSitePermissions(origin: string, decisions: SitePermissions[string] | null, now: number): void {
