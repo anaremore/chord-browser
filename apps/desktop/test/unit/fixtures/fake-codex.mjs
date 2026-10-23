@@ -33,6 +33,9 @@ async function runTurn(text, turnId) {
   const decision = await ask('item/fileChange/requestApproval', { threadId: thread, turnId, itemId: 'fc_1' });
   write({ method: 'item/agentMessage/delta', params: { threadId: thread, turnId, itemId: 'm1', delta: `tool:${tool.contentItems?.[0]?.text ?? ''} ` } });
   write({ method: 'item/agentMessage/delta', params: { threadId: thread, turnId, itemId: 'm1', delta: `file:${decision.decision}` } });
+  // codex-cli 0.160.1's shape: the last request's tokens, the thread's total, and the window (null when unknown).
+  const breakdown = (totalTokens) => ({ totalTokens, inputTokens: totalTokens - 840, cachedInputTokens: 20_000, cacheWriteInputTokens: 0, outputTokens: 840, reasoningOutputTokens: 0 });
+  write({ method: 'thread/tokenUsage/updated', params: { threadId: thread, turnId, tokenUsage: { total: breakdown(51_680), last: breakdown(25_840), modelContextWindow: 258_400 } } });
   write({ method: 'turn/completed', params: { threadId: thread, turn: { id: turnId, status: 'completed' } } });
 }
 

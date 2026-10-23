@@ -102,6 +102,7 @@ chord-browser/
 │  │  └─ pages/                 chord://settings, chord://archive
 │  ├─ src/data/                 "chord-data" utility process: SQLite, search, favicons
 │  ├─ src/main/duet/            Duet: CLI adapters, its tools and page extraction (in main, §11.2)
+│  ├─ src/pdf/                  Duet's PDF reader: pdf.js in a utility process, one per PDF read (§11.4)
 │  ├─ test/                     unit · e2e (dev build) · packaged (smoke test of a packaged build)
 │  ├─ build/                    packaging resources: app icon; later NSIS include, entitlements
 │  └─ electron-builder.config.ts
@@ -150,7 +151,8 @@ flowchart LR
 |---|---|---|
 | **Main** | Lifecycle, windows, WebContentsView creation and placement, sessions and profiles, navigation policy, permissions, downloads, shortcuts, menus, default browser, updates. Holds the **authoritative in-memory Store**. | Owns every native object. It is never allowed to block: no SQLite, no search. Duet only pipes stdio to the CLIs (§11.2). |
 | **chord-data** (utilityProcess) | SQLite connection (WAL), migrations, write-behind persistence, history, archive, FTS5 search, favicon cache, backups. | Synchronous SQLite stays off main. A crash here doesn't take down windows: main buffers writes and respawns it. |
-| **Duet's CLIs** (the user's `claude` / `codex`, lazy) | One per active chat, at most 3; each answers through stdio, and Duet (in main) answers their tool calls and streams replies to the shell. | The CLIs are third-party processes doing the network and model I/O. **Nothing is spawned** until a message is sent, and each is killed after 10 minutes idle. A planned `chord-agent` utility process proved unnecessary (§11.2). |
+| **Duet's CLIs** (the user's `claude` / `codex`, lazy) | One per active chat, at most 3; each answers through stdio, and Duet (in main) answers their tool calls and streams replies to the shell. On Windows a CLI installed only inside WSL runs through `wsl.exe` (§11.1). | The CLIs are third-party processes doing the network and model I/O. **Nothing is spawned** until a message is sent, and each is killed after 10 minutes idle. A planned `chord-agent` utility process proved unnecessary (§11.2). |
+| **PDF reader** (utilityProcess, one per PDF read) | pdf.js turns a PDF's bytes into each page's text when Duet reads a PDF tab (§11.4). | Parsing a file from the web is untrusted work: it stays off main, gets 30 seconds, and the process is thrown away after each read. |
 | **Shell renderer** (1 per window) | React UI: sidebar, content-frame shadows and placeholders, Win/Linux top strip, Duet panel, toasts, onboarding. | Our trusted UI, still sandboxed. |
 | **Overlay renderer** (1 per window, pre-warmed) | Command bar, Peek frame chrome, split-view drop zones. | Must paint above web content ([§5](#5-window-composition)). Kept mounted and hidden so it opens in < 50 ms. |
 | **Popover renderer** (1 per window, pre-warmed) | Hover previews, permission prompts. Its bounds are sized to the card. | Electron views can't pass clicks through (see [§5](#5-window-composition)), so popovers must not cover the sidebar. |
@@ -601,7 +603,12 @@ Built in Phase 2 on spikes S10 ([docs/decisions/S10-claude-headless.md](docs/dec
 | No Electron-as-Node | Chord spawns the native binaries. Chord's tools are served in-process over the CLI's own stdio (§11.2), so no helper needs the RunAsNode fuse, which is off ([§14.1](#141-hardening)). |
 | Setup is the user's own step | D2: no provider agreement. Anthropic may enforce its terms "without prior notice"; R8 tracks policy changes. |
 
-**Versions:** minimum Claude Code 2.1.268 and Codex 0.160.0; tested with **Claude Code 2.1.309** and **codex-cli 0.160.1**. An older CLI shows *Needs an update* but isn't blocked. Features are detected from `system/init.capabilities` (Claude) and the app-server's responses (Codex). WSL-only installs aren't detected yet.
+**Versions:** minimum Claude Code 2.1.268 and Codex 0.160.0; tested with **Claude Code 2.1.309** and **codex-cli 0.160.1**. An older CLI shows *Needs an update* but isn't blocked. Claude Code older than the minimum isn't asked `auth status` (1.x has no `auth` command and would take it as a prompt), so Setup offers *How to update* instead of *Sign in*. Features are detected from `system/init.capabilities` (Claude) and the app-server's responses (Codex).
+
+**Installed only inside WSL (Windows, D11).** If `claude` or `codex` isn't found on Windows itself, Setup looks in the default WSL distro and offers *Claude Code in WSL (Ubuntu)* (`launch.ts`, `detect.ts`):
+- **Finding it, cheaply.** The default distro's name comes from the registry (`HKCU\…\Lxss`), which doesn't start WSL; with no distro, nothing runs and nothing shows. Only then does one probe (`wsl.exe -d <distro> -e sh -c …`, 25-second timeout, never awaited by the UI) ask the user's login shell (`$SHELL -ilc`, since nvm lives in `.bashrc`) for its `PATH` and any `CLAUDE_CONFIG_DIR`, drop the Windows folders WSL appends (so a Windows CLI seen through interop doesn't count), and run `command -v`. Setup says *Looking in WSL…* meanwhile. WSL is looked at only when it matters: *Check again*, Settings → Duet, and opening the panel while Setup shows or when the provider in use lives in WSL; never at launch. What it found is kept in `panel.json`, so a WSL-only setup is ready at launch without starting WSL. (Cold start measured at 7 s on Windows 11.)
+- **Running it.** `wsl.exe -d <distro> --cd <empty folder> -e env PATH=<shell PATH> [CLAUDE_CONFIG_DIR=…] CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 <cli> <the same flags as above>`. `-e` hands every argument over as is, the empty `--tools ""` included (checked), with no shell. Windows variables don't cross into WSL, hence `env`. The empty folder and the instructions file are the same Windows files at their `/mnt/c/…` paths (`wslpath`'s mount root); Codex gets that path as its thread's `cwd`. Closing ends stdin first, which ends the CLI inside the distro, then the `wsl.exe` tree.
+- **Sign in** opens a console running `wsl.exe -d <distro> -e <the user's shell> -lic "exec '<cli>' auth login"`, so the login runs where the CLI lives. **Resume** works unchanged. **Delete** removes `<config>/projects/<the distro's path to the empty folder>/<session>.jsonl` and its folder inside the distro (`wsl.exe -e rm -rf -- …`); Codex deletes through `thread/delete` as before.
 
 ### 11.2 Runtime
 
@@ -664,6 +671,11 @@ codex app-server --disable shell_tool --disable unified_exec --disable view_imag
 
 **Errors** map to plain causes and fixes: signed out (*Run `claude auth login`*), usage limit (with Codex's reset time), rate limit, overloaded, model not available, the tripwire, and *Interrupted*.
 
+**Context used.** A small meter in the panel's header shows how much of the model's context the chat holds, from the usage each CLI already streams; nothing is estimated, and a CLI that doesn't report the window gets no meter. Its tooltip says what happens next: both CLIs compact the conversation automatically when it fills up.
+- **Claude Code** (checked against 2.1.309): each `result` has `modelUsage[<model>].contextWindow` (1,000,000 for the default `claude-opus-5-5`, checked live over two turns with Duet's flags) and `usage.iterations`, one entry per request in the turn. `usage` is that turn's alone; `modelUsage` adds up over the session and, from the second turn, also lists a background helper (`claude-haiku-5-5`). Used = the last request's `input_tokens + cache_creation_input_tokens + cache_read_input_tokens + output_tokens` (else the last `message_delta`'s usage). The model is `system/init.model`, then each reply's `message.model`; another model's entry (a background helper) never sets the window.
+- **Codex** (0.160.1's generated schema): `thread/tokenUsage/updated {tokenUsage: {total, last, modelContextWindow: number | null}}`. Used = `last.totalTokens`; a null window hides the meter. Compaction shows up as a `contextCompaction` item, which the tripwire allows.
+- The meter is per chat, in memory: it appears after the first answer, and resets when the provider changes or a session continues from a summary.
+
 ### 11.3 Tools and reading scope
 
 All tools are **read-only** and named in snake_case (the Claude API's and Codex's name rules); Claude Code also sees them marked `readOnlyHint`.
@@ -671,7 +683,7 @@ All tools are **read-only** and named in snake_case (the Claude API's and Codex'
 | Tool | Reads |
 |---|---|
 | `list_tabs` | Titles and sites of the chord's tabs (all chords under *All my tabs*) |
-| `read_tab {tab_id, start?}` | A tab's text in ranges of about **40,000 characters** (Claude Code saves larger results to a file a browse thread can't open) |
+| `read_tab {tab_id, start?}` | A tab's text in ranges of about **40,000 characters** (Claude Code saves larger results to a file a browse thread can't open). A PDF's text, with `[Page n]` markers (§11.4) |
 | `read_selection {tab_id}` | The selected text |
 | `tab_screenshot {tab_id}` | A PNG at most 1280 px wide |
 | `search_history {query}` · `search_archive {query}` | Matching pages |
@@ -680,13 +692,20 @@ All tools are **read-only** and named in snake_case (the Claude API's and Codex'
 
 **Never readable**, whatever the scope: private windows, chords where Duet is off, sites on the *Never* list (and their subdomains), `chord://`, `chrome-extension://` and other non-web pages, and form field values. History and archive results leave out the same sites and chords.
 
-**Citations:** the prompt asks for `[[t1:"exact quote"]]` after a claim. The panel shows a numbered pill; clicking it activates the tab and finds the quote, or, if the tab is gone, opens the page with a `#:~:text=` fragment.
+**Citations:** the prompt asks for `[[t1:"exact quote"]]` after a claim. The panel shows a numbered pill; clicking it activates the tab and finds the quote, or, if the tab is gone, opens the page with a `#:~:text=` fragment. A PDF's pill also names the page (*1 · p. 3*), which Chord finds by searching the text it read, not by asking the model. Find in page works inside Chromium's PDF viewer (it goes to the page and marks the quote); if the viewer can't find the quote as written, the tab reloads at `#page=N` (the viewer reads the fragment only when it loads). A PDF whose tab is gone opens at `#page=N`.
 
 ### 11.4 Content extraction and prompt-injection posture
 
 Page content is **untrusted input** handed to a model.
 
 - **Extraction** (`extract.ts`) runs in an **isolated world** (4400), so page scripts can't tamper with it. It takes rendered text only. It skips `input`, `textarea`, `select`, `option`, `button`, a focused `contenteditable`, `script`/`style`/`template`/`noscript`, and hidden, zero-size or off-screen elements. *Test:* the E2E types secrets into five kinds of field and checks none reach the model.
+- **PDFs.** Chromium's viewer shows a PDF inside the tab (its document says `application/pdf`), where the extractor sees only an empty viewer. So Duet (`pdf.ts`):
+  - checks every rule first, exactly as for a page: Never sites, chords where Duet is off, private windows, the chat's scope and *Ask first*;
+  - fetches the file again with **the tab's own session** (`session.fetch`, `credentials: 'include'`, the HTTP cache first), so the user's cookies apply and a private session would stay in memory; the address it ends at, after redirects, must still be readable;
+  - refuses past **25 MB** (from `Content-Length`, or while streaming, so the rest is never downloaded), and anything that doesn't start like a PDF;
+  - hands the bytes to a **PDF reader utility process** (`src/pdf/worker.ts`) running **pdf.js** (`pdfjs-dist`, Apache-2.0, shipped in `licenses/`) for text only: no worker file, no fetching (CMaps, fonts, wasm), no canvas, fonts, XFA or scripts. It reads at most **200 pages**, has 30 seconds, and is thrown away after each read;
+  - returns the text with `[Page n]` markers as `{source: "pdf", …, pages: {total, read}, note?}`. The note says when only the first 200 pages were read, or that a PDF has no text (scanned pages: `tab_screenshot` shows the page). A password, a damaged file or a timeout is a plain refusal, shown in the activity line too (*Couldn't read “Report” · it's password-protected*). Later ranges of the same PDF reuse the read (three PDFs kept per chat).
+  - `read_selection` can't see inside the viewer and says so. ⚠ PDFs that need Adobe's CMaps (some CJK text) may read incompletely: they aren't shipped.
 - **Hidden characters** are stripped: Unicode tag characters (U+E0000–E007F), zero-width and bidi controls, soft hyphens.
 - **Page text only arrives in tool results**, JSON-encoded with provenance: `{source: "web_page", tab_id, origin, url, retrieved_at, trust: "untrusted", range, content}`. The user's turn carries only opaque handles and Chord-made site labels (*Attached: tab t1 · example.com*), never titles or page text. Duet's instructions say tool results are data, never instructions.
 - **Containment:** no shell, files, web fetch or other MCP servers in either CLI (§11.2); Duet's tools only read.
@@ -699,13 +718,13 @@ Page content is **untrusted input** handed to a model.
 
 - **Chord's transcript is the source of truth** (chord-data migration 9): `duet_thread` (chord, title, provider, model, provider session id, scope, times), `duet_message` (role and a JSON body) and `duet_fts`, which the command bar's **`@duet`** filter searches. A provider's session is a cache, resumed when it works.
 - **Threads:** one per chord at a time. After **12 hours** idle the panel starts fresh and offers *Continue “title”*. The Chats menu has New chat, Rename, Export as Markdown (to Downloads), Delete this chat, recent chats, and *Turn off in this chord*. Titles come from the first message. Switching provider mid-chat continues from a summary (*Switched to Codex*).
-- **Panel state** (drafts, whether the first-use note was seen) lives in `userData/duet/panel.json`.
+- **Panel state** (drafts, whether the first-use note was seen, and any CLI found inside WSL: its distro, path, the shell's `PATH`) lives in `userData/duet/panel.json`.
 - **Retention:** *Keep Duet chats: Forever · 90 days · 30 days*, pruned at launch; *Clear all Duet chats* (asks twice, in place).
-- **Delete really deletes:** Chord removes its rows, then the provider's copy. For Claude, that's `<config>/projects/<Chord's empty folder>/<session>.jsonl` and its `<session>/` folder, found by exact id; for Codex, `thread/delete`. Chord reads nothing else there. Settings discloses that both CLIs keep their own copy while a chat exists. ⚠ Codex chats may also show in the user's own Codex history.
+- **Delete really deletes:** Chord removes its rows, then the provider's copy. For Claude, that's `<config>/projects/<Chord's empty folder>/<session>.jsonl` and its `<session>/` folder, found by exact id (inside the distro too, for Claude Code in WSL); for Codex, `thread/delete`. Chord reads nothing else there. Settings discloses that both CLIs keep their own copy while a chat exists. ⚠ Codex chats may also show in the user's own Codex history.
 
 **Connect an agent (parked).** Offering Chord's tools to agents the user runs themselves (a `chord-mcp` helper, `claude mcp add …`) is parked, not deleted (ROADMAP.md). Duet doesn't need it: its tools ride the CLI's own stdio (§11.2).
 
-**Not yet:** reading PDFs (pdf.js), which Duet can see only as the viewer's page; a context-usage hint (only if both CLIs report it); Claude Code or Codex installed only inside WSL.
+**Built 2026-10-23** (once "not yet"): reading PDFs (§11.4), the context meter (§11.2) and CLIs installed only inside WSL (§11.1, D11).
 
 ---
 
@@ -1041,7 +1060,7 @@ Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all o
 | **D8** | Duet scope and timing | **Decided 2026-10-22:** Phase 2, chat that can optionally read the browser. No organize actions, acting on pages, developer mode, API keys or local models (ROADMAP.md *Not planned*). |
 | **D9** | How Duet's tools reach the CLIs | **Decided (Phase 2, spike S10):** in-process, over each CLI's own stdio. Claude Code: an SDK-type MCP server declared in `initialize` and served on the control channel. Codex: `dynamicTools`. This replaces the localhost HTTP server (DNS-rebinding and token surface) and the `chord-mcp` helper (it can't be Electron-as-Node with the RunAsNode fuse off, and no single-executable build exists yet). Chord ships no Anthropic code. |
 | **D10** | Stopping a reply on Windows | **Decided (S10):** Claude Code's `interrupt` control request, used when `system/init.capabilities` has `interrupt_receipt_v1`; otherwise kill the process tree (`taskkill /T`) and resume next time. Codex: `turn/interrupt`. No signals, which Windows lacks. |
-| **D11** | CLIs installed only inside WSL | **Deferred:** Phase 2 detects Windows-native installs only. |
+| **D11** | CLIs installed only inside WSL | **Decided 2026-10-23: supported, in the default distro.** When Windows has no `claude` or `codex`, Setup offers the one in the default WSL distro and Duet runs it through `wsl.exe -e` with the same flags, the distro's paths and the user's shell `PATH` (§11.1). Other distros, and a CLI in both places at once (Windows wins), aren't offered. |
 
 ## 17. Risks
 

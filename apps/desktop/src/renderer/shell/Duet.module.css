@@ -38,6 +38,45 @@
   font: var(--text-label);
 }
 
+/* The context meter: a quiet pie that fills as the chat uses the model's context; the tooltip says how much. */
+.meter {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+  border-radius: var(--radius-full);
+  color: var(--color-fg-subtle);
+}
+
+.meter:hover {
+  background: var(--color-item-hover);
+}
+
+.meter[data-full] {
+  color: var(--color-accent);
+}
+
+.meter svg {
+  inline-size: var(--size-icon);
+  block-size: var(--size-icon);
+  transform: rotate(-90deg);
+}
+
+.meterTrack,
+.meterFill {
+  fill: none;
+}
+
+.meterTrack {
+  stroke: currentColor;
+}
+
+.meterFill {
+  stroke: currentColor;
+  transition: stroke-dasharray var(--duration-fade-fast) var(--ease-standard);
+}
+
 .rename {
   flex: 1;
   min-inline-size: 0;
@@ -439,6 +478,7 @@
   background: var(--color-selection);
   color: var(--color-fg);
   font: var(--text-glyph);
+  white-space: nowrap;
   vertical-align: text-top;
 }
 

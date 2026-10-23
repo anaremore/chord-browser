@@ -62,7 +62,7 @@ To switch the files to B: rename the three `io.github.anaremore.chord-browser.*`
 
   The fuses are set exactly as in the other builds (§14.1). The unpacked app goes to `/app/chord`, minus `chrome-sandbox`.
 - **Launcher** (`/app/bin/chord`): `zypak-wrapper /app/chord/chord`. zypak runs Chromium's sandboxed processes in Flatpak's own sub-sandbox, since Chromium's sandbox can't nest inside Flatpak's; Chord's sandbox stays on (§14.1). It also points `TMPDIR` at `$XDG_RUNTIME_DIR/app/$FLATPAK_ID`, which every instance of the app shares, so a second launch finds the running Chord and hands it the link instead of opening the profile twice.
-- **Licenses:** `LICENSE` (MIT), `GPL-3.0.txt` and `MPL-2.0.txt` go to `/app/share/licenses/`, and the app carries them in `resources/licenses` too. The metainfo says `GPL-3.0-only`, since the build includes the GPL-3.0-only extensions library (§16, D1).
+- **Licenses:** `LICENSE` (MIT), `GPL-3.0.txt`, `MPL-2.0.txt` and `Apache-2.0.txt` (pdf.js, Duet's PDF reader) go to `/app/share/licenses/`, and the app carries them in `resources/licenses` too. The metainfo says `GPL-3.0-only`, since the build includes the GPL-3.0-only extensions library (§16, D1).
 
 **Permissions** (Flathub wants them minimal, with portals wherever one exists ✅):
 
