@@ -1,7 +1,9 @@
 import { StrictMode, useLayoutEffect, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import '../assets/fonts/fonts.css';
 import '../shared/global.css';
+import { batchFrames, nextFrame } from '../shared/frames';
 import { createMirror } from '../shared/mirror';
 import { live } from '../shared/live';
 import { afterNextPaint } from '../shared/perf';
@@ -15,7 +17,10 @@ const toasts = createToastStore((listener) => api.toasts.onShow(listener));
 const info = await live(() => api.system.info(), (listener) => api.system.onChange(listener));
 applySystem(info.get());
 info.subscribe(() => applySystem(info.get()));
-const mirror = await createMirror(api.state);
+// Patches render once a frame, however many arrive in it (a tab switch sends several): a frame's
+// updates from main run together, in one React pass (shared/frames.ts).
+batchFrames(flushSync);
+const mirror = await createMirror(api.state, { notify: nextFrame });
 
 let reported = false;
 /**

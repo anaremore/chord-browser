@@ -484,6 +484,26 @@ export class Browser {
     return windowId ? this.windows.get(windowId) : undefined;
   }
 
+  /** Whether one of Settings → Motion's switches is on, and the OS allows motion (DESIGN.md §6.8). */
+  animates(gate: Parameters<typeof motionEnabled>[1]): boolean {
+    return motionEnabled(this.store.state.settings, gate, systemInfo().prefersReducedMotion);
+  }
+
+  /**
+   * Dock or collapse a window's sidebar (toggle it, with no `sidebar`). The
+   * page's frame glides there by its snapshot (DESIGN.md §6.5), or changes at
+   * once with "Animate the sidebar" off or reduced motion. Which way a toggle
+   * goes is decided when it runs, so two quick toggles go there and back.
+   */
+  setSidebar(w: AppWindow, sidebar?: 'docked' | 'collapsed'): void {
+    if (sidebar && this.store.state.windows[w.id]?.sidebar === sidebar) return;
+    w.changeFrame(() => {
+      const now = this.store.state.windows[w.id]?.sidebar;
+      if (!now) return;
+      this.store.dispatch({ t: 'window.sidebar', windowId: w.id, sidebar: sidebar ?? (now === 'collapsed' ? 'docked' : 'collapsed') });
+    }, this.animates('sidebar'));
+  }
+
   /** The pointer rests on a pinned tab or folder row in a window's sidebar (or left it). */
   previewHover(w: AppWindow, target: PreviewTarget): Promise<void> {
     return this.previews.hover(w, target);
@@ -645,11 +665,10 @@ export class Browser {
           this.options.history({ k: 'unarchive', id: effect.archiveId });
           this.archiveChanged();
           break;
-        case 'window.layout': {
-          const animate = effect.animate && motionEnabled(this.store.state.settings, 'sidebar', systemInfo().prefersReducedMotion);
-          this.windows.get(effect.windowId)?.setSidebar(effect.sidebar, effect.width, animate);
+        case 'window.layout':
+          // Docking and collapsing glide by the frame's snapshot (setSidebar below); here the frame just moves.
+          this.windows.get(effect.windowId)?.setSidebar(effect.sidebar, effect.width);
           break;
-        }
         case 'window.open':
           if (!this.windows.has(effect.windowId)) this.openWindow(effect.windowId, { commandBar: !this.quietWindows.has(effect.windowId) });
           break;
@@ -1361,11 +1380,9 @@ export class Browser {
       case 'view.fullscreen':
         w.window.setFullScreen(!w.window.isFullScreen());
         return true;
-      case 'view.toggleSidebar': {
-        const sidebar = this.store.state.windows[w.id]?.sidebar === 'collapsed' ? 'docked' : 'collapsed';
-        this.store.dispatch({ t: 'window.sidebar', windowId: w.id, sidebar });
+      case 'view.toggleSidebar':
+        this.setSidebar(w);
         return true;
-      }
       case 'view.zoomIn':
       case 'view.zoomOut':
         // Remembered for the site, as in Chrome.

@@ -15,7 +15,7 @@ import type { AddressInfo } from 'node:net';
 import { cpus, release, tmpdir, totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type CDPSession, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { frameIntervals, framesOf, longestTask, trace, type Frame } from './frames';
+import { frameIntervals, framesOf, layoutsOf, longestTask, trace, type Frame, type TraceEvent } from './frames';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -39,12 +39,12 @@ interface Check {
   value: number;
   /** The budget: the value is held to at most this. */
   limit: number;
-  unit: 'ms' | 'late';
+  unit: 'ms' | 'late' | 'renders' | 'moves';
   status: Status;
 }
 
 interface Row {
-  group: 'launch' | 'command bar' | 'frames';
+  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view';
   name: string;
   scenario: string;
   motion: 'on' | 'off' | null;
@@ -189,6 +189,9 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
     CHORD_USER_DATA: profile,
     CHORD_HOME_URL: `${site.origin}/`,
     CHORD_E2E_HOOKS: '1',
+    // Duet's panel opens without looking for a real Claude Code or Codex on this machine (paths that don't exist).
+    CHORD_DUET_CLAUDE: join(profile, 'no-claude'),
+    CHORD_DUET_CODEX: join(profile, 'no-codex'),
     ...env,
   };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
@@ -352,8 +355,9 @@ interface Step {
  * Runs `steps`, tracing each one's `act`, and records against the frame
  * budget: the longest task (anywhere), the worst frame's work at 60 Hz and
  * 120 Hz, and the slowest gap between frames (60 fps). See frames.ts.
+ * `traced` sees each step's trace too (every process is in it).
  */
-async function interaction(s: Session, name: string, steps: Step[]): Promise<void> {
+async function interaction(s: Session, name: string, steps: Step[], traced?: (events: TraceEvent[]) => Promise<void> | void): Promise<void> {
   const frames: (Frame & { renderer: string })[] = [];
   const tasks: { renderer: string; ms: number; calls: { name: string; ms: number }[] }[] = [];
   const intervals: number[] = [];
@@ -368,6 +372,7 @@ async function interaction(s: Session, name: string, steps: Step[]): Promise<voi
       frames.push(...framesOf(events, pid).map((f) => ({ ...f, renderer })));
       tasks.push({ renderer, ...longestTask(events, pid) });
     }
+    await traced?.(events);
     await step.verify?.();
   }
   const work = frames.map((f) => f.work);
@@ -459,6 +464,76 @@ async function typeSlowly(overlay: Page, text: string) {
   }
   await overlay.waitForTimeout(300);
 }
+
+/**
+ * The shell's renders while `run` runs: every commit of its App leaves a
+ * `chord:shell-render` mark (src/renderer/shared/perf.ts), and a
+ * requestAnimationFrame loop marks where each frame begins. A frame should
+ * hold at most one render, however many state patches arrive in it.
+ */
+async function shellRenders(shell: Page, run: () => Promise<void>): Promise<{ total: number; mostInAFrame: number }> {
+  await shell.evaluate(() => {
+    performance.clearMarks('chord:shell-render');
+    const probe = { times: [] as number[], on: true };
+    (window as unknown as { __chordRenderFrames?: typeof probe }).__chordRenderFrames = probe;
+    const step = (t: number) => {
+      probe.times.push(t);
+      if (probe.on) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+  await run();
+  return shell.evaluate(() => {
+    const probe = (window as unknown as { __chordRenderFrames: { times: number[]; on: boolean } }).__chordRenderFrames;
+    probe.on = false;
+    const renders = performance.getEntriesByName('chord:shell-render', 'mark').map((m) => m.startTime);
+    // Renders between one frame's start and the next's belong to the same frame.
+    let most = 0;
+    for (let i = 0; i < probe.times.length; i++) {
+      const from = probe.times[i]!;
+      const to = probe.times[i + 1] ?? Infinity;
+      most = Math.max(most, renders.filter((t) => t >= from && t < to).length);
+    }
+    return { total: renders.length, mostInAFrame: most };
+  });
+}
+
+/**
+ * From now on, counts each shown page view's moves (`setBounds` calls) in
+ * main: the snapshot technique moves a page at most twice per frame change
+ * (ARCHITECTURE.md §5), where moving it every frame would relayout it every frame.
+ */
+async function watchPageMoves(app: ElectronApplication, origin: string): Promise<void> {
+  await app.evaluate(({ BaseWindow }, from) => {
+    interface Watched {
+      setBounds(bounds: unknown): void;
+      webContents?: { getURL(): string };
+      chordMoves?: number;
+      chordWatched?: boolean;
+    }
+    const views = BaseWindow.getAllWindows()[0]!.contentView.children as unknown as Watched[];
+    const pages = views.filter((v) => v.webContents?.getURL().startsWith(from));
+    (globalThis as { chordMoveWatch?: Watched[] }).chordMoveWatch = pages;
+    for (const view of pages) {
+      view.chordMoves = 0;
+      if (view.chordWatched) continue;
+      view.chordWatched = true;
+      const setBounds = view.setBounds.bind(view);
+      view.setBounds = (bounds) => {
+        view.chordMoves = (view.chordMoves ?? 0) + 1;
+        setBounds(bounds);
+      };
+    }
+  }, origin);
+}
+
+/** The renderer processes of the pages shown (the site's), by OS process ID. */
+const pageRenderers = (app: ElectronApplication, origin: string) =>
+  app.evaluate(({ webContents }, from) => [...new Set(webContents.getAllWebContents().filter((c) => c.getURL().startsWith(from)).map((c) => c.getOSProcessId()))], origin);
+
+/** The most any watched page view moved since `watchPageMoves`. */
+const pageMoves = (app: ElectronApplication) =>
+  app.evaluate(() => Math.max(0, ...((globalThis as { chordMoveWatch?: { chordMoves?: number }[] }).chordMoveWatch ?? []).map((v) => v.chordMoves ?? 0)));
 
 /** Ten openings, the first since launch included: the open budget, to the first frame and to its paint. */
 async function commandBarOpens(s: Session): Promise<void> {
@@ -580,17 +655,115 @@ for (const tabs of [20, 200]) {
           { setup: () => openCommandBar(shell, overlay), act: () => typeSlowly(overlay, 'melody'), verify: () => closeCommandBar(overlay) },
         ]);
 
-        // Switching tabs: the active pill glides (DESIGN.md §6.5).
+        // Switching tabs: the active pill glides (DESIGN.md §6.5). Each switch's state patches render the shell once a frame at most.
+        const switchRenders: { total: number; mostInAFrame: number }[] = [];
+        let switchLocked: boolean | null = null;
         await interaction(s, 'Switch tabs', repeat(6, (i) => ({
           setup: async () => {
             at = await centerOf(todayRows.nth(1 + i * 2));
+            switchLocked = screenLocked() || switchLocked;
           },
           act: async () => {
-            await shell.mouse.click(at.x, at.y);
-            await settle();
+            switchRenders.push(
+              await shellRenders(shell, async () => {
+                await shell.mouse.click(at.x, at.y);
+                await settle();
+              }),
+            );
           },
           verify: () => expect(todayRows.nth(1 + i * 2)).toHaveAttribute('aria-current', 'page'),
         })));
+        record({
+          group: 'renders',
+          name: 'Switch tabs: shell renders',
+          scenario: s.scenario,
+          motion: s.motion,
+          locked: switchLocked,
+          checks: [check('most in a frame', max(switchRenders.map((r) => r.mostInAFrame)), 1, { locked: switchLocked, unit: 'renders' })],
+          detail: { perSwitch: switchRenders.map((r) => r.total), mostInAFramePerSwitch: switchRenders.map((r) => r.mostInAFrame) },
+        });
+
+        // Collapsing and docking the sidebar, and Duet's panel: the page frame changes size by the
+        // snapshot technique (DESIGN.md §6.5), so each page view moves at most twice, never every frame.
+        const frameChange = async (name: string, change: () => Promise<void>, ready: () => Promise<void>, done: () => Promise<void>) => {
+          const moves: number[] = [];
+          // The page's own cost: each resize lays it out again, so a page moved every frame relayouts every frame.
+          const layouts: { count: number; ms: number }[] = [];
+          let pagePids: number[] = [];
+          let locked: boolean | null = null;
+          await interaction(
+            s,
+            name,
+            repeat(3, () => ({
+              setup: async () => {
+                await ready();
+                await watchPageMoves(app, site.origin);
+                pagePids = await pageRenderers(app, site.origin);
+                locked = screenLocked() || locked;
+              },
+              act: async () => {
+                await change();
+                await settle();
+              },
+              verify: async () => {
+                await done();
+                moves.push(await pageMoves(app));
+              },
+            })),
+            (events) => {
+              const each = pagePids.map((pid) => layoutsOf(events, pid));
+              layouts.push({ count: each.reduce((n, l) => n + l.count, 0), ms: round(each.reduce((n, l) => n + l.ms, 0)) });
+            },
+          );
+          record({
+            group: 'page view',
+            name: `${name}: page view moves`,
+            scenario: s.scenario,
+            motion: s.motion,
+            locked,
+            checks: [check('most in one', max(moves), 2, { locked, unit: 'moves' })],
+            detail: { moves, pageLayouts: layouts.map((l) => l.count), pageLayoutMs: layouts.map((l) => l.ms) },
+          });
+        };
+        const hideSidebar = shell.getByRole('button', { name: 'Hide sidebar' });
+        const showSidebar = shell.getByRole('button', { name: 'Show sidebar' });
+        const toggleSidebar = () => runAction(shell, 'view.toggleSidebar');
+        const docked = async () => {
+          if (await showSidebar.isVisible()) {
+            await toggleSidebar();
+            await settle();
+          }
+          await expect(hideSidebar).toBeVisible();
+        };
+        const collapsed = async () => {
+          if (await hideSidebar.isVisible()) {
+            await toggleSidebar();
+            await settle();
+          }
+          await expect(showSidebar).toBeVisible();
+        };
+        await frameChange('Collapse the sidebar', toggleSidebar, docked, () => expect(showSidebar).toBeVisible());
+        await frameChange('Dock the sidebar', toggleSidebar, collapsed, () => expect(hideSidebar).toBeVisible());
+        await docked();
+        const duetPanel = shell.getByRole('complementary', { name: 'Duet' });
+        const toggleDuet = () => runAction(shell, 'duet.toggle');
+        const duetClosed = async () => {
+          if (await duetPanel.isVisible()) {
+            await toggleDuet();
+            await settle();
+          }
+          await expect(duetPanel).toBeHidden();
+        };
+        const duetOpen = async () => {
+          if (!(await duetPanel.isVisible())) {
+            await toggleDuet();
+            await settle();
+          }
+          await expect(duetPanel).toBeVisible();
+        };
+        await frameChange('Open Duet', toggleDuet, duetClosed, () => expect(duetPanel).toBeVisible());
+        await frameChange('Close Duet', toggleDuet, duetOpen, () => expect(duetPanel).toBeHidden());
+        await duetClosed();
 
         // Pinning: the row travels into Pinned.
         await interaction(s, 'Pin a tab', repeat(3, (i) => ({
