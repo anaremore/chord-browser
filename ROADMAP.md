@@ -251,6 +251,14 @@ A milestone is done when all of these hold:
   - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests.
   - The **72-hour patch runbook** rehearsed end to end.
 - **D5** ad blocking and **D7** Safe Browsing, if you choose them.
+- **Google-free mode** (requested 2026-10-22).
+  - *Why not ungoogled-chromium itself:* it's a set of patches, domain substitutions and build flags for Chromium's source. Chord runs on Electron, which builds its own Chromium, so using it would mean building Electron from source with those patches applied. That's hours of build per OS and architecture for every security release, and no maintained project does it today.
+  - *What we can do instead:* first, an **audit spike** that runs a Chord session with a network log (`--log-net-log`) and lists every Google host Chord itself contacts, apart from pages you visit. Then a switch in Settings:
+    - a non-Google default search;
+    - no search suggestions;
+    - spellcheck dictionaries from a non-Google host (`session.setSpellCheckerDictionaryDownloadURL`), or local only;
+    - plus anything else the audit finds.
+  - *Kept honest by a test:* CI fails if a fresh session in this mode contacts a Google domain on its own.
 
 ## Phase 4 — Deeper · March 2027 onward
 
