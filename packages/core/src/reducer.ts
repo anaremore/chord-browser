@@ -709,7 +709,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         delete draft.live[tab.id];
         effects.push({ e: 'view.destroy', nodeId: tab.id });
       }
-      if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
+      // A whole Clear stays undoable, however many tabs it took (its toast's Undo restores them all).
+      const keep = Math.max(MAX_CLOSED, cmd.reason === 'cleared' ? tabs.length : 0);
+      if (draft.closed.length > keep) draft.closed.length = keep;
       for (const win of Object.values(draft.windows)) {
         for (const chordId of Object.keys(win.activeTab)) {
           const key = `${win.id}:${chordId}`;

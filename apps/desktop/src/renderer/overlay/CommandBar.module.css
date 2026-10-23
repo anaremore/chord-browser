@@ -6,6 +6,11 @@
   color: var(--color-fg);
 }
 
+/* The unseen warm-up render before the first opening (CommandBar.tsx). */
+.warming {
+  visibility: hidden;
+}
+
 .scrim {
   position: absolute;
   inset: 0;

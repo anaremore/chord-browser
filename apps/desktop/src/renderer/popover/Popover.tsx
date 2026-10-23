@@ -188,7 +188,13 @@ export function Popover({ initialInfo, initialState }: { initialInfo: SystemInfo
   const [info, setInfo] = useState(initialInfo);
   const [state, setState] = useState(initialState);
   useEffect(() => api.system.onChange(setInfo), []);
-  useEffect(() => api.popover.onState(setState), []);
+  useEffect(() => {
+    const stop = api.popover.onState(setState);
+    // Asked again once listening: a change main sent between the first snapshot and now (a page asking
+    // for a permission right after launch) was missed, and main only sends what changed.
+    void api.popover.state().then(setState);
+    return stop;
+  }, []);
   const root = useRef<HTMLDivElement>(null);
   const hasCards = Boolean(state.find || state.permission || state.share);
 
