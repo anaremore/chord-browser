@@ -330,6 +330,17 @@ export class Browser {
     });
   }
 
+  /** Links from other apps (Chord as the default browser): new tabs in the window used last, which comes forward. */
+  openExternalUrls(urls: readonly string[]): void {
+    // macOS keeps running with every window closed; a link brings one back.
+    if (this.windows.size === 0) this.start();
+    const w = this.lastWindow();
+    if (!w) return;
+    for (const url of urls) this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+    if (w.window.isMinimized()) w.window.restore();
+    w.window.focus();
+  }
+
   /** A link from Settings opens as a new tab in the browser window used last, which comes forward. */
   openUrlInLastWindow(url: string): void {
     const w = this.lastWindow();

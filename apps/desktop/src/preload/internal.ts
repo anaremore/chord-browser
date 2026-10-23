@@ -17,6 +17,8 @@ const api: SettingsApi = {
     saveTheme: (theme) => invoke('settings:saveTheme', { theme }),
     deleteTheme: (id) => invoke('settings:deleteTheme', { id }),
     copyText: (text) => invoke('settings:copyText', { text }),
+    defaultBrowser: () => invoke('settings:defaultBrowser'),
+    makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),
     about: () => invoke('settings:about'),
     openUrl: (url) => invoke('settings:openUrl', { url }),
   },

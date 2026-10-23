@@ -12,7 +12,7 @@ import {
   type MotionSettings,
   type Shortcut,
 } from '@chord/core';
-import type { AboutInfo, SettingsSnapshot, SystemInfo } from '@chord/ipc';
+import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo } from '@chord/ipc';
 import { Check, Info, Keyboard, Palette, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
@@ -43,11 +43,57 @@ const REPO_URL = 'https://github.com/anaremore/chord-browser';
 
 /* ---------- Sections ---------- */
 
-function General({ snapshot }: { snapshot: SettingsSnapshot }) {
+const MAKE_DEFAULT_HINT: Record<SystemInfo['platform'], string> = {
+  win32: 'Opens Windows Settings, where you pick Chord for web links.',
+  darwin: 'Your Mac asks you to confirm.',
+  linux: 'Links from other apps will open in Chord.',
+};
+
+function DefaultBrowser({ platform }: { platform: SystemInfo['platform'] }) {
+  const [status, setStatus] = useState<DefaultBrowserStatus | null>(null);
+  useEffect(() => {
+    const refresh = () => void api.settings.defaultBrowser().then(setStatus);
+    refresh();
+    // The choice is made in the OS's settings; Chord checks again when you come back.
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
+  if (!status) return null;
+  return (
+    <>
+      <h2 className={styles.groupTitle}>Default browser</h2>
+      <div className={styles.group}>
+        {status === 'default' && (
+          <Row
+            label="Chord is your default browser"
+            description="Links from other apps open here, in the window you used last."
+            control={<Check className={styles.check} size={16} strokeWidth={2.25} aria-hidden />}
+          />
+        )}
+        {status === 'not-default' && (
+          <Row
+            label="Make Chord your default browser"
+            description={MAKE_DEFAULT_HINT[platform]}
+            control={
+              <button type="button" className={styles.linkButton} onClick={() => void api.settings.makeDefaultBrowser().then(setStatus)}>
+                Make default
+              </button>
+            }
+          />
+        )}
+        {status === 'unavailable' && (
+          <Row label="Default browser" description="Installed copies of Chord can be your default browser. This is a development build." control={null} />
+        )}
+      </div>
+    </>
+  );
+}
+
+function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
   const engine = snapshot.settings.searchEngine;
   return (
     <>
-      <SectionHeader title="General" description="How Chord searches when what you type isn't an address." />
+      <SectionHeader title="General" description="How Chord searches, and whether it opens your links." />
       <h2 className={styles.groupTitle}>
         Search engine
         <ResetButton visible={engine !== DEFAULT_SETTINGS.searchEngine} onReset={() => void api.settings.set({ searchEngine: DEFAULT_SETTINGS.searchEngine })} />
@@ -68,6 +114,7 @@ function General({ snapshot }: { snapshot: SettingsSnapshot }) {
           </button>
         ))}
       </div>
+      <DefaultBrowser platform={info.platform} />
     </>
   );
 }
@@ -258,7 +305,7 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               exit={{ opacity: 0 }}
               transition={spring('snappy', 'commandBar')}
             >
-              {section === 'general' && <General snapshot={snapshot} />}
+              {section === 'general' && <General snapshot={snapshot} info={info} />}
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
               {section === 'shortcuts' && <Shortcuts info={info} />}

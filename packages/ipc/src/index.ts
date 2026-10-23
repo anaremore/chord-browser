@@ -123,6 +123,9 @@ void _settingsMatch;
 export const ChordThemePatch = ChordTheme.partial();
 export type ChordThemePatch = z.infer<typeof ChordThemePatch>;
 
+export const DefaultBrowserStatus = z.enum(['default', 'not-default', 'unavailable']);
+export type DefaultBrowserStatus = z.infer<typeof DefaultBrowserStatus>;
+
 /** What the Settings window shows: settings, and the chord in the last-used window (for Appearance). */
 export interface SettingsSnapshot {
   settings: Settings;
@@ -257,6 +260,8 @@ export const invokeChannels = {
   'settings:deleteTheme': { roles: ['internal'], request: z.strictObject({ id: z.string().min(1).max(64) }), response: z.void() },
   /** Put text on the clipboard (Chord's own pages have no clipboard permission of their own). */
   'settings:copyText': { roles: ['internal'], request: z.strictObject({ text: z.string().max(10_000) }), response: z.void() },
+  'settings:defaultBrowser': { roles: ['internal'], request: z.void(), response: DefaultBrowserStatus },
+  'settings:makeDefaultBrowser': { roles: ['internal'], request: z.void(), response: DefaultBrowserStatus },
   // The popover: find bar and permission prompts, over the page (ARCHITECTURE.md §5).
   'popover:state': { roles: ['popover'], request: z.void(), response: z.custom<PopoverState>() },
   /** The popover's content size, so main can fit the view to its cards (0 × 0 hides it). */
@@ -342,6 +347,10 @@ export interface SettingsApi {
     saveTheme(theme: CustomTheme): Promise<void>;
     deleteTheme(id: string): Promise<void>;
     copyText(text: string): Promise<void>;
+    /** Whether Chord opens web links from other apps; `unavailable` in development builds. */
+    defaultBrowser(): Promise<DefaultBrowserStatus>;
+    /** Asks the OS to make Chord the default (on Windows, opens Settings → Default apps), then reports again. */
+    makeDefaultBrowser(): Promise<DefaultBrowserStatus>;
     about(): Promise<AboutInfo>;
     openUrl(url: string): Promise<void>;
   };

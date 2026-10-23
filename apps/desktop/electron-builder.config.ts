@@ -57,6 +57,8 @@ const config: Configuration = {
     oneClick: true,
     perMachine: false,
     artifactName: '${productName}-${version}-${os}-${arch}-setup.${ext}',
+    // Registers Chord as a browser Windows can offer as the default.
+    include: 'build/installer.nsh',
   },
 
   mac: {
@@ -69,6 +71,13 @@ const config: Configuration = {
     // Developer ID signing arrives (ARCHITECTURE.md §15.2).
     identity: '-',
     hardenedRuntime: false,
+    // Web links and pages, so macOS lists Chord as a possible default browser.
+    extendInfo: {
+      CFBundleURLTypes: [{ CFBundleURLName: 'Web site URL', CFBundleURLSchemes: ['http', 'https'], CFBundleTypeRole: 'Viewer' }],
+      CFBundleDocumentTypes: [
+        { CFBundleTypeName: 'HTML document', CFBundleTypeRole: 'Viewer', LSHandlerRank: 'Alternate', LSItemContentTypes: ['public.html', 'public.xhtml'] },
+      ],
+    },
   },
 
   linux: {
@@ -80,6 +89,8 @@ const config: Configuration = {
     // which Electron also uses as the Wayland app_id and X11 WM_CLASS.
     syncDesktopName: true,
     category: 'Network;WebBrowser',
+    // The .desktop file's MimeType: web links and pages, so Linux desktops offer Chord as the browser.
+    mimeTypes: ['text/html', 'application/xhtml+xml', 'x-scheme-handler/http', 'x-scheme-handler/https'],
     synopsis: 'A calm, colorful browser',
     // Shows in public package metadata. A project address, never a person's: decide the real one before 1.0.
     maintainer: 'Chord contributors <noreply@chordbrowser.com>',

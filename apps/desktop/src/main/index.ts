@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { app, clipboard, Menu, nativeTheme, session, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
+import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
 import { DownloadManager } from './downloads';
 import { PermissionBroker } from './permissions';
+import { openable, urlsFromArgv } from './os-links';
 import { Persistence } from './persistence';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
@@ -100,6 +102,11 @@ function registerIpc(): void {
   handle('settings:saveTheme', ({ theme }) => browser!.store.dispatch({ t: 'theme.save', theme }));
   handle('settings:deleteTheme', ({ id }) => browser!.store.dispatch({ t: 'theme.delete', id }));
   handle('settings:copyText', ({ text }) => clipboard.writeText(text));
+  handle('settings:defaultBrowser', () => defaultBrowserStatus());
+  handle('settings:makeDefaultBrowser', async () => {
+    await makeDefaultBrowser();
+    return defaultBrowserStatus();
+  });
   handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
   handle('popover:size', ({ width, height }, sender) => senderWindow(sender).setPopoverSize(width, height));
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
@@ -110,8 +117,27 @@ function registerIpc(): void {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    browser?.focusFirstWindow();
+  // Links from other apps (Chord as the default browser) can arrive before the window does.
+  const pendingUrls = urlsFromArgv(process.argv);
+  const openUrls = (urls: string[]) => {
+    if (browser) browser.openExternalUrls(urls);
+    else pendingUrls.push(...urls);
+  };
+  app.on('second-instance', (_event, argv) => {
+    const urls = urlsFromArgv(argv);
+    if (urls.length > 0) openUrls(urls);
+    else browser?.focusFirstWindow();
+  });
+  // macOS hands links and files over as events, from launch onward.
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    const target = openable(url);
+    if (target) openUrls([target]);
+  });
+  app.on('open-file', (event, path) => {
+    event.preventDefault();
+    const target = openable(path);
+    if (target) openUrls([target]);
   });
 
   // macOS keeps running with no windows; the Dock icon brings the last one back.
@@ -192,6 +218,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     registerIpc();
     browser.start();
+    if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
   });
 
   app.on('window-all-closed', () => {
