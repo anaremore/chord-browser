@@ -7,7 +7,7 @@
  * keyword or `@filter` followed by Tab narrows the bar to a chip, and the
  * engine's suggestions slot in under the local rows when they arrive.
  */
-import { type DuetHit, formatKeys, parseInput, shortcutById, type ActionId, type SearchEngineId } from '@chord/core';
+import { keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
 import type { HistorySearch, OverlayOpenEvent, SystemInfo } from '@chord/ipc';
 import { AppWindow, Archive, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, MessagesSquare, PanelLeft, Pin, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
@@ -72,12 +72,6 @@ const ANCHORED_MIN_WIDTH = 560;
 const EDGE = 8;
 /** Suggestions wait for a pause this long in typing, so not every keystroke goes out. */
 const SUGGEST_DELAY_MS = 120;
-
-function keycapFor(action: ActionId, platform: SystemInfo['platform']): string {
-  const sc = shortcutById(action);
-  const first = sc ? (platform === 'darwin' ? sc.mac : sc.other)[0] : undefined;
-  return first ? formatKeys(first, platform) : '';
-}
 
 function hintFor(result: Result, mode: Session['mode']): { text: string; key: string } {
   if (result.kind === 'scope') return { text: result.scope.kind === 'keyword' ? `Search ${scopeLabel(result.scope).name}` : 'Show only these', key: result.scope.kind === 'keyword' ? 'Tab' : '↵' };
@@ -456,7 +450,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
                       {result.kind === 'archive' && <span className={styles.chip}>Archived</span>}
                       {result.kind === 'duet' && <span className={styles.resultDetail}>{result.detail}</span>}
                       {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
-                      {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform)}</kbd>}
+                      {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform, state.settings.shortcuts)}</kbd>}
                       {isSelected && (
                         <span className={styles.hint}>
                           {hint.text} <kbd className={styles.keycap}>{hint.key}</kbd>

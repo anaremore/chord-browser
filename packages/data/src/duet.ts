@@ -1,5 +1,5 @@
 /**
- * Duet's store (migration 8; ARCHITECTURE.md §11): threads and their
+ * Duet's store (migration 9; ARCHITECTURE.md §11): threads and their
  * messages, retention, and the command bar's @duet search. Chord's transcript
  * is the source of truth; `provider_session_id` only caches the provider's
  * side, so losing it costs a summary, never the conversation.

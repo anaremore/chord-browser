@@ -9,6 +9,8 @@ import {
   defaultSettings,
   type ArchiveAfter,
   emptyState,
+  MAX_ZOOM,
+  MIN_ZOOM,
   SIDEBAR_WIDTH,
   extensionKey,
   type Chord,
@@ -25,10 +27,12 @@ import {
   type State,
   type WindowModel,
 } from './model';
+import { cleanOverrides } from './bindings';
 import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
+import type { Platform } from './shortcuts';
 
 /** Everything chord-data persists; live engine state and the version never are. */
 export interface PersistedState {
@@ -43,6 +47,20 @@ export interface PersistedState {
   extensions?: InstalledExtension[];
   /** The Favorites row. */
   favorites?: Favorite[];
+  /** Page zoom by host. */
+  siteZoom?: Record<string, number>;
+}
+
+/** A dictionary language code, as Chromium names them: `en-US`, `pt-BR`, `es-419`, `fr`. */
+export const isLanguageCode = (code: string): boolean => /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(code);
+
+/** Zoom levels that still make sense: a host and a factor in Chromium's range, other than 100%. */
+function restoreZoom(saved: Record<string, number> | undefined): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [host, factor] of Object.entries(saved ?? {})) {
+    if (host && typeof factor === 'number' && factor >= MIN_ZOOM && factor <= MAX_ZOOM && Math.abs(factor - 1) >= 0.001) out[host] = factor;
+  }
+  return out;
 }
 
 /** Favorites that still make sense: a web address and a rank. */
@@ -117,8 +135,9 @@ export function validTheme(v: unknown): CustomTheme | null {
   return { id: t.id, name: t.name.slice(0, 40), stops: t.stops.map((s) => ({ l: s.l, c: s.c, h: s.h })), grain: t.grain };
 }
 
-function restoreSettings(saved: Record<string, unknown>): Settings {
+function restoreSettings(saved: Record<string, unknown>, platform?: Platform): Settings {
   const settings = defaultSettings();
+  settings.shortcuts = cleanOverrides(saved['shortcuts'], platform);
   const scheme = saved['colorScheme'];
   if (scheme === 'system' || scheme === 'light' || scheme === 'dark') settings.colorScheme = scheme;
   const ui = saved['interface'] as Record<string, unknown> | undefined;
@@ -138,6 +157,12 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
     if (typeof saved[key] === 'boolean') settings[key] = saved[key];
   }
   if (typeof saved['autoPip'] === 'boolean') settings.autoPip = saved['autoPip'];
+  const spellcheck = saved['spellcheck'] as Record<string, unknown> | undefined;
+  if (spellcheck && typeof spellcheck === 'object') {
+    if (typeof spellcheck['enabled'] === 'boolean') settings.spellcheck.enabled = spellcheck['enabled'];
+    const language = spellcheck['language'];
+    if (typeof language === 'string' && isLanguageCode(language)) settings.spellcheck.language = language;
+  }
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
   const motion = saved['motion'];
@@ -170,11 +195,12 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   if (!saved || !saved.chords.some((c) => !c.private)) {
     const fresh = seedState(seed);
     if (saved) {
-      fresh.settings = restoreSettings(saved.settings);
+      fresh.settings = restoreSettings(saved.settings, seed.platform);
       fresh.sitePermissions = restorePermissions(saved.sitePermissions);
       fresh.downloads = restoreDownloads(saved.downloads);
       fresh.favorites = restoreFavorites(saved.favorites);
       fresh.extensions = restoreExtensions(saved.extensions);
+      fresh.siteZoom = restoreZoom(saved.siteZoom);
     }
     // No chords yet: first run, unless onboarding already finished once (or --no-first-run).
     if (seed.firstRun && saved?.settings['onboarded'] !== true) fresh.settings.onboarded = false;
@@ -182,11 +208,12 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   }
 
   const state = emptyState();
-  state.settings = restoreSettings(saved.settings);
+  state.settings = restoreSettings(saved.settings, seed.platform);
   state.sitePermissions = restorePermissions(saved.sitePermissions);
   state.downloads = restoreDownloads(saved.downloads);
   state.favorites = restoreFavorites(saved.favorites);
   state.extensions = restoreExtensions(saved.extensions);
+  state.siteZoom = restoreZoom(saved.siteZoom);
   // A private window's chord is never saved; if one ever were, it doesn't come back.
   for (const chord of saved.chords) if (!chord.private) state.chords[chord.id] = chord;
   for (const node of saved.nodes) {

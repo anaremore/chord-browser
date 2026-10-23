@@ -5,6 +5,7 @@
  * keeps closed tabs in its own table).
  */
 import type { DuetKeep, DuetProvider, DuetScope } from './duet';
+import type { ActionId, ShortcutOverrides } from './shortcuts';
 
 export type ChordId = string;
 export type NodeId = string;
@@ -169,6 +170,8 @@ export interface LiveTab {
   error: LoadError | null;
   /** Chord popped the page's video out into picture-in-picture (auto PiP, ARCHITECTURE.md §9). */
   pip: boolean;
+  /** The page is sharing your screen or a window (getDisplayMedia, ARCHITECTURE.md §9). */
+  sharing: boolean;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -296,8 +299,18 @@ export interface Settings {
   sleepTabs: boolean;
   /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
   autoPip: boolean;
+  /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
+  shortcuts: ShortcutOverrides;
+  spellcheck: SpellcheckSettings;
   /** Duet, the chat panel (ARCHITECTURE.md §11). */
   duet: DuetSettings;
+}
+
+/** Spelling in text fields (ARCHITECTURE.md §9). */
+export interface SpellcheckSettings {
+  enabled: boolean;
+  /** A dictionary language like `en-US` (Windows and Linux); null follows the system. macOS always uses its own. */
+  language: string | null;
 }
 
 export interface DuetSettings {
@@ -330,6 +343,8 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveAfter: '12h',
   sleepTabs: true,
   autoPip: true,
+  spellcheck: { enabled: true, language: null },
+  shortcuts: {},
   duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
 };
 
@@ -339,6 +354,8 @@ export const defaultSettings = (): Settings => ({
   motion: { ...DEFAULT_SETTINGS.motion },
   interface: { ...DEFAULT_SETTINGS.interface },
   themes: [],
+  spellcheck: { ...DEFAULT_SETTINGS.spellcheck },
+  shortcuts: {},
   duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
 });
 
@@ -364,6 +381,9 @@ export interface SettingsPatch {
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
   autoPip?: boolean;
+  spellcheck?: Partial<SpellcheckSettings>;
+  /** Per action: its whole new list of keys, or null to go back to the registry's. */
+  shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
   duet?: Partial<DuetSettings>;
 }
 
@@ -392,6 +412,8 @@ export interface State {
   favorites: Record<string, Favorite>;
   /** Folders deleted this session, with what was in them, for Undo (newest first; not persisted). */
   deletedFolders: DeletedFolder[];
+  /** Page zoom you chose for a site, by host (1 isn't stored). Shared by every chord, like permissions. */
+  siteZoom: Record<string, number>;
 }
 
 export interface DeletedFolder {
@@ -422,6 +444,11 @@ export const emptyState = (): State => ({
   deletedChords: [],
   favorites: {},
   deletedFolders: [],
+  siteZoom: {},
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false };
+
+/** Page zoom Chord remembers per site: Chromium's own range. */
+export const MIN_ZOOM = 0.25;
+export const MAX_ZOOM = 5;

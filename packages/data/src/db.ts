@@ -209,10 +209,17 @@ export class ChordDatabase {
         updatedAt: num(r['updated_at']),
       }),
     );
+    const siteZoom: Record<string, number> = {};
+    for (const r of this.sql('SELECT host, factor FROM site_zoom WHERE profile_id = ?').all(DEFAULT_PROFILE) as Row[]) siteZoom[str(r['host'])] = num(r['factor']);
     if (chordRows.length === 0) {
       const anything =
-        Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0 || downloads.length > 0 || extensions.length > 0 || favorites.length > 0;
-      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads, extensions, favorites } : null;
+        Object.keys(settings).length > 0 ||
+        Object.keys(sitePermissions).length > 0 ||
+        downloads.length > 0 ||
+        extensions.length > 0 ||
+        favorites.length > 0 ||
+        Object.keys(siteZoom).length > 0;
+      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads, extensions, favorites, siteZoom } : null;
     }
 
     const chords = chordRows.map(
@@ -269,7 +276,7 @@ export class ChordDatabase {
       }),
     );
 
-    return { chords, nodes, windows, settings, sitePermissions, downloads, extensions, favorites };
+    return { chords, nodes, windows, settings, sitePermissions, downloads, extensions, favorites, siteZoom };
   }
 
   /** One batch, all or nothing. */
@@ -284,6 +291,7 @@ export class ChordDatabase {
         else if (op.k === 'download') this.writeDownload(op.id, op.value);
         else if (op.k === 'favorite') this.writeFavorite(op.id, op.value, now);
         else if (op.k === 'extension') this.writeExtension(op.id, op.value);
+        else if (op.k === 'siteZoom') this.writeSiteZoom(op.id, op.value, now);
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
@@ -523,6 +531,14 @@ export class ChordDatabase {
        ON CONFLICT(node_id) DO UPDATE SET pinned_url = excluded.pinned_url, custom_title = excluded.custom_title, url = excluded.url,
          title = excluded.title, favicon_key = excluded.favicon_key, last_active_at = excluded.last_active_at`,
     ).run(id, node.pinnedUrl, node.customTitle, node.url, node.title, iconKey, node.lastActiveAt);
+  }
+
+  private writeSiteZoom(host: string, factor: number | null, now: number): void {
+    if (factor === null) this.sql('DELETE FROM site_zoom WHERE profile_id = ? AND host = ?').run(DEFAULT_PROFILE, host);
+    else
+      this.sql(
+        'INSERT INTO site_zoom (profile_id, host, factor, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(profile_id, host) DO UPDATE SET factor = excluded.factor, updated_at = excluded.updated_at',
+      ).run(DEFAULT_PROFILE, host, factor, now);
   }
 
   private writeSitePermissions(origin: string, decisions: SitePermissions[string] | null, now: number): void {

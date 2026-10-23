@@ -1,5 +1,6 @@
 import {
   ARCHIVE_AFTER_MS,
+  DEFAULT_SETTINGS,
   IDLE_CHECK_MS,
   SLEEP_AFTER_MS,
   isPrivateProfile,
@@ -14,7 +15,7 @@ import {
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { delimiter, join } from 'node:path';
-import { app, clipboard, Menu, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
+import { app, clipboard, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { openSignIn } from './duet/detect';
@@ -24,10 +25,13 @@ import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
 import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
+import { observeContextMenusForTests } from './context-menu';
 import { PermissionBroker } from './permissions';
+import { ScreenShareBroker } from './screen-share';
+import { applySpellcheck } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
 import { Persistence, removeUnusedPartitions } from './persistence';
-import { systemInfo } from './platform';
+import { platform, systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
 import { Suggestions } from './suggestions';
@@ -59,6 +63,7 @@ let browser: Browser | undefined;
 let persistence: Persistence | undefined;
 let duet: DuetService | undefined;
 const permissions = new PermissionBroker();
+const screenShare = new ScreenShareBroker();
 const downloads = new DownloadManager({
   state: () => browser!.store.state,
   dispatch: (command) => browser!.store.dispatch(command),
@@ -151,6 +156,7 @@ function registerIpc(): void {
   handle('settings:saveTheme', ({ theme }) => browser!.store.dispatch({ t: 'theme.save', theme }));
   handle('settings:deleteTheme', ({ id }) => browser!.store.dispatch({ t: 'theme.delete', id }));
   handle('settings:copyText', ({ text }) => clipboard.writeText(text));
+  handle('settings:recordingShortcut', ({ recording }, sender) => browser!.setRecordingShortcut(sender, recording));
   handle('extensions:state', (_request, sender) => browser!.extensions.barState(senderWindow(sender)));
   handle('extension:activate', ({ id, anchor }, sender) => browser!.extensions.activate(senderWindow(sender), id, anchor));
   handle('extension:menu', ({ id, x, y }, sender) => browser!.extensions.menu(senderWindow(sender), id, { x, y }));
@@ -195,6 +201,12 @@ function registerIpc(): void {
     }
     return duet!.refreshProviders();
   });
+  handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
+  handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
+  handle('settings:sitePermission', ({ origin, permission, decision }) =>
+    browser!.store.dispatch({ t: 'permission.set', origin, permissions: [permission], decision }),
+  );
+  handle('settings:forgetSite', ({ origin }) => browser!.store.dispatch({ t: 'permission.forget', origin }));
   handle('archive:snapshot', (_request, sender) => browser!.archiveSnapshot(sender));
   handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
   handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
@@ -274,6 +286,8 @@ if (!app.requestSingleInstanceLock()) {
         const priv = isPrivateProfile(profileId);
         permissions.attach(ses, priv ? profileId : null);
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
+        screenShare.attach(ses);
+        applySpellcheck(ses, browser?.store.state.settings.spellcheck ?? DEFAULT_SETTINGS.spellcheck);
         profiles.set(profileId, ses);
       }
       return ses;
@@ -304,6 +318,8 @@ if (!app.requestSingleInstanceLock()) {
       // Chrome's --no-first-run skips it. Playwright adds that switch to every Electron it drives,
       // so development builds can ask for first run with CHORD_FIRST_RUN=1.
       firstRun: (!app.isPackaged && process.env['CHORD_FIRST_RUN'] === '1') || !app.commandLine.hasSwitch('no-first-run'),
+      // Saved shortcut changes this OS keeps for itself are dropped.
+      platform,
     });
     if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
     // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
@@ -319,6 +335,7 @@ if (!app.requestSingleInstanceLock()) {
       uiSession: ui,
       profileSession,
       permissions,
+      screenShare,
       history: (event) => store.history(event),
       archive: { entry: (which) => store.archiveEntry(which) },
       idle: {
@@ -339,7 +356,7 @@ if (!app.requestSingleInstanceLock()) {
         ...(publisherKeyHash ? { publisherKeyHash } : {}),
       },
     });
-    Menu.setApplicationMenu(browser.appMenu);
+    browser.applyAppMenu();
     // Settings → Appearance → Color scheme is Chromium's own theme source, so web pages'
     // prefers-color-scheme follows it, as in Chrome. Development's CHORD_APPEARANCE wins.
     const followScheme = () => {
@@ -348,6 +365,10 @@ if (!app.requestSingleInstanceLock()) {
     followScheme();
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
+      // Spelling settings apply to every profile's session at once.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'spellcheck')) {
+        for (const ses of profiles.values()) applySpellcheck(ses, change.state.settings.spellcheck);
+      }
     });
     duet = new DuetService(browser, persistence, app.getPath('userData'));
     browser.duet = duet;
@@ -355,7 +376,11 @@ if (!app.requestSingleInstanceLock()) {
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu.
     if (dev('CHORD_E2E_HOOKS')) {
+      // Right-click menus are read, not shown: their labels, newest last, by page.
+      const contextMenus = new Map<number, string[]>();
+      observeContextMenusForTests((contents, labels) => contextMenus.set(contents.id, labels));
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
+        contextMenu: (contentsId: number) => contextMenus.get(contentsId) ?? null,
         extensionMenuLabels: (contentsId: number, params: Partial<ContextMenuParams>) => {
           const contents = webContents.fromId(contentsId);
           return contents ? browser!.extensions.contextMenuItems(contents, params as ContextMenuParams).map((item) => item.label) : [];

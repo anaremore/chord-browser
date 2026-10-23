@@ -30,7 +30,7 @@ import { DragDropProvider, useDroppable } from '@dnd-kit/react';
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
-import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, Sparkle, Undo2, X } from 'lucide-react';
+import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Sparkle, Undo2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { Favicon } from '../shared/Favicon';
@@ -39,7 +39,7 @@ import { displayHost, pageTitle } from '../shared/site';
 import { api } from './api';
 import styles from './App.module.css';
 import { DuetReadTabs } from './duet-context';
-import { keycap, withKeys } from './keys';
+import { useKeys } from './keys';
 import { CHORD_DROP, flattenPinned, levelsFor, MAX_VISUAL_DEPTH, projectDrop, type Drop, type FlatRow } from './tree';
 
 const PINNED_ZONE = 'pinned-zone';
@@ -279,6 +279,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
   const { ref, handleRef, isDragging, isDropTarget } = useSortable({ id: tab.id, index, group: section, type: 'tab', accept: ROW_ACCEPTS });
   const { dragging, projected } = drag;
   const { state, windowId, activeId, info, appearance, spring } = ctx;
+  const { withKeys } = useKeys(info);
   const isActive = tab.id === activeId;
   const lifted = isDragging || drag.moving === tab.id;
   const live = state.live[tab.id];
@@ -290,6 +291,8 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
   const unloaded = pinned && asleep;
   // Its video popped out when you switched away (auto picture-in-picture).
   const popped = Boolean(live?.pip);
+  // It's sharing your screen: the slot shows a Stop button instead, which matters more.
+  const sharing = Boolean(live?.sharing);
   const dispatch = api.state.dispatch;
   const close = () => void dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
   const shownDepth = isDragging && projected ? projected.depth : depth;
@@ -328,7 +331,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
         // A pinned tab that hasn't been opened yet reads quieter (DESIGN.md §7.2).
         data-unloaded={unloaded || undefined}
         data-asleep={asleep || undefined}
-        data-pip={popped || undefined}
+        data-pip={popped || sharing || undefined}
         aria-current={isActive ? 'page' : undefined}
         title={pageTitle(tab) || tab.url}
         onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
@@ -342,7 +345,17 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
         <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
         {duetRead && <Sparkle className={styles.duetRead} size={12} strokeWidth={2} role="img" aria-label="Duet read this tab" />}
       </button>
-      {popped && (
+      {sharing ? (
+        <button
+          type="button"
+          className={`${styles.pip} ${styles.sharing}`}
+          aria-label="Stop sharing your screen"
+          title="Stop sharing your screen"
+          onClick={() => void api.share.stop(tab.id)}
+        >
+          <ScreenShare size={14} strokeWidth={2} />
+        </button>
+      ) : popped && (
         <button
           type="button"
           className={styles.pip}
@@ -368,7 +381,7 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
           type="button"
           className={styles.close}
           aria-label={`Close ${tab.title || 'tab'}`}
-          title={withKeys(pinned ? 'Close (stays pinned)' : 'Close tab', 'tab.close', info)}
+          title={withKeys(pinned ? 'Close (stays pinned)' : 'Close tab', 'tab.close')}
           onClick={close}
         >
           <X size={14} strokeWidth={2} />
@@ -661,6 +674,7 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
   useEffect(() => api.sidebar.onRename(({ nodeId }) => setRenaming(nodeId)), []);
   const ctx: RowContext = { ...rest, renaming, setRenaming };
   const { state, info } = rest;
+  const { keycap } = useKeys(info);
   const pinned = flattenPinned(state, chordId, active?.type === 'folder' ? active.id : null);
   const today = children(state, chordId, 'today', null).filter((n): n is TabNode => n.kind === 'tab');
 
@@ -699,7 +713,7 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
       <button type="button" className={`${styles.row} ${styles.newTab}`} onClick={() => void api.overlay.open('new')}>
         <Plus size={16} strokeWidth={1.75} aria-hidden />
         <span className={styles.ellipsis}>New tab</span>
-        <kbd className={styles.rowKeycap}>{keycap('tab.new', info)}</kbd>
+        <kbd className={styles.rowKeycap}>{keycap('tab.new')}</kbd>
       </button>
 
       <ul className={styles.list} aria-label="Today">

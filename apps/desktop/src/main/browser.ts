@@ -17,7 +17,6 @@ import {
   sortedChords,
   tabsInOrder,
   uuidv7,
-  zoomStep,
   type ActionId,
   type ArchiveReason,
   type Effect,
@@ -27,9 +26,9 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
+import type { ArchiveSnapshot, GesturePhase, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
 import { size } from '@chord/tokens';
-import { app, BaseWindow, BrowserWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
@@ -38,9 +37,13 @@ import type { WebStore } from './extensions/webstore';
 import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
+import { setShortcutOverrides } from './shortcut-overrides';
 import { IdleKeeper, type IdleTiming } from './idle';
 import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
+import type { ScreenShareBroker } from './screen-share';
+import { SiteZoom } from './site-zoom';
+import { spellcheckLanguages } from './spellcheck';
 import { systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
@@ -62,6 +65,8 @@ export interface BrowserOptions {
   archive: { entry(which: { archiveId: string } | { reasons: ArchiveReason[] }): Promise<ArchiveEntry | null> };
   /** When idle tabs are archived and put to sleep. */
   idle: IdleTiming;
+  /** Answers getDisplayMedia with Chord's picker; connected here once the store exists. */
+  screenShare: ScreenShareBroker;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
   /** A private window closed: drop its session (cookies, storage, cache) and anything kept for it. */
@@ -77,6 +82,13 @@ export interface BrowserOptions {
     publisherKeyHash?: string;
   };
 }
+
+/** Trackpad scroll phases forwarded to the shell, for the chord swipe. */
+const GESTURE_PHASES: Partial<Record<string, GesturePhase>> = {
+  gestureScrollBegin: 'begin',
+  gestureScrollEnd: 'end',
+  gestureFlingStart: 'fling',
+};
 
 export class Browser {
   readonly store: Store;
@@ -105,21 +117,27 @@ export class Browser {
     return [...this.windows.values()];
   }
   private readonly autoPip: AutoPip;
+  private readonly siteZoom: SiteZoom;
   private readonly archivedHistory = new Map<string, NavState | null>();
   /** Archive entries being restored, so a double click brings a tab back once. */
   private readonly restoring = new Set<string>();
   private archiveChangedTimer: ReturnType<typeof setTimeout> | undefined;
   /** Chord is quitting: windows closing now stay in the saved state, to come back at the next launch. */
   private quitting = false;
+  /** The Settings view while it records a shortcut: main acts on none of its keys until it's done. */
+  private recordingIn: WebContents | null = null;
   private readonly keyboard: KeyboardHandlers = {
     run: (action, contents) => this.run(action, contents),
     onControlUp: () => this.finishRecentCycle(),
+    paused: (contents) => contents === this.recordingIn,
   };
   /** The application menu (macOS menu bar; on Windows/Linux the ⋯ menu, whose accelerators stay live). */
-  readonly appMenu: Menu = buildAppMenu((action) => this.runInFocusedWindow(action));
+  appMenu: Menu;
 
   constructor(private readonly options: BrowserOptions) {
     this.store = new Store(options.initial);
+    setShortcutOverrides(this.store.state.settings.shortcuts);
+    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
     this.tabs = new TabManager({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
@@ -138,11 +156,20 @@ export class Browser {
         attachShortcuts(contents, this.keyboard);
         this.extensions.tabCreated(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
-        // Whatever a page asked for is denied once it's gone or replaced by another page.
+        this.siteZoom.attach(contents);
+        // Whatever a page asked for is denied once it's gone or replaced by another page; a share ends.
         contents.on('did-start-navigation', (details) => {
-          if (details.isMainFrame && !details.isSameDocument) options.permissions.forgetTab(nodeId);
+          if (!details.isMainFrame || details.isSameDocument) return;
+          options.permissions.forgetTab(nodeId);
+          options.screenShare.forgetTab(nodeId);
         });
-        contents.once('destroyed', () => options.permissions.forgetTab(nodeId));
+        contents.once('destroyed', () => {
+          options.permissions.forgetTab(nodeId);
+          options.screenShare.forgetTab(nodeId);
+        });
+        // A page going fullscreen (a video) covers the whole window; Esc, or the page, brings Chord back.
+        contents.on('enter-html-full-screen', () => this.windowFor(contents)?.setPageFullScreen(true));
+        contents.on('leave-html-full-screen', () => this.windowFor(contents)?.setPageFullScreen(false));
         attachContextMenu(contents, {
           surface: 'web',
           inspect: true,
@@ -222,6 +249,25 @@ export class Browser {
         w.window.focus();
       },
     });
+    this.siteZoom = new SiteZoom({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      isPrivate: (contents) => {
+        const node = this.store.state.nodes[this.tabs.nodeFor(contents) ?? ''];
+        return node ? isPrivateChord(this.store.state, node.chordId) : false;
+      },
+    });
+    options.screenShare.connect({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      onChange: () => this.syncPopovers(),
+      cantStop: (nodeId, host) => {
+        const windowId = this.windowShowing(nodeId);
+        const w = windowId ? this.windows.get(windowId) : undefined;
+        if (w) send(w.shell.webContents, 'toast:show', { id: `share:${nodeId}`, message: `Chord can't stop this share. Use ${host}'s own Stop button.` });
+      },
+    });
     this.idle = new IdleKeeper(
       {
         state: () => this.store.state,
@@ -237,7 +283,12 @@ export class Browser {
       this.syncPopovers();
       this.extensions.sync();
       if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
-      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions'].includes(String(p.path[0])))) {
+      // New keys apply at once: the router reads them live, and the menus are rebuilt to show and accept them.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'shortcuts')) {
+        setShortcutOverrides(change.state.settings.shortcuts);
+        this.applyAppMenu();
+      }
+      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions', 'sitePermissions'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
       if (change.patches.some((p) => p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'interface'))) {
@@ -318,13 +369,22 @@ export class Browser {
     });
     this.windows.set(windowId, w);
     this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));
+    // A load can finish after its window has closed (quitting right after launch): only an open window syncs.
     w.popover.webContents.on('did-finish-load', () => {
+      if (this.windows.get(windowId) !== w) return;
       this.popoverSent.delete(windowId);
       this.syncPopover(w);
     });
     w.shell.webContents.on('did-finish-load', () => {
+      if (this.windows.get(windowId) !== w) return;
       this.extensions.forget(windowId);
       this.extensions.sync();
+    });
+    // The chord swipe's phases (DESIGN.md §6.4): the renderer sees only wheel events, which
+    // don't say when the fingers lift. Where the OS sends none, the shell ends on idle.
+    w.shell.webContents.on('input-event', (_event, input) => {
+      const phase = GESTURE_PHASES[input.type];
+      if (phase) send(w.shell.webContents, 'gesture:phase', phase);
     });
     this.lastWindowId ??= windowId;
     w.window.on('focus', () => {
@@ -470,6 +530,7 @@ export class Browser {
       interface: state.settings.interface,
       find: find && find.target === w.activeTabContents ? find.state : null,
       permission: this.options.permissions.promptFor(activeTabId(state, w.id)),
+      share: this.options.screenShare.promptFor(activeTabId(state, w.id)),
     };
   }
 
@@ -544,7 +605,20 @@ export class Browser {
       chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
       extensions: this.extensions.infos(),
       chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId })),
+      sitePermissions: state.sitePermissions,
+      spellcheckLanguages: spellcheckLanguages(),
     };
+  }
+
+  /** Builds the menus from the current shortcuts and installs the app menu. */
+  applyAppMenu(): void {
+    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
+    Menu.setApplicationMenu(this.appMenu);
+  }
+
+  /** Settings is (or stops) recording a shortcut in this contents. Only the Settings view may ask. */
+  setRecordingShortcut(contents: WebContents, recording: boolean): void {
+    this.recordingIn = recording && contents === this.settingsWindow?.view.webContents ? contents : null;
   }
 
   openSettings(section?: string): void {
@@ -554,6 +628,11 @@ export class Browser {
     }
     this.settingsWindow = new SettingsWindow(this.options.uiSession, this.lastWindow()?.window.getBounds(), section, () => {
       this.settingsWindow = null;
+      this.recordingIn = null;
+    });
+    // Recording a shortcut ends when Settings loses focus, whatever its page says.
+    this.settingsWindow.window.on('blur', () => {
+      this.recordingIn = null;
     });
     attachShortcuts(this.settingsWindow.view.webContents, this.keyboard);
     attachContextMenu(this.settingsWindow.view.webContents, {
@@ -736,7 +815,8 @@ export class Browser {
         editColors: () => {
           this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
           this.lastWindowId = w.id;
-          this.openSettings('appearance');
+          // Appearance, with the chord's colors open on the wheel.
+          this.openSettings('appearance/colors');
         },
         separateSignIns: chord.profileId !== DEFAULT_PROFILE,
         toggleSeparateSignIns: () => this.toggleSeparateSignIns(w, chordId),
@@ -848,10 +928,11 @@ export class Browser {
       }
       case 'view.zoomIn':
       case 'view.zoomOut':
-        activeContents?.setZoomFactor(zoomStep(activeContents.getZoomFactor(), action === 'view.zoomIn' ? 1 : -1));
+        // Remembered for the site, as in Chrome.
+        if (activeContents) this.siteZoom.step(activeContents, action === 'view.zoomIn' ? 1 : -1);
         return true;
       case 'view.zoomReset':
-        activeContents?.setZoomFactor(1);
+        if (activeContents) this.siteZoom.reset(activeContents);
         return true;
       case 'page.print':
         activeContents?.print();

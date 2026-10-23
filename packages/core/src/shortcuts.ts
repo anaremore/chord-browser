@@ -1,10 +1,12 @@
 /**
  * The one shortcut registry (DESIGN.md §14). Everything else (the reserved-key
  * interceptor, menus, keycaps, the cheat sheet, the docs table) is generated
- * from this list.
+ * from this list, plus your changes to it (Settings → Keyboard shortcuts),
+ * which `keysFor` folds in.
  *
  * Key syntax: modifiers joined with `+`. `Mod` is ⌘ on macOS and Ctrl
- * elsewhere; `Ctrl` is always the Control key (⌃ on macOS).
+ * elsewhere; `Ctrl` is always the Control key (⌃ on macOS); `Meta` is the
+ * Windows or Super key (never used on macOS, where ⌘ is `Mod`).
  */
 
 export type Platform = 'darwin' | 'win32' | 'linux';
@@ -142,9 +144,30 @@ export const SHORTCUTS: readonly Shortcut[] = [
 
 export const shortcutById = (id: ActionId): Shortcut | undefined => SHORTCUTS.find((x) => x.id === id);
 
-export function keysFor(shortcut: Shortcut, platform: Platform): readonly string[] {
+/**
+ * Your changes to the registry's keys (Settings → Keyboard shortcuts): an
+ * action's full list of combinations, in the portable `Mod+…` form. An empty
+ * list means the action has no keys. Actions not listed keep their defaults.
+ */
+export type ShortcutOverrides = Readonly<Partial<Record<ActionId, readonly string[]>>>;
+
+/** The registry's own keys for an action on this platform, ignoring your changes. */
+export function defaultKeysFor(shortcut: Shortcut, platform: Platform): readonly string[] {
   if (shortcut.only && !shortcut.only.includes(platform)) return [];
   return platform === 'darwin' ? shortcut.mac : shortcut.other;
+}
+
+/** The keys that work for an action: your changes if you made any, else the registry's. */
+export function keysFor(shortcut: Shortcut, platform: Platform, overrides: ShortcutOverrides = {}): readonly string[] {
+  if (shortcut.only && !shortcut.only.includes(platform)) return [];
+  return overrides[shortcut.id] ?? defaultKeysFor(shortcut, platform);
+}
+
+/** The keycap for an action's first key on this platform ("⌘L", "Ctrl+L"), or '' if it has none. */
+export function keycapFor(id: ActionId, platform: Platform, overrides: ShortcutOverrides = {}): string {
+  const shortcut = shortcutById(id);
+  const first = shortcut ? keysFor(shortcut, platform, overrides)[0] : undefined;
+  return first ? formatKeys(first, platform) : '';
 }
 
 /** The subset of Electron's `Input` that matching needs. */
@@ -168,7 +191,7 @@ interface Combo {
 
 function parseCombo(text: string, platform: Platform): Combo {
   const parts = text.split('+');
-  // `Mod++` would split badly, but no shortcut uses "+" as its key.
+  // The + key itself is written `Plus`, so splitting on + is safe.
   const key = parts.pop()!;
   const combo: Combo = { key: normalizeKey(key), ctrl: false, meta: false, alt: false, shift: false };
   for (const mod of parts) {
@@ -176,31 +199,58 @@ function parseCombo(text: string, platform: Platform): Combo {
     else if (mod === 'Ctrl') combo.ctrl = true;
     else if (mod === 'Alt') combo.alt = true;
     else if (mod === 'Shift') combo.shift = true;
+    else if (mod === 'Meta') combo.meta = true;
   }
   return combo;
 }
 
 function normalizeKey(key: string): string {
+  if (key === ' ') return 'Space';
+  if (key === '+') return 'Plus';
   return key.length === 1 ? key.toUpperCase() : key;
 }
 
-/** Physical digit and letter keys keep working on layouts where Shift or AltGr changes `key`. */
-function inputKey(input: KeyInput): string {
+/** Punctuation keys by position, as US keycaps name them. */
+const PUNCTUATION_CODES: Record<string, string> = {
+  BracketLeft: '[',
+  BracketRight: ']',
+  Equal: '=',
+  Minus: '-',
+  Slash: '/',
+  Comma: ',',
+  Period: '.',
+  Semicolon: ';',
+  Quote: "'",
+  Backslash: '\\',
+  Backquote: '`',
+};
+
+/**
+ * The key a press names in a combination. Digit, letter and punctuation keys
+ * go by position when a modifier is down, so shortcuts keep working on
+ * layouts where Shift, ⌥ or AltGr changes the character.
+ */
+export function keyOf(input: KeyInput): string {
+  if (input.code === 'Space') return 'Space';
   if (/^Digit\d$/.test(input.code)) return input.code.slice(5);
-  if (/^Key[A-Z]$/.test(input.code) && (input.control || input.meta || input.alt)) return input.code.slice(3);
-  if (input.code === 'BracketLeft' && (input.control || input.meta)) return '[';
-  if (input.code === 'BracketRight' && (input.control || input.meta)) return ']';
-  if (input.code === 'Equal' && (input.control || input.meta)) return '=';
-  if (input.code === 'Minus' && (input.control || input.meta)) return '-';
-  if (input.code === 'Slash' && (input.control || input.meta)) return '/';
-  if (input.code === 'Comma' && (input.control || input.meta)) return ',';
+  const modified = input.control || input.meta || input.alt;
+  if (/^Key[A-Z]$/.test(input.code) && modified) return input.code.slice(3);
+  const punctuation = PUNCTUATION_CODES[input.code];
+  if (punctuation && modified) return punctuation;
   return normalizeKey(input.key);
+}
+
+/** Whether two combinations are the same keys on this platform (`Mod+T` and `Ctrl+T` are, off macOS). */
+export function sameCombo(a: string, b: string, platform: Platform): boolean {
+  const x = parseCombo(a, platform);
+  const y = parseCombo(b, platform);
+  return x.key === y.key && x.ctrl === y.ctrl && x.meta === y.meta && x.alt === y.alt && x.shift === y.shift;
 }
 
 export function matches(input: KeyInput, text: string, platform: Platform): boolean {
   const combo = parseCombo(text, platform);
   return (
-    inputKey(input) === combo.key &&
+    keyOf(input) === combo.key &&
     input.control === combo.ctrl &&
     input.meta === combo.meta &&
     input.alt === combo.alt &&
@@ -208,10 +258,10 @@ export function matches(input: KeyInput, text: string, platform: Platform): bool
   );
 }
 
-/** The shortcut this key press triggers, if any (keyDown only). */
-export function findShortcut(input: KeyInput, platform: Platform, kind?: ShortcutKind): Shortcut | undefined {
+/** The shortcut this key press triggers, if any (keyDown only), with your changes applied. */
+export function findShortcut(input: KeyInput, platform: Platform, kind?: ShortcutKind, overrides: ShortcutOverrides = {}): Shortcut | undefined {
   if (input.type !== 'keyDown') return undefined;
-  return SHORTCUTS.find((sc) => (!kind || sc.kind === kind) && keysFor(sc, platform).some((k) => matches(input, k, platform)));
+  return SHORTCUTS.find((sc) => (!kind || sc.kind === kind) && keysFor(sc, platform, overrides).some((k) => matches(input, k, platform)));
 }
 
 const MAC_SYMBOLS: Record<string, string> = { Ctrl: '⌃', Alt: '⌥', Shift: '⇧', Mod: '⌘' };
@@ -224,6 +274,7 @@ const KEY_LABELS: Record<string, string> = {
   Escape: 'Esc',
   PageUp: 'PgUp',
   PageDown: 'PgDn',
+  Plus: '+',
 };
 
 /** Keycap text: `⌘⇧T` on macOS, `Ctrl+Shift+T` elsewhere. */

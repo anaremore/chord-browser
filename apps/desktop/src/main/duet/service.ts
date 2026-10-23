@@ -1,7 +1,7 @@
 /**
  * Duet in main (ARCHITECTURE.md §11): threads per chord, provider sessions,
  * Chord's tools with their tiers, scope and approvals, and what each window's
- * panel shows. Chord's transcript (chord-data, migration 8) is the source of
+ * panel shows. Chord's transcript (chord-data, migration 9) is the source of
  * truth; a provider's session is a cache that's resumed when it still works
  * and replaced, primed with a summary, when it doesn't.
  */

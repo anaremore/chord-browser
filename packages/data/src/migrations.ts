@@ -170,7 +170,14 @@ export const MIGRATIONS: readonly string[] = [
     favicon_key TEXT, rank TEXT NOT NULL, created_at INTEGER NOT NULL
   ) STRICT;
   `,
-  // 8: Duet (ARCHITECTURE.md §11): Chord's own transcript is the source of truth; a provider's
+  // 8: page zoom you chose for a site, by host (Chrome remembers it too). Shared by every chord.
+  `
+  CREATE TABLE site_zoom (
+    profile_id TEXT NOT NULL, host TEXT NOT NULL, factor REAL NOT NULL, updated_at INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, host)
+  ) STRICT;
+  `,
+  // 9: Duet (ARCHITECTURE.md §11): Chord's own transcript is the source of truth; a provider's
   // session (provider_session_id) is a cache, resumed when it works. Message bodies are JSON
   // (packages/core/src/duet.ts); text is what the command bar's @duet searches.
   `

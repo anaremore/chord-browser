@@ -6,10 +6,13 @@
  */
 import { generateKeyBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
+import { cleanKeys } from './bindings';
 import { isInternalUrl, visibleTabs } from './idle';
 import {
   DEFAULT_PROFILE,
   IDLE_LIVE,
+  MAX_ZOOM,
+  MIN_ZOOM,
   SIDEBAR_WIDTH,
   PRIVATE_CHORD_THEME,
   extensionKey,
@@ -37,6 +40,7 @@ import {
   type WindowId,
   type WindowModel,
 } from './model';
+import { shortcutById, type ActionId } from './shortcuts';
 import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 
 enablePatches();
@@ -140,7 +144,11 @@ export type Command =
   /** Remove a custom theme; chords using it keep their colors. */
   | { t: 'theme.delete'; id: string }
   /** Remember (or, with null, forget) a site's answer to a permission prompt. */
-  | { t: 'permission.set'; origin: string; permissions: SitePermission[]; decision: PermissionDecision | null };
+  | { t: 'permission.set'; origin: string; permissions: SitePermission[]; decision: PermissionDecision | null }
+  /** Forget everything decided for a site (Settings → Site permissions). */
+  | { t: 'permission.forget'; origin: string }
+  /** The page zoom you chose for a site; 1 forgets it. */
+  | { t: 'zoom.set'; host: string; factor: number }
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -911,6 +919,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       for (const [key, value] of Object.entries(cmd.settings.interface ?? {}) as [keyof typeof draft.settings.interface, number | undefined][]) {
         if (value !== undefined && draft.settings.interface[key] !== clamp01(value)) draft.settings.interface[key] = clamp01(value);
       }
+      const { spellcheck } = cmd.settings;
+      if (spellcheck?.enabled !== undefined && draft.settings.spellcheck.enabled !== spellcheck.enabled) draft.settings.spellcheck.enabled = spellcheck.enabled;
+      if (spellcheck?.language !== undefined && draft.settings.spellcheck.language !== spellcheck.language) draft.settings.spellcheck.language = spellcheck.language;
+      // Shortcuts: each listed action gets its new keys (checked again here), or null goes back to the registry's.
+      for (const [id, keys] of Object.entries(cmd.settings.shortcuts ?? {}) as [ActionId, readonly string[] | null | undefined][]) {
+        if (keys === undefined || !shortcutById(id)) continue;
+        if (keys === null) delete draft.settings.shortcuts[id];
+        else draft.settings.shortcuts[id] = cleanKeys(id, keys);
+      }
       return;
     }
 
@@ -1102,6 +1119,19 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         else if (site[permission] !== cmd.decision) site[permission] = cmd.decision;
       }
       if (Object.keys(site).length === 0) delete draft.sitePermissions[cmd.origin];
+      return;
+    }
+
+    case 'permission.forget':
+      delete draft.sitePermissions[cmd.origin];
+      return;
+
+    case 'zoom.set': {
+      if (!cmd.host) return;
+      const factor = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, cmd.factor));
+      // Chromium's zoom steps aren't exact; anything this close to 100% is 100%.
+      if (Math.abs(factor - 1) < 0.001) delete draft.siteZoom[cmd.host];
+      else if (draft.siteZoom[cmd.host] !== factor) draft.siteZoom[cmd.host] = factor;
       return;
     }
 

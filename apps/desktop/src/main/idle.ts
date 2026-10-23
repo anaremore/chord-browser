@@ -2,8 +2,8 @@
  * Tidying up (ARCHITECTURE.md §7, §9): every few minutes, and when the
  * computer wakes, Today tabs unused for longer than Settings allows go to the
  * archive, and background tabs unused for an hour go to sleep. Tabs that are
- * playing, sharing the camera or microphone, or in picture-in-picture are
- * left alone.
+ * playing, using the camera or microphone, sharing the screen, or in
+ * picture-in-picture are left alone.
  */
 import { archiveCandidates, sleepCandidates, type ArchiveAfter, type Command, type NodeId, type State } from '@chord/core';
 import { powerMonitor } from 'electron';
@@ -56,7 +56,7 @@ export class IdleKeeper {
       const busy = new Set<NodeId>();
       for (const id of Object.keys(state().nodes)) {
         const live = state().live[id];
-        if (live?.audible || live?.pip || tabs.isPlaying(id) || isCapturing(id)) busy.add(id);
+        if (live?.audible || live?.pip || live?.sharing || tabs.isPlaying(id) || isCapturing(id)) busy.add(id);
       }
       // Picture-in-picture means asking the page, so only for tabs that would otherwise go.
       const settings = state().settings;

@@ -30,6 +30,7 @@ const api: ShellApi = {
   chords: { onEdit: (listener) => subscribe('chord:edit', listener) },
   toasts: { onShow: (listener) => subscribe('toast:show', listener) },
   duet: { view: () => invoke('duet:view'), act: (action) => invoke('duet:do', action), onState: (listener) => subscribe('duet:state', listener) },
+  gestures: { onPhase: (listener) => subscribe('gesture:phase', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
   extensions: {
     state: () => invoke('extensions:state'),
@@ -39,6 +40,7 @@ const api: ShellApi = {
     install: (input) => invoke('extensions:install', { input }),
   },
   defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
+  share: { stop: (nodeId) => invoke('share:stop', { nodeId }) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

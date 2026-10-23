@@ -383,6 +383,13 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 | **Interrupt** | A new swipe during the settle catches the panel where it is. Velocity carries over, so it never jumps back to zero. |
 | **Keyboard / click** | ⌘1–9 or a switcher click plays the same transition with the `release` spring from rest. Jumping more than one chord does not slide past the in-between ones: it crossfades with a 24 px drift. |
 
+*As built* (`shell/swipe.ts`, `shell/useChordSwipe.ts`):
+- **Interrupt:** a swipe that starts during a spring-back catches the pane where it is, with its velocity. During a commit's settle (about 300 ms), new input waits.
+- **Momentum:** what arrives after a release is ignored until it pauses for 120 ms, or the OS reports a new gesture.
+- **Flick back:** a release past half the width that is flicked back faster than 0.5 px/ms springs back instead of committing.
+- **Mouse tilt wheel or Shift+wheel:** line-based deltas, or a first step of 50 px or more, switch one chord per notch with the usual slide. Repeats while held are ignored.
+- **Switcher pill:** it moves at the commit, not proportionally while tracking.
+
 ### 6.5 Choreography of the key moments
 
 | Moment | Motion (distinct for each, so close ≠ archive ≠ pin) |
@@ -528,7 +535,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 
 - **ColorWheel (240 px canvas).**
-  - Hue runs around the ring; chroma runs outward from the gray center. It's drawn at the current appearance's lightness band and gamut-mapped to the display (P3 where available).
+  - Hue runs around the ring; chroma runs outward from the gray center. It's drawn at the swatches' display lightness in both appearances. In the dark band it was too muddy to pick from. The orbs and the live sidebar show how each appearance draws the tint.
   - Up to 3 handles: 24 px circles with a 2 px white ring and `shadow-raised`.
   - Click an empty spot to move the nearest handle.
   - **+** adds a handle at +40° (analogous).
@@ -538,6 +545,17 @@ Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 - **Accessible:**
   - Each handle is a focusable 2D control. Arrow keys change hue; Shift+arrows change chroma.
   - `aria-valuetext` names the nearest swatch, e.g. "Close to Coral, vivid".
+
+*As built* (Settings → Appearance's theme editor, `settings/ColorWheel.tsx`, `settings/wheel.ts`):
+- **Drawing:** the wheel is drawn with the generator's own band mapping (`mapToBand`), so dark mode's wheel is as deep as dark tints are.
+- **Handles:** hue is 0° at the top, growing clockwise. Picked colors are stored at the swatches' display lightness.
+- **Removing a color:** let go of a handle 1.25 radii out. Delete or Backspace on a focused handle removes it too.
+- **Replaced:** the wheel replaces the hue and vividness sliders. Swatches and grain stay beside it.
+- **Surprise me:**
+  - It's in the editor and on the themes header.
+  - It picks neighbors on the wheel, or now and then a split complement.
+  - On the header it re-colors the chord directly, leaving a "Current colors" card to save.
+- **Edit colors…:** the chord menu's item opens the editor on the chord's colors, or on its own theme.
 
 **Settings → Appearance** is the theme library. It has three parts:
 
@@ -762,7 +780,15 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
    - **Page-first (P):** the page sees the key first. If it uses it (Google Docs' ⌘S, a web editor's ⌘D), Chord stays out of the way. If not, Chord acts.
 3. **Hands off keys web apps depend on.** Chord never *reserves* ⌘K, ⌘E, ⌘B, ⌘I, ⌘U, ⌘↵ or ⌘/. A page-first binding is allowed only where Chrome already has one, like Ctrl+U for view source on Windows/Linux, and the page still wins.
 4. **Discoverable.** Every action is in the command bar with its keycaps shown. The full cheat sheet is one shortcut away.
-5. **One registry.** `packages/core/src/shortcuts.ts` defines each shortcut once: id, macOS keys, Windows/Linux keys, kind, action. It generates the macOS menu bar, the reserved-key interceptor, keycaps, the cheat sheet, and the tables below. A test fails on any duplicate per platform. Rebinding with conflict detection comes in Phase 3.
+5. **One registry.** `packages/core/src/shortcuts.ts` defines each shortcut once: id, macOS keys, Windows/Linux keys, kind, action. It generates the macOS menu bar, the reserved-key interceptor, keycaps, the cheat sheet, and the tables below. A test fails on any duplicate per platform.
+6. **Every key is yours to change** (Settings → Keyboard shortcuts):
+   - **Editing:** click a keycap to record a new one ("Press keys…"), or **+** to add another (up to four per action). Esc cancels, and Delete removes that key. ↺ puts one action back, and **Reset all** asks a second time in place.
+   - **Conflicts are settled in the row.** "⌘K is used by *Search tabs*" offers **Use it here**, which moves the key, or Cancel. Never a dialog.
+   - **Refused, with the reason in one plain sentence:**
+     - a key with no ⌘/⌃/⌥ (Ctrl/Alt elsewhere), unless it's F1–F24;
+     - what the OS keeps for itself: Spotlight's ⌘Space, ⌘Tab, Force Quit, Alt+Tab, Ctrl+Alt+Delete, Windows and Super key combinations, and the rest in `bindings.ts`;
+     - text editing's ⌘C/V/X/A/Z (and Ctrl+Y off macOS).
+   - **What changing keeps:** the action's kind (reserved or page-first) and its place in menus. Only the keys change, and they apply at once everywhere: the router, the menus, every keycap and tooltip, the command bar and onboarding.
 
 ### 14.2 The map (Phase 1 unless marked)
 
@@ -865,5 +891,5 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 - **⌘1–9 switches chords**, as the brief asks, so Chrome's "go to tab N" isn't available.
 - **Ctrl+Tab cycles recent tabs** (Arc's behavior) rather than Chrome's next-in-order. Next-in-order is on Ctrl+PageDown, and a setting can swap them.
 - **Copy page address takes Ctrl+Shift+C**, which Chrome uses to inspect elements on Windows and Linux. In Chord, open DevTools (F12) first; its element picker answers to Ctrl+Shift+C there.
-- **On GNOME, Ctrl+Alt+←/→ switches workspaces** before Chord sees it. Use Ctrl+1–9, the trackpad swipe, or rebind (Phase 3).
+- **On GNOME, Ctrl+Alt+←/→ switches workspaces** before Chord sees it. Use Ctrl+1–9, the trackpad swipe, or give Next/Previous chord other keys in Settings → Keyboard shortcuts.
 - **Page-first keys depend on the page.** In Google Docs, ⌘S does Docs' thing, not the sidebar. That is deliberate: web apps keep working, and the command bar and View menu always reach the same action.

@@ -51,6 +51,8 @@ export class SettingsWindow {
       onClosed();
     });
     this.view.webContents.once('did-finish-load', () => {
+      // It may have been closed before it finished loading.
+      if (this.window.isDestroyed()) return;
       this.window.show();
       this.view.webContents.focus();
     });

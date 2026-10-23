@@ -1,9 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import type { DuetMessage, DuetThread } from '@chord/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ChordDatabase } from '../src/db';
+import { MIGRATIONS } from '../src/migrations';
 
 let dir: string;
 let db: ChordDatabase;
@@ -35,7 +37,7 @@ const message = (id: string, threadId: string, text: string, role: 'user' | 'ass
   body: role === 'user' ? { role, text, attachments: [] } : { role, text, citations: [], status: 'done' },
 });
 
-describe('Duet store (migration 8)', () => {
+describe('Duet store (migration 9)', () => {
   it('keeps threads per chord, newest first, with their messages and scope', () => {
     db.duet({ op: 'saveThread', thread: thread('a', 1) });
     db.duet({ op: 'saveThread', thread: { ...thread('b', 2), scope: 'chord' } });
@@ -65,6 +67,27 @@ describe('Duet store (migration 8)', () => {
     expect(db.duet({ op: 'prune', before: 500 }).removed?.map((t) => t.id)).toEqual(['old']);
     expect(db.duet({ op: 'threads', chordId: 'c1', limit: 10 }).threads?.map((t) => t.id)).toEqual(['new']);
     expect(db.duet({ op: 'deleteAll' }).removed?.map((t) => t.id)).toEqual(['new']);
+  });
+
+  it('upgrades a version-8 profile (site zoom, no Duet yet), keeping its zoom', () => {
+    db.close();
+    const file = join(dir, 'v8.db');
+    const v8 = new DatabaseSync(file);
+    for (const migration of MIGRATIONS.slice(0, 8)) v8.exec(migration);
+    v8.exec('PRAGMA user_version = 8');
+    v8.prepare('INSERT INTO site_zoom (profile_id, host, factor, updated_at) VALUES (?, ?, ?, ?)').run('default', 'news.test', 1.25, 1);
+    v8.close();
+
+    db = new ChordDatabase(file);
+    expect(db.version).toBe(9);
+    db.duet({ op: 'saveThread', thread: thread('a', 1) });
+    db.duet({ op: 'saveMessage', message: message('m1', 'a', 'Hello after the upgrade') });
+    expect(db.duet({ op: 'search', query: 'upgrade', limit: 10 }).hits?.map((h) => h.messageId)).toEqual(['m1']);
+    db.close();
+    const check = new DatabaseSync(file);
+    expect(check.prepare('SELECT host, factor FROM site_zoom').all()).toEqual([{ host: 'news.test', factor: 1.25 }]);
+    check.close();
+    db = new ChordDatabase(join(dir, 'chord.db'));
   });
 
   it('treats FTS syntax in a search as plain words', () => {

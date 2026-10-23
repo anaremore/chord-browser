@@ -16,13 +16,17 @@ import {
   type Oklch,
 } from '@chord/core';
 import type { SettingsSnapshot, SystemInfo } from '@chord/ipc';
-import { PRESETS, SWATCHES, createChordTheme, cssOklch, presetStops, type Appearance as Mode, type PresetId, type SwatchId } from '@chord/tokens';
-import { BookmarkPlus, Check, ClipboardCopy, Copy, Download, Pencil, Plus, X } from 'lucide-react';
+import { PRESETS, SWATCHES, createChordTheme, cssOklch, presetStops, springs, type Appearance as Mode, type PresetId, type SwatchId } from '@chord/tokens';
+import { BookmarkPlus, Check, ClipboardCopy, Copy, Dices, Download, Pencil, Plus, X } from 'lucide-react';
+import { motion, type Transition } from 'motion/react';
 import { useEffect, useState, type CSSProperties } from 'react';
+import { INSTANT } from '../shared/motion';
 import { api } from './api';
 import styles from './Appearance.module.css';
+import { ColorWheel } from './ColorWheel';
 import { ResetButton, Row, SectionHeader, Segmented } from './controls';
 import settingsStyles from './Settings.module.css';
+import { MAX_STOPS, addedStop, surpriseStops } from './wheel';
 
 /** A theme in the library: a built-in preset or one of yours. */
 interface LibraryTheme {
@@ -44,10 +48,8 @@ interface Draft {
 }
 
 const PRESET_GRAIN = 0.2;
-/** Colors you pick sit at the swatches' display lightness; the generator maps them into each mode. */
-const PICK_L = 0.72;
-const MAX_CHROMA = 0.16;
-const MAX_STOPS = 3;
+/** The last "Edit colors…" request opened, so coming back to Appearance doesn't reopen the editor. */
+let handledEditColors = 0;
 
 const titleCase = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-3;
@@ -149,7 +151,41 @@ function ColorSchemes({ scheme, ...look }: Look & { scheme: ColorScheme }) {
 
 /* ---------- Theme editor ---------- */
 
-function ThemeEditor({ draft, info, ui, onDone, onDuplicate }: { draft: Draft; info: SystemInfo; ui: InterfaceSettings; onDone(saved: CustomTheme | null): void; onDuplicate(draft: Draft): void }) {
+/** "Surprise me": colors that sit well together, with a dice that spins (the `playful` spring). */
+function SurpriseButton({ spin, className, onClick }: { spin: Transition; className: string | undefined; onClick(): void }) {
+  const [turns, setTurns] = useState(0);
+  return (
+    <button
+      type="button"
+      className={className}
+      onClick={() => {
+        setTurns((t) => t + 1);
+        onClick();
+      }}
+    >
+      <motion.span className={styles.dice} animate={{ rotate: turns * 360 }} transition={spin} aria-hidden>
+        <Dices size={14} strokeWidth={2} />
+      </motion.span>
+      Surprise me
+    </button>
+  );
+}
+
+function ThemeEditor({
+  draft,
+  info,
+  ui,
+  spin,
+  onDone,
+  onDuplicate,
+}: {
+  draft: Draft;
+  info: SystemInfo;
+  ui: InterfaceSettings;
+  spin: Transition;
+  onDone(saved: CustomTheme | null): void;
+  onDuplicate(draft: Draft): void;
+}) {
   const [name, setName] = useState(draft.name);
   const [stops, setStops] = useState<Oklch[]>(draft.stops);
   const [grain, setGrain] = useState(draft.grain);
@@ -170,7 +206,6 @@ function ThemeEditor({ draft, info, ui, onDone, onDuplicate }: { draft: Draft; i
     void api.settings.saveTheme(theme);
     onDone(theme);
   };
-  const hueTrack = Array.from({ length: 13 }, (_, i) => cssOklch({ l: PICK_L, c: 0.13, h: i * 30 })).join(', ');
 
   return (
     <section className={styles.editor} aria-label={draft.id ? `Edit ${draft.name}` : 'New theme'}>
@@ -179,87 +214,90 @@ function ThemeEditor({ draft, info, ui, onDone, onDuplicate }: { draft: Draft; i
         <input className={styles.nameInput} value={name} maxLength={40} placeholder="Name your theme" aria-label="Theme name" autoFocus={!draft.id} onChange={(e) => setName(e.target.value)} />
       </div>
 
-      <div className={styles.slots} role="radiogroup" aria-label="Theme colors">
-        {stops.map((s, i) => (
-          <span key={i} className={styles.slotWrap}>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={i === slot}
-              aria-label={`Color ${i + 1}`}
-              className={styles.slot}
-              style={{ backgroundColor: cssOklch(s) }}
-              onClick={() => setSlot(i)}
-            />
-            {stops.length > 1 && (
+      <div className={styles.picker}>
+        <ColorWheel
+          stops={stops}
+          active={Math.min(slot, stops.length - 1)}
+          onSelect={setSlot}
+          onChange={(next, index) => {
+            setStops(next);
+            setSlot(index);
+          }}
+        />
+        <div className={styles.pickerSide}>
+          <div className={styles.slots} role="radiogroup" aria-label="Theme colors">
+            {stops.map((s, i) => (
+              <span key={i} className={styles.slotWrap}>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={i === slot}
+                  aria-label={`Color ${i + 1}`}
+                  className={styles.slot}
+                  style={{ backgroundColor: cssOklch(s) }}
+                  onClick={() => setSlot(i)}
+                />
+                {stops.length > 1 && (
+                  <button
+                    type="button"
+                    className={styles.slotRemove}
+                    aria-label={`Remove color ${i + 1}`}
+                    onClick={() => {
+                      setStops(stops.filter((_, j) => j !== i));
+                      setSlot(0);
+                    }}
+                  >
+                    <X size={10} strokeWidth={3} />
+                  </button>
+                )}
+              </span>
+            ))}
+            {stops.length < MAX_STOPS && (
               <button
                 type="button"
-                className={styles.slotRemove}
-                aria-label={`Remove color ${i + 1}`}
+                className={styles.slotAdd}
+                aria-label="Add a color"
                 onClick={() => {
-                  setStops(stops.filter((_, j) => j !== i));
-                  setSlot(0);
+                  // A new color starts a little way around the wheel from the last one.
+                  setStops([...stops, addedStop(stops)]);
+                  setSlot(stops.length);
                 }}
               >
-                <X size={10} strokeWidth={3} />
+                <Plus size={14} strokeWidth={2} />
               </button>
             )}
-          </span>
-        ))}
-        {stops.length < MAX_STOPS && (
-          <button
-            type="button"
-            className={styles.slotAdd}
-            aria-label="Add a color"
+            <span className={styles.slotHint}>{stops.length === 1 ? 'Add a second color for a gradient.' : 'The gradient runs from the first color to the last.'}</span>
+          </div>
+
+          <div className={styles.palette} role="radiogroup" aria-label={`Color ${slot + 1}`}>
+            {(Object.keys(SWATCHES) as SwatchId[]).map((id) => (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={sameStops([active], [SWATCHES[id]])}
+                aria-label={titleCase(id)}
+                title={titleCase(id)}
+                className={styles.swatch}
+                style={{ backgroundColor: cssOklch(SWATCHES[id]) }}
+                onClick={() => setActive({ ...SWATCHES[id] })}
+              />
+            ))}
+          </div>
+
+          <label className={styles.slider}>
+            <span>Grain</span>
+            <input type="range" min={0} max={100} step={5} value={Math.round(grain * 100)} onChange={(e) => setGrain(Number(e.target.value) / 100)} />
+          </label>
+          <SurpriseButton
+            spin={spin}
+            className={styles.quiet}
             onClick={() => {
-              // A new color starts a little way around the wheel from the one you're on.
-              setStops([...stops, { l: PICK_L, c: Math.max(active.c, 0.08), h: (active.h + 40) % 360 }]);
-              setSlot(stops.length);
+              setStops(surpriseStops(Math.random));
+              setSlot(0);
             }}
-          >
-            <Plus size={14} strokeWidth={2} />
-          </button>
-        )}
-        <span className={styles.slotHint}>{stops.length === 1 ? 'Add a second color for a gradient.' : 'The gradient runs from the first color to the last.'}</span>
-      </div>
-
-      <div className={styles.palette} role="radiogroup" aria-label={`Color ${slot + 1}`}>
-        {(Object.keys(SWATCHES) as SwatchId[]).map((id) => (
-          <button
-            key={id}
-            type="button"
-            role="radio"
-            aria-checked={sameStops([active], [SWATCHES[id]])}
-            aria-label={titleCase(id)}
-            title={titleCase(id)}
-            className={styles.swatch}
-            style={{ backgroundColor: cssOklch(SWATCHES[id]) }}
-            onClick={() => setActive({ ...SWATCHES[id] })}
           />
-        ))}
-      </div>
-
-      <div className={styles.sliders}>
-        <label className={styles.slider}>
-          <span>Hue</span>
-          <input
-            type="range"
-            min={0}
-            max={359}
-            value={Math.round(active.h)}
-            className={styles.hue}
-            style={{ backgroundImage: `linear-gradient(to right, ${hueTrack})` }}
-            onChange={(e) => setActive({ l: PICK_L, c: Math.max(active.c, 0.04), h: Number(e.target.value) })}
-          />
-        </label>
-        <label className={styles.slider}>
-          <span>Vividness</span>
-          <input type="range" min={0} max={MAX_CHROMA * 1000} value={Math.round(active.c * 1000)} onChange={(e) => setActive({ ...active, l: PICK_L, c: Number(e.target.value) / 1000 })} />
-        </label>
-        <label className={styles.slider}>
-          <span>Grain</span>
-          <input type="range" min={0} max={100} step={5} value={Math.round(grain * 100)} onChange={(e) => setGrain(Number(e.target.value) / 100)} />
-        </label>
+        </div>
       </div>
 
       <div className={styles.editorActions}>
@@ -379,7 +417,7 @@ function ThemeCard({ theme, selected, look, onApply, onSecondary }: { theme: Lib
   );
 }
 
-export function AppearanceSection({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
+export function AppearanceSection({ snapshot, info, editColors }: { snapshot: SettingsSnapshot; info: SystemInfo; editColors: number }) {
   const { settings, chord } = snapshot;
   const ui = settings.interface;
   const [panel, setPanel] = useState<{ kind: 'edit'; draft: Draft; key: number } | { kind: 'import' } | null>(null);
@@ -388,6 +426,8 @@ export function AppearanceSection({ snapshot, info }: { snapshot: SettingsSnapsh
   const stops = current?.stops ?? presetStops('dusk');
   const grain = current?.grain ?? PRESET_GRAIN;
   const look = { info, ui };
+  // Decorative, so off whenever the OS asks for less motion (DESIGN.md §6.6).
+  const spin: Transition = info.prefersReducedMotion && settings.motion.followSystem ? INSTANT : { type: 'spring', ...springs.playful };
 
   // A chord points at the theme it came from; older chords (and plain colors) match by their colors.
   const isSelected = (t: LibraryTheme) => (current ? (current.themeId ? current.themeId === t.id : sameStops(current.stops, t.stops)) : false);
@@ -398,6 +438,14 @@ export function AppearanceSection({ snapshot, info }: { snapshot: SettingsSnapsh
     if (chord) void api.settings.theme(chord.id, { stops: t.stops, grain: t.grain, themeId: t.id });
   };
   const edit = (draft: Draft) => setPanel({ kind: 'edit', draft, key: Date.now() });
+  // The chord's ⋯ menu → "Edit colors…": its own theme if it came from one of yours, otherwise a new one from its colors.
+  useEffect(() => {
+    if (!editColors || editColors === handledEditColors) return;
+    handledEditColors = editColors;
+    const own = settings.themes.find((t) => t.id === current?.themeId);
+    edit(own ? { id: own.id, name: own.name, stops: copyOf(own), grain: own.grain } : { id: null, name: '', stops: copyOf({ stops }), grain });
+    // Only a new request opens it, not every change to the chord.
+  }, [editColors]);
 
   return (
     <>
@@ -417,6 +465,13 @@ export function AppearanceSection({ snapshot, info }: { snapshot: SettingsSnapsh
         <button type="button" className={styles.headButton} onClick={() => setPanel({ kind: 'import' })}>
           <Download size={14} strokeWidth={2} aria-hidden /> Import
         </button>
+        {chord && (
+          <SurpriseButton
+            spin={spin}
+            className={styles.headButton}
+            onClick={() => void api.settings.theme(chord.id, { stops: surpriseStops(Math.random), themeId: null })}
+          />
+        )}
       </div>
       {panel?.kind === 'import' && (
         <ImportTheme
@@ -431,6 +486,7 @@ export function AppearanceSection({ snapshot, info }: { snapshot: SettingsSnapsh
           key={panel.key}
           draft={panel.draft}
           {...look}
+          spin={spin}
           onDuplicate={edit}
           onDone={(saved) => {
             setPanel(null);
