@@ -1,5 +1,7 @@
 /**
- * Settings → Privacy: Google-free mode (docs/decisions/S10-google-free.md).
+ * Settings → Privacy: what Chord sends and what it keeps.
+ *
+ * Google-free mode (docs/decisions/S10-google-free.md).
  * With it on, Chord itself doesn't contact Google: searches and suggestions
  * go to the engine chosen here, spelling uses only dictionaries already
  * downloaded, and Web Store extensions don't check for updates in the
@@ -16,7 +18,7 @@ export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
   const { googleFree, searchEngine } = snapshot.settings;
   return (
     <>
-      <SectionHeader title="Privacy" description="What Chord itself sends, apart from the sites you visit." />
+      <SectionHeader title="Privacy" description="What Chord itself sends and keeps, apart from the sites you visit." />
       <div className={styles.group}>
         <Row
           label="Google-free mode"
@@ -70,6 +72,17 @@ export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
           </div>
         </>
       )}
+      {/* What Chord keeps on this computer that you might not expect (DESIGN.md §7.6). */}
+      <h2 className={styles.groupTitle}>On this computer</h2>
+      <div className={styles.group}>
+        <Row
+          label="Show page previews"
+          description="Hovering a pinned tab or folder shows a preview. Chord keeps a small picture of each pinned page on this computer for it; turning this off deletes them."
+          changed={snapshot.settings.pagePreviews !== DEFAULT_SETTINGS.pagePreviews}
+          onReset={() => void api.settings.set({ pagePreviews: DEFAULT_SETTINGS.pagePreviews })}
+          control={<Switch label="Show page previews" checked={snapshot.settings.pagePreviews} onChange={(pagePreviews) => void api.settings.set({ pagePreviews })} />}
+        />
+      </div>
     </>
   );
 }

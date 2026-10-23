@@ -1,25 +1,19 @@
 /** Read-only queries over State, shared by main and renderers. */
 import type { Chord, ChordId, Download, Favorite, NodeId, Section, SidebarNode, State, TabNode, WindowId } from './model';
+import { children } from './nodes';
 import { placeKey } from './rank';
+import { shownTabs } from './split';
 
-/** Rank order; ties (possible after reopening a closed tab) fall back to ID, which is time-ordered. */
-const byRank = (a: SidebarNode, b: SidebarNode) =>
-  a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+export { children };
 
-/** Children of a parent in one section of a chord, in sidebar order. */
-export function children(state: State, chordId: ChordId, section: Section, parentId: NodeId | null = null): SidebarNode[] {
-  return Object.values(state.nodes)
-    .filter((n) => n.chordId === chordId && n.section === section && n.parentId === parentId)
-    .sort(byRank);
-}
-
-/** Every tab of a chord in visual order: pinned (depth-first through folders), then Today. */
+/** Every tab of a chord in visual order: pinned (depth-first through folders and splits), then Today. */
 export function tabsInOrder(state: State, chordId: ChordId): TabNode[] {
   const out: TabNode[] = [];
   const walk = (section: Section, parentId: NodeId | null) => {
     for (const node of children(state, chordId, section, parentId)) {
       if (node.kind === 'tab') out.push(node);
-      else if (!node.collapsed) walk(section, node.id);
+      // A split's panes are always in order (its row lists them when opened); a closed folder's aren't.
+      else if (node.kind === 'split' || !node.collapsed) walk(section, node.id);
     }
   };
   walk('pinned', null);
@@ -27,15 +21,15 @@ export function tabsInOrder(state: State, chordId: ChordId): TabNode[] {
   return out;
 }
 
-/** Everything inside a folder, at any depth, parents before their children. */
+/** Everything inside a folder (or a split), at any depth, parents before their children. */
 export function descendants(state: State, folderId: NodeId): SidebarNode[] {
   const folder = state.nodes[folderId];
-  if (folder?.kind !== 'folder') return [];
+  if (folder?.kind !== 'folder' && folder?.kind !== 'split') return [];
   const out: SidebarNode[] = [];
   const walk = (parentId: NodeId) => {
     for (const node of children(state, folder.chordId, folder.section, parentId)) {
       out.push(node);
-      if (node.kind === 'folder') walk(node.id);
+      if (node.kind !== 'tab') walk(node.id);
     }
   };
   walk(folderId);
@@ -136,9 +130,9 @@ export function activeTab(state: State, windowId: WindowId): TabNode | null {
   return node?.kind === 'tab' ? node : null;
 }
 
-/** Which windows currently show this tab (at most one: a tab shows in one window at a time). */
+/** Which windows currently show this tab, alone or as a pane of a split (at most one: a tab shows in one window at a time). */
 export function windowsShowing(state: State, nodeId: NodeId): WindowId[] {
   return Object.values(state.windows)
-    .filter((w) => w.activeTab[w.activeChordId] === nodeId)
+    .filter((w) => shownTabs(state, w.id).includes(nodeId))
     .map((w) => w.id);
 }

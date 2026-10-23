@@ -7,6 +7,7 @@ import {
   keycapFor,
   SIDEBAR_WIDTH,
   sortedChords,
+  splitOf,
   type ActionId,
   type LiveTab,
   type LoadError,
@@ -30,10 +31,12 @@ import { DuetPanel } from './Duet';
 import { DuetReadTabs } from './duet-context';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { Onboarding } from './Onboarding';
+import { SplitPanes, useElementSize } from './Split';
 import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
 import { Toasts } from './Toasts';
 import type { ToastStore } from './toast-store';
 import { useChordSwipe, type PaneMotion } from './useChordSwipe';
+import { usePreviewHover } from './usePreviewHover';
 
 /** What the frame shows when a page didn't load (DESIGN.md §9), instead of a blank page. */
 function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadError; canGoBack: boolean; windowId: string; tabId: string }) {
@@ -56,6 +59,22 @@ function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadErro
       <p className={styles.errorCode}>{copy.name}</p>
     </div>
   );
+}
+
+/** What the frame shows instead of a page that crashed or didn't load (nothing while the page is fine). */
+function PageState({ tab, live, windowId }: { tab: TabNode; live: LiveTab | undefined; windowId: string }) {
+  if (live?.crashed) {
+    return (
+      <div className={styles.empty} role="alert">
+        <p className={styles.emptyTitle}>This page stopped working.</p>
+        <p className={styles.emptyBody}>It’s not you. Reloading usually fixes it.</p>
+        <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
+          Reload
+        </button>
+      </div>
+    );
+  }
+  return live?.error ? <LoadErrorState error={live.error} canGoBack={live.canGoBack} windowId={windowId} tabId={tab.id} /> : null;
 }
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -216,6 +235,17 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const activeId = activeTabId(state, windowId);
   const active = activeId ? (state.nodes[activeId] as TabNode | undefined) : undefined;
   const live = activeId ? state.live[activeId] : undefined;
+  // Split view: the frame divides between the split's panes; the active tab is the focused one.
+  const split = activeId ? splitOf(state, activeId) : null;
+  const frameRef = useRef<HTMLDivElement>(null);
+  const frameSize = useElementSize(frameRef);
+  // Where split view's drop zones go, and whether the shell is lifted over the page to show them.
+  const [dropHost, setDropHost] = useState<HTMLDivElement | null>(null);
+  const [lifted, setLifted] = useState(false);
+  const lift = (on: boolean) => {
+    setLifted(on);
+    void api.layout.lift(on);
+  };
   // Chord's own pages (the archive) go by their name, not an address.
   const internal = active ? isInternalUrl(active.url) : false;
   const host = active ? (internal ? active.title || 'Chord' : displayHost(active.url)) : '';
@@ -320,6 +350,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
     blend: state.settings.motion.colorBlend,
   });
   const paneMotion: PaneMotion = swipe.paneMotion ?? { kind: 'slide', dir: slide };
+  // Hover previews of pinned tabs and folders (DESIGN.md §7.6): only with the sidebar docked and still.
+  usePreviewHover(rootRef, !collapsed && liveWidth === null && swipe.paneMotion === null && state.settings.pagePreviews && state.settings.onboarded);
   const tintOf = (chordId: string) => String(chordStyle(state.chords[chordId], info, state.settings.interface).style['--color-tint' as keyof CSSProperties] ?? '');
 
   const toggleSidebar = () => void api.action.run('view.toggleSidebar');
@@ -337,6 +369,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
           className={styles.window}
           data-sidebar={collapsed ? 'collapsed' : 'docked'}
           data-peek={peeking || undefined}
+          data-lifted={lifted || undefined}
           data-resizing={liveWidth !== null || undefined}
           style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px`, '--duet-space': duetOpen ? 'calc(var(--size-duet-width) + var(--space-2))' : 'var(--space-0)' } as CSSProperties}
         >
@@ -404,7 +437,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
             </button>
 
             {/* One drag space: tabs move between lists, onto Favorites, and onto chords in the switcher. */}
-            <SidebarDnd state={state} chordId={chord?.id ?? ''}>
+            <SidebarDnd state={state} chordId={chord?.id ?? ''} windowId={windowId} frame={dropHost} onLift={lift}>
               {!isPrivate && <FavoritesRow state={state} windowId={windowId} activeId={activeId} appearance={appearance} />}
 
               <div ref={trackRef} className={styles.paneTrack} data-swiping={swipe.ghosts.length > 0 || swipe.paneMotion !== null || undefined}>
@@ -529,21 +562,23 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
           )}
           {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
 
-          <div className={styles.frame}>
+          <div ref={frameRef} className={styles.frame} data-split={split ? split.direction : undefined}>
             {!state.settings.onboarded && chord && !isPrivate ? (
               <Onboarding chord={chord} windowId={windowId} info={info} spring={spring} />
             ) : (
               <>
-                {active && live?.crashed && (
-                  <div className={styles.empty} role="alert">
-                    <p className={styles.emptyTitle}>This page stopped working.</p>
-                    <p className={styles.emptyBody}>It’s not you. Reloading usually fixes it.</p>
-                    <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
-                      Reload
-                    </button>
-                  </div>
+                {split ? (
+                  <SplitPanes
+                    state={state}
+                    windowId={windowId}
+                    split={split}
+                    activeId={activeId}
+                    size={frameSize}
+                    pageState={(tab, paneLive) => <PageState tab={tab} live={paneLive} windowId={windowId} />}
+                  />
+                ) : (
+                  active && <PageState tab={active} live={live} windowId={windowId} />
                 )}
-                {active && !live?.crashed && live?.error && <LoadErrorState error={live.error} canGoBack={live.canGoBack} windowId={windowId} tabId={active.id} />}
                 {!active && (
                   <div className={styles.empty}>
                     {isPrivate ? (
@@ -566,6 +601,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
             )}
           </div>
           {duetOpen && duet && <DuetPanel view={duet} windowId={windowId} info={info} />}
+          {/* Split view's drop zones, over the page while a tab is dragged (Tabs.tsx draws them here). */}
+          <div ref={setDropHost} className={styles.dropLayer} aria-hidden={!lifted || undefined} />
         </div>
       </MotionConfig>
     </ShortcutsProvider>

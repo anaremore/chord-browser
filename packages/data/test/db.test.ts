@@ -132,6 +132,25 @@ describe('chord-data', () => {
     expect(restoreState(saved, { now: 9, newId: ctx.newId, theme: state.chords[Object.keys(state.chords)[0]!]!.theme, homeUrl: 'x' }).extensions).toEqual(state.extensions);
   });
 
+  it('keeps a split view through a restart, and forgets it once it dissolves', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const windowId = Object.keys(state.windows)[0]!;
+    const first = Object.values(state.nodes)[0]!.id;
+    state = drive(db, state, [{ t: 'split.add', windowId, withId: first, url: 'https://beside.test/', direction: 'column' }]);
+    const split = Object.values(state.nodes).find((n) => n.kind === 'split')!;
+    state = drive(db, state, [{ t: 'split.resize', splitId: split.id, sizes: [0.3, 0.7] }]);
+    db.close();
+    db = new ChordDatabase(file);
+    const back = restoreState(db.load(), { now: 0, newId: ctx.newId, theme: state.chords[split.chordId]!.theme, homeUrl: 'https://home.test/' });
+    expect(back.nodes[split.id]).toMatchObject({ kind: 'split', direction: 'column', sizes: [0.3, 0.7] });
+    expect(Object.values(back.nodes).filter((n) => n.parentId === split.id)).toHaveLength(2);
+    drive(db, state, [{ t: 'split.separate', splitId: split.id }]);
+    db.close();
+    expect(count('split')).toBe(0);
+  });
+
   it('deletes closed tabs and unused icons', () => {
     let db = new ChordDatabase(file);
     let state = seed();

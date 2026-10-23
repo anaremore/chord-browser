@@ -34,6 +34,7 @@ import { SEARCH_ENGINES } from './input';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
 import type { Platform } from './shortcuts';
+import { settleSplits, shownWith } from './split';
 
 /** Everything chord-data persists; live engine state and the version never are. */
 export interface PersistedState {
@@ -158,6 +159,7 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
     if (typeof saved[key] === 'boolean') settings[key] = saved[key];
   }
   if (typeof saved['autoPip'] === 'boolean') settings.autoPip = saved['autoPip'];
+  if (typeof saved['pagePreviews'] === 'boolean') settings.pagePreviews = saved['pagePreviews'];
   const spellcheck = saved['spellcheck'] as Record<string, unknown> | undefined;
   if (spellcheck && typeof spellcheck === 'object') {
     if (typeof spellcheck['enabled'] === 'boolean') settings.spellcheck.enabled = spellcheck['enabled'];
@@ -223,10 +225,15 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
     if (!state.chords[node.chordId]) continue;
     state.nodes[node.id] = { ...node };
   }
-  // Children whose folder is gone move to the section root rather than vanish.
+  // Children whose folder (or split) is gone move to the section root rather than vanish.
   for (const node of Object.values(state.nodes)) {
     if (node.parentId && !state.nodes[node.parentId]) node.parentId = null;
   }
+  // Splits come back whole: two to four panes, sizes that match (split.ts).
+  for (const node of Object.values(state.nodes)) {
+    if (node.kind === 'split') node.sizes = Array.isArray(node.sizes) ? node.sizes.filter((s) => typeof s === 'number') : [];
+  }
+  settleSplits(state);
   // No live entries: every tab starts unloaded, and gets one when its page starts loading.
 
   const firstChord = sortedChords(state)[0]!;
@@ -240,9 +247,11 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
       if (!state.chords[chordId]) continue;
       activeTab[chordId] = tabId && state.nodes[tabId]?.kind === 'tab' && state.nodes[tabId]?.chordId === chordId ? tabId : null;
     }
+    // A split shows all its panes, so it's the whole group that one window keeps.
     const showing = activeTab[activeChordId];
-    if (showing && shown.has(showing)) activeTab[activeChordId] = null;
-    else if (showing) shown.add(showing);
+    const group = showing ? shownWith(state, showing) : [];
+    if (group.some((id) => shown.has(id))) activeTab[activeChordId] = null;
+    else for (const id of group) shown.add(id);
     activeTab[activeChordId] ??= null;
     const width = win.sidebarWidth;
     const sidebarWidth = typeof width === 'number' && width >= SIDEBAR_WIDTH.min && width <= SIDEBAR_WIDTH.max ? width : SIDEBAR_WIDTH.default;

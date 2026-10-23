@@ -14,7 +14,8 @@ export const MAX_VISUAL_DEPTH = 4;
 
 export interface FlatRow {
   id: NodeId;
-  kind: 'tab' | 'folder';
+  /** A split is one row (its tabs show under it when it's opened, but never take drops). */
+  kind: 'tab' | 'folder' | 'split';
   depth: number;
   parentId: NodeId | null;
   collapsed: boolean;

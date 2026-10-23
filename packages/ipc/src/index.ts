@@ -30,8 +30,8 @@ import {
 } from '@chord/core';
 import { z } from 'zod';
 
-/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs). */
-export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive';
+/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs); `preview` draws hover previews. */
+export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive' | 'preview';
 
 export const Platform = z.enum(['darwin', 'win32', 'linux']);
 export type Platform = z.infer<typeof Platform>;
@@ -130,7 +130,29 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('settings.set'), settings: z.strictObject({ onboarded: z.literal(true) }) }),
   // Undo for "Keep sign-ins separate": back to shared sign-ins, or to the chord's own (Chord's IDs are UUIDs).
   z.object({ t: z.literal('chord.profile'), chordId: id, profileId: z.union([z.literal('default'), z.uuid()]) }),
-  // chord.delete isn't here: main deletes, then offers Undo in a toast.
+  // Split view (DESIGN.md §8.4): drop a tab on the page, drag a divider, drag a pane out, Undo for separating, ⌘⌥[ / ⌘⌥].
+  z.object({
+    t: z.literal('split.add'),
+    windowId: id,
+    withId: id,
+    nodeId: id.optional(),
+    url: url.optional(),
+    index: z.number().int().min(0).max(4).optional(),
+    direction: z.enum(['row', 'column']).optional(),
+  }),
+  z.object({ t: z.literal('split.resize'), splitId: id, sizes: z.array(z.number().positive().max(1)).min(2).max(4) }),
+  z.object({ t: z.literal('split.remove'), nodeId: id }),
+  z.object({
+    t: z.literal('split.join'),
+    windowId: id,
+    splitId: id,
+    nodeIds: z.array(id).min(2).max(4),
+    direction: z.enum(['row', 'column']),
+    sizes: z.array(z.number().positive().max(1)).min(2).max(4).optional(),
+    focus: id.optional(),
+  }),
+  z.object({ t: z.literal('split.focus'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
+  // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
 // Compile-time check: every renderer command is a real core command.
@@ -146,6 +168,7 @@ export const SettingsPatch = z.strictObject({
   archiveAfter: z.enum(archiveAfterIds).optional(),
   sleepTabs: z.boolean().optional(),
   autoPip: z.boolean().optional(),
+  pagePreviews: z.boolean().optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
   extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
   searchSuggestions: z.boolean().optional(),
@@ -302,6 +325,52 @@ export interface SharePrompt {
 }
 
 /** Everything the popover shows: cards stack top-right over the page. */
+/** One row of a folder's hover preview. */
+export interface PreviewRow {
+  title: string;
+  url: string;
+  favicon: string | null;
+}
+
+/** A hover preview (DESIGN.md §7.6): what main sends the preview view to draw, in the hovered tab's chord colors. */
+export type PreviewCard = {
+  theme: ChordThemeSpec;
+  interface: InterfaceSettings;
+  /** Crossfade between cards (Settings → Motion → Animate the sidebar, and reduced motion). */
+  animate: boolean;
+} & (
+  | {
+      kind: 'tab';
+      id: string;
+      title: string;
+      url: string;
+      favicon: string | null;
+      /** "Opened 2 h ago". */
+      opened: string;
+      /** The last picture of the page, as a data URL; null shows its icon on its tint. */
+      thumbnail: string | null;
+    }
+  | {
+      kind: 'folder';
+      id: string;
+      title: string;
+      /** The first six tabs inside, nested folders flattened. */
+      rows: PreviewRow[];
+      /** "and 4 more". */
+      more: number;
+    }
+);
+
+/** The sidebar row the pointer rests on (shell coordinates), or null when it leaves. */
+export const PreviewTarget = z
+  .object({
+    nodeId: id,
+    top: z.number().min(-10_000).max(100_000),
+    bottom: z.number().min(-10_000).max(100_000),
+  })
+  .nullable();
+export type PreviewTarget = z.infer<typeof PreviewTarget>;
+
 export interface PopoverState {
   theme: ChordThemeSpec | null;
   interface: InterfaceSettings;
@@ -370,14 +439,15 @@ export const OverlayOpen = z.object({
    * editing the current tab. `downloads`: the downloads panel, anchored on the
    * button that opened it (`anchor`).
    */
-  mode: z.enum(['new', 'edit', 'downloads', 'extensions']),
+  mode: z.enum(['new', 'edit', 'downloads', 'extensions', 'split']),
   anchor: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
 });
 export type OverlayOpen = z.infer<typeof OverlayOpen>;
 
 /** What main tells the overlay when it opens. */
 export interface OverlayOpenEvent {
-  mode: 'new' | 'edit' | 'downloads' | 'extensions';
+  /** `split`: the command bar for "Split with…": what you pick opens beside the current tab. */
+  mode: 'new' | 'edit' | 'downloads' | 'extensions' | 'split';
   /** Where the address sits, for the anchored placement (window coordinates). */
   anchor: Rect | null;
   /** The current tab's address, prefilled in edit mode. */
@@ -478,7 +548,9 @@ export const invokeChannels = {
     request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }), z.object({ do: z.literal('clearAll') })]),
     response: z.custom<DuetProviderInfo[]>(),
   },
-  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive'], request: z.void(), response: SystemInfo },
+  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview'], request: z.void(), response: SystemInfo },
+  'preview:hover': { roles: ['shell'], request: PreviewTarget, response: z.void() },
+  'preview:size': { roles: ['preview'], request: z.object({ width: z.number().min(0).max(2000), height: z.number().min(0).max(2000) }), response: z.void() },
   'state:snapshot': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<StateSnapshot>() },
   'cmd:dispatch': { roles: ['shell', 'overlay'], request: RendererCommand, response: z.void() },
   'nav:command': { roles: ['shell', 'overlay'], request: z.object({ action: NavAction }), response: z.void() },
@@ -536,6 +608,8 @@ export const invokeChannels = {
   'sidebar:deleteFolder': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   /** Minimal mode: lift the sidebar over the page while it peeks, and put it back. */
   'layout:peek': { roles: ['shell'], request: z.strictObject({ open: z.boolean() }), response: z.void() },
+  /** A tab is being dragged from the sidebar: lift the shell over the page for split drop zones, and put it back. */
+  'layout:lift': { roles: ['shell'], request: z.strictObject({ lifted: z.boolean() }), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
   // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
@@ -608,6 +682,8 @@ export interface EventPayloads {
   'overlay:open': OverlayOpenEvent;
   'settings:changed': SettingsSnapshot;
   'popover:state': PopoverState;
+  /** What the hover preview shows, or null to clear it. */
+  'preview:card': PreviewCard | null;
   'toast:show': Toast;
   /** The shell's trackpad gesture phases, for the chord swipe's release (DESIGN.md §6.4). */
   'gesture:phase': GesturePhase;
@@ -653,6 +729,8 @@ export interface ShellApi {
     anchor(rect: Rect | null): Promise<void>;
     /** Minimal mode's sidebar peek: main lifts the shell above the page while it's open. */
     peek(open: boolean): Promise<void>;
+    /** While a tab is dragged, the shell sits above the page so split view's drop zones show over it. */
+    lift(lifted: boolean): Promise<void>;
   };
   menu: {
     app(anchor: Rect): Promise<void>;
@@ -684,6 +762,8 @@ export interface ShellApi {
   duet: { view(): Promise<DuetView>; act(action: DuetAction): Promise<void>; onState(listener: (view: DuetView) => void): () => void };
   /** Stop a tab's screen share (its sidebar row shows it's sharing). */
   share: { stop(nodeId: string): Promise<void> };
+  /** The pinned tab or folder row the pointer rests on, for its hover preview (null when it leaves). */
+  preview: { hover(target: PreviewTarget): Promise<void> };
 }
 
 interface DownloadsApi {
@@ -748,6 +828,19 @@ export interface ArchiveApi {
     onChange(listener: () => void): () => void;
     restore(archiveId: string): Promise<void>;
     remove(archiveId: string): Promise<void>;
+  };
+}
+
+/** `window.chord` in the hover-preview view. */
+export interface PreviewApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  preview: {
+    onCard(listener: (card: PreviewCard | null) => void): () => void;
+    /** The card's size; 0 × 0 hides the view. */
+    size(width: number, height: number): Promise<void>;
   };
 }
 
