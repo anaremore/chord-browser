@@ -61,6 +61,27 @@ export function containerName(root, random = randomBytes(3).toString('hex')) {
   return `chord-e2e-run-${slug}-${random}`;
 }
 
+/** A run copies its results out within seconds of its container stopping; one stopped longer than this is nobody's. */
+export const STALE_MS = 10 * 60_000;
+
+/**
+ * Containers left by runs that were killed before they could remove them (Task Manager, WSL
+ * shutting down), from `docker inspect` lines of name|status|finished|created. Only stopped ones,
+ * and only long enough ago that no run is still copying results out of them.
+ */
+export function staleRuns(inspected, now = Date.now()) {
+  return inspected
+    .split('\n')
+    .map((line) => line.trim().split('|'))
+    .filter(([name, status, finished, created]) => {
+      if (!name || !['exited', 'dead', 'created'].includes(status)) return false;
+      // A container that never started has no finish time (0001-01-01).
+      const stopped = Date.parse(finished) > 0 ? Date.parse(finished) : Date.parse(created);
+      return now - stopped > STALE_MS;
+    })
+    .map(([name]) => name.replace(/^\//, ''));
+}
+
 /** `docker run`'s arguments: the tar of the working tree arrives on stdin and is unpacked in /work. */
 export function dockerRunArgs({ name, image, display, root, startedAt, playwright }) {
   return [
@@ -207,6 +228,14 @@ async function main() {
         ? `Docker isn't reachable in WSL${distro ? ` (${distro})` : ''}. It needs a WSL 2 distro running Docker Engine, with your user in its docker group; set CHORD_E2E_WSL_DISTRO if that isn't WSL's default distro.`
         : "Docker isn't reachable: is it installed and running?",
     );
+  }
+
+  // Each container holds a copy of a tree with its node_modules and build: sweep up any a killed run left.
+  const runs = docker(['ps', '--all', '--quiet', '--filter', 'label=chord-e2e=run'], { quiet: true })?.split(/\s+/).filter(Boolean) ?? [];
+  const stale = runs.length ? staleRuns(docker(['inspect', '--format', '{{.Name}}|{{.State.Status}}|{{.State.FinishedAt}}|{{.Created}}', ...runs], { quiet: true }) ?? '') : [];
+  if (stale.length) {
+    docker(['rm', '--force', ...stale], { quiet: true });
+    log(`Removed what killed runs left: ${stale.join(', ')}`);
   }
 
   // The image: built once per version of the Dockerfile. It copies nothing in, so it needs no context.

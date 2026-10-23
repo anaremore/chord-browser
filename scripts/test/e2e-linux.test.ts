@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ELECTRON_VOLUME, STORE_VOLUME, containerName, dockerRunArgs, imageTag, parseArgs, tarArchive } from '../e2e-linux/run.mjs';
+import { ELECTRON_VOLUME, STALE_MS, STORE_VOLUME, containerName, dockerRunArgs, imageTag, parseArgs, staleRuns, tarArchive } from '../e2e-linux/run.mjs';
 
 describe('parseArgs', () => {
   it('runs X11 by default and hands everything else to Playwright, in order', () => {
@@ -46,6 +46,33 @@ describe('names', () => {
     expect(name).toBe('chord-e2e-run-chord-browser-copy--a1b2c3');
     expect(name).toMatch(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/);
     expect(containerName('/x/agent-a27a56a2ea384d960')).not.toBe(containerName('/x/agent-a27a56a2ea384d960'));
+  });
+});
+
+describe('staleRuns', () => {
+  const now = Date.parse('2026-10-23T12:00:00Z');
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  const never = '0001-01-01T00:00:00Z';
+  const line = (name: string, status: string, finished: string, created = ago(3_600_000)) => `/${name}|${status}|${finished}|${created}`;
+
+  it('takes containers stopped long enough ago that no run is copying out of them', () => {
+    const inspected = [
+      line('chord-e2e-run-a-111111', 'exited', ago(STALE_MS + 1_000)),
+      line('chord-e2e-run-b-222222', 'dead', ago(2 * STALE_MS)),
+      line('chord-e2e-run-c-333333', 'exited', ago(30_000)),
+    ].join('\r\n');
+    expect(staleRuns(inspected, now)).toEqual(['chord-e2e-run-a-111111', 'chord-e2e-run-b-222222']);
+  });
+
+  it('leaves running ones alone, and goes by creation for one that never started', () => {
+    const inspected = [
+      line('chord-e2e-run-a-111111', 'running', never),
+      line('chord-e2e-run-b-222222', 'running', ago(2 * STALE_MS)),
+      line('chord-e2e-run-c-333333', 'created', never, ago(2 * STALE_MS)),
+      line('chord-e2e-run-d-444444', 'created', never, ago(1_000)),
+    ].join('\n');
+    expect(staleRuns(inspected, now)).toEqual(['chord-e2e-run-c-333333']);
+    expect(staleRuns('', now)).toEqual([]);
   });
 });
 
