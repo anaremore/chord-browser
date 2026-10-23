@@ -469,11 +469,14 @@ for (const appearance of ['light', 'dark'] as const) {
     try {
       const shell = await shellOf(app);
       await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe(appearance);
+      const panel = await openDuet(shell);
       const capture = async (step: string) => {
         await shell.evaluate(() => document.fonts.ready);
+        // The panel slides in (DESIGN.md §6.5): captured once it has landed.
+        let last = '';
+        await expect.poll(async () => (last === (last = JSON.stringify(await panel.boundingBox())) ? 'still' : 'moving'), { intervals: [100] }).toBe('still');
         await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-${step}.png`) });
       };
-      const panel = await openDuet(shell);
       await expect(panel.getByText('Meet Duet.')).toBeVisible();
       await capture('1-setup');
       await panel.getByRole('button', { name: 'Use this' }).first().click();

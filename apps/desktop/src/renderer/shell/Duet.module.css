@@ -199,6 +199,13 @@
   overflow: auto;
 }
 
+/* Setup under the introduction shares its column: no second inset, just a little more room above. */
+.intro .setup {
+  margin-block-start: var(--space-3);
+  padding: 0;
+  overflow: visible;
+}
+
 .introTitle {
   margin: 0;
   font: var(--text-heading);
