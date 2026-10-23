@@ -526,9 +526,10 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 ### 7.6 `HoverPreview`
 
 - 280 px card next to the sidebar, aligned to the hovered row and clamped to the window.
-- **Pinned tab:** a 280×175 thumbnail (last capture, WebP), title (`text-label`), domain (`text-small`, muted), and "Opened 2 h ago" (`text-micro`). A tab never captured shows its favicon on its tint.
+- **Pinned tab:** a 280×175 thumbnail (last capture, JPEG), title (`text-label`), domain (`text-small`, muted), and "Opened 2 h ago" (`text-micro`). A tab never captured shows its favicon on its tint.
 - **Folder:** the folder title, then up to 6 rows (favicon and title), then "and 4 more".
-- **Timing:** appears after `delay-hover-intent`. While one is visible, moving to another row swaps instantly: content crossfades, position glides (`snappy`). Hidden while dragging or resizing.
+- **Timing:** appears after `delay-hover-intent`. While one is visible, moving to another row swaps instantly: content crossfades, position glides (`snappy`). Hidden while dragging, resizing or peeking, and on a click, scroll or key.
+- **Off switch:** Settings → Privacy → Show page previews (on by default). Off deletes the pictures.
 
 ### 7.7 `ThemePicker`
 

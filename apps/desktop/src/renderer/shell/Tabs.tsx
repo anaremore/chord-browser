@@ -328,6 +328,8 @@ function TabRow({ tab, index, section, depth, ctx, drag }: { tab: TabNode; index
         data-row="tab"
         data-id={tab.id}
         data-parent={tab.parentId ?? undefined}
+        // Pinned tabs get a hover preview (DESIGN.md §7.6).
+        data-preview={pinned || undefined}
         // A pinned tab that hasn't been opened yet reads quieter (DESIGN.md §7.2).
         data-unloaded={unloaded || undefined}
         data-asleep={asleep || undefined}
@@ -429,6 +431,7 @@ function FolderRow({ folder, index, depth, ctx, drag }: { folder: FolderNode; in
         data-row="folder"
         data-id={folder.id}
         data-parent={folder.parentId ?? undefined}
+        data-preview
         aria-expanded={open}
         title={folder.title}
         onClick={toggle}

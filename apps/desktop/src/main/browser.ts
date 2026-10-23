@@ -26,8 +26,9 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, GesturePhase, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
+import type { ArchiveSnapshot, GesturePhase, PopoverState, PreviewTarget, Rect, SettingsSnapshot } from '@chord/ipc';
 import { size } from '@chord/tokens';
+import { join } from 'node:path';
 import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
@@ -41,6 +42,7 @@ import { setShortcutOverrides } from './shortcut-overrides';
 import { IdleKeeper, type IdleTiming } from './idle';
 import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
+import { Previews } from './previews';
 import type { ScreenShareBroker } from './screen-share';
 import { SiteZoom } from './site-zoom';
 import { spellcheckLanguages } from './spellcheck';
@@ -117,6 +119,8 @@ export class Browser {
     return [...this.windows.values()];
   }
   private readonly autoPip: AutoPip;
+  /** Hover previews for pinned tabs and folders, and the pictures behind them (DESIGN.md §7.6). */
+  private readonly previews: Previews;
   private readonly siteZoom: SiteZoom;
   private readonly archivedHistory = new Map<string, NavState | null>();
   /** Archive entries being restored, so a double click brings a tab back once. */
@@ -157,6 +161,7 @@ export class Browser {
         this.extensions.tabCreated(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
         this.siteZoom.attach(contents);
+        contents.on('did-stop-loading', () => this.previews.loaded(nodeId));
         // Whatever a page asked for is denied once it's gone or replaced by another page; a share ends.
         contents.on('did-start-navigation', (details) => {
           if (!details.isMainFrame || details.isSameDocument) return;
@@ -232,6 +237,13 @@ export class Browser {
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       onChange: () => this.syncPopovers(),
     });
+    this.previews = new Previews(join(app.getPath('userData'), 'Captures'), {
+      state: () => this.store.state,
+      contentsOf: (nodeId) => this.tabs.get(nodeId)?.webContents,
+      onScreen: (contents) => [...this.windows.values()].some((w) => w.activeTabContents === contents && !w.window.isMinimized()),
+      animate: () => motionEnabled(this.store.state.settings, 'sidebar', systemInfo().prefersReducedMotion),
+    });
+    void this.previews.open();
     this.autoPip = new AutoPip({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
@@ -283,6 +295,11 @@ export class Browser {
       this.syncPopovers();
       this.extensions.sync();
       if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
+      // Pictures of tabs that were closed, archived or unpinned go; turning previews off takes them all.
+      if (change.patches.some((p) => p.path[0] === 'nodes' || p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'pagePreviews'))) {
+        this.previews.sync();
+        if (!change.state.settings.pagePreviews) for (const w of this.windows.values()) w.hidePreview();
+      }
       // New keys apply at once: the router reads them live, and the menus are rebuilt to show and accept them.
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'shortcuts')) {
         setShortcutOverrides(change.state.settings.shortcuts);
@@ -345,11 +362,16 @@ export class Browser {
 
   windowFor(contents: WebContents): AppWindow | undefined {
     for (const w of this.windows.values()) {
-      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.activeTabContents].includes(contents)) return w;
+      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.preview.webContents, w.activeTabContents].includes(contents)) return w;
     }
     const nodeId = this.tabs.nodeFor(contents);
     const windowId = nodeId ? this.windowShowing(nodeId) : undefined;
     return windowId ? this.windows.get(windowId) : undefined;
+  }
+
+  /** The pointer rests on a pinned tab or folder row in a window's sidebar (or left it). */
+  previewHover(w: AppWindow, target: PreviewTarget): Promise<void> {
+    return this.previews.hover(w, target);
   }
 
   activeUrl(windowId: WindowId): string {
@@ -471,7 +493,11 @@ export class Browser {
           const w = this.windows.get(effect.windowId);
           if (!w) break;
           const outgoing = w.activeTabContents;
+          // Hover previews: picture the page you're leaving while its view is still attached.
+          const outgoingId = outgoing ? this.tabs.nodeFor(outgoing) : undefined;
+          if (outgoing && outgoingId && outgoingId !== effect.nodeId) this.previews.leaving(outgoingId, outgoing);
           w.showTab(effect.nodeId ? (this.tabs.ensure(effect.nodeId) ?? null) : null);
+          if (effect.nodeId) this.previews.shown(effect.nodeId);
           this.extensions.tabShown(w);
           // Auto picture-in-picture: the tab you left may pop its video out; the one you're on takes it back.
           if (outgoing && outgoing !== w.activeTabContents && !outgoing.isDestroyed()) this.autoPip.left(outgoing);

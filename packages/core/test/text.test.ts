@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeDownload, firstGrapheme, formatBytes, parseThemeCode, themeCode, type Download } from '../src';
+import { describeDownload, firstGrapheme, formatBytes, openedAgo, parseThemeCode, themeCode, type Download } from '../src';
 
 describe('firstGrapheme', () => {
   it('keeps whole emoji, including skin tones, families and flags', () => {
@@ -62,5 +62,22 @@ describe('theme codes', () => {
     expect(parseThemeCode('{"chordTheme":1,"name":"x","stops":[],"grain":0.2}')).toBeNull();
     expect(parseThemeCode('{"name":"x","stops":[{"l":0.5,"c":0.1,"h":10}],"grain":0.2}')).toBeNull();
     expect(parseThemeCode('not json')).toBeNull();
+  });
+});
+
+describe('openedAgo', () => {
+  const now = Date.UTC(2026, 9, 22, 12);
+  const min = 60_000;
+  it('says how long ago, in the largest unit that reads well', () => {
+    expect(openedAgo(now - 20_000, now)).toBe('Opened just now');
+    expect(openedAgo(now - 5 * min, now)).toBe('Opened 5 min ago');
+    expect(openedAgo(now - 125 * min, now)).toBe('Opened 2 h ago');
+    expect(openedAgo(now - 30 * 60 * min, now)).toBe('Opened yesterday');
+    expect(openedAgo(now - 6 * 24 * 60 * min, now)).toBe('Opened 6 days ago');
+    expect(openedAgo(now - 40 * 24 * 60 * min, now)).toBe('Opened over a month ago');
+  });
+
+  it('treats a time in the future as now', () => {
+    expect(openedAgo(now + 10 * min, now)).toBe('Opened just now');
   });
 });

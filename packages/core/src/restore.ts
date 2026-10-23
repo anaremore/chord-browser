@@ -158,6 +158,7 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
     if (typeof saved[key] === 'boolean') settings[key] = saved[key];
   }
   if (typeof saved['autoPip'] === 'boolean') settings.autoPip = saved['autoPip'];
+  if (typeof saved['pagePreviews'] === 'boolean') settings.pagePreviews = saved['pagePreviews'];
   const spellcheck = saved['spellcheck'] as Record<string, unknown> | undefined;
   if (spellcheck && typeof spellcheck === 'object') {
     if (typeof spellcheck['enabled'] === 'boolean') settings.spellcheck.enabled = spellcheck['enabled'];

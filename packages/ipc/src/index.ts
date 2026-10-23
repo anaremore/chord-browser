@@ -30,8 +30,8 @@ import {
 } from '@chord/core';
 import { z } from 'zod';
 
-/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs). */
-export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive';
+/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs); `preview` draws hover previews. */
+export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive' | 'preview';
 
 export const Platform = z.enum(['darwin', 'win32', 'linux']);
 export type Platform = z.infer<typeof Platform>;
@@ -146,6 +146,7 @@ export const SettingsPatch = z.strictObject({
   archiveAfter: z.enum(archiveAfterIds).optional(),
   sleepTabs: z.boolean().optional(),
   autoPip: z.boolean().optional(),
+  pagePreviews: z.boolean().optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
   extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
   searchSuggestions: z.boolean().optional(),
@@ -302,6 +303,52 @@ export interface SharePrompt {
 }
 
 /** Everything the popover shows: cards stack top-right over the page. */
+/** One row of a folder's hover preview. */
+export interface PreviewRow {
+  title: string;
+  url: string;
+  favicon: string | null;
+}
+
+/** A hover preview (DESIGN.md §7.6): what main sends the preview view to draw, in the hovered tab's chord colors. */
+export type PreviewCard = {
+  theme: ChordThemeSpec;
+  interface: InterfaceSettings;
+  /** Crossfade between cards (Settings → Motion → Animate the sidebar, and reduced motion). */
+  animate: boolean;
+} & (
+  | {
+      kind: 'tab';
+      id: string;
+      title: string;
+      url: string;
+      favicon: string | null;
+      /** "Opened 2 h ago". */
+      opened: string;
+      /** The last picture of the page, as a data URL; null shows its icon on its tint. */
+      thumbnail: string | null;
+    }
+  | {
+      kind: 'folder';
+      id: string;
+      title: string;
+      /** The first six tabs inside, nested folders flattened. */
+      rows: PreviewRow[];
+      /** "and 4 more". */
+      more: number;
+    }
+);
+
+/** The sidebar row the pointer rests on (shell coordinates), or null when it leaves. */
+export const PreviewTarget = z
+  .object({
+    nodeId: id,
+    top: z.number().min(-10_000).max(100_000),
+    bottom: z.number().min(-10_000).max(100_000),
+  })
+  .nullable();
+export type PreviewTarget = z.infer<typeof PreviewTarget>;
+
 export interface PopoverState {
   theme: ChordThemeSpec | null;
   interface: InterfaceSettings;
@@ -478,7 +525,9 @@ export const invokeChannels = {
     request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }), z.object({ do: z.literal('clearAll') })]),
     response: z.custom<DuetProviderInfo[]>(),
   },
-  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive'], request: z.void(), response: SystemInfo },
+  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview'], request: z.void(), response: SystemInfo },
+  'preview:hover': { roles: ['shell'], request: PreviewTarget, response: z.void() },
+  'preview:size': { roles: ['preview'], request: z.object({ width: z.number().min(0).max(2000), height: z.number().min(0).max(2000) }), response: z.void() },
   'state:snapshot': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<StateSnapshot>() },
   'cmd:dispatch': { roles: ['shell', 'overlay'], request: RendererCommand, response: z.void() },
   'nav:command': { roles: ['shell', 'overlay'], request: z.object({ action: NavAction }), response: z.void() },
@@ -608,6 +657,8 @@ export interface EventPayloads {
   'overlay:open': OverlayOpenEvent;
   'settings:changed': SettingsSnapshot;
   'popover:state': PopoverState;
+  /** What the hover preview shows, or null to clear it. */
+  'preview:card': PreviewCard | null;
   'toast:show': Toast;
   /** The shell's trackpad gesture phases, for the chord swipe's release (DESIGN.md §6.4). */
   'gesture:phase': GesturePhase;
@@ -684,6 +735,8 @@ export interface ShellApi {
   duet: { view(): Promise<DuetView>; act(action: DuetAction): Promise<void>; onState(listener: (view: DuetView) => void): () => void };
   /** Stop a tab's screen share (its sidebar row shows it's sharing). */
   share: { stop(nodeId: string): Promise<void> };
+  /** The pinned tab or folder row the pointer rests on, for its hover preview (null when it leaves). */
+  preview: { hover(target: PreviewTarget): Promise<void> };
 }
 
 interface DownloadsApi {
@@ -748,6 +801,19 @@ export interface ArchiveApi {
     onChange(listener: () => void): () => void;
     restore(archiveId: string): Promise<void>;
     remove(archiveId: string): Promise<void>;
+  };
+}
+
+/** `window.chord` in the hover-preview view. */
+export interface PreviewApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  preview: {
+    onCard(listener: (card: PreviewCard | null) => void): () => void;
+    /** The card's size; 0 × 0 hides the view. */
+    size(width: number, height: number): Promise<void>;
   };
 }
 

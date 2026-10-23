@@ -3,6 +3,7 @@
  *   shell    Chord's UI, full window, transparent
  *   tab      the active tab, inset and rounded (index 1)
  *   popover  find bar and permission prompts: sized to its cards, at the frame's top-right
+ *   preview  a pinned tab's or folder's hover preview, beside the sidebar (DESIGN.md §7.6)
  *   floating an extension's popup, under its button (at most one)
  *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L
  */
@@ -42,8 +43,12 @@ function frameOrigin(sidebar: SidebarMode, sidebarWidth: number): FrameOrigin {
 
 const FRAME_SPRING = springCurve(springs.smooth);
 const FRAME_TICK_MS = 1000 / 60;
+/** The hover preview glides between rows on `snappy` (DESIGN.md §7.6). */
+const PREVIEW_SPRING = springCurve(springs.snappy);
+/** The preview page pads its card so the whole shadow shows (more below); the card's own edge sits this far in. */
+const PREVIEW_PAD = space[6];
 
-export type UiSurface = 'shell' | 'overlay' | 'popover' | 'settings' | 'archive';
+export type UiSurface = 'shell' | 'overlay' | 'popover' | 'preview' | 'settings' | 'archive';
 
 /** A view that floats over the page until something else happens (an extension's popup). */
 export interface FloatingView {
@@ -59,6 +64,7 @@ const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
   shell: { preload: 'shell', role: 'shell' },
   overlay: { preload: 'overlay', role: 'overlay' },
   popover: { preload: 'popover', role: 'popover' },
+  preview: { preload: 'preview', role: 'preview' },
   settings: { preload: 'internal', role: 'internal' },
   archive: { preload: 'archive', role: 'archive' },
 };
@@ -97,6 +103,12 @@ export class AppWindow {
   readonly shell: WebContentsView;
   readonly overlay: WebContentsView;
   readonly popover: WebContentsView;
+  readonly preview: WebContentsView;
+  private previewSize = { width: 0, height: 0 };
+  /** The hovered row's top and bottom, while a preview is wanted. */
+  private previewAnchor: { top: number; bottom: number } | null = null;
+  private previewGlide = false;
+  private previewAnimation: ReturnType<typeof setInterval> | undefined;
   private tabView: WebContentsView | null = null;
   /** The page is hidden while the frame shows why it didn't load (or that it crashed). */
   private tabHidden = false;
@@ -137,11 +149,14 @@ export class AppWindow {
     this.shell = createUiView(uiSession, 'shell');
     this.popover = createUiView(uiSession, 'popover');
     this.popover.setVisible(false);
+    this.preview = createUiView(uiSession, 'preview');
+    this.preview.setVisible(false);
     this.overlay = createUiView(uiSession, 'overlay');
     this.overlay.setVisible(false);
     // Tab views go in at index 1, between the shell and the popover.
     this.window.contentView.addChildView(this.shell);
     this.window.contentView.addChildView(this.popover);
+    this.window.contentView.addChildView(this.preview);
     this.window.contentView.addChildView(this.overlay);
 
     this.layout();
@@ -157,6 +172,7 @@ export class AppWindow {
     };
     this.window.on('resize', () => {
       this.closeFloating();
+      this.hidePreview();
       this.layout();
       reportBounds();
     });
@@ -166,7 +182,7 @@ export class AppWindow {
 
     const onTheme = () => {
       if (platform !== 'darwin') this.window.setTitleBarOverlay?.(titleBarOverlay(forced));
-      for (const view of [this.shell, this.popover, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
+      for (const view of [this.shell, this.popover, this.preview, this.overlay]) send(view.webContents, 'system:changed', systemInfo());
     };
     nativeTheme.on('updated', onTheme);
     this.window.on('closed', () => {
@@ -174,7 +190,8 @@ export class AppWindow {
       nativeTheme.off('updated', onTheme);
       clearTimeout(boundsTimer);
       clearInterval(this.frameAnimation);
-      for (const view of [this.shell, this.popover, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
+      clearInterval(this.previewAnimation);
+      for (const view of [this.shell, this.popover, this.preview, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
     });
 
     // Quitting right after launch can close the window before its shell has loaded.
@@ -220,6 +237,7 @@ export class AppWindow {
     if (!on) return this.leavePageFullScreen();
     this.pageFullScreen = true;
     this.closeFloating();
+    this.hidePreview();
     this.closeOverlay();
     const root = this.window.contentView;
     root.removeChildView(this.tabView);
@@ -265,6 +283,69 @@ export class AppWindow {
     else this.focusPopoverWhenShown = true;
   }
 
+  /**
+   * Show the hover preview beside the sidebar, its top level with the hovered
+   * row (DESIGN.md §7.6). It appears once its page reports a size; while one
+   * is up, the next glides to its row (`animate`) instead of jumping.
+   */
+  anchorPreview(anchor: { top: number; bottom: number }, animate: boolean): void {
+    this.previewGlide = animate && this.preview.getVisible();
+    this.previewAnchor = anchor;
+    this.placePreview();
+  }
+
+  /** The preview page reports its card's size; 0 × 0 hides it. */
+  setPreviewSize(width: number, height: number): void {
+    this.previewSize = { width: Math.ceil(width), height: Math.ceil(height) };
+    this.placePreview();
+  }
+
+  hidePreview(): void {
+    this.previewAnchor = null;
+    clearInterval(this.previewAnimation);
+    this.previewAnimation = undefined;
+    if (!this.window.isDestroyed()) this.preview.setVisible(false);
+  }
+
+  /**
+   * Where the preview goes: level with the row, kept inside the window. The
+   * view starts at the sidebar's edge, never over it: a view takes the pointer
+   * even where it's transparent, and the rows' buttons and the resize handle
+   * are there.
+   */
+  private placePreview(): void {
+    if (this.window.isDestroyed()) return;
+    const { width: w, height: h } = this.previewSize;
+    if (!this.previewAnchor || w === 0 || h === 0) {
+      this.preview.setVisible(false);
+      return;
+    }
+    const content = this.window.getContentBounds();
+    const x = Math.round(this.origin.left);
+    const y = Math.max(0, Math.min(Math.round(this.previewAnchor.top) - PREVIEW_PAD, content.height - h));
+    const from = this.preview.getBounds();
+    clearInterval(this.previewAnimation);
+    this.previewAnimation = undefined;
+    if (!this.previewGlide || !this.preview.getVisible() || from.y === y) {
+      this.preview.setBounds({ x, y, width: w, height: h });
+      this.preview.setVisible(true);
+      return;
+    }
+    const start = performance.now();
+    const step = () => {
+      if (this.window.isDestroyed()) return clearInterval(this.previewAnimation);
+      const elapsed = performance.now() - start;
+      const k = PREVIEW_SPRING.at(elapsed);
+      this.preview.setBounds({ x, y: Math.round(from.y + (y - from.y) * k), width: w, height: h });
+      if (elapsed >= PREVIEW_SPRING.durationMs) {
+        clearInterval(this.previewAnimation);
+        this.previewAnimation = undefined;
+      }
+    };
+    this.previewAnimation = setInterval(step, FRAME_TICK_MS);
+    step();
+  }
+
   setAnchor(rect: Rect | null): void {
     this.anchor = rect;
   }
@@ -272,6 +353,7 @@ export class AppWindow {
   /** `anchor` places the downloads panel by its button; ⌘L uses the address the shell reported. */
   openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null): void {
     this.closeFloating();
+    this.hidePreview();
     if (!this.overlayReady) {
       // A brand-new window: the command bar opens as soon as it's listening.
       this.pendingOpen = { mode, url, anchor };
@@ -306,6 +388,7 @@ export class AppWindow {
    */
   setSidebar(sidebar: SidebarMode, width: number, animate: boolean): void {
     this.closeFloating();
+    this.hidePreview();
     clearInterval(this.frameAnimation);
     this.frameAnimation = undefined;
     if (sidebar === 'docked') this.setPeek(false);
@@ -339,6 +422,7 @@ export class AppWindow {
   setPeek(open: boolean): void {
     if (this.peeking === open || this.window.isDestroyed()) return;
     this.peeking = open;
+    this.hidePreview();
     const root = this.window.contentView;
     root.removeChildView(this.shell);
     // Above the page, below the popover and the command bar; or back at the bottom.
