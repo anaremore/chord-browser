@@ -98,7 +98,7 @@ jobs:
           fi
 
       # electron-builder makes the .rpm with the fpm it downloads (it has one for x64 and arm64),
-      # and fpm needs rpmbuild.
+      # and fpm needs rpmbuild. GitHub's Ubuntu 24.04 images have it on both; this covers one that doesn't.
       - name: Install rpmbuild (Linux)
         if: runner.os == 'Linux'
         timeout-minutes: 10
@@ -269,7 +269,8 @@ jobs:
         run: |
           sudo -E apt-get -o DPkg::Lock::Timeout=300 update
           sudo -E apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends xvfb ./apps/desktop/release/*.deb
-          # electron-builder's script makes it setuid only where user namespaces don't work.
+          # electron-builder's script makes it setuid only where user namespaces don't work, so 0755 here:
+          # the AppArmor profile is what lets the sandbox run. (The .rpm installs it setuid.)
           stat -c '%A %U:%G %n' /opt/Chord/chrome-sandbox
           echo "CHORD_APP=/opt/Chord/chord" >> "$GITHUB_ENV"
           echo "FUSES_APP=/opt/Chord/chord" >> "$GITHUB_ENV"
