@@ -64,9 +64,11 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # Runner images ship Xvfb, so X11 jobs skip apt entirely (it has hung for 10+ minutes).
-          # Only the Wayland job installs Weston.
+          # Runner images ship Xvfb. X11 jobs add a window manager: a desktop always has one, and
+          # without it no window is ever granted fullscreen (or activated the way a real one is).
+          # The Wayland job installs Weston, which is its own.
           if ! command -v Xvfb >/dev/null; then NEED="xvfb"; fi
+          if [ "${{ matrix.display }}" = "x11" ] && ! command -v openbox >/dev/null; then NEED="$NEED openbox"; fi
           if [ "${{ matrix.display }}" = "wayland" ]; then NEED="$NEED weston"; fi
           if [ -n "$NEED" ]; then
             sudo -E apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
@@ -77,9 +79,16 @@ jobs:
           # sandbox on (packages ship an AppArmor profile instead).
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: E2E (X11)
+      - name: E2E (X11, Xvfb with openbox)
         if: matrix.display == 'x11'
-        run: xvfb-run -a pnpm --filter @chord/desktop test:e2e
+        run: |
+          xvfb-run -a sh -c '
+            ready="$(mktemp -u)"
+            openbox --startup "touch $ready" &
+            for i in $(seq 1 100); do [ -e "$ready" ] && break; sleep 0.1; done
+            [ -e "$ready" ] || { echo "openbox did not start"; exit 1; }
+            pnpm --filter @chord/desktop test:e2e
+          '
 
       - name: E2E (Wayland, headless Weston)
         if: matrix.display == 'wayland'

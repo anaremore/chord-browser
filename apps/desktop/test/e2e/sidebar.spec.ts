@@ -84,20 +84,25 @@ async function setUp(app: ElectronApplication, paths: string[], origin = () => s
 }
 
 /**
- * Where a row is once it has stopped moving. Rows glide into place (a folder
- * opening reveals its tabs with a spring), so a box read mid-glide sends a
- * drag somewhere the row no longer is.
+ * Where a row is once it has stopped moving. Rows glide into place (after
+ * "New folder" they spring for about 700 ms), so a box read mid-glide sends a
+ * drag somewhere the row no longer is. Settled means the same box on four
+ * reads 100 ms apart; two reads in the same frame would match while it moves.
  */
 async function settledBox(target: Locator) {
-  let last = await target.boundingBox();
+  let last: Awaited<ReturnType<Locator['boundingBox']>> = null;
+  let same = 0;
   await expect
-    .poll(async () => {
-      const box = await target.boundingBox();
-      const still = box !== null && last !== null && box.x === last.x && box.y === last.y && box.height === last.height;
-      last = box;
-      return still;
-    }, { intervals: [100] })
-    .toBe(true);
+    .poll(
+      async () => {
+        const box = await target.boundingBox();
+        same = box && last && box.x === last.x && box.y === last.y && box.width === last.width && box.height === last.height ? same + 1 : 0;
+        last = box;
+        return same;
+      },
+      { intervals: [100] },
+    )
+    .toBeGreaterThanOrEqual(3);
   return last!;
 }
 

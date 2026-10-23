@@ -156,7 +156,21 @@ test('screen sharing goes through Chord’s picker, and Stop in the sidebar ends
     // Refused: the page's request fails (Electron reports AbortError; Chrome says NotAllowedError).
     await tab.locator('#share').click();
     // Thumbnails of every screen and window take a moment to gather.
-    await expect(picker).toBeVisible({ timeout: 15_000 });
+    await expect(picker)
+      .toBeVisible({ timeout: 15_000 })
+      .catch(async (error: Error) => {
+        // Chord refuses when there's nothing to share: say what the OS offered.
+        const offered = await app.evaluate(async ({ desktopCapturer }) => {
+          const start = Date.now();
+          const listed = desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } }).then(
+            (sources) => `${sources.length} sources [${sources.map((s) => s.id).join(', ')}]`,
+            (e: unknown) => `getSources failed: ${String(e)}`,
+          );
+          const late = new Promise<string>((resolve) => setTimeout(() => resolve('getSources still pending'), 5000));
+          return `${await Promise.race([listed, late])} after ${Date.now() - start} ms`;
+        });
+        throw new Error(`${error.message}\nThe page's title: ${await tab.title()}\ndesktopCapturer: ${offered}`);
+      });
     await picker.getByRole('button', { name: 'Cancel' }).click();
     await expect.poll(() => tab.title()).toBe('Share refused: AbortError');
     await expect(picker).toBeHidden();
@@ -243,9 +257,23 @@ test('a page in fullscreen covers the whole window, and leaving it brings Chord 
         return { covers: b.x === 0 && b.y === 0 && b.width === width && b.height === height, onTop: index === children.length - 1 };
       }, `${site.origin}/fullscreen`);
     expect(await page()).toEqual({ covers: false, onTop: false });
+    // Esc and the page's own exit act on a window that's fullscreen: wait out the OS's transition (an
+    // animation on macOS). Without a window manager to grant it (bare Xvfb), it never comes.
+    const windowFullScreen = () => app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows()[0]!.isFullScreen());
+    // The page's own view of it: set once the browser has granted fullscreen and resized it.
+    const documentFullScreen = () => tab.evaluate(() => document.fullscreenElement !== null);
+    const fullScreened = () =>
+      expect
+        .poll(windowFullScreen, { timeout: 10_000 })
+        .toBe(true)
+        .catch((error: Error) => {
+          throw new Error(`${error.message}\nThe window never went fullscreen; on X11 that takes a window manager to grant it.`);
+        });
 
     await tab.locator('#go').click();
     await expect.poll(page).toEqual({ covers: true, onTop: true });
+    await fullScreened();
+    await expect.poll(documentFullScreen).toBe(true);
 
     // Esc leaves, as in Chrome. (Sent the way a real key arrives: Playwright's keys skip the browser's handling.)
     await app.evaluate(({ webContents }, url) => {
@@ -254,10 +282,16 @@ test('a page in fullscreen covers the whole window, and leaving it brings Chord 
       w.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
     }, `${site.origin}/fullscreen`);
     await expect.poll(page).toEqual({ covers: false, onTop: false });
+    // And the page knows: nothing of it stays fullscreen inside Chord's frame.
+    await expect.poll(documentFullScreen).toBe(false);
 
-    // So does the page itself (once the window has finished going fullscreen).
+    // So does the page itself.
+    await expect.poll(windowFullScreen, { timeout: 10_000 }).toBe(false);
     await tab.locator('#go').click();
     await expect.poll(page).toEqual({ covers: true, onTop: true });
+    await fullScreened();
+    await expect.poll(documentFullScreen).toBe(true);
+    // exitFullscreen can refuse while the window is still changing; ask until it goes.
     await expect
       .poll(() => tab.evaluate(() => (document.fullscreenElement ? document.exitFullscreen().then(() => true, () => false) : true)))
       .toBe(true);

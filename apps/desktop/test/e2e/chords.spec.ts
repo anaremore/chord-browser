@@ -167,14 +167,19 @@ test('the color wheel: keys turn the hue, a click moves the nearest color, and a
     await first.press('Shift+ArrowDown');
     await expect(first).toHaveAttribute('aria-valuetext', /^Close to \w+/);
 
-    // A click on the wheel's right edge takes the nearest color to hue 90°.
+    // A click on the wheel's right edge takes the nearest color to hue 90°. Which one is nearest depends on
+    // the colors the chord started with (the OS accent's; Dusk's, lilac and coral, where there's none), so
+    // find it the way the wheel does: by distance from the click.
     const wheel = first.locator('..');
     const box = (await wheel.boundingBox())!;
-    await settings.mouse.click(box.x + box.width - 6, box.y + box.height / 2);
-    // Wait for the hue to arrive near 90°, not just past 85: a starting hue above that (the default
-    // chord's lilac, about 300°, where there's no OS accent color) would pass before the click lands.
-    await expect.poll(async () => Math.abs((await hue()) - 90)).toBeLessThanOrEqual(5);
-    await expect(first).toHaveAttribute('aria-valuetext', /vivid$/);
+    const at = { x: box.x + box.width - 6, y: box.y + box.height / 2 };
+    const sliders = editor.getByRole('slider', { name: /^Color \d$/ });
+    const centers = await sliders.evaluateAll((els) => els.map((el) => el.getBoundingClientRect()).map((r) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 })));
+    const distances = centers.map((c) => Math.hypot(c.x - at.x, c.y - at.y));
+    const nearest = sliders.nth(distances.indexOf(Math.min(...distances)));
+    await settings.mouse.click(at.x, at.y);
+    await expect.poll(async () => Math.abs(Number(await nearest.getAttribute('aria-valuenow')) - 90)).toBeLessThanOrEqual(5);
+    await expect(nearest).toHaveAttribute('aria-valuetext', /vivid$/);
 
     // "+" adds a color; dragged off the wheel and let go, it's removed.
     const handles = editor.getByRole('slider', { name: /^Color \d$/ });
