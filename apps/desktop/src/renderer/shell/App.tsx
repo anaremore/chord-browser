@@ -287,8 +287,16 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   // Duet's panel for this window (DESIGN.md §7.8): main pushes what it shows.
   const [duet, setDuet] = useState<DuetView | null>(null);
   useEffect(() => {
-    void api.duet.view().then(setDuet);
-    return api.duet.onState(setDuet);
+    // A push can arrive before the answer and be the newer of the two (live.ts says why): it wins.
+    let pushed = false;
+    const unsubscribe = api.duet.onState((view) => {
+      pushed = true;
+      setDuet(view);
+    });
+    void api.duet.view().then((view) => {
+      if (!pushed) setDuet(view);
+    });
+    return unsubscribe;
   }, []);
   const duetOpen = Boolean(duet?.enabled && duet.open);
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
@@ -311,11 +319,18 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
     const pinned = tabs.filter((n) => n.section === 'pinned').length;
     announce(`${chord.name} chord, ${pinned} pinned, ${tabs.length - pinned} today`);
   }, [chord?.id]);
-  const createChord = async () => {
-    await api.state.dispatch({ t: 'chord.create', windowId, name: 'New chord', ...newChordLook(sortedChords(state)) });
-    // Main's patches arrive before its reply, so the mirror already shows the new chord: name it right away.
-    const chordId = mirror.get().windows[windowId]?.activeChordId;
-    if (chordId) setChordEdit({ chordId, field: 'name' });
+  // A new chord's name field opens on it as soon as it's here. Its patch can arrive after main's reply
+  // (they come on different pipes), so it's found as the chord that wasn't there before, not the active one.
+  const [naming, setNaming] = useState<ReadonlySet<string> | null>(null);
+  useEffect(() => {
+    const created = naming && Object.keys(state.chords).find((id) => !naming.has(id));
+    if (!created) return;
+    setNaming(null);
+    setChordEdit({ chordId: created, field: 'name' });
+  }, [naming, state.chords]);
+  const createChord = () => {
+    setNaming(new Set(Object.keys(state.chords)));
+    api.state.dispatch({ t: 'chord.create', windowId, name: 'New chord', ...newChordLook(sortedChords(state)) }).catch(() => setNaming(null));
   };
 
   // The sidebar's width, live while its edge is dragged (main lays the page out to match).
