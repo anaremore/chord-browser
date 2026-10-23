@@ -251,7 +251,7 @@ export class Browser {
       cantStop: (nodeId, host) => {
         const windowId = this.windowShowing(nodeId);
         const w = windowId ? this.windows.get(windowId) : undefined;
-        if (w) send(w.shell.webContents, 'toast:show', { id: `share:${nodeId}`, message: `Chord can't stop this share. Use ${host}'s own Stop button.` });
+        if (w) w.toast({ id: `share:${nodeId}`, message: `Chord can't stop this share. Use ${host}'s own Stop button.` });
       },
     });
     this.idle = new IdleKeeper(
