@@ -162,6 +162,7 @@ export class AppWindow {
       reportBounds();
     });
     this.window.on('move', reportBounds);
+    if (platform === 'darwin') this.window.on('leave-full-screen', () => this.refreshPageFullScreen());
     this.window.on('maximize', reportBounds);
     this.window.on('unmaximize', reportBounds);
 
@@ -243,6 +244,21 @@ export class AppWindow {
     root.addChildView(this.tabView);
     this.tabView.setBorderRadius(0);
     this.layout();
+  }
+
+  /**
+   * macOS: as the window animates out of fullscreen, Electron (45) tells the
+   * page it's still fullscreen ("pending" while the transition runs) and
+   * doesn't tell it again when the animation ends, so the page's element
+   * stays fullscreen inside Chord's frame. Resizing the page's view makes
+   * Chromium tell the page afresh, now that the transition is over.
+   */
+  private refreshPageFullScreen(): void {
+    const view = this.tabView;
+    if (!view || this.pageFullScreen || this.window.isDestroyed()) return;
+    const bounds = view.getBounds();
+    view.setBounds({ ...bounds, height: bounds.height + 1 });
+    view.setBounds(bounds);
   }
 
   private leavePageFullScreen(): void {

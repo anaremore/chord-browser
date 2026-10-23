@@ -126,15 +126,18 @@ test('a misspelled word offers suggestions and Add to dictionary at the top of t
     await tab.keyboard.type('teh ');
     const id = (await contentsId(app, `${site.origin}/spell`))!;
     const menu = () => app.evaluate((_electron, contents) => (globalThis as unknown as { chordTestHooks: { contextMenu(id: number): string[] | null } }).chordTestHooks.contextMenu(contents), id);
-    // Spelling is checked as you type, once the dictionary has loaded (the first time, it downloads);
-    // text typed before that isn't checked again, so type the word again until it is.
+    // Spelling is checked as you type, once the dictionary has loaded (the first time, it downloads).
+    // Text typed before then isn't checked again: while the word isn't marked at all, type it again.
     await expect
       .poll(
         async () => {
-          await tab.locator('#t').fill('');
-          await tab.locator('#t').pressSequentially('teh ');
           await tab.locator('#t').click({ button: 'right', position: { x: 24, y: 24 } });
-          return menu();
+          const labels = await menu();
+          if (!labels?.includes('Add to dictionary')) {
+            await tab.locator('#t').fill('');
+            await tab.locator('#t').pressSequentially('teh ');
+          }
+          return labels;
         },
         { timeout: 30_000, intervals: [500, 1000] },
       )

@@ -49,9 +49,6 @@ import { Store, type Change } from './store';
 import { TabManager } from './tabs';
 import { AppWindow, createUiView } from './window';
 
-/** The isolated world main uses to finish a page's fullscreen exit (see leave-html-full-screen). */
-const FULLSCREEN_WORLD = 1011;
-
 /** Histories of tabs archived this session, kept in memory so ⌘⇧T doesn't wait on the database. */
 const MAX_REMEMBERED_HISTORIES = 100;
 
@@ -158,16 +155,7 @@ export class Browser {
         });
         // A page going fullscreen (a video) covers the whole window; Esc, or the page, brings Chord back.
         contents.on('enter-html-full-screen', () => this.windowFor(contents)?.setPageFullScreen(true));
-        contents.on('leave-html-full-screen', () => {
-          this.windowFor(contents)?.setPageFullScreen(false);
-          // macOS: leaving by Esc can leave the document itself fullscreen (its element filling the
-          // page, over everything) while the window and Chord's frame come back. Finish leaving.
-          if (process.platform === 'darwin') {
-            void contents
-              .executeJavaScriptInIsolatedWorld(FULLSCREEN_WORLD, [{ code: 'if (document.fullscreenElement) document.exitFullscreen().catch(() => {})' }])
-              .catch(() => undefined);
-          }
-        });
+        contents.on('leave-html-full-screen', () => this.windowFor(contents)?.setPageFullScreen(false));
         attachContextMenu(contents, {
           surface: 'web',
           inspect: true,

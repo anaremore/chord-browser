@@ -171,7 +171,10 @@ test('the color wheel: keys turn the hue, a click moves the nearest color, and a
     // the colors the chord started with (the OS accent's; Dusk's, lilac and coral, where there's none), so
     // find it the way the wheel does: by distance from the click.
     const wheel = first.locator('..');
-    const box = (await wheel.boundingBox())!;
+    // All of it on screen: the editor scrolls, and a handle below the fold can't be clicked or dragged.
+    const showWheel = () => wheel.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    await showWheel();
+    let box = (await wheel.boundingBox())!;
     const at = { x: box.x + box.width - 6, y: box.y + box.height / 2 };
     const sliders = editor.getByRole('slider', { name: /^Color \d$/ });
     const centers = await sliders.evaluateAll((els) => els.map((el) => el.getBoundingClientRect()).map((r) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 })));
@@ -186,6 +189,8 @@ test('the color wheel: keys turn the hue, a click moves the nearest color, and a
     const count = await handles.count();
     await editor.getByRole('button', { name: 'Add a color' }).click();
     await expect(handles).toHaveCount(count + 1);
+    await showWheel();
+    box = (await wheel.boundingBox())!;
     const added = (await handles.nth(count).boundingBox())!;
     // Well past the rim (1.6 radii; past 1.25 it goes), on a side of the wheel with room in the window:
     // Settings is smaller on a small screen.
