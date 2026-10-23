@@ -5,6 +5,7 @@
  * app-server dynamic tools), so there is no helper binary, no localhost
  * server and no token to leak; the process is the thread's scope.
  */
+import { execFile } from 'node:child_process';
 import type { DuetProvider, DuetToolSpec } from '@chord/core';
 import type { Launch } from './detect';
 
@@ -81,5 +82,22 @@ export function errorCopy(provider: DuetProvider, kind: ProviderErrorKind, detai
       return `${name} stopped unexpectedly.${detail ? ` ${detail}` : ''} Your message is still here: try again.`;
     default:
       return detail || `${name} couldn't answer. Try again.`;
+  }
+}
+
+/** Ends a provider and anything it started (Codex starts a code-mode host: research §3.4, §4.3). */
+export function killTree(pid: number | undefined): void {
+  if (!pid) return;
+  if (process.platform === 'win32') execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => undefined);
+  else {
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        // Already gone.
+      }
+    }
   }
 }

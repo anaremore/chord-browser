@@ -11,8 +11,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { DuetToolSpec } from '@chord/core';
-import { errorCopy, type DuetSession, type ProviderError, type SessionEvents, type SessionOptions, type ToolOutput } from './adapter';
-import { killTree } from './detect';
+import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionOptions, type ToolOutput } from './adapter';
 
 const SERVER = 'chord';
 
@@ -64,7 +63,7 @@ async function mcpReply(message: { id?: unknown; method?: string; params?: Recor
     return {
       jsonrpc: '2.0',
       id,
-      result: { tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: t.tier === 0, destructiveHint: t.name === 'close_tabs' } })) },
+      result: { tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: true }})) },
     };
   }
   if (method === 'tools/call') {

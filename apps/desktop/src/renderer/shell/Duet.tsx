@@ -12,7 +12,7 @@
  */
 import { DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, splitCitations, type DuetMessage, type DuetProvider, type DuetScope } from '@chord/core';
 import type { DuetAction, DuetView, SystemInfo } from '@chord/ipc';
-import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Ellipsis, Pencil, RotateCcw, Square, Undo2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { api } from './api';
 import styles from './Duet.module.css';
@@ -217,18 +217,14 @@ function Approval({ message }: { message: DuetMessage }) {
           {body.target.length > 8 && <li className={styles.muted}>and {body.target.length - 8} more</li>}
         </ul>
       )}
-      {body.reason && <p className={styles.reason}>Duet says: “{body.reason}”</p>}
-      {body.tainted && pending && <p className={styles.warning}>This address didn't come from you or your tabs. Check it before you allow it.</p>}
       {pending ? (
         <div className={styles.approvalActions}>
           <button type="button" className={styles.primary} onClick={() => act({ do: 'approve', messageId: message.id, decision: 'once' })}>
             Allow once
           </button>
-          {!body.tainted && (
-            <button type="button" className={styles.secondary} onClick={() => act({ do: 'approve', messageId: message.id, decision: 'thread' })}>
-              Allow for this chat
-            </button>
-          )}
+          <button type="button" className={styles.secondary} onClick={() => act({ do: 'approve', messageId: message.id, decision: 'thread' })}>
+            Allow for this chat
+          </button>
           <span className={styles.flex} />
           <button type="button" className={styles.quiet} onClick={() => act({ do: 'approve', messageId: message.id, decision: 'denied' })}>
             No
@@ -236,12 +232,7 @@ function Approval({ message }: { message: DuetMessage }) {
         </div>
       ) : (
         <div className={styles.approvalOutcome}>
-          <span className={styles.muted}>{body.undone ? 'Undone' : outcome}</span>
-          {body.undo && !body.undone && (
-            <button type="button" className={styles.quiet} onClick={() => act({ do: 'undo', messageId: message.id })}>
-              <Undo2 size={13} strokeWidth={2} aria-hidden /> Undo
-            </button>
-          )}
+          <span className={styles.muted}>{outcome}</span>
         </div>
       )}
     </div>
@@ -680,7 +671,7 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
           {view.firstUse && (
             <div className={styles.firstUse} role="note">
               <p>
-                What you attach goes to {providerName} through your own account. Duet reads only what's attached to your message, unless you let it see more. It always asks before it changes your tabs.
+                What you attach goes to {providerName} through your own account. Duet reads only what’s attached to your message, unless you let it see more. It always asks before it changes your tabs.
               </p>
               <button type="button" className={styles.secondary} onClick={() => act({ do: 'dismissFirstUse' })}>
                 Got it
@@ -704,7 +695,7 @@ export function DuetPanel({ view, windowId }: { view: DuetView; windowId: string
           </div>
           {empty ? (
             <div className={styles.empty}>
-              <p className={styles.emptyTitle}>Ask about this page, your tabs, or anything you're working on.</p>
+              <p className={styles.emptyTitle}>Ask about this page, your tabs, or anything you’re working on.</p>
               <div className={styles.suggestions}>
                 {['Summarize this page', 'What should I know before I decide?', 'Compare with my other tabs'].map((s) => (
                   <button key={s} type="button" className={styles.suggestion} onClick={() => act({ do: 'send', text: s })}>

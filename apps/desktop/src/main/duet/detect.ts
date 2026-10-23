@@ -196,23 +196,6 @@ export function openSignIn(provider: DuetProvider, path: string): void {
   }
 }
 
-/** Ends a provider and anything it started (Codex starts a code-mode host: research §3.4, §4.3). */
-export function killTree(pid: number | undefined): void {
-  if (!pid) return;
-  if (process.platform === 'win32') execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => undefined);
-  else {
-    try {
-      process.kill(-pid, 'SIGTERM');
-    } catch {
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch {
-        // Already gone.
-      }
-    }
-  }
-}
-
 /** Claude names a project folder after its working directory, every other character a dash. */
 export const claudeProjectFolder = (cwd: string): string => cwd.replace(/[^a-zA-Z0-9]/g, '-');
 export const claudeConfigDir = (): string => process.env['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude');

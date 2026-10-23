@@ -370,7 +370,6 @@ export const DuetAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('retry') }),
   z.object({ do: z.literal('unqueue'), index: z.number().int().min(0).max(100) }),
   z.object({ do: z.literal('approve'), messageId: id, decision: z.enum(['once', 'thread', 'denied']) }),
-  z.object({ do: z.literal('undo'), messageId: id }),
   z.object({ do: z.literal('new') }),
   z.object({ do: z.literal('open'), threadId: id }),
   z.object({ do: z.literal('continue') }),

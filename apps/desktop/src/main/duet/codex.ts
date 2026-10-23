@@ -9,8 +9,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { errorCopy, type DuetSession, type ProviderError, type SessionEvents, type SessionOptions } from './adapter';
-import { killTree } from './detect';
+import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionOptions } from './adapter';
 
 /** Default-on features that add tools (research §3.3). Unknown names are ignored by older versions. */
 export const CODEX_FEATURES_OFF = [

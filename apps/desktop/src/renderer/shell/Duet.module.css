@@ -541,19 +541,6 @@
   list-style: none;
 }
 
-.reason {
-  margin: 0;
-  color: var(--color-fg-muted);
-  font: var(--text-small);
-  font-style: italic;
-}
-
-.warning {
-  margin: 0;
-  color: var(--color-danger);
-  font: var(--text-small);
-}
-
 .approvalActions,
 .approvalOutcome {
   display: flex;

@@ -26,8 +26,6 @@ import {
   threadToShow,
   toolResult,
   transcriptSummary,
-  urlsInText,
-  urlTaint,
   userTurnText,
   uuidv7,
   type DuetAttachment,
@@ -38,7 +36,6 @@ import {
   type DuetScope,
   type DuetThread,
   type DuetToolName,
-  type DuetUndo,
   type NodeId,
   type TabNode,
   type WindowId,
@@ -65,12 +62,8 @@ interface ThreadState {
   refs: Map<string, NodeId>;
   /** Tabs attached to any message in the thread: readable without asking. */
   attached: Set<NodeId>;
-  /** "Allow for this chat": tool names. open_tab with a tainted URL is never covered. */
+  /** "Allow for this chat": tool names the user said yes to for the rest of the thread. */
   grants: Set<string>;
-  /** URLs from the user's own context (typed, attached, their history and tabs): not tainted. */
-  trusted: Set<string>;
-  /** Text tools returned this thread, for the URL echo check. */
-  toolTexts: string[];
   /** Tabs Duet read in this thread: a badge in the sidebar while it's open. */
   read: Set<NodeId>;
   queue: string[];
@@ -201,8 +194,6 @@ export class DuetService {
       refs: new Map(),
       attached: new Set(),
       grants: new Set(),
-      trusted: new Set(),
-      toolTexts: [],
       read: new Set(),
       queue: [],
       streaming: null,
@@ -232,9 +223,7 @@ export class DuetService {
             state.refs.set(a.ref, node);
             state.attached.add(node);
           }
-          state.trusted.add(a.url);
         }
-        for (const url of urlsInText(m.body.text)) state.trusted.add(url);
       }
       // A reply cut off by quitting stays as it was, marked interrupted (with Retry).
       if (m.body.role === 'assistant' && m.body.status === 'streaming') m.body = { ...m.body, status: 'interrupted' };
@@ -324,6 +313,8 @@ export class DuetService {
     for (const w of this.browser.allWindows) {
       if (w.window.isDestroyed()) continue;
       const view = await this.view(w.id);
+      // The window may have closed while its view was built.
+      if (w.window.isDestroyed()) continue;
       w.setDuetWidth(view.enabled && view.open ? this.browser.duetWidth : 0);
       send(w.shell.webContents, 'duet:state', view);
     }
@@ -386,8 +377,6 @@ export class DuetService {
         resolve?.(action.decision);
         return;
       }
-      case 'undo':
-        return this.undo(windowId, state, action.messageId);
       case 'new':
         this.close(state);
         this.continueFrom.set(chordId, state.thread ? { id: state.thread.id, title: state.thread.title } : (this.continueFrom.get(chordId) ?? null));
@@ -502,9 +491,7 @@ export class DuetService {
     for (const a of attachments) {
       const node = state.refs.get(a.ref);
       if (node) state.attached.add(node);
-      state.trusted.add(a.url);
     }
-    for (const url of urlsInText(trimmed)) state.trusted.add(url);
 
     if (state.pendingDivider) {
       await this.addMessage(state, { role: 'divider', text: state.pendingDivider });
@@ -701,10 +688,10 @@ export class DuetService {
   /* ---------- Tools ---------- */
 
   /** Ask in the thread (an approval card), and keep the answer as a record. */
-  private async ask(state: ThreadState, tool: string, description: string, target: string[], reason: string | undefined, tainted = false): Promise<{ decision: Decision; message: DuetMessage }> {
-    const message = await this.addMessage(state, { role: 'approval', tool, description, target, ...(reason ? { reason } : {}), ...(tainted ? { tainted: true } : {}), decision: 'pending' });
+  private async ask(state: ThreadState, tool: string, description: string, target: string[]): Promise<{ decision: Decision; message: DuetMessage }> {
+    const message = await this.addMessage(state, { role: 'approval', tool, description, target, decision: 'pending' });
     const decision = await new Promise<Decision>((resolve) => state.pending.set(message.id, resolve));
-    if (decision === 'thread' && !tainted) state.grants.add(tool);
+    if (decision === 'thread') state.grants.add(tool);
     if (message.body.role === 'approval') await this.updateMessage(message, { ...message.body, decision });
     return { decision, message };
   }
@@ -729,8 +716,7 @@ export class DuetService {
     const spec = duetTool(name);
     if (!spec || !state.thread) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
     try {
-      if (spec.tier === 0) return await this.readTool(state, spec.name, args);
-      return await this.organizeTool(state, spec.name, args);
+      return await this.readTool(state, spec.name, args);
     } catch (error) {
       return { text: toolResult({ error: error instanceof Error ? error.message : String(error) }, false), isError: true };
     }
@@ -742,32 +728,23 @@ export class DuetService {
     if (tool === 'list_tabs' || tool === 'search_history' || tool === 'search_archive') {
       if (readNeedsApproval({ scope: thread.scope, attached: false, sameChord: true, tool, granted: state.grants.has(tool) })) {
         const what = tool === 'list_tabs' ? 'See the list of your tabs' : tool === 'search_history' ? `Search your history for “${String(args['query'] ?? '')}”` : `Search your archive for “${String(args['query'] ?? '')}”`;
-        const { decision } = await this.ask(state, tool, what, [], undefined);
+        const { decision } = await this.ask(state, tool, what, []);
         if (decision === 'denied') return refuse('The user said no to this. Carry on without it, or ask them.');
       }
       if (tool === 'list_tabs') {
-        const tabs = this.tabsInScope(state).map((n) => {
-          state.trusted.add(n.url);
-          return { tab_id: this.refFor(state, n.id), title: n.title, site: safeHost(n.url), attached: state.attached.has(n.id) };
-        });
+        const tabs = this.tabsInScope(state).map((n) => ({ tab_id: this.refFor(state, n.id), title: n.title, site: safeHost(n.url), attached: state.attached.has(n.id) }));
         await this.activity(state, tool, `Listed ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`);
         return { text: toolResult({ tabs }) };
       }
       const query = String(args['query'] ?? '').slice(0, 200);
       if (tool === 'search_history') {
         const result = await this.persistence.search(query, state.chordId);
-        const hits = result.history.slice(0, 20).map((h) => {
-          state.trusted.add(h.url);
-          return { title: h.title, url: h.url, last_visit: new Date(h.lastVisitAt).toISOString() };
-        });
+        const hits = result.history.slice(0, 20).map((h) => ({ title: h.title, url: h.url, last_visit: new Date(h.lastVisitAt).toISOString() }));
         await this.activity(state, tool, `Searched history for “${query}”`, `${hits.length} found`);
         return { text: toolResult({ results: hits }) };
       }
       const page = await this.persistence.archiveList(query, 20);
-      const hits = page.items.map((a) => {
-        state.trusted.add(a.url);
-        return { title: a.title, url: a.url, archived: new Date(a.archivedAt).toISOString() };
-      });
+      const hits = page.items.map((a) => ({ title: a.title, url: a.url, archived: new Date(a.archivedAt).toISOString() }));
       await this.activity(state, tool, `Searched the archive for “${query}”`, `${hits.length} found`);
       return { text: toolResult({ results: hits }) };
     }
@@ -779,7 +756,7 @@ export class DuetService {
     const needs = readNeedsApproval({ scope: thread.scope, attached: state.attached.has(node.id), sameChord: node.chordId === state.chordId, tool, granted: state.grants.has(`read:${node.id}`) || state.grants.has(tool) });
     if (needs) {
       const verb = tool === 'tab_screenshot' ? 'Take a picture of' : 'Read';
-      const { decision } = await this.ask(state, tool, `${verb} “${node.title || safeHost(node.url)}”`, [node.url], undefined);
+      const { decision } = await this.ask(state, tool, `${verb} “${node.title || safeHost(node.url)}”`, [node.url]);
       if (decision === 'denied') return refuse('The user said no to reading that tab. Carry on without it, or ask them.');
       if (decision === 'thread') state.grants.add(tool);
     }
@@ -796,14 +773,11 @@ export class DuetService {
     if (!page) return refuse('That page could not be read.');
     if (tool === 'read_selection') {
       await this.activity(state, tool, `Read your selection in “${node.title || safeHost(node.url)}”`, node.url);
-      const text = pageResult({ ref, url: page.url, text: page.selection, retrievedAt: Date.now() });
-      state.toolTexts.push(page.selection.slice(0, 20_000));
-      return { text };
+      return { text: pageResult({ ref, url: page.url, text: page.selection, retrievedAt: Date.now() }) };
     }
     const start = typeof args['start'] === 'number' ? args['start'] : 0;
     const length = typeof args['length'] === 'number' ? args['length'] : undefined;
     const text = pageResult({ ref, url: page.url, text: page.text, start, ...(length ? { length } : {}), retrievedAt: Date.now() });
-    state.toolTexts.push(page.text.slice(0, 40_000));
     await this.activity(state, tool, `Read “${node.title || safeHost(node.url)}”`, node.url);
     return { text };
   }
@@ -831,105 +805,6 @@ export class DuetService {
       });
     }
     return contents.isDestroyed() ? null : contents;
-  }
-
-  private async organizeTool(state: ThreadState, tool: DuetToolName, args: Record<string, unknown>): Promise<ToolOutput> {
-    const store = this.browser.store;
-    const reason = typeof args['reason'] === 'string' ? args['reason'].slice(0, 300) : undefined;
-    const tabs = (Array.isArray(args['tab_ids']) ? args['tab_ids'] : [])
-      .map((ref) => this.resolveTab(state, ref))
-      .filter((n): n is TabNode => n !== null && n.chordId === state.chordId && !this.isPrivateChord(n.chordId));
-    const named = tabs.map((n) => n.title || n.url);
-    const refuse = (why: string) => ({ text: toolResult({ refused: why }, false), isError: true });
-    const windowId = state.windowId ?? this.browser.allWindows.find((w) => store.state.windows[w.id]?.activeChordId === state.chordId)?.id ?? null;
-    const position = (n: TabNode) => {
-      const siblings = children(store.state, n.chordId, n.section, n.parentId);
-      return { nodeId: n.id, section: n.section, parentId: n.parentId, index: Math.max(0, siblings.findIndex((s) => s.id === n.id)) };
-    };
-
-    let description: string;
-    let tainted = false;
-    let url = '';
-    switch (tool) {
-      case 'create_folder':
-        if (tabs.length === 0) return refuse('None of those tabs are in this chord.');
-        description = `Create folder “${String(args['title'] ?? 'New folder').slice(0, 80)}” with ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`;
-        break;
-      case 'move_tabs':
-        if (tabs.length === 0) return refuse('None of those tabs are in this chord.');
-        description = `Move ${tabs.length} tab${tabs.length === 1 ? '' : 's'} to ${args['to'] === 'pinned' ? 'Pinned' : 'Today'}`;
-        break;
-      case 'close_tabs':
-        if (tabs.length === 0) return refuse('None of those tabs are in this chord.');
-        description = `Close ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`;
-        break;
-      default: {
-        url = String(args['url'] ?? '');
-        let parsed: URL;
-        try {
-          parsed = new URL(url);
-        } catch {
-          return refuse('That is not a web address.');
-        }
-        if (!/^https?:$/.test(parsed.protocol)) return refuse('Duet only opens web addresses.');
-        const taint = urlTaint(parsed.href, state.trusted, state.toolTexts);
-        tainted = taint.tainted;
-        description = `Open ${parsed.href}`;
-      }
-    }
-    // Rule of Two: anything that changes the browser asks, unless allowed for this chat (never for a tainted URL).
-    if (tainted || !state.grants.has(tool)) {
-      const { decision } = await this.ask(state, tool, description, tool === 'open_tab' ? [url] : named, reason, tainted);
-      if (decision === 'denied') return refuse('The user said no. Do not try again unless they ask.');
-    }
-
-    let undo: DuetUndo;
-    if (tool === 'create_folder') {
-      const before = tabs.map(position);
-      const folderId = uuidv7();
-      store.dispatch({ t: 'folder.create', folderId, chordId: state.chordId, title: String(args['title'] ?? 'New folder').slice(0, 80), tabId: tabs[0]!.id });
-      for (const tab of tabs.slice(1)) store.dispatch({ t: 'node.move', nodeId: tab.id, section: 'pinned', index: Number.MAX_SAFE_INTEGER, parentId: folderId });
-      undo = { kind: 'move', moves: before, deleteFolderId: folderId };
-    } else if (tool === 'move_tabs') {
-      const before = tabs.map(position);
-      const section = args['to'] === 'pinned' ? 'pinned' : 'today';
-      for (const tab of tabs) store.dispatch({ t: 'node.move', nodeId: tab.id, section, index: Number.MAX_SAFE_INTEGER, parentId: null });
-      undo = { kind: 'move', moves: before };
-    } else if (tool === 'close_tabs') {
-      if (!windowId) return refuse('No window to act in.');
-      for (const tab of tabs) store.dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
-      undo = { kind: 'reopen', tabs: tabs.map((t) => ({ url: t.url, title: t.title })) };
-    } else {
-      if (!windowId) return refuse('No window to act in.');
-      const before = new Set(Object.keys(store.state.nodes));
-      store.dispatch({ t: 'tab.open', windowId, url, background: args['background'] !== false });
-      const opened = Object.keys(store.state.nodes).filter((id) => !before.has(id));
-      undo = { kind: 'close', tabIds: opened };
-    }
-    // The record stays with the approval: Undo puts things back.
-    const record = [...state.messages].reverse().find((m) => m.body.role === 'approval' && m.body.tool === tool);
-    if (record?.body.role === 'approval') await this.updateMessage(record, { ...record.body, undo });
-    await this.activity(state, tool, description);
-    return { text: toolResult({ done: description }, false) };
-  }
-
-  private async undo(windowId: WindowId, state: ThreadState, messageId: string): Promise<void> {
-    const message = state.messages.find((m) => m.id === messageId);
-    if (message?.body.role !== 'approval' || !message.body.undo || message.body.undone) return;
-    const undo = message.body.undo;
-    const store = this.browser.store;
-    if (undo.kind === 'reopen') {
-      for (const tab of undo.tabs) store.dispatch({ t: 'tab.open', windowId, url: tab.url, background: true });
-    } else if (undo.kind === 'close') {
-      for (const id of undo.tabIds) if (store.state.nodes[id]) store.dispatch({ t: 'tab.close', windowId, nodeId: id });
-    } else {
-      for (const move of [...undo.moves].reverse()) store.dispatch({ t: 'node.move', nodeId: move.nodeId, section: move.section, index: move.index, parentId: move.parentId });
-      if (undo.deleteFolderId && store.state.nodes[undo.deleteFolderId]) {
-        const left = Object.values(store.state.nodes).some((n) => n.parentId === undo.deleteFolderId);
-        if (!left) store.dispatch({ t: 'folder.delete', nodeId: undo.deleteFolderId });
-      }
-    }
-    await this.updateMessage(message, { ...message.body, undone: true });
   }
 
   /* ---------- Citations, export ---------- */
