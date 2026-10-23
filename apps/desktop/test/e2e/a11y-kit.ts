@@ -168,6 +168,20 @@ export async function pressReal(app: ElectronApplication, match: string, keyCode
   );
 }
 
+/**
+ * The OS's reduce motion setting, stubbed in main and sent to the renderers
+ * as a real change would be; resolves once the shell has it. (CI machines
+ * differ: some have it on, some off.)
+ */
+export async function setReducedMotion(app: ElectronApplication, shell: Page, reduce: boolean): Promise<void> {
+  await app.evaluate(({ systemPreferences, nativeTheme }, r) => {
+    const real = systemPreferences.getAnimationSettings.bind(systemPreferences);
+    systemPreferences.getAnimationSettings = () => ({ ...real(), prefersReducedMotion: r });
+    nativeTheme.emit('updated');
+  }, reduce);
+  await expect.poll(() => shell.evaluate(() => document.documentElement.hasAttribute('data-reduced-motion'))).toBe(reduce);
+}
+
 /** Which of Chord's views has the keyboard: a page's address, or its kind (shell, overlay, popover). */
 export async function focusedView(app: ElectronApplication): Promise<string | null> {
   return app.evaluate(({ webContents }) => {

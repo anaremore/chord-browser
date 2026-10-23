@@ -107,7 +107,13 @@ function NameStep({ chord, onNext }: { chord: Chord; onNext(): void }) {
         autoFocus
         spellCheck={false}
         onChange={(e) => rename(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && finish()}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return;
+          // Handled: with motion reduced the next card is there at once, and the key's own default
+          // would press its main button ("Looks good"), skipping the colors.
+          e.preventDefault();
+          finish();
+        }}
       />
       <div className={styles.chips}>
         {NAME_CHIPS.map((chip) => (
