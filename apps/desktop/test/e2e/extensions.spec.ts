@@ -69,22 +69,27 @@ async function openSettings(app: ElectronApplication, shell: Page): Promise<Page
 }
 
 test('an extension: told it was installed once, its scripts and rules run, and its button lives in the sidebar shelf', async () => {
+  const t0 = Date.now();
+  const step = (name: string) => console.log(`DEBUG ext +${Date.now() - t0}ms ${name}`);
   const { server, origin } = await startSite();
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   let app = await launch({ CHORD_HOME_URL: `${origin}/`, CHORD_LOAD_EXTENSION: FIXTURE }, profile);
   try {
     const shell = await pageWhere(app, isShell);
     const tab = await pageWhere(app, (url) => url === `${origin}/`);
+    step('launched');
     const shelf = shell.locator('[data-placement="sidebar"]');
     // Pinned by default, in the shelf, with its badge; nothing extension-related in the header.
     await expect(shelf.getByRole('button', { name: 'Chord Test, 7' })).toBeVisible({ timeout: 20_000 });
     await expect(shell.locator('[data-placement="bar"]')).toHaveCount(0);
+    step('shelf ok');
 
     // The content script ran, and the rule the manifest enables blocks (Chord's install step turns it on).
     await expect.poll(() => tab.evaluate(() => document.documentElement.dataset['chordTestExtension'])).toBe('injected');
     const fetchFrom = (path: string) => tab.evaluate((p) => fetch(p).then(() => 'loaded', () => 'blocked'), path);
     await expect.poll(() => fetchFrom('/blocked-by-extension'), { timeout: 20_000 }).toBe('blocked');
     expect(await fetchFrom('/other')).toBe('loaded');
+    step('rules ok');
 
     // Its context-menu item (made in runtime.onInstalled) joins a page's right-click menu.
     const tabId = await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)?.id, `${origin}/`);
@@ -103,6 +108,7 @@ test('an extension: told it was installed once, its scripts and rules run, and i
         [tabId, `${origin}/`] as const,
       );
     await expect.poll(menuLabels, { timeout: 20_000 }).toContain('Chord test: “chord”');
+    step('menu ok');
 
     // The popup opens from the button, sized to its page, and closes when the page closes it.
     await shelf.getByRole('button', { name: 'Chord Test, 7' }).click();
@@ -113,6 +119,7 @@ test('an extension: told it was installed once, its scripts and rules run, and i
     expect(await popup.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(300);
     await popup.locator('#close').click();
     await expect.poll(() => app.windows().some((p) => isPopup(p.url()))).toBe(false);
+    step('popup ok');
 
     // The puzzle piece lists every extension; unpinning takes the button off the shelf but not off the list.
     const overlay = await pageWhere(app, isOverlay);
@@ -125,6 +132,7 @@ test('an extension: told it was installed once, its scripts and rules run, and i
     await list.getByRole('button', { name: 'Pin Chord Test' }).click();
     await overlay.keyboard.press('Escape');
     await expect(shelf.getByRole('button', { name: 'Chord Test, 7' })).toBeVisible();
+    step('puzzle ok');
 
     // Settings can move the buttons to the title bar.
     const settings = await openSettings(app, shell);
@@ -140,8 +148,11 @@ test('an extension: told it was installed once, its scripts and rules run, and i
     await expect(bar.getByRole('button', { name: 'Extensions', exact: true })).toBeVisible();
     await expect(bar.getByRole('button', { name: 'Chord Test, 7' })).toHaveCount(0);
     await shell.getByRole('button', { name: 'Show sidebar' }).click();
+    step('collapse ok');
   } finally {
+    step('closing');
     await app.close();
+    step('closed');
   }
 
   // Next launch: it loads from what was saved, and isn't told it was installed again.

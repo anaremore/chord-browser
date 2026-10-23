@@ -267,7 +267,18 @@ test('page-first keys reach Chord only when the page passes; reserved keys fire 
     };
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
     // Chord is up: the page is a tab in the sidebar.
-    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Keys');
+    try {
+      await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Keys', { timeout: 10_000 });
+    } catch (error) {
+      // DEBUG (CI): main's state against the shell's.
+      const main = await shell.evaluate(async () => {
+        const snap = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { version: number; chords: object; nodes: object; windows: object } }> } } }).chord.state.snapshot();
+        return { windowId: snap.windowId, version: snap.state.version, chords: Object.keys(snap.state.chords).length, nodes: Object.keys(snap.state.nodes).length, windows: snap.state.windows };
+      });
+      console.log(`DEBUG precondition failed ${JSON.stringify(main)} shellUrl=${shell.url()} pages=${JSON.stringify(app.windows().map((p) => p.url().slice(0, 50)))}`);
+      console.log(`DEBUG shell html ${(await shell.evaluate(() => document.querySelector('nav')?.outerHTML ?? 'no nav')).slice(0, 3000)}`);
+      throw error;
+    }
 
     // DEBUG (CI): what main and the shell see around the first key.
     const debug = async (label: string) => {
