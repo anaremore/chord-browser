@@ -20,6 +20,7 @@ import {
   type Settings,
   type SettingsPatch as CoreSettingsPatch,
   type SitePermission,
+  type SitePermissions,
   type ChordThemeSpec,
   type State,
 } from '@chord/core';
@@ -146,6 +147,10 @@ export const SettingsPatch = z.strictObject({
   searchSuggestions: z.boolean().optional(),
   checkForUpdates: z.boolean().optional(),
   separateSignIns: z.boolean().optional(),
+  spellcheck: z
+    .strictObject({ enabled: z.boolean(), language: z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/).nullable() })
+    .partial()
+    .optional(),
   interface: z.strictObject({ contrast: z.number().min(0).max(1), glass: z.number().min(0).max(1) }).partial().optional(),
   motion: z
     .strictObject({
@@ -203,6 +208,10 @@ export interface SettingsSnapshot {
   /** Every chord in switcher order, for Settings → General → Sign-ins. */
   chords: Pick<Chord, 'id' | 'name' | 'icon' | 'profileId'>[];
   extensions: ExtensionInfo[];
+  /** What you allowed or blocked, by site (Settings → Site permissions). */
+  sitePermissions: SitePermissions;
+  /** Spelling dictionaries Chord can use (Windows and Linux); empty on macOS, where the system's own checks spelling. */
+  spellcheckLanguages: string[];
 }
 
 /** One extension's toolbar button, for the window's current tab. */
@@ -252,13 +261,38 @@ export interface FindState {
   focus: number;
 }
 
+/** A screen or window a page may capture (getDisplayMedia), for Chord's picker. */
+export interface ShareSource {
+  id: string;
+  name: string;
+  kind: 'screen' | 'window';
+  /** A small JPEG data URL of what would be shared. */
+  thumbnail: string;
+}
+
+/** A page asking to share your screen: the picker card in the popover. */
+export interface SharePrompt {
+  id: number;
+  host: string;
+  sources: ShareSource[];
+  /** Offer "Share audio too": the page asked for audio and this OS can capture it (Windows). */
+  audio: boolean;
+}
+
 /** Everything the popover shows: cards stack top-right over the page. */
 export interface PopoverState {
   theme: ChordThemeSpec | null;
   interface: InterfaceSettings;
   find: FindState | null;
   permission: PermissionPrompt | null;
+  share: SharePrompt | null;
 }
+
+/** The permissions a site can be asked for, in Settings' order. */
+export const SITE_PERMISSIONS = ['camera', 'microphone', 'location', 'notifications', 'clipboard-read'] as const satisfies readonly SitePermission[];
+const _permissionsMatch = (p: SitePermission): (typeof SITE_PERMISSIONS)[number] => p;
+void _permissionsMatch;
+const siteOrigin = z.string().max(300).regex(/^https?:[/][/][^/]+$/);
 
 /** History pages, archived tabs and learned picks for a command bar query (chord-data's SearchResult). */
 export interface HistorySearch {
@@ -429,6 +463,20 @@ export const invokeChannels = {
   'settings:makeDefaultBrowser': { roles: ['internal', 'shell'], request: z.void(), response: DefaultBrowserStatus },
   'settings:updateStatus': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
   'settings:checkForUpdates': { roles: ['internal'], request: z.void(), response: z.custom<UpdateStatus>() },
+  // Settings → Site permissions: change one decision (null asks again next time), or forget a site.
+  'settings:sitePermission': {
+    roles: ['internal'],
+    request: z.strictObject({ origin: siteOrigin, permission: z.enum(SITE_PERMISSIONS), decision: z.enum(['allow', 'block']).nullable() }),
+    response: z.void(),
+  },
+  'settings:forgetSite': { roles: ['internal'], request: z.strictObject({ origin: siteOrigin }), response: z.void() },
+  // Screen sharing (ARCHITECTURE.md §9): the picker answers; the sidebar's Stop ends a share.
+  'share:respond': {
+    roles: ['popover'],
+    request: z.strictObject({ id: z.number().int().min(1), sourceId: z.string().max(200).nullable(), audio: z.boolean() }),
+    response: z.void(),
+  },
+  'share:stop': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   // The popover: find bar and permission prompts, over the page (ARCHITECTURE.md §5).
   'popover:state': { roles: ['popover'], request: z.void(), response: z.custom<PopoverState>() },
   /** The popover's content size, so main can fit the view to its cards (0 × 0 hides it). */
@@ -517,6 +565,8 @@ export interface ShellApi {
   };
   /** First run's "Open links in Chord?" (DESIGN.md §8.1). */
   defaultBrowser: { status(): Promise<DefaultBrowserStatus>; make(): Promise<DefaultBrowserStatus> };
+  /** Stop a tab's screen share (its sidebar row shows it's sharing). */
+  share: { stop(nodeId: string): Promise<void> };
 }
 
 interface DownloadsApi {
@@ -542,6 +592,9 @@ export interface SettingsApi {
     /** Keep a chord's sign-ins separate, or share them again (its tabs reload; the window offers Undo). */
     chordSignIns(chordId: string, separate: boolean): Promise<void>;
     /** Whether Chord opens web links from other apps; `unavailable` in development builds. */
+    /** Change one remembered decision for a site (null asks again), or forget the site entirely. */
+    sitePermission(origin: string, permission: SitePermission, decision: 'allow' | 'block' | null): Promise<void>;
+    forgetSite(origin: string): Promise<void>;
     defaultBrowser(): Promise<DefaultBrowserStatus>;
     /** Asks the OS to make Chord the default (on Windows, opens Settings → Default apps), then reports again. */
     makeDefaultBrowser(): Promise<DefaultBrowserStatus>;
@@ -591,6 +644,8 @@ export interface PopoverApi {
     close(): Promise<void>;
   };
   permission: { respond(id: number, decision: 'allow' | 'block' | 'dismiss'): Promise<void> };
+  /** The screen-share picker: a source to share, or null to cancel. */
+  share: { respond(id: number, sourceId: string | null, audio: boolean): Promise<void> };
 }
 
 /** `window.chord` in the command bar overlay. */

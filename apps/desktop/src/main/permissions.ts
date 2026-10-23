@@ -12,6 +12,12 @@ import type { Session, WebContents } from 'electron';
 
 /** Allowed without asking: they can't see or hear anything about you. */
 const HARMLESS = new Set(['fullscreen', 'automatic-fullscreen', 'pointerLock', 'clipboard-sanitized-write', 'persistent-storage', 'storage-access']);
+/**
+ * Let through here because Chord asks elsewhere: sharing the screen goes on
+ * to Chord's own picker (screen-share.ts), where nothing is shared until you
+ * choose what.
+ */
+const ASKED_ELSEWHERE = new Set(['display-capture']);
 
 /** What a Chromium permission request asks Chord's user for. Null means deny without asking. */
 export function sitePermissionsFor(permission: string, mediaTypes: readonly string[] = []): SitePermission[] | null {
@@ -91,7 +97,7 @@ export class PermissionBroker {
   /** `scope`: a private window's profile, whose answers stay in memory and apart from your saved ones. */
   attach(ses: Session, scope: string | null = null): void {
     ses.setPermissionRequestHandler((contents, permission, callback, details) => {
-      if (HARMLESS.has(permission)) return callback(true);
+      if (HARMLESS.has(permission) || ASKED_ELSEWHERE.has(permission)) return callback(true);
       const mediaTypes = 'mediaTypes' in details ? (details.mediaTypes ?? []) : [];
       const wanted = sitePermissionsFor(permission, mediaTypes);
       const origin = originOf('requestingUrl' in details ? details.requestingUrl : undefined);
@@ -106,7 +112,7 @@ export class PermissionBroker {
       this.deps.onChange();
     });
     ses.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
-      if (HARMLESS.has(permission)) return true;
+      if (HARMLESS.has(permission) || ASKED_ELSEWHERE.has(permission)) return true;
       const mediaTypes = details.mediaType && details.mediaType !== 'unknown' ? [details.mediaType] : [];
       const wanted = sitePermissionsFor(permission, mediaTypes);
       const origin = originOf(requestingOrigin);

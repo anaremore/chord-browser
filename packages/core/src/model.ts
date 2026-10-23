@@ -168,6 +168,8 @@ export interface LiveTab {
   error: LoadError | null;
   /** Chord popped the page's video out into picture-in-picture (auto PiP, ARCHITECTURE.md §9). */
   pip: boolean;
+  /** The page is sharing your screen or a window (getDisplayMedia, ARCHITECTURE.md §9). */
+  sharing: boolean;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -295,6 +297,14 @@ export interface Settings {
   sleepTabs: boolean;
   /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
   autoPip: boolean;
+  spellcheck: SpellcheckSettings;
+}
+
+/** Spelling in text fields (ARCHITECTURE.md §9). */
+export interface SpellcheckSettings {
+  enabled: boolean;
+  /** A dictionary language like `en-US` (Windows and Linux); null follows the system. macOS always uses its own. */
+  language: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -311,6 +321,7 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveAfter: '12h',
   sleepTabs: true,
   autoPip: true,
+  spellcheck: { enabled: true, language: null },
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -319,6 +330,7 @@ export const defaultSettings = (): Settings => ({
   motion: { ...DEFAULT_SETTINGS.motion },
   interface: { ...DEFAULT_SETTINGS.interface },
   themes: [],
+  spellcheck: { ...DEFAULT_SETTINGS.spellcheck },
 });
 
 /**
@@ -343,6 +355,7 @@ export interface SettingsPatch {
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
   autoPip?: boolean;
+  spellcheck?: Partial<SpellcheckSettings>;
 }
 
 export interface State {
@@ -370,6 +383,8 @@ export interface State {
   favorites: Record<string, Favorite>;
   /** Folders deleted this session, with what was in them, for Undo (newest first; not persisted). */
   deletedFolders: DeletedFolder[];
+  /** Page zoom you chose for a site, by host (1 isn't stored). Shared by every chord, like permissions. */
+  siteZoom: Record<string, number>;
 }
 
 export interface DeletedFolder {
@@ -400,6 +415,11 @@ export const emptyState = (): State => ({
   deletedChords: [],
   favorites: {},
   deletedFolders: [],
+  siteZoom: {},
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false };
+
+/** Page zoom Chord remembers per site: Chromium's own range. */
+export const MIN_ZOOM = 0.25;
+export const MAX_ZOOM = 5;

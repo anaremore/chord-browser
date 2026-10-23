@@ -166,3 +166,102 @@
 .secondary:active {
   transform: scale(0.97);
 }
+
+.primary:disabled {
+  opacity: 0.45;
+}
+
+/* ---------- Screen-share picker ---------- */
+
+/* Wider than the other cards: two thumbnails side by side. */
+.shareCard {
+  inline-size: calc(var(--size-popover-card) + var(--space-16));
+}
+
+.shareTabs {
+  display: flex;
+  gap: var(--space-1);
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+}
+
+.shareTab {
+  flex: 1;
+  block-size: var(--size-hit-min);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.shareTab[aria-selected='true'] {
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
+}
+
+.shareTab:disabled {
+  opacity: 0.45;
+}
+
+.sources {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  max-block-size: calc(var(--size-popover-card) * 1.25);
+  margin: var(--space-3) 0 0;
+  padding: var(--space-1) var(--space-4);
+  overflow-y: auto;
+}
+
+.source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
+  text-align: start;
+}
+
+.source:hover {
+  background: var(--color-item-hover);
+}
+
+.source[aria-selected='true'] {
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+  color: var(--color-fg);
+}
+
+.thumbnail {
+  display: block;
+  inline-size: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-xs);
+  background: var(--color-item-hover);
+  object-fit: contain;
+}
+
+.sourceName {
+  overflow: hidden;
+  font: var(--text-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shareAudio {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin: var(--space-3) var(--space-4) 0;
+  font: var(--text-small);
+}
+
+.shareAudio input {
+  accent-color: var(--color-accent);
+}
