@@ -86,7 +86,7 @@ async function launch({ profile = mkdtempSync(join(tmpdir(), 'chord-e2e-')), env
   };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
   if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
-  const app = watchForMainErrors(await electron.launch({ args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
+  const app = watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
   return { app, profile, downloads };
 }
 
