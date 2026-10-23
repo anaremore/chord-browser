@@ -7,6 +7,7 @@
  */
 import {
   defaultSettings,
+  type ArchiveAfter,
   emptyState,
   type Chord,
   type CustomTheme,
@@ -20,6 +21,7 @@ import {
   type State,
   type WindowModel,
 } from './model';
+import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
@@ -84,6 +86,9 @@ function restoreSettings(saved: Record<string, unknown>): Settings {
     if (isUnit(ui['glass'])) settings.interface.glass = ui['glass'];
   }
   if (Array.isArray(saved['themes'])) settings.themes = saved['themes'].map(validTheme).filter((t): t is CustomTheme => t !== null);
+  const archiveAfter = saved['archiveAfter'];
+  if (typeof archiveAfter === 'string' && archiveAfter in ARCHIVE_AFTER_MS) settings.archiveAfter = archiveAfter as ArchiveAfter;
+  if (typeof saved['sleepTabs'] === 'boolean') settings.sleepTabs = saved['sleepTabs'];
   const engine = saved['searchEngine'];
   if (typeof engine === 'string' && SEARCH_ENGINES.some((e) => e.id === engine)) settings.searchEngine = engine as Settings['searchEngine'];
   const motion = saved['motion'];

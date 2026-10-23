@@ -160,7 +160,7 @@ flowchart LR
 | **Overlay renderer** (1 per window, pre-warmed) | Command bar, Peek frame chrome, split-view drop zones. | Must paint above web content ([§5](#5-window-composition)). Kept mounted and hidden so it opens in < 50 ms. |
 | **Popover renderer** (1 per window, pre-warmed) | Hover previews, permission prompts. Its bounds are sized to the card. | Electron views can't pass clicks through (see [§5](#5-window-composition)), so popovers must not cover the sidebar. |
 | **Web content** | One WebContentsView per live tab; Chromium site isolation decides the processes. | `sandbox`, `contextIsolation`, no `nodeIntegration`, **no preload**, no `webviewTag`. |
-| **Internal pages** (`chord://settings`, `chord://archive`) | Settings is its own window (⌘, / Ctrl+,), one at a time: the preferences convention on every OS, and it keeps a privileged page out of browsing tabs entirely. The archive renders as a normal tab. | Narrow `internal.ts` preload, separate in-memory `chord-ui` session. Settings sees settings and one chord's theme, never tabs or history. |
+| **Internal pages** (`chord://settings`, `chord://archive`) | Settings is its own window (⌘, / Ctrl+,), one at a time: the preferences convention on every OS, and it keeps a privileged page out of browsing tabs entirely. The archive renders as a normal tab. | Separate in-memory `chord-ui` session; each page has its own narrow preload and IPC role. Settings (`internal.ts`, role `internal`) sees settings and one chord's theme, never tabs or history. The archive page (`archive.ts`, role `archive`) lists, restores and removes archived tabs, and sees its chord's colors. A tab showing it is made by TabManager on the UI session; navigating it to a web address (or a web tab to it) replaces the view. |
 
 All Chord UI views use one in-memory session, `chord-ui`. The `chord://` and `chord-favicon://` protocols are registered **only on that session**, so web pages can't reach them (this also prevents history-sniffing through favicons).
 
@@ -254,7 +254,7 @@ Every destructive command returns inverse patches plus an `UndoToken`. A toast h
 
 - Closed Today tabs go to the archive (`reason='closed'`) with their navigation history, which `webContents.navigationHistory.restore()` brings back ✅.
 - Deleted folders and chords are soft-deleted (`deleted_at`) and kept 30 days. They can be restored from Settings → Recently deleted.
-- Reopen-closed-tab (⌘⇧T) walks the same archive.
+- Reopen-closed-tab (⌘⇧T) walks the same archive: this session's closed (and cleared) tabs first, back in their exact place, then what the archive remembers you closed or cleared, newest first, across restarts. Tabs tidied away automatically aren't reopened by ⌘⇧T; they're in the archive page and the command bar.
 
 ---
 
@@ -409,13 +409,22 @@ CREATE TABLE duet_site_rule (
 - `parent_id` and `active_chord_id` aren't foreign keys. `restoreState()` in `@chord/core` repairs dangling references on load (an orphaned tab moves to its section root; a missing active chord falls back to the first).
 - `tab` and `folder` rows cascade from `node`.
 
-Favicons are stored once per distinct icon, keyed by content hash, and unused ones are dropped on open. Recently closed tabs are not persisted yet; they move to `archive_item` in M1.4.
+Favicons are stored once per distinct icon, keyed by content hash, and unused ones (no tab or archived tab uses them) are dropped on open.
+
+**The archive, as built (migration 5):** `archive_item` with an explicit integer `rid` (so its external-content FTS5 index, `archive_fts`, survives `VACUUM`), `reason` of `auto`, `closed` or `cleared`, and `nav_state` as JSON: the tab's `navigationHistory` entries (with Chromium's `pageState`, which holds the scroll position) and index, at most 50 entries around the current one, web pages only, and capped at 1 MB. An entry is deleted when its tab comes back. Entries older than 30 days go on open. Archive writes ride the history event stream (`HistoryEvent` `archive` / `unarchive`), in order and in the same transaction as the batch they arrive with.
 
 **Migrations** are forward-only numbered SQL files, each run in a transaction. Before every migration, and as a daily rolling copy (keep 3), we take a backup with `VACUUM INTO`. A failed migration restores the backup and opens in a read-only "something went wrong" state rather than losing data.
 
 **Profiles.** Chords share the default profile unless "Keep sign-ins separate" is on. That creates a profile with its own persistent partition: cookies, storage, cache, extensions. Moving a tab to a chord with a **different profile** recreates it in the target session and reloads it, because a WebContents can't change session. The UI says so before the drop completes.
 
 **Auto-archive.** A main-process timer runs every 5 minutes and on `powerMonitor` `resume`. It archives Today tabs whose `last_active_at` is older than the chord's threshold (12 h by default; 24 h, 7 d, 30 d, or never). It skips tabs that are audible, visible in any window, part of a split, or playing media. Archived items are kept 30 days by default.
+
+As built (`core/idle.ts`, `main/idle.ts`):
+- The threshold is one setting for now (Settings → General → "Archive Today tabs after"), not per chord.
+- `last_active_at` is when you last *left* the tab (the reducer stamps the tab a window stops showing), so idle time runs from then, not from when you opened it.
+- Busy tabs are skipped: audible; playing (`media-started-playing` until `media-paused`, so muted video counts); given the camera or microphone, until the page goes (Electron can't say when capture ends); and in picture-in-picture (asked in an isolated world just before acting).
+- Candidates are checked again against fresh state right before acting, and the reducer never auto-archives a tab on screen.
+- `CHORD_ARCHIVE_AFTER_MS`, `CHORD_SLEEP_AFTER_MS` and `CHORD_IDLE_CHECK_MS` shorten the times in development and tests (ignored when packaged).
 
 ---
 
@@ -442,10 +451,11 @@ Favicons are stored once per distinct icon, keyed by content hash, and unused on
 | Channel | shell | overlay | popover | internal | Notes |
 |---|:-:|:-:|:-:|:-:|---|
 | `state.snapshot` / `state.patch` | ✓ | ✓ | ✓ (subset) | — | |
-| `cmd.dispatch(Command)` | ✓ | ✓ (open/activate/actions subset) | — | ✓ (archive/space subset) | |
+| `cmd.dispatch(Command)` | ✓ | ✓ (open/activate/actions subset) | — | — | |
 | `layout.port` | ✓ | — | — | — | frame rects, Duet width |
 | `nav.back/forward/reload/stop` | ✓ | ✓ | — | — | |
-| `search.port` | — | ✓ | — | ✓ (archive page) | direct to chord-data |
+| `search.port` | — | ✓ | — | — | direct to chord-data |
+| `archive:list/restore/remove/snapshot` | — | restore only | — | — | the archive page's own role, `archive`; as built these are `invoke` channels through main, which flushes pending writes first |
 | `system.info` | ✓ | ✓ | ✓ | ✓ | platform, accent, reduced motion and transparency, forced colors, window-controls geometry |
 | `overlay.open/close` | ✓ | ✓ | — | — | |
 | `permission.respond` | — | — | ✓ | — | |
@@ -464,7 +474,7 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
 | Service | Approach |
 |---|---|
 | **Tabs** | TabManager owns `nodeId → WebContentsView`. Views are created lazily: on restart only the active tab of each window loads. Others load on activation (pinned tabs show their cached favicon and title until then). |
-| **Sleeping tabs** | Electron has no Chromium tab discarding. Tabs hidden for more than 60 minutes (configurable) get their `nav_state` saved and `webContents.close()` called. Activation restores them with `navigationHistory.restore()` ✅. **Never slept or auto-archived** (rule borrowed from Crest): tabs that are playing media, in picture-in-picture, sharing the screen or camera, being used by an agent, or holding a pending `beforeunload`. |
+| **Sleeping tabs** | Electron has no Chromium tab discarding. Tabs hidden for more than 60 minutes (configurable) get their `nav_state` saved and `webContents.close()` called. Activation restores them with `navigationHistory.restore()` ✅. **Never slept or auto-archived** (rule borrowed from Crest): tabs that are playing media, in picture-in-picture, sharing the screen or camera, being used by an agent, or holding a pending `beforeunload`. **As built:** 60 minutes hidden, checked with auto-archive; on by default, with a switch in Settings → General. The history (with `pageState`, so the scroll position comes back) stays in memory until the tab is shown; a sleeping tab is one with no live entry, and its icon fades to 70 %. ⚠ Not yet: detecting a pending `beforeunload` (a page with unsaved form input can be slept; `pageState` usually brings the input back). |
 | **Popups / OAuth** | `setWindowOpenHandler`: a plain `target=_blank` becomes a new Today tab (or Peek, for links from pinned tabs, later). `window.open` with features, as OAuth and payment popups use, gets a real child popup window so `window.opener` keeps working. |
 | **Navigation events** | `did-navigate`, `page-title-updated`, `page-favicon-updated`, loading and audible changes are coalesced per tab (≤ 1 update per 50 ms) into store commands. History visits go to chord-data. |
 | **Favicons** | Fetched through the tab's own session (`session.fetch`, so partition cookies apply), size-capped at 64 KB, sanitized (SVG rasterized to PNG in a sandboxed context), and stored by key. The shell loads them via `chord-favicon://<key>`. Fallback monograms are generated client-side (DESIGN.md §7.4). |
@@ -520,7 +530,8 @@ Each query carries a sequence number; stale responses are dropped. The in-memory
 
   Otherwise the address or search the text spells comes first. A typed address leads over pages unless habit says otherwise.
 - **Transport:** history lives in chord-data (migration 4: `history_url`, `history_visit`, an external-content FTS5 index kept in sync by triggers, and `palette_choice`). The overlay asks through main (`history:search`), not yet over a direct MessagePort. The 50 best bm25 matches come back, and the overlay ranks them with everything else.
-- ⚠ **Not yet:** inline autocomplete, search suggestions, the archive, and Crest's calculator.
+- **Archive (as built):** archived tabs come from chord-data with history, and replace the history row for the same page. They rank with that page's use (or recency of archiving) and picking one brings the tab back with its back/forward history.
+- ⚠ **Not yet:** inline autocomplete, search suggestions, `@archive` and the other filters, and Crest's calculator.
 
 ---
 

@@ -39,14 +39,18 @@ function frameOrigin(sidebar: SidebarMode): FrameOrigin {
 const FRAME_SPRING = springCurve(springs.smooth);
 const FRAME_TICK_MS = 1000 / 60;
 
-export type UiSurface = 'shell' | 'overlay' | 'popover' | 'settings';
+export type UiSurface = 'shell' | 'overlay' | 'popover' | 'settings' | 'archive';
 
-/** Each surface's preload and IPC role. Internal pages share one narrow preload. */
+/**
+ * Each surface's preload and IPC role. Settings and the archive page are both
+ * Chord's own pages, but only the archive sees archived tabs.
+ */
 const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
   shell: { preload: 'shell', role: 'shell' },
   overlay: { preload: 'overlay', role: 'overlay' },
   popover: { preload: 'popover', role: 'popover' },
   settings: { preload: 'internal', role: 'internal' },
+  archive: { preload: 'archive', role: 'archive' },
 };
 
 function uiUrl(surface: UiSurface): string {

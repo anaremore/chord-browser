@@ -12,8 +12,10 @@ describe('opsFromPatches', () => {
     const result = apply(state, { t: 'tab.open', windowId, url: 'https://a.test/' }, ctx);
     const ops = opsFromPatches(result.patches, result.state);
     const newTab = Object.keys(result.state.nodes).find((id) => !state.nodes[id])!;
-    expect(ops.map((op) => `${op.k}:${op.id}`).sort()).toEqual([`node:${newTab}`, `window:${windowId}`].sort());
-    expect(ops.find((op) => op.k === 'node')!.value).toEqual(result.state.nodes[newTab]);
+    // The tab it left records when it stopped being used.
+    const left = state.windows[windowId]!.activeTab[state.windows[windowId]!.activeChordId]!;
+    expect(ops.map((op) => `${op.k}:${op.id}`).sort()).toEqual([`node:${newTab}`, `node:${left}`, `window:${windowId}`].sort());
+    expect(ops.find((op) => op.k === 'node' && op.id === newTab)!.value).toEqual(result.state.nodes[newTab]);
   });
 
   it('turns removals into deletes and ignores engine-only state', () => {

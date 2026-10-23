@@ -1,7 +1,8 @@
 /**
  * Chord's domain model (ARCHITECTURE.md §6–7). Plain serializable data: the
  * main process owns the authoritative copy, renderers mirror it via patches,
- * and chord-data persists everything except `live` and `closed`.
+ * and chord-data persists everything except `live` and `closed` (the archive
+ * keeps closed tabs in its own table).
  */
 
 export type ChordId = string;
@@ -154,7 +155,26 @@ export interface ClosedTab {
   node: TabNode;
   windowId: WindowId;
   closedAt: number;
+  /** Its entry in the archive, which keeps it (with its back/forward history) after this session; null for Chord's own pages. */
+  archiveId: string | null;
 }
+
+/** Why a tab went to the archive: you closed it, cleared Today, or it sat unused (ARCHITECTURE.md §7). */
+export type ArchiveReason = 'auto' | 'closed' | 'cleared';
+
+/** A Today tab in the archive: enough to show it, search it and bring it back. */
+export interface ArchivedTab {
+  id: string;
+  chordId: ChordId;
+  url: string;
+  title: string;
+  favicon: string | null;
+  reason: ArchiveReason;
+  archivedAt: number;
+}
+
+/** Settings → General → "Archive tabs after": how long a Today tab may sit unused. */
+export type ArchiveAfter = '12h' | '24h' | '7d' | '30d' | 'never';
 
 export type SearchEngineId = 'google' | 'duckduckgo' | 'bing' | 'brave' | 'kagi' | 'ecosia';
 
@@ -181,6 +201,10 @@ export interface Settings {
   colorScheme: ColorScheme;
   interface: InterfaceSettings;
   themes: CustomTheme[];
+  /** Today tabs unused this long go to the archive. */
+  archiveAfter: ArchiveAfter;
+  /** Background tabs unused for an hour free their memory, and wake when shown again. */
+  sleepTabs: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -189,6 +213,8 @@ export const DEFAULT_SETTINGS: Settings = {
   colorScheme: 'system',
   interface: { contrast: 0.5, glass: 0.5 },
   themes: [],
+  archiveAfter: '12h',
+  sleepTabs: true,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -213,6 +239,8 @@ export interface SettingsPatch {
   motion?: Partial<MotionSettings>;
   colorScheme?: ColorScheme;
   interface?: Partial<InterfaceSettings>;
+  archiveAfter?: ArchiveAfter;
+  sleepTabs?: boolean;
 }
 
 export interface State {
@@ -225,7 +253,10 @@ export interface State {
   nodes: Record<NodeId, SidebarNode>;
   windows: Record<WindowId, WindowModel>;
   live: Record<NodeId, LiveTab>;
-  /** Recently closed tabs for ⌘⇧T, newest first. Moves to the archive in M1.4. */
+  /**
+   * Tabs you closed (or cleared) this session, newest first, for ⌘⇧T. They're
+   * in the archive too; this keeps their exact place in the sidebar.
+   */
   closed: ClosedTab[];
   /** Chords deleted this session, with their tabs, for Undo (newest first; not persisted). */
   deletedChords: DeletedChord[];

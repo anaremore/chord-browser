@@ -1,4 +1,4 @@
-import { restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
+import { ARCHIVE_AFTER_MS, IDLE_CHECK_MS, SLEEP_AFTER_MS, restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { join } from 'node:path';
@@ -23,6 +23,12 @@ app.enableSandbox();
 // Google is the default search engine (decided 2026-10-22). Tests override the
 // first page so CI never depends on the network.
 const HOME_URL = (!app.isPackaged && process.env['CHORD_HOME_URL']) || 'https://www.google.com/';
+
+/** Development and tests only: a duration in ms from the environment, for archiving and sleeping in seconds rather than hours. */
+function devMs(name: string): number | null {
+  const value = app.isPackaged ? NaN : Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
 
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
@@ -105,6 +111,10 @@ function registerIpc(): void {
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
+  handle('archive:snapshot', (_request, sender) => browser!.archiveSnapshot(sender));
+  handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
+  handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
+  handle('archive:remove', ({ archiveId }) => browser!.removeArchived(archiveId));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -178,6 +188,12 @@ if (!app.requestSingleInstanceLock()) {
       profileSession,
       permissions,
       history: (event) => store.history(event),
+      archive: { entry: (which) => store.archiveEntry(which) },
+      idle: {
+        checkMs: devMs('CHORD_IDLE_CHECK_MS') ?? IDLE_CHECK_MS,
+        archiveAfterMs: (setting) => (setting === 'never' ? null : (devMs('CHORD_ARCHIVE_AFTER_MS') ?? ARCHIVE_AFTER_MS[setting])),
+        sleepAfterMs: devMs('CHORD_SLEEP_AFTER_MS') ?? SLEEP_AFTER_MS,
+      },
       onChange: (change) => store.record(change.patches, change.state),
     });
     Menu.setApplicationMenu(browser.appMenu);

@@ -19,14 +19,14 @@ const visit = (url: string, title: string, frecency: number) => ({ url, title, v
 describe('command bar ranking', () => {
   it('puts the search first when nothing clearly matches, then the best matches', () => {
     const { state, windowId } = stateWith([]);
-    const history: HistorySearch = { history: [visit('https://news.test/', 'Chord news', 1)], choices: [] };
+    const history: HistorySearch = { history: [visit('https://news.test/', 'Chord news', 1)], choices: [], archive: [] };
     const results = buildResults('chord progressions', state, windowId, 'new', history, now);
     expect(results[0]).toMatchObject({ kind: 'open', search: true });
   });
 
   it('lets a well-used page the text starts lead, ahead of the search', () => {
     const { state, windowId } = stateWith([]);
-    const history: HistorySearch = { history: [visit('https://github.com/', 'GitHub', 20)], choices: [] };
+    const history: HistorySearch = { history: [visit('https://github.com/', 'GitHub', 20)], choices: [], archive: [] };
     const [first, second] = buildResults('git', state, windowId, 'new', history, now);
     expect(first).toMatchObject({ kind: 'history', url: 'https://github.com/' });
     expect(second).toMatchObject({ kind: 'open', search: true });
@@ -34,7 +34,7 @@ describe('command bar ranking', () => {
 
   it('shows an open tab instead of its history entry', () => {
     const { state, windowId } = stateWith(['https://github.com/']);
-    const history: HistorySearch = { history: [visit('https://www.github.com/', 'GitHub', 20)], choices: [] };
+    const history: HistorySearch = { history: [visit('https://www.github.com/', 'GitHub', 20)], choices: [], archive: [] };
     const results = buildResults('github', state, windowId, 'new', history, now);
     expect(results.filter((r) => r.kind === 'history')).toHaveLength(0);
     expect(results.some((r) => r.kind === 'tab')).toBe(true);
@@ -43,8 +43,25 @@ describe('command bar ranking', () => {
   it('remembers the pick: what was chosen twice for the same text leads', () => {
     const { state, windowId } = stateWith([]);
     const choices: Choice[] = [{ text: 'set', destination: 'action:app.settings', uses: 1.9, lastUsedAt: now }];
-    const [first] = buildResults('set', state, windowId, 'new', { history: [], choices }, now);
+    const [first] = buildResults('set', state, windowId, 'new', { history: [], choices, archive: [] }, now);
     expect(first).toMatchObject({ kind: 'action', action: 'app.settings' });
+  });
+
+  it('offers an archived tab in place of its history entry, ranked by how much the page is used', () => {
+    const { state, windowId } = stateWith([]);
+    const archived = { id: 'a1', chordId: 'c', url: 'https://github.com/anaremore', title: 'anaremore', favicon: null, reason: 'auto' as const, archivedAt: now - 3 * 86_400_000 };
+    const history: HistorySearch = { history: [visit('https://github.com/anaremore', 'anaremore', 20)], choices: [], archive: [archived] };
+    const results = buildResults('anaremore', state, windowId, 'new', history, now);
+    expect(results.filter((r) => r.kind === 'history')).toHaveLength(0);
+    expect(results[0]).toMatchObject({ kind: 'archive', archiveId: 'a1' });
+    expect(destinationOf(results[0]!)).toBe('github.com/anaremore');
+  });
+
+  it("doesn't offer an archived tab whose page is open", () => {
+    const { state, windowId } = stateWith(['https://github.com/']);
+    const archived = { id: 'a1', chordId: 'c', url: 'https://github.com/', title: 'GitHub', favicon: null, reason: 'closed' as const, archivedAt: now };
+    const results = buildResults('github', state, windowId, 'new', { history: [], choices: [], archive: [archived] }, now);
+    expect(results.some((r) => r.kind === 'archive')).toBe(false);
   });
 
   it('knows where each row leads, so picks can be remembered', () => {
