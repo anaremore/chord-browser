@@ -115,7 +115,7 @@ test('the packaged app browses, opens Settings, and restores tabs after a relaun
   try {
     const shell = await pageWhere(app.browser, isShell);
     const overlay = await pageWhere(app.browser, isOverlay);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     // The bundled typeface loads from inside the asar.
     await expect(shell.getByText('Personal')).toBeVisible();
     const onestLoaded = () => shell.evaluate(() => [...document.fonts].some((f) => f.family.replace(/"/g, '') === 'Onest' && f.status === 'loaded'));
@@ -125,7 +125,7 @@ test('the packaged app browses, opens Settings, and restores tabs after a relaun
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
     await expect(overlay.getByRole('dialog')).toBeVisible();
     // Fill rather than type: keys sent before the field has focus would be lost.
-    const address = overlay.getByRole('textbox');
+    const address = overlay.getByRole('combobox');
     await address.fill(page);
     await expect(overlay.getByRole('option').first()).toContainText(page);
     await address.press('Enter');
@@ -149,9 +149,9 @@ test('the packaged app browses, opens Settings, and restores tabs after a relaun
   app = await start(executable, profile);
   try {
     const shell = await pageWhere(app.browser, isShell);
-    const today = shell.getByRole('list', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Today' });
     await expect(today).toContainText('Smoke page');
-    await expect(today.getByRole('button', { name: 'Smoke page', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(today.getByRole('treeitem', { name: 'Smoke page', exact: true })).toHaveAttribute('aria-selected', 'true');
     await pageWhere(app.browser, (url) => url === page);
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
     const settings = await pageWhere(app.browser, isSettings);
@@ -187,7 +187,7 @@ test('links handed over by the OS open in mini windows, at launch and in a runni
     const bar = (await urlOf(bars[0]!)) === `${site.origin}/from-second` ? bars[0]! : bars[1]!;
     await bar.getByRole('button', { name: /^Open in/ }).click();
     const shell = await pageWhere(app.browser, isShell);
-    await expect(shell.getByRole('list', { name: 'Today' }).getByRole('listitem').first()).toContainText('Smoke page');
+    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('Smoke page');
     await expect.poll(() => pages(app.browser).filter((p) => isMini(p.url())).length).toBe(1);
 
     // A packaged build can be the default browser, so Settings offers it (not clicked here: that asks the OS).
