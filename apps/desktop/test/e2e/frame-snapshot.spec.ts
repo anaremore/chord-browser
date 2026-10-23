@@ -208,6 +208,13 @@ async function ready(app: ElectronApplication, home = 'Colored page'): Promise<{
   const overlay = await pageWhere(app, isOverlay);
   await expect(shell.getByRole('tree', { name: 'Today' })).toContainText(home);
   await expect.poll(async () => (await pages(app)).views.length).toBe(1);
+  // Just after launch, a slow machine (CI's macOS ones) takes longer than a snapshot may (PREPARE_TIMEOUT_MS)
+  // over its first picture and the shell's first frames, and the frame just changes at once instead. Once a
+  // page has been pictured and the shell is idle, it glides, as it does in a Chord that has been running.
+  await app.evaluate(async ({ webContents }, origin) => {
+    await Promise.all(webContents.getAllWebContents().filter((c) => c.getURL().startsWith(origin)).map((c) => c.capturePage()));
+  }, site.origin);
+  await shell.evaluate(() => new Promise<void>((done) => requestIdleCallback(() => done(), { timeout: 2000 })));
   return { shell, overlay };
 }
 
@@ -379,8 +386,9 @@ test('peeking the sidebar while the page glides brings the page back at once, un
     await gliding;
 
     // The pointer reaches the window's left edge: the sidebar slides in over the page, which is back in place.
-    const edgeAt = Date.now();
     await shell.mouse.move(1, 300, { steps: 6 });
+    // Timed from when the pointer is there: moving it takes the test a while on a slow machine.
+    const edgeAt = Date.now();
     await expect(sidebar).toBeVisible();
     await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(4);
     const [away, back] = (await watched(app)).rects[`${site.origin}/`]!;
