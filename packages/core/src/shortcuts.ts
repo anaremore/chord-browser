@@ -111,8 +111,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('tab.favorite', 'Add this tab to Favorites', 'page-first', []),
   s('folder.new', 'New folder with this tab', 'page-first', []),
   s('today.clear', 'Clear Today', 'page-first', []),
-  // Split view (DESIGN.md §8.4)
-  s('split.with', 'Split with…', 'reserved', ['Mod+Alt+S']),
+  // Split view (DESIGN.md §8.4). The backslash reads as a divider; no Alt, so AltGr's letters (ś, ß…) stay typeable.
+  s('split.with', 'Split with…', 'reserved', ['Mod+Shift+\\']),
   s('split.focusPrevious', 'Focus the pane to the left', 'reserved', ['Mod+Alt+['], ['Ctrl+Alt+[']),
   s('split.focusNext', 'Focus the pane to the right', 'reserved', ['Mod+Alt+]'], ['Ctrl+Alt+]']),
   s('split.separate', 'Separate split tabs', 'page-first', []),

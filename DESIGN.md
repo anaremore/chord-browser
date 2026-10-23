@@ -658,7 +658,8 @@ Triggers: two-finger swipe on the sidebar (§6.4) · ⌘/Ctrl+1–9 · clicking 
 2. **On drop:** the frame divides with the snapshot technique (`smooth`). The sidebar row morphs into a `SplitRow`.
 3. **Resize** by dragging the gaps. The focused pane follows the cursor or click; ⌘⌥[ / ⌘⌥] (Ctrl+Alt+[ / ]) moves focus. (⌘⌥←/→ is taken by chord switching.)
 4. **Close a pane:** the others expand (`smooth`). A split of one dissolves back into a normal tab. Each step can be undone from a toast.
-5. Splits are saved as a unit in Pinned or Today and come back exactly as they were.
+5. Splits are saved as a unit in Pinned or Today (and in folders) and come back exactly as they were. A private window can split too; like everything else there, it's never saved.
+6. A split is something you set up on purpose: auto-archive skips its tabs (off screen they can still sleep, like any tab), and Clear leaves it in Today. Pinning or unpinning one of its tabs moves the whole split. To let its tabs go, close them or *Separate tabs* (Undo in a toast).
 
 ### 8.5 Peek (from pinned tabs)
 
@@ -872,7 +873,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 |---|---|---|---|
 | Show / hide Duet (page-first) | ⌘E | Ctrl+E | 2 |
 | Focus the pane left / right in a split | ⌘⌥[ · ⌘⌥] | Ctrl+Alt+[ · Ctrl+Alt+] | 2 |
-| Split with… (the command bar picks what opens beside the current tab) | ⌘⌥S | Ctrl+Alt+S | 2 |
+| Split with… (the command bar picks what opens beside the current tab) | ⇧⌘\ | Ctrl+Shift+\ | 2 |
 | Separate split tabs | (menus and the command bar) | (menus and the command bar) | 2 |
 | Peek: keep as a tab · close | ⌘↵ · Esc | Ctrl+↵ · Esc | 3 |
 | Mini window: move into a chord | ⌘↵ | Ctrl+↵ | 3 |
