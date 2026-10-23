@@ -6,6 +6,8 @@
  */
 import {
   DEFAULT_SETTINGS,
+  UI_SCALES,
+  isUiScale,
   parseThemeCode,
   themeCode,
   uuidv7,
@@ -534,6 +536,23 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
 
       <h2 className={settingsStyles.groupTitle}>Interface</h2>
       <div className={settingsStyles.group}>
+        <Row
+          label="Interface size"
+          description="Makes Chord’s sidebar, bars, menus and Settings larger or smaller. Pages keep their own zoom."
+          changed={settings.uiScale !== DEFAULT_SETTINGS.uiScale}
+          onReset={() => void api.settings.set({ uiScale: DEFAULT_SETTINGS.uiScale })}
+          control={
+            <Segmented<string>
+              label="Interface size"
+              value={String(settings.uiScale)}
+              options={UI_SCALES.map((scale) => ({ value: String(scale), label: `${Math.round(scale * 100)}%` }))}
+              onChange={(value) => {
+                const uiScale = Number(value);
+                if (isUiScale(uiScale)) void api.settings.set({ uiScale });
+              }}
+            />
+          }
+        />
         <Row
           label="Contrast"
           description="How strongly dividers, hover states and secondary text stand out. Text always stays readable."
