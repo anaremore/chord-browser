@@ -1,6 +1,10 @@
 # Captures a top-level window for design QA on Windows.
 #
-#   pwsh scripts/dev/capture-window.ps1 -Title Chord -Out shots/chord.png [-Popups]
+#   pwsh scripts/dev/capture-window.ps1 -Title Chord -Out shots/chord.png [-ProcessId <pid>] [-Popups]
+#
+# Pass -ProcessId (the Chord your script launched) whenever another Chord may be
+# open, such as the one you browse with: titles alone can't tell them apart, and
+# with two matches and no -ProcessId it captures nothing.
 #
 # By default the window renders itself (PrintWindow with PW_RENDERFULLCONTENT),
 # so the capture holds only Chord's pixels even when another app covers it.
@@ -9,6 +13,7 @@
 param(
   [Parameter(Mandatory)] [string] $Title,
   [Parameter(Mandatory)] [string] $Out,
+  [int] $ProcessId = 0,
   [switch] $Popups,
   [int] $SettleMs = 400
 )
@@ -27,6 +32,25 @@ public static class ChordCapture {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
   [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT rect, int size);
+  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int max);
+  // A visible top-level window of this process with exactly this title (off-screen ones too,
+  // which Process.MainWindowHandle skips).
+  public static IntPtr Find(uint pid, string title) {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows((h, _) => {
+      uint owner; GetWindowThreadProcessId(h, out owner);
+      if (owner != pid || !IsWindowVisible(h)) return true;
+      var text = new System.Text.StringBuilder(512);
+      GetWindowText(h, text, text.Capacity);
+      if (text.ToString() != title) return true;
+      found = h;
+      return false;
+    }, IntPtr.Zero);
+    return found;
+  }
 }
 '@
 
@@ -34,9 +58,17 @@ public static class ChordCapture {
 [void][ChordCapture]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
 
 # (FindWindow can't be used here: PowerShell passes `$null` strings as empty strings.)
-$proc = Get-Process | Where-Object { $_.MainWindowTitle -eq $Title } | Select-Object -First 1
-if (-not $proc) { Write-Error "No window titled '$Title'"; exit 1 }
-$hwnd = $proc.MainWindowHandle
+if ($ProcessId) {
+  $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+  $hwnd = if ($proc) { [ChordCapture]::Find([uint32]$ProcessId, $Title) } else { [IntPtr]::Zero }
+  if ($hwnd -eq [IntPtr]::Zero) { Write-Error "No window titled '$Title' in process $ProcessId"; exit 1 }
+} else {
+  $procs = @(Get-Process | Where-Object { $_.MainWindowTitle -eq $Title })
+  if ($procs.Count -eq 0) { Write-Error "No window titled '$Title'"; exit 1 }
+  if ($procs.Count -gt 1) { Write-Error "$($procs.Count) windows are titled '$Title'; pass -ProcessId to say which"; exit 1 }
+  $proc = $procs[0]
+  $hwnd = $proc.MainWindowHandle
+}
 
 $frame = New-Object ChordCapture+RECT
 # DWMWA_EXTENDED_FRAME_BOUNDS = 9: the visible frame, without the invisible resize border.

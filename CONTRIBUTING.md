@@ -27,6 +27,10 @@ pnpm lint
 - **Tests come with the change.** Logic gets unit tests; user flows get E2E tests.
 - **Commits** use [Conventional Commits](https://www.conventionalcommits.org/) prefixes (`feat:`, `fix:`, `docs:`, `chore:`, …).
 
+## Screenshots
+
+The README's screenshots come from `scripts/dev/readme-shots.mjs`, on Windows. From `apps/desktop`, run `pnpm build`, then `node ../../scripts/dev/readme-shots.mjs`. It uses a throwaway profile and public pages, captures only the Chord window it launched (never the screen), and writes `docs/images/`. Retake them when the UI they show changes.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE). Changes to `packages/core/src/rank.ts`, which is adapted from Crest, stay under the [Mozilla Public License 2.0](LICENSES/MPL-2.0.txt), as its header says.
