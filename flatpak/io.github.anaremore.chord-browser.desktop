@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Chord
+GenericName=Web Browser
+Comment=A calm, colorful browser built around a vertical sidebar
+Keywords=web;browser;internet;tabs;sidebar;
+Exec=chord %U
+Icon=io.github.anaremore.chord-browser
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github.anaremore.chord-browser
+Categories=Network;WebBrowser;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

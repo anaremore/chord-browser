@@ -1,0 +1,128 @@
+# Chord as a Flatpak, built from this checkout with no network during the
+# build (ARCHITECTURE.md §15.1, docs/releasing/flathub.md).
+#
+# NOT FOR SUBMISSION TO FLATHUB. Flathub's Generative AI policy says Flathub
+# manifests must not contain AI-generated or AI-assisted content, and this file
+# was written with an AI agent. It proves and tests the from-source build:
+# flatpak/build.sh builds it in a throwaway container. The manifest
+# for Flathub has to be written by a person (docs/releasing/flathub.md).
+#
+# Before building, generate the npm sources next to this file:
+#   flatpak-node-generator pnpm pnpm-lock.yaml --no-playwright-browsers \
+#     -o flatpak/generated-sources.json
+# build.sh does that too. The generated file isn't committed: it changes with
+# every lockfile change.
+
+app-id: io.github.anaremore.chord-browser
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+# Electron's runtime libraries, plus zypak, which runs Chromium's sandboxed
+# processes in Flatpak's own sub-sandbox (Electron's sandbox can't nest).
+base: org.electronjs.Electron2.BaseApp
+base-version: '26.08'
+sdk-extensions:
+  # Node 24, as everywhere else (CONTRIBUTING.md): node:sqlite needs it.
+  - org.freedesktop.Sdk.Extension.node24
+command: chord
+separate-locales: false
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  # Electron 45 picks Wayland when it's there, and X11 otherwise.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  # GPU, cameras and security keys (WebAuthn reads /dev/hidraw*), as Flathub's
+  # Chromium does. File pickers and screen sharing go through portals.
+  - --device=all
+  # Downloads land in ~/Downloads (src/main/downloads.ts).
+  - --filesystem=xdg-download
+  # Web notifications, "Show in folder", keeping the screen awake for video.
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.FileManager1
+  - --talk-name=org.freedesktop.ScreenSaver
+  # Cookie encryption keeps its key in the desktop's keyring (ARCHITECTURE.md §14.1).
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.kwalletd5
+  - --talk-name=org.kde.kwalletd6
+  # Media keys and the desktop's now-playing controls (MPRIS).
+  - --own-name=org.mpris.MediaPlayer2.chromium.*
+
+modules:
+  - name: chord
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/node24/bin:/run/build/chord/pnpm-bin
+      env:
+        # flatpak-node-generator's offline caches: the pnpm store and Electron's zips.
+        XDG_CACHE_HOME: /run/build/chord/flatpak-node/cache
+        npm_config_offline: 'true'
+        # package.json pins pnpm 10.33.0, which is the one below; never fetch another.
+        npm_config_manage_package_manager_versions: 'false'
+        CI: 'true'
+    build-commands:
+      - pnpm install --offline --frozen-lockfile
+      - pnpm --filter @chord/desktop build
+      # The unpacked app only: Flatpak is the package. The .desktop name must be
+      # the app ID, or Wayland desktops can't match windows to it, so it's set
+      # here rather than in package.json (com.chordbrowser.Chord for deb and rpm).
+      - . flatpak-node/electron-builder-arch-args.sh &&
+        cd apps/desktop &&
+        pnpm exec electron-builder --config electron-builder.config.ts --publish never --linux dir $ELECTRON_BUILDER_ARCH_ARGS
+        -c.electronDist=../../node_modules/electron/dist
+        -c.extraMetadata.desktopName=${FLATPAK_ID}.desktop
+      - cp -a apps/desktop/release/linux*-unpacked ${FLATPAK_DEST}/chord
+      # zypak replaces Chromium's setuid sandbox helper.
+      - rm -f ${FLATPAK_DEST}/chord/chrome-sandbox
+      - install -Dm755 chord.sh ${FLATPAK_DEST}/bin/chord
+      - install -Dm644 flatpak/${FLATPAK_ID}.desktop -t ${FLATPAK_DEST}/share/applications
+      - install -Dm644 flatpak/${FLATPAK_ID}.metainfo.xml -t ${FLATPAK_DEST}/share/metainfo
+      - for size in 16 24 32 48 64 128 256 512; do
+          install -Dm644 apps/desktop/build/icons/${size}x${size}.png ${FLATPAK_DEST}/share/icons/hicolor/${size}x${size}/apps/${FLATPAK_ID}.png;
+        done
+      # Release builds are a GPL-3.0-only combined work (ARCHITECTURE.md §16, D1).
+      - install -Dm644 LICENSE ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}/LICENSE
+      - install -Dm644 LICENSES/GPL-3.0.txt LICENSES/MPL-2.0.txt -t ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}
+    sources:
+      # This checkout. A Flathub manifest uses the release tag instead:
+      #   type: git, url: https://github.com/anaremore/chord-browser.git, tag: vX.Y.Z, commit: <sha>
+      - type: dir
+        path: ..
+        skip:
+          - .git
+          - .claude
+          - .qa
+          - node_modules
+          - apps/desktop/node_modules
+          - apps/desktop/out
+          - apps/desktop/release
+          - apps/desktop/test-results
+          - packages/chrome-extensions/node_modules
+          - packages/core/node_modules
+          - packages/data/node_modules
+          - packages/ipc/node_modules
+          - packages/tokens/node_modules
+          - flatpak/.flatpak-builder
+          - flatpak/build-dir
+          - flatpak/repo
+      - generated-sources.json
+      # pnpm itself, the version in package.json's packageManager.
+      - type: archive
+        url: https://registry.npmjs.org/pnpm/-/pnpm-10.33.0.tgz
+        sha256: bfcc1bcbad279b13a516c446a75b3c58b6904b45d57a1951411015e50b751a80
+        dest: pnpm
+      - type: script
+        dest: pnpm-bin
+        dest-filename: pnpm
+        commands:
+          - exec node /run/build/chord/pnpm/bin/pnpm.cjs "$@"
+      - type: script
+        dest-filename: chord.sh
+        commands:
+          # Every Chord instance shares one temp dir, so a second launch finds the
+          # running one's socket and hands it its links instead of opening the
+          # profile twice. Flatpak gives each instance its own /tmp.
+          - export TMPDIR="${XDG_RUNTIME_DIR}/app/${FLATPAK_ID}"
+          - exec zypak-wrapper /app/chord/chord "$@"

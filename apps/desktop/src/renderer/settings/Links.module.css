@@ -1,8 +1,9 @@
 /* Settings → General → Links and link routes. Tokens only. */
 
+/* Inside the routes card: inset like its rows (Settings.module.css .row). */
 .empty {
   margin: 0;
-  padding: var(--space-3) var(--space-1);
+  padding: var(--space-3) var(--space-4);
   color: var(--color-fg-muted);
   font: var(--text-small);
 }
@@ -35,7 +36,7 @@
   display: flex;
   gap: var(--space-2);
   align-items: center;
-  padding-block: var(--space-2);
+  padding: var(--space-2) var(--space-4);
 }
 
 .input {
