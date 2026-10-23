@@ -151,7 +151,9 @@ export class Extensions {
     return {
       createTab: async ({ url, active, windowId }) => {
         const base = windowId !== undefined ? BaseWindow.fromId(windowId) : null;
-        const w = (base && this.windowForBase(base)) || this.deps.lastWindow();
+        // Never into a private window, even one named by its id: extensions don't run there.
+        const named = base ? this.windowForBase(base) : undefined;
+        const w = (named && !named.isPrivate ? named : undefined) || this.deps.lastWindow();
         if (!w) throw new Error('No window to open a tab in');
         const before = new Set(Object.keys(this.deps.state().nodes));
         this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: url ?? NEW_TAB_URL, background: !active });

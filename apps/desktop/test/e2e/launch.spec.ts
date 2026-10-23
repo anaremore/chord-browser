@@ -31,6 +31,9 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     // Signing in sets a cookie; /whoami reports whether this chord's sign-ins have it.
     '/login': `<title>Login</title><script>document.cookie = 'account=alex; path=/; max-age=3600'; document.title = 'Signed in';</script>`,
     '/whoami': `<title>Whoami</title><script>document.title = document.cookie.includes('account=alex') ? 'Alex' : 'Signed out';</script>`,
+    // A private window's sign-in, and a check from outside it that it didn't leak.
+    '/secret-login': `<title>Secret</title><script>document.cookie = 'secret=yes; path=/; max-age=3600'; document.title = 'Secret set';</script>`,
+    '/secret-check': `<title>Check</title><script>document.title = document.cookie.includes('secret=yes') ? 'Has secret' : 'No secret';</script>`,
     // A "Sign in with…" flow: a sized popup reports back through window.opener, then closes.
     '/signin':
       `<title>Signed out</title><button id="signin" onclick="window.open('/signin-popup', 'auth', 'width=420,height=560')">Sign in</button>` +
@@ -108,6 +111,22 @@ const runAction = (shell: Page, action: string) =>
 /** Whether the active tab's view is showing (it hides while the frame explains an error). */
 const tabVisible = (app: ElectronApplication) =>
   app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows()[0]!.contentView.children[1]!.getVisible());
+
+/** A page matching `match` that isn't one of `known` (a new window's shell or command bar). */
+async function newPage(app: ElectronApplication, match: (url: string) => boolean, known: readonly Page[]): Promise<Page> {
+  const find = () => app.windows().find((p) => match(p.url()) && !known.includes(p));
+  await expect.poll(() => Boolean(find()), { timeout: 20_000 }).toBe(true);
+  return find()!;
+}
+
+/** The address each window's content frame shows (its tab view, index 1), or null for none. */
+const framesShowing = (app: ElectronApplication) =>
+  app.evaluate(({ BaseWindow, WebContentsView }) =>
+    BaseWindow.getAllWindows().map((w) => {
+      const view = w.contentView.children[1];
+      return view instanceof WebContentsView && !view.webContents.getURL().includes('/popover') ? view.webContents.getURL() : null;
+    }),
+  );
 
 /** Opens the command bar the way the shell's own buttons do. (Synthetic keys can't reach Chord's shortcut router.) */
 async function openCommandBar(shell: Page, overlay: Page, mode: 'new' | 'edit') {
@@ -596,6 +615,114 @@ test('a muted background video stays in its page when you switch away', async ()
   }
 });
 
+test('several windows: ⌘N opens one, a tab moves between them, and both come back', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
+  try {
+    const shell1 = await pageWhere(app, isShell);
+    const overlay1 = await pageWhere(app, isOverlay);
+    await expect(shell1.getByRole('list', { name: 'Today' })).toContainText('First page');
+
+    // ⌘N: a second window on the same chord, with the command bar open and nothing shown yet.
+    await runAction(shell1, 'window.new');
+    const shell2 = await newPage(app, isShell, [shell1]);
+    const overlay2 = await newPage(app, isOverlay, [overlay1]);
+    await expect(overlay2.getByRole('dialog')).toBeVisible();
+    await expect(shell2.getByText('Fresh chord, fresh start.')).toBeVisible();
+    await overlay2.keyboard.type(`${site.origin}/second`);
+    await overlay2.keyboard.press('Enter');
+    const row = (shell: Page, name: string) => shell.getByRole('list', { name: 'Today' }).getByRole('button', { name, exact: true });
+    await expect(row(shell2, 'Second page')).toHaveAttribute('aria-current', 'page');
+    // Both windows list the chord's tabs; each shows its own.
+    await expect(row(shell1, 'Second page')).toBeVisible();
+    await expect(row(shell1, 'First page')).toHaveAttribute('aria-current', 'page');
+
+    // Taking the first window's tab moves its page over; the first window falls back to the other tab.
+    await row(shell2, 'First page').click();
+    await expect(row(shell2, 'First page')).toHaveAttribute('aria-current', 'page');
+    await expect(row(shell1, 'Second page')).toHaveAttribute('aria-current', 'page');
+    await expect.poll(async () => (await framesShowing(app)).sort()).toEqual([`${site.origin}/`, `${site.origin}/second`]);
+  } finally {
+    await app.close();
+  }
+
+  // Both windows were open at quit: both come back.
+  app = await launch({}, profile);
+  try {
+    await pageWhere(app, isShell);
+    await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
+    await expect.poll(async () => (await framesShowing(app)).sort()).toEqual([`${site.origin}/`, `${site.origin}/second`]);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a private window keeps to itself: no shared sign-ins, no history, and nothing survives it', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/login` }, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await pageWhere(app, (url) => url === `${site.origin}/login`);
+
+    await runAction(shell, 'window.newPrivate');
+    const privateShell = await newPage(app, isShell, [shell]);
+    const privateOverlay = await newPage(app, isOverlay, [overlay]);
+    await expect(privateShell.getByText('This window is private.')).toBeVisible();
+    // Only its own chord, and no way to make others or open the archive.
+    const switcher = (s: Page) => s.getByRole('tablist', { name: 'Chords' });
+    await expect(switcher(privateShell).getByRole('tab')).toHaveCount(1);
+    await expect(switcher(privateShell).getByRole('tab', { name: 'Private' })).toBeVisible();
+    await expect(privateShell.getByRole('button', { name: 'New chord' })).toHaveCount(0);
+    await expect(privateShell.getByRole('button', { name: 'Archive' })).toHaveCount(0);
+    await expect(switcher(shell).getByRole('tab', { name: 'Private' })).toHaveCount(0);
+
+    // The normal window's sign-in isn't there, and the private one's doesn't leak out.
+    const visitIn = async (o: Page, path: string) => {
+      await expect(o.getByRole('dialog')).toBeVisible();
+      await o.keyboard.type(`${site.origin}${path}`);
+      await o.keyboard.press('Enter');
+    };
+    await visitIn(privateOverlay, '/whoami');
+    await expect.poll(() => app.windows().find((p) => p.url() === `${site.origin}/whoami`)?.title()).toBe('Signed out');
+    await openCommandBar(privateShell, privateOverlay, 'new');
+    await visitIn(privateOverlay, '/secret-login');
+    await expect.poll(() => app.windows().find((p) => p.url() === `${site.origin}/secret-login`)?.title()).toBe('Secret set');
+    await openCommandBar(privateShell, privateOverlay, 'new');
+    await visitIn(privateOverlay, '/third');
+    await expect(privateShell.getByRole('list', { name: 'Today' })).toContainText('Third page');
+
+    // The normal window's command bar finds nothing of it: no open tab, no history.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('Third');
+    await expect(overlay.getByRole('option').filter({ hasText: 'Third page' })).toHaveCount(0);
+    await overlay.keyboard.press('Escape');
+    await openCommandBar(shell, overlay, 'new');
+    await visitIn(overlay, '/secret-check');
+    await expect.poll(() => app.windows().find((p) => p.url() === `${site.origin}/secret-check`)?.title()).toBe('No secret');
+
+    // Closing it forgets it. (The page running the action closes with it.)
+    await runAction(privateShell, 'window.close').catch(() => {});
+    await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(1);
+  } finally {
+    await app.close();
+  }
+
+  app = await launch({}, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('No secret');
+    await expect(shell.getByRole('list', { name: 'Today' })).not.toContainText('Third page');
+    expect(app.windows().filter((p) => isShell(p.url()))).toHaveLength(1);
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('Third');
+    await expect(overlay.getByRole('option').filter({ hasText: 'Third page' })).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
 test('a relaunch restores tabs, the sidebar and settings', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
@@ -868,6 +995,42 @@ test('a permission prompt asks once, and the answer is remembered for the site',
     // Remembered: no second prompt, and the page can see it's allowed.
     expect(await ask()).toBe('granted');
     expect(await tab.evaluate(async () => (await navigator.permissions.query({ name: 'notifications' })).state)).toBe('granted');
+  } finally {
+    await app.close();
+  }
+});
+
+test('a private window asks for permissions itself, remembers the answer only while open, and never saves it', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const popover = await pageWhere(app, isPopover);
+    const tab = await pageWhere(app, (url) => url === `${site.origin}/`);
+    await runAction(shell, 'window.newPrivate');
+    const privatePopover = await newPage(app, isPopover, [popover]);
+    const privateOverlay = await newPage(app, isOverlay, [overlay]);
+    await expect(privateOverlay.getByRole('dialog')).toBeVisible();
+    await privateOverlay.keyboard.type(`${site.origin}/second`);
+    await privateOverlay.keyboard.press('Enter');
+    const privateTab = await pageWhere(app, (url) => url === `${site.origin}/second`);
+
+    // Blocked in the private window: asked there, and remembered there while it's open.
+    const first = privateTab.evaluate(() => Notification.requestPermission());
+    const prompt = privatePopover.getByRole('alertdialog');
+    await expect(prompt).toContainText('Show notifications');
+    await prompt.getByRole('button', { name: 'Block' }).click();
+    expect(await first).toBe('denied');
+    expect(await privateTab.evaluate(() => Notification.requestPermission())).toBe('denied');
+
+    // The normal window never heard that answer: it asks for itself.
+    const normal = tab.evaluate(() => Notification.requestPermission());
+    const normalPrompt = popover.getByRole('alertdialog');
+    await expect(normalPrompt).toContainText('Show notifications');
+    await normalPrompt.getByRole('button', { name: 'Allow' }).click();
+    expect(await normal).toBe('granted');
+    // …and the private window still has its own answer.
+    expect(await privateTab.evaluate(() => Notification.requestPermission())).toBe('denied');
   } finally {
     await app.close();
   }
