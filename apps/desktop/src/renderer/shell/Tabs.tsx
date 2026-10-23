@@ -11,41 +11,51 @@
  * a DOM node into another <ul> behind React's back leaves React (and the exit
  * animation) with a node that's no longer where it put it. Instead the row it
  * would land next to shows where, and on drop React moves it.
+ *
+ * Split view (DESIGN.md §8.4): a split is one row; opened, its tabs show
+ * under it. A tab dropped on the page goes beside it in a split, and a split's
+ * tab dragged out to the sidebar leaves the split.
  */
 import {
   children,
   isInternalUrl,
   sortedFavorites,
+  splitMembers,
   tabForFavorite,
   uuidv7,
   type ChordId,
   type Favorite,
   type FolderNode,
+  type SidebarNode,
+  type SplitNode,
   type State,
   type TabNode,
 } from '@chord/core';
 import { CollisionPriority } from '@dnd-kit/abstract';
 import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
-import { DragDropProvider, useDroppable } from '@dnd-kit/react';
+import { DragDropProvider, useDraggable, useDragDropMonitor, useDroppable } from '@dnd-kit/react';
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
-import type { Appearance } from '@chord/tokens';
+import { size, type Appearance } from '@chord/tokens';
 import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Undo2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Favicon } from '../shared/Favicon';
 import type { SpringFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
 import { api } from './api';
 import styles from './App.module.css';
 import { useKeys } from './keys';
+import { SPLIT_DROP, splitDropFor, type SplitDrop } from './split-drop';
 import { CHORD_DROP, flattenPinned, levelsFor, MAX_VISUAL_DEPTH, projectDrop, type Drop, type FlatRow } from './tree';
 
 const PINNED_ZONE = 'pinned-zone';
 const FAVORITES_ZONE = 'favorites-zone';
 const FAVORITE = 'fav:';
 /** What each kind of row takes as a drop (constant, so dnd-kit sees the same options every render). */
-const ROW_ACCEPTS = ['tab', 'folder'];
+const ROW_ACCEPTS = ['tab', 'folder', 'split'];
+const FRAME_ACCEPTS = ['tab'];
 const FAVORITE_ACCEPTS = ['favorite', 'tab'];
 /** Hovering a closed folder this long while dragging opens it (DESIGN.md §6.5). */
 const SPRING_LOAD_MS = 600;
@@ -55,8 +65,11 @@ type Section = 'pinned' | 'today';
 /* ---------- Drag state, shared by every list in the sidebar ---------- */
 
 interface DragState {
-  /** What's being dragged: a tab, a folder, or a favorite. */
-  active: { id: string; type: 'tab' | 'folder' | 'favorite' } | null;
+  /**
+   * What's being dragged: a tab, a folder, a split, or a favorite. `member`:
+   * a split's tab dragged from under its split's row (not one of the list's rows).
+   */
+  active: { id: string; type: 'tab' | 'folder' | 'split' | 'favorite'; member: boolean } | null;
   /** Where a row dragged within Pinned would land, so it can show at that depth. */
   projected: Drop | null;
 }
@@ -66,14 +79,30 @@ const useDrag = () => useContext(DragContext);
 
 /**
  * One drag-and-drop space for the whole sidebar, so a tab can go from its
- * list to Favorites or to another chord in the switcher.
+ * list to Favorites, to another chord in the switcher, or onto the page
+ * beside the tab shown there (`frame`: where the page's drop zones go).
+ * While a tab is dragged the shell is lifted over the page (`onLift`).
  */
-export function SidebarDnd({ state, chordId, children: content }: { state: State; chordId: ChordId; children: ReactNode }) {
+export function SidebarDnd({
+  state,
+  chordId,
+  windowId,
+  frame,
+  onLift,
+  children: content,
+}: {
+  state: State;
+  chordId: ChordId;
+  windowId: string;
+  frame: HTMLElement | null;
+  onLift(lifted: boolean): void;
+  children: ReactNode;
+}) {
   const [drag, setDrag] = useState<DragState>({ active: null, projected: null });
   const springTimer = useRef<{ id: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   // Handlers read the latest state, not the one from when the drag began.
-  const latest = useRef({ state, chordId, drag });
-  latest.current = { state, chordId, drag };
+  const latest = useRef({ state, chordId, drag, windowId });
+  latest.current = { state, chordId, drag, windowId };
 
   const clearSpring = () => {
     if (springTimer.current) clearTimeout(springTimer.current.timer);
@@ -120,8 +149,10 @@ export function SidebarDnd({ state, chordId, children: content }: { state: State
         onDragStart={(event) => {
           const source = event.operation.source;
           if (!source) return;
-          const type = source.type === 'folder' ? 'folder' : source.type === 'favorite' ? 'favorite' : 'tab';
-          setDrag({ active: { id: String(source.id), type }, projected: null });
+          const type = source.type === 'folder' || source.type === 'favorite' || source.type === 'split' ? source.type : 'tab';
+          setDrag({ active: { id: String(source.id), type, member: type === 'tab' && !isSortable(source) }, projected: null });
+          // A tab can be dropped on the page, so the shell goes over it to show where.
+          if (type === 'tab') onLift(true);
         }}
         onDragMove={(event) => {
           const { source, position } = event.operation;
@@ -146,12 +177,13 @@ export function SidebarDnd({ state, chordId, children: content }: { state: State
         }}
         onDragEnd={(event) => {
           const projected = latest.current.drag.projected;
+          if (latest.current.drag.active?.type === 'tab') onLift(false);
           setDrag({ active: null, projected: null });
           clearSpring();
           if (event.canceled) return;
           const { source, target, position } = event.operation;
           if (!source) return;
-          const { state: s, chordId: c } = latest.current;
+          const { state: s, chordId: c, windowId: w } = latest.current;
           const targetId = target ? String(target.id) : '';
           const below = () => {
             const box = target?.shape?.boundingRectangle;
@@ -169,6 +201,15 @@ export function SidebarDnd({ state, chordId, children: content }: { state: State
           const node = s.nodes[nodeId];
           if (!node) return;
 
+          // Onto the page: beside the tab shown there, in a split (or to another place in the split shown).
+          if (targetId === SPLIT_DROP) {
+            const box = target?.shape?.boundingRectangle;
+            const drop = box
+              ? splitDropFor(s, w, nodeId, { x: position.current.x - box.left, y: position.current.y - box.top }, { width: box.width, height: box.height })
+              : null;
+            if (drop) void api.state.dispatch(drop.command);
+            return;
+          }
           // Onto a chord in the switcher: the tab moves there.
           if (targetId.startsWith(CHORD_DROP)) {
             if (node.kind === 'tab') void api.sidebar.moveToChord(nodeId, targetId.slice(CHORD_DROP.length));
@@ -188,18 +229,26 @@ export function SidebarDnd({ state, chordId, children: content }: { state: State
             void api.state.dispatch({ t: 'node.move', nodeId, section: 'pinned', index: 0, parentId: null });
             return;
           }
-          if (!isSortable(source)) return;
-          const from = source.group as Section;
+          // A split's tab dragged from under its row isn't one of the list's rows: it lands beside one, leaving
+          // its split (DESIGN.md §8.4). Let go away from any row, a row or more from where it started, it leaves
+          // its split all the same, landing just after it.
+          const from = isSortable(source) ? (source.group as Section) : null;
+          if (!from && (node.kind !== 'tab' || source.type !== 'tab')) return;
           const to = isSortable(target) && (target.group === 'pinned' || target.group === 'today') ? (target.group as Section) : null;
+          if (!from && !to) {
+            const moved = Math.hypot(position.current.x - position.initial.x, position.current.y - position.initial.y);
+            if (moved >= size.row) void api.state.dispatch({ t: 'split.remove', nodeId });
+            return;
+          }
 
           // Within Pinned: where the projection says, at the depth it showed.
-          if (from === 'pinned' && (to === 'pinned' || to === null)) {
+          if (isSortable(source) && from === 'pinned' && (to === 'pinned' || to === null)) {
             const drop = projected ?? projectWithin(nodeId, source.index, position.current.x - position.initial.x);
             if (drop) void api.state.dispatch({ t: 'node.move', nodeId, section: 'pinned', index: drop.index, parentId: drop.parentId });
             return;
           }
           // Within Today.
-          if (from === 'today' && (to === 'today' || to === null)) {
+          if (isSortable(source) && from === 'today' && (to === 'today' || to === null)) {
             void api.state.dispatch({ t: 'node.move', nodeId, section: 'today', index: source.index });
             return;
           }
@@ -220,8 +269,45 @@ export function SidebarDnd({ state, chordId, children: content }: { state: State
         }}
       >
         {content}
+        {frame && drag.active?.type === 'tab' && <SplitDropZone state={state} windowId={windowId} host={frame} />}
       </DragDropProvider>
     </DragContext.Provider>
+  );
+}
+
+/**
+ * Split view's drop zones over the page (DESIGN.md §8.4), drawn in `host`
+ * (laid over the content frame) while a tab is dragged: where the tab would
+ * go fills with the accent at 12%, ringed at 50%.
+ */
+function SplitDropZone({ state, windowId, host }: { state: State; windowId: string; host: HTMLElement }) {
+  const { ref, isDropTarget } = useDroppable({ id: SPLIT_DROP, type: 'frame', accept: FRAME_ACCEPTS });
+  const [drop, setDrop] = useState<SplitDrop | null>(null);
+  const latest = useRef(state);
+  latest.current = state;
+  useDragDropMonitor({
+    onDragMove(event) {
+      const { source, position } = event.operation;
+      if (!source) return;
+      const box = host.getBoundingClientRect();
+      const point = { x: position.current.x - box.left, y: position.current.y - box.top };
+      const inside = point.x >= 0 && point.y >= 0 && point.x <= box.width && point.y <= box.height;
+      const next = inside ? splitDropFor(latest.current, windowId, String(source.id), point, { width: box.width, height: box.height }) : null;
+      setDrop((d) => (JSON.stringify(d?.rect) === JSON.stringify(next?.rect) ? d : next));
+    },
+  });
+  const shown = isDropTarget ? drop : null;
+  return createPortal(
+    <div ref={ref} className={styles.dropTarget} data-testid="split-drop" data-zone={shown ? JSON.stringify(shown.rect) : undefined}>
+      {shown && (
+        <span
+          className={styles.dropZone}
+          style={{ left: shown.rect.x, top: shown.rect.y, width: shown.rect.width, height: shown.rect.height }}
+          aria-hidden
+        />
+      )}
+    </div>,
+    host,
   );
 }
 
@@ -257,6 +343,9 @@ interface RowContext {
   /** The folder being renamed inline. */
   renaming: string | null;
   setRenaming(id: string | null): void;
+  /** Splits opened to show their tabs. */
+  openSplits: ReadonlySet<string>;
+  toggleSplit(id: string, open: boolean): void;
 }
 
 /** A pinned tab is "away" once it has left its pinned site; ↩ takes it back. */
@@ -462,6 +551,137 @@ function FolderRow({ folder, index, depth, ctx, drag }: { folder: FolderNode; in
 }
 
 /**
+ * A split (DESIGN.md §7.9): one row, its tabs' icons in a line and their
+ * titles joined ("Docs + Figma"). Clicking shows the split, focused where it
+ * was last; the chevron opens it to list its tabs.
+ */
+function SplitRow({ split, index, section, depth, ctx, drag }: { split: SplitNode; index: number; section: Section; depth: number; ctx: RowContext; drag: RowDrag }) {
+  const { ref, handleRef, isDragging, isDropTarget } = useSortable({ id: split.id, index, group: section, type: 'split', accept: ROW_ACCEPTS });
+  const { dragging, projected } = drag;
+  const { state, windowId, activeId, appearance, spring, openSplits, toggleSplit } = ctx;
+  const panes = splitMembers(state, split.id);
+  const isActive = panes.some((p) => p.id === activeId);
+  const open = openSplits.has(split.id);
+  const title = panes.map((p) => pageTitle(p) || displayHost(p.url) || 'New tab').join(' + ');
+  const shownDepth = isDragging && projected ? projected.depth : depth;
+  // The pane used last is the one focused again.
+  const show = () => {
+    const recent = [...panes].sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0];
+    if (recent && !isActive) void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: recent.id });
+  };
+  return (
+    <motion.li
+      ref={ref}
+      layout={dragging ? false : 'position'}
+      className={styles.item}
+      style={indent(shownDepth)}
+      data-dragging={(isDragging || drag.moving === split.id) || undefined}
+      data-drop-target={(dragging && isDropTarget && !isDragging) || undefined}
+      initial={{ opacity: 0, scale: 0.96 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, x: -8 }}
+      transition={spring('smooth', 'tabMoves')}
+      onContextMenu={(e: MouseEvent) => {
+        e.preventDefault();
+        void api.menu.tab(split.id, { x: e.clientX, y: e.clientY });
+      }}
+    >
+      {isActive && <motion.span layoutId={`active-pill-${split.chordId}`} className={styles.activePill} transition={spring('snappy', 'tabMoves')} />}
+      <button
+        ref={handleRef}
+        type="button"
+        className={`${styles.row} ${isActive ? styles.active : ''}`}
+        data-row="split"
+        data-id={split.id}
+        data-parent={split.parentId ?? undefined}
+        aria-expanded={open}
+        aria-current={isActive ? 'page' : undefined}
+        aria-label={`Split: ${title}`}
+        title={title}
+        onClick={show}
+      >
+        <span className={styles.splitIcons} aria-hidden>
+          {panes.slice(0, 4).map((p) =>
+            isInternalUrl(p.url) ? (
+              <Archive key={p.id} className={styles.rowGlyph} size={16} strokeWidth={1.75} />
+            ) : (
+              <Favicon key={p.id} url={p.url} title={p.title} favicon={p.favicon} loading={false} appearance={appearance} />
+            ),
+          )}
+        </span>
+        <span className={styles.ellipsis}>{title}</span>
+      </button>
+      <button
+        type="button"
+        className={styles.close}
+        data-split-toggle
+        aria-label={open ? 'Hide the tabs in this split' : 'Show the tabs in this split'}
+        title={open ? 'Hide tabs' : 'Show tabs'}
+        onClick={() => toggleSplit(split.id, !open)}
+      >
+        <ChevronRight className={styles.chevron} data-open={open || undefined} size={14} strokeWidth={2} />
+      </button>
+    </motion.li>
+  );
+}
+
+/**
+ * One of a split's tabs, listed under its opened row. Click focuses its pane;
+ * drag it to a place in the sidebar to take it out of the split, or onto the
+ * page to move its pane.
+ */
+function SplitMemberRow({ tab, depth, ctx }: { tab: TabNode; depth: number; ctx: RowContext }) {
+  const { ref, handleRef, isDragging } = useDraggable({ id: tab.id, type: 'tab' });
+  const { state, windowId, activeId, info, appearance, spring } = ctx;
+  const { withKeys } = useKeys(info);
+  const focused = tab.id === activeId;
+  const live = state.live[tab.id];
+  const close = () => void api.state.dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
+  return (
+    <motion.li
+      ref={ref}
+      className={styles.item}
+      style={indent(depth)}
+      data-dragging={isDragging || undefined}
+      initial={{ opacity: 0, scale: 0.96 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, x: -8 }}
+      transition={spring('smooth', 'tabMoves')}
+      onAuxClick={(e: MouseEvent) => {
+        if (e.button === 1) close();
+      }}
+      onContextMenu={(e: MouseEvent) => {
+        e.preventDefault();
+        void api.menu.tab(tab.id, { x: e.clientX, y: e.clientY });
+      }}
+    >
+      <button
+        ref={handleRef}
+        type="button"
+        className={styles.row}
+        data-row="tab"
+        data-id={tab.id}
+        data-parent={tab.parentId ?? undefined}
+        data-focused-pane={focused || undefined}
+        aria-current={focused ? 'true' : undefined}
+        title={pageTitle(tab) || tab.url}
+        onClick={() => void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
+      >
+        {isInternalUrl(tab.url) ? (
+          <Archive className={styles.rowGlyph} size={16} strokeWidth={1.75} aria-hidden />
+        ) : (
+          <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
+        )}
+        <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
+      </button>
+      <button type="button" className={styles.close} aria-label={`Close ${tab.title || 'tab'}`} title={withKeys('Close tab', 'tab.close')} onClick={close}>
+        <X size={14} strokeWidth={2} />
+      </button>
+    </motion.li>
+  );
+}
+
+/**
  * Where to drop a tab to pin it while nothing is pinned yet: laid over the
  * Today divider, so the rows don't jump down when a drag begins (with the
  * keyboard they'd land somewhere else).
@@ -561,6 +781,8 @@ interface TreeKeys {
   moving: Moving | null;
   setMoving(moving: Moving | null): void;
   setRenaming(id: string): void;
+  openSplits: ReadonlySet<string>;
+  toggleSplit(id: string, open: boolean): void;
 }
 
 /**
@@ -623,6 +845,12 @@ function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys) {
     case 'End':
       return focus(rows.at(-1));
     case 'ArrowRight':
+      if (node?.kind === 'split') {
+        event.preventDefault();
+        if (!ctx.openSplits.has(id)) ctx.toggleSplit(id, true);
+        else if (rows[at + 1]?.dataset['parent'] === id) rows[at + 1]!.focus();
+        return;
+      }
       if (node?.kind !== 'folder') return;
       event.preventDefault();
       if (node.collapsed) void api.state.dispatch({ t: 'folder.toggle', nodeId: id, collapsed: false });
@@ -631,6 +859,7 @@ function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys) {
     case 'ArrowLeft':
       event.preventDefault();
       if (node?.kind === 'folder' && !node.collapsed) void api.state.dispatch({ t: 'folder.toggle', nodeId: id, collapsed: true });
+      else if (node?.kind === 'split' && ctx.openSplits.has(id)) ctx.toggleSplit(id, false);
       else if (row.dataset['parent']) rows.find((r) => r.dataset['id'] === row.dataset['parent'])?.focus();
       return;
     case ' ': {
@@ -663,29 +892,48 @@ function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys) {
 
 /* ---------- The lists ---------- */
 
-export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 'setRenaming'> & { chordId: ChordId }) {
+export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 'setRenaming' | 'openSplits' | 'toggleSplit'> & { chordId: ChordId }) {
   const { active, projected } = useDrag();
   const [moving, setMoving] = useState<Moving | null>(null);
   const drag: RowDrag = { dragging: active !== null, projected, moving: moving?.id ?? null };
   const [renaming, setRenaming] = useState<string | null>(null);
   useEffect(() => api.sidebar.onRename(({ nodeId }) => setRenaming(nodeId)), []);
-  const ctx: RowContext = { ...rest, renaming, setRenaming };
+  const [openSplits, setOpenSplits] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleSplit = (id: string, open: boolean) =>
+    setOpenSplits((s) => {
+      const next = new Set(s);
+      if (open) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  const ctx: RowContext = { ...rest, renaming, setRenaming, openSplits, toggleSplit };
   const { state, info } = rest;
   const { keycap } = useKeys(info);
   const pinned = flattenPinned(state, chordId, active?.type === 'folder' ? active.id : null);
-  const today = children(state, chordId, 'today', null).filter((n): n is TabNode => n.kind === 'tab');
+  const today = children(state, chordId, 'today', null).filter((n) => n.kind !== 'folder');
+  // A split's tabs list under its opened row, except while a row is dragged (dnd-kit then moves rows around them).
+  const showMembers = !active || active.member;
+
+  /** A split's row, and its tabs under it when it's opened. */
+  const splitRows = (split: SplitNode, index: number, section: Section, depth: number) => [
+    <SplitRow key={split.id} split={split} index={index} section={section} depth={depth} ctx={ctx} drag={drag} />,
+    ...(openSplits.has(split.id) && showMembers ? splitMembers(state, split.id).map((tab) => <SplitMemberRow key={tab.id} tab={tab} depth={depth + 1} ctx={ctx} />) : []),
+  ];
 
   const row = (r: FlatRow, index: number) => {
     const node = state.nodes[r.id];
     if (node?.kind === 'folder') return <FolderRow key={r.id} folder={node} index={index} depth={r.depth} ctx={ctx} drag={drag} />;
     if (node?.kind === 'tab') return <TabRow key={r.id} tab={node} index={index} section="pinned" depth={r.depth} ctx={ctx} drag={drag} />;
+    if (node?.kind === 'split') return splitRows(node, index, 'pinned', r.depth);
     return null;
   };
+  const todayRow = (node: SidebarNode, index: number) =>
+    node.kind === 'split' ? splitRows(node, index, 'today', 0) : node.kind === 'tab' ? <TabRow key={node.id} tab={node} index={index} section="today" depth={0} ctx={ctx} drag={drag} /> : null;
 
   return (
     <div
       className={styles.tree}
-      onKeyDown={(e) => treeKeys(e, { state, windowId: rest.windowId, info, dragging: active !== null, moving, setMoving, setRenaming })}
+      onKeyDown={(e) => treeKeys(e, { state, windowId: rest.windowId, info, dragging: active !== null, moving, setMoving, setRenaming, openSplits, toggleSplit })}
       // A click drops a row picked up with the keyboard.
       onPointerDown={() => moving && setMoving(null)}
     >
@@ -700,8 +948,8 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
       <div className={styles.divider}>
         {pinned.length === 0 && active && active.type !== 'favorite' && !state.windows[rest.windowId]?.private && <PinnedDropZone />}
         <span className={styles.hairline} role="separator" />
-        {today.length > 0 && (
-          <button type="button" className={styles.clear} title="Archive every Today tab" onClick={() => void api.action.run('today.clear')}>
+        {today.some((n) => n.kind === 'tab') && (
+          <button type="button" className={styles.clear} title="Archive every Today tab (splits stay)" onClick={() => void api.action.run('today.clear')}>
             Clear
           </button>
         )}
@@ -715,9 +963,7 @@ export function SidebarTabs({ chordId, ...rest }: Omit<RowContext, 'renaming' | 
 
       <ul className={styles.list} aria-label="Today">
         <AnimatePresence initial={false} mode="popLayout">
-          {today.map((tab, index) => (
-            <TabRow key={tab.id} tab={tab} index={index} section="today" depth={0} ctx={ctx} drag={drag} />
-          ))}
+          {today.map(todayRow)}
         </AnimatePresence>
       </ul>
     </div>

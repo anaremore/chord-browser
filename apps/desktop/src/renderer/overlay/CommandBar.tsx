@@ -63,10 +63,11 @@ interface Session {
 
 /**
  * Where a result opens (DESIGN.md §7.3): ↵ here (this tab when editing its
- * address), ⌘↵ / Ctrl+↵ a new background tab, ⇧↵ a new tab in front. ⇧↵ is
- * a new window in the spec; it opens a tab until Chord has more than one window.
+ * address), ⌘↵ / Ctrl+↵ a new background tab, ⇧↵ a new tab in front, ⌥↵
+ * beside the current tab in a split (as ↵ does in "Split with…"). ⇧↵ is a
+ * new window in the spec; it opens a tab until Chord has more than one window.
  */
-type Where = 'here' | 'background' | 'front';
+type Where = 'here' | 'background' | 'front' | 'split';
 
 const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'tab.reopen': RotateCcw,
@@ -103,6 +104,7 @@ const SUGGEST_DELAY_MS = 120;
 
 function hintFor(result: Result, mode: Session['mode']): { text: string; key: string } {
   if (result.kind === 'scope') return { text: result.scope.kind === 'keyword' ? `Search ${scopeLabel(result.scope).name}` : 'Show only these', key: result.scope.kind === 'keyword' ? 'Tab' : '↵' };
+  if (mode === 'split') return { text: 'Open in split', key: '↵' };
   if (result.kind === 'tab') return { text: 'Switch to tab', key: '↵' };
   if (result.kind === 'action') return { text: 'Run', key: '↵' };
   if (result.kind === 'chord') return { text: 'Switch to chord', key: '↵' };
@@ -256,6 +258,14 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
       const address = result.kind === 'open' || result.kind === 'history' || result.kind === 'archive' ? result.url : result.kind === 'tab' ? result.tab.url : undefined;
       void api.history.choose(typed, destination, address && /^https?:/i.test(address) ? address : undefined);
     }
+    // Beside the current tab, in a split (DESIGN.md §8.4): a page opens as a new pane; a tab of this chord moves in.
+    const splitTab = result.kind === 'tab' && result.tab.chordId === win?.activeChordId && result.tab.id !== activeId ? result.tab : null;
+    if (where === 'split' && activeId && (splitTab || result.kind === 'open' || result.kind === 'history')) {
+      if (splitTab) void dispatch({ t: 'split.add', windowId, withId: activeId, nodeId: splitTab.id });
+      else if (result.kind === 'open' || result.kind === 'history') void dispatch({ t: 'split.add', windowId, withId: activeId, url: result.url });
+      close();
+      return;
+    }
     if (result.kind === 'open' || result.kind === 'history') {
       if (session?.mode === 'edit' && activeId && where === 'here') void dispatch({ t: 'tab.navigate', nodeId: activeId, url: result.url });
       else void dispatch({ t: 'tab.open', windowId, url: result.url, background: where === 'background' });
@@ -272,6 +282,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   };
 
   const whereFor = (event: KeyboardEvent | MouseEvent): Where => {
+    if (session?.mode === 'split' || event.altKey) return 'split';
     if (info.platform === 'darwin' ? event.metaKey : event.ctrlKey) return 'background';
     return event.shiftKey ? 'front' : 'here';
   };
@@ -351,7 +362,7 @@ export function CommandBar({ initialInfo, mirror }: { initialInfo: SystemInfo; m
   const entrance = anchored ? { opacity: 0, y: -4 } : { opacity: 0, scale: 0.97, y: -8 };
   const InputIcon = query && results[0]?.kind === 'open' && !results[0].search ? Globe : Search;
   const label = scope ? scopeLabel(scope) : null;
-  const placeholder = label?.placeholder ?? 'Search or enter address';
+  const placeholder = label?.placeholder ?? (session.mode === 'split' ? 'Split with a tab or a page' : 'Search or enter address');
   const ScopeIcon = scope ? scopeIcon(scope) : null;
 
   return (

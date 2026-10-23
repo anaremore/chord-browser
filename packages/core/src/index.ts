@@ -11,4 +11,5 @@ export * from './restore';
 export * from './seed';
 export * from './select';
 export * from './shortcuts';
+export * from './split';
 export * from './text';

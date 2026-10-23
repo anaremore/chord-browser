@@ -863,6 +863,8 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 |---|---|---|---|
 | Show / hide Duet | to decide (§13) | to decide | 2 |
 | Focus the pane left / right in a split | ⌘⌥[ · ⌘⌥] | Ctrl+Alt+[ · Ctrl+Alt+] | 2 |
+| Split with… (the command bar picks what opens beside the current tab) | ⌘⌥S | Ctrl+Alt+S | 2 |
+| Separate split tabs | (menus and the command bar) | (menus and the command bar) | 2 |
 | Peek: keep as a tab · close | ⌘↵ · Esc | Ctrl+↵ · Esc | 3 |
 | Mini window: move into a chord | ⌘↵ | Ctrl+↵ | 3 |
 

@@ -177,4 +177,12 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (profile_id, host)
   ) STRICT;
   `,
+  // 10: split view (Phase 2; 9 is Duet's). A split is a node of kind 'split'; its panes are its
+  // child tabs, in rank order. layout is {direction:'row'|'column', sizes:number[]} (shares in pane order).
+  `
+  CREATE TABLE IF NOT EXISTS split (
+    node_id TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+    layout TEXT NOT NULL
+  ) STRICT;
+  `,
 ];

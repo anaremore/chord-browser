@@ -22,6 +22,7 @@ import {
   recencyPoints,
   searchEngine,
   searchUrl,
+  shownTabs,
   chordsFor,
   usagePoints,
   type ActionId,
@@ -193,14 +194,38 @@ export interface Narrowing {
   suggestions?: readonly string[];
 }
 
+/**
+ * The command bar's rows. In `split` mode ("Split with…", DESIGN.md §8.4)
+ * only what can open beside the current tab: pages to open, and this
+ * chord's other tabs that aren't on screen.
+ */
 export function buildResults(
   query: string,
   state: State,
   windowId: string,
-  mode: 'new' | 'edit',
+  mode: 'new' | 'edit' | 'split',
   history: HistorySearch | null = null,
   now = Date.now(),
-  { scope = null, suggestions = [] }: Narrowing = {},
+  narrowing: Narrowing = {},
+): Result[] {
+  const all = resultsFor(query, state, windowId, mode === 'split' ? 'new' : mode, history, now, narrowing);
+  if (mode !== 'split') return all;
+  const win = state.windows[windowId];
+  const onScreen = new Set(shownTabs(state, windowId));
+  return all.filter((r) => {
+    if (r.kind === 'tab') return r.tab.chordId === win?.activeChordId && !onScreen.has(r.tab.id);
+    return r.kind === 'open' || r.kind === 'history' || r.kind === 'scope';
+  });
+}
+
+function resultsFor(
+  query: string,
+  state: State,
+  windowId: string,
+  mode: 'new' | 'edit',
+  history: HistorySearch | null,
+  now: number,
+  { scope = null, suggestions = [] }: Narrowing,
 ): Result[] {
   const q = query.trim();
   const win = state.windows[windowId];

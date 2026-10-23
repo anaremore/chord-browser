@@ -15,6 +15,7 @@ const api: ShellApi = {
   layout: {
     anchor: (rect) => invoke('layout:anchor', rect),
     peek: (open) => invoke('layout:peek', { open }),
+    lift: (lifted) => invoke('layout:lift', { lifted }),
   },
   menu: {
     app: (anchor) => invoke('menu:app', anchor),

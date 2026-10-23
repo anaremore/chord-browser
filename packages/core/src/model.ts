@@ -113,7 +113,31 @@ export interface FolderNode {
   createdAt: number;
 }
 
-export type SidebarNode = TabNode | FolderNode;
+/** Panes side by side (`row`) or stacked (`column`). */
+export type SplitDirection = 'row' | 'column';
+
+/**
+ * A split view (DESIGN.md §7.9, §8.4): 2–4 tabs shown together, saved as one
+ * unit in Pinned or Today. Its tabs are its children (their `parentId` is the
+ * split), in pane order; `sizes` are their shares of the frame, in the same
+ * order, summing to 1.
+ */
+export interface SplitNode {
+  kind: 'split';
+  id: NodeId;
+  chordId: ChordId;
+  section: Section;
+  parentId: NodeId | null;
+  rank: string;
+  direction: SplitDirection;
+  sizes: number[];
+  createdAt: number;
+}
+
+export type SidebarNode = TabNode | FolderNode | SplitNode;
+
+/** Split view's limits (DESIGN.md §7.9): up to 4 panes, none narrower than 320 px, 8 px apart. */
+export const SPLIT = { maxPanes: 4, minPane: 320, gap: 8 } as const;
 
 /**
  * A site in the Favorites row at the top of the sidebar, shared by every
