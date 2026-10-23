@@ -3,7 +3,7 @@
  * rename and the icon picker, the switcher in the footer, and the color
  * crossfade behind it all.
  */
-import { DEFAULT_PROFILE, chordsFor, firstGrapheme, formatKeys, shortcutById, type ActionId, type Chord, type ChordThemeSpec, type State } from '@chord/core';
+import { DEFAULT_PROFILE, chordsFor, firstGrapheme, keycapFor, type ActionId, type Chord, type ChordThemeSpec, type ShortcutOverrides, type State } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
 import { useDroppable } from '@dnd-kit/react';
@@ -28,11 +28,10 @@ export function newChordLook(chords: Chord[]): { icon: string; theme: ChordTheme
   return { icon, theme: { stops: presetStops(preset), grain: 0.2, appearance: 'auto' } };
 }
 
-function gotoKeys(index: number, info: SystemInfo): string {
+/** The key for the nth chord (with your shortcut changes), for its tooltip. */
+function gotoKeys(index: number, info: SystemInfo, overrides: ShortcutOverrides): string {
   if (index > 8) return '';
-  const shortcut = shortcutById(`chord.goto${Math.min(index + 1, 9)}` as ActionId);
-  const keys = shortcut ? (info.platform === 'darwin' ? shortcut.mac : shortcut.other)[0] : undefined;
-  return keys ? formatKeys(keys, info.platform) : '';
+  return keycapFor(`chord.goto${index + 1}` as ActionId, info.platform, overrides);
 }
 
 /**
@@ -338,7 +337,7 @@ export function ChordSwitcher({
         }}
       >
         {chords.map((chord, index) => (
-          <ChordButton key={chord.id} chord={chord} selected={chord.id === current} keys={gotoKeys(index, info)} info={info} pill={pill} windowId={windowId} />
+          <ChordButton key={chord.id} chord={chord} selected={chord.id === current} keys={gotoKeys(index, info, state.settings.shortcuts)} info={info} pill={pill} windowId={windowId} />
         ))}
       </div>
       {onCreate ? (

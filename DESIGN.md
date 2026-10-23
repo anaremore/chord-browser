@@ -762,7 +762,15 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
    - **Page-first (P):** the page sees the key first. If it uses it (Google Docs' ⌘S, a web editor's ⌘D), Chord stays out of the way. If not, Chord acts.
 3. **Hands off keys web apps depend on.** Chord never *reserves* ⌘K, ⌘E, ⌘B, ⌘I, ⌘U, ⌘↵ or ⌘/. A page-first binding is allowed only where Chrome already has one, like Ctrl+U for view source on Windows/Linux, and the page still wins.
 4. **Discoverable.** Every action is in the command bar with its keycaps shown. The full cheat sheet is one shortcut away.
-5. **One registry.** `packages/core/src/shortcuts.ts` defines each shortcut once: id, macOS keys, Windows/Linux keys, kind, action. It generates the macOS menu bar, the reserved-key interceptor, keycaps, the cheat sheet, and the tables below. A test fails on any duplicate per platform. Rebinding with conflict detection comes in Phase 3.
+5. **One registry.** `packages/core/src/shortcuts.ts` defines each shortcut once: id, macOS keys, Windows/Linux keys, kind, action. It generates the macOS menu bar, the reserved-key interceptor, keycaps, the cheat sheet, and the tables below. A test fails on any duplicate per platform.
+6. **Every key is yours to change** (Settings → Keyboard shortcuts):
+   - **Editing:** click a keycap to record a new one ("Press keys…"), or **+** to add another (up to four per action). Esc cancels, and Delete removes that key. ↺ puts one action back, and **Reset all** asks a second time in place.
+   - **Conflicts are settled in the row.** "⌘K is used by *Search tabs*" offers **Use it here**, which moves the key, or Cancel. Never a dialog.
+   - **Refused, with the reason in one plain sentence:**
+     - a key with no ⌘/⌃/⌥ (Ctrl/Alt elsewhere), unless it's F1–F24;
+     - what the OS keeps for itself: Spotlight's ⌘Space, ⌘Tab, Force Quit, Alt+Tab, Ctrl+Alt+Delete, Windows and Super key combinations, and the rest in `bindings.ts`;
+     - text editing's ⌘C/V/X/A/Z (and Ctrl+Y off macOS).
+   - **What changing keeps:** the action's kind (reserved or page-first) and its place in menus. Only the keys change, and they apply at once everywhere: the router, the menus, every keycap and tooltip, the command bar and onboarding.
 
 ### 14.2 The map (Phase 1 unless marked)
 
@@ -865,5 +873,5 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 - **⌘1–9 switches chords**, as the brief asks, so Chrome's "go to tab N" isn't available.
 - **Ctrl+Tab cycles recent tabs** (Arc's behavior) rather than Chrome's next-in-order. Next-in-order is on Ctrl+PageDown, and a setting can swap them.
 - **Copy page address takes Ctrl+Shift+C**, which Chrome uses to inspect elements on Windows and Linux. In Chord, open DevTools (F12) first; its element picker answers to Ctrl+Shift+C there.
-- **On GNOME, Ctrl+Alt+←/→ switches workspaces** before Chord sees it. Use Ctrl+1–9, the trackpad swipe, or rebind (Phase 3).
+- **On GNOME, Ctrl+Alt+←/→ switches workspaces** before Chord sees it. Use Ctrl+1–9, the trackpad swipe, or give Next/Previous chord other keys in Settings → Keyboard shortcuts.
 - **Page-first keys depend on the page.** In Google Docs, ⌘S does Docs' thing, not the sidebar. That is deliberate: web apps keep working, and the command bar and View menu always reach the same action.

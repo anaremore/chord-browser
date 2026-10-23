@@ -1,0 +1,147 @@
+/* Settings → Keyboard shortcuts: editable keycaps, recording, and problems in place. Tokens only. */
+
+.toolbar {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.filter {
+  flex: 1;
+}
+
+/* A shortcut row and, under it while editing, what's wrong with the key you pressed. */
+.row {
+  display: flex;
+  flex-direction: column;
+}
+
+.row[data-editing] {
+  background: var(--color-item-hover);
+}
+
+/* A key you can click to change: looks like a keycap, behaves like a button. */
+.keyButton {
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--color-item-hover);
+  box-shadow: inset 0 calc(var(--size-hairline) * -1) 0 var(--color-divider);
+  color: var(--color-fg);
+  font: var(--text-small);
+  white-space: nowrap;
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    box-shadow var(--duration-fade-fast) var(--ease-standard);
+}
+
+.keyButton:hover {
+  background: var(--color-item-active-bg);
+  box-shadow:
+    inset 0 calc(var(--size-hairline) * -1) 0 var(--color-divider),
+    0 0 0 var(--size-hairline) var(--color-divider);
+}
+
+/* Listening for keys: the keycap glows in the accent and breathes. */
+.recorder {
+  min-inline-size: var(--space-16);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  outline: 0;
+  background: var(--color-surface-raised);
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  white-space: nowrap;
+  animation: listen calc(var(--duration-fade-base) * 6) var(--ease-standard) infinite alternate;
+}
+
+@keyframes listen {
+  from {
+    box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+  }
+
+  to {
+    box-shadow: 0 0 0 calc(var(--size-focus-ring) * 2) var(--color-selection);
+  }
+}
+
+.addButton {
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-fg-subtle);
+  opacity: 0;
+  transition:
+    opacity var(--duration-fade-fast) var(--ease-standard),
+    background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.addButton:hover {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+/* + shows on the row you're on, so the list stays calm. */
+.addButton:focus-visible,
+.row:hover .addButton {
+  opacity: 1;
+}
+
+.problem {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.problemText {
+  flex: 1;
+  min-inline-size: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.problemText em {
+  color: var(--color-fg);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.primary,
+.quiet {
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: var(--text-label);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.primary {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+.quiet {
+  background: transparent;
+  color: var(--color-fg-muted);
+}
+
+.quiet:hover {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.quiet[data-danger] {
+  color: var(--color-danger);
+}

@@ -28,7 +28,7 @@ import {
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
 import type { ArchiveSnapshot, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
-import { app, BaseWindow, BrowserWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
@@ -37,6 +37,7 @@ import type { WebStore } from './extensions/webstore';
 import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
+import { setShortcutOverrides } from './shortcut-overrides';
 import { IdleKeeper, type IdleTiming } from './idle';
 import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
@@ -97,15 +98,20 @@ export class Browser {
   private archiveChangedTimer: ReturnType<typeof setTimeout> | undefined;
   /** Chord is quitting: windows closing now stay in the saved state, to come back at the next launch. */
   private quitting = false;
+  /** The Settings view while it records a shortcut: main acts on none of its keys until it's done. */
+  private recordingIn: WebContents | null = null;
   private readonly keyboard: KeyboardHandlers = {
     run: (action, contents) => this.run(action, contents),
     onControlUp: () => this.finishRecentCycle(),
+    paused: (contents) => contents === this.recordingIn,
   };
   /** The application menu (macOS menu bar; on Windows/Linux the ⋯ menu, whose accelerators stay live). */
-  readonly appMenu: Menu = buildAppMenu((action) => this.runInFocusedWindow(action));
+  appMenu: Menu;
 
   constructor(private readonly options: BrowserOptions) {
     this.store = new Store(options.initial);
+    setShortcutOverrides(this.store.state.settings.shortcuts);
+    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
     this.tabs = new TabManager({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
@@ -223,6 +229,11 @@ export class Browser {
       this.syncPopovers();
       this.extensions.sync();
       if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
+      // New keys apply at once: the router reads them live, and the menus are rebuilt to show and accept them.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'shortcuts')) {
+        setShortcutOverrides(change.state.settings.shortcuts);
+        this.applyAppMenu();
+      }
       if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
@@ -532,6 +543,17 @@ export class Browser {
     };
   }
 
+  /** Builds the menus from the current shortcuts and installs the app menu. */
+  applyAppMenu(): void {
+    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
+    Menu.setApplicationMenu(this.appMenu);
+  }
+
+  /** Settings is (or stops) recording a shortcut in this contents. Only the Settings view may ask. */
+  setRecordingShortcut(contents: WebContents, recording: boolean): void {
+    this.recordingIn = recording && contents === this.settingsWindow?.view.webContents ? contents : null;
+  }
+
   openSettings(section?: string): void {
     if (this.settingsWindow) {
       this.settingsWindow.show(section);
@@ -539,6 +561,11 @@ export class Browser {
     }
     this.settingsWindow = new SettingsWindow(this.options.uiSession, this.lastWindow()?.window.getBounds(), section, () => {
       this.settingsWindow = null;
+      this.recordingIn = null;
+    });
+    // Recording a shortcut ends when Settings loses focus, whatever its page says.
+    this.settingsWindow.window.on('blur', () => {
+      this.recordingIn = null;
     });
     attachShortcuts(this.settingsWindow.view.webContents, this.keyboard);
     attachContextMenu(this.settingsWindow.view.webContents, {
