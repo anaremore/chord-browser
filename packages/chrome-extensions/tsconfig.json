@@ -1,0 +1,20 @@
+{
+  // Upstream's own compiler settings (electron-browser-shell tsconfig.base.json),
+  // updated only where TypeScript 6 requires it. Chord's stricter base config
+  // isn't applied to vendored code.
+  "compilerOptions": {
+    "lib": ["DOM", "ES2022"],
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    // Upstream compiled with [[Set]] class fields (target ES2019); keep that.
+    "useDefineForClassFields": false,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "types": ["node", "chrome"]
+  },
+  "include": ["src/**/*"]
+}

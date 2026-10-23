@@ -8,6 +8,15 @@ import { _electron as electron, expect, test, type ElectronApplication, type Loc
 const appDir = resolve(import.meta.dirname, '../..');
 const capturesDir = resolve(appDir, 'test-results', 'captures');
 
+/** What the command bar asked the stub suggestion endpoint, in order. */
+const suggestionsAsked: string[] = [];
+/** A page whose video plays a canvas stream (no media files, no network). */
+const videoPage = (title: string, attrs: string) =>
+  `<title>${title}</title><canvas id="c" width="640" height="360" hidden></canvas><video id="v" width="640" height="360" ${attrs}></video>` +
+  `<script>const c = document.getElementById('c'), g = c.getContext('2d'); let n = 0;` +
+  `setInterval(() => { g.fillStyle = 'hsl(' + (n++ * 7) % 360 + ' 70% 50%)'; g.fillRect(0, 0, 640, 360); }, 40);` +
+  `const v = document.getElementById('v'); v.srcObject = c.captureStream(25); v.play();</script>`;
+
 /** A few tiny pages so navigation works without the network. */
 function startSite(): Promise<{ server: Server; origin: string }> {
   const pages: Record<string, string> = {
@@ -28,8 +37,30 @@ function startSite(): Promise<{ server: Server; origin: string }> {
       `<script>addEventListener('message', (e) => { if (e.data === 'signed-in') document.title = 'Signed in'; });</script>`,
     '/signin-popup': `<title>Sign in</title><button id="done" onclick="window.opener.postMessage('signed-in', '*'); window.close()">Continue</button>`,
     '/long': '<title>Long page</title><div style="height: 6000px">A long page</div>',
+    // A playing video with no media file: a canvas, streamed into a <video>. The muted one is a background loop.
+    '/video': videoPage('Video', ''),
+    '/muted-video': videoPage('Muted video', 'muted'),
   };
   const server = createServer((req, res) => {
+    // Search suggestions (CHORD_SUGGEST_URL) in the OpenSearch shape the engines use; every question is logged.
+    if (req.url?.startsWith('/suggest?q=')) {
+      const q = decodeURIComponent(req.url.slice('/suggest?q='.length));
+      suggestionsAsked.push(q);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify([q, [`${q} progressions`, `${q} finder`]]));
+      return;
+    }
+    // GitHub Releases (CHORD_UPDATE_FEED): one release newer than a development build's 0.0.0.
+    if (req.url === '/releases') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify([
+          { tag_name: 'v0.2.0', name: 'Chord 0.2.0', html_url: 'https://github.com/anaremore/chord-browser/releases/tag/v0.2.0', draft: false, prerelease: false },
+          { tag_name: 'v9.0.0', name: 'Draft', html_url: 'https://github.com/anaremore/chord-browser/releases/tag/v9.0.0', draft: true, prerelease: false },
+        ]),
+      );
+      return;
+    }
     if (req.url === '/bad.png') {
       res.writeHead(200, { 'content-type': 'image/png' });
       res.end('this is not a png');
@@ -51,11 +82,14 @@ function startSite(): Promise<{ server: Server; origin: string }> {
   );
 }
 
-async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'))): Promise<ElectronApplication> {
+async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-')), { firstRun = false } = {}): Promise<ElectronApplication> {
   // A fresh profile per launch unless a test reuses one: tests never touch a developer's real data.
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return electron.launch({ args: [appDir], env: childEnv, cwd: appDir });
+  // Every test but first run's own starts straight in the browser (Chrome's --no-first-run, which
+  // Playwright also adds by itself; CHORD_FIRST_RUN=1 asks for first run anyway).
+  if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
+  return electron.launch({ args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir });
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
@@ -426,6 +460,137 @@ test('a chord can keep its sign-ins separate, with Undo, and its sign-ins are de
   try {
     await pageWhere(app, isShell);
     await expect.poll(ownPartitions).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test('first run: name, colors and pins land in the real sidebar, and it never comes back', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile, { firstRun: true });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const welcome = shell.getByRole('dialog', { name: 'Welcome to Chord' });
+    await expect(welcome.getByRole('heading', { name: 'Hi, I’m Chord.' })).toBeVisible();
+    // The page waits behind the cards.
+    expect(await tabVisible(app)).toBe(false);
+    await welcome.getByRole('button', { name: /Make your first chord/ }).click();
+
+    // The sidebar header types along.
+    const name = welcome.getByRole('textbox', { name: 'Chord name' });
+    await expect(name).toBeFocused();
+    await name.fill('Studio');
+    await expect(shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { name: 'Studio' })).toBeVisible();
+    await name.press('Enter');
+
+    // Colors re-theme the sidebar live.
+    const tint = () => shell.evaluate(() => getComputedStyle(document.querySelector('[data-sidebar]')!).getPropertyValue('--color-tint'));
+    const before = await tint();
+    await welcome.getByRole('radio', { name: 'Sea Glass' }).click();
+    await expect.poll(tint).not.toBe(before);
+    await welcome.getByRole('button', { name: /Looks good/ }).click();
+
+    // A site you open every day lands in Pinned.
+    await expect(welcome.getByText('Chord created')).toBeVisible();
+    const site1 = welcome.getByRole('textbox', { name: 'A site you open every day' });
+    await site1.fill(`${site.origin}/second`);
+    await site1.press('Enter');
+    await expect(shell.getByRole('list', { name: 'Pinned', exact: true })).toContainText('Second page');
+    await welcome.getByRole('button', { name: /^Next/ }).click();
+
+    // A development build can't be the default browser, so that step is skipped.
+    await expect(welcome.getByRole('heading', { name: 'Three things to know' })).toBeVisible();
+    await welcome.getByRole('button', { name: /Start browsing/ }).click();
+    await expect(welcome).toHaveCount(0);
+    await expect(overlay.getByRole('dialog')).toBeVisible();
+    await expect.poll(() => tabVisible(app)).toBe(true);
+  } finally {
+    await app.close();
+  }
+
+  app = await launch({}, profile, { firstRun: true });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('dialog', { name: 'Welcome to Chord' })).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a playing video pops out when you switch away, and comes home when you return', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/video` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const video = await pageWhere(app, (url) => url === `${site.origin}/video`);
+    const pip = () => video.evaluate(() => document.pictureInPictureElement?.id ?? null);
+    const paused = () => video.evaluate(() => document.querySelector('video')!.paused);
+    await expect.poll(() => video.evaluate(() => document.querySelector('video')!.currentTime)).toBeGreaterThan(0.3);
+    const today = shell.getByRole('list', { name: 'Today' });
+    const row = (name: string) => today.getByRole('button', { name, exact: true });
+
+    // Switching to another tab pops the video out, and its row says so.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/second`);
+    await overlay.keyboard.press('Enter');
+    await expect.poll(pip).toBe('v');
+    const bringBack = shell.getByRole('button', { name: 'Bring the video back' });
+    await expect(bringBack).toBeVisible();
+
+    // The glyph brings it home: its tab is shown and the video plays on, inline.
+    await bringBack.click();
+    await expect.poll(pip).toBeNull();
+    await expect(row('Video')).toHaveAttribute('aria-current', 'page');
+    expect(await paused()).toBe(false);
+    await expect(bringBack).toHaveCount(0);
+
+    // The PiP window's "Back to tab" ends PiP with the video still playing (Electron says nothing else):
+    // Chord brings the tab back.
+    await row('Second page').click();
+    await expect.poll(pip).toBe('v');
+    await video.evaluate(() => document.exitPictureInPicture());
+    await expect(row('Video')).toHaveAttribute('aria-current', 'page');
+
+    // Its ✕ pauses the video as PiP ends: you stay where you are.
+    await row('Second page').click();
+    await expect.poll(pip).toBe('v');
+    await video.evaluate(() => {
+      document.querySelector('video')!.pause();
+      return document.exitPictureInPicture();
+    });
+    await expect(bringBack).toHaveCount(0);
+    await shell.waitForTimeout(600);
+    await expect(row('Second page')).toHaveAttribute('aria-current', 'page');
+
+    // Turned off in Settings, switching away leaves the video where it is.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
+    await settings.getByRole('switch', { name: 'Pop out playing videos when you switch away' }).click();
+    await row('Video').click();
+    await video.evaluate(() => document.querySelector('video')!.play());
+    await row('Second page').click();
+    await shell.waitForTimeout(800);
+    expect(await pip()).toBeNull();
+  } finally {
+    await app.close();
+  }
+});
+
+test('a muted background video stays in its page when you switch away', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/muted-video` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const video = await pageWhere(app, (url) => url === `${site.origin}/muted-video`);
+    await expect.poll(() => video.evaluate(() => document.querySelector('video')!.currentTime)).toBeGreaterThan(0.3);
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/second`);
+    await overlay.keyboard.press('Enter');
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('Second page');
+    await shell.waitForTimeout(800);
+    expect(await video.evaluate(() => document.pictureInPictureElement)).toBeNull();
   } finally {
     await app.close();
   }
@@ -907,6 +1072,14 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
     await expect(today.getByRole('listitem')).toHaveCount(1, { timeout: 10_000 });
     await expect(today).toContainText('Third page');
 
+    // The command bar's @archive lists it, newest first, before anything is typed.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('@archive ');
+    await expect(overlay.getByTestId('scope-chip')).toHaveText('Archive');
+    await expect(overlay.getByRole('option').first()).toContainText('Second page');
+    await expect(overlay.getByRole('option').first()).toContainText('Archived');
+    await overlay.keyboard.press('Escape');
+
     // ⌘Y / Ctrl+H opens the archive as a tab.
     await runAction(shell, 'app.history');
     const archive = await pageWhere(app, isArchive);
@@ -959,6 +1132,165 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
     await expect(today).toContainText('Second page');
     const second = await pageWhere(app, (url) => url === `${site.origin}/second`);
     await expect.poll(() => second.evaluate(() => history.length)).toBe(2);
+  } finally {
+    await app.close();
+  }
+});
+
+const isSettings = (url: string) => url.startsWith('chord://settings') || url.includes('/settings/index.html');
+const selection = (field: Locator) => field.evaluate((input: HTMLInputElement) => [input.selectionStart, input.selectionEnd]);
+
+test('the command bar completes an address inline; Backspace never brings it back, Tab accepts it', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today).toContainText('First page');
+    // A recent tab on a host nothing else starts with.
+    const port = new URL(site.origin).port;
+    const full = `localhost:${port}/second`;
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`http://${full}`);
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('listitem').first()).toContainText('Second page');
+
+    await openCommandBar(shell, overlay, 'new');
+    const field = overlay.getByRole('textbox');
+    await overlay.keyboard.type('loc');
+    await expect(field).toHaveValue(full);
+    expect(await selection(field)).toEqual([3, full.length]);
+    // Backspace takes the completion away, and it doesn't come straight back.
+    await overlay.keyboard.press('Backspace');
+    await expect(field).toHaveValue('loc');
+    await overlay.waitForTimeout(250);
+    await expect(field).toHaveValue('loc');
+    // Typing on completes again; Tab accepts it, caret at the end, and Return goes there.
+    await overlay.keyboard.type('a');
+    await expect(field).toHaveValue(full);
+    await overlay.keyboard.press('Tab');
+    await expect(field).toHaveValue(full);
+    expect(await selection(field)).toEqual([full.length, full.length]);
+    await expect(overlay.getByRole('option').first()).toContainText('Second page');
+  } finally {
+    await app.close();
+  }
+});
+
+test('site keywords and @filters narrow the command bar to a chip', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('list', { name: 'Today' });
+    await expect(today).toContainText('First page');
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/third`);
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('listitem').first()).toContainText('Third page');
+
+    await openCommandBar(shell, overlay, 'new');
+    const field = overlay.getByRole('textbox');
+    const chip = overlay.getByTestId('scope-chip');
+    // yt, then Tab: the bar searches YouTube.
+    await overlay.keyboard.type('yt');
+    await expect(overlay.getByRole('option').filter({ hasText: 'Search YouTube' })).toBeVisible();
+    await overlay.keyboard.press('Tab');
+    await expect(chip).toHaveText('YouTube');
+    await expect(field).toHaveValue('');
+    await expect(field).toHaveAttribute('placeholder', 'Search YouTube');
+    await overlay.keyboard.type('lofi');
+    await expect(overlay.getByRole('option').first()).toContainText('lofi');
+    await expect(overlay.getByRole('option').first()).toContainText('Search YouTube');
+    // Backspace through the text, then once more in the empty field: the chip goes.
+    for (let i = 0; i < 4; i++) await overlay.keyboard.press('Backspace');
+    await expect(chip).toBeVisible();
+    await overlay.keyboard.press('Backspace');
+    await expect(chip).toHaveCount(0);
+    // Short keywords switch on Space too.
+    await overlay.keyboard.type('gh ');
+    await expect(chip).toHaveText('GitHub');
+    await overlay.keyboard.press('Backspace');
+    await expect(chip).toHaveCount(0);
+
+    // @tabs, then Space: open tabs only, and nothing else.
+    await overlay.keyboard.type('@tabs ');
+    await expect(chip).toHaveText('Tabs');
+    await expect(overlay.getByRole('option')).toHaveCount(1);
+    await expect(overlay.getByRole('option').first()).toContainText('First page');
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('button', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
+
+    // `@` lists the filters; Return on one narrows to it.
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('@h');
+    await expect(overlay.getByRole('option').first()).toContainText('Search history');
+    await overlay.keyboard.press('Enter');
+    await expect(chip).toHaveText('History');
+  } finally {
+    await app.close();
+  }
+});
+
+test('search suggestions come in under local results; addresses are never sent, and the switch stops them', async () => {
+  suggestionsAsked.length = 0;
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_SUGGEST_URL: `${site.origin}/suggest?q=` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await expect(shell.getByRole('list', { name: 'Today' })).toContainText('First page');
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('chord');
+    const options = overlay.getByRole('option');
+    await expect(options.filter({ hasText: 'chord progressions' })).toBeVisible();
+    // The search for what was typed stays first; suggestions come last.
+    await expect(options.first()).toContainText('Search Google');
+    const texts = await options.allTextContents();
+    expect(texts.at(-2)).toContain('chord progressions');
+    expect(texts.at(-1)).toContain('chord finder');
+    // Typing quickly asks after the pause, not for every key.
+    expect(suggestionsAsked).toContain('chord');
+    expect(suggestionsAsked.length).toBeLessThan(3);
+
+    // Neither does a filter being typed, or an address.
+    await overlay.getByRole('textbox').fill('@hist');
+    await overlay.waitForTimeout(400);
+    expect(suggestionsAsked.some((q) => q.startsWith('@'))).toBe(false);
+    await overlay.getByRole('textbox').fill('example.com/private/path');
+    await overlay.waitForTimeout(400);
+    expect(suggestionsAsked.some((q) => q.includes('example.com'))).toBe(false);
+    await overlay.keyboard.press('Escape');
+
+    // Off in Settings → General: no more questions, no more rows.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    const toggle = settings.getByRole('switch', { name: 'Search suggestions' });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    const asked = suggestionsAsked.length;
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type('chord');
+    await overlay.waitForTimeout(400);
+    await expect(overlay.getByRole('option').filter({ hasText: 'chord progressions' })).toHaveCount(0);
+    expect(suggestionsAsked.length).toBe(asked);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a newer release is announced once, in a toast, and in Settings → About', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_UPDATE_FEED: `${site.origin}/releases` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    // The draft (9.0.0) never counts; 0.2.0 is newer than a development build's 0.0.0.
+    await expect(shell.getByRole('status').filter({ hasText: 'Chord 0.2.0 is out' })).toBeVisible({ timeout: 10_000 });
+    await expect(shell.getByRole('button', { name: 'What’s new' })).toBeVisible();
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'About' }).click();
+    await expect(settings.getByText('Chord 0.2.0 is out')).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'See what’s new' })).toBeVisible();
+    await expect(settings.getByRole('switch', { name: 'Check for updates automatically' })).toHaveAttribute('aria-checked', 'true');
   } finally {
     await app.close();
   }

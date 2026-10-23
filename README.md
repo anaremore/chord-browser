@@ -22,7 +22,7 @@ Windows, macOS, and Linux (X11 and Wayland) are all first-class.
 
 Download the file for your system from the latest [release](https://github.com/anaremore/chord-browser/releases). `arm64` builds are for Apple silicon Macs and ARM PCs; `x64` (`amd64`, `x86_64` on Linux) for Intel and AMD.
 
-Previews aren't code-signed yet, so Windows and macOS warn you before the first launch. Each release lists the files' SHA-256 checksums in `SHA256SUMS.txt`. Chord doesn't update itself yet: get new versions from Releases.
+Previews aren't code-signed yet, so Windows and macOS warn you before the first launch. Each release lists the files' SHA-256 checksums in `SHA256SUMS.txt`. Chord tells you when a new version is out (you can turn that off in Settings → About), but it doesn't install updates itself yet: download the new version and install it over the old one. Your tabs and settings stay.
 
 **Windows 10 and 11:** run `Chord-<version>-win-<arch>-setup.exe`. It installs for your account only, with no admin prompt.
 - If SmartScreen says *Windows protected your PC*, click **More info**, then **Run anyway**.
@@ -37,6 +37,18 @@ Previews aren't code-signed yet, so Windows and macOS warn you before the first 
 - **AppImage:** `chmod +x Chord-<version>-linux-<arch>.AppImage`, then run it. Chord never runs without its sandbox, which needs unprivileged user namespaces. Ubuntu 23.10 and later block those for apps without an AppArmor profile, so use the `.deb` there.
 
 To try a build without touching your everyday profile, start it with `--user-data-dir=<folder>`, as you would Chrome.
+
+**Make Chord your default browser:** Settings → General → **Make default**. On Windows this opens Windows Settings at Chord's entry: Windows doesn't let apps make themselves the default. On macOS, the system asks you to confirm.
+
+**Where your data lives:**
+
+| OS | Profile folder |
+|---|---|
+| Windows | `%LOCALAPPDATA%\Chord\User Data` |
+| macOS | `~/Library/Application Support/Chord` |
+| Linux | `~/.config/Chord` |
+
+Deleting that folder resets Chord. To uninstall, use Windows' *Installed apps*, drag Chord to the Trash on macOS, or run `sudo apt remove chord`.
 
 ## Documents
 
@@ -69,3 +81,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues privately,
 ## License
 
 [MIT](LICENSE). One file, the command bar's ranking (`packages/core/src/rank.ts`), is adapted from [Crest](https://github.com/pauljoda/Crest) and stays under the [Mozilla Public License 2.0](LICENSES/MPL-2.0.txt).
+
+Release builds include [electron-chrome-extensions](packages/chrome-extensions) for Chrome extension support. That library is GPL-3.0, so Chord's release builds are distributed under the [GPL-3.0](LICENSES/GPL-3.0.txt), with the source at each release's tag. Chord's own source stays MIT.

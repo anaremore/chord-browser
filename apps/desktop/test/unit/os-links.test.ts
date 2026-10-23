@@ -37,8 +37,8 @@ describe('urlsFromArgv', () => {
 describe('openable', () => {
   it('turns an absolute path to a web page into a file URL', () => {
     const url = openable('/tmp/page.html');
-    expect(url).toMatch(/^file:\/\/\/.*\/tmp\/page\.html$/);
-    expect(openable('"/tmp/page.htm"')).toMatch(/^file:\/\/\/.*page\.htm$/);
+    expect(url).toMatch(/^file:\/\/.*\/tmp\/page\.html$/);
+    expect(openable('"/tmp/page.htm"')).toMatch(/^file:\/\/.*\/tmp\/page\.htm$/);
   });
 
   it('refuses other files and relative paths', () => {

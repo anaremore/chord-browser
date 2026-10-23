@@ -150,7 +150,20 @@ export const MIGRATIONS: readonly string[] = [
     INSERT INTO archive_fts(archive_fts, rowid, title, url) VALUES ('delete', old.rid, old.title, old.url);
   END;
   `,
-  // 6: the Favorites row (M1.2): sites every chord shares, in order. Icons live in favicon.
+  // 6: Chrome extensions installed in each profile (M1.5). notified_version is the version the
+  // extension was last told about through runtime.onInstalled (Electron skips Chrome's install step).
+  `
+  CREATE TABLE extension (
+    profile_id TEXT NOT NULL, id TEXT NOT NULL,
+    name TEXT NOT NULL, version TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('store','unpacked')), path TEXT NOT NULL,
+    notified_version TEXT,
+    pinned INTEGER NOT NULL DEFAULT 1,
+    installed_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, id)
+  ) STRICT;
+  `,
+  // 7: the Favorites row (M1.2): sites every chord shares, in order. Icons live in favicon.
   `
   CREATE TABLE favorite (
     id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',

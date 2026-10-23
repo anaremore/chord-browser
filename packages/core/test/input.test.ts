@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseInput, resolveInput, searchUrl } from '../src';
+import { SEARCH_ENGINES, SITE_KEYWORDS, keywordFor, keywordSearchUrl, parseInput, parseSuggestions, resolveInput, searchUrl, suggestUrl } from '../src';
 
 describe('parseInput', () => {
   it.each([
@@ -37,5 +37,53 @@ describe('parseInput', () => {
     expect(searchUrl('a&b')).toBe('https://www.google.com/search?q=a%26b');
     expect(resolveInput('chord browser', 'duckduckgo')).toBe('https://duckduckgo.com/?q=chord%20browser');
     expect(searchUrl('x', 'kagi')).toBe('https://kagi.com/search?q=x');
+  });
+});
+
+describe('search suggestions', () => {
+  it('asks the chosen engine for searches, never for addresses', () => {
+    expect(suggestUrl('chord browser', 'duckduckgo')).toBe('https://duckduckgo.com/ac/?type=list&q=chord%20browser');
+    expect(suggestUrl('kagi', 'kagi')).toBe('https://kagi.com/api/autosuggest?q=kagi');
+    expect(suggestUrl('example.com/some/page')).toBeNull();
+    expect(suggestUrl('localhost:3000')).toBeNull();
+    expect(suggestUrl('   ')).toBeNull();
+    expect(suggestUrl('x'.repeat(201))).toBeNull();
+  });
+
+  it('every engine has an endpoint', () => {
+    for (const engine of SEARCH_ENGINES) expect(engine.suggest).toMatch(/^https:\/\/.+[?&](q|query)=$/);
+  });
+
+  it('reads OpenSearch replies: text only, distinct, without the query, at most five', () => {
+    const reply = ['chord', ['chord', 'Chordify', 'chordify', 42, ' chord  energy ', 'chords', 'chord finder', 'chord chart', 'more'], [], {}];
+    expect(parseSuggestions(reply, 'Chord')).toEqual(['Chordify', 'chord energy', 'chords', 'chord finder', 'chord chart']);
+    expect(parseSuggestions({ not: 'an array' }, 'x')).toEqual([]);
+    expect(parseSuggestions(['x'], 'x')).toEqual([]);
+  });
+});
+
+describe('site keywords', () => {
+  it('finds a keyword typed exactly, in any case', () => {
+    expect(keywordFor('yt')?.name).toBe('YouTube');
+    expect(keywordFor(' GH ')?.name).toBe('GitHub');
+    expect(keywordFor('ddg')).toMatchObject({ name: 'DuckDuckGo', engine: 'duckduckgo', space: true });
+    expect(keywordFor('ytt')).toBeUndefined();
+    expect(keywordFor('')).toBeUndefined();
+  });
+
+  it('only abbreviations switch on Space; words need Tab', () => {
+    expect(keywordFor('yt')?.space).toBe(true);
+    expect(keywordFor('maps')?.space).toBe(false);
+    expect(keywordFor('brave')?.space).toBe(false);
+  });
+
+  it('builds the site search', () => {
+    expect(keywordSearchUrl(keywordFor('yt')!, ' lofi beats ')).toBe('https://www.youtube.com/results?search_query=lofi%20beats');
+    expect(keywordSearchUrl(keywordFor('maps')!, 'coffee')).toBe('https://www.google.com/maps/search/coffee');
+  });
+
+  it('keywords are unique', () => {
+    const words = SITE_KEYWORDS.map((k) => k.keyword);
+    expect(new Set(words).size).toBe(words.length);
   });
 });

@@ -57,10 +57,11 @@ describe('restoreState', () => {
       chords: [chord('c1', 'a0')],
       nodes: [tab('t1', 'c1'), tab('t2', 'c1')],
       windows: [win('w1', 'c1', { c1: 't2' })],
-      settings: { searchEngine: 'kagi', motion: { sidebar: false } },
+      settings: { searchEngine: 'kagi', motion: { sidebar: false }, searchSuggestions: false, checkForUpdates: false },
     };
     const state = restoreState(saved, seed);
     expect(Object.keys(state.nodes)).toEqual(['t1', 't2']);
+    expect(state.settings).toMatchObject({ searchSuggestions: false, checkForUpdates: false });
     expect(state.windows['w1']).toMatchObject({ activeChordId: 'c1', activeTab: { c1: 't2' }, sidebar: 'collapsed', bounds: { x: 10 } });
     expect(state.live).toEqual({}); // every tab starts unloaded
     expect(state.settings.searchEngine).toBe('kagi');
@@ -74,7 +75,7 @@ describe('restoreState', () => {
       chords: [chord('c1', 'a1'), chord('c0', 'a0')],
       nodes: [tab('orphan', 'gone'), tab('child', 'c1', 'missing-folder'), tab('t1', 'c1')],
       windows: [win('w1', 'gone', { gone: 't1', c1: 'orphan' })],
-      settings: { searchEngine: 'evil', motion: { sidebar: 'yes' }, unknown: 1 },
+      settings: { searchEngine: 'evil', motion: { sidebar: 'yes' }, searchSuggestions: 'no', unknown: 1 },
     };
     const state = restoreState(saved, seed);
     expect(state.nodes['orphan']).toBeUndefined();

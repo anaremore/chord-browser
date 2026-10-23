@@ -26,8 +26,11 @@ import {
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
 import type { ArchiveSnapshot, PopoverState, Rect, SettingsSnapshot } from '@chord/ipc';
 import { app, BaseWindow, BrowserWindow, clipboard, screen, type Menu, type Session, type WebContents } from 'electron';
+import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
+import { Extensions } from './extensions';
+import type { WebStore } from './extensions/webstore';
 import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
@@ -57,11 +60,22 @@ export interface BrowserOptions {
   idle: IdleTiming;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
+  /** Chrome extensions (ARCHITECTURE.md §12). */
+  extensions: {
+    /** Where Web Store extensions are unpacked. */
+    root: string;
+    /** The extension library's preload, as built. */
+    preloadPath: string;
+    webStore: WebStore;
+    /** Development and tests only: the key packages must be signed with instead of the Web Store's. */
+    publisherKeyHash?: string;
+  };
 }
 
 export class Browser {
   readonly store: Store;
   readonly tabs: TabManager;
+  readonly extensions: Extensions;
   private readonly windows = new Map<WindowId, AppWindow>();
   private readonly finders = new Map<WindowId, FindInPage>();
   /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
@@ -71,6 +85,7 @@ export class Browser {
   private settingsWindow: SettingsWindow | null = null;
   private recent: { windowId: WindowId; order: NodeId[]; index: number } | null = null;
   readonly idle: IdleKeeper;
+  private readonly autoPip: AutoPip;
   private readonly archivedHistory = new Map<string, NavState | null>();
   /** Archive entries being restored, so a double click brings a tab back once. */
   private readonly restoring = new Set<string>();
@@ -95,6 +110,8 @@ export class Browser {
       onTitle: (url, title) => options.history({ k: 'title', url, title }),
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
+        this.extensions.tabCreated(contents, nodeId);
+        this.autoPip.attach(contents, nodeId);
         // Whatever a page asked for is denied once it's gone or replaced by another page.
         contents.on('did-start-navigation', (details) => {
           if (details.isMainFrame && !details.isSameDocument) options.permissions.forgetTab(nodeId);
@@ -113,6 +130,7 @@ export class Browser {
             const bounds = this.tabs.get(nodeId)?.getBounds();
             return w && bounds ? { window: w.window, x: bounds.x, y: bounds.y } : undefined;
           },
+          extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
         });
       },
       onPopupCreated: (contents, openerNodeId) => {
@@ -132,11 +150,50 @@ export class Browser {
         });
       },
     });
+    this.extensions = new Extensions({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      profileSession: (profileId) => options.profileSession(profileId),
+      root: options.extensions.root,
+      preloadPath: options.extensions.preloadPath,
+      webStore: options.extensions.webStore,
+      ...(options.extensions.publisherKeyHash ? { publisherKeyHash: options.extensions.publisherKeyHash } : {}),
+      windows: () => this.windows.values(),
+      windowById: (windowId) => this.windows.get(windowId),
+      lastWindow: () => this.lastWindow(),
+      windowOfNode: (nodeId) => this.windowShowing(nodeId),
+      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      liveTabs: () => this.tabs.entries(),
+      ensureTab: (nodeId) => this.tabs.ensure(nodeId)?.webContents,
+      toast: (windowId, message, action) => {
+        const w = this.windows.get(windowId);
+        if (w) send(w.shell.webContents, 'toast:show', { id: `extension:${Date.now()}`, message, ...(action ? { action } : {}) });
+      },
+      openSettings: (section) => this.openSettings(section),
+      changed: () => this.settingsWindow?.update(this.settingsSnapshot()),
+    });
     options.permissions.connect({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       onChange: () => this.syncPopovers(),
+    });
+    this.autoPip = new AutoPip({
+      state: () => this.store.state,
+      dispatch: (command) => this.store.dispatch(command),
+      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      contents: (nodeId) => this.tabs.get(nodeId)?.webContents,
+      loaded: () => this.tabs.loaded(),
+      isShown: (nodeId) => [...this.windows.values()].some((w) => w.activeTabContents !== null && w.activeTabContents === this.tabs.get(nodeId)?.webContents),
+      // "Back to tab" in the PiP window: the tab comes forward in its window.
+      bringBack: (nodeId) => {
+        const windowId = this.windowShowing(nodeId);
+        const w = windowId ? this.windows.get(windowId) : undefined;
+        if (!w) return;
+        this.store.dispatch({ t: 'tab.activate', windowId: w.id, nodeId });
+        if (w.window.isMinimized()) w.window.restore();
+        w.window.focus();
+      },
     });
     this.idle = new IdleKeeper(
       {
@@ -151,7 +208,9 @@ export class Browser {
       this.broadcast(change);
       this.runEffects(change.effects);
       this.syncPopovers();
-      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows'].includes(String(p.path[0])))) {
+      this.extensions.sync();
+      if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
+      if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
       if (change.patches.some((p) => p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'interface'))) {
@@ -207,6 +266,10 @@ export class Browser {
       this.popoverSent.delete(windowId);
       this.syncPopover(w);
     });
+    w.shell.webContents.on('did-finish-load', () => {
+      this.extensions.forget(windowId);
+      this.extensions.sync();
+    });
     this.lastWindowId ??= windowId;
     w.window.on('focus', () => {
       this.lastWindowId = windowId;
@@ -226,6 +289,7 @@ export class Browser {
       this.windows.delete(windowId);
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
+      this.extensions.forget(windowId);
       if (this.lastWindowId === windowId) this.lastWindowId = this.windows.keys().next().value ?? null;
       if (this.windows.size === 0 && process.platform !== 'darwin') {
         this.idle.stop();
@@ -236,6 +300,7 @@ export class Browser {
     });
     const active = activeTabId(this.store.state, windowId);
     w.showTab(active ? (this.tabs.ensure(active) ?? null) : null);
+    this.extensions.tabShown(w);
     return w;
   }
 
@@ -262,9 +327,17 @@ export class Browser {
         case 'view.ensure':
           this.tabs.ensure(effect.nodeId);
           break;
-        case 'view.show':
-          this.windows.get(effect.windowId)?.showTab(effect.nodeId ? (this.tabs.ensure(effect.nodeId) ?? null) : null);
+        case 'view.show': {
+          const w = this.windows.get(effect.windowId);
+          if (!w) break;
+          const outgoing = w.activeTabContents;
+          w.showTab(effect.nodeId ? (this.tabs.ensure(effect.nodeId) ?? null) : null);
+          this.extensions.tabShown(w);
+          // Auto picture-in-picture: the tab you left may pop its video out; the one you're on takes it back.
+          if (outgoing && outgoing !== w.activeTabContents && !outgoing.isDestroyed()) this.autoPip.left(outgoing);
+          if (effect.nodeId) this.autoPip.returned(effect.nodeId);
           break;
+        }
         case 'view.navigate': {
           // Going between Chord's own page and the web makes a new view; windows showing the tab take it.
           const before = this.tabs.get(effect.nodeId);
@@ -337,7 +410,8 @@ export class Browser {
     if (find?.target && find.target !== w.activeTabContents) find.close(false);
     const id = activeTabId(this.store.state, w.id);
     const live = id ? this.store.state.live[id] : undefined;
-    w.setTabHidden(Boolean(live?.error || live?.crashed));
+    // The frame explains errors and crashes, and holds first run's cards, instead of the page.
+    w.setTabHidden(Boolean(live?.error || live?.crashed) || !this.store.state.settings.onboarded);
     const state = this.popoverState(w);
     const json = JSON.stringify(state);
     if (this.popoverSent.get(w.id) === json) return;
@@ -359,6 +433,11 @@ export class Browser {
     else if (action === 'app.settings' || action === 'app.shortcuts') this.openSettings(action === 'app.shortcuts' ? 'shortcuts' : undefined);
   }
 
+  /** The browser window used most recently (Settings acts on it). */
+  lastBrowserWindow(): AppWindow | undefined {
+    return this.lastWindow();
+  }
+
   private lastWindow(): AppWindow | undefined {
     return (this.lastWindowId ? this.windows.get(this.lastWindowId) : undefined) ?? this.windows.values().next().value;
   }
@@ -370,6 +449,7 @@ export class Browser {
     return {
       settings: state.settings,
       chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
+      extensions: this.extensions.infos(),
       chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId })),
     };
   }
@@ -562,6 +642,13 @@ export class Browser {
       }),
       { ...at, width: 0, height: 0 },
     );
+  }
+
+  /** A note for the window used last, with a link that opens as a tab there (a new Chord version, for one). */
+  announce(id: string, message: string, link: { label: string; url: string }): void {
+    const w = this.lastWindow();
+    if (!w) return;
+    send(w.shell.webContents, 'toast:show', { id, message, action: { label: link.label, command: { t: 'tab.open', windowId: w.id, url: link.url } } });
   }
 
   /**

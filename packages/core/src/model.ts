@@ -149,6 +149,8 @@ export interface LiveTab {
   crashed: boolean;
   /** The main frame failed to load; the frame shows why instead of a blank page. */
   error: LoadError | null;
+  /** Chord popped the page's video out into picture-in-picture (auto PiP, ARCHITECTURE.md §9). */
+  pip: boolean;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -173,6 +175,35 @@ export interface Download {
 
 /** What the downloads panel can do with one download. */
 export type DownloadAction = 'open' | 'show' | 'pause' | 'resume' | 'cancel' | 'retry' | 'remove';
+
+/** A Chrome extension installed in a profile (ARCHITECTURE.md §12). */
+export interface InstalledExtension {
+  /** 32 letters a–p; for the Chrome Web Store, the store's ID. */
+  id: string;
+  profileId: string;
+  name: string;
+  version: string;
+  /** `store`: from the Chrome Web Store, verified and kept up to date. `unpacked`: a folder loaded for development. */
+  source: 'store' | 'unpacked';
+  /** The unpacked folder it loads from. */
+  path: string;
+  /**
+   * The version the extension was last told it was installed or updated to
+   * (`runtime.onInstalled`); null until it has been told once. Electron skips
+   * Chrome's install step, so Chord does this itself.
+   */
+  notifiedVersion: string | null;
+  /** Its button shows in the sidebar's extensions shelf (or the title bar); every install starts pinned. */
+  pinned: boolean;
+  installedAt: number;
+  updatedAt: number;
+}
+
+/** Where extension buttons go (DESIGN.md §3): the sidebar's shelf, or the title bar. */
+export type ExtensionButtons = 'sidebar' | 'titleBar';
+
+/** Installed extensions are keyed by profile and ID: the same extension can be in two profiles. */
+export const extensionKey = (profileId: string, id: string): string => `${profileId}:${id}`;
 
 /** Permissions a site has to ask for (ARCHITECTURE.md §9). Camera and microphone are separate decisions. */
 export type SitePermission = 'camera' | 'microphone' | 'location' | 'notifications' | 'clipboard-read';
@@ -230,12 +261,21 @@ export interface Settings {
   colorScheme: ColorScheme;
   interface: InterfaceSettings;
   themes: CustomTheme[];
+  extensionButtons: ExtensionButtons;
+  /** Searches from the engine while typing in the command bar (ROADMAP Q4: on, with a switch). Typed addresses never go out. */
+  searchSuggestions: boolean;
+  /** Installed builds ask GitHub Releases once a day whether a newer Chord is out; nothing installs by itself. */
+  checkForUpdates: boolean;
   /** New chords keep their own sign-ins (a profile of their own) instead of sharing everyone's. */
   separateSignIns: boolean;
+  /** First run is done (DESIGN.md §8.1). Only a brand-new profile starts without it. */
+  onboarded: boolean;
   /** Today tabs unused this long go to the archive. */
   archiveAfter: ArchiveAfter;
   /** Background tabs unused for an hour free their memory, and wake when shown again. */
   sleepTabs: boolean;
+  /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
+  autoPip: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -244,9 +284,14 @@ export const DEFAULT_SETTINGS: Settings = {
   colorScheme: 'system',
   interface: { contrast: 0.5, glass: 0.5 },
   themes: [],
+  extensionButtons: 'sidebar',
+  searchSuggestions: true,
+  checkForUpdates: true,
   separateSignIns: false,
+  onboarded: true,
   archiveAfter: '12h',
   sleepTabs: true,
+  autoPip: true,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -271,9 +316,14 @@ export interface SettingsPatch {
   motion?: Partial<MotionSettings>;
   colorScheme?: ColorScheme;
   interface?: Partial<InterfaceSettings>;
+  extensionButtons?: ExtensionButtons;
+  searchSuggestions?: boolean;
+  checkForUpdates?: boolean;
   separateSignIns?: boolean;
+  onboarded?: boolean;
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
+  autoPip?: boolean;
 }
 
 export interface State {
@@ -282,6 +332,10 @@ export interface State {
   settings: Settings;
   sitePermissions: SitePermissions;
   downloads: Record<string, Download>;
+  /** By `extensionKey(profileId, id)`. */
+  extensions: Record<string, InstalledExtension>;
+  /** Extensions removed this session, newest first, for Undo (not persisted). */
+  removedExtensions: InstalledExtension[];
   chords: Record<ChordId, Chord>;
   nodes: Record<NodeId, SidebarNode>;
   windows: Record<WindowId, WindowModel>;
@@ -317,6 +371,8 @@ export const emptyState = (): State => ({
   settings: defaultSettings(),
   sitePermissions: {},
   downloads: {},
+  extensions: {},
+  removedExtensions: [],
   chords: {},
   nodes: {},
   windows: {},
@@ -327,4 +383,4 @@ export const emptyState = (): State => ({
   deletedFolders: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false };

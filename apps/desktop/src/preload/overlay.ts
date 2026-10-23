@@ -16,6 +16,14 @@ const api: OverlayApi = {
     search: (query) => invoke('history:search', { query }),
     choose: (text, destination, address) => invoke('history:choose', address ? { text, destination, address } : { text, destination }),
   },
+  extensions: {
+    state: () => invoke('extensions:state'),
+    activate: (id, anchor) => invoke('extension:activate', { id, anchor }),
+    manage: () => invoke('extensions:manage'),
+  },
+  search: {
+    suggest: (query, engine) => invoke('search:suggest', engine ? { query, engine } : { query }),
+  },
   archive: { restore: (archiveId) => invoke('archive:restore', { archiveId }) },
 };
 

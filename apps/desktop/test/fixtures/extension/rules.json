@@ -1,0 +1,8 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "blocked-by-extension", "resourceTypes": ["xmlhttprequest", "script", "image", "main_frame", "sub_frame", "other"] }
+  }
+]

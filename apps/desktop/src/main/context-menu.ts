@@ -4,7 +4,7 @@
  * Inspect in development builds.
  */
 import { searchEngine, searchUrl, type ActionId, type Platform, type SearchEngineId } from '@chord/core';
-import { clipboard, Menu, type BaseWindow, type ContextMenuParams, type MenuItemConstructorOptions, type WebContents } from 'electron';
+import { clipboard, Menu, type BaseWindow, type ContextMenuParams, type MenuItem, type MenuItemConstructorOptions, type WebContents } from 'electron';
 import { acceleratorFor } from './menu';
 import { platform } from './platform';
 
@@ -18,7 +18,11 @@ export interface ContextMenuDeps {
   openTab(url: string, background: boolean): void;
   /** The window showing this contents, and the view's offset in it, to place the menu where the click was. */
   placement(): { window: BaseWindow; x: number; y: number } | undefined;
+  /** Items extensions added for what was clicked (ARCHITECTURE.md §12). */
+  extensionItems?(params: ContextMenuParams): MenuItem[];
 }
+
+type Item = MenuItemConstructorOptions | MenuItem;
 
 const MAX_SEARCH_PREVIEW = 32;
 
@@ -29,9 +33,9 @@ function preview(text: string): string {
 
 const accel = (id: ActionId, p: Platform = platform) => acceleratorFor(id, p);
 
-export function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps: ContextMenuDeps): MenuItemConstructorOptions[] {
-  const items: MenuItemConstructorOptions[] = [];
-  const section = (...entries: MenuItemConstructorOptions[]) => {
+export function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps: ContextMenuDeps): Item[] {
+  const items: Item[] = [];
+  const section = (...entries: Item[]) => {
     if (entries.length === 0) return;
     if (items.length > 0) items.push({ type: 'separator' });
     items.push(...entries);
@@ -97,6 +101,9 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
       { label: 'View page source', accelerator: accel('page.viewSource'), click: () => deps.openTab(`view-source:${params.pageURL}`, false) },
     );
   }
+
+  // Extensions' own items, as Chrome places them: after the page's, before Inspect.
+  if (web) section(...(deps.extensionItems?.(params) ?? []));
 
   if (deps.inspect) {
     section({

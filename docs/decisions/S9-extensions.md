@@ -270,7 +270,15 @@ Deferred: `sidePanel` (Bitwarden), `userScripts` (uBO Lite advanced mode), exten
 - **Electron #54685** on macOS, where it was reported, using `persist:` partitions.
 - **The CWS "Add to Chord" flow end to end, and a real version update.**
 
-## Corrections for ARCHITECTURE.md §12 (next doc pass)
+## What M1.5 found while building it
+
+- **Popup sizing.** `enablePreferredSizeMode` on a WebContentsView reports a size only for pages in the view's first renderer process. A minimal repro on Electron 45: a fixed-size page reports 300×200 when loaded first, and nothing after a cross-process navigation. An extension popup always moves into its extension's process, so `preferred-size-changed` never fires for it. (This spike measured sizes because its views happened to start there.)
+  - Chord measures the page itself instead. A script in Chord's own isolated world (4321) watches the root element with a ResizeObserver, reads its max-content size, and reports it with a tagged `console.debug`. Main reads it from `console-message` and clamps it to 25×25 to 800×600 (`main/extensions/sizer.ts`).
+  - A page could log the tag itself. All it could do is resize its own popup within that clamp, which is harmless.
+- **The install step needs retries.** A service worker that's still starting can't be sent to, so the library's send fails. Chord retries with backoff for up to 15 s. With that, rulesets reach uBO Lite and 1Password, and `onInstalled` reaches every test extension that listens for it. uBO Lite doesn't listen for it.
+- **`queueAndSendEvent()` in the library** ended its wait when *any* extension listened for the event, then sent it only to the target. That could drop `runtime.onInstalled`. Fixed in the vendored copy; a candidate for upstream.
+
+## Corrections for ARCHITECTURE.md §12 (applied in M1.5)
 
 - `declarativeNetRequest` **is** present and enforcing in Electron 45. The gap is that manifest-enabled rulesets aren't turned on at load. D5 can now consider uBO Lite.
 - Issue references:

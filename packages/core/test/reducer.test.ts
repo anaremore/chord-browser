@@ -157,6 +157,14 @@ describe('reducer', () => {
     expect(t.run({ t: 'settings.set', settings: { motion: { sidebar: false } } }).patches).toHaveLength(0);
   });
 
+  it('turns search suggestions and update checks off and on', () => {
+    const t = setup();
+    expect(t.state.settings).toMatchObject({ searchSuggestions: true, checkForUpdates: true });
+    t.run({ t: 'settings.set', settings: { searchSuggestions: false, checkForUpdates: false } });
+    expect(t.state.settings).toMatchObject({ searchSuggestions: false, checkForUpdates: false });
+    expect(t.run({ t: 'settings.set', settings: { searchSuggestions: false } }).patches).toHaveLength(0);
+  });
+
   it("updates a chord's theme and clamps grain", () => {
     const t = setup();
     t.run({ t: 'chord.theme', chordId: 'c1', theme: { grain: 3, appearance: 'dark' } });

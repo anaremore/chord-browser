@@ -660,6 +660,37 @@ kbd {
   inset: 0;
 }
 
+/*
+ * A video popped out of this tab (auto picture-in-picture): the glyph sits in
+ * the audio slot just before ×'s (DESIGN.md §7.2), so nothing moves on hover.
+ * Click brings the video home.
+ */
+.row[data-pip],
+.item:hover .row[data-pip] {
+  padding-inline-end: calc(var(--space-2) + var(--size-hit-min) * 2);
+}
+
+.pip {
+  position: absolute;
+  inset-block-start: calc((var(--size-row) - var(--size-hit-min)) / 2);
+  inset-inline-end: calc(var(--space-1) + var(--size-hit-min));
+  z-index: var(--z-sticky);
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-accent);
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.pip:hover {
+  background: var(--color-item-hover);
+}
+
 /* ---------- Footer ---------- */
 
 .footer {

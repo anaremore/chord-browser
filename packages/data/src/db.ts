@@ -22,6 +22,7 @@ import {
   type Choice,
   type Download,
   type Favorite,
+  type InstalledExtension,
   type FolderNode,
   type PersistedState,
   type SidebarNode,
@@ -193,9 +194,24 @@ export class ChordDatabase {
         createdAt: num(r['created_at']),
       }),
     );
+    const extensions = (this.sql('SELECT * FROM extension').all() as Row[]).map(
+      (r): InstalledExtension => ({
+        id: str(r['id']),
+        profileId: str(r['profile_id']),
+        name: str(r['name']),
+        version: str(r['version']),
+        source: r['source'] === 'unpacked' ? 'unpacked' : 'store',
+        path: str(r['path']),
+        notifiedVersion: strOrNull(r['notified_version']),
+        pinned: num(r['pinned']) !== 0,
+        installedAt: num(r['installed_at']),
+        updatedAt: num(r['updated_at']),
+      }),
+    );
     if (chordRows.length === 0) {
-      const anything = Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0 || downloads.length > 0 || favorites.length > 0;
-      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads, favorites } : null;
+      const anything =
+        Object.keys(settings).length > 0 || Object.keys(sitePermissions).length > 0 || downloads.length > 0 || extensions.length > 0 || favorites.length > 0;
+      return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads, extensions, favorites } : null;
     }
 
     const chords = chordRows.map(
@@ -252,7 +268,7 @@ export class ChordDatabase {
       }),
     );
 
-    return { chords, nodes, windows, settings, sitePermissions, downloads, favorites };
+    return { chords, nodes, windows, settings, sitePermissions, downloads, extensions, favorites };
   }
 
   /** One batch, all or nothing. */
@@ -266,6 +282,7 @@ export class ChordDatabase {
         else if (op.k === 'sitePermission') this.writeSitePermissions(op.id, op.value, now);
         else if (op.k === 'download') this.writeDownload(op.id, op.value);
         else if (op.k === 'favorite') this.writeFavorite(op.id, op.value, now);
+        else if (op.k === 'extension') this.writeExtension(op.id, op.value);
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
@@ -345,29 +362,38 @@ export class ChordDatabase {
   /**
    * History pages matching every typed word as a prefix (FTS5, best bm25
    * first), and the chord's picks for text starting with what was typed.
-   * One letter matches nothing in history: the index starts at two.
+   * One letter matches nothing in history: the index starts at two. Nothing
+   * at all (the command bar's `@history` before you type) lists recent pages.
    */
   search(query: string, chordId: string | null, now = Date.now()): SearchResult {
     const words = terms(query).filter((w) => [...w].length >= 2);
-    const history =
-      words.length === 0
+    const rows: Row[] = !query.trim()
+      ? (this.sql(
+          `SELECT url, title, visit_count, typed_count, last_visit_at, decay_day
+             FROM history_url WHERE profile_id = ? ORDER BY last_visit_at DESC LIMIT ?`,
+        ).all(DEFAULT_PROFILE, SEARCH_LIMIT) as Row[])
+      : words.length === 0
         ? []
-        : (
-            this.sql(
-              `SELECT h.url, h.title, h.visit_count, h.typed_count, h.last_visit_at, h.decay_day
-                 FROM history_fts JOIN history_url h ON h.id = history_fts.rowid
-                WHERE history_fts MATCH ? AND h.profile_id = ?
-                ORDER BY bm25(history_fts) LIMIT ?`,
-            ).all(words.map((w) => `"${w.replaceAll('"', '""')}"*`).join(' '), DEFAULT_PROFILE, SEARCH_LIMIT) as Row[]
-          ).map((r) => ({
-            url: str(r['url']),
-            title: str(r['title']),
-            visitCount: num(r['visit_count']),
-            typedCount: num(r['typed_count']),
-            lastVisitAt: num(r['last_visit_at']),
-            frecency: frecencyOn(num(r['decay_day']), now),
-          }));
-    const archive = words.length === 0 ? [] : this.archiveMatching(words, ARCHIVE_SEARCH_LIMIT, 'bm25(archive_fts)');
+        : (this.sql(
+            `SELECT h.url, h.title, h.visit_count, h.typed_count, h.last_visit_at, h.decay_day
+               FROM history_fts JOIN history_url h ON h.id = history_fts.rowid
+              WHERE history_fts MATCH ? AND h.profile_id = ?
+              ORDER BY bm25(history_fts) LIMIT ?`,
+          ).all(words.map((w) => `"${w.replaceAll('"', '""')}"*`).join(' '), DEFAULT_PROFILE, SEARCH_LIMIT) as Row[]);
+    const history = rows.map((r) => ({
+      url: str(r['url']),
+      title: str(r['title']),
+      visitCount: num(r['visit_count']),
+      typedCount: num(r['typed_count']),
+      lastVisitAt: num(r['last_visit_at']),
+      frecency: frecencyOn(num(r['decay_day']), now),
+    }));
+    // The archive the same way: nothing typed (`@archive` before you type) lists the newest.
+    const archive = !query.trim()
+      ? this.archiveList('', ARCHIVE_SEARCH_LIMIT).items
+      : words.length === 0
+        ? []
+        : this.archiveMatching(words, ARCHIVE_SEARCH_LIMIT, 'bm25(archive_fts)');
     const text = foldChoiceText(query);
     const choices: Choice[] =
       chordId && text
@@ -517,6 +543,21 @@ export class ChordDatabase {
        ON CONFLICT(id) DO UPDATE SET path = excluded.path, filename = excluded.filename, state = excluded.state,
          received = excluded.received, total = excluded.total, ended_at = excluded.ended_at`,
     ).run(id, DEFAULT_PROFILE, d.url, d.path, d.filename, d.mime, d.state, d.received, d.total, d.startedAt, d.endedAt);
+  }
+
+  /** `key` is `extensionKey(profileId, id)`; a deletion only has the key to go on. */
+  private writeExtension(key: string, e: InstalledExtension | null): void {
+    if (!e) {
+      const split = key.lastIndexOf(':');
+      this.sql('DELETE FROM extension WHERE profile_id = ? AND id = ?').run(key.slice(0, split), key.slice(split + 1));
+      return;
+    }
+    this.sql(
+      `INSERT INTO extension (profile_id, id, name, version, source, path, notified_version, pinned, installed_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(profile_id, id) DO UPDATE SET name = excluded.name, version = excluded.version, source = excluded.source,
+         path = excluded.path, notified_version = excluded.notified_version, pinned = excluded.pinned, updated_at = excluded.updated_at`,
+    ).run(e.profileId, e.id, e.name, e.version, e.source, e.path, e.notifiedVersion, e.pinned ? 1 : 0, e.installedAt, e.updatedAt);
   }
 
   private writeWindow(id: string, win: WindowModel | null): void {

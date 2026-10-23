@@ -104,6 +104,19 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
   try {
     const { shell, today, pinned } = await setUp(app, ['/second', '/third']);
 
+    // The command bar offers the sidebar's actions.
+    const overlay = await pageWhere(app, isOverlay);
+    await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
+    for (const [typed, title] of [
+      ['new folder', 'New folder with this tab'],
+      ['favorites', 'Add this tab to Favorites'],
+      ['tidy', 'Clear Today'],
+    ]) {
+      await overlay.getByRole('textbox').fill(typed!);
+      await expect(overlay.getByRole('option').filter({ hasText: title! })).toHaveCount(1);
+    }
+    await overlay.keyboard.press('Escape');
+
     // "New folder with this tab": the active tab (Third) goes into a new folder in Pinned, named right away.
     await runAction(shell, 'folder.new');
     const name = shell.getByRole('textbox', { name: 'Folder name' });

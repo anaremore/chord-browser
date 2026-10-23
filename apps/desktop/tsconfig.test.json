@@ -16,6 +16,7 @@
   },
   "include": [
     "test/e2e",
+    "test/fixtures",
     "test/packaged",
     "src/renderer/env.d.ts"
   ]

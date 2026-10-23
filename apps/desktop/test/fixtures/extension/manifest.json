@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Chord Test Extension",
+  "version": "1.0",
+  "description": "A small extension for Chord's end-to-end tests: an action popup with a badge, a content script, a static rule and a context-menu item.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4rMpFnF8+ERPgHPQVm0za1Pdsh/TxU+dSal7A91r0b2som2oD3FBYNsqdBzfbTTWQey/CZ1S4O7eC0mzqu/E5urbKLjy8SE2PRmoeFBVzSJbNDmCQwox4HZZJ6sXjiAgKE+AxIoTu7gEa13h9gCJzsoH7Y/bi9wHwfwRriISmKdLHQiW3pVUH/nEKD3m4mBn4ifPjNA0P2FbGr4QYnyiiqZaZ4AGMEdjBdPJi/gn/x/Od3BTnIAxeTvL9bPn+by+rEHU15WwL159btsHHd9QHpB3CUwxkSxkRmo35dKr4hGRk34AFZZB+U2uM/pPgo1Vv1idrspm+AlkIt0xIkR/YQIDAQAB",
+  "permissions": ["storage", "contextMenus", "declarativeNetRequest"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Chord Test", "default_popup": "popup.html" },
+  "content_scripts": [{ "matches": ["http://127.0.0.1/*"], "js": ["content.js"], "run_at": "document_start" }],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "blocklist", "enabled": true, "path": "rules.json" }]
+  }
+}

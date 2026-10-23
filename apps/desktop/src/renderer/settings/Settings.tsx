@@ -10,12 +10,13 @@ import {
   SHORTCUTS,
   formatKeys,
   keysFor,
+  searchEngine,
   type ArchiveAfter,
   type MotionSettings,
   type Shortcut,
 } from '@chord/core';
-import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo } from '@chord/ipc';
-import { Check, Info, Keyboard, Palette, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
+import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
+import { Check, Info, Keyboard, Palette, Puzzle, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
@@ -23,12 +24,14 @@ import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import { AppearanceSection } from './Appearance';
 import { ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
+import { ExtensionsSection } from './Extensions';
 import styles from './Settings.module.css';
 
 const SECTIONS = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'motion', label: 'Motion', icon: Sparkles },
+  { id: 'extensions', label: 'Extensions', icon: Puzzle },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
 ] as const;
@@ -148,6 +151,21 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
           </button>
         ))}
       </div>
+      <div className={`${styles.group} ${styles.groupAfter}`}>
+        <Row
+          label="Search suggestions"
+          description={`As you type a search, ${searchEngine(engine).name} suggests ways to finish it. What you type is sent to ${searchEngine(engine).name}; addresses you type never are.`}
+          changed={snapshot.settings.searchSuggestions !== DEFAULT_SETTINGS.searchSuggestions}
+          onReset={() => void api.settings.set({ searchSuggestions: DEFAULT_SETTINGS.searchSuggestions })}
+          control={
+            <Switch
+              label="Search suggestions"
+              checked={snapshot.settings.searchSuggestions}
+              onChange={(searchSuggestions) => void api.settings.set({ searchSuggestions })}
+            />
+          }
+        />
+      </div>
 
       <h2 className={styles.groupTitle}>Tabs</h2>
       <div className={styles.group}>
@@ -172,6 +190,15 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
           onReset={() => void api.settings.set({ sleepTabs: DEFAULT_SETTINGS.sleepTabs })}
           control={
             <Switch label="Sleep tabs you're not using" checked={snapshot.settings.sleepTabs} onChange={(sleepTabs) => void api.settings.set({ sleepTabs })} />
+          }
+        />
+        <Row
+          label="Pop out playing videos when you switch away"
+          description="A video you're watching keeps playing in a small window over everything. Come back to its tab and it slides home."
+          changed={snapshot.settings.autoPip !== DEFAULT_SETTINGS.autoPip}
+          onReset={() => void api.settings.set({ autoPip: DEFAULT_SETTINGS.autoPip })}
+          control={
+            <Switch label="Pop out playing videos when you switch away" checked={snapshot.settings.autoPip} onChange={(autoPip) => void api.settings.set({ autoPip })} />
           }
         />
       </div>
@@ -291,7 +318,70 @@ function Shortcuts({ info }: { info: SystemInfo }) {
   );
 }
 
-function About({ about }: { about: AboutInfo }) {
+const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+
+function checkedAgo(at: number): string {
+  const minutes = Math.round((Date.now() - at) / 60_000);
+  if (minutes < 1) return 'Checked just now.';
+  if (minutes < 60) return `Checked ${relativeTime.format(-minutes, 'minute')}.`;
+  return `Checked ${relativeTime.format(-Math.round(minutes / 60), 'hour')}.`;
+}
+
+/** Settings → About: the notify-only update check's answer, and its switch. */
+function Updates({ enabled }: { enabled: boolean }) {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  useEffect(() => void api.settings.updateStatus().then(setStatus), []);
+  if (!status) return null;
+  const checkNow = async () => {
+    setStatus({ state: 'checking' });
+    setStatus(await api.settings.checkForUpdates());
+  };
+  const checkButton = (
+    <button type="button" className={styles.linkButton} disabled={status.state === 'checking'} onClick={() => void checkNow()}>
+      Check now
+    </button>
+  );
+  const row = (() => {
+    switch (status.state) {
+      case 'unavailable':
+        return <Row label="Updates" description="Installed copies of Chord check for new versions. This is a development build." control={null} />;
+      case 'idle':
+        return <Row label="Check for updates" description="Not checked yet." control={checkButton} />;
+      case 'checking':
+        return <Row label="Checking for updates…" control={checkButton} />;
+      case 'current':
+        return <Row label="Chord is up to date" description={checkedAgo(status.checkedAt)} control={checkButton} />;
+      case 'failed':
+        return <Row label="Couldn’t check for updates" description="Chord will try again later." control={checkButton} />;
+      case 'available':
+        return (
+          <Row
+            label={`Chord ${status.version} is out`}
+            description="Download it from the release page; it installs over this version, keeping your tabs and settings."
+            control={
+              <button type="button" className={styles.linkButton} onClick={() => void api.settings.openUrl(status.url)}>
+                See what’s new
+              </button>
+            }
+          />
+        );
+    }
+  })();
+  return (
+    <div className={`${styles.group} ${styles.groupBelow}`}>
+      {row}
+      <Row
+        label="Check for updates automatically"
+        description="Once a day, Chord asks GitHub whether a newer version is out. Nothing about you is sent, and nothing installs by itself."
+        changed={enabled !== DEFAULT_SETTINGS.checkForUpdates}
+        onReset={() => void api.settings.set({ checkForUpdates: DEFAULT_SETTINGS.checkForUpdates })}
+        control={<Switch label="Check for updates automatically" checked={enabled} onChange={(checkForUpdates) => void api.settings.set({ checkForUpdates })} />}
+      />
+    </div>
+  );
+}
+
+function About({ about, snapshot }: { about: AboutInfo; snapshot: SettingsSnapshot }) {
   return (
     <>
       <div className={styles.aboutHero}>
@@ -301,11 +391,17 @@ function About({ about }: { about: AboutInfo }) {
         <h1 className={styles.aboutName}>Chord</h1>
         <p className={styles.sectionDescription}>Version {about.version}</p>
       </div>
+      <Updates enabled={snapshot.settings.checkForUpdates} />
       <div className={styles.group}>
         <Row label="Engine" control={<span className={styles.value}>Chromium {about.chromium}</span>} />
         <Row label="Electron" control={<span className={styles.value}>{about.electron}</span>} />
         <Row label="Platform" control={<span className={styles.value}>{`${about.platform} · ${about.arch}`}</span>} />
         <Row label="License" description="Free and open source. No accounts, no telemetry." control={<span className={styles.value}>MIT</span>} />
+        <Row
+          label="This build"
+          description="Includes electron-chrome-extensions, which is GPL-3.0, so Chord’s release builds are distributed under GPL-3.0. Chord’s own source stays MIT."
+          control={<span className={styles.value}>GPL-3.0</span>}
+        />
       </div>
       <div className={styles.links}>
         <button type="button" className={styles.linkButton} onClick={() => void api.settings.openUrl(REPO_URL)}>
@@ -379,8 +475,9 @@ export function Settings({ initialInfo, initialSnapshot, about }: { initialInfo:
               {section === 'general' && <General snapshot={snapshot} info={info} />}
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
+              {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'shortcuts' && <Shortcuts info={info} />}
-              {section === 'about' && <About about={about} />}
+              {section === 'about' && <About about={about} snapshot={snapshot} />}
             </motion.div>
           </AnimatePresence>
         </main>

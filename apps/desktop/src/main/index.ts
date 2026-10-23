@@ -1,20 +1,23 @@
 import { ARCHIVE_AFTER_MS, IDLE_CHECK_MS, SLEEP_AFTER_MS, profilePartition, restoreState, uuidv7, type Command, type WindowId } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
-import { join } from 'node:path';
-import { app, clipboard, Menu, nativeTheme, session, type Session, type WebContents } from 'electron';
+import { delimiter, join } from 'node:path';
+import { app, clipboard, Menu, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { configureAppIdentity } from './identity';
 import { handle } from './ipc';
 import { DownloadManager } from './downloads';
+import { WebStore } from './extensions/webstore';
 import { PermissionBroker } from './permissions';
 import { openable, urlsFromArgv } from './os-links';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { systemInfo } from './platform';
 import { handleChordProtocol, registerSchemes } from './protocol';
 import { configureUiSession, hardenAllWebContents } from './security';
+import { Suggestions } from './suggestions';
+import { UpdateChecker } from './updates';
 import { chromiumUserAgent } from './user-agent';
 
 // Before `ready`: privileged schemes, identity (decides userData), sandbox for every renderer.
@@ -42,6 +45,14 @@ const downloads = new DownloadManager({
   defaultSession: () => profileSession('default'),
 });
 let profileSession: (profileId: string) => Session;
+const updates = new UpdateChecker({
+  enabled: () => browser?.store.state.settings.checkForUpdates ?? false,
+  onAvailable: (release) => browser?.announce(`update:${release.version}`, `${release.name} is out`, { label: 'What’s new', url: release.url }),
+});
+const suggestions = new Suggestions({
+  enabled: () => browser?.store.state.settings.searchSuggestions ?? false,
+  engine: () => browser?.store.state.settings.searchEngine ?? 'google',
+});
 
 function senderWindow(sender: WebContents) {
   const w = browser?.windowFor(sender);
@@ -80,6 +91,7 @@ function registerIpc(): void {
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
   handle('history:search', ({ query }, sender) => persistence!.search(query, activeChordOf(sender)));
+  handle('search:suggest', ({ query, engine }, sender) => suggestions.suggest(sender.id, query, engine));
   handle('history:choose', ({ text, destination, address }, sender) => {
     const chordId = activeChordOf(sender);
     if (chordId) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
@@ -112,8 +124,25 @@ function registerIpc(): void {
   handle('settings:saveTheme', ({ theme }) => browser!.store.dispatch({ t: 'theme.save', theme }));
   handle('settings:deleteTheme', ({ id }) => browser!.store.dispatch({ t: 'theme.delete', id }));
   handle('settings:copyText', ({ text }) => clipboard.writeText(text));
+  handle('extensions:state', (_request, sender) => browser!.extensions.barState(senderWindow(sender)));
+  handle('extension:activate', ({ id, anchor }, sender) => browser!.extensions.activate(senderWindow(sender), id, anchor));
+  handle('extension:menu', ({ id, x, y }, sender) => browser!.extensions.menu(senderWindow(sender), id, { x, y }));
+  handle('extensions:manage', () => browser!.openSettings('extensions'));
+  handle('extensions:install', ({ input }, sender) => {
+    // Into the profile of the chord the caller's window shows (Settings: the last-used window's).
+    const w = browser!.windowFor(sender) ?? browser!.lastBrowserWindow();
+    const state = browser!.store.state;
+    const chordId = w ? state.windows[w.id]?.activeChordId : undefined;
+    const profileId = (chordId ? state.chords[chordId]?.profileId : undefined) ?? 'default';
+    return browser!.extensions.install(profileId, input, browser!.windowFor(sender) ? w?.id : undefined);
+  });
+  handle('extensions:remove', ({ profileId, id }) => browser!.extensions.remove(profileId, id));
+  handle('extensions:options', ({ profileId, id }) => browser!.extensions.openOptions(profileId, id));
+  handle('extensions:update', () => browser!.extensions.checkForUpdates());
   handle('settings:chordSignIns', ({ chordId, separate }) => browser!.setSeparateSignIns(chordId, separate));
   handle('settings:defaultBrowser', () => defaultBrowserStatus());
+  handle('settings:updateStatus', () => updates.status());
+  handle('settings:checkForUpdates', () => updates.checkNow());
   handle('settings:makeDefaultBrowser', async () => {
     await makeDefaultBrowser();
     return defaultBrowserStatus();
@@ -209,12 +238,19 @@ if (!app.requestSingleInstanceLock()) {
       newId: () => uuidv7(),
       theme: { stops: defaultChordStops(accentRgb ? rgbToOklch(accentRgb) : null), grain: 0.2, appearance: 'auto' },
       homeUrl: HOME_URL,
+      // Chrome's --no-first-run skips it. Playwright adds that switch to every Electron it drives,
+      // so development builds can ask for first run with CHORD_FIRST_RUN=1.
+      firstRun: (!app.isPackaged && process.env['CHORD_FIRST_RUN'] === '1') || !app.commandLine.hasSwitch('no-first-run'),
     });
     if (!opened.saved || opened.saved.chords.length === 0) persistence.recordAll(initial);
     // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
     await removeUnusedPartitions(app.getPath('userData'), new Set(Object.values(initial.chords).map((c) => c.profileId)));
 
     const store = persistence;
+    // Development and tests only (ignored when packaged): a stand-in Web Store and its signing key,
+    // and unpacked extension folders to load, like Chrome's --load-extension.
+    const dev = (name: string) => (app.isPackaged ? undefined : process.env[name] || undefined);
+    const publisherKeyHash = dev('CHORD_WEBSTORE_PUBLISHER_KEY_HASH');
     browser = new Browser({
       initial,
       uiSession: ui,
@@ -228,6 +264,16 @@ if (!app.requestSingleInstanceLock()) {
         sleepAfterMs: devMs('CHORD_SLEEP_AFTER_MS') ?? SLEEP_AFTER_MS,
       },
       onChange: (change) => store.record(change.patches, change.state),
+      extensions: {
+        root: join(app.getPath('userData'), 'Extensions'),
+        preloadPath: join(import.meta.dirname, '../preload/extensions.cjs'),
+        webStore: new WebStore({
+          fetch: (url, init) => net.fetch(url, init),
+          prodversion: process.versions.chrome,
+          ...(dev('CHORD_WEBSTORE_UPDATE_URL') ? { updateUrl: dev('CHORD_WEBSTORE_UPDATE_URL')! } : {}),
+        }),
+        ...(publisherKeyHash ? { publisherKeyHash } : {}),
+      },
     });
     Menu.setApplicationMenu(browser.appMenu);
     // Settings → Appearance → Color scheme is Chromium's own theme source, so web pages'
@@ -240,8 +286,21 @@ if (!app.requestSingleInstanceLock()) {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
     });
     registerIpc();
+    // End-to-end tests only (never when packaged): what extensions add to a page's
+    // right-click menu, read without opening a native menu.
+    if (dev('CHORD_E2E_HOOKS')) {
+      (globalThis as Record<string, unknown>)['chordTestHooks'] = {
+        extensionMenuLabels: (contentsId: number, params: Partial<ContextMenuParams>) => {
+          const contents = webContents.fromId(contentsId);
+          return contents ? browser!.extensions.contextMenuItems(contents, params as ContextMenuParams).map((item) => item.label) : [];
+        },
+      };
+    }
+    // Extensions load before any page does, so their content scripts reach restored tabs.
+    await browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean));
     browser.start();
     if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
+    updates.start();
   });
 
   app.on('window-all-closed', () => {
