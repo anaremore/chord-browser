@@ -320,6 +320,10 @@ test('minimal mode peeks the sidebar over the page from the left edge, and puts 
     await expect.poll(async () => (await views(app))[0]!.url).toBe(`${site.origin}/`);
     // The page didn't move.
     expect((await views(app))[0]!.x).toBe(4);
+    // It stays while the pointer is in it.
+    await shell.mouse.move(60, 300, { steps: 4 });
+    await shell.waitForTimeout(800);
+    await expect(sidebar).toBeVisible();
 
     // Pointing back at the page puts it away, and the shell goes back under the page.
     await shell.mouse.move(700, 300, { steps: 6 });

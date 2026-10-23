@@ -289,8 +289,18 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           <div className={styles.grain} />
         </div>
 
-        {/* Over the page while the sidebar peeks: a click here puts it away. */}
-        {peeking && <div className={styles.peekScrim} aria-hidden onPointerDown={() => setPeek(false)} />}
+        {/*
+          Over the page while the sidebar peeks: the pointer resting here (not in the sidebar) puts it
+          away after a moment, and a click at once. Coming from the edge, the sidebar is a few px away.
+        */}
+        {peeking && (
+          <div
+            className={styles.peekScrim}
+            aria-hidden
+            onPointerMove={() => schedulePeek(false, PEEK_DELAY_MS)}
+            onPointerDown={() => setPeek(false)}
+          />
+        )}
         {/* Pointing at the window's left edge peeks the sidebar (DESIGN.md §3.3). */}
         {collapsed && !peeking && (
           <div className={styles.edgeZone} aria-hidden onPointerEnter={() => schedulePeek(true, EDGE_PEEK_DELAY_MS)} onPointerLeave={keepPeek} />
@@ -302,6 +312,7 @@ export function App({ initialInfo, mirror }: { initialInfo: SystemInfo; mirror: 
           inert={collapsed && !peeking}
           aria-hidden={(collapsed && !peeking) || undefined}
           onPointerEnter={() => peeking && keepPeek()}
+          onPointerMove={() => peeking && keepPeek()}
           onPointerLeave={() => peeking && schedulePeek(false, PEEK_DELAY_MS)}
           onKeyDown={(e) => {
             if (peeking && e.key === 'Escape') setPeek(false);
