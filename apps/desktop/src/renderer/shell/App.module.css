@@ -1095,9 +1095,36 @@ kbd {
   inset-inline-start: var(--size-frame-inset);
 }
 
+/*
+ * The frame's snapshot (ARCHITECTURE.md §5; FrameSnapshot.tsx): pictures of
+ * the pages, drawn as the frame's cards, glide by transform alone while the
+ * frame changes size. Above the frame and the sidebar, as the pages are.
+ */
+.snapshots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.snapshot {
+  position: absolute;
+  border-radius: var(--radius-frame);
+  box-shadow: var(--shadow-frame);
+  transform-origin: 0 0;
+  transition: transform var(--spring-smooth-duration) var(--spring-smooth);
+  will-change: transform;
+}
+
+/* While the pictures show, they are the frame: the real one is already at its new size, hidden. */
+:global(:root[data-frame-snapshot]) .window .frame {
+  visibility: hidden;
+  transition: none;
+}
+
 /* Settings → Motion → "Animate the sidebar" off: collapse and dock are instant. */
 :global(:root[data-motion-off~='sidebar']) .window .sidebar,
-:global(:root[data-motion-off~='sidebar']) .window .frame {
+:global(:root[data-motion-off~='sidebar']) .window .frame,
+:global(:root[data-motion-off~='sidebar']) .snapshot {
   transition-duration: var(--duration-instant);
 }
 

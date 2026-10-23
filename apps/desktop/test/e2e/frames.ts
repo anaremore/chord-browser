@@ -110,6 +110,16 @@ export function framesOf(events: readonly TraceEvent[], pid: number): Frame[] {
   });
 }
 
+/**
+ * How often a renderer laid its page out, and how long that took in all, ms.
+ * Resizing a page's view costs it a layout: moving it every frame of a
+ * transition lays it out every frame (ARCHITECTURE.md §5, the frame snapshot).
+ */
+export function layoutsOf(events: readonly TraceEvent[], pid: number): { count: number; ms: number } {
+  const layouts = mainThread(events, pid).filter((e) => e.ph === 'X' && e.name === 'Layout' && e.dur !== undefined);
+  return { count: layouts.length, ms: layouts.reduce((total, e) => total + e.dur!, 0) / 1000 };
+}
+
 const STYLE_LAYOUT = new Set(['UpdateLayoutTree', 'Layout']);
 const PAINT = new Set(['PrePaint', 'Paint', 'Layerize', 'Commit']);
 

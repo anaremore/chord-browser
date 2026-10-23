@@ -705,6 +705,11 @@ export const invokeChannels = {
   'layout:peek': { roles: ['shell'], request: z.strictObject({ open: z.boolean() }), response: z.void() },
   /** A tab is being dragged from the sidebar: lift the shell over the page for split drop zones, and put it back. */
   'layout:lift': { roles: ['shell'], request: z.strictObject({ lifted: z.boolean() }), response: z.void() },
+  /**
+   * The frame's snapshot (ARCHITECTURE.md §5): its pictures are painted where the pages are (`shown`),
+   * or have reached where the pages are going (`moved`).
+   */
+  'layout:snapshot': { roles: ['shell'], request: z.strictObject({ seq: z.number().int().min(1), phase: z.enum(['shown', 'moved']) }), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
   // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
@@ -813,7 +818,28 @@ export interface EventPayloads {
   /** Peek's page moved on (title, address) or its card moved (the window resized). */
   'peek:state': PeekState;
   'duet:state': DuetView;
+  /** The frame changes size by its snapshot (ARCHITECTURE.md §5): pictures of the pages to show, move, then drop. */
+  'frame:snapshot': FrameSnapshotEvent;
 }
+
+/** One page's picture: where it is, in the shell's CSS pixels, and its pixels (RGBA, `width` × `height`, device pixels). */
+export interface SnapshotPane {
+  rect: Rect;
+  width: number;
+  height: number;
+  pixels: Uint8Array;
+}
+
+/**
+ * The snapshot technique, step by step (ARCHITECTURE.md §5): `show` the
+ * pictures where the pages are; `move` them to where the pages are going (the
+ * frame changed; again if it changes on the way); `drop` them once the pages
+ * are back.
+ */
+export type FrameSnapshotEvent =
+  | { seq: number; phase: 'show'; panes: SnapshotPane[] }
+  | { seq: number; phase: 'move'; rects: Rect[] }
+  | { seq: number; phase: 'drop' };
 
 export type InvokeChannel = keyof typeof invokeChannels;
 export type EventChannel = keyof EventPayloads;
@@ -846,6 +872,9 @@ export interface ShellApi {
     peek(open: boolean): Promise<void>;
     /** While a tab is dragged, the shell sits above the page so split view's drop zones show over it. */
     lift(lifted: boolean): Promise<void>;
+    /** The frame's snapshot: main's pictures of the pages while the frame changes size, and the shell's replies. */
+    onSnapshot(listener: (event: FrameSnapshotEvent) => void): () => void;
+    snapshot(seq: number, phase: 'shown' | 'moved'): Promise<void>;
   };
   menu: {
     app(anchor: Rect): Promise<void>;
