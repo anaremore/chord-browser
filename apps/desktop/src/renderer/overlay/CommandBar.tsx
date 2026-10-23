@@ -143,18 +143,19 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   const [mayComplete, setMayComplete] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(
-    () =>
-      api.overlay.onOpen((event) => {
-        setSession({ mode: event.mode, anchor: event.anchor, openedAt: performance.now(), initial: event.mode === 'edit' ? event.url : '', seq: event.seq });
-        setQuery(event.mode === 'edit' ? event.url : '');
-        setSelected(0);
-        setScope(null);
-        setMayComplete(false);
-        setSuggested(null);
-      }),
-    [],
-  );
+  useEffect(() => {
+    const stop = api.overlay.onOpen((event) => {
+      setSession({ mode: event.mode, anchor: event.anchor, openedAt: performance.now(), initial: event.mode === 'edit' ? event.url : '', seq: event.seq });
+      setQuery(event.mode === 'edit' ? event.url : '');
+      setSelected(0);
+      setScope(null);
+      setMayComplete(false);
+      setSuggested(null);
+    });
+    // Listening: an opening that waited for this (a brand-new window's) comes now.
+    void api.overlay.ready();
+    return stop;
+  }, []);
 
   // Typeable on the first frame (DESIGN.md §6.7): focus before the entrance animation runs.
   useLayoutEffect(() => {
@@ -334,7 +335,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
         <div className={styles.root} style={style}>
           <div className={styles.clearScrim} onMouseDown={close} />
           {session.mode === 'downloads' ? (
-            <DownloadsPanel state={state} anchor={session.anchor} transition={spring('overlay', 'commandBar')} onClose={close} />
+            <DownloadsPanel state={state} windowId={windowId} anchor={session.anchor} transition={spring('overlay', 'commandBar')} onClose={close} />
           ) : (
             <ExtensionsPanel key={session.openedAt} anchor={session.anchor} transition={spring('overlay', 'commandBar')} onClose={close} />
           )}

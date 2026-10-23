@@ -45,14 +45,15 @@ export function visibleTabs(state: State): Set<NodeId> {
 
 /**
  * Today tabs unused for at least `afterMs`, oldest first. Pinned tabs never
- * go; nor do tabs on screen, or ones the engine says are busy (`busy`:
+ * go, nor does a private window's tab (nothing of it is kept); nor do tabs on
+ * screen, or ones the engine says are busy (`busy`:
  * playing, sharing the camera or screen, in picture-in-picture).
  */
 export function archiveCandidates(state: State, now: number, afterMs: number | null, busy: ReadonlySet<NodeId> = new Set()): NodeId[] {
   if (afterMs === null) return [];
   const visible = visibleTabs(state);
   return Object.values(state.nodes)
-    .filter((n): n is TabNode => n.kind === 'tab' && n.section === 'today')
+    .filter((n): n is TabNode => n.kind === 'tab' && n.section === 'today' && !state.chords[n.chordId]?.private)
     .filter((t) => !visible.has(t.id) && !busy.has(t.id) && now - t.lastActiveAt >= afterMs)
     .sort((a, b) => a.lastActiveAt - b.lastActiveAt)
     .map((t) => t.id);

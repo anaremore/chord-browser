@@ -36,7 +36,7 @@ describe('downloads', () => {
     state = apply(state, { t: 'download.update', download: file('a', 'progressing', 1) }, ctx).state;
     state = apply(state, { t: 'download.update', download: file('b', 'completed', 2) }, ctx).state;
     expect(apply(state, { t: 'download.update', download: file('b', 'completed', 2) }, ctx).patches).toHaveLength(0);
-    state = apply(state, { t: 'download.clear' }, ctx).state;
+    state = apply(state, { t: 'download.clear', windowId: 'w' }, ctx).state;
     expect(Object.keys(state.downloads)).toEqual(['a']);
 
     const seed = { now: 1, newId: () => 'n', theme: { stops: [{ l: 0.7, c: 0.1, h: 1 }], grain: 0.2, appearance: 'auto' as const }, homeUrl: 'h' };

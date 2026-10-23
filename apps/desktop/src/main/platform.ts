@@ -24,23 +24,26 @@ function windowsSupportsMica(): boolean {
   return platform === 'win32' && build >= 22621;
 }
 
-const appearance = (): 'light' | 'dark' => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
+/** `forced`: a window that's always one appearance (a private window is always dark). */
+export type ForcedAppearance = 'light' | 'dark' | null;
 
-export const backgroundHex = (): string => rgbToHex(oklchToRgb(windowBackground[appearance()]));
+const appearance = (forced: ForcedAppearance = null): 'light' | 'dark' => forced ?? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
 
-function captionSymbolColor(): string {
-  return appearance() === 'dark' ? rgbToHex(oklchToRgb({ l: 0.96, c: 0, h: 0 })) : rgbToHex(oklchToRgb({ l: 0.24, c: 0, h: 0 }));
+export const backgroundHex = (forced: ForcedAppearance = null): string => rgbToHex(oklchToRgb(windowBackground[appearance(forced)]));
+
+function captionSymbolColor(forced: ForcedAppearance): string {
+  return appearance(forced) === 'dark' ? rgbToHex(oklchToRgb({ l: 0.96, c: 0, h: 0 })) : rgbToHex(oklchToRgb({ l: 0.24, c: 0, h: 0 }));
 }
 
 /** A transparent overlay lets the window material show behind the caption buttons. */
-export const titleBarOverlay = () => ({ color: '#00000000', symbolColor: captionSymbolColor(), height: size.strip });
+export const titleBarOverlay = (forced: ForcedAppearance = null) => ({ color: '#00000000', symbolColor: captionSymbolColor(forced), height: size.strip });
 
 export function usesTranslucentMaterial(): boolean {
   if (nativeTheme.prefersReducedTransparency) return false;
   return platform === 'darwin' || windowsSupportsMica();
 }
 
-export function windowChromeOptions(): BaseWindowConstructorOptions {
+export function windowChromeOptions(forced: ForcedAppearance = null): BaseWindowConstructorOptions {
   if (platform === 'darwin') {
     return {
       ...windowIcon(),
@@ -48,14 +51,14 @@ export function windowChromeOptions(): BaseWindowConstructorOptions {
       trafficLightPosition: { x: 16, y: (size.header - 12) / 2 },
       ...(usesTranslucentMaterial()
         ? { vibrancy: 'sidebar', visualEffectState: 'followWindow' }
-        : { backgroundColor: backgroundHex() }),
+        : { backgroundColor: backgroundHex(forced) }),
     };
   }
   return {
     ...windowIcon(),
     titleBarStyle: 'hidden',
-    titleBarOverlay: titleBarOverlay(),
-    ...(usesTranslucentMaterial() ? { backgroundMaterial: 'mica' } : { backgroundColor: backgroundHex() }),
+    titleBarOverlay: titleBarOverlay(forced),
+    ...(usesTranslucentMaterial() ? { backgroundMaterial: 'mica' } : { backgroundColor: backgroundHex(forced) }),
   };
 }
 

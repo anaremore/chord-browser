@@ -140,6 +140,14 @@ Windows / Linux
 - In OS fullscreen the bar slides away too and returns when you point at the top edge.
 - Collapsed or docked is remembered per window.
 
+### 3.4 More windows, and private windows
+
+- **⌘N** opens a window on the chord you're in, cascaded from the one you were in, with the command bar open. Every window lists the chord's tabs, and each shows its own. A tab shows in one window at a time: clicking one that another window is showing brings it to you, and that window goes back to the tab it used before.
+- **⌘⇧N** opens a private window. It has a single chord of its own, named "Private" and marked with an eye-off glyph where the chord's icon goes. Its colors are quiet graphite, always dark, whatever the color scheme.
+  - Its switcher shows only that chord. There's no New chord, no Archive button, no Pinned section, and no extensions shelf.
+  - Its empty state says: "This window is private. Chord won't remember the sites you visit in this window. Files you download are kept."
+  - Closing it forgets everything at once, with no confirmation.
+
 ---
 
 ## 4. Tokens

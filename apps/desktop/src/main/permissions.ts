@@ -3,9 +3,10 @@
  * window's popover and the answer is remembered per site; harmless ones are
  * allowed; everything else is denied. A prompt only shows for the tab you're
  * looking at, and a tab's pending prompts are denied if it navigates away or
- * closes.
+ * closes. A private window asks the same way, but its answers last only
+ * while it's open, and it never sees the ones you saved.
  */
-import type { Command, NodeId, PermissionDecision, SitePermission, State } from '@chord/core';
+import type { Command, NodeId, PermissionDecision, SitePermission, SitePermissions, State } from '@chord/core';
 import type { PermissionPrompt } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
 
@@ -34,8 +35,8 @@ export function sitePermissionsFor(permission: string, mediaTypes: readonly stri
 }
 
 /** The remembered answer for all of `wanted`: allow only if every one is allowed; block if any is blocked. */
-export function rememberedDecision(state: State, origin: string, wanted: readonly SitePermission[]): PermissionDecision | null {
-  const site = state.sitePermissions[origin];
+export function rememberedDecision(sites: SitePermissions, origin: string, wanted: readonly SitePermission[]): PermissionDecision | null {
+  const site = sites[origin];
   if (!site) return null;
   if (wanted.some((p) => site[p] === 'block')) return 'block';
   return wanted.every((p) => site[p] === 'allow') ? 'allow' : null;
@@ -53,6 +54,8 @@ function originOf(url: string | undefined): string | null {
 interface Pending extends PermissionPrompt {
   nodeId: NodeId;
   origin: string;
+  /** A private window's profile: its answers are kept for the window's life only. */
+  scope: string | null;
   answer(granted: boolean): void;
 }
 
@@ -77,13 +80,16 @@ export class PermissionBroker {
    * such tabs are never slept or archived (ARCHITECTURE.md §9).
    */
   private readonly capturing = new Set<NodeId>();
+  /** Private windows' answers, by their profile; forgotten when the window closes. */
+  private readonly privateAnswers = new Map<string, SitePermissions>();
 
   /** Called once Browser exists; sessions can be attached before that. */
   connect(deps: PermissionDeps): void {
     this.deps = deps;
   }
 
-  attach(ses: Session): void {
+  /** `scope`: a private window's profile, whose answers stay in memory and apart from your saved ones. */
+  attach(ses: Session, scope: string | null = null): void {
     ses.setPermissionRequestHandler((contents, permission, callback, details) => {
       if (HARMLESS.has(permission)) return callback(true);
       const mediaTypes = 'mediaTypes' in details ? (details.mediaTypes ?? []) : [];
@@ -91,12 +97,12 @@ export class PermissionBroker {
       const origin = originOf('requestingUrl' in details ? details.requestingUrl : undefined);
       const nodeId = this.deps?.nodeFor(contents);
       if (!wanted || !origin || !nodeId || !this.deps) return callback(false);
-      const remembered = rememberedDecision(this.deps.state(), origin, wanted);
+      const remembered = rememberedDecision(this.answers(scope), origin, wanted);
       if (remembered) {
         if (remembered === 'allow') this.granted(nodeId, wanted);
         return callback(remembered === 'allow');
       }
-      this.pending.push({ id: this.nextId++, nodeId, origin, host: new URL(origin).host, permissions: wanted, answer: callback });
+      this.pending.push({ id: this.nextId++, nodeId, origin, scope, host: new URL(origin).host, permissions: wanted, answer: callback });
       this.deps.onChange();
     });
     ses.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
@@ -104,8 +110,19 @@ export class PermissionBroker {
       const mediaTypes = details.mediaType && details.mediaType !== 'unknown' ? [details.mediaType] : [];
       const wanted = sitePermissionsFor(permission, mediaTypes);
       const origin = originOf(requestingOrigin);
-      return Boolean(wanted && origin && this.deps && rememberedDecision(this.deps.state(), origin, wanted) === 'allow');
+      return Boolean(wanted && origin && this.deps && rememberedDecision(this.answers(scope), origin, wanted) === 'allow');
     });
+  }
+
+  /** The answers that apply: your saved ones, or a private window's own. */
+  private answers(scope: string | null): SitePermissions {
+    if (scope) return this.privateAnswers.get(scope) ?? {};
+    return this.deps?.state().sitePermissions ?? {};
+  }
+
+  /** A private window closed: its answers go with it. */
+  forgetScope(scope: string): void {
+    this.privateAnswers.delete(scope);
   }
 
   /** The prompt to show for a tab, oldest first. */
@@ -119,14 +136,20 @@ export class PermissionBroker {
     const index = this.pending.findIndex((p) => p.id === id);
     if (index < 0) return;
     const [prompt] = this.pending.splice(index, 1);
-    if (decision !== 'dismiss') {
+    if (decision !== 'dismiss' && prompt!.scope) {
+      // A private window's answer lasts while it's open, and is never saved.
+      const sites = this.privateAnswers.get(prompt!.scope) ?? {};
+      const site = (sites[prompt!.origin] ??= {});
+      for (const permission of prompt!.permissions) site[permission] = decision;
+      this.privateAnswers.set(prompt!.scope, sites);
+    } else if (decision !== 'dismiss') {
       this.deps?.dispatch({ t: 'permission.set', origin: prompt!.origin, permissions: prompt!.permissions, decision });
     }
     if (decision === 'allow') this.granted(prompt!.nodeId, prompt!.permissions);
     prompt!.answer(decision === 'allow');
     // Other requests from the same site for the same things are answered too.
-    for (const other of this.pending.filter((p) => p.origin === prompt!.origin && this.deps)) {
-      const remembered = rememberedDecision(this.deps!.state(), other.origin, other.permissions);
+    for (const other of this.pending.filter((p) => p.origin === prompt!.origin && p.scope === prompt!.scope && this.deps)) {
+      const remembered = rememberedDecision(this.answers(other.scope), other.origin, other.permissions);
       if (remembered) {
         this.pending.splice(this.pending.indexOf(other), 1);
         if (remembered === 'allow') this.granted(other.nodeId, other.permissions);
