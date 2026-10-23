@@ -400,6 +400,8 @@ test('a tab dropped on another chord moves there, reloading signed out when that
     await chords.getByRole('tab', { name: 'Personal' }).click();
     const { overlay } = { overlay: await pageWhere(app, isOverlay) };
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
+    // Type once it's open: keys sent before its field has focus go nowhere.
+    await expect(overlay.getByRole('dialog')).toBeVisible();
     await overlay.keyboard.type(`${site.origin}/whoami`);
     await overlay.keyboard.press('Enter');
     const whoami = () => app.windows().find((p) => p.url() === `${site.origin}/whoami`)?.title();
