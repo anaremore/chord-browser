@@ -897,12 +897,16 @@ export class DuetService {
     const id = thread.providerSessionId;
     if (!id || !/^[A-Za-z0-9-]{8,80}$/.test(id)) return;
     if (thread.provider === 'claude') {
-      // Claude names the folder after its working directory as the OS reports it: with symlinks
-      // resolved (on macOS the temp and other folders sit under /private).
+      // Claude names the folder after its working directory as the OS reports it: on macOS and Linux
+      // with symlinks resolved (macOS's temp and other folders sit under /private); on Windows as
+      // given (a short 8.3 name stays short). The session id is exact, so both places are safe to try.
       const cwd = join(this.root, 'empty');
-      const folder = join(claudeConfigDir(), 'projects', claudeProjectFolder(await realpath(cwd).catch(() => cwd)));
-      await rm(join(folder, `${id}.jsonl`), { force: true }).catch(() => undefined);
-      await rm(join(folder, id), { recursive: true, force: true }).catch(() => undefined);
+      const resolved = await realpath(cwd).catch(() => cwd);
+      for (const dir of new Set([cwd, resolved])) {
+        const folder = join(claudeConfigDir(), 'projects', claudeProjectFolder(dir));
+        await rm(join(folder, `${id}.jsonl`), { force: true }).catch(() => undefined);
+        await rm(join(folder, id), { recursive: true, force: true }).catch(() => undefined);
+      }
       return;
     }
     const status = this.statuses.codex ?? (await detect('codex'));
