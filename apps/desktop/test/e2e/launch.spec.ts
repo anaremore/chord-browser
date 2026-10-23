@@ -403,7 +403,9 @@ test('Settings opens from the shell and its changes apply live', async () => {
     await settings.getByRole('button', { name: 'Add theme' }).click();
     await expect(settings.getByRole('button', { name: 'Pasted', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
-    // Deleting asks twice, in place; the chord keeps its colors.
+    // Deleting asks twice, in place; the chord keeps its colors. (The window behind wears the pasted
+    // colors first: it renders a frame after Settings shows the theme chosen.)
+    await expect.poll(tint).toMatch(/ 150 \/.+ 220 \//);
     const tintBeforeDelete = await tint();
     await settings.getByRole('button', { name: 'Edit Pasted' }).click();
     await settings.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -598,14 +600,18 @@ test('a playing video pops out when you switch away, and comes home when you ret
     await expect(bringBack).toHaveCount(0);
 
     // The PiP window's "Back to tab" ends PiP with the video still playing (Electron says nothing else):
-    // Chord brings the tab back.
+    // Chord brings the tab back. (Each switch is waited for in the sidebar, which renders a frame after
+    // main switches: otherwise the Video row still looks current from before, and the next click lands
+    // while Chord is still telling "Back to tab" from ✕.)
     await row('Second page').click();
+    await expect(row('Second page')).toHaveAttribute('aria-current', 'page');
     await expect.poll(pip).toBe('v');
     await video.evaluate(() => document.exitPictureInPicture());
     await expect(row('Video')).toHaveAttribute('aria-current', 'page');
 
     // Its ✕ pauses the video as PiP ends: you stay where you are.
     await row('Second page').click();
+    await expect(row('Second page')).toHaveAttribute('aria-current', 'page');
     await expect.poll(pip).toBe('v');
     await video.evaluate(() => {
       document.querySelector('video')!.pause();
