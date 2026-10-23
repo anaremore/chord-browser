@@ -10,7 +10,7 @@
 import type { Rect } from '@chord/ipc';
 import { radius } from '@chord/tokens';
 import { WebContentsView, type Session } from 'electron';
-import type { AppWindow, FloatingView } from '../window';
+import { toWindowRect, type AppWindow, type FloatingView } from '../window';
 import { POPUP_MAX, popupPosition, popupSize } from './geometry';
 import { parseSizeMessage, SIZER_SCRIPT, SIZER_WORLD } from './sizer';
 
@@ -115,7 +115,8 @@ export class ExtensionPopup implements FloatingView {
 
   private place(): void {
     if (this.closed) return;
-    const { x, y } = popupPosition(this.size, this.options.anchor, this.host.frameBounds);
+    const anchor = this.options.anchor && toWindowRect(this.options.anchor);
+    const { x, y } = popupPosition(this.size, anchor, this.host.frameBounds);
     this.view.setBounds({ x, y, ...this.size });
   }
 

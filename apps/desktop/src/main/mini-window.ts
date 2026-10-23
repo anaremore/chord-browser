@@ -13,7 +13,7 @@ import type { MiniState, Rect } from '@chord/ipc';
 import { size } from '@chord/tokens';
 import { BaseWindow, clipboard, Menu, nativeTheme, screen, type Session, type WebContents, type WebContentsView } from 'electron';
 import { send } from './ipc';
-import { miniWindowChromeOptions, platform, systemInfo } from './platform';
+import { miniWindowChromeOptions, onUiScale, platform, systemInfo, titleBarOverlay, trafficLightPosition, uiScale } from './platform';
 import type { TabManager } from './tabs';
 import { createUiView } from './window';
 
@@ -103,7 +103,15 @@ class MiniWindow {
     });
     const onTheme = () => send(this.bar.webContents, 'system:changed', systemInfo());
     nativeTheme.on('updated', onTheme);
+    const stopScale = onUiScale(() => {
+      if (this.window.isDestroyed()) return;
+      if (platform === 'darwin') this.window.setWindowButtonPosition(trafficLightPosition(size.miniBar, 12));
+      else this.window.setTitleBarOverlay?.(titleBarOverlay(null, size.miniBar));
+      onTheme();
+      this.layout();
+    });
     this.window.on('closed', () => {
+      stopScale();
       nativeTheme.off('updated', onTheme);
       clearTimeout(this.sizeTimer);
       if (!this.bar.webContents.isDestroyed()) this.bar.webContents.close();
@@ -142,8 +150,9 @@ class MiniWindow {
   private layout(): void {
     if (this.window.isDestroyed()) return;
     const { width, height } = this.window.getContentBounds();
-    const top = this.fullScreen ? 0 : size.miniBar;
-    this.bar.setBounds({ x: 0, y: 0, width, height: size.miniBar });
+    const bar = Math.round(size.miniBar * uiScale());
+    const top = this.fullScreen ? 0 : bar;
+    this.bar.setBounds({ x: 0, y: 0, width, height: bar });
     this.page.setBounds({ x: 0, y: top, width, height: Math.max(0, height - top) });
   }
 
@@ -256,7 +265,8 @@ export class MiniWindows {
         click: () => this.promote(contents, chord.id),
       })),
     );
-    menu.popup({ window: mini.window, x: Math.round(anchor.x), y: Math.round(anchor.y + anchor.height + 4) });
+    const s = uiScale();
+    menu.popup({ window: mini.window, x: Math.round(anchor.x * s), y: Math.round((anchor.y + anchor.height + 4) * s) });
   }
 
   copyLink(contents: WebContents): void {

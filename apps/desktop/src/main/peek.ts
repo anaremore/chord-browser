@@ -7,6 +7,7 @@
 import { hostOf, isPrivateChord, uuidv7, type ChordId, type Command, type LiveTab, type NodeId, type State, type WindowId } from '@chord/core';
 import { springCurve, springs } from '@chord/tokens';
 import type { Session, WebContents } from 'electron';
+import { uiScale } from './platform';
 import type { TabManager } from './tabs';
 import type { AppWindow } from './window';
 
@@ -75,9 +76,10 @@ export class Peeks {
     contents.on('did-navigate', follow);
     contents.on('did-navigate-in-page', follow);
     contents.on('page-title-updated', follow);
-    // The card grows from the click: the page's point, in window coordinates.
+    // The card grows from the click: the page's point, in UI units (the overlay's CSS pixels), as the card is.
     const page = this.deps.tabs.get(openerNodeId)?.getBounds();
-    const origin = point && page ? { x: page.x + point.x, y: page.y + point.y } : null;
+    const s = uiScale();
+    const origin = point && page ? { x: (page.x + point.x) / s, y: (page.y + point.y) / s } : null;
     const delay = this.deps.animates() ? springCurve(springs.overlay).durationMs : 0;
     w.openPeek(view, { url, host: hostOf(url) ?? '', title: '', origin }, delay);
     this.deps.changed();

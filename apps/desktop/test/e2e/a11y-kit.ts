@@ -98,7 +98,8 @@ export async function launch(env: Record<string, string>, { firstRun = false, pr
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
   if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
-  return watchForMainErrors(await electron.launch({ args: [appDir, ...(firstRun ? [] : ['--no-first-run']), ...args], env: childEnv, cwd: appDir }));
+  // On Linux, Playwright adds --no-sandbox unless told otherwise; Chord never runs without its sandbox.
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, ...(firstRun ? [] : ['--no-first-run']), ...args], env: childEnv, cwd: appDir }));
 }
 
 export async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {

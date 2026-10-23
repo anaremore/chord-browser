@@ -57,7 +57,7 @@ async function launch(home = '/', profile = mkdtempSync(join(tmpdir(), 'chord-e2
     CHORD_DUET_CODEX: join(profile, 'no-codex'),
   };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return watchForMainErrors(await electron.launch({ args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean, not: Page[] = []): Promise<Page> {

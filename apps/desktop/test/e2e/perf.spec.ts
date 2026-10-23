@@ -195,7 +195,7 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
     ...env,
   };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
-  return watchForMainErrors(await electron.launch({ args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
