@@ -217,8 +217,8 @@ function TargetSelect({ label, value, options, onChange, disabled }: { label: st
 
 /**
  * What the chosen browser holds and where it goes, then how the import is
- * going. `onOpenAccess` is the button for Safari's Full Disk Access; `onRetry`
- * reads the profile again (after quitting the browser).
+ * going; or why it can't be read, with a way on: `onOpenAccess` for Safari's
+ * Full Disk Access, or reading it again (after quitting the browser).
  */
 export function ImportDetails({ flow, chords, onOpenAccess }: { flow: ImportFlow; chords: ImportChordOption[]; onOpenAccess(): void }) {
   const browser = flow.source ? IMPORT_BROWSER_NAMES[flow.source.browser] : '';
