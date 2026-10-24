@@ -199,6 +199,7 @@ function registerIpc(): void {
   handle('layout:peek', ({ open }, sender) => browser!.setPeek(sender, open));
   handle('layout:lift', ({ lifted }, sender) => browser!.setLifted(sender, lifted));
   handle('layout:snapshot', ({ seq, phase }, sender) => senderWindow(sender).ackSnapshot(seq, phase));
+  handle('layout:snapshotPort', (_request, sender) => senderWindow(sender).connectSnapshots());
   handle('menu:chord', ({ chordId, x, y }, sender) => browser!.openChordMenu(sender, chordId, { x, y }));
   handle('action:run', async ({ action }, sender) => {
     browser!.run(action, sender);

@@ -731,6 +731,8 @@ export const invokeChannels = {
    * or have reached where the pages are going (`moved`).
    */
   'layout:snapshot': { roles: ['shell'], request: z.strictObject({ seq: z.number().int().min(1), phase: z.enum(['shown', 'moved']) }), response: z.void() },
+  /** The shell is listening: send it a MessagePort for the snapshot's events (`frame:port`). */
+  'layout:snapshotPort': { roles: ['shell'], request: z.void(), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
   // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
@@ -857,7 +859,11 @@ export interface EventPayloads {
   'frame:snapshot': FrameSnapshotEvent;
 }
 
-/** One page's picture: where it is, in the shell's CSS pixels, and its pixels (RGBA, `width` × `height`, device pixels). */
+/**
+ * One page's picture: where it is, in the shell's CSS pixels, and its pixels
+ * as `capturePage` gives them (BGRA, `width` × `height`, device pixels). The
+ * shell turns them into RGBA off its main thread.
+ */
 export interface SnapshotPane {
   rect: Rect;
   width: number;
@@ -871,6 +877,9 @@ export interface SnapshotPane {
  * frame changed; again if it changes on the way); `drop` them once the pages
  * are back.
  */
+/** The `message` event's data on the shell's window when main's snapshot port arrives (`connectSnapshots`). */
+export const SNAPSHOT_PORT_MESSAGE = 'chord:frame-port';
+
 export type FrameSnapshotEvent =
   | { seq: number; phase: 'show'; panes: SnapshotPane[] }
   | { seq: number; phase: 'move'; rects: Rect[] }
@@ -910,6 +919,13 @@ export interface ShellApi {
     /** The frame's snapshot: main's pictures of the pages while the frame changes size, and the shell's replies. */
     onSnapshot(listener: (event: FrameSnapshotEvent) => void): () => void;
     snapshot(seq: number, phase: 'shown' | 'moved'): Promise<void>;
+    /**
+     * Ask main for a port of its own for the snapshot's events, so pictures skip
+     * the preload: it arrives as a `message` event on this window, data
+     * `SNAPSHOT_PORT_MESSAGE`. Until then (and if it never does), they come
+     * through `onSnapshot`.
+     */
+    connectSnapshots(): Promise<void>;
   };
   menu: {
     app(anchor: Rect): Promise<void>;

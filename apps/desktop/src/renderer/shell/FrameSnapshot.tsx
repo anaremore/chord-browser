@@ -16,12 +16,17 @@
  * its new size (App.module.css). Pictures live in canvases in this page's
  * memory only, never in a URL or a file.
  */
-import type { FrameSnapshotEvent, Rect } from '@chord/ipc';
+import type { FrameSnapshotEvent, Rect, SnapshotPane, SNAPSHOT_PORT_MESSAGE } from '@chord/ipc';
 import { useEffect, useRef } from 'react';
 import { nextFrame } from '../shared/frames';
 import { afterNextPaint } from '../shared/perf';
 import { api } from './api';
 import styles from './App.module.css';
+import { bgraToRgba, imageData } from './pixels';
+import type { DrawablePane, DrawableSnapshotEvent } from './snapshot-events';
+
+/** The value of `SNAPSHOT_PORT_MESSAGE`, without bundling @chord/ipc's runtime into the shell. */
+const PORT_MESSAGE: typeof SNAPSHOT_PORT_MESSAGE = 'chord:frame-port';
 
 /** The transform that takes a picture drawn at `from` to `to` (its origin is its top-left corner). */
 export function transformFor(from: Rect, to: Rect): string {
@@ -50,21 +55,23 @@ function attach(host: HTMLElement): () => void {
     delete root.dataset['frameSnapshot'];
   };
 
-  const show = (event: Extract<FrameSnapshotEvent, { phase: 'show' }>) => {
+  // Usually an ImageBitmap the worker made, handed to the canvas as it is (no draw, no copy); main's pixels as
+  // sent until the worker has its port.
+  const show = (panes: readonly (DrawablePane | SnapshotPane)[], seq: number) => {
     clear();
-    const canvases = event.panes.map((pane) => {
+    const canvases = panes.map((pane) => {
       const canvas = document.createElement('canvas');
       canvas.className = styles.snapshot!;
       canvas.width = pane.width;
       canvas.height = pane.height;
       Object.assign(canvas.style, { left: `${pane.rect.x}px`, top: `${pane.rect.y}px`, width: `${pane.rect.width}px`, height: `${pane.rect.height}px` });
-      const pixels = new Uint8ClampedArray(pane.pixels.buffer as ArrayBuffer, pane.pixels.byteOffset, pane.pixels.byteLength);
-      canvas.getContext('2d', { alpha: false })?.putImageData(new ImageData(pixels, pane.width, pane.height), 0, 0);
+      if ('bitmap' in pane) canvas.getContext('bitmaprenderer')?.transferFromImageBitmap(pane.bitmap);
+      else canvas.getContext('2d', { alpha: false })?.putImageData(imageData(bgraToRgba(pane.pixels), pane.width, pane.height), 0, 0);
       return canvas;
     });
     host.replaceChildren(...canvases);
     root.dataset['frameSnapshot'] = '';
-    const mine: Showing = { seq: event.seq, canvases, from: event.panes.map((p) => p.rect), to: canvases.map(() => ''), arrived: false };
+    const mine: Showing = { seq, canvases, from: panes.map((p) => p.rect), to: canvases.map(() => ''), arrived: false };
     showing = mine;
     // Main moves the pages away only once the pictures are on screen in their place.
     afterNextPaint(() => {
@@ -105,8 +112,8 @@ function attach(host: HTMLElement): () => void {
   };
   host.addEventListener('transitionend', onArrived);
 
-  const off = api.layout.onSnapshot((event) => {
-    if (event.phase === 'show') show(event);
+  const handle = (event: FrameSnapshotEvent | DrawableSnapshotEvent) => {
+    if (event.phase === 'show') show(event.panes, event.seq);
     else if (event.phase === 'move') move(event);
     else {
       // The pages are back above the shell: let them paint, then the pictures go.
@@ -117,9 +124,22 @@ function attach(host: HTMLElement): () => void {
         }),
       );
     }
-  });
+  };
+
+  // Main's port for these events goes to a worker, which turns pictures into bitmaps off this thread.
+  const worker = new Worker(new URL('./snapshot-worker.ts', import.meta.url), { type: 'module', name: 'frame-snapshot' });
+  worker.onmessage = (e: MessageEvent<DrawableSnapshotEvent>) => handle(e.data);
+  const onPort = (e: MessageEvent) => {
+    if (e.source === window && e.data === PORT_MESSAGE && e.ports[0]) worker.postMessage(null, [e.ports[0]]);
+  };
+  window.addEventListener('message', onPort);
+  // Until the port arrives, events come the usual way.
+  const off = api.layout.onSnapshot(handle);
+  void api.layout.connectSnapshots();
   return () => {
     off();
+    window.removeEventListener('message', onPort);
+    worker.terminate();
     host.removeEventListener('transitionend', onArrived);
     clear();
   };
