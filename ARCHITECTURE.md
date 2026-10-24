@@ -49,6 +49,15 @@ Every library, API, and version below was checked on 2026-10-22. Anything not co
 | New tab ready to type | 0 extra frames: ⌘T opens the command bar, which is always mounted | same as command bar |
 | Shell UI frame rate | 120 fps where the display supports it, never < 60 fps | Chromium trace during scripted interactions: each frame's main-thread work and the longest task. (The Long Animation Frames API only reports frames over 50 ms.) |
 
+**Performance rules** (agreed 2026-10-24). Every change keeps to these; a review that finds one broken treats it as a bug.
+
+1. **Main never does heavy or blocking work.** It routes, lays out and answers events. Anything that can take more than about a millisecond goes to a utility process or a worker thread: SQLite (chord-data, §4), PDF text (the PDF reader), Safe Browsing's lists and hashing (a worker), and later filter-list compiling, import parsing and sync's encryption. Synchronous file I/O on main is for startup and quit only.
+2. **No per-request JavaScript where Chromium can decide alone.** A `webRequest` listener sends every request of every page through main's JavaScript thread. Use one only when nothing else can do the job, keep its work to microseconds, filter it by URL pattern, and share one dispatcher per session (Electron keeps a single listener per event). Prefer what runs inside Chromium's network process, such as `declarativeNetRequest` rules.
+3. **Measure before going native.** Native Node modules are a last resort: each must be rebuilt for six targets on every Electron major, signed, and built offline for Flathub, all inside the 72-hour patch window (§14.3). If a measurement shows JavaScript isn't fast enough, try WebAssembly first. A native module needs a decision in §16.
+4. **Small, batched IPC.** Messages carry what changed, not whole state: state patches, coalesced per animation frame in the renderers (§6.2), and layout over its own `MessagePort`. Large data stays where it's used. Main applies page styles itself (`insertCSS`) instead of sending them through a renderer, and bulk reads go through chord-data's own queries.
+5. **Lazy by default.** Renderers load code for a panel, window or page when it's first opened, except the command bar, which stays loaded so it opens at once. Hidden tabs sleep (§9), and nothing polls on a timer faster than it needs to.
+6. **Budgets are tests.** `perf.spec.ts` measures the budgets above on every CI run and reports them, and enforces them on reference hardware (`CHORD_PERF_ENFORCE=1`, [docs/testing/performance.md](docs/testing/performance.md)); CI's shared machines are too noisy to fail on. A change that needs more time on a frame or at launch makes its case against a budget, not around it.
+
 ---
 
 ## 2. Stack
