@@ -198,6 +198,7 @@ for (const mode of APPEARANCES) {
 
         // New tab, with tabs, actions and the search row.
         await runAction(shell, 'tab.new');
+        await expect(overlay.getByRole('combobox')).toBeFocused();
         await overlay.keyboard.type('se');
         await expect(overlay.getByRole('option').first()).toBeVisible();
         findings.push(...(await audit(overlay, 'command bar', { appearance: mode })));
@@ -488,6 +489,7 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
 
     // The command bar: a modal dialog, a combobox that owns a listbox, and the active option followed by aria-activedescendant.
     await runAction(shell, 'tab.new');
+    await expect(overlay.getByRole('combobox')).toBeFocused();
     await overlay.keyboard.type('pa');
     const dialog = overlay.getByRole('dialog', { name: 'New tab' });
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
@@ -615,6 +617,7 @@ test('Windows High Contrast: tints off; focus, selection, the active tab, switch
     // The command bar: the selected result is the selection color.
     await overlay.emulateMedia({ forcedColors: 'active' });
     await runAction(shell, 'tab.new');
+    await expect(overlay.getByRole('combobox')).toBeFocused();
     await overlay.keyboard.type('page');
     const option = overlay.getByRole('option', { selected: true });
     await expect(option).toBeVisible();

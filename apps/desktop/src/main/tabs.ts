@@ -71,6 +71,12 @@ export class TabManager {
     return undefined;
   }
 
+  /** The id of a page that isn't a tab (yet): Peek's, or a mini window's. */
+  floatingNodeFor(contents: WebContents): NodeId | undefined {
+    for (const [id, page] of this.floating) if (page.view.webContents === contents) return id;
+    return undefined;
+  }
+
   /** Tabs with a page loaded. */
   loaded(): NodeId[] {
     return [...this.views.keys()];

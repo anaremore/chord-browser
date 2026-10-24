@@ -56,8 +56,9 @@ export async function kill(app: ElectronApplication): Promise<void> {
     try {
       process.kill(pid, 0);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      // Windows won't let us open a sandboxed Chromium process (EPERM): it's still there.
+      return (error as NodeJS.ErrnoException).code === 'EPERM';
     }
   };
   for (const deadline = Date.now() + 15_000; pids.some(alive) && Date.now() < deadline; ) await new Promise((done) => setTimeout(done, 100));

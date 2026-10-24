@@ -312,7 +312,7 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
 - **P0** CI green on every OS, then tag `v0.1.0` and publish the draft as a prerelease.
 
 ### 0.1.x · Daily-driver gaps · November
-- **P0 HTTP Basic Auth.** **Built 2026-10-24** (ARCHITECTURE.md §9): a sign-in box in the popover over the tab that asked, for sites and proxies (Basic, Digest, NTLM), with the site's realm, a note after a wrong answer and a warning on plain HTTP. Chromium remembers a sign-in that worked until you quit; Chord keeps nothing (D12). Not yet: Peek and mini windows, whose pages get the site's 401 page.
+- **P0 HTTP Basic Auth.** **Built 2026-10-24** (ARCHITECTURE.md §9): a sign-in box in the popover over the tab that asked, for sites and proxies (Basic, Digest, NTLM), with the site's realm, a note after a wrong answer and a warning on plain HTTP. Chromium remembers a sign-in that worked until you quit; Chord keeps nothing (D12). Peek too (its box shows over Peek); not yet mini windows, whose pages get the site's 401 page.
 - **P0 Sign-in checks, by hand:** Google in a second chord on Windows, macOS and Linux; Microsoft, GitHub and Apple; 1Password, Bitwarden and KeePassXC-Browser (risk R2). No user-agent spoofing unless one fails (D15).
 - **P1 Crash resilience.** **Built 2026-10-24** (ARCHITECTURE.md §6.2): open tabs now keep their back/forward history, scroll position and form fields across a restart or a crash (before, they came back as just their address). E2E tests kill Chord mid-session and check a tab comes back where it was, and that every window, chord and split comes back.
 - **P1 Performance pass:**
@@ -329,8 +329,8 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   - Then: one request dispatcher per session, EasyList and EasyPrivacy on by default, a switch per site, private windows included, cosmetic filtering, and lists bundled at build time and refreshed from the lists' own hosts.
 - **P1 Import** from Chrome, Edge, Brave, Firefox and Safari: bookmarks, history, and open tabs where the files can be read. First run and Settings map each bookmark folder to a chord. No passwords or cookies: Chrome locks them to Chrome on Windows, and they're your password manager's job. Safari needs Full Disk Access, and Chord says so. Still no Arc import.
   - **Built 2026-10-24** (ARCHITECTURE.md §9, DESIGN.md §8.7): first run's *Bring your bookmarks?* step and Settings → Import. Each top-level folder becomes a new chord or a pinned folder in one you have; the bookmarks bar's links can be Favorites (up to 24); Firefox's open tabs land in a chord's Today; history goes in with its visits, so frecency ranks it. Counts before, progress during, Undo after, history included. Read in a utility process from copies of each browser's files, which are never changed; a test imports 3,000 bookmarks and 6,000 pages.
-  - Not yet: Chrome, Edge and Brave's open tabs (their session files are an undocumented binary format that changes between versions) and Safari's; another Flatpak's browser data, which Chord's Flatpak can't see.
-- **P2 Link routes by path**, such as `github.com/acme/*` → Work.
+  - Not yet: Chrome, Edge and Brave's open tabs (their session files are an undocumented binary format that changes between versions) and Safari's; another Flatpak's browser data, which Chord's Flatpak can't see. After an import of tens of thousands of bookmarks every store change is slower than a frame, because the store copies its whole node map on each change (ARCHITECTURE.md §9, known limit): one for the performance pass.
+- **P2 Link routes by path**, such as `github.com/acme/*` → Work. **Built 2026-10-24** (ARCHITECTURE.md §9).
 - **P2 Media controls** in the sidebar (the audible and muted states in DESIGN.md §7, plus play and pause), and **reader mode**.
 
 ### Electron 46 · January 5, 2027

@@ -121,6 +121,13 @@ export class FrameSnapshots {
   private queue: Promise<void> = Promise.resolve();
   private readonly replies = new Map<string, { promise: Promise<void>; resolve(): void }>();
   private disposed = false;
+  /**
+   * Why the last change that wanted pictures happened at once instead (null: it
+   * glided): the pages took too long to picture, the shell took too long to
+   * show them (both mean a machine too slow for the budget), or something
+   * moved on meanwhile. For tests and diagnosis.
+   */
+  lastFallback: 'capture' | 'shown' | 'changed' | null = null;
 
   constructor(private readonly host: FrameHost) {}
 
@@ -218,11 +225,16 @@ export class FrameSnapshots {
     const deadline = Date.now() + PREPARE_TIMEOUT_MS;
     const pictures = await within(Promise.all(panes.map((p) => picture(p.view.webContents))), PREPARE_TIMEOUT_MS);
     // Something moved on while the pages were pictured (another tab, a resize): the change just happens.
-    if (!pictures || pictures.some((p) => p === null) || !this.unchanged(panes)) return null;
+    if (!pictures || pictures.some((p) => p === null) || !this.unchanged(panes)) {
+      this.lastFallback = !pictures || pictures.some((p) => p === null) ? 'capture' : 'changed';
+      return null;
+    }
     const shown = this.reply(seq, 'shown');
     this.tell({ seq, phase: 'show', panes: panes.map((p, i) => ({ rect: p.rect, ...pictures[i]! })) });
-    const ready = (await within(shown, deadline - Date.now())) !== null && this.unchanged(panes) && this.host.canSnapshot();
+    const onTime = (await within(shown, deadline - Date.now())) !== null;
+    const ready = onTime && this.unchanged(panes) && this.host.canSnapshot();
     this.replies.delete(`${seq}:shown`);
+    this.lastFallback = ready ? null : onTime ? 'changed' : 'shown';
     if (ready) return seq;
     this.tell({ seq, phase: 'drop' });
     return null;

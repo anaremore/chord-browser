@@ -146,6 +146,8 @@ const framesShowing = (app: ElectronApplication) =>
 async function openCommandBar(shell: Page, overlay: Page, mode: 'new' | 'edit') {
   await shell.evaluate((m) => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open(m), mode);
   await expect(overlay.getByRole('dialog')).toBeVisible();
+  // Keys typed before the field has the keyboard are lost (a slow machine shows the bar first).
+  await expect(overlay.getByRole('combobox')).toBeFocused();
 }
 
 let site: { server: Server; origin: string };

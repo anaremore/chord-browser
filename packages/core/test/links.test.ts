@@ -7,6 +7,7 @@ import {
   routeCovers,
   routeFor,
   routeHost,
+  routeKey,
   siteOf,
   tabsInOrder,
   type Chord,
@@ -80,11 +81,26 @@ describe('link routes', () => {
     expect(routeHost('')).toBeNull();
   });
 
+  it('keys a route by its site and, when given, its path', () => {
+    expect(routeKey('github.com')).toBe('github.com');
+    expect(routeKey('https://www.GitHub.com/')).toBe('github.com');
+    expect(routeKey('github.com/Acme/*')).toBe('github.com/acme');
+    expect(routeKey('https://github.com/acme/?tab=repositories#top')).toBe('github.com/acme');
+    expect(routeKey('github.com/acme/chord/')).toBe('github.com/acme/chord');
+    expect(routeKey('not a site/acme')).toBeNull();
+  });
+
   it('covers the host, www and subdomains, but not lookalikes', () => {
     expect(routeCovers('github.com', 'github.com')).toBe(true);
     expect(routeCovers('github.com', 'www.github.com')).toBe(true);
     expect(routeCovers('github.com', 'gist.github.com')).toBe(true);
     expect(routeCovers('github.com', 'notgithub.com')).toBe(false);
+    // With a path: that path and below it, any case; not a longer name that starts the same.
+    expect(routeCovers('github.com/acme', 'github.com', '/acme')).toBe(true);
+    expect(routeCovers('github.com/acme', 'github.com', '/ACME/chord/pulls')).toBe(true);
+    expect(routeCovers('github.com/acme', 'github.com', '/acmecorp')).toBe(false);
+    expect(routeCovers('github.com/acme', 'github.com', '/')).toBe(false);
+    expect(routeCovers('github.com/acme', 'gist.github.com', '/acme/1')).toBe(true);
   });
 
   it('picks the most specific route, and only to a chord that can take it', () => {
@@ -94,6 +110,14 @@ describe('link routes', () => {
     expect(routeFor(t.state, 'https://docs.google.com/d/1')).toBe('c2');
     expect(routeFor(t.state, 'https://mail.google.com/')).toBe('c1');
     expect(routeFor(t.state, 'https://example.com/')).toBeNull();
+    // A path's route beats its site's: one organization's GitHub to Work, the rest of GitHub elsewhere.
+    t.run({ t: 'linkRoute.set', host: 'github.com', chordId: 'c1' });
+    t.run({ t: 'linkRoute.set', host: 'github.com/acme/*', chordId: 'c2' });
+    expect(Object.keys(t.state.linkRoutes)).toContain('github.com/acme');
+    expect(routeFor(t.state, 'https://github.com/acme/chord/pull/7')).toBe('c2');
+    expect(routeFor(t.state, 'https://github.com/someone-else')).toBe('c1');
+    t.run({ t: 'linkRoute.delete', host: 'github.com/acme' });
+    expect(routeFor(t.state, 'https://github.com/acme/chord')).toBe('c1');
     // Not a route to a private window's chord.
     t.run({ t: 'linkRoute.set', host: 'secret.example', chordId: 'c2' });
     const withPrivate = { ...t.state, chords: { ...t.state.chords, c2: { ...t.state.chords['c2']!, private: true } } };

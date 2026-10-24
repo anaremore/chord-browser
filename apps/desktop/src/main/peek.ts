@@ -90,6 +90,11 @@ export class Peeks {
     return this.open.has(w.id) ? w.peekContents : null;
   }
 
+  /** The id Peek's page in this window has (as it would as a tab), while one is open. */
+  nodeOf(w: AppWindow): NodeId | null {
+    return this.open.get(w.id)?.nodeId ?? null;
+  }
+
   isOpen(w: AppWindow): boolean {
     return this.open.has(w.id);
   }

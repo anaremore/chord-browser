@@ -6,7 +6,7 @@
 import type { ChordId, LinkRoute, State } from './model';
 
 // Core compiles without DOM types; URL is a global in Node and every browser.
-declare const URL: new (url: string) => { protocol: string; hostname: string };
+declare const URL: new (url: string) => { protocol: string; hostname: string; pathname: string };
 
 /**
  * Two-part public suffixes common enough to matter, so `a.co.uk` and
@@ -62,24 +62,55 @@ export function routeHost(text: string): string | null {
   return bare.includes('.') || bare === 'localhost' ? bare : null;
 }
 
-/** Whether a route for `routeHost` covers `host`: the same host, `www.` of it, or a subdomain. */
-export function routeCovers(route: string, host: string): boolean {
+/**
+ * What someone typed as a route, as Chord keys it: the host (`routeHost`), and
+ * the path when one was given, so `github.com/acme/*` covers only that
+ * organization's pages. Paths are matched without case, a trailing slash or
+ * `*`, query or fragment. Null when it isn't a plausible site.
+ */
+export function routeKey(text: string): string | null {
+  const host = routeHost(text);
+  if (!host) return null;
+  let value = text.trim();
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) value = `https://${value}`;
+  let path: string;
+  try {
+    path = new URL(value).pathname.toLowerCase().replace(/\*$/, '').replace(/\/+$/, '');
+  } catch {
+    return host;
+  }
+  return path ? `${host}${path}` : host;
+}
+
+/**
+ * Whether a route (`routeKey`) covers a page at `host` and `path`: the same
+ * host, `www.` of it, or a subdomain; and, for a route with a path, that path
+ * or one under it (`/acme` covers `/acme/chord`, not `/acmecorp`).
+ */
+export function routeCovers(route: string, host: string, path = '/'): boolean {
+  const slash = route.indexOf('/');
+  const routeSite = slash < 0 ? route : route.slice(0, slash);
   const h = host.replace(/^www\./, '');
-  return h === route || h.endsWith(`.${route}`);
+  if (h !== routeSite && !h.endsWith(`.${routeSite}`)) return false;
+  if (slash < 0) return true;
+  const prefix = route.slice(slash);
+  const p = path.toLowerCase();
+  return p === prefix || p.startsWith(`${prefix}/`);
 }
 
 /**
  * The chord a link should open in by its route, if any: the most specific
- * route that covers its host and points at a chord that still exists (and
- * isn't a private window's).
+ * route (the longest, so a path's beats its site's) that covers it and points
+ * at a chord that still exists (and isn't a private window's).
  */
 export function routeFor(state: State, url: string): ChordId | null {
   const host = hostOf(url);
   if (!host) return null;
+  const path = new URL(url).pathname;
   let best: LinkRoute | null = null;
   for (const route of Object.values(state.linkRoutes)) {
     const chord = state.chords[route.chordId];
-    if (!chord || chord.private || !routeCovers(route.host, host)) continue;
+    if (!chord || chord.private || !routeCovers(route.host, host, path)) continue;
     if (!best || route.host.length > best.host.length) best = route;
   }
   return best?.chordId ?? null;
