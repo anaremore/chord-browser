@@ -4,6 +4,8 @@ import {
   ARCHIVE_AFTER_MS,
   DEFAULT_SETTINGS,
   IDLE_CHECK_MS,
+  MEMORY_CHECK_MS,
+  PRESSURE_SLEEP_AFTER_MS,
   SLEEP_AFTER_MS,
   isPrivateProfile,
   isPrivateWindow,
@@ -32,6 +34,7 @@ import { observeContextMenusForTests, type ObservedItem } from './context-menu';
 import { PermissionBroker } from './permissions';
 import { ScreenShareBroker } from './screen-share';
 import { AuthBroker } from './http-auth';
+import { memoryLow } from './memory';
 import { applySpellcheck, setDictionarySource } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
@@ -221,6 +224,7 @@ function registerIpc(): void {
   handle('layout:peek', ({ open }, sender) => browser!.setPeek(sender, open));
   handle('layout:lift', ({ lifted }, sender) => browser!.setLifted(sender, lifted));
   handle('layout:snapshot', ({ seq, phase }, sender) => senderWindow(sender).ackSnapshot(seq, phase));
+  handle('layout:snapshotPort', (_request, sender) => senderWindow(sender).connectSnapshots());
   handle('menu:chord', ({ chordId, x, y }, sender) => browser!.openChordMenu(sender, chordId, { x, y }));
   handle('action:run', async ({ action }, sender) => {
     browser!.run(action, sender);
@@ -473,7 +477,11 @@ if (!app.requestSingleInstanceLock()) {
         checkMs: devNumber('CHORD_IDLE_CHECK_MS') ?? IDLE_CHECK_MS,
         archiveAfterMs: (setting) => (setting === 'never' ? null : (devNumber('CHORD_ARCHIVE_AFTER_MS') ?? ARCHIVE_AFTER_MS[setting])),
         sleepAfterMs: devNumber('CHORD_SLEEP_AFTER_MS') ?? SLEEP_AFTER_MS,
+        pressureSleepAfterMs: devNumber('CHORD_PRESSURE_SLEEP_AFTER_MS') ?? PRESSURE_SLEEP_AFTER_MS,
+        memoryCheckMs: devNumber('CHORD_MEMORY_CHECK_MS') ?? MEMORY_CHECK_MS,
       },
+      // CHORD_MEMORY_LOW=1 (development and tests only) acts as if memory were always low.
+      memoryLow: () => (!app.isPackaged && process.env['CHORD_MEMORY_LOW'] === '1') || memoryLow(process.getSystemMemoryInfo(), process.platform),
       onChange: (change) => store.record(change.patches, change.state),
       releaseProfile,
       safeBrowsing: {

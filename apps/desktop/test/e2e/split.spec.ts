@@ -11,8 +11,9 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { failOnMainErrors, watchForMainErrors } from './main-errors';
+import { failOnMainErrors, kill, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
 
@@ -51,7 +52,7 @@ interface Chord {
   chord: {
     action: { run(a: string): Promise<void> };
     overlay: { open(m: string): Promise<void> };
-    state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, Node> } }>; dispatch(c: unknown): Promise<void> };
+    state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, Node>; chords: Record<string, { id: string; rank: string }> } }>; dispatch(c: unknown): Promise<void> };
   };
 }
 interface Node {
@@ -318,6 +319,55 @@ test('a split comes back after a relaunch, exactly as it was', async () => {
     expect(top!.x).toBe(bottom!.x);
     expect(bottom!.y - (top!.y + top!.height)).toBe(GAP);
     expect(top!.height / (top!.height + bottom!.height)).toBeCloseTo(0.3, 2);
+  } finally {
+    await app.close();
+  }
+});
+
+test('killed mid-session, Chord brings back every window, chord and split', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
+  try {
+    const { shell } = await setUp(app, ['/second']);
+    const { windowId, activeId, ids } = await splitState(shell);
+    await dispatch(shell, { t: 'split.add', windowId, withId: activeId, nodeId: ids['First page'], direction: 'row' });
+    await expect.poll(async () => (await splitState(shell)).panes).toEqual(['Second page', 'First page']);
+    await dispatch(shell, { t: 'chord.create', windowId, name: 'Work', icon: 'W', theme: { stops: [{ l: 0.72, c: 0.12, h: 40 }], grain: 0.2, appearance: 'auto' } });
+    await runAction(shell, 'window.new');
+    await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
+    // Written within about 250 ms of each change: read it from chord-data's own database.
+    const saved = () => {
+      const db = new DatabaseSync(join(profile, 'chord.db'), { readOnly: true });
+      try {
+        const count = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
+        return {
+          windows: count('SELECT count(*) AS n FROM window_state'),
+          chords: count('SELECT count(*) AS n FROM chord WHERE deleted_at IS NULL'),
+          splits: count('SELECT count(*) AS n FROM split'),
+        };
+      } finally {
+        db.close();
+      }
+    };
+    await expect.poll(saved, { timeout: 10_000 }).toEqual({ windows: 2, chords: 2, splits: 1 });
+  } finally {
+    // No quit, no flush: the way a crash, a power cut or a force-quit ends it.
+    await kill(app);
+  }
+
+  app = await launch({}, profile);
+  try {
+    await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
+    // Both windows list both chords. Making Work switched the windows to it; back on the first chord, the split is there.
+    const shell = app.windows().find((p) => isShell(p.url()))!;
+    await expect(shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab')).toHaveCount(2);
+    const { windowId, first } = await shell.evaluate(async () => {
+      const { windowId, state } = await (window as unknown as Chord).chord.state.snapshot();
+      return { windowId, first: Object.values(state.chords).sort((a, b) => (a.rank < b.rank ? -1 : 1))[0]!.id };
+    });
+    await dispatch(shell, { t: 'chord.activate', windowId, chordId: first });
+    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem', { name: 'Split: Second page + First page' })).toBeVisible();
+    expect(await splitState(shell)).toMatchObject({ panes: ['Second page', 'First page'], direction: 'row' });
   } finally {
     await app.close();
   }

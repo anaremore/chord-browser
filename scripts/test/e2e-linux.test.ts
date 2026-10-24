@@ -77,7 +77,8 @@ describe('staleRuns', () => {
 });
 
 describe('dockerRunArgs', () => {
-  const args = dockerRunArgs({ name: 'chord-e2e-run-x-1', image: 'chord-e2e-runner:abc', display: 'wayland', root: '/src', startedAt: 1_700_000_000_000, playwright: ['-g', 'a b'] });
+  const base = { name: 'chord-e2e-run-x-1', image: 'chord-e2e-runner:abc', display: 'wayland', root: '/src', startedAt: 1_700_000_000_000, playwright: ['-g', 'a b'] };
+  const args = dockerRunArgs(base);
   const after = (flag: string) => args.flatMap((a, i) => (a === flag ? [args[i + 1]] : []));
 
   it('keeps the sandbox possible: an unprivileged user with no capabilities, namespaces allowed', () => {
@@ -98,6 +99,12 @@ describe('dockerRunArgs', () => {
     expect(after('--volume')).toEqual([`${STORE_VOLUME}:/home/chord/.cache/pnpm-store`, `${ELECTRON_VOLUME}:/home/chord/.cache/electron`]);
     expect([STORE_VOLUME, ELECTRON_VOLUME].every((v) => v.startsWith('chord-e2e-'))).toBe(true);
     expect(after('--env')).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000']);
+  });
+
+  it('passes CHORD_NO_MINIFY and CHORD_PERF_ENFORCE in when they’re set, and nothing else from the environment', () => {
+    const withEnv = dockerRunArgs({ ...base, env: { CHORD_NO_MINIFY: '1', CHORD_PERF_ENFORCE: '', HOME: '/home/me', CHORD_USER_DATA: '/tmp/x' } });
+    const envs = withEnv.flatMap((a, i) => (withEnv[i - 1] === '--env' ? [a] : []));
+    expect(envs).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000', 'CHORD_NO_MINIFY=1']);
   });
 
   it('ends with the image, the container script and Playwright’s arguments, untouched', () => {

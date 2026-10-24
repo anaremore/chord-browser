@@ -12,6 +12,7 @@
 //   --wayland / --x11   which display server (x11 by default)
 //   --rebuild           rebuild the image from scratch (fresh Ubuntu packages)
 // CHORD_E2E_WSL_DISTRO picks the WSL distro that has Docker (WSL's default otherwise).
+// CHORD_NO_MINIFY, CHORD_PERF_ENFORCE and CHORD_PERF_PROFILE, when set, are passed into the container (PASSED_ENV).
 //
 // What's tested is this working tree as it is: tracked files and untracked ones
 // that aren't ignored, uncommitted changes included, copied into a container of
@@ -82,8 +83,14 @@ export function staleRuns(inspected, now = Date.now()) {
     .map(([name]) => name.replace(/^\//, ''));
 }
 
+/**
+ * Variables a run takes into the container from the caller's environment when they're set: an
+ * unminified build to profile (CHORD_NO_MINIFY), and the performance spec's enforcement and CPU profiles.
+ */
+export const PASSED_ENV = ['CHORD_NO_MINIFY', 'CHORD_PERF_ENFORCE', 'CHORD_PERF_PROFILE'];
+
 /** `docker run`'s arguments: the tar of the working tree arrives on stdin and is unpacked in /work. */
-export function dockerRunArgs({ name, image, display, root, startedAt, playwright }) {
+export function dockerRunArgs({ name, image, display, root, startedAt, playwright, env = {} }) {
   return [
     'run',
     '--interactive',
@@ -120,6 +127,7 @@ export function dockerRunArgs({ name, image, display, root, startedAt, playwrigh
     '--volume', `${ELECTRON_VOLUME}:/home/chord/.cache/electron`,
     '--env', `CHORD_E2E_DISPLAY=${display}`,
     '--env', `CHORD_E2E_STARTED=${Math.round(startedAt / 1000)}`,
+    ...PASSED_ENV.filter((key) => env[key]).flatMap((key) => ['--env', `${key}=${env[key]}`]),
     image,
     'bash', '-c', 'tar -xf - -C /work && exec bash /work/scripts/e2e-linux/in-container.sh "$@"', 'bash',
     ...playwright,
@@ -313,7 +321,7 @@ async function main() {
 
   const where = options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)';
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
-  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright }), tar);
+  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, env: process.env }), tar);
 
   // Results, back where a local run leaves them. A folder the run didn't write isn't touched.
   const appInDocker = dockerPath(appDir);

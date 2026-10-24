@@ -2,9 +2,20 @@
  * The shell's only door to main (ARCHITECTURE.md §8). Exposes a frozen,
  * typed `window.chord`; raw ipcRenderer never reaches the page.
  */
-import type { ShellApi } from '@chord/ipc';
-import { contextBridge } from 'electron';
+import type { ShellApi, SNAPSHOT_PORT_MESSAGE } from '@chord/ipc';
+import { contextBridge, ipcRenderer } from 'electron';
 import { downloadsApi, invoke, stateApi, subscribe, systemApi } from './bridge';
+
+/** The value of `SNAPSHOT_PORT_MESSAGE`, without bundling @chord/ipc's runtime into the preload. */
+const PORT_MESSAGE: typeof SNAPSHOT_PORT_MESSAGE = 'chord:frame-port';
+
+/** The page this preload serves (preloads build without the DOM's types). */
+const page = globalThis as unknown as { location: { origin: string }; postMessage(message: string, targetOrigin: string, transfer: unknown[]): void };
+
+// The snapshot's own port (FrameSnapshot.tsx): handed straight to the page, so the pictures never pass through here.
+ipcRenderer.on('frame:port', (event) => {
+  if (event.ports[0]) page.postMessage(PORT_MESSAGE, page.location.origin, [event.ports[0]]);
+});
 
 const api: ShellApi = {
   system: systemApi,
@@ -18,6 +29,7 @@ const api: ShellApi = {
     lift: (lifted) => invoke('layout:lift', { lifted }),
     onSnapshot: (listener) => subscribe('frame:snapshot', listener),
     snapshot: (seq, phase) => invoke('layout:snapshot', { seq, phase }),
+    connectSnapshots: () => invoke('layout:snapshotPort'),
   },
   menu: {
     app: (anchor) => invoke('menu:app', anchor),

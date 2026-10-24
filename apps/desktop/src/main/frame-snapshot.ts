@@ -71,24 +71,6 @@ export function offscreen(rect: Rect, window: { width: number; height: number })
   return { x: window.width - 1, y: window.height - 1, width: rect.width, height: rect.height };
 }
 
-/**
- * A captured bitmap's pixels, BGRA (Skia's N32 order on every desktop
- * platform Chromium builds for), as the RGBA an ImageData wants. Converted in
- * place when `bgra` has its memory to itself (as `toBitmap`'s copy does), so
- * IPC sends just these bytes.
- */
-export function toRgba(bgra: Uint8Array): Uint8Array {
-  const own = bgra.byteOffset === 0 && bgra.buffer.byteLength === bgra.length;
-  const out = own ? bgra : new Uint8Array(bgra);
-  // Four bytes at a time (little-endian): swap the first and third of each pixel.
-  const pixels = new Uint32Array(out.buffer, 0, out.length >>> 2);
-  for (let i = 0; i < pixels.length; i++) {
-    const p = pixels[i]!;
-    pixels[i] = (p & 0xff00ff00) | ((p & 0xff) << 16) | ((p >>> 16) & 0xff);
-  }
-  return out;
-}
-
 /** Keys that type into the page (not a modifier on its own, not a held key repeating). */
 export function isTyping(input: Pick<Input, 'type' | 'key' | 'isAutoRepeat'>): boolean {
   if (input.type !== 'keyDown' && input.type !== 'rawKeyDown' && input.type !== 'char') return false;
@@ -113,15 +95,20 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   });
 }
 
-/** A page's picture at its device pixels, or null if there's nothing to show. */
+/**
+ * A page's picture at its device pixels, or null if there's nothing to show.
+ * The pixels stay as captured (BGRA, Skia's order on every desktop platform
+ * Chromium builds for): the shell's worker turns them into RGBA, so main
+ * never loops over them (ARCHITECTURE.md §1, performance rule 1).
+ */
 async function picture(contents: WebContents): Promise<Omit<SnapshotPane, 'rect'> | null> {
   const image = await contents.capturePage();
   if (image.isEmpty()) return null;
   const scale = Math.max(1, ...image.getScaleFactors());
   const { width, height } = image.getSize(scale);
-  const bitmap = image.toBitmap({ scaleFactor: scale });
-  if (width < 1 || height < 1 || bitmap.length !== width * height * 4) return null;
-  return { width, height, pixels: toRgba(bitmap) };
+  const pixels = image.toBitmap({ scaleFactor: scale });
+  if (width < 1 || height < 1 || pixels.length !== width * height * 4) return null;
+  return { width, height, pixels };
 }
 
 const sameRect = (a: Rect, b: Rect) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;

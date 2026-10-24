@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { failOnMainErrors, watchForMainErrors } from './main-errors';
+import { failOnMainErrors, kill, watchForMainErrors } from './main-errors';
 
 const appDir = resolve(import.meta.dirname, '../..');
 const capturesDir = resolve(appDir, 'test-results', 'captures');
@@ -56,7 +56,7 @@ function startSite(): Promise<{ server: Server; origin: string }> {
       res.end(JSON.stringify([q, [`${q} progressions`, `${q} finder`]]));
       return;
     }
-    // GitHub Releases (CHORD_UPDATE_FEED): one release newer than a development build's 0.0.0.
+    // GitHub Releases (CHORD_UPDATE_FEED): one release newer than this build (0.1.0).
     if (req.url === '/releases') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
@@ -1016,10 +1016,7 @@ test('killed mid-session, Chord brings a tab back where it was: its page, back a
       .toContain('/ /long /third @2');
   } finally {
     // No quit, no flush: the way a crash, a power cut or a force-quit ends it.
-    const child = app.process();
-    const exited = new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done(null) : child.once('exit', done)));
-    child.kill('SIGKILL');
-    await exited;
+    await kill(app);
   }
 
   app = await launch({}, profile);
@@ -1479,6 +1476,31 @@ test('sleeping: a tab hidden long enough frees its page, and wakes where it was'
   }
 });
 
+test('low on memory, a hidden tab goes to sleep after minutes, not the usual hour', async () => {
+  // The usual wait stays an hour; memory reads as low, and "minutes" here are a second.
+  const app = await launch({
+    CHORD_HOME_URL: `${site.origin}/`,
+    CHORD_MEMORY_LOW: '1',
+    CHORD_PRESSURE_SLEEP_AFTER_MS: '700',
+    CHORD_MEMORY_CHECK_MS: '200',
+  });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('tree', { name: 'Today' });
+    await expect(today).toContainText('First page');
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/second`);
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('treeitem').first()).toContainText('Second page');
+    await expect(today.getByRole('treeitem', { name: 'First page', exact: true })).toHaveAttribute('data-asleep', 'true', { timeout: 10_000 });
+    // The tab on screen stays awake.
+    await expect(today.getByRole('treeitem', { name: 'Second page', exact: true })).not.toHaveAttribute('data-asleep');
+  } finally {
+    await app.close();
+  }
+});
+
 test('the archive: unused tabs are tidied away, come back from the archive page, and ⌘⇧T reopens closed ones', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   let app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_ARCHIVE_AFTER_MS: '900', CHORD_IDLE_CHECK_MS: '200' }, profile);
@@ -1712,7 +1734,7 @@ test('a newer release is announced once, in a toast, and in Settings → About',
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_UPDATE_FEED: `${site.origin}/releases` });
   try {
     const shell = await pageWhere(app, isShell);
-    // The draft (9.0.0) never counts; 0.2.0 is newer than a development build's 0.0.0.
+    // The draft (9.0.0) never counts; 0.2.0 is newer than this build (0.1.0).
     await expect(shell.getByRole('group').filter({ hasText: 'Chord 0.2.0 is out' })).toBeVisible({ timeout: 10_000 });
     await expect(shell.getByRole('button', { name: 'What’s new' })).toBeVisible();
     await runAction(shell, 'app.settings');

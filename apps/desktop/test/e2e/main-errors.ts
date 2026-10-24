@@ -7,6 +7,8 @@ import { expect, test, type ElectronApplication } from '@playwright/test';
 
 const MAIN_ERROR = /\[chord\] (Uncaught exception|Unhandled rejection) in main/;
 const mainErrors: string[] = [];
+/** Apps a test ended on purpose with kill(): their exit isn't a crash. */
+const killed = new WeakSet<ElectronApplication>();
 
 /** Watch a launched app's stderr for errors main caught. */
 export function watchForMainErrors(app: ElectronApplication): ElectronApplication {
@@ -24,7 +26,7 @@ export function watchForMainErrors(app: ElectronApplication): ElectronApplicatio
   });
   // A crash (rather than a quit) says so, instead of only "Target page, context or browser has been closed".
   app.process().once('exit', (code, signal) => {
-    if (code !== 0 || signal) mainErrors.push(`Chord's main process exited with code ${code}, signal ${signal}. Its last output:\n${log}`);
+    if ((code !== 0 || signal) && !killed.has(app)) mainErrors.push(`Chord's main process exited with code ${code}, signal ${signal}. Its last output:\n${log}`);
   });
   return app;
 }
@@ -35,4 +37,28 @@ export function failOnMainErrors(): void {
     const errors = mainErrors.splice(0);
     expect(errors, errors.join('\n---\n')).toEqual([]);
   });
+}
+
+/**
+ * End Chord the way a crash, a power cut or a force-quit does: SIGKILL, so
+ * nothing is flushed on the way out. Resolves once the process has exited.
+ */
+export async function kill(app: ElectronApplication): Promise<void> {
+  killed.add(app);
+  // Chromium's other processes (GPU, renderers, utilities) notice on their own and exit a moment later; on
+  // Windows they hold the profile until then, and a Chord launched on it at once can't start.
+  const pids = await app.evaluate(({ app: electronApp }) => electronApp.getAppMetrics().map((m) => m.pid)).catch(() => [] as number[]);
+  const child = app.process();
+  const exited = new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done(null) : child.once('exit', done)));
+  child.kill('SIGKILL');
+  await exited;
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const deadline = Date.now() + 15_000; pids.some(alive) && Date.now() < deadline; ) await new Promise((done) => setTimeout(done, 100));
 }

@@ -12,7 +12,7 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 - Chord reads copies of the other browser's files and never changes them. It never copies passwords, cookies or extensions; your password manager can bring passwords across.
 - Safari needs Full Disk Access, and Chord says where to turn it on.
 
-## 0.1.0 · preview (unreleased)
+## 0.1.0 · preview · 2026-10-24
 
 The first public preview: a calm, colorful browser for people leaving Arc. Builds aren't code-signed yet: see [Try the preview](README.md#try-the-preview) for the first-launch steps on each OS.
 

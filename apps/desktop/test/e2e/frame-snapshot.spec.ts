@@ -182,7 +182,12 @@ const recordPictures = (shell: Page) =>
       // Out of screen readers' way, and never focusable.
       seen.unseen = c.closest('[aria-hidden="true"]') !== null;
       seen.focusable = c.tabIndex >= 0;
-      seen.color = [...c.getContext('2d')!.getImageData(c.width >> 1, c.height >> 1, 1, 1).data];
+      // Its middle pixel, read through a canvas of our own (the picture's canvas may hold a bitmap, not a 2D context).
+      const probe = document.createElement('canvas');
+      probe.width = probe.height = 1;
+      const probeContext = probe.getContext('2d')!;
+      probeContext.drawImage(c, c.width >> 1, c.height >> 1, 1, 1, 0, 0, 1, 1);
+      seen.color = [...probeContext.getImageData(0, 0, 1, 1).data];
     }).observe(document.body, { childList: true, subtree: true });
   });
 const picturesSeen = (shell: Page) =>
