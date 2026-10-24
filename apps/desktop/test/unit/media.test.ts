@@ -79,7 +79,7 @@ describe('MediaWatcher', () => {
     expect(media.list()).toHaveLength(1);
     expect(changed).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(200);
-    expect(media.list()).toEqual([{ nodeId: 't1', title: 'Song', artist: 'Artist', album: 'Album', artwork: null, playing: true, pausable: true, video: false }]);
+    expect(media.list()).toEqual([{ nodeId: 't1', title: 'Song', artist: 'Artist', album: 'Album', artwork: null, playing: true, pausable: true, video: false, pip: false }]);
     expect(changed).toHaveBeenCalledTimes(1);
     // Read in Chord's own isolated world, never the page's.
     expect(page.scripts.every((s) => s.world === 1008)).toBe(true);
