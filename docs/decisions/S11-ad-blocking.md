@@ -91,7 +91,7 @@ Measured in the same container (`main.mjs`, the `dnr-*` phases):
 
 ## Not done, or uncertain
 
-- ⚠ **At launch**, a profile's rules load a moment after its extension, about 0.2 s here. A page that loads in that moment can get its ads.
+- ⚠ **At launch**, Chord waits for each chord's extension to load before any page does, as it does for other extensions. (Loading it beside the first navigation left restored tabs that never loaded on CI's macOS arm64 runner.) Its rules load a moment later, about 0.2 s here, and a page's first requests in that moment can get through.
 - **Not covered:** generic element hiding by class and id, procedural (`:has-text`) filters and scriptlets, which all need code in pages. `$redirect` and `$rewrite` block instead of serving a stand-in (37 filters), and 2,962 popup filters do nothing.
 - ⚠ **Measured on Linux only**, in a container, with a local page. Windows and macOS weren't measured (no Electron on the development desktop), and neither were real sites. Repeat `run.mjs` on CI or by hand to compare.
 - ⚠ Electron could attach the per-tab DNR helper in a later version. If it does, `allowAllRequests` starts to work, and `topDomains` keeps working.
