@@ -15,6 +15,7 @@
  */
 import { isInternalUrl, type Command, type NodeId, type State } from '@chord/core';
 import type { WebContents, WebFrameMain } from 'electron';
+import { pageCall } from './page-call';
 
 /** Chord's isolated world for this: same DOM as the page, none of its scripts. */
 const WORLD = 1007;
@@ -194,6 +195,6 @@ export class AutoPip {
   private run(contents: WebContents, frame: WebFrameMain, code: string, userGesture: boolean): Promise<unknown> {
     if (contents.isDestroyed() || frame.isDestroyed()) return Promise.resolve(null);
     const done = frame === contents.mainFrame ? contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code }], userGesture) : frame.executeJavaScript(code, userGesture);
-    return done.catch(() => null);
+    return pageCall<unknown>(done, null);
   }
 }

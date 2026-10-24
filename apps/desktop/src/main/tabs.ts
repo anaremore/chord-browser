@@ -11,6 +11,7 @@ import { WebContentsView, type BrowserWindow, type HandlerDetails, type Session,
 import { windowIcon } from './app-icon';
 import { trimNavState } from './nav';
 import { platform } from './platform';
+import { pageCall } from './page-call';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 const MAX_CRASH_RELOADS = 2;
@@ -90,12 +91,9 @@ export class TabManager {
   async inPictureInPicture(nodeId: NodeId): Promise<boolean> {
     const contents = this.views.get(nodeId)?.webContents;
     if (!contents || contents.isDestroyed() || this.internal.has(nodeId)) return false;
-    try {
-      // An isolated world shares the page's DOM but not its scripts, so a page can't fake this.
-      return Boolean(await contents.executeJavaScriptInIsolatedWorld(999, [{ code: 'Boolean(document.pictureInPictureElement)' }]));
-    } catch {
-      return false;
-    }
+    // An isolated world shares the page's DOM but not its scripts, so a page can't fake this. A hung page
+    // answers no (it can go to sleep), rather than holding up every tab after it.
+    return Boolean(await pageCall(contents.executeJavaScriptInIsolatedWorld(999, [{ code: 'Boolean(document.pictureInPictureElement)' }]), false));
   }
 
   /** The tab's back/forward history as it is now (or as it fell asleep), ready to restore later. */

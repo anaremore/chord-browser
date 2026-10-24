@@ -11,6 +11,7 @@
  * toString(): bundling may rename or wrap functions in ways the page can't run.
  */
 import type { WebContents } from 'electron';
+import { pageCall } from '../page-call';
 
 /** Chord's isolated world for Duet's reads (extension popups' sizer uses 4321). */
 export const DUET_WORLD = 4400;
@@ -71,21 +72,22 @@ export const EXTRACT_SCRIPT = String.raw`(() => {
   return { title: document.title, url: location.href, contentType: document.contentType, text, selection };
 })()`;
 
+/** How long a page may take to be read or pictured for Duet: a long page is slow, a hung one never answers. */
+const READ_MS = 8000;
+
 export async function readPage(contents: WebContents): Promise<PageRead | null> {
   if (contents.isDestroyed()) return null;
-  try {
-    const result = (await contents.executeJavaScriptInIsolatedWorld(DUET_WORLD, [{ code: EXTRACT_SCRIPT }])) as PageRead;
-    return result && typeof result.text === 'string' ? result : null;
-  } catch {
-    return null;
-  }
+  // A long page takes a moment to read; a hung one is unreadable, not a turn that never ends.
+  const result = (await pageCall(contents.executeJavaScriptInIsolatedWorld(DUET_WORLD, [{ code: EXTRACT_SCRIPT }]), null, READ_MS)) as PageRead | null;
+  return result && typeof result.text === 'string' ? result : null;
 }
 
 /** A tab's visible area as a PNG, at most 1280 px wide (tab_screenshot). */
 export async function screenshot(contents: WebContents): Promise<{ data: string; mimeType: string } | null> {
   if (contents.isDestroyed()) return null;
   try {
-    let image = await contents.capturePage();
+    let image = await pageCall(contents.capturePage(), null, READ_MS);
+    if (!image) return null;
     if (image.getSize().width > 1280) image = image.resize({ width: 1280 });
     return { data: image.toPNG().toString('base64'), mimeType: 'image/png' };
   } catch {
