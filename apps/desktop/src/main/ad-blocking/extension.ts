@@ -48,8 +48,6 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 export class BlockerExtension {
   private extension: Electron.Extension | null = null;
-  /** Control pages open now: if Chord quits before one finishes, it's closed, never left to Electron's teardown. */
-  private readonly controls = new Set<Electron.WebContents>();
 
   constructor(
     readonly session: Session,
@@ -110,24 +108,11 @@ export class BlockerExtension {
     if (!this.extension) throw new Error('The blocker isn’t loaded');
     const view = new WebContentsView({ webPreferences: { session: this.session, sandbox: true, contextIsolation: true, nodeIntegration: false } });
     const contents = view.webContents;
-    this.controls.add(contents);
     try {
       await within(contents.loadURL(`chrome-extension://${this.extension.id}/control.html`), CONTROL_TIMEOUT_MS);
       return (await within(contents.executeJavaScript(`(async () => { ${body} })()`), CONTROL_TIMEOUT_MS)) as T;
     } finally {
-      this.controls.delete(contents);
       if (!contents.isDestroyed()) contents.close();
     }
-  }
-
-  /**
-   * Quitting with a change still under way (a slow machine can take seconds to
-   * load the control page): its page closes now, and the change fails like any
-   * other. Left open, Electron destroyed it mid-request as it tore down, and on
-   * Windows main crashed (an access violation, in CI).
-   */
-  closeControls(): void {
-    for (const contents of this.controls) if (!contents.isDestroyed()) contents.close();
-    this.controls.clear();
   }
 }
