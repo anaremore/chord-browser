@@ -12,7 +12,7 @@
 //   --wayland / --x11   which display server (x11 by default)
 //   --rebuild           rebuild the image from scratch (fresh Ubuntu packages)
 // CHORD_E2E_WSL_DISTRO picks the WSL distro that has Docker (WSL's default otherwise).
-// CHORD_NO_MINIFY and CHORD_PERF_ENFORCE, when set, are passed into the container (PASSED_ENV).
+// CHORD_NO_MINIFY, CHORD_PERF_ENFORCE and CHORD_PERF_PROFILE, when set, are passed into the container (PASSED_ENV).
 //
 // What's tested is this working tree as it is: tracked files and untracked ones
 // that aren't ignored, uncommitted changes included, copied into a container of
@@ -85,9 +85,9 @@ export function staleRuns(inspected, now = Date.now()) {
 
 /**
  * Variables a run takes into the container from the caller's environment when they're set: an
- * unminified build to profile (CHORD_NO_MINIFY), and the performance spec's enforcement.
+ * unminified build to profile (CHORD_NO_MINIFY), and the performance spec's enforcement and CPU profiles.
  */
-export const PASSED_ENV = ['CHORD_NO_MINIFY', 'CHORD_PERF_ENFORCE'];
+export const PASSED_ENV = ['CHORD_NO_MINIFY', 'CHORD_PERF_ENFORCE', 'CHORD_PERF_PROFILE'];
 
 /** `docker run`'s arguments: the tar of the working tree arrives on stdin and is unpacked in /work. */
 export function dockerRunArgs({ name, image, display, root, startedAt, playwright, env = {} }) {

@@ -7,6 +7,8 @@ import { expect, test, type ElectronApplication } from '@playwright/test';
 
 const MAIN_ERROR = /\[chord\] (Uncaught exception|Unhandled rejection) in main/;
 const mainErrors: string[] = [];
+/** Apps a test ended on purpose with kill(): their exit isn't a crash. */
+const killed = new WeakSet<ElectronApplication>();
 
 /** Watch a launched app's stderr for errors main caught. */
 export function watchForMainErrors(app: ElectronApplication): ElectronApplication {
@@ -24,7 +26,7 @@ export function watchForMainErrors(app: ElectronApplication): ElectronApplicatio
   });
   // A crash (rather than a quit) says so, instead of only "Target page, context or browser has been closed".
   app.process().once('exit', (code, signal) => {
-    if (code !== 0 || signal) mainErrors.push(`Chord's main process exited with code ${code}, signal ${signal}. Its last output:\n${log}`);
+    if ((code !== 0 || signal) && !killed.has(app)) mainErrors.push(`Chord's main process exited with code ${code}, signal ${signal}. Its last output:\n${log}`);
   });
   return app;
 }
@@ -35,4 +37,16 @@ export function failOnMainErrors(): void {
     const errors = mainErrors.splice(0);
     expect(errors, errors.join('\n---\n')).toEqual([]);
   });
+}
+
+/**
+ * End Chord the way a crash, a power cut or a force-quit does: SIGKILL, so
+ * nothing is flushed on the way out. Resolves once the process has exited.
+ */
+export async function kill(app: ElectronApplication): Promise<void> {
+  killed.add(app);
+  const child = app.process();
+  const exited = new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done(null) : child.once('exit', done)));
+  child.kill('SIGKILL');
+  await exited;
 }

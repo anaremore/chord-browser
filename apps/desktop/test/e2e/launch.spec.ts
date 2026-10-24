@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { failOnMainErrors, watchForMainErrors } from './main-errors';
+import { failOnMainErrors, kill, watchForMainErrors } from './main-errors';
 
 const appDir = resolve(import.meta.dirname, '../..');
 const capturesDir = resolve(appDir, 'test-results', 'captures');
@@ -1014,10 +1014,7 @@ test('killed mid-session, Chord brings a tab back where it was: its page, back a
       .toContain('/ /long /third @2');
   } finally {
     // No quit, no flush: the way a crash, a power cut or a force-quit ends it.
-    const child = app.process();
-    const exited = new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done(null) : child.once('exit', done)));
-    child.kill('SIGKILL');
-    await exited;
+    await kill(app);
   }
 
   app = await launch({}, profile);

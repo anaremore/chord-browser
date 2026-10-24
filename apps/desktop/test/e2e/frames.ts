@@ -152,6 +152,44 @@ export async function trace(cdp: CDPSession, run: () => Promise<void>): Promise<
   return events;
 }
 
+interface ProfileNode {
+  id: number;
+  callFrame: { functionName: string; url: string; lineNumber: number };
+}
+
+/**
+ * Self time per function in one renderer while `run` runs, from a V8 CPU
+ * profile sampled every 100 µs: what to optimize inside a slow frame (the
+ * trace only names the outermost calls). Sampling slows the page a little,
+ * so it's for finding the cost, not for measuring the budget.
+ */
+export async function profile(cdp: CDPSession, run: () => Promise<void>): Promise<Map<string, number>> {
+  await cdp.send('Profiler.enable');
+  await cdp.send('Profiler.setSamplingInterval', { interval: 100 });
+  await cdp.send('Profiler.start');
+  let result: { profile: { nodes: ProfileNode[]; samples?: number[]; timeDeltas?: number[] } } | undefined;
+  try {
+    await run();
+  } finally {
+    result = (await cdp.send('Profiler.stop')) as typeof result;
+    await cdp.send('Profiler.disable');
+  }
+  const names = new Map(result!.profile.nodes.map((n) => [n.id, frameName(n.callFrame)]));
+  const self = new Map<string, number>();
+  const { samples = [], timeDeltas = [] } = result!.profile;
+  samples.forEach((id, i) => {
+    const name = names.get(id) ?? '?';
+    if (name === '(idle)' || name === '(program)') return;
+    self.set(name, (self.get(name) ?? 0) + (timeDeltas[i + 1] ?? 0) / 1000);
+  });
+  return self;
+}
+
+function frameName({ functionName, url, lineNumber }: ProfileNode['callFrame']): string {
+  const file = url.split('/').pop();
+  return file ? `${functionName || '(anonymous)'} ${file}:${lineNumber + 1}` : functionName || '(anonymous)';
+}
+
 /**
  * Frame intervals while `run` runs: a requestAnimationFrame loop asks for
  * every frame, so a gap longer than the display's refresh interval is a
