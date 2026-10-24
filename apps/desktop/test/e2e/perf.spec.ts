@@ -4,9 +4,11 @@
  * §6.5, with a typical sidebar (20 Today tabs) and a full one (200), motion on
  * and off.
  *
- * Writes test-results/perf.json and prints a table. It only reports, because
- * CI runners are noisy; with CHORD_PERF_ENFORCE=1 (on reference hardware) any
- * budget miss fails. How to run it and read the report: docs/testing/performance.md.
+ * Writes test-results/perf.json and prints a table. Counts (renders in a
+ * frame, page moves, late results) don't depend on the machine, so a miss
+ * fails anywhere, CI included. Times only report, because CI runners are
+ * noisy; with CHORD_PERF_ENFORCE=1 (on reference hardware) a time over its
+ * budget fails too. How to run it and read the report: docs/testing/performance.md.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -116,8 +118,8 @@ async function measureCpuBusy(ms = 1000): Promise<number> {
 function record(row: Omit<Row, 'cpuBusy'>): void {
   (row as Row).cpuBusy = cpuBusy;
   rows.push(row as Row);
-  if (!ENFORCE) return;
   for (const c of row.checks) {
+    if (!ENFORCE && c.unit === 'ms') continue;
     const what = `${row.name} (${row.scenario}${row.motion ? `, motion ${row.motion}` : ''}): ${c.label} ${c.value} ${c.unit}, budget ${c.limit}`;
     expect.soft(c.status, what).not.toMatch(/^(miss|no data)$/);
   }

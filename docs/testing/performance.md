@@ -1,6 +1,6 @@
 # Performance
 
-Chord's performance budgets ([ARCHITECTURE.md §1](../../ARCHITECTURE.md#1-scope)) are acceptance criteria for 0.1. `apps/desktop/test/e2e/perf.spec.ts` measures them on every E2E run. CI only reports, because its runners are noisy. The reference PC (Windows 11, Ryzen 9 5900X, 144 Hz display) enforces them.
+Chord's performance budgets ([ARCHITECTURE.md §1](../../ARCHITECTURE.md#1-scope)) are acceptance criteria for 0.1. `apps/desktop/test/e2e/perf.spec.ts` measures them on every E2E run. The checks that count something (one shell render a frame, pages moved at most twice, no late results) don't depend on the machine, so they fail CI too. Times only report in CI, because its runners are noisy; the reference PC (Windows 11, Ryzen 9 5900X, 144 Hz display) enforces them.
 
 ## Run it
 
