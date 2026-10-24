@@ -1478,6 +1478,65 @@ test('sleeping: a tab hidden long enough frees its page, and wakes where it was'
   }
 });
 
+test('a hung page doesn’t stop the rest from going to sleep, and goes itself', async () => {
+  // Its own site (localhost, not 127.0.0.1), so its endless loop has a renderer of its own.
+  const hang = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<title>Hung page</title><script>setTimeout(() => { for (;;) {} }, 300);</script>');
+  });
+  await new Promise<void>((done) => hang.listen(0, done));
+  const hungUrl = `http://localhost:${(hang.address() as AddressInfo).port}/`;
+  const app = await launch({ CHORD_HOME_URL: hungUrl, CHORD_SLEEP_AFTER_MS: '700', CHORD_IDLE_CHECK_MS: '200' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('tree', { name: 'Today' });
+    await expect(today).toContainText('Hung page');
+    for (const path of ['/third', '/second']) {
+      await openCommandBar(shell, overlay, 'new');
+      await overlay.keyboard.type(`${site.origin}${path}`);
+      await overlay.keyboard.press('Enter');
+    }
+    await expect(today.getByRole('treeitem').first()).toContainText('Second page');
+    // Asking the hung page anything never gets an answer: Chord stops waiting, and both hidden tabs sleep.
+    await expect(today.getByRole('treeitem', { name: 'Third page', exact: true })).toHaveAttribute('data-asleep', 'true', { timeout: 15_000 });
+    await expect(today.getByRole('treeitem', { name: 'Hung page', exact: true })).toHaveAttribute('data-asleep', 'true', { timeout: 15_000 });
+  } finally {
+    await app.close();
+    hang.close();
+  }
+});
+
+test('Chord’s own views come back when their renderer crashes: the sidebar, and the command bar', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    await expect((await pageWhere(app, isShell)).getByRole('tree', { name: 'Today' })).toContainText('First page');
+    // Asked from main: a page whose renderer crashed is gone for Playwright, even once Chord has loaded it again.
+    const view = (name: string, script: string) =>
+      app.evaluate(
+        async ({ webContents }, [n, code]) => {
+          const contents = webContents.getAllWebContents().find((c) => c.getURL().startsWith(`chord://${n}`) || c.getURL().includes(`/${n}/index.html`));
+          if (!contents || contents.isCrashed() || contents.isLoading()) return null;
+          return (await contents.executeJavaScript(code!).catch(() => null)) as string | null;
+        },
+        [name, script],
+      );
+    const crash = (name: string) =>
+      app.evaluate(({ webContents }, n) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(`chord://${n}`) || c.getURL().includes(`/${n}/index.html`))!.forcefullyCrashRenderer(), name);
+
+    for (const [name, script, expected] of [
+      ['shell', `document.querySelector('[role="tree"][aria-label="Today"]')?.textContent ?? ''`, 'First page'],
+      ['overlay', `document.querySelector('[role="combobox"]') ? 'ready' : ''`, 'ready'],
+      ['popover', `document.getElementById('root')?.childElementCount > 0 ? 'ready' : ''`, 'ready'],
+    ] as const) {
+      await crash(name);
+      await expect.poll(() => view(name, script), { timeout: 15_000 }).toContain(expected);
+    }
+  } finally {
+    await app.close();
+  }
+});
+
 test('low on memory, a hidden tab goes to sleep after minutes, not the usual hour', async () => {
   // The usual wait stays an hour; memory reads as low, and "minutes" here are a second.
   const app = await launch({
