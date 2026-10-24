@@ -57,6 +57,10 @@ A milestone is done when all of these hold:
 | **2 · Side by side** | — | Jan 2027 | work in splits, open links from other apps in a mini window, Peek from pinned tabs, hover-preview pinned tabs and folders, and chat with Duet about your tabs |
 | **3 · Links from everywhere** | — | Feb 2027 | send a site's links to the right chord, install from Flathub or apt/dnf, update in place, go Google-free |
 | **4 · Deeper** | — | Mar 2027 + | install signed builds that update themselves on every OS |
+| **After 0.1** | 0.1.x | Nov 2026 | sign in to sites that ask for a password in a box, and trust that a force-quit loses nothing |
+| | 0.2 · Cleaner pages | Dec 2026 | browse without ads or trackers, and bring your bookmarks and history from Chrome, Edge, Brave, Firefox or Safari |
+| | 0.3 · Effects | Feb 2027 | restyle a site by hand or by asking Duet, with a Dry/Wet switch |
+| | 0.4 · Your data | Mar 2027 | export everything, and sync your setup through a folder you already sync, end-to-end encrypted |
 
 ## Where we are (updated 2026-10-23)
 
@@ -300,12 +304,56 @@ Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every 
   - **Still to do:** Mac in-app updates (what they'd take is in that doc), and a Store submission. The Store package is drafted and builds, but is off.
 - **Electron 47** (around March 2027), compact density, and whatever Phase 1–3 use teaches us.
 
-## Not planned (decided 2026-10-22)
+## After 0.1 (planned 2026-10-24)
 
-- **Built-in ad blocking** (D5). Install uBlock Origin Lite from the Web Store; it blocks ads in Chord (spike S9).
-- **Importing** from other browsers, for now. Arc import was ruled out earlier.
-- **Duet developer mode, your own API keys, local models.** Duet stays a chat that can read the browser.
+Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned, **P3** is later or maybe. Decisions D5 and D12–D15 are in ARCHITECTURE.md §16.
+
+### 0.1.0 · the preview
+- **P0** CI green on every OS, then tag `v0.1.0` and publish the draft as a prerelease.
+
+### 0.1.x · Daily-driver gaps · November
+- **P0 HTTP Basic Auth.** Today a site that asks for a username and password in the browser's own box just fails: nothing handles `login`. A prompt in the content frame, themed like the permission prompts, never a native dialog. Chromium remembers the answer until you quit (D12).
+- **P0 Sign-in checks, by hand:** Google in a second chord on Windows, macOS and Linux; Microsoft, GitHub and Apple; 1Password, Bitwarden and KeePassXC-Browser (risk R2). No user-agent spoofing unless one fails (D15).
+- **P1 Crash resilience.** A test that kills Chord mid-session and checks every window, chord, split and tab comes back. Open tabs save their scroll and form state every 30 seconds, not only when they navigate.
+- **P1 Performance pass:**
+  - cold launch: try Node's compile cache or a V8 snapshot for main, measured against the 1.5 s budget, kept only if it wins;
+  - load Duet, the theme editor and Settings' code when first opened;
+  - the four interactions over the 8 ms frame budget on 120 Hz displays (Duet, drag, chord switch, Clear Today);
+  - memory from `app.getAppMetrics()`, and tabs sleep sooner when free memory runs low (Electron has no pressure event);
+  - CI fails when launch time or memory grows past a set margin.
+  - Not doing: removing the app menu (shortcuts and the macOS Edit menu need it), or native modules (each Electron upgrade would need them rebuilt, against the 72-hour runbook).
+
+### 0.2 · Cleaner pages · December
+- **P1 Ad and tracker blocking** (D5, reversed). First a single request dispatcher per session, since Electron allows one `webRequest` listener per event. Then Ghostery's engine with EasyList and EasyPrivacy, on by default, a switch per site, private windows included. Lists bundled at build time and refreshed from the lists' own hosts.
+- **P1 Import** from Chrome, Edge, Brave, Firefox and Safari: bookmarks, history, and open tabs where the files can be read. First run and Settings map each bookmark folder to a chord. No passwords or cookies: Chrome locks them to Chrome on Windows, and they're your password manager's job. Safari needs Full Disk Access, and Chord says so. Still no Arc import.
+- **P2 Link routes by path**, such as `github.com/acme/*` → Work.
+- **P2 Media controls** in the sidebar (the audible and muted states in DESIGN.md §7, plus play and pause), and **reader mode**.
+
+### Electron 46 · January 5, 2027
+- **P0** The first major upgrade (Phase 2's first task), on the 72-hour clock.
+
+### 0.3 · Effects · February
+- **P2 Effects**, in place of Boosts (D13): per-site styles with a Dry/Wet switch that removes them at once.
+  - By hand: your own CSS, hiding an element, a few presets.
+  - *Ask Duet*: your Claude Code or Codex app writes a patch from a stripped outline of the page; same reading rules as Duet.
+  - Every patch is parsed and stripped of anything that fetches before it's applied, and re-applied on each navigation.
+
+### 0.4 · Your data · March
+- **P1 Export everything:** chords, tabs, folders, Favorites, themes, settings, routes, Effects, history and Duet chats, in the format sync uses.
+- **P2 Sync** through a folder you already sync, end-to-end encrypted with your passphrase (D14). Setup only in its first version: no history, no open tabs. One log per device, merged on every device.
+
+### Later (P3)
+- **Translation.** Needs its own decision: an on-device engine, or Google's, which Google-free mode rules out.
+- **Search the text of pages you've read**, kept on your computer.
+- **Duet tidying your tabs.** It conflicts with D8 ("Duet reads, it doesn't rearrange"), so it waits for you to ask again.
+
+## Not planned (decided 2026-10-22, updated 2026-10-24)
+
+- **Arc import.**
+- **A built-in password store** (D12): no `.kdbx` reader and no keychain store. KeePassXC-Browser covers `.kdbx` files.
+- **Duet developer mode, your own API keys, local models.** Duet stays a chat that can read the browser; Effects use the same apps.
 - **Connect an agent** (the Chord MCP server for your own Claude Code or Codex) is parked, not deleted. It goes beyond chat, and can come back if you want it.
+- *Moved to After 0.1 on 2026-10-24:* built-in ad blocking (D5 reversed) and importing from other browsers.
 
 ---
 
