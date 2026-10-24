@@ -1,6 +1,9 @@
 /* Popover cards (DESIGN.md §7.1): raised surfaces over the page. Tokens only. */
 
-/* Sized by its cards, anchored top-right; the padding leaves room for their shadows. */
+/*
+ * Sized by its cards, anchored top-right. The padding holds their shadow (shadow-card, which ends inside it);
+ * it stays small because the view takes the page's clicks even where it's clear.
+ */
 .root {
   position: absolute;
   inset-block-start: 0;
@@ -20,7 +23,7 @@
   inline-size: var(--size-popover-card);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
-  box-shadow: var(--shadow-popover);
+  box-shadow: var(--shadow-card);
   animation: card-in var(--spring-overlay-duration) var(--spring-overlay);
 }
 

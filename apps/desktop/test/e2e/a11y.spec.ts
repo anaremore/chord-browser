@@ -264,6 +264,10 @@ for (const mode of APPEARANCES) {
           await expect(settings.getByRole('heading', { level: 1 }).first()).toBeVisible();
           await settings.waitForTimeout(250);
           findings.push(...(await audit(settings, `Settings → ${name}`, { appearance: mode })));
+          // Native parts are drawn for the theme's appearance, so a select's list of options reads in every theme.
+          const schemes = await settings.locator('select').evaluateAll((els) => els.map((el) => getComputedStyle(el).colorScheme));
+          expect(schemes.every((scheme) => scheme === mode), `Settings → ${name}, each select's color-scheme: ${schemes.join(', ')}`).toBe(true);
+          if (name === 'About') await settings.getByRole('heading', { name: 'Chord', level: 1 }).locator('..').screenshot({ path: resolve(capturesDir, `settings-about-${mode}.png`) });
           if (name === 'Appearance') {
             // The theme editor with its color wheel, and importing a theme.
             await settings.getByRole('button', { name: 'Create theme' }).click();

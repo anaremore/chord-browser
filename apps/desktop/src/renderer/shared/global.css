@@ -5,6 +5,15 @@ body,
   margin: 0;
 }
 
+/* The system's appearance until a chord's theme sets its own (shared/theme.ts): native parts are drawn to match. */
+:root[data-appearance='light'] {
+  color-scheme: light;
+}
+
+:root[data-appearance='dark'] {
+  color-scheme: dark;
+}
+
 html {
   background: transparent;
   color: var(--color-fg);

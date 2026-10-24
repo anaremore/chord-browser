@@ -4,7 +4,7 @@
  * for a password in the browser's own box, Settings → Site permissions, a
  * page's fullscreen, and page zoom remembered per site.
  */
-import { mkdtempSync, readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,7 @@ import { failOnMainErrors, watchForMainErrors } from './main-errors';
 failOnMainErrors();
 
 const appDir = resolve(import.meta.dirname, '../..');
+const capturesDir = resolve(appDir, 'test-results', 'captures');
 
 /** The smallest PDF Chromium's viewer opens: one blank page. */
 const PDF = Buffer.from(
@@ -234,6 +235,9 @@ test('a site that asks for a password gets Chord’s own box: a wrong answer say
     // This computer's own server isn't warned about; the username field has the keyboard.
     await expect(box).not.toContainText('HTTPS');
     await expect(box.getByLabel('Username')).toBeFocused();
+    // For design QA: the card and its shadow, which must end inside the popover's own view.
+    mkdirSync(capturesDir, { recursive: true });
+    await popover.screenshot({ path: join(capturesDir, 'sign-in-card.png'), omitBackground: true });
 
     await popover.keyboard.type('me');
     await popover.keyboard.press('Tab');

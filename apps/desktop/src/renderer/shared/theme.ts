@@ -18,5 +18,7 @@ export function chordStyle(
     glass: ui?.glass,
     focus: accent ? rgbToOklch(accent) : null,
   });
-  return { style: theme.vars as CSSProperties, appearance: theme.appearance };
+  // color-scheme follows the chord's appearance, not the system's: native parts (a select's list, scrollbars,
+  // form controls) are drawn to match, so an option's text, in the theme's ink, always reads on its background.
+  return { style: { ...theme.vars, colorScheme: theme.appearance } as CSSProperties, appearance: theme.appearance };
 }

@@ -393,9 +393,15 @@
   text-align: center;
 }
 
+/* Chord's mark (ChordMark.tsx), the size of first run's, its cutouts in the frame's color behind it. */
 .aboutMark {
-  color: var(--color-accent);
-  font: var(--text-display);
+  block-size: calc(var(--space-16) * 1.25);
+  margin-block-end: var(--space-3);
+  overflow: visible;
+}
+
+.aboutMarkCut {
+  fill: var(--color-surface);
 }
 
 .aboutName {
