@@ -107,26 +107,28 @@ export type DataRequest =
   | { id: number; type: 'archive.latest'; reasons: ArchiveReason[] }
   /** Duet's threads and messages (./duet.ts). */
   | { id: number; type: 'duet'; op: DuetOp }
-  /** One batch of another browser's history, from an import (ARCHITECTURE.md §9). */
-  | { id: number; type: 'import.history'; importId: string; pages: ImportedPage[] }
+  /**
+   * A port (transferred with this request) on which the import process sends
+   * one import's history, a batch at a time (`ImportBatch`), so the pages
+   * never pass through main (ARCHITECTURE.md §9). Each batch is answered.
+   */
+  | { id: number; type: 'import.port'; importId: string }
   /** Take back what an import added to history: its Undo. */
   | { id: number; type: 'import.undo'; importId: string }
   | { id: number; type: 'close' };
 
+/** The import process → chord-data, on an import's port: one batch of history, written in one transaction. */
+export interface ImportBatch {
+  pages: ImportedPage[];
+}
+
+/** chord-data's answer to each batch: the pages written, or why it couldn't. */
+export type ImportBatchReply = { ok: true; added: number } | { ok: false; error: string };
+
 /** chord-data → main. */
 export type DataResponse =
-  /** `navs`, from `open`: open tabs' saved back/forward histories, by node id. `added`: pages an import batch wrote. */
-  | {
-      id: number;
-      ok: true;
-      saved?: PersistedState | null;
-      navs?: Record<string, NavState>;
-      search?: SearchResult;
-      archive?: ArchivePage;
-      entry?: ArchiveEntry | null;
-      duet?: DuetResult;
-      added?: number;
-    }
+  /** `navs`, from `open`: open tabs' saved back/forward histories, by node id. */
+  | { id: number; ok: true; saved?: PersistedState | null; navs?: Record<string, NavState>; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult }
   | { id: number; ok: false; error: string };
 
 /** The part of an Immer patch this needs. */

@@ -94,6 +94,8 @@ function archivedTab(r: Row): ArchivedTab {
 export class ChordDatabase {
   private readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
+  /** Imports undone this session: their late batches are ignored. */
+  private readonly undoneImports = new Set<string>();
 
   constructor(readonly file: string) {
     this.db = new DatabaseSync(file);
@@ -518,6 +520,8 @@ export class ChordDatabase {
    * it; a page Chord knows keeps its own title. Returns the pages written.
    */
   importHistory(importId: string, pages: readonly ImportedPage[], now = Date.now()): number {
+    // A batch still on its way when the import was undone stays out.
+    if (this.undoneImports.has(importId)) return 0;
     this.importTables();
     let added = 0;
     this.transaction(() => {
@@ -568,6 +572,7 @@ export class ChordDatabase {
    * seen since the import began.
    */
   undoImport(importId: string): void {
+    this.undoneImports.add(importId);
     this.importTables();
     const batch = this.sql('SELECT visit_floor, visit_ceiling FROM import_batch WHERE import_id = ?').get(importId) as Row | undefined;
     if (!batch) return;

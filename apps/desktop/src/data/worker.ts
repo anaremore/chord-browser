@@ -3,7 +3,7 @@
  * connection so synchronous database work never runs on main. A crash here
  * doesn't take windows down; main buffers writes and starts a new one.
  */
-import type { DataRequest, DataResponse } from '@chord/data';
+import type { DataRequest, DataResponse, ImportBatch, ImportBatchReply } from '@chord/data';
 import { ChordDatabase } from '@chord/data/db';
 
 let db: ChordDatabase | null = null;
@@ -45,10 +45,23 @@ process.parentPort.on('message', (event) => {
         if (!db) throw new Error('chord-data: duet before open');
         reply({ id: request.id, ok: true, duet: db.duet(request.op) });
         break;
-      case 'import.history':
-        if (!db) throw new Error('chord-data: import before open');
-        reply({ id: request.id, ok: true, added: db.importHistory(request.importId, request.pages) });
+      case 'import.port': {
+        const port = event.ports[0];
+        if (!db || !port) throw new Error('chord-data: import port before open');
+        const { importId } = request;
+        // The import process's batches of history, each written in one transaction and answered.
+        port.on('message', ({ data }) => {
+          try {
+            if (!db) throw new Error('chord-data: closed');
+            port.postMessage({ ok: true, added: db.importHistory(importId, (data as ImportBatch).pages) } satisfies ImportBatchReply);
+          } catch (error) {
+            port.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies ImportBatchReply);
+          }
+        });
+        port.start();
+        reply({ id: request.id, ok: true });
         break;
+      }
       case 'import.undo':
         if (!db) throw new Error('chord-data: import before open');
         db.undoImport(request.importId);

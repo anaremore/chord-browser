@@ -25,7 +25,7 @@ import {
   type DuetScope,
   type ImportBrowser,
   type ImportChoices,
-  type ImportGroup,
+  type ImportOverview,
   type ImportTarget,
   type SearchEngineId,
   type Settings,
@@ -660,15 +660,8 @@ export interface ImportSource {
 export type ImportProblem = 'denied' | 'locked' | 'unreadable' | 'missing' | 'busy';
 
 /** What a profile holds, counted before anything is imported, with each group's mapping to start from. */
-export interface ImportSummary {
+export interface ImportSummary extends ImportOverview {
   key: string;
-  groups: ImportGroup[];
-  bookmarks: number;
-  folders: number;
-  /** Open tabs; null where the browser's files can't be read reliably (Chrome, Edge, Brave). */
-  tabs: number | null;
-  history: number;
-  choices: ImportChoices;
 }
 
 export type ImportPreviewResult = { ok: true; summary: ImportSummary } | { ok: false; problem: ImportProblem };

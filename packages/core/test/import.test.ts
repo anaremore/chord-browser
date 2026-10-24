@@ -8,6 +8,7 @@ import {
   emptyState,
   frecencyOn,
   IMPORT_FAVORITES,
+  importContext,
   importGroups,
   planImport,
   sortedChords,
@@ -88,7 +89,7 @@ const preview = (): ImportPreview => ({
 
 const plan = (state: State, choices: ImportChoices, id = 'imp-1') => {
   let n = 0;
-  return planImport(state, preview(), choices, { importId: id, now: 7_000, newId: () => `${id}-${++n}`, themes: [THEME], fallbackChordId: 'c1' });
+  return planImport(importContext(state), preview(), choices, { importId: id, now: 7_000, newId: () => `${id}-${++n}`, themes: [THEME], fallbackChordId: 'c1' });
 };
 
 describe('import mapping', () => {
@@ -135,7 +136,7 @@ describe('import mapping', () => {
     t.state.favorites['f1'] = { id: 'f1', url: 'https://news.test/', title: 'News', favicon: null, rank: 'a0', createdAt: 0 };
     const many: ImportPreview = { roots: [{ kind: 'bar', title: 'Favorites bar', items: Array.from({ length: 30 }, (_, i) => link(`Site ${i}`, `https://s${i}.test/`)) }], tabs: null, history: 0 };
     let n = 0;
-    const p = planImport(t.state, many, { groups: { r0: 'favorites' }, tabs: 'skip', history: false }, { importId: 'i', now: 1, newId: () => `n${++n}`, themes: [THEME], fallbackChordId: 'c1' });
+    const p = planImport(importContext(t.state), many, { groups: { r0: 'favorites' }, tabs: 'skip', history: false }, { importId: 'i', now: 1, newId: () => `n${++n}`, themes: [THEME], fallbackChordId: 'c1' });
     expect(p.favorites).toHaveLength(IMPORT_FAVORITES);
     expect(p.favorites[0]!.rank > 'a0').toBe(true);
     const overflow = p.nodes.find((x) => x.kind === 'folder')!;
@@ -150,6 +151,18 @@ describe('import mapping', () => {
       ['today', 'https://open.test/a'],
       ['today', 'https://open.test/b'],
     ]);
+  });
+
+  it('plans from a small summary of the state (where each chord’s Pinned ends and Today starts), which never has a private chord', () => {
+    const t = setup();
+    t.run({ t: 'window.create', windowId: 'pw', privateChordId: 'secret' });
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://b.test/' });
+    const context = importContext(t.state);
+    expect(context.chords.map((c) => c.id)).toEqual(['c1']);
+    expect(context.pinnedEnd).toEqual({ c1: 'a0' });
+    expect(context.todayStart).toEqual({ c1: children(t.state, 'c1', 'today', null)[0]!.rank });
+    expect(context.separateSignIns).toBe(false);
   });
 
   it('never lands anything in a private window’s chord, or a chord that isn’t there', () => {

@@ -6,7 +6,7 @@
  */
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ArchiveReason, ImportedPage, PersistedState, State } from '@chord/core';
+import type { ArchiveReason, PersistedState, State } from '@chord/core';
 import {
   opKey,
   opsForState,
@@ -23,7 +23,7 @@ import {
   type SearchResult,
   type WriteOp,
 } from '@chord/data';
-import { utilityProcess, type UtilityProcess } from 'electron';
+import { MessageChannelMain, utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron';
 
 const FLUSH_MS = 250;
 const CLOSE_TIMEOUT_MS = 2000;
@@ -82,11 +82,11 @@ export class Persistence {
     });
   }
 
-  private request(request: Request): Promise<DataResponse> {
+  private request(request: Request, transfer: MessagePortMain[] = []): Promise<DataResponse> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.waiting.set(id, { resolve, reject });
-      this.child.postMessage({ ...request, id });
+      this.child.postMessage({ ...request, id }, transfer);
     });
   }
 
@@ -133,14 +133,15 @@ export class Persistence {
   }
 
   /**
-   * One batch of another browser's history (an import), in its own
-   * transaction; resolves with the pages written. Throws if chord-data can't
-   * answer, so the import can say so.
+   * A port straight to chord-data for one import's history: the import
+   * process sends its batches through it (`ImportBatch`, each answered), so
+   * the pages never pass through main. Resolves once chord-data listens.
    */
-  async importHistory(importId: string, pages: ImportedPage[]): Promise<number> {
-    const response = await this.request({ type: 'import.history', importId, pages });
+  async importPort(importId: string): Promise<MessagePortMain> {
+    const { port1, port2 } = new MessageChannelMain();
+    const response = await this.request({ type: 'import.port', importId }, [port1]);
     if (!response.ok) throw new Error(response.error);
-    return response.added ?? 0;
+    return port2;
   }
 
   /** Take back what an import added to history (its Undo). */

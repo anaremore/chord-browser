@@ -530,7 +530,7 @@ if (!app.requestSingleInstanceLock()) {
       env: importEnv,
       state: () => browser!.store.state,
       dispatch: (command) => browser!.store.dispatch(command),
-      history: { write: (importId, pages) => store.importHistory(importId, pages), undo: (importId) => store.undoImport(importId) },
+      history: { port: (importId) => store.importPort(importId), undo: (importId) => store.undoImport(importId) },
       toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
     });
     registerIpc();

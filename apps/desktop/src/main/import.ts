@@ -1,51 +1,44 @@
 /**
- * Import from other browsers (ARCHITECTURE.md §9), main's side. Finding and
- * reading profiles happens in the import utility process (src/import), one
- * process per step, each with a temp folder of copies removed when it ends.
- * Main decides where things land (core's planImport), adds them to the store
- * in parts so a big import never holds a frame up, and hands history to
- * chord-data a batch at a time, asking for the next batch only once the last
- * is written. One import runs at a time; its Undo (the toast, or Settings)
- * takes back the chords, folders, tabs, favorites and history it added.
+ * Import from other browsers (ARCHITECTURE.md §9), main's side, which only
+ * routes (performance rules 1 and 4). The import process (src/import) finds
+ * profiles, reads the one you pick from copies of its files, keeps it, and
+ * plans the import; main hands it a small summary of the state, adds what it
+ * plans to the store a part at a time, and connects it straight to
+ * chord-data for the history, hearing only how far it's got. One import runs
+ * at a time; its Undo (the toast, or Settings) takes back the chords,
+ * folders, tabs, favorites and history it added.
  */
 import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  countFolders,
-  countLinks,
-  defaultChoices,
   IMPORT_BROWSER_NAMES,
-  importableTabs,
-  importGroups,
-  planImport,
+  importContext,
   sortedChords,
   uuidv7,
   type ChordId,
   type ChordThemeSpec,
   type Command,
   type ImportChoices,
-  type ImportedPage,
-  type ImportPreview,
   type State,
   type WindowId,
 } from '@chord/core';
-import type { ImportCounts, ImportPreviewResult, ImportProblem, ImportProgress, ImportRunResult, ImportSource, ImportSummary, Toast } from '@chord/ipc';
+import type { ImportCounts, ImportPreviewResult, ImportProblem, ImportProgress, ImportRunResult, ImportSource, Toast } from '@chord/ipc';
 import { PRESETS, presetStops, type PresetId } from '@chord/tokens';
-import { utilityProcess, type UtilityProcess } from 'electron';
+import { utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron';
 import type { FoundProfile, ImportEnv } from '../import/detect';
 import type { ImportReply, ImportRequest } from '../import/worker';
 
-/** Folders and tabs added per store change: a few hundred patch a sidebar within a frame. */
-const NODES_PER_STEP = 400;
 const SCAN_TIMEOUT_MS = 20_000;
 const READ_TIMEOUT_MS = 120_000;
-const BATCH_TIMEOUT_MS = 60_000;
+/** A step of the plan, or a batch of history. */
+const STEP_TIMEOUT_MS = 60_000;
+/** A profile read but not imported is let go after this, with its copies. */
+const IDLE_MS = 10 * 60_000;
 /** Copies an import process never got to clean up (Chord was killed mid-import) go after a day. */
 const STALE_MS = 86_400_000;
 const PREFIX = 'chord-import-';
-const MAX_PREVIEWS = 3;
 
 export interface ImporterOptions {
   /** The import process's script, as built (out/main/import.js). */
@@ -53,8 +46,8 @@ export interface ImporterOptions {
   env(): ImportEnv;
   state(): State;
   dispatch(command: Command): void;
-  /** chord-data: a batch of history (resolves with the pages written), and an import's Undo. */
-  history: { write(importId: string, pages: ImportedPage[]): Promise<number>; undo(importId: string): Promise<void> };
+  /** chord-data: a port for an import's history batches, and an import's Undo. */
+  history: { port(importId: string): Promise<MessagePortMain>; undo(importId: string): Promise<void> };
   toast(windowId: WindowId, toast: Toast): void;
 }
 
@@ -63,6 +56,7 @@ const keyOf = (profile: FoundProfile) => createHash('sha256').update(profile.dir
 
 const numbers = new Intl.NumberFormat('en-US');
 const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
+const NONE: ImportCounts = { bookmarks: 0, folders: 0, chords: 0, favorites: 0, tabs: 0, pages: 0 };
 
 /** "Chrome", "Chrome · Work" when it has several profiles, "Firefox (Flatpak)". */
 function sourcesOf(profiles: FoundProfile[]): ImportSource[] {
@@ -71,19 +65,6 @@ function sourcesOf(profiles: FoundProfile[]): ImportSource[] {
     const variant = p.variant === 'flatpak' ? ' (Flatpak)' : p.variant === 'snap' ? ' (Snap)' : '';
     return { key: keyOf(p), browser: p.browser, label: `${IMPORT_BROWSER_NAMES[p.browser]}${variant}${several ? ` · ${p.name}` : ''}`, denied: p.denied };
   });
-}
-
-export function summarize(key: string, preview: ImportPreview, chordId: ChordId): ImportSummary {
-  const all = preview.roots.flatMap((r) => r.items);
-  return {
-    key,
-    groups: importGroups(preview),
-    bookmarks: countLinks(all),
-    folders: countFolders(all),
-    tabs: preview.tabs ? importableTabs(preview.tabs).length : null,
-    history: preview.history,
-    choices: defaultChoices(preview, chordId),
-  };
 }
 
 /** New chords' colors: the presets in turn, starting after as many as there are chords, so they differ from the ones you have. */
@@ -105,15 +86,23 @@ export function doneMessage(counts: ImportCounts, browser: string): string {
   return `Imported ${list} from ${browser}`;
 }
 
-/** One run of the import process, with a temp folder for its copies; the folder goes when the process ends, however it ends. */
+/**
+ * One import process, with a temp folder for its copies; the folder goes
+ * when the process ends, however it ends. Replies that arrive before they're
+ * asked for wait in order.
+ */
 class ImportProcess {
   private readonly child: UtilityProcess;
+  private readonly inbox: ImportReply[] = [];
   private waiting: ((reply: ImportReply | null) => void) | null = null;
   private exited = false;
 
   private constructor(path: string, readonly temp: string) {
     this.child = utilityProcess.fork(path, [], { serviceName: 'Chord Import', stdio: 'ignore' });
-    this.child.on('message', (reply: ImportReply) => this.settle(reply));
+    this.child.on('message', (reply: ImportReply) => {
+      if (this.waiting) this.settle(reply);
+      else this.inbox.push(reply);
+    });
     this.child.once('exit', () => {
       this.exited = true;
       this.settle(null);
@@ -131,8 +120,13 @@ class ImportProcess {
     waiting?.(reply);
   }
 
-  /** The reply to `request`; null if the process ended, or took too long (it's stopped then). */
-  ask(request: ImportRequest, timeoutMs: number): Promise<ImportReply | null> {
+  send(request: ImportRequest, transfer: MessagePortMain[] = []): void {
+    if (!this.exited) this.child.postMessage(request, transfer);
+  }
+
+  /** The next reply; null if the process ended, or took too long (it's stopped then). */
+  next(timeoutMs: number): Promise<ImportReply | null> {
+    if (this.inbox.length > 0) return Promise.resolve(this.inbox.shift()!);
     if (this.exited) return Promise.resolve(null);
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -143,8 +137,12 @@ class ImportProcess {
         clearTimeout(timer);
         resolve(reply);
       };
-      this.child.postMessage(request);
     });
+  }
+
+  ask(request: ImportRequest, timeoutMs: number): Promise<ImportReply | null> {
+    this.send(request);
+    return this.next(timeoutMs);
   }
 
   end(): void {
@@ -152,8 +150,19 @@ class ImportProcess {
   }
 }
 
+/** A profile read and kept by its own import process, until it's imported or let go. */
+interface Session {
+  key: string;
+  profile: FoundProfile;
+  process: ImportProcess;
+  /** Pages of history it has. */
+  history: number;
+  idle: ReturnType<typeof setTimeout> | undefined;
+}
+
 interface Running {
   importId: string;
+  process: ImportProcess;
   cancelled: boolean;
   finished: Promise<void>;
 }
@@ -161,8 +170,7 @@ interface Running {
 export class Importer {
   /** The profiles the last search found, by key: renderers name one, never a path. */
   private profiles = new Map<string, FoundProfile>();
-  /** The profiles read lately, by key, until one is imported (a few at most: switching back and forth needs no new read). */
-  private readonly previews = new Map<string, ImportPreview>();
+  private session: Session | null = null;
   private running: Running | null = null;
   /** Where each import reports, for Undo's report too. */
   private readonly notifiers = new Map<string, (progress: ImportProgress) => void>();
@@ -170,36 +178,47 @@ export class Importer {
 
   constructor(private readonly options: ImporterOptions) {}
 
-  private async once(request: (temp: string) => ImportRequest, timeoutMs: number): Promise<ImportReply | null> {
-    const process = await ImportProcess.start(this.options.workerPath);
-    try {
-      return await process.ask(request(process.temp), timeoutMs);
-    } finally {
-      process.end();
-    }
+  private letGo(): void {
+    if (!this.session) return;
+    clearTimeout(this.session.idle);
+    this.session.process.end();
+    this.session = null;
   }
 
   /** The browsers and profiles on this computer. */
   async sources(): Promise<ImportSource[]> {
     void this.sweep();
-    const reply = await this.once(() => ({ type: 'scan', env: this.options.env() }), SCAN_TIMEOUT_MS);
-    const profiles = reply?.type === 'profiles' ? reply.profiles : [];
-    this.profiles = new Map(profiles.map((p) => [keyOf(p), p]));
-    return sourcesOf(profiles);
+    const process = await ImportProcess.start(this.options.workerPath);
+    try {
+      const reply = await process.ask({ type: 'scan', env: this.options.env() }, SCAN_TIMEOUT_MS);
+      const profiles = reply?.type === 'profiles' ? reply.profiles : [];
+      this.profiles = new Map(profiles.map((p) => [keyOf(p), p]));
+      return sourcesOf(profiles);
+    } finally {
+      process.end();
+    }
   }
 
-  /** Read a profile and count what it holds, with each group's mapping to start from (new chords, or `chordId`). */
+  /** Read a profile in a process of its own, which keeps it; groups start out mapped to new chords, or `chordId`. */
   async read(key: string, chordId: ChordId): Promise<ImportPreviewResult> {
     const profile = this.profiles.get(key);
     if (!profile) return { ok: false, problem: 'missing' };
     if (profile.denied) return { ok: false, problem: 'denied' };
-    const reply = await this.once((temp) => ({ type: 'read', profile, temp }), READ_TIMEOUT_MS);
-    if (reply?.type === 'error') return { ok: false, problem: reply.problem };
-    if (reply?.type !== 'preview') return { ok: false, problem: 'unreadable' };
-    this.previews.delete(key);
-    this.previews.set(key, reply.preview);
-    for (const old of [...this.previews.keys()].slice(0, -MAX_PREVIEWS)) this.previews.delete(old);
-    return { ok: true, summary: summarize(key, reply.preview, chordId) };
+    if (this.running) return { ok: false, problem: 'busy' };
+    this.letGo();
+    const process = await ImportProcess.start(this.options.workerPath);
+    const session: Session = { key, profile, process, history: 0, idle: undefined };
+    this.session = session;
+    const reply = await process.ask({ type: 'read', profile, temp: process.temp, chordId }, READ_TIMEOUT_MS);
+    // Another profile was picked meanwhile: this one's been let go.
+    if (this.session !== session) return { ok: false, problem: 'missing' };
+    if (reply?.type !== 'overview') {
+      this.letGo();
+      return { ok: false, problem: reply?.type === 'error' ? reply.problem : 'unreadable' };
+    }
+    session.history = reply.overview.history;
+    session.idle = setTimeout(() => this.session === session && this.letGo(), IDLE_MS);
+    return { ok: true, summary: { key, ...reply.overview } };
   }
 
   /**
@@ -208,78 +227,74 @@ export class Importer {
    */
   run(key: string, choices: ImportChoices, windowId: WindowId, notify: (progress: ImportProgress) => void): ImportRunResult {
     if (this.running) return { ok: false, problem: 'busy' };
-    const profile = this.profiles.get(key);
-    const preview = this.previews.get(key);
-    const state = this.options.state();
-    const win = state.windows[windowId];
-    if (!profile || !preview || !win || win.private) return { ok: false, problem: 'missing' };
-    this.previews.clear();
+    const session = this.session?.key === key ? this.session : null;
+    const win = this.options.state().windows[windowId];
+    if (!session || !win || win.private) return { ok: false, problem: 'missing' };
+    // The run owns the process from here.
+    clearTimeout(session.idle);
+    this.session = null;
     const importId = uuidv7();
     this.notifiers.set(importId, notify);
-    const running: Running = { importId, cancelled: false, finished: Promise.resolve() };
-    running.finished = this.work(running, profile, preview, choices, windowId)
+    const running: Running = { importId, process: session.process, cancelled: false, finished: Promise.resolve() };
+    running.finished = this.work(running, session, choices, windowId)
       .catch((error: unknown) => {
-        // What landed stays, with Undo still possible from Settings.
+        // Undo stopped it: that's no failure.
+        if (running.cancelled) return;
+        // What landed stays, with Undo still possible.
         console.error('Import failed:', error);
-        notify({ importId, phase: 'failed', done: 0, total: 0, counts: { bookmarks: 0, folders: 0, chords: 0, favorites: 0, tabs: 0, pages: 0 }, problem: 'unreadable' });
+        notify({ importId, phase: 'failed', done: 0, total: 0, counts: NONE, problem: 'unreadable' });
       })
       .finally(() => {
+        session.process.end();
         if (this.running === running) this.running = null;
       });
     this.running = running;
     return { ok: true, importId };
   }
 
-  private async work(running: Running, profile: FoundProfile, preview: ImportPreview, choices: ImportChoices, windowId: WindowId): Promise<void> {
-    const { importId } = running;
+  private async work(running: Running, session: Session, choices: ImportChoices, windowId: WindowId): Promise<void> {
+    const { importId, process } = running;
     const state = this.options.state();
-    const fallback = state.windows[windowId]?.activeChordId ?? sortedChords(state)[0]?.id ?? '';
-    const plan = planImport(state, preview, choices, { importId, now: Date.now(), newId: () => uuidv7(), themes: themesFor(state), fallbackChordId: fallback });
-    const counts: ImportCounts = { ...plan.counts, pages: 0 };
-    const total = choices.history ? preview.history : 0;
+    const fallbackChordId = state.windows[windowId]?.activeChordId ?? sortedChords(state)[0]?.id ?? '';
+    const planned = await process.ask({ type: 'plan', importId, choices, context: importContext(state), themes: themesFor(state), fallbackChordId }, STEP_TIMEOUT_MS);
+    if (planned?.type !== 'plan') throw new Error(`no plan (${planned?.type === 'error' ? planned.problem : 'no answer'})`);
+    const counts: ImportCounts = { ...planned.counts, pages: 0 };
+    const total = choices.history ? session.history : 0;
     const report = (phase: ImportProgress['phase'], problem?: ImportProblem) =>
       this.notifiers.get(importId)?.({ importId, phase, done: counts.pages, total, counts: { ...counts }, ...(problem ? { problem } : {}) });
 
     report('bookmarks');
-    if (plan.chords.length > 0 || plan.favorites.length > 0 || plan.nodes.length > 0) {
-      this.options.dispatch({ t: 'import.add', importId, chords: plan.chords, favorites: plan.favorites, nodes: plan.nodes.slice(0, NODES_PER_STEP) });
-      for (let at = NODES_PER_STEP; at < plan.nodes.length && !running.cancelled; at += NODES_PER_STEP) {
-        // A turn of the event loop between parts: input, IPC and painting go first.
-        await new Promise((resolve) => setImmediate(resolve));
-        this.options.dispatch({ t: 'import.add', importId, nodes: plan.nodes.slice(at, at + NODES_PER_STEP) });
-      }
-    }
-    let problem: ImportProblem | undefined;
-    if (total > 0 && !running.cancelled) {
-      report('history');
-      problem = await this.history(running, profile, counts, () => report('history'));
+    if (planned.chords.length > 0 || planned.favorites.length > 0) this.options.dispatch({ t: 'import.add', importId, chords: planned.chords, favorites: planned.favorites });
+    // A part at a time, each its own store change; asking for the next lets input and painting go first.
+    let part = await process.ask({ type: 'more' }, STEP_TIMEOUT_MS);
+    while (part?.type === 'nodes' && !running.cancelled) {
+      this.options.dispatch({ t: 'import.add', importId, nodes: part.nodes });
+      part = await process.ask({ type: 'more' }, STEP_TIMEOUT_MS);
     }
     if (running.cancelled) return;
+    if (part?.type !== 'planned') throw new Error('the plan stopped');
+
+    let problem: ImportProblem | undefined;
+    if (total > 0) {
+      report('history');
+      process.send({ type: 'history', importId }, [await this.options.history.port(importId)]);
+      for (;;) {
+        const batch = await process.next(STEP_TIMEOUT_MS);
+        if (running.cancelled) return;
+        if (batch?.type === 'pages') {
+          counts.pages += batch.added;
+          report('history');
+          continue;
+        }
+        if (batch?.type !== 'done') problem = batch?.type === 'error' ? batch.problem : 'unreadable';
+        break;
+      }
+    }
     report(problem ? 'failed' : 'done', problem);
-    const browser = IMPORT_BROWSER_NAMES[profile.browser];
+    const browser = IMPORT_BROWSER_NAMES[session.profile.browser];
     const message = problem ? `${doneMessage(counts, browser)}. Chord couldn’t read all of its history.` : doneMessage(counts, browser);
     const added = counts.tabs + counts.bookmarks + counts.favorites + counts.chords + counts.pages > 0;
     this.options.toast(windowId, { id: `import:${importId}`, message, ...(added ? { action: { label: 'Undo', command: { t: 'import.undo', importId } } } : {}) });
-  }
-
-  /** History, a batch at a time: read in the import process, written by chord-data, the next asked for once it's in. */
-  private async history(running: Running, profile: FoundProfile, counts: ImportCounts, progress: () => void): Promise<ImportProblem | undefined> {
-    const process = await ImportProcess.start(this.options.workerPath);
-    try {
-      let reply = await process.ask({ type: 'history', profile, temp: process.temp }, BATCH_TIMEOUT_MS);
-      while (reply?.type === 'pages') {
-        if (running.cancelled) return undefined;
-        counts.pages += await this.options.history.write(running.importId, reply.pages);
-        progress();
-        reply = await process.ask({ type: 'more' }, BATCH_TIMEOUT_MS);
-      }
-      if (reply?.type === 'error') return reply.problem;
-      return reply?.type === 'done' ? undefined : 'unreadable';
-    } catch {
-      return 'unreadable';
-    } finally {
-      process.end();
-    }
   }
 
   /** Undo: a running import stops first; then what it added goes, history included. */
@@ -287,11 +302,12 @@ export class Importer {
     const running = this.running?.importId === importId ? this.running : null;
     if (running) {
       running.cancelled = true;
+      running.process.end();
       await running.finished;
     }
     this.options.dispatch({ t: 'import.undo', importId });
     await this.options.history.undo(importId).catch(() => undefined);
-    this.notifiers.get(importId)?.({ importId, phase: 'undone', done: 0, total: 0, counts: { bookmarks: 0, folders: 0, chords: 0, favorites: 0, tabs: 0, pages: 0 } });
+    this.notifiers.get(importId)?.({ importId, phase: 'undone', done: 0, total: 0, counts: NONE });
     this.notifiers.delete(importId);
   }
 

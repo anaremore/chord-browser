@@ -46,19 +46,29 @@ export async function readIfThere(file: string): Promise<Buffer | null> {
   }
 }
 
-let copies = 0;
+/** Copies made so far, by temp folder and database: an import reads the copy its counts came from. */
+const copied = new Map<string, string>();
 
-/** A copy of a SQLite database (and its write-ahead log) in `temp`, opened read-only; null when there's no such database. */
+/**
+ * A copy of a SQLite database (and its write-ahead log) in `temp`, opened
+ * read-only; null when there's no such database. The same database again
+ * opens the copy already made.
+ */
 export async function openCopy(file: string, temp: string): Promise<DatabaseSync | null> {
-  const to = join(temp, `${++copies}-${basename(file)}`);
-  try {
-    await copyFile(file, to);
-  } catch (error) {
-    if (problemOf(error) === 'missing') return null;
-    throw new ImportProblem(problemOf(error));
+  const id = `${temp}\0${file}`;
+  let to = copied.get(id);
+  if (!to) {
+    to = join(temp, `${copied.size + 1}-${basename(file)}`);
+    try {
+      await copyFile(file, to);
+    } catch (error) {
+      if (problemOf(error) === 'missing') return null;
+      throw new ImportProblem(problemOf(error));
+    }
+    // No log is fine: the browser had nothing waiting, or isn't running.
+    await copyFile(`${file}-wal`, `${to}-wal`).catch(() => undefined);
+    copied.set(id, to);
   }
-  // No log is fine: the browser had nothing waiting, or isn't running.
-  await copyFile(`${file}-wal`, `${to}-wal`).catch(() => undefined);
   try {
     return new DatabaseSync(to, { readOnly: true });
   } catch {

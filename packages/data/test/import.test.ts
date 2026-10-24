@@ -74,8 +74,9 @@ describe('importing history', () => {
     // Its frecency: what it had, plus Chord's own visit just now.
     expect(known[0]!.frecency).toBeCloseTo(before[0]!.frecency + 1, 5);
     expect(visitRows().map((v) => v.transition)).toEqual(['link', 'link']);
-    // Undo again does nothing.
+    // Undo again does nothing, and a batch that was still on its way stays out.
     db.undoImport('i1');
+    expect(db.importHistory('i1', [page('https://late.test/', 'Late', [t0])], t0)).toBe(0);
     expect(db.search('', null, t0).history).toHaveLength(1);
   });
 

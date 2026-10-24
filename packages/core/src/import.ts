@@ -9,7 +9,6 @@
  */
 import { generateNKeysBetween } from 'fractional-indexing';
 import { DEFAULT_PROFILE, MAX_FAVORITES, type Chord, type ChordId, type ChordThemeSpec, type Favorite, type FolderNode, type SidebarNode, type State, type TabNode } from './model';
-import { children } from './nodes';
 import { dayOf, frecencyOn, HALF_LIFE_DAYS } from './rank';
 import { sortedChords, sortedFavorites } from './select';
 
@@ -171,6 +170,75 @@ export function defaultChoices(preview: ImportPreview, chordId: ChordId): Import
   return { groups, tabs: preview.tabs && importableTabs(preview.tabs).length > 0 ? `chord:${chordId}` : 'skip', history: preview.history > 0 };
 }
 
+/** What a profile holds, counted for the person before anything is imported, with each group's mapping to start from. */
+export interface ImportOverview {
+  groups: ImportGroup[];
+  bookmarks: number;
+  folders: number;
+  /** Open tabs that would come across; null where the browser's files can't be read reliably. */
+  tabs: number | null;
+  history: number;
+  choices: ImportChoices;
+}
+
+export function overviewOf(preview: ImportPreview, chordId: ChordId): ImportOverview {
+  const all = preview.roots.flatMap((r) => r.items);
+  return {
+    groups: importGroups(preview),
+    bookmarks: countLinks(all),
+    folders: countFolders(all),
+    tabs: preview.tabs ? importableTabs(preview.tabs).length : null,
+    history: preview.history,
+    choices: defaultChoices(preview, chordId),
+  };
+}
+
+/**
+ * The little of the state an import needs to plan, so it can plan away from
+ * main (in the import process): your chords (never a private window's), where
+ * each chord's Pinned ends and Today begins, and the Favorites row.
+ */
+export interface ImportContext {
+  chords: { id: ChordId; rank: string }[];
+  /** The rank of the last node at the top of each chord's Pinned (null when it's empty). */
+  pinnedEnd: Record<ChordId, string | null>;
+  /** The rank of the first node at the top of each chord's Today. */
+  todayStart: Record<ChordId, string | null>;
+  favorites: { url: string; rank: string }[];
+  separateSignIns: boolean;
+}
+
+/** One pass over the nodes, in the sidebar's order (rank, then id). */
+export function importContext(state: State): ImportContext {
+  const chords = sortedChords(state);
+  const pinnedEnd: Record<ChordId, string | null> = {};
+  const todayStart: Record<ChordId, string | null> = {};
+  const ends = new Map<ChordId, SidebarNode>();
+  const starts = new Map<ChordId, SidebarNode>();
+  const after = (a: SidebarNode, b: SidebarNode) => a.rank > b.rank || (a.rank === b.rank && a.id > b.id);
+  for (const node of Object.values(state.nodes)) {
+    if (node.parentId !== null) continue;
+    if (node.section === 'pinned') {
+      const end = ends.get(node.chordId);
+      if (!end || after(node, end)) ends.set(node.chordId, node);
+    } else {
+      const start = starts.get(node.chordId);
+      if (!start || after(start, node)) starts.set(node.chordId, node);
+    }
+  }
+  for (const chord of chords) {
+    pinnedEnd[chord.id] = ends.get(chord.id)?.rank ?? null;
+    todayStart[chord.id] = starts.get(chord.id)?.rank ?? null;
+  }
+  return {
+    chords: chords.map((c) => ({ id: c.id, rank: c.rank })),
+    pinnedEnd,
+    todayStart,
+    favorites: sortedFavorites(state).map((f) => ({ url: f.url, rank: f.rank })),
+    separateSignIns: state.settings.separateSignIns,
+  };
+}
+
 /** The items a group stands for. */
 function groupItems(preview: ImportPreview, id: string): { title: string; items: BookmarkItem[]; loose: boolean } | null {
   const match = /^r(\d+)(?:\/(\d+))?$/.exec(id);
@@ -211,21 +279,22 @@ const clip = (text: string, max: number) => [...text.trim()].slice(0, max).join(
 
 /**
  * Decide where everything goes. Pure: ids and time come from `options`. Chords
- * that don't exist (or are a private window's) and groups mapped nowhere are
- * skipped, so whatever a renderer sends, nothing lands in a private window.
+ * that aren't in `context` (gone, or a private window's) and groups mapped
+ * nowhere are skipped, so whatever a renderer sends, nothing lands in a
+ * private window.
  */
-export function planImport(state: State, preview: ImportPreview, choices: ImportChoices, options: ImportPlanOptions): ImportPlan {
+export function planImport(context: ImportContext, preview: ImportPreview, choices: ImportChoices, options: ImportPlanOptions): ImportPlan {
   const { now, newId } = options;
   const chords: Chord[] = [];
   const nodes: SidebarNode[] = [];
   const favorites: Favorite[] = [];
   const counts = { bookmarks: 0, folders: 0, tabs: 0, chords: 0, favorites: 0 };
-  const existing = new Set(sortedChords(state).map((c) => c.id));
+  const existing = new Set(context.chords.map((c) => c.id));
   const chordOf = (target: ImportTarget | undefined): ChordId | null => (target?.startsWith('chord:') && existing.has(target.slice(6)) ? target.slice(6) : null);
   // Appends to a chord's Pinned go after what's there, and after each other, in group order.
   const lastPinned = new Map<ChordId, string | null>();
   const pinnedEnd = (chordId: ChordId) => {
-    if (!lastPinned.has(chordId)) lastPinned.set(chordId, children(state, chordId, 'pinned', null).at(-1)?.rank ?? null);
+    if (!lastPinned.has(chordId)) lastPinned.set(chordId, context.pinnedEnd[chordId] ?? null);
     return lastPinned.get(chordId)!;
   };
 
@@ -287,7 +356,7 @@ export function planImport(state: State, preview: ImportPreview, choices: Import
 
   const groups = importGroups(preview);
   const newChords = groups.filter((g) => choices.groups[g.id] === 'new');
-  const chordRanks = generateNKeysBetween(sortedChords(state).at(-1)?.rank ?? null, null, newChords.length);
+  const chordRanks = generateNKeysBetween(context.chords.at(-1)?.rank ?? null, null, newChords.length);
   for (const group of groups) {
     const target = choices.groups[group.id];
     const found = groupItems(preview, group.id);
@@ -297,7 +366,7 @@ export function planImport(state: State, preview: ImportPreview, choices: Import
       const name = clip(found.title, MAX_CHORD_NAME) || 'Bookmarks';
       chords.push({
         id,
-        profileId: state.settings.separateSignIns ? newId() : DEFAULT_PROFILE,
+        profileId: context.separateSignIns ? newId() : DEFAULT_PROFILE,
         name,
         icon: letterIcon(name),
         theme: structuredTheme(options.themes[chords.length % Math.max(1, options.themes.length)]),
@@ -310,9 +379,9 @@ export function planImport(state: State, preview: ImportPreview, choices: Import
       continue;
     }
     if (target === 'favorites' && group.kind === 'bar') {
-      const have = new Set(sortedFavorites(state).map((f) => f.url));
+      const have = new Set(context.favorites.map((f) => f.url));
       const room = Math.max(0, Math.min(IMPORT_FAVORITES, MAX_FAVORITES - have.size));
-      const order = sortedFavorites(state);
+      const order = context.favorites;
       const links = found.items.filter((i): i is BookmarkLink => i.kind === 'link' && isImportableUrl(i.url) && !have.has(i.url) && Boolean(have.add(i.url)));
       const fit = links.slice(0, room);
       const ranks = generateNKeysBetween(order.at(-1)?.rank ?? null, null, fit.length);
@@ -331,8 +400,7 @@ export function planImport(state: State, preview: ImportPreview, choices: Import
   const tabsTo = chordOf(choices.tabs);
   if (tabsTo && preview.tabs) {
     const tabs = importableTabs(preview.tabs);
-    const first = children(state, tabsTo, 'today', null)[0];
-    const ranks = generateNKeysBetween(null, first?.rank ?? null, tabs.length);
+    const ranks = generateNKeysBetween(null, context.todayStart[tabsTo] ?? null, tabs.length);
     tabs.forEach((page, i) => {
       // Not loaded until opened, like tabs restored at launch.
       nodes.push({
