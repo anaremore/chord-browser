@@ -6,6 +6,7 @@
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
 import { Check, EyeOff, FolderInput, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { ChordMark } from '../shared/ChordMark';
 import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
@@ -355,9 +356,7 @@ function About({ about, snapshot }: { about: AboutInfo; snapshot: SettingsSnapsh
   return (
     <>
       <div className={styles.aboutHero}>
-        <span className={styles.aboutMark} aria-hidden>
-          ✦
-        </span>
+        <ChordMark className={styles.aboutMark} cutClassName={styles.aboutMarkCut!} />
         <h1 className={styles.aboutName}>Chord</h1>
         <p className={styles.sectionDescription}>Version {about.version}</p>
       </div>
