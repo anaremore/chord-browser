@@ -21,6 +21,8 @@ const flag = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 if (args[0] === '--version') {
+  // FAKE_CLAUDE_SLOW_VERSION=<ms>: answer late, the way a slow machine does, so Duet is open before it has found Claude.
+  await new Promise((done) => setTimeout(done, Number(process.env.FAKE_CLAUDE_SLOW_VERSION ?? 0)));
   // FAKE_CLAUDE_VERSION plays an older Claude Code (1.x has no `auth` command).
   process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.309'} (Claude Code)\n`);
   process.exit(0);

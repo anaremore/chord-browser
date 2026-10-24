@@ -404,7 +404,9 @@ test('Settings opens from the shell and its changes apply live', async () => {
     await settings.getByRole('button', { name: 'Add theme' }).click();
     await expect(settings.getByRole('button', { name: 'Pasted', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
-    // Deleting asks twice, in place; the chord keeps its colors.
+    // Deleting asks twice, in place; the chord keeps its colors. (The window behind wears the pasted
+    // colors first: it renders a frame after Settings shows the theme chosen.)
+    await expect.poll(tint).toMatch(/ 150 \/.+ 220 \//);
     const tintBeforeDelete = await tint();
     await settings.getByRole('button', { name: 'Edit Pasted' }).click();
     await settings.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -599,14 +601,18 @@ test('a playing video pops out when you switch away, and comes home when you ret
     await expect(bringBack).toHaveCount(0);
 
     // The PiP window's "Back to tab" ends PiP with the video still playing (Electron says nothing else):
-    // Chord brings the tab back.
+    // Chord brings the tab back. (Each switch is waited for in the sidebar, which renders a frame after
+    // main switches: otherwise the Video row still looks current from before, and the next click lands
+    // while Chord is still telling "Back to tab" from ✕.)
     await row('Second page').click();
+    await expect(row('Second page')).toHaveAttribute('aria-current', 'page');
     await expect.poll(pip).toBe('v');
     await video.evaluate(() => document.exitPictureInPicture());
     await expect(row('Video')).toHaveAttribute('aria-current', 'page');
 
     // Its ✕ pauses the video as PiP ends: you stay where you are.
     await row('Second page').click();
+    await expect(row('Second page')).toHaveAttribute('aria-current', 'page');
     await expect.poll(pip).toBe('v');
     await video.evaluate(() => {
       document.querySelector('video')!.pause();
@@ -1329,9 +1335,6 @@ test('a page that fails to load explains why, and recovers', async () => {
 });
 
 test('a page that keeps crashing stops after two reloads, and Reload brings it back', async () => {
-  // ⚠ Times out on every Linux runner (X11 and Wayland, x64 and arm64) and hangs app.close();
-  // the cause isn't known yet. Crash handling itself is covered on Windows and macOS.
-  test.skip(process.platform === 'linux', 'forced renderer crashes hang on Linux CI; under investigation');
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
@@ -1380,7 +1383,8 @@ test('downloads save to the Downloads folder without asking, never overwrite, an
     const tab = await pageWhere(app, (url) => url.startsWith(`${site.origin}/files`));
 
     await tab.click('#get');
-    await expect(shell.getByRole('button', { name: 'Downloads, new' })).toBeVisible();
+    // The badge waits on the download starting, which a busy CI machine can take a while over.
+    await expect(shell.getByRole('button', { name: 'Downloads, new' })).toBeVisible({ timeout: 15_000 });
     await tab.click('#get');
     await expect.poll(() => readdirSync(folder).sort()).toEqual(['report (1).bin', 'report.bin']);
     expect(statSync(join(folder, 'report.bin')).size).toBe(300_000);
@@ -1511,10 +1515,11 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
     await expect(archive.getByRole('list', { name: 'Today' })).toBeVisible();
     await expect(bringBack).toBeVisible();
 
-    // Search narrows by title or address.
+    // Search narrows by title or address. (Not by "third": Third page, out of sight since the archive
+    // opened, may have been tidied away too by now, at this test's short limit.)
     const search = archive.getByRole('textbox', { name: 'Search the archive' });
-    await search.fill('third');
-    await expect(archive.getByText('Nothing in the archive matches “third”.')).toBeVisible();
+    await search.fill('nowhere');
+    await expect(archive.getByText('Nothing in the archive matches “nowhere”.')).toBeVisible();
     await search.fill('seco');
     await expect(bringBack).toBeVisible();
 

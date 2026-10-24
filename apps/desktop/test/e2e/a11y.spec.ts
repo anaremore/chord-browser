@@ -149,33 +149,31 @@ for (const mode of APPEARANCES) {
         await expect(shell.getByRole('alert')).toBeHidden();
 
         // A page that keeps crashing (Chord reloads it twice, then explains).
-        if (process.platform !== 'linux') {
-          // The tab on screen (the window's view 1), which other tabs of the site mustn't stand in for.
-          const crashes = () => app.evaluate(() => (globalThis as { crashes?: number }).crashes ?? 0);
-          await app.evaluate(({ BaseWindow, WebContentsView }) => {
-            const counter = globalThis as { crashes?: number; crashing?: number };
-            const view = BaseWindow.getAllWindows().find((w) => w.getTitle() !== 'Chord Settings')!.contentView.children[1];
-            if (!(view instanceof WebContentsView)) throw new Error('No tab on screen');
-            counter.crashes = 0;
-            counter.crashing = view.webContents.id;
-            view.webContents.on('render-process-gone', () => void counter.crashes!++);
-          });
-          const page = (check: 'ready' | 'crash') =>
-            app.evaluate(({ webContents }, what) => {
-              const c = webContents.fromId((globalThis as { crashing?: number }).crashing!);
-              if (!c) return false;
-              if (what === 'ready') return !c.isCrashed() && !c.isLoading();
-              c.forcefullyCrashRenderer();
-              return true;
-            }, check);
-          for (let i = 1; i <= 3; i++) {
-            await expect.poll(() => page('ready'), { timeout: 10_000 }).toBe(true);
-            expect(await page('crash')).toBe(true);
-            await expect.poll(crashes).toBe(i);
-          }
-          await expect(shell.getByRole('alert')).toContainText('This page stopped working.');
-          findings.push(...(await audit(shell, 'crash page', { appearance: mode })));
+        // The tab on screen (the window's view 1), which other tabs of the site mustn't stand in for.
+        const crashes = () => app.evaluate(() => (globalThis as { crashes?: number }).crashes ?? 0);
+        await app.evaluate(({ BaseWindow, WebContentsView }) => {
+          const counter = globalThis as { crashes?: number; crashing?: number };
+          const view = BaseWindow.getAllWindows().find((w) => w.getTitle() !== 'Chord Settings')!.contentView.children[1];
+          if (!(view instanceof WebContentsView)) throw new Error('No tab on screen');
+          counter.crashes = 0;
+          counter.crashing = view.webContents.id;
+          view.webContents.on('render-process-gone', () => void counter.crashes!++);
+        });
+        const page = (check: 'ready' | 'crash') =>
+          app.evaluate(({ webContents }, what) => {
+            const c = webContents.fromId((globalThis as { crashing?: number }).crashing!);
+            if (!c) return false;
+            if (what === 'ready') return !c.isCrashed() && !c.isLoading();
+            c.forcefullyCrashRenderer();
+            return true;
+          }, check);
+        for (let i = 1; i <= 3; i++) {
+          await expect.poll(() => page('ready'), { timeout: 10_000 }).toBe(true);
+          expect(await page('crash')).toBe(true);
+          await expect.poll(crashes).toBe(i);
         }
+        await expect(shell.getByRole('alert')).toContainText('This page stopped working.');
+        findings.push(...(await audit(shell, 'crash page', { appearance: mode })));
 
         // The archive page.
         await runAction(shell, 'app.history');
@@ -469,7 +467,7 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
         - treeitem "Second page" [level=1]
         - treeitem "New folder" [expanded] [level=1]
         - treeitem "Third page" [level=2] [selected]
-      - button "New tab Ctrl+T"
+      - button "New tab ${process.platform === 'darwin' ? '⌘T' : 'Ctrl+T'}"
       - tree "Today":
         - treeitem "Article" [level=1]
       - region "Notifications"
@@ -695,13 +693,20 @@ test('reduce transparency (stubbed in main) makes the window solid, and turning 
   try {
     const shell = await pageWhere(app, isShell);
     await expect(today(shell)).toContainText('First page');
-    const before = await shell.evaluate(() => document.documentElement.dataset['material']);
-    const setReduced = (reduce: boolean) =>
-      app.evaluate(({ nativeTheme }, r) => {
+    const material = () => shell.evaluate(() => document.documentElement.dataset['material']);
+    const setReduced = async (reduce: boolean) => {
+      await app.evaluate(({ nativeTheme }, r) => {
         Object.defineProperty(nativeTheme, 'prefersReducedTransparency', { configurable: true, get: () => r });
         nativeTheme.emit('updated');
       }, reduce);
+      // A round trip to main: IPC keeps order, so the change main sent first has been applied.
+      await shell.evaluate(() => (window as unknown as { chord: { system: { info(): Promise<unknown> } } }).chord.system.info());
+    };
     const base = () => shell.evaluate(() => getComputedStyle(document.querySelector('[data-sidebar]')!).backgroundColor);
+    // The material without reduce transparency: measured with it off, since the OS may have it on
+    // (the macOS CI runners do, so the window starts solid there).
+    await setReduced(false);
+    const before = await material();
 
     await setReduced(true);
     await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['material'])).toBe('solid');

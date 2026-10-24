@@ -121,7 +121,7 @@ interface ChordGlobal {
     overlay: { open(mode: string): Promise<void> };
     state: {
       dispatch(c: unknown): Promise<void>;
-      snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, { id: string; title?: string; url?: string; kind: string }> } }>;
+      snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, { id: string; title?: string; url?: string; kind: string }>; chords: Record<string, { theme: { stops: { l: number; c: number; h: number }[] } }> } }>;
     };
   };
 }
@@ -169,6 +169,20 @@ export async function pressReal(app: ElectronApplication, match: string, keyCode
   );
 }
 
+/**
+ * The OS's reduce motion setting, stubbed in main and sent to the renderers
+ * as a real change would be; resolves once the shell has it. (CI machines
+ * differ: some have it on, some off.)
+ */
+export async function setReducedMotion(app: ElectronApplication, shell: Page, reduce: boolean): Promise<void> {
+  await app.evaluate(({ systemPreferences, nativeTheme }, r) => {
+    const real = systemPreferences.getAnimationSettings.bind(systemPreferences);
+    systemPreferences.getAnimationSettings = () => ({ ...real(), prefersReducedMotion: r });
+    nativeTheme.emit('updated');
+  }, reduce);
+  await expect.poll(() => shell.evaluate(() => document.documentElement.hasAttribute('data-reduced-motion'))).toBe(reduce);
+}
+
 /** Which of Chord's views has the keyboard: a page's address, or its kind (shell, overlay, popover). */
 export async function focusedView(app: ElectronApplication): Promise<string | null> {
   return app.evaluate(({ webContents }) => {
@@ -194,11 +208,14 @@ export type ThemeName = keyof typeof THEMES;
 /** Recolor the window's chord; resolves once the shell has re-themed. */
 export async function setTheme(shell: Page, theme: ThemeName): Promise<void> {
   const { chordId } = await where(shell);
+  // A chord can have these colors already: with no OS accent color (Linux), the first chord is Dusk.
+  const current = await shell.evaluate(async (id) => (await (window as unknown as ChordGlobal).chord.state.snapshot()).state.chords[id]!.theme.stops, chordId);
+  const same = JSON.stringify(current.map(({ l, c, h }) => ({ l, c, h }))) === JSON.stringify(THEMES[theme]);
   const before = await shell.evaluate(() => document.querySelector<HTMLElement>('[data-sidebar]')?.style.getPropertyValue('--color-tint') ?? '');
   await dispatch(shell, { t: 'chord.theme', chordId, theme: { stops: THEMES[theme], grain: 0.2, appearance: 'auto', themeId: null } });
   await expect
     .poll(() => shell.evaluate(() => document.querySelector<HTMLElement>('[data-sidebar]')?.style.getPropertyValue('--color-tint') ?? ''))
-    .not.toBe(before === '' ? 'never' : before);
+    .not.toBe(same || before === '' ? 'never' : before);
   // The tint crossfades; contrast is judged once it has settled.
   await shell.waitForTimeout(400);
 }

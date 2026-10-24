@@ -91,10 +91,17 @@ jobs:
           # sandbox needs. Allow them on the test runner so E2E keeps the
           # sandbox on (packages ship an AppArmor profile instead).
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # No core dumps. The tests crash pages on purpose, and the runners hand every crash to
+          # systemd-coredump through a pipe, which ignores the shell's ulimit and takes long enough
+          # over a renderer's core to hang the test that crashed it. A plain file name instead of
+          # the pipe makes the E2E steps' `ulimit -c 0` count: nothing is written at all.
+          sudo sysctl -w kernel.core_pattern=core
 
       - name: E2E (X11, Xvfb with openbox)
         if: matrix.display == 'x11'
         run: |
+          # No core dumps (see the display servers step).
+          ulimit -c 0
           xvfb-run -a sh -c '
             ready="$(mktemp -u)"
             openbox --startup "touch $ready" &
@@ -112,6 +119,8 @@ jobs:
           for i in $(seq 1 50); do [ -S "$XDG_RUNTIME_DIR/wayland-chord" ] && break; sleep 0.1; done
           unset DISPLAY
           export WAYLAND_DISPLAY=wayland-chord XDG_SESSION_TYPE=wayland
+          # No core dumps (see the display servers step).
+          ulimit -c 0
           pnpm --filter @chord/desktop test:e2e
 
       - name: E2E

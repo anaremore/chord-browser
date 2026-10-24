@@ -646,18 +646,35 @@ const panelStart = (panel: HTMLElement | null) =>
  * Opened, the panel takes the keyboard (from the page too: ⌘E); closed, it
  * gives it back. In between, a step that replaces the focused button (Use
  * this → Got it → the message field) hands the keyboard to the next one.
+ * A step's main button can also arrive after the step: opened while Duet is
+ * still finding Claude Code and Codex, the keyboard starts on the panel's
+ * first button, and moves to "Use this" when it appears, unless the user has
+ * moved it since.
  */
 function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string, present: boolean): void {
+  // Where the panel last put the keyboard.
+  const placed = useRef<HTMLElement | null>(null);
+  const focusStart = () => {
+    placed.current = panelStart(panel.current) ?? null;
+    placed.current?.focus();
+  };
   useEffect(() => {
     // Only when the keyboard was left nowhere (its button went with the step): never taken from elsewhere.
     const now = document.activeElement;
     if (now && now !== document.body) return;
-    panelStart(panel.current)?.focus();
+    focusStart();
   }, [step]);
   useEffect(() => {
+    if (!present || !placed.current || document.activeElement !== placed.current) return;
+    if (panelStart(panel.current) !== placed.current) focusStart();
+  });
+  useEffect(() => {
     if (!present) return;
-    const before = document.hasFocus() && document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
-    panelStart(panel.current)?.focus();
+    // What had the keyboard before the panel: never the panel's own button (the step's effect, run first, may
+    // have focused it), which is still there, inert, while the panel slides out, so focusing it would do nothing.
+    const now = document.activeElement;
+    const before = document.hasFocus() && now instanceof HTMLElement && now !== document.body && !panel.current?.contains(now) ? now : null;
+    focusStart();
     void api.focus.move('shell');
     return () => {
       // Closing (sliding out, or gone): the keyboard leaves the panel now, not when the slide ends.

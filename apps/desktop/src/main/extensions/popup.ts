@@ -64,6 +64,8 @@ export class ExtensionPopup implements FloatingView {
       void contents.executeJavaScriptInIsolatedWorld(SIZER_WORLD, [{ code: SIZER_SCRIPT }]).catch(() => undefined);
     });
     contents.on('console-message', (details) => {
+      // A size can still arrive after the window has gone (Chord quit with the popup open).
+      if (this.closed || this.host.window.isDestroyed()) return;
       if (details.level !== 'debug' || details.frame !== contents.mainFrame) return;
       const reported = parseSizeMessage(details.message);
       if (!reported) return;
@@ -77,8 +79,12 @@ export class ExtensionPopup implements FloatingView {
     contents.on('blur', () => {
       // Focus moved within Chord (a click on the sidebar or the page): close. Focus left
       // Chord (another app): stay, so a code can be copied in. Open devtools also keep it.
-      if (this.host.window.isDestroyed() || contents.isDestroyed()) return;
-      if (this.host.window.isFocused() && !contents.isDevToolsOpened()) this.close('blur');
+      // Decided a turn later: a closing window (Chord quitting) blurs its views while it takes
+      // them down, and taking the popup out of the window in the middle of that crashes Chromium.
+      setImmediate(() => {
+        if (this.closed || this.host.window.isDestroyed() || contents.isDestroyed() || contents.isFocused()) return;
+        if (this.host.window.isFocused() && !contents.isDevToolsOpened()) this.close('blur');
+      });
     });
     contents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'Escape') {

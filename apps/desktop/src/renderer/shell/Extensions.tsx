@@ -20,9 +20,15 @@ export function useExtensionsBar(): ExtensionsBarState {
   const [bar, setBar] = useState(EMPTY);
   useEffect(() => {
     let live = true;
+    // A push can arrive before the answer and be the newer of the two (live.ts says why): it wins.
+    let pushed = false;
     // In the frame with the state patches (a tab switch sends both), so they render once (shared/frames.ts).
-    const off = api.extensions.onState(inNextFrame(setBar));
-    void api.extensions.state().then((state) => live && setBar(state));
+    const show = inNextFrame(setBar);
+    const off = api.extensions.onState((state) => {
+      pushed = true;
+      show(state);
+    });
+    void api.extensions.state().then((state) => live && !pushed && setBar(state));
     return () => {
       live = false;
       off();

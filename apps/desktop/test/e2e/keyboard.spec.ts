@@ -10,7 +10,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { fakeClaude, focusedView, isOverlay, isSettings, isShell, launch, pageWhere, pressReal, runAction, startSite, type Site } from './a11y-kit';
+import { fakeClaude, focusedView, isOverlay, isSettings, isShell, launch, pageWhere, pressReal, runAction, setReducedMotion, startSite, type Site } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -62,57 +62,61 @@ async function openFromCommandBar(shell: Page, overlay: Page, path: string, titl
   await expect(row(today(shell), title)).toBeVisible();
 }
 
-test('first run, keyboard only: name a chord, pick its colors with arrow keys, pin a site, and start browsing', async () => {
-  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, { firstRun: true });
-  try {
-    const shell = await pageWhere(app, isShell);
-    const welcome = shell.getByRole('dialog', { name: 'Welcome to Chord' });
-    // Each step starts on its main button or field.
-    await expect(welcome.getByRole('button', { name: /Make your first chord/ })).toBeFocused();
-    await shell.keyboard.press('Enter');
-    const name = welcome.getByRole('textbox', { name: 'Chord name' });
-    await expect(name).toBeFocused();
-    await shell.keyboard.type('Studio');
-    await shell.keyboard.press('Enter');
+// With motion reduced each card is there at once, so a key that moves on must not also press the next card's button.
+for (const reduced of [false, true]) {
+  test(`first run, keyboard only: name a chord, pick its colors with arrow keys, pin a site, and start browsing${reduced ? ' (reduced motion)' : ''}`, async () => {
+    const app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, { firstRun: true });
+    try {
+      const shell = await pageWhere(app, isShell);
+      await setReducedMotion(app, shell, reduced);
+      const welcome = shell.getByRole('dialog', { name: 'Welcome to Chord' });
+      // Each step starts on its main button or field.
+      await expect(welcome.getByRole('button', { name: /Make your first chord/ })).toBeFocused();
+      await shell.keyboard.press('Enter');
+      const name = welcome.getByRole('textbox', { name: 'Chord name' });
+      await expect(name).toBeFocused();
+      await shell.keyboard.type('Studio');
+      await shell.keyboard.press('Enter');
 
-    // Colors: each radio group is one Tab stop; arrow keys pick (and the sidebar re-themes).
-    const done = welcome.getByRole('button', { name: /Looks good/ });
-    await expect(done).toBeFocused();
-    const swatches = welcome.getByRole('radiogroup', { name: 'One color' });
-    await tabTo(shell, swatches.getByRole('radio').first(), { back: true });
-    await expect(swatches.locator('[tabindex="0"]')).toHaveCount(1);
-    await shell.keyboard.press('ArrowRight');
-    await expect(swatches.getByRole('radio', { name: 'Tangerine' })).toBeFocused();
-    await expect(swatches.getByRole('radio', { name: 'Tangerine' })).toHaveAttribute('aria-checked', 'true');
-    await shell.keyboard.press('End');
-    await expect(swatches.getByRole('radio', { name: 'Graphite' })).toHaveAttribute('aria-checked', 'true');
-    const presets = welcome.getByRole('radiogroup', { name: 'Theme' });
-    await tabTo(shell, presets.getByRole('radio').first(), { back: true });
-    await shell.keyboard.press('ArrowRight');
-    await expect(presets.getByRole('radio', { name: 'Sea Glass' })).toHaveAttribute('aria-checked', 'true');
-    // ↵ anywhere but a field is the step's main action.
-    await shell.keyboard.press('Enter');
+      // Colors: each radio group is one Tab stop; arrow keys pick (and the sidebar re-themes).
+      const done = welcome.getByRole('button', { name: /Looks good/ });
+      await expect(done).toBeFocused();
+      const swatches = welcome.getByRole('radiogroup', { name: 'One color' });
+      await tabTo(shell, swatches.getByRole('radio').first(), { back: true });
+      await expect(swatches.locator('[tabindex="0"]')).toHaveCount(1);
+      await shell.keyboard.press('ArrowRight');
+      await expect(swatches.getByRole('radio', { name: 'Tangerine' })).toBeFocused();
+      await expect(swatches.getByRole('radio', { name: 'Tangerine' })).toHaveAttribute('aria-checked', 'true');
+      await shell.keyboard.press('End');
+      await expect(swatches.getByRole('radio', { name: 'Graphite' })).toHaveAttribute('aria-checked', 'true');
+      const presets = welcome.getByRole('radiogroup', { name: 'Theme' });
+      await tabTo(shell, presets.getByRole('radio').first(), { back: true });
+      await shell.keyboard.press('ArrowRight');
+      await expect(presets.getByRole('radio', { name: 'Sea Glass' })).toHaveAttribute('aria-checked', 'true');
+      // ↵ anywhere but a field is the step's main action.
+      await shell.keyboard.press('Enter');
 
-    // Pins: type a site, ↵ pins it; ↵ on the empty field goes on.
-    const pin = welcome.getByRole('textbox', { name: 'A site you open every day' });
-    await expect(pin).toBeFocused();
-    await shell.keyboard.type(`${site.origin}/second`);
-    await shell.keyboard.press('Enter');
-    await expect(row(pinned(shell), 'Second page')).toBeVisible();
-    await shell.keyboard.press('Enter');
+      // Pins: type a site, ↵ pins it; ↵ on the empty field goes on.
+      const pin = welcome.getByRole('textbox', { name: 'A site you open every day' });
+      await expect(pin).toBeFocused();
+      await shell.keyboard.type(`${site.origin}/second`);
+      await shell.keyboard.press('Enter');
+      await expect(row(pinned(shell), 'Second page')).toBeVisible();
+      await shell.keyboard.press('Enter');
 
-    // Three things to know, then the command bar opens to start browsing.
-    await expect(welcome.getByRole('button', { name: /Start browsing/ })).toBeFocused();
-    await shell.keyboard.press('Enter');
-    const overlay = await pageWhere(app, isOverlay);
-    await expect(overlay.getByRole('combobox')).toBeFocused();
-    await overlay.keyboard.press('Escape');
-    await expect(welcome).toBeHidden();
-    await expect(shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { name: 'Studio' })).toHaveAttribute('aria-selected', 'true');
-  } finally {
-    await app.close();
-  }
-});
+      // Three things to know, then the command bar opens to start browsing.
+      await expect(welcome.getByRole('button', { name: /Start browsing/ })).toBeFocused();
+      await shell.keyboard.press('Enter');
+      const overlay = await pageWhere(app, isOverlay);
+      await expect(overlay.getByRole('combobox')).toBeFocused();
+      await overlay.keyboard.press('Escape');
+      await expect(welcome).toBeHidden();
+      await expect(shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { name: 'Studio' })).toHaveAttribute('aria-selected', 'true');
+    } finally {
+      await app.close();
+    }
+  });
+}
 
 test('tabs, keyboard only: F6 into the tree, move, reorder with Space and arrows, pin, fold a folder, and close', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
@@ -303,14 +307,17 @@ test('Settings, keyboard only: change a setting, then put it back with its ↺, 
 
 test('Duet, keyboard only: open it, set it up, ask, answer its question from the keyboard, and use its menus', async () => {
   const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
-  const app = await launch({ CHORD_HOME_URL: `${site.origin}/article`, CHORD_DUET_CLAUDE: fakeClaude, CHORD_DUET_CODEX: resolve(config, 'no-codex'), CLAUDE_CONFIG_DIR: config });
+  // Claude answers late, so Duet opens before it has found it (as on a slow machine).
+  const env = { CHORD_HOME_URL: `${site.origin}/article`, CHORD_DUET_CLAUDE: fakeClaude, CHORD_DUET_CODEX: resolve(config, 'no-codex'), CLAUDE_CONFIG_DIR: config, FAKE_CLAUDE_SLOW_VERSION: '2000' };
+  const app = await launch(env);
   try {
     const shell = await pageWhere(app, isShell);
     await expect(row(today(shell), 'Article')).toBeVisible();
-    // ⌘E (page-first, through the registry): the panel opens with the keyboard on its first step.
+    // ⌘E (page-first, through the registry): the panel opens with the keyboard on its first step,
+    // and the keyboard follows when "Use this" arrives.
     await runAction(shell, 'duet.toggle');
     const panel = shell.getByRole('complementary', { name: 'Duet' });
-    await expect(panel.getByRole('button', { name: 'Use this' }).first()).toBeFocused();
+    await expect(panel.getByRole('button', { name: 'Use this' }).first()).toBeFocused({ timeout: 15_000 });
     await shell.keyboard.press('Enter');
     await expect(panel.getByRole('button', { name: 'Got it' })).toBeFocused();
     await shell.keyboard.press('Enter');
