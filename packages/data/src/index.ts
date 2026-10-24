@@ -10,6 +10,7 @@ import type {
   Chord,
   Download,
   Favorite,
+  ImportedPage,
   InstalledExtension,
   LinkRoute,
   PersistedState,
@@ -106,12 +107,26 @@ export type DataRequest =
   | { id: number; type: 'archive.latest'; reasons: ArchiveReason[] }
   /** Duet's threads and messages (./duet.ts). */
   | { id: number; type: 'duet'; op: DuetOp }
+  /** One batch of another browser's history, from an import (ARCHITECTURE.md §9). */
+  | { id: number; type: 'import.history'; importId: string; pages: ImportedPage[] }
+  /** Take back what an import added to history: its Undo. */
+  | { id: number; type: 'import.undo'; importId: string }
   | { id: number; type: 'close' };
 
 /** chord-data → main. */
 export type DataResponse =
-  /** `navs`, from `open`: open tabs' saved back/forward histories, by node id. */
-  | { id: number; ok: true; saved?: PersistedState | null; navs?: Record<string, NavState>; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult }
+  /** `navs`, from `open`: open tabs' saved back/forward histories, by node id. `added`: pages an import batch wrote. */
+  | {
+      id: number;
+      ok: true;
+      saved?: PersistedState | null;
+      navs?: Record<string, NavState>;
+      search?: SearchResult;
+      archive?: ArchivePage;
+      entry?: ArchiveEntry | null;
+      duet?: DuetResult;
+      added?: number;
+    }
   | { id: number; ok: false; error: string };
 
 /** The part of an Immer patch this needs. */

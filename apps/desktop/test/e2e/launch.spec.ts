@@ -102,6 +102,8 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
   // Every test but first run's own starts straight in the browser (Chrome's --no-first-run, which
   // Playwright also adds by itself; CHORD_FIRST_RUN=1 asks for first run anyway).
   if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
+  // No other browsers (import.spec.ts brings its own), so first run never offers to import from the machine's.
+  childEnv['CHORD_IMPORT_ROOT'] ??= join(profile, 'no-browsers');
   return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
 }
 

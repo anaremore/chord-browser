@@ -45,6 +45,15 @@ process.parentPort.on('message', (event) => {
         if (!db) throw new Error('chord-data: duet before open');
         reply({ id: request.id, ok: true, duet: db.duet(request.op) });
         break;
+      case 'import.history':
+        if (!db) throw new Error('chord-data: import before open');
+        reply({ id: request.id, ok: true, added: db.importHistory(request.importId, request.pages) });
+        break;
+      case 'import.undo':
+        if (!db) throw new Error('chord-data: import before open');
+        db.undoImport(request.importId);
+        reply({ id: request.id, ok: true });
+        break;
       case 'close':
         db?.close();
         db = null;

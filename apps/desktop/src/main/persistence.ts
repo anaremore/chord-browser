@@ -6,7 +6,7 @@
  */
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ArchiveReason, PersistedState, State } from '@chord/core';
+import type { ArchiveReason, ImportedPage, PersistedState, State } from '@chord/core';
 import {
   opKey,
   opsForState,
@@ -130,6 +130,23 @@ export class Persistence {
     } catch {
       return { history: [], choices: [], archive: [] };
     }
+  }
+
+  /**
+   * One batch of another browser's history (an import), in its own
+   * transaction; resolves with the pages written. Throws if chord-data can't
+   * answer, so the import can say so.
+   */
+  async importHistory(importId: string, pages: ImportedPage[]): Promise<number> {
+    const response = await this.request({ type: 'import.history', importId, pages });
+    if (!response.ok) throw new Error(response.error);
+    return response.added ?? 0;
+  }
+
+  /** Take back what an import added to history (its Undo). */
+  async undoImport(importId: string): Promise<void> {
+    const response = await this.request({ type: 'import.undo', importId });
+    if (!response.ok) throw new Error(response.error);
   }
 
   /** Duet's threads and messages. Throws if chord-data can't answer, so Duet can say so. */

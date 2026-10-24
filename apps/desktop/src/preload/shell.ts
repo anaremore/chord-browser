@@ -55,6 +55,15 @@ const api: ShellApi = {
     back: (nodeId) => invoke('safeBrowsing:back', { nodeId }),
     proceed: (nodeId) => invoke('safeBrowsing:proceed', { nodeId }),
   },
+  imports: {
+    sources: () => invoke('import:sources'),
+    preview: (key) => invoke('import:preview', { key }),
+    run: (key, choices) => invoke('import:run', { key, choices }),
+    // The same Undo as the import's toast.
+    undo: (importId) => invoke('cmd:dispatch', { t: 'import.undo', importId }),
+    openAccess: () => invoke('import:openAccess'),
+    onProgress: (listener) => subscribe('import:progress', listener),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

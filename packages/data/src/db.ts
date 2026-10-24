@@ -6,7 +6,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
+  addDecay,
   ARCHIVE_KEEP_MS,
+  decayOfVisits,
   foldChoiceText,
   frecencyOn,
   pickedAgain,
@@ -22,6 +24,7 @@ import {
   type Choice,
   type Download,
   type Favorite,
+  type ImportedPage,
   type InstalledExtension,
   type LinkRoute,
   type FolderNode,
@@ -486,6 +489,113 @@ export class ChordDatabase {
           WHERE archive_fts MATCH ? AND a.profile_id = ? ORDER BY ${order} LIMIT ?`,
       ).all(match, DEFAULT_PROFILE, limit) as Row[]
     ).map(archivedTab);
+  }
+
+  /**
+   * What imports changed in history, for their Undo: temporary tables, which
+   * last as long as this connection (an import's Undo is offered for a moment,
+   * never after a restart). `import_batch` holds the history_visit ids an
+   * import's visits fall between; `import_page` each page it touched, and what
+   * that page was before.
+   */
+  private importTables(): void {
+    this.db.exec(`
+      CREATE TEMP TABLE IF NOT EXISTS import_batch (
+        import_id TEXT PRIMARY KEY, visit_floor INTEGER NOT NULL, visit_ceiling INTEGER NOT NULL
+      ) STRICT;
+      CREATE TEMP TABLE IF NOT EXISTS import_page (
+        import_id TEXT NOT NULL, url_id INTEGER NOT NULL, created INTEGER NOT NULL,
+        visits INTEGER NOT NULL, typed INTEGER NOT NULL,
+        last_visit_before INTEGER NOT NULL, decay_before REAL NOT NULL, title_before TEXT NOT NULL, title_set TEXT,
+        PRIMARY KEY (import_id, url_id)
+      ) STRICT;
+    `);
+  }
+
+  /**
+   * One batch of another browser's history, all or nothing. Every visit is
+   * kept (as `import` visits) and counts toward frecency as if Chord had seen
+   * it; a page Chord knows keeps its own title. Returns the pages written.
+   */
+  importHistory(importId: string, pages: readonly ImportedPage[], now = Date.now()): number {
+    this.importTables();
+    let added = 0;
+    this.transaction(() => {
+      this.sql('INSERT OR IGNORE INTO import_batch (import_id, visit_floor, visit_ceiling) SELECT ?, COALESCE(MAX(id), 0), COALESCE(MAX(id), 0) FROM history_visit').run(importId);
+      for (const page of pages) {
+        const place = placeKey(page.url);
+        const visits = page.visits.filter((at) => Number.isFinite(at) && at > 0);
+        const typed = page.typed.filter((at) => Number.isFinite(at) && at > 0);
+        const decay = decayOfVisits([...visits, ...typed], now);
+        if (!place || visits.length === 0 || decay === null) continue;
+        const last = visits.reduce((a, b) => Math.max(a, b), 0);
+        const row = this.sql('SELECT id, title, last_visit_at, decay_day FROM history_url WHERE profile_id = ? AND place = ?').get(DEFAULT_PROFILE, place) as Row | undefined;
+        let urlId: number;
+        if (row) {
+          urlId = num(row['id']);
+          const titleBefore = str(row['title']);
+          this.sql(
+            `UPDATE history_url SET visit_count = visit_count + ?, typed_count = typed_count + ?, last_visit_at = MAX(last_visit_at, ?),
+               decay_day = ?, title = CASE WHEN title = '' THEN ? ELSE title END
+             WHERE id = ?`,
+          ).run(visits.length, typed.length, last, addDecay(num(row['decay_day']), decay, now), page.title, urlId);
+          this.sql(
+            `INSERT INTO import_page (import_id, url_id, created, visits, typed, last_visit_before, decay_before, title_before, title_set)
+             VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(import_id, url_id) DO UPDATE SET visits = visits + excluded.visits, typed = typed + excluded.typed`,
+          ).run(importId, urlId, visits.length, typed.length, num(row['last_visit_at']), num(row['decay_day']), titleBefore, !titleBefore && page.title ? page.title : null);
+        } else {
+          const result = this.sql(
+            `INSERT INTO history_url (profile_id, place, url, title, visit_count, typed_count, last_visit_at, decay_day) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(DEFAULT_PROFILE, place, page.url, page.title, visits.length, typed.length, last, decay);
+          urlId = Number(result.lastInsertRowid);
+          this.sql(
+            `INSERT INTO import_page (import_id, url_id, created, visits, typed, last_visit_before, decay_before, title_before, title_set)
+             VALUES (?, ?, 1, ?, ?, 0, 0, '', NULL)`,
+          ).run(importId, urlId, visits.length, typed.length);
+        }
+        for (const at of visits) this.sql(`INSERT INTO history_visit (url_id, visited_at, transition) VALUES (?, ?, 'import')`).run(urlId, at);
+        added++;
+      }
+      this.sql('UPDATE import_batch SET visit_ceiling = (SELECT COALESCE(MAX(id), 0) FROM history_visit) WHERE import_id = ?').run(importId);
+    });
+    return added;
+  }
+
+  /**
+   * An import's Undo: pages it brought go, and pages Chord already knew get
+   * back their counts, title and frecency, plus any visits Chord itself has
+   * seen since the import began.
+   */
+  undoImport(importId: string): void {
+    this.importTables();
+    const batch = this.sql('SELECT visit_floor, visit_ceiling FROM import_batch WHERE import_id = ?').get(importId) as Row | undefined;
+    if (!batch) return;
+    const floor = num(batch['visit_floor']);
+    this.transaction(() => {
+      for (const page of this.sql('SELECT * FROM import_page WHERE import_id = ?').all(importId) as Row[]) {
+        const urlId = num(page['url_id']);
+        if (num(page['created']) === 1) {
+          // Its visits and its search entry go with it (cascade, trigger).
+          this.sql('DELETE FROM history_url WHERE id = ?').run(urlId);
+          continue;
+        }
+        const since = (this.sql(`SELECT visited_at FROM history_visit WHERE url_id = ? AND id > ? AND transition != 'import' ORDER BY id`).all(urlId, floor) as Row[]).map((r) =>
+          num(r['visited_at']),
+        );
+        let decay = num(page['decay_before']);
+        for (const at of since) decay = used(decay, at);
+        const titleSet = strOrNull(page['title_set']);
+        this.sql(
+          `UPDATE history_url SET visit_count = MAX(0, visit_count - ?), typed_count = MAX(0, typed_count - ?), last_visit_at = ?, decay_day = ?,
+             title = CASE WHEN ? IS NOT NULL AND title = ? THEN ? ELSE title END
+           WHERE id = ?`,
+        ).run(num(page['visits']), num(page['typed']), since.reduce((a, b) => Math.max(a, b), num(page['last_visit_before'])), decay, titleSet, titleSet, str(page['title_before']), urlId);
+      }
+      this.sql(`DELETE FROM history_visit WHERE id > ? AND id <= ? AND transition = 'import'`).run(floor, num(batch['visit_ceiling']));
+      this.sql('DELETE FROM import_page WHERE import_id = ?').run(importId);
+      this.sql('DELETE FROM import_batch WHERE import_id = ?').run(importId);
+    });
   }
 
   /** Duet's threads and messages (packages/data/src/duet.ts). */

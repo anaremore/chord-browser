@@ -17,13 +17,15 @@ import {
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { delimiter, join } from 'node:path';
-import { app, clipboard, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
+import { app, clipboard, nativeTheme, net, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
+import type { ImportEnv } from '../import/detect';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { DuetService } from './duet/service';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { configureAppIdentity } from './identity';
-import { handle } from './ipc';
+import { Importer } from './import';
+import { handle, send } from './ipc';
 import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
 import { observeContextMenusForTests, type ObservedItem } from './context-menu';
@@ -68,6 +70,7 @@ function devNumber(name: string): number | null {
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
 let duet: DuetService | undefined;
+let importer: Importer | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker();
 const httpAuth = new AuthBroker();
@@ -113,6 +116,23 @@ const suggestions = new Suggestions({
   engine: () => browser?.store.state.settings.searchEngine ?? 'google',
 });
 
+/**
+ * Where an import looks for other browsers (ARCHITECTURE.md §9): this
+ * computer's folders, or in development builds a stand-in home folder of
+ * synthetic profiles (CHORD_IMPORT_ROOT, as the tests use; ignored when packaged).
+ */
+function importEnv(): ImportEnv {
+  const root = (!app.isPackaged && process.env['CHORD_IMPORT_ROOT']) || null;
+  const home = root ?? app.getPath('home');
+  return {
+    platform,
+    home,
+    localAppData: root ? join(root, 'AppData/Local') : process.env['LOCALAPPDATA'] || join(home, 'AppData/Local'),
+    appData: root ? join(root, 'AppData/Roaming') : app.getPath('appData'),
+    configHome: root ? join(root, '.config') : process.env['XDG_CONFIG_HOME'] || join(home, '.config'),
+  };
+}
+
 function senderWindow(sender: WebContents) {
   const w = browser?.windowFor(sender);
   if (!w) throw new Error('No window for this sender');
@@ -137,6 +157,8 @@ function registerIpc(): void {
   handle('state:snapshot', (_request, sender) => ({ windowId: senderWindow(sender).id, state: browser!.store.state }));
   handle('cmd:dispatch', (command, sender) => {
     const w = senderWindow(sender);
+    // An import's toast: its history goes too, and a running import stops first.
+    if (command.t === 'import.undo') return importer!.undo(command.importId);
     // Docking and collapsing picture the page first, so its frame can glide (ARCHITECTURE.md §5).
     if (command.t === 'window.sidebar') {
       browser!.setSidebar(w, command.sidebar);
@@ -279,6 +301,24 @@ function registerIpc(): void {
   handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
   handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
   handle('archive:remove', ({ archiveId }) => browser!.removeArchived(archiveId));
+  // Import from other browsers: first run (the shell) and Settings → Import (the last normal window). Never a private window.
+  const importWindow = (sender: WebContents) => browser!.windowFor(sender) ?? browser!.lastBrowserWindow();
+  handle('import:sources', (_request, sender) => (importWindow(sender)?.isPrivate === false ? importer!.sources() : []));
+  handle('import:preview', ({ key }, sender) => {
+    const w = importWindow(sender);
+    const chordId = w && !w.isPrivate ? browser!.store.state.windows[w.id]?.activeChordId : undefined;
+    return chordId ? importer!.read(key, chordId) : { ok: false, problem: 'missing' };
+  });
+  handle('import:run', ({ key, choices }, sender) => {
+    const w = importWindow(sender);
+    if (!w || w.isPrivate) return { ok: false, problem: 'missing' };
+    return importer!.run(key, choices, w.id, (progress) => send(sender, 'import:progress', progress));
+  });
+  handle('import:undo', ({ importId }) => importer!.undo(importId));
+  handle('import:openAccess', () => {
+    // System Settings → Privacy & Security → Full Disk Access, which Safari's folder needs.
+    if (platform === 'darwin') void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
+  });
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -477,6 +517,14 @@ if (!app.requestSingleInstanceLock()) {
     applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
     duet = new DuetService(browser, persistence, app.getPath('userData'));
     browser.duet = duet;
+    importer = new Importer({
+      workerPath: join(import.meta.dirname, 'import.js'),
+      env: importEnv,
+      state: () => browser!.store.state,
+      dispatch: (command) => browser!.store.dispatch(command),
+      history: { write: (importId, pages) => store.importHistory(importId, pages), undo: (importId) => store.undoImport(importId) },
+      toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
+    });
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu; and launch timing.

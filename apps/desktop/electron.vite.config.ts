@@ -11,14 +11,21 @@ export default defineConfig({
     // release workflow passes the `release` environment's secret. Without it Safe Browsing is unavailable.
     define: { __CHORD_SAFE_BROWSING_KEY__: JSON.stringify(process.env['CHORD_SAFE_BROWSING_KEY'] ?? '') },
     // Bundle everything (workspace packages are TypeScript sources); only
-    // electron and Node built-ins stay external. Four entries: main itself,
+    // electron and Node built-ins stay external. Five entries: main itself,
     // chord-data's utility process (ARCHITECTURE.md §4), the PDF reader
     // Duet starts for each PDF it reads (§11.4; pdf.js stays out of main),
-    // and Safe Browsing's worker thread (§14.5).
+    // Safe Browsing's worker thread (§14.5), and the process that reads
+    // other browsers' files for an import (§9).
     build: {
       externalizeDeps: false,
       rolldownOptions: {
-        input: { index: src('main/index.ts'), data: src('data/worker.ts'), pdf: src('pdf/worker.ts'), 'safe-browsing': src('main/safe-browsing/worker.ts') },
+        input: {
+          index: src('main/index.ts'),
+          data: src('data/worker.ts'),
+          pdf: src('pdf/worker.ts'),
+          'safe-browsing': src('main/safe-browsing/worker.ts'),
+          import: src('import/worker.ts'),
+        },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },
       },

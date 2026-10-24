@@ -625,7 +625,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
 
           <div ref={frameRef} className={styles.frame} data-split={split ? split.direction : undefined} data-region="page">
             {!state.settings.onboarded && chord && !isPrivate ? (
-              <Onboarding chord={chord} windowId={windowId} info={info} spring={spring} />
+              <Onboarding chord={chord} chords={sortedChords(state)} windowId={windowId} info={info} spring={spring} />
             ) : (
               <>
                 {split ? (
