@@ -222,14 +222,21 @@ async function ready(app: ElectronApplication, home = 'Colored page'): Promise<{
   const overlay = await pageWhere(app, isOverlay);
   await expect(shell.getByRole('tree', { name: 'Today' })).toContainText(home);
   await expect.poll(async () => (await pages(app)).views.length).toBe(1);
-  // Just after launch, a slow machine (CI's macOS ones) takes longer than a snapshot may (PREPARE_TIMEOUT_MS)
-  // over its first picture and the shell's first frames, and the frame just changes at once instead. Once a
-  // page has been pictured and the shell is idle, it glides, as it does in a Chord that has been running.
+  await warm(app, shell);
+  return { shell, overlay };
+}
+
+/**
+ * Just after a page appears, a slow machine (CI's macOS ones) takes longer than a snapshot may
+ * (PREPARE_TIMEOUT_MS) over its first picture and the shell's first frames, and the frame just changes at
+ * once instead. Once every page has been pictured and the shell is idle, it glides, as it does in a Chord
+ * that has been running.
+ */
+async function warm(app: ElectronApplication, shell: Page): Promise<void> {
   await app.evaluate(async ({ webContents }, origin) => {
     await Promise.all(webContents.getAllWebContents().filter((c) => c.getURL().startsWith(origin)).map((c) => c.capturePage()));
   }, site.origin);
   await shell.evaluate(() => new Promise<void>((done) => requestIdleCallback(() => done(), { timeout: 2000 })));
-  return { shell, overlay };
 }
 
 test('docking and collapsing glide the page by its snapshot: two moves, its picture in the shell, focus kept', async () => {
@@ -253,7 +260,7 @@ test('docking and collapsing glide the page by its snapshot: two moves, its pict
       await watch(app);
       await recordPictures(shell);
       // Mid-glide, the page waits out of sight and its picture glides in the shell.
-      await glide(app, shell,name, () => runAction(shell, 'view.toggleSidebar'));
+      await glide(app, shell, name, () => runAction(shell, 'view.toggleSidebar'));
       await expect.poll(() => picturesNow(shell)).toBe(0);
       const { views, width, height } = await pages(app);
       expect(views[0]!.x).toBe(x);
@@ -291,7 +298,7 @@ test("Duet's panel slides in while the page's frame narrows by its snapshot, and
     for (const [name, width] of [['duet-open', full - DUET_SPACE], ['duet-close', full]] as const) {
       await watch(app);
       await recordPictures(shell);
-      await glide(app, shell,name, () => runAction(shell, 'duet.toggle'));
+      await glide(app, shell, name, () => runAction(shell, 'duet.toggle'));
       await expect.poll(async () => (await pages(app)).views[0]!.width).toBe(width);
       await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(248);
       if (name === 'duet-open') await expect(panel).toBeVisible();
@@ -326,11 +333,13 @@ test('split view: every pane is pictured and laid out with the same pane rects',
     });
     await expect.poll(async () => (await pages(app)).views.length).toBe(2);
     await setMotion(app, shell, true);
+    // The second page is new to the frame: picture it once, as ready() did the first.
+    await warm(app, shell);
 
     const before = (await pages(app)).views;
     await watch(app);
     await recordPictures(shell);
-    await glide(app, shell,'split-collapse', () => runAction(shell, 'view.toggleSidebar'));
+    await glide(app, shell, 'split-collapse', () => runAction(shell, 'view.toggleSidebar'));
     await expect.poll(() => picturesNow(shell)).toBe(0);
 
     // Each pane was pictured where it was…

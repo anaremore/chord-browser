@@ -129,7 +129,8 @@ test('the packaged app browses, opens Settings, and restores tabs after a relaun
     await address.fill(page);
     await expect(overlay.getByRole('option').first()).toContainText(page);
     await address.press('Enter');
-    await expect(today).toContainText('Smoke page');
+    // A cold packaged app's first page load can take a while on a shared CI machine.
+    await expect(today).toContainText('Smoke page', { timeout: 15_000 });
     const tab = await pageWhere(app.browser, (url) => url === page);
     expect(await tab.title()).toBe('Smoke page');
 
@@ -150,7 +151,7 @@ test('the packaged app browses, opens Settings, and restores tabs after a relaun
   try {
     const shell = await pageWhere(app.browser, isShell);
     const today = shell.getByRole('tree', { name: 'Today' });
-    await expect(today).toContainText('Smoke page');
+    await expect(today).toContainText('Smoke page', { timeout: 15_000 });
     await expect(today.getByRole('treeitem', { name: 'Smoke page', exact: true })).toHaveAttribute('aria-selected', 'true');
     await pageWhere(app.browser, (url) => url === page);
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
