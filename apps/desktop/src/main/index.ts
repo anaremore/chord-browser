@@ -35,7 +35,7 @@ import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
 import { observeContextMenusForTests, type ObservedItem } from './context-menu';
 import { PermissionBroker } from './permissions';
-import { ScreenShareBroker } from './screen-share';
+import { ScreenShareBroker, systemPickerFor } from './screen-share';
 import { AuthBroker } from './http-auth';
 import { memoryLow } from './memory';
 import { applySpellcheck, setDictionarySource } from './spellcheck';
@@ -78,7 +78,7 @@ let persistence: Persistence | undefined;
 let duet: DuetService | undefined;
 let importer: Importer | undefined;
 const permissions = new PermissionBroker();
-const screenShare = new ScreenShareBroker();
+const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
 
 /**
@@ -174,6 +174,13 @@ function activeChordOf(sender: WebContents): string | null {
 /** A private window's command bar neither reads history and the archive nor teaches them anything. */
 const fromPrivateWindow = (sender: WebContents): boolean => isPrivateWindow(browser!.store.state, senderWindow(sender).id);
 
+/**
+ * Presenting mode (ARCHITECTURE.md §9): history, the archive and Duet's chats
+ * answer nothing, here where they come from, so a keystroke the command bar
+ * sends before it hears the mode is on can't show one either.
+ */
+const presenting = (): boolean => browser!.store.state.presenting !== null;
+
 /** Renderers may only act on their own window, whatever windowId they send. */
 function scopeToWindow(command: RendererCommand, windowId: WindowId): Command {
   return 'windowId' in command ? { ...command, windowId } : command;
@@ -213,9 +220,13 @@ function registerIpc(): void {
   handle('safeBrowsing:choose', ({ on }) => browser!.store.dispatch({ t: 'settings.set', settings: { safeBrowsing: on, safeBrowsingAsked: true } }));
   handle('safeBrowsing:back', ({ nodeId }, sender) => browser!.safeBrowsingAction(sender, nodeId, 'back'));
   handle('safeBrowsing:proceed', ({ nodeId }, sender) => browser!.safeBrowsingAction(sender, nodeId, 'proceed'));
-  handle('history:search', ({ query }, sender) =>
-    fromPrivateWindow(sender) ? { history: [], choices: [], archive: [] } : persistence!.search(query, activeChordOf(sender)),
-  );
+  handle('history:search', async ({ query }, sender) => {
+    const nothing = { history: [], choices: [], archive: [] };
+    if (fromPrivateWindow(sender) || presenting()) return nothing;
+    const found = await persistence!.search(query, activeChordOf(sender));
+    // Presenting mode may have started while chord-data looked.
+    return presenting() ? nothing : found;
+  });
   handle('search:suggest', ({ query, engine }, sender) => suggestions.suggest(sender.id, query, engine));
   handle('history:choose', ({ text, destination, address }, sender) => {
     const chordId = activeChordOf(sender);
@@ -305,7 +316,11 @@ function registerIpc(): void {
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
   handle('duet:view', (_request, sender) => duet!.view(senderWindow(sender).id));
   handle('duet:do', (action, sender) => duet!.act(senderWindow(sender).id, action));
-  handle('duet:search', ({ query }, sender) => (fromPrivateWindow(sender) ? [] : duet!.search(query)));
+  handle('duet:search', async ({ query }, sender) => {
+    if (fromPrivateWindow(sender) || presenting()) return [];
+    const hits = await duet!.search(query);
+    return presenting() ? [] : hits;
+  });
   handle('duet:openHit', ({ chordId, threadId }, sender) => duet!.openHit(senderWindow(sender).id, chordId, threadId));
   handle('settings:duet', async (request) => {
     if (request.do === 'signIn') {

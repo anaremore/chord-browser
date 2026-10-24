@@ -208,8 +208,10 @@ export interface LiveTab {
   error: LoadError | null;
   /** Chord popped the page's video out into picture-in-picture (auto PiP, ARCHITECTURE.md §9). */
   pip: boolean;
-  /** The page is sharing your screen or a window (getDisplayMedia, ARCHITECTURE.md §9). */
+  /** The page is sharing your screen, a window or a tab (getDisplayMedia, ARCHITECTURE.md §9). */
   sharing: boolean;
+  /** A page is sharing this tab (picked in Chord's picker): it never sleeps, and stays painting off screen. */
+  shared: boolean;
   /** Safe Browsing suspects the page (or a frame in it): the frame shows a warning instead (ARCHITECTURE.md §14.5). */
   threat: PageThreat | null;
 }
@@ -348,6 +350,8 @@ export interface Settings {
   autoPip: boolean;
   /** Hovering a pinned tab or folder shows a preview; pinned pages are kept as small pictures in `<userData>/Captures/` (DESIGN.md §7.6). */
   pagePreviews: boolean;
+  /** Presenting mode collapses each window's sidebar, and docks it again when it ends (ARCHITECTURE.md §9). */
+  presentingHidesSidebar: boolean;
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
   shortcuts: ShortcutOverrides;
   spellcheck: SpellcheckSettings;
@@ -439,6 +443,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sleepTabs: true,
   autoPip: true,
   pagePreviews: true,
+  presentingHidesSidebar: false,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
   googleFree: false,
@@ -487,6 +492,7 @@ export interface SettingsPatch {
   sleepTabs?: boolean;
   autoPip?: boolean;
   pagePreviews?: boolean;
+  presentingHidesSidebar?: boolean;
   spellcheck?: Partial<SpellcheckSettings>;
   externalLinks?: ExternalLinks;
   miniWindowSize?: { width: number; height: number } | null;
@@ -500,6 +506,13 @@ export interface SettingsPatch {
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
   duet?: Partial<DuetSettings>;
 }
+
+/**
+ * Why presenting mode is on (ARCHITECTURE.md §9): a page in Chord is sharing
+ * something (`share`, it ends with the last share), or you turned it on
+ * (`you`: the switch or its shortcut, for when another app shares Chord).
+ */
+export type Presenting = 'share' | 'you';
 
 export interface State {
   /** Increments on every change, so mirrors can detect gaps. */
@@ -532,6 +545,10 @@ export interface State {
   linkRoutes: Record<string, LinkRoute>;
   /** What each import from another browser added this session, for its Undo (not persisted). */
   imports: Record<string, ImportRecord>;
+  /** Presenting mode, and why it's on; null when off. Hides what's private while something is shared (not persisted). */
+  presenting: Presenting | null;
+  /** Chord windows a page is sharing, as a window or on a shared screen: their edge is tinted (not persisted). */
+  sharedWindows: WindowId[];
 }
 
 export interface DeletedFolder {
@@ -565,9 +582,11 @@ export const emptyState = (): State => ({
   siteZoom: {},
   linkRoutes: {},
   imports: {},
+  presenting: null,
+  sharedWindows: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, threat: null };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

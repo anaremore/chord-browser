@@ -49,13 +49,15 @@ const NOT_BUILT: ReadonlySet<ActionId> = new Set(['nav.stop', 'page.save', 'app.
 /** The options menu's width at 100% scale on Windows 11, measured from a capture; used to right-align it. */
 export const OPTIONS_MENU_WIDTH = 230;
 
-export function buildAppMenu(run: (action: ActionId) => void): Menu {
+/** `presenting`: presenting mode is on, so its item is checked (the menu is built again when it changes). */
+export function buildAppMenu(run: (action: ActionId) => void, presenting = false): Menu {
   const used: ActionId[] = [];
   const item = (label: string, action: ActionId): MenuItemConstructorOptions => {
     used.push(action);
     const accelerator = acceleratorFor(action);
     return { label, ...(accelerator ? { accelerator } : {}), click: () => run(action) };
   };
+  const presentingItem = (label: string): MenuItemConstructorOptions => ({ ...item(label, 'view.presenting'), type: 'checkbox', checked: presenting });
   /** Secondary keys (⌘← for Back, F5 for Reload…) work too, from items nobody sees. */
   const alternates = (): MenuItemConstructorOptions[] =>
     used.flatMap((action) =>
@@ -142,6 +144,7 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
         label: 'View',
         submenu: [
           item('Toggle Sidebar', 'view.toggleSidebar'),
+          presentingItem('Presenting Mode'),
           { type: 'separator' },
           item('Reload', 'nav.reload'),
           item('Reload, Skipping Cache', 'nav.hardReload'),
@@ -175,6 +178,7 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
     item('Reopen closed tab', 'tab.reopen'),
     { type: 'separator' },
     item('Show or hide sidebar', 'view.toggleSidebar'),
+    presentingItem('Presenting mode'),
     item('Edit address', 'address.edit'),
     item('Copy page address', 'address.copy'),
     item('Pin or unpin tab', 'tab.pin'),
@@ -266,9 +270,10 @@ export interface TabMenuActions {
   moveTo(chordId: string): void;
   /**
    * What the row's own buttons do, for the keyboard (Shift+F10, the menu key):
-   * null when the row doesn't show them.
+   * null when the row doesn't show them. Stop sharing is "this tab" when a
+   * page is sharing the tab itself.
    */
-  stopSharing: (() => void) | null;
+  stopSharing: { label: string; click(): void } | null;
   backToPinned: (() => void) | null;
 }
 
@@ -280,7 +285,7 @@ export function buildTabMenu(a: TabMenuActions): Menu {
     click: () => a.moveTo(c.id),
   }));
   const rowButtons: MenuItemConstructorOptions[] = [
-    ...(a.stopSharing ? [{ label: 'Stop sharing your screen', click: () => a.stopSharing?.() }] : []),
+    ...(a.stopSharing ? [{ label: a.stopSharing.label, click: a.stopSharing.click }] : []),
     ...(a.backToPinned ? [{ label: 'Back to pinned page', click: () => a.backToPinned?.() }] : []),
   ];
   return Menu.buildFromTemplate([

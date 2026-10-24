@@ -4,9 +4,11 @@
  * these cards, so the rest of the page stays clickable.
  */
 import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
-import type { AuthPrompt, FindState, PermissionPrompt, PopoverState, SharePrompt, SystemInfo } from '@chord/ipc';
-import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, KeyRound, MapPin, Mic, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type FindState, type PermissionPrompt, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
+import type { Appearance } from '@chord/tokens';
+import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, KeyRound, MapPin, Mic, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Favicon } from '../shared/Favicon';
 import { useLive, type Live } from '../shared/live';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
@@ -109,49 +111,96 @@ function PermissionCard({ prompt }: { prompt: PermissionPrompt }) {
   );
 }
 
-/** Chord's screen-share picker (ARCHITECTURE.md §9): a screen or a window, and the computer's sound where the OS allows. */
-function ShareCard({ prompt }: { prompt: SharePrompt }) {
-  const screens = prompt.sources.filter((s) => s.kind === 'screen');
-  const windows = prompt.sources.filter((s) => s.kind === 'window');
-  const [kind, setKind] = useState<'screen' | 'window'>(screens.length > 0 ? 'screen' : 'window');
-  const shown = kind === 'screen' ? screens : windows;
-  // One screen is the usual answer: it's picked already.
-  const [picked, setPicked] = useState<string | null>(screens.length === 1 ? screens[0]!.id : null);
-  const [audio, setAudio] = useState(false);
-  const respond = (sourceId: string | null) => void api.share.respond(prompt.id, sourceId, audio && prompt.audio);
+type ShareKind = ShareSource['kind'];
+
+const SHARE_KINDS: { kind: ShareKind; label: string; list: string }[] = [
+  { kind: 'tab', label: 'A tab', list: 'Tabs' },
+  { kind: 'window', label: 'A window', list: 'Windows' },
+  { kind: 'screen', label: 'Entire screen', list: 'Screens' },
+];
+
+/**
+ * Chord's share picker (ARCHITECTURE.md §9): one of Chord's tabs, a window or
+ * a screen, and the sound that goes with it. Screens and windows are named at
+ * once and pictured as the pictures arrive. Where the system picks those
+ * itself (macOS 15 and later, Wayland), the card lists tabs and opens the
+ * system's picker for the rest.
+ */
+function ShareCard({ prompt, appearance, platform }: { prompt: SharePrompt; appearance: Appearance; platform: SystemInfo['platform'] }) {
+  const of = (k: ShareKind) => prompt.sources.filter((s) => s.kind === k);
+  const [kind, setKind] = useState<ShareKind>('tab');
+  const shown = of(kind);
+  const [picked, setPicked] = useState<string | null>(null);
+  // A tab's sound comes along unless you say not; the computer's only if you ask (it's everything you hear).
+  const [tabSound, setTabSound] = useState(true);
+  const [systemSound, setSystemSound] = useState(false);
+  const sound = kind === 'tab' ? prompt.audio : prompt.audio && prompt.systemAudio;
+  const respond = (sourceId: string | null) =>
+    void api.share.respond(prompt.id, sourceId, sourceId !== SYSTEM_SHARE_SOURCE && sound && (kind === 'tab' ? tabSound : systemSound));
+  const show = (k: ShareKind) => {
+    setKind(k);
+    // One screen is the usual answer: it's picked already.
+    const screens = of('screen');
+    setPicked(k === 'screen' && screens.length === 1 ? screens[0]!.id : null);
+  };
+  const lists = prompt.systemPicker ? SHARE_KINDS.filter((k) => k.kind === 'tab') : SHARE_KINDS;
+  const list = SHARE_KINDS.find((k) => k.kind === kind)!.list;
   return (
     <div
       className={`${styles.card} ${styles.shareCard}`}
       role="alertdialog"
-      aria-label={`${prompt.host} wants to share your screen`}
+      aria-label={`Choose what to share with ${prompt.host}`}
       onKeyDown={(e) => {
         if (e.key === 'Escape') respond(null);
       }}
     >
       <div className={styles.permissionHead}>
         <p className={styles.permissionTitle}>
-          <span className={styles.host}>{prompt.host}</span> wants to share your screen
+          Choose what to share with <span className={styles.host}>{prompt.host}</span>
         </p>
         <button type="button" className={styles.iconButton} aria-label="Don't share" title="Don't share" onClick={() => respond(null)}>
           <X {...ICON} />
         </button>
       </div>
-      <div className={styles.shareTabs} role="tablist" aria-label="What to share">
-        {(['screen', 'window'] as const).map((k) => (
-          <button
-            key={k}
-            type="button"
-            role="tab"
-            aria-selected={kind === k}
-            className={styles.shareTab}
-            disabled={(k === 'screen' ? screens : windows).length === 0}
-            onClick={() => setKind(k)}
-          >
-            {k === 'screen' ? 'Entire screen' : 'A window'}
-          </button>
-        ))}
-      </div>
-      <div className={styles.sources} role="listbox" aria-label={kind === 'screen' ? 'Screens' : 'Windows'}>
+      {lists.length > 1 && (
+        <div className={styles.shareTabs} role="tablist" aria-label="What to share">
+          {lists.map((k) => (
+            <button
+              key={k.kind}
+              type="button"
+              role="tab"
+              aria-selected={kind === k.kind}
+              className={styles.shareTab}
+              // Still being listed, screens and windows can be chosen as soon as they are.
+              disabled={of(k.kind).length === 0 && !prompt.loading}
+              onClick={() => show(k.kind)}
+            >
+              {k.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {kind === 'tab' ? (
+        <div className={styles.tabSources} role="listbox" aria-label={list}>
+          {shown.map((source) => (
+            <button
+              key={source.id}
+              type="button"
+              role="option"
+              aria-selected={picked === source.id}
+              className={styles.tabSource}
+              onClick={() => setPicked(source.id)}
+              onDoubleClick={() => respond(source.id)}
+            >
+              <Favicon url={`https://${source.host ?? ''}/`} title={source.name} favicon={source.favicon ?? null} appearance={appearance} />
+              <span className={styles.tabSourceName}>{source.name}</span>
+              {source.self ? <span className={styles.selfTag}>This tab</span> : <span className={styles.tabSourceHost}>{source.host}</span>}
+            </button>
+          ))}
+        </div>
+      ) : (
+      <div className={styles.sources} role="listbox" aria-label={list} aria-busy={prompt.loading || undefined}>
+        {shown.length === 0 && <p className={styles.sourcesEmpty}>Finding {list.toLowerCase()}…</p>}
         {shown.map((source) => (
           <button
             key={source.id}
@@ -167,17 +216,33 @@ function ShareCard({ prompt }: { prompt: SharePrompt }) {
           </button>
         ))}
       </div>
-      {prompt.audio && (
+      )}
+      {sound && (
         <label className={styles.shareAudio}>
-          <input type="checkbox" checked={audio} onChange={(e) => setAudio(e.target.checked)} />
-          Share your computer's sound too
+          {kind === 'tab' ? (
+            <input type="checkbox" checked={tabSound} onChange={(e) => setTabSound(e.target.checked)} />
+          ) : (
+            <input type="checkbox" checked={systemSound} onChange={(e) => setSystemSound(e.target.checked)} />
+          )}
+          {kind === 'tab' ? "Share the tab's sound too" : "Share your computer's sound too"}
         </label>
       )}
       <div className={styles.actions}>
+        {prompt.systemPicker && (
+          <button
+            type="button"
+            className={`${styles.secondary} ${styles.systemPicker}`}
+            title={platform === 'darwin' ? "Opens macOS's own picker" : "Opens your desktop's own picker"}
+            onClick={() => respond(SYSTEM_SHARE_SOURCE)}
+          >
+            <MonitorUp size={14} strokeWidth={2} aria-hidden />
+            Screen or window…
+          </button>
+        )}
         <button type="button" className={styles.secondary} onClick={() => respond(null)}>
           Cancel
         </button>
-        <button type="button" className={styles.primary} disabled={!picked} onClick={() => respond(picked)}>
+        <button type="button" className={styles.primary} disabled={!picked || !shown.some((s) => s.id === picked)} onClick={() => respond(picked)}>
           Share
         </button>
       </div>
@@ -315,12 +380,12 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
     return () => observer.disconnect();
   }, [hasCards]);
 
-  const { style } = chordStyle(state.theme ? { theme: state.theme } : null, info, state.interface);
+  const { style, appearance } = chordStyle(state.theme ? { theme: state.theme } : null, info, state.interface);
   return (
     <div ref={root} className={styles.root} style={style}>
       {state.find && <FindBar find={state.find} />}
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}
-      {state.share && <ShareCard key={state.share.id} prompt={state.share} />}
+      {state.share && <ShareCard key={state.share.id} prompt={state.share} appearance={appearance} platform={info.platform} />}
       {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}
       {state.safeBrowsingOffer && <SafeBrowsingOffer />}
     </div>

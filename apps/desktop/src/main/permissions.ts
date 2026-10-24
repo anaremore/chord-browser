@@ -4,7 +4,9 @@
  * allowed; everything else is denied. A prompt only shows for the tab you're
  * looking at, and a tab's pending prompts are denied if it navigates away or
  * closes. A private window asks the same way, but its answers last only
- * while it's open, and it never sees the ones you saved.
+ * while it's open, and it never sees the ones you saved. In presenting mode
+ * websites' notifications are refused, without asking: their permission
+ * check is the only place Chord can stop them.
  */
 import type { Command, NodeId, PermissionDecision, SitePermission, SitePermissions, State } from '@chord/core';
 import type { PermissionPrompt } from '@chord/ipc';
@@ -102,7 +104,7 @@ export class PermissionBroker {
       const wanted = sitePermissionsFor(permission, mediaTypes);
       const origin = originOf('requestingUrl' in details ? details.requestingUrl : undefined);
       const nodeId = this.deps?.nodeFor(contents);
-      if (!wanted || !origin || !nodeId || !this.deps) return callback(false);
+      if (!wanted || !origin || !nodeId || !this.deps || this.quiet(wanted)) return callback(false);
       const remembered = rememberedDecision(this.answers(scope), origin, wanted);
       if (remembered) {
         if (remembered === 'allow') this.granted(nodeId, wanted);
@@ -116,8 +118,13 @@ export class PermissionBroker {
       const mediaTypes = details.mediaType && details.mediaType !== 'unknown' ? [details.mediaType] : [];
       const wanted = sitePermissionsFor(permission, mediaTypes);
       const origin = originOf(requestingOrigin);
-      return Boolean(wanted && origin && this.deps && rememberedDecision(this.answers(scope), origin, wanted) === 'allow');
+      return Boolean(wanted && origin && this.deps && !this.quiet(wanted) && rememberedDecision(this.answers(scope), origin, wanted) === 'allow');
     });
+  }
+
+  /** Presenting mode: notifications are refused (pages see "denied" while it's on), and nothing is remembered. */
+  private quiet(wanted: readonly SitePermission[]): boolean {
+    return wanted.includes('notifications') && Boolean(this.deps?.state().presenting);
   }
 
   /** The answers that apply: your saved ones, or a private window's own. */

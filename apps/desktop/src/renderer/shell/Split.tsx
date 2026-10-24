@@ -2,7 +2,8 @@
  * Split view in the content frame (DESIGN.md §7.9, §8.4). Main lays the
  * pages out; the shell draws what's around and behind them with the same
  * math (core `paneRects`): each pane's rounded frame, the focus ring in the
- * gap around the focused one, and the dividers in the gaps between them.
+ * gap around the focused one, a shared tab's tinted edge, and the dividers in
+ * the gaps between them.
  */
 import { equalSizes, paneRects, resizeSizes, SPLIT, splitMembers, type LiveTab, type SplitNode, type State, type TabNode } from '@chord/core';
 import { useEffect, useState, type ReactNode, type RefObject } from 'react';
@@ -144,6 +145,8 @@ export function SplitPanes({
             className={styles.pane}
             data-pane={tab.id}
             data-focused={focused || undefined}
+            // A page is sharing this pane's tab: its edge is tinted (ARCHITECTURE.md §9).
+            data-shared={state.live[tab.id]?.shared || undefined}
             style={{ left: r.x, top: r.y, width: r.width, height: r.height }}
             onPointerDown={() => {
               if (!focused) void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id });

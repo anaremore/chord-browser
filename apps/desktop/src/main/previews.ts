@@ -148,7 +148,8 @@ export class Previews {
     this.hovers.set(w, seq);
     const card = target ? await this.card(target.nodeId) : null;
     if (this.hovers.get(w) !== seq || w.window.isDestroyed()) return;
-    if (!target || !card) {
+    // A card read just before presenting mode started isn't sent after.
+    if (!target || !card || this.deps.state().presenting) {
       w.hidePreview();
       return;
     }
@@ -158,7 +159,8 @@ export class Previews {
 
   private async card(nodeId: NodeId): Promise<PreviewCard | null> {
     const state = this.deps.state();
-    if (!state.settings.pagePreviews) return null;
+    // Presenting mode sends no cards at all: the shell may not have heard it's on yet.
+    if (!state.settings.pagePreviews || state.presenting) return null;
     const node = state.nodes[nodeId];
     const chord = node ? state.chords[node.chordId] : undefined;
     if (!node || !chord || chord.private || node.section !== 'pinned') return null;

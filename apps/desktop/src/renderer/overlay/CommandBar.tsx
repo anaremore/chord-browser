@@ -9,7 +9,7 @@
  */
 import { keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
 import type { HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
-import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, PanelLeft, Pin, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, PanelLeft, Pin, Presentation, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
@@ -87,6 +87,7 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'tab.previous': ArrowUp,
   'nav.hardReload': RotateCw,
   'view.toggleSidebar': PanelLeft,
+  'view.presenting': Presentation,
   'view.find': TextSearch,
   'view.zoomIn': ZoomIn,
   'view.zoomOut': ZoomOut,
@@ -315,9 +316,15 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     [suggested, typedNow, engineForSuggestions, state.settings.searchSuggestions],
   );
 
+  // Presenting mode (ARCHITECTURE.md §9): main answers nothing from history, the archive or Duet while it's on;
+  // a reply that left before it started isn't shown either.
+  const presenting = state.presenting !== null;
   const results = useMemo(
-    () => (isCommandBar(session) ? buildResults(query, state, windowId, session.mode, history, Date.now(), { scope, suggestions, duetHits }) : []),
-    [session, query, state, windowId, history, scope, suggestions],
+    () =>
+      isCommandBar(session)
+        ? buildResults(query, state, windowId, session.mode, presenting ? null : history, Date.now(), { scope, suggestions, duetHits: presenting ? [] : duetHits })
+        : [],
+    [session, query, state, windowId, history, scope, suggestions, duetHits, presenting],
   );
   const current = Math.min(selected, Math.max(0, results.length - 1));
   // Inline autocomplete: only the leading row completes, and only while it's the one selected.

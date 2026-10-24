@@ -18,6 +18,9 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
   - Safari needs Full Disk Access, and Chord says where to turn it on.
 - **Media controls:** a tab playing sound shows a speaker on its row; click it (or press Ctrl+M, ⌃M on macOS) to mute the tab, and it stays muted after it sleeps or Chord restarts.
   - When something plays in a tab you aren't looking at, in any chord, a Now playing card at the bottom of the sidebar shows what it is (with the track and artist when the site says), with play and pause, mute, picture-in-picture for videos, and a way back to the tab.
+- **Share a single tab:** when a site asks to share your screen, Chord's picker lists your tabs first. Only that page goes out, with its sound, which you keep hearing; it keeps working while you look at another tab. On macOS 15 and later, and on Wayland, *Screen or window…* opens the system's own picker for the rest.
+  - **Presenting mode** starts by itself while a page shares, and with Ctrl+Shift+P (⌘⇧P on macOS) when another app like Zoom or Teams shares Chord: history in the command bar, hover previews, websites' notifications and Chord's own notes stay hidden until it ends. A card in the sidebar says it's on, and turns it off. Settings → General can hide the sidebar while you present, too.
+  - What's shared is outlined in red: the shared tab's frame, or a window that's being shared. The shared tab's row has its own Stop.
 - **Peek** gets the sign-in box too, when a site in it asks for a username and password.
 - **Link routes for part of a site:** `github.com/acme` can go to Work while the rest of GitHub goes elsewhere (Settings → General → Link routes).
 - **Low on memory,** tabs you haven't looked at in 5 minutes go to sleep, instead of after an hour.

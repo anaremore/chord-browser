@@ -624,8 +624,9 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
   const unloaded = pinned && asleep;
   // Its video popped out when you switched away (auto picture-in-picture).
   const popped = Boolean(live?.pip);
-  // It's sharing your screen: the slot shows a Stop button instead, which matters more.
-  const sharing = Boolean(live?.sharing);
+  // It's sharing (your screen, a window or a tab), or a page is sharing it: the slot shows Stop instead, which matters more.
+  const sharing = Boolean(live?.sharing || live?.shared);
+  const stopLabel = live?.sharing ? 'Stop sharing' : 'Stop sharing this tab';
   // It's making sound (muted, it still is, silently): the slot shows a speaker, unless one of those is there.
   const audible = Boolean(live?.audible) && !sharing && !popped;
   const dispatch = api.state.dispatch;
@@ -679,8 +680,8 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
           tabIndex={-1}
           aria-hidden
           className={`${styles.pip} ${styles.sharing}`}
-          aria-label="Stop sharing your screen"
-          title="Stop sharing your screen"
+          aria-label={stopLabel}
+          title={stopLabel}
           onClick={() => void api.share.stop(tab.id)}
         >
           <ScreenShare size={14} strokeWidth={2} />
@@ -700,7 +701,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
       )}
       {sharing && (
         <span id={`sharing-${tab.id}`} hidden>
-          Sharing your screen
+          {live?.sharing ? 'Sharing' : 'Being shared'}
         </span>
       )}
       {popped && !sharing && (

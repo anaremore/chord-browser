@@ -3,7 +3,7 @@
  * differs from the default (DESIGN.md §6.8). Changes apply at once,
  * everywhere: the window behind this one re-themes as you pick.
  */
-import { DEFAULT_PROFILE, DEFAULT_SETTINGS, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
+import { DEFAULT_PROFILE, DEFAULT_SETTINGS, keycapFor, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
 import { Check, EyeOff, FolderInput, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { ChordMark } from '../shared/ChordMark';
@@ -214,6 +214,23 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
           onReset={() => void api.settings.set({ autoPip: DEFAULT_SETTINGS.autoPip })}
           control={
             <Switch label="Pop out playing videos when you switch away" checked={snapshot.settings.autoPip} onChange={(autoPip) => void api.settings.set({ autoPip })} />
+          }
+        />
+      </div>
+
+      <h2 className={styles.groupTitle}>Sharing</h2>
+      <div className={styles.group}>
+        <Row
+          label="Hide the sidebar while presenting"
+          description={`Presenting mode starts when a page shares your screen, a window or a tab, and with ${keycapFor('view.presenting', info.platform, snapshot.settings.shortcuts) || 'the command bar'} when another app shares Chord. It hides history in the command bar, previews, websites' notifications and Chord's own notes. This folds the sidebar away too, and brings it back after.`}
+          changed={snapshot.settings.presentingHidesSidebar !== DEFAULT_SETTINGS.presentingHidesSidebar}
+          onReset={() => void api.settings.set({ presentingHidesSidebar: DEFAULT_SETTINGS.presentingHidesSidebar })}
+          control={
+            <Switch
+              label="Hide the sidebar while presenting"
+              checked={snapshot.settings.presentingHidesSidebar}
+              onChange={(presentingHidesSidebar) => void api.settings.set({ presentingHidesSidebar })}
+            />
           }
         />
       </div>

@@ -65,6 +65,10 @@ test.beforeAll(async () => {
       track: { title: 'Chord Song', artist: 'The Notes', album: 'Triads', artwork: `data:image/png;base64,${ARTWORK_PNG.toString('base64')}` },
     }),
     '/radio': mediaPage({ title: 'Radio' }),
+    // A page that shares what Chord's picker gives it.
+    '/meet':
+      '<title>Meet</title><button id="share">Share</button><script>document.getElementById("share").onclick = () => ' +
+      'navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }).then(() => { document.title = "Sharing"; });</script>',
   });
   mkdirSync(capturesDir, { recursive: true });
 });
@@ -469,6 +473,44 @@ for (const mode of APPEARANCES) {
         await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
         await expect(shell.getByRole('button', { name: 'Unmute tab' })).toBeVisible();
         findings.push(...(await audit(shell, 'minimal bar, playing', { appearance: mode })));
+      } finally {
+        await app.close();
+      }
+      expectClean(findings);
+    });
+
+    test(`the share picker, presenting mode's indicator and a shared tab's edge (${mode})`, async () => {
+      const app = await launch({ CHORD_HOME_URL: `${site.origin}/meet`, CHORD_APPEARANCE: mode });
+      const findings: Finding[] = [];
+      try {
+        const shell = await pageWhere(app, isShell);
+        const popover = await pageWhere(app, isPopover);
+        const meet = await pageWhere(app, (url) => url === `${site.origin}/meet`);
+        await expect(today(shell)).toContainText('Meet');
+        const { windowId } = await where(shell);
+        await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/second`, background: true });
+        await expect(today(shell).getByRole('treeitem', { name: 'Second page', exact: true })).toBeVisible();
+        // The picker: tabs, the asking one first.
+        await meet.locator('#share').click();
+        const picker = popover.getByRole('alertdialog', { name: /^Choose what to share with/ });
+        await expect(picker.getByRole('option', { name: /Second page/ })).toBeVisible();
+        findings.push(...(await audit(popover, 'share picker', { appearance: mode })));
+        await picker.getByRole('option', { name: /Second page/ }).click();
+        await picker.getByRole('button', { name: 'Share', exact: true }).click();
+        await expect.poll(() => meet.title()).toBe('Sharing');
+        // Presenting mode's card, in each theme; the shared tab's row and its frame's edge.
+        const card = shell.getByRole('group', { name: 'Presenting mode' });
+        await expect(card).toBeVisible();
+        await dispatch(shell, { t: 'tab.activate', windowId, nodeId: await tabIdByTitle(shell, 'Second page') });
+        await expect(shell.locator('[data-region="page"][data-shared]')).toHaveCount(1);
+        for (const theme of ['dusk', 'graphite', 'coral', 'aurora'] satisfies ThemeName[]) {
+          await setTheme(shell, theme);
+          findings.push(...(await audit(shell, `presenting, ${theme}`, { appearance: mode })));
+        }
+        // The minimal bar's chip.
+        await runAction(shell, 'view.toggleSidebar');
+        await expect(shell.getByRole('button', { name: 'Turn off presenting mode' })).toBeVisible();
+        findings.push(...(await audit(shell, 'minimal bar, presenting', { appearance: mode })));
       } finally {
         await app.close();
       }

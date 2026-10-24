@@ -16,6 +16,7 @@ export * from './restore';
 export * from './safe-browsing';
 export * from './seed';
 export * from './select';
+export * from './sharing';
 export * from './shortcuts';
 export * from './split';
 export * from './text';

@@ -4,7 +4,8 @@
  * archive, and background tabs unused for an hour go to sleep. When the
  * computer runs low on memory (checked every 30 seconds), background tabs go
  * to sleep after 5 minutes instead. Tabs that are playing, using the camera or
- * microphone, sharing the screen, or in picture-in-picture are left alone.
+ * microphone, sharing the screen or being shared, or in picture-in-picture
+ * are left alone.
  */
 import { archiveCandidates, sleepCandidates, type ArchiveAfter, type Command, type NodeId, type State } from '@chord/core';
 import { powerMonitor } from 'electron';
@@ -70,7 +71,7 @@ export class IdleKeeper {
       const busy = new Set<NodeId>();
       for (const id of Object.keys(state().nodes)) {
         const live = state().live[id];
-        if (live?.audible || live?.pip || live?.sharing || tabs.isPlaying(id) || isCapturing(id)) busy.add(id);
+        if (live?.audible || live?.pip || live?.sharing || live?.shared || tabs.isPlaying(id) || isCapturing(id)) busy.add(id);
       }
       // Picture-in-picture means asking the page, so only for tabs that would otherwise go.
       const settings = state().settings;

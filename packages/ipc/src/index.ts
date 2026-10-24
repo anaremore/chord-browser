@@ -169,6 +169,8 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('adBlocking.site'), site: z.string().min(1).max(300), off: z.boolean(), chordId: id.optional() }),
   // An import's toast: Undo. (Main also takes its history back; import.add is main's alone.)
   z.object({ t: z.literal('import.undo'), importId: id }),
+  // Presenting mode's indicator turns it off. Only yours: shares start and end it in main.
+  z.object({ t: z.literal('presenting.set'), on: z.boolean(), by: z.literal('you') }),
   // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
@@ -186,6 +188,7 @@ export const SettingsPatch = z.strictObject({
   sleepTabs: z.boolean().optional(),
   autoPip: z.boolean().optional(),
   pagePreviews: z.boolean().optional(),
+  presentingHidesSidebar: z.boolean().optional(),
   uiScale: z.literal(UI_SCALES).optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
   extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
@@ -382,22 +385,43 @@ export interface FindState {
   focus: number;
 }
 
-/** A screen or window a page may capture (getDisplayMedia), for Chord's picker. */
+/** What a page may capture (getDisplayMedia), for Chord's picker: one of Chord's tabs, a screen or a window. */
 export interface ShareSource {
+  /** `tab:<node id>` for a tab; the OS's id for a screen or window. */
   id: string;
+  /** A tab's title, or the screen's or window's name. */
   name: string;
-  kind: 'screen' | 'window';
-  /** A small JPEG data URL of what would be shared. */
+  kind: 'tab' | 'screen' | 'window';
+  /** A screen's or window's picture, a small JPEG data URL; empty until it's taken (names come first), and for tabs. */
   thumbnail: string;
+  /** A tab's site, and its icon (a data: URL, or null for the monogram). */
+  host?: string;
+  favicon?: string | null;
+  /** The tab that's asking. */
+  self?: boolean;
 }
 
-/** A page asking to share your screen: the picker card in the popover. */
+/** The picker's answer that hands screens and windows over to the system's own picker (`SharePrompt.systemPicker`). */
+export const SYSTEM_SHARE_SOURCE = 'system';
+
+/** A page asking to share your screen, a window or a tab: the picker card in the popover. */
 export interface SharePrompt {
   id: number;
   host: string;
+  /** Tabs, the asking one first, then screens and windows by name. */
   sources: ShareSource[];
-  /** Offer "Share audio too": the page asked for audio and this OS can capture it (Windows). */
+  /** Screens' and windows' pictures are still on their way. */
+  loading: boolean;
+  /** The page asked for sound: a tab's comes with it if you like; a screen's is the computer's (`systemAudio`). */
   audio: boolean;
+  /** The computer's sound can be shared with a screen or window (Windows only). */
+  systemAudio: boolean;
+  /**
+   * Screens and windows are picked in the system's own picker, which Chord's
+   * opens (`SYSTEM_SHARE_SOURCE`): macOS 15 and later, and Wayland's portal.
+   * Chord lists only tabs itself then.
+   */
+  systemPicker: boolean;
 }
 
 /**
@@ -547,6 +571,8 @@ export interface Toast {
   action?: { label: string; command: RendererCommand } | { label: string; update: 'restart' };
   /** A second line with its own action, about the same thing ("Always open linear.app here?" under "Moved to Work"). */
   also?: { message: string; action: { label: string; command: RendererCommand } };
+  /** Shown even in presenting mode, which hides Chord's other toasts: it's about the share itself. */
+  whilePresenting?: boolean;
 }
 
 export interface ChordEdit {
@@ -913,7 +939,8 @@ export const invokeChannels = {
   'mini:copyLink': { roles: ['mini'], request: z.void(), response: z.void() },
   /** Peek's "Open in Today": the page becomes a tab, history and all. Closing goes through overlay:close. */
   'peek:expand': { roles: ['overlay'], request: z.void(), response: z.void() },
-  // Screen sharing (ARCHITECTURE.md §9): the picker answers; the sidebar's Stop ends a share.
+  // Screen sharing (ARCHITECTURE.md §9): the picker answers (a source's id, SYSTEM_SHARE_SOURCE, or null to refuse);
+  // the sidebar's Stop ends a share, from the sharing tab's row or the shared tab's.
   'share:respond': {
     roles: ['popover'],
     request: z.strictObject({ id: z.number().int().min(1), sourceId: z.string().max(200).nullable(), audio: z.boolean() }),
@@ -1090,7 +1117,7 @@ export interface ShellApi {
   defaultBrowser: { status(): Promise<DefaultBrowserStatus>; make(): Promise<DefaultBrowserStatus> };
   /** Duet's panel in this window (ARCHITECTURE.md §11). */
   duet: { view(): Promise<DuetView>; act(action: DuetAction): Promise<void>; onState(listener: (view: DuetView) => void): () => void };
-  /** Stop a tab's screen share (its sidebar row shows it's sharing). */
+  /** Stop a tab's share (its sidebar row shows it's sharing), or the shares of a tab that's being shared. */
   share: { stop(nodeId: string): Promise<void> };
   /** The Now playing card: the window's media as main pushes it, and the card's own buttons. */
   media: {
@@ -1254,7 +1281,7 @@ export interface PopoverApi {
     close(): Promise<void>;
   };
   permission: { respond(id: number, decision: 'allow' | 'block' | 'dismiss'): Promise<void> };
-  /** The screen-share picker: a source to share, or null to cancel. */
+  /** The screen-share picker: a source to share (or SYSTEM_SHARE_SOURCE, the system's picker), or null to cancel. */
   share: { respond(id: number, sourceId: string | null, audio: boolean): Promise<void> };
   /** A sign-in box: a username and password, or null to cancel. */
   auth: { respond(id: number, credentials: { username: string; password: string } | null): Promise<void> };

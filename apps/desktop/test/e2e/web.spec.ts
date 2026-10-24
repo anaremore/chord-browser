@@ -172,51 +172,63 @@ test('a misspelled word offers suggestions and Add to dictionary at the top of t
   }
 });
 
-test('screen sharing goes through Chord’s picker, and Stop in the sidebar ends it', async () => {
-  test.skip(process.platform === 'darwin', 'macOS 15+ uses the system picker, which a test can’t drive');
-  test.skip(process.env['XDG_SESSION_TYPE'] === 'wayland', 'headless Weston has no screen to capture');
+test('screen sharing goes through Chord’s picker: presenting mode and the window’s tinted edge while it lasts, and Stop in the sidebar ends it', async () => {
+  test.skip(process.platform === 'darwin', 'macOS 15+ picks screens in the system’s own picker, which a test can’t drive (sharing.spec.ts shares tabs everywhere)');
+  test.skip(process.env['XDG_SESSION_TYPE'] === 'wayland', 'headless Weston has no screen to capture, nor a portal to pick one');
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/share` });
   try {
     const shell = await pageWhere(app, isShell);
     const tab = await pageWhere(app, (url) => url === `${site.origin}/share`);
     const popover = await pageWhere(app, isPopover);
-    const picker = popover.getByRole('alertdialog', { name: /wants to share your screen/ });
+    const picker = popover.getByRole('alertdialog', { name: /^Choose what to share with/ });
+    const screens = picker.getByRole('listbox', { name: 'Screens' }).getByRole('option');
+    // Screens are named at once, pictured a moment later; say what the OS offered if none comes.
+    const firstScreen = async () => {
+      await picker.getByRole('tab', { name: 'Entire screen' }).click();
+      await expect(screens.first())
+        .toBeVisible({ timeout: 15_000 })
+        .catch(async (error: Error) => {
+          const offered = await app.evaluate(async ({ desktopCapturer }) => {
+            const start = Date.now();
+            const listed = desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } }).then(
+              (sources) => `${sources.length} sources [${sources.map((s) => s.id).join(', ')}]`,
+              (e: unknown) => `getSources failed: ${String(e)}`,
+            );
+            const late = new Promise<string>((resolve) => setTimeout(() => resolve('getSources still pending'), 5000));
+            return `${await Promise.race([listed, late])} after ${Date.now() - start} ms`;
+          });
+          throw new Error(`${error.message}
+The page's title: ${await tab.title()}
+desktopCapturer: ${offered}`);
+        });
+    };
 
     // Refused: the page's request fails (Electron reports AbortError; Chrome says NotAllowedError).
     await tab.locator('#share').click();
-    // Thumbnails of every screen and window take a moment to gather.
-    await expect(picker)
-      .toBeVisible({ timeout: 15_000 })
-      .catch(async (error: Error) => {
-        // Chord refuses when there's nothing to share: say what the OS offered.
-        const offered = await app.evaluate(async ({ desktopCapturer }) => {
-          const start = Date.now();
-          const listed = desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } }).then(
-            (sources) => `${sources.length} sources [${sources.map((s) => s.id).join(', ')}]`,
-            (e: unknown) => `getSources failed: ${String(e)}`,
-          );
-          const late = new Promise<string>((resolve) => setTimeout(() => resolve('getSources still pending'), 5000));
-          return `${await Promise.race([listed, late])} after ${Date.now() - start} ms`;
-        });
-        throw new Error(`${error.message}\nThe page's title: ${await tab.title()}\ndesktopCapturer: ${offered}`);
-      });
+    await expect(picker).toBeVisible();
+    await firstScreen();
     await picker.getByRole('button', { name: 'Cancel' }).click();
     await expect.poll(() => tab.title()).toBe('Share refused: AbortError');
     await expect(picker).toBeHidden();
 
     // Shared: the first screen.
     await tab.locator('#share').click();
-    await expect(picker).toBeVisible({ timeout: 15_000 });
-    await picker.getByRole('option').first().click();
+    await firstScreen();
+    await screens.first().click();
     await picker.getByRole('button', { name: 'Share', exact: true }).click();
     await expect.poll(() => tab.title()).toBe('Sharing');
-    const stop = shell.locator('[aria-label="Stop sharing your screen"]');
+    const stop = shell.locator('[aria-label="Stop sharing"]');
     await expect(stop).toBeVisible();
+    // Presenting mode is on while it lasts, and the window on the shared screen has the tinted edge.
+    await expect(shell.getByRole('group', { name: 'Presenting mode' })).toBeVisible();
+    await expect(shell.locator('[data-shared-window]')).toHaveCount(1);
 
     // Stop ends it the way the OS would: the page hears "ended".
     await stop.click();
     await expect.poll(() => tab.title()).toBe('Share ended');
     await expect(stop).toHaveCount(0);
+    await expect(shell.getByRole('group', { name: 'Presenting mode' })).toBeHidden();
+    await expect(shell.locator('[data-shared-window]')).toHaveCount(0);
   } finally {
     await app.close();
   }

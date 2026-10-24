@@ -51,8 +51,8 @@ export function visibleTabs(state: State): Set<NodeId> {
  * Today tabs unused for at least `afterMs`, oldest first. Pinned tabs never
  * go, nor does a private window's tab (nothing of it is kept), nor a split's
  * pane (you put it there on purpose); nor do tabs on screen, or ones the
- * engine says are busy (`busy`: playing, sharing the camera or screen, in
- * picture-in-picture).
+ * engine says are busy (`busy`: playing, sharing the camera or screen, being
+ * shared, in picture-in-picture).
  */
 export function archiveCandidates(state: State, now: number, afterMs: number | null, busy: ReadonlySet<NodeId> = new Set()): NodeId[] {
   if (afterMs === null) return [];

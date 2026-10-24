@@ -37,6 +37,7 @@ import {
   type LiveTab,
   type NodeId,
   type PermissionDecision,
+  type Presenting,
   type ProfileId,
   type Section,
   type SidebarNode,
@@ -137,6 +138,14 @@ export type Command =
   /** Drag the sidebar's edge: clamped to SIDEBAR_WIDTH. */
   | { t: 'window.sidebarWidth'; windowId: WindowId; width: number }
   | { t: 'settings.set'; settings: SettingsPatch }
+  /**
+   * Presenting mode (ARCHITECTURE.md §9). By `share`: a page in Chord started
+   * sharing (on, unless it's on already), or the last share ended (off, unless
+   * you turned it on). By `you`, the switch or its shortcut: as asked, either way.
+   */
+  | { t: 'presenting.set'; on: boolean; by: Presenting }
+  /** The Chord windows a page is sharing now, as a window or on a shared screen (their edge is tinted). */
+  | { t: 'sharing.windows'; windowIds: WindowId[] }
   | { t: 'chord.theme'; chordId: ChordId; theme: Partial<ChordThemeSpec> }
   /** A new chord after the others, switched to in this window. */
   | { t: 'chord.create'; windowId: WindowId; name: string; icon: string; theme: ChordThemeSpec }
@@ -1092,6 +1101,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const win = draft.windows[cmd.windowId];
       if (!win) return;
       delete draft.windows[cmd.windowId];
+      if (draft.sharedWindows.includes(cmd.windowId)) draft.sharedWindows = draft.sharedWindows.filter((id) => id !== cmd.windowId);
       if (!win.private) return;
       // Closing a private window forgets everything in it (files it downloaded stay on disk).
       const chordId = win.activeChordId;
@@ -1167,6 +1177,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (isUiScale(uiScale) && draft.settings.uiScale !== uiScale) draft.settings.uiScale = uiScale;
       if (autoPip !== undefined && draft.settings.autoPip !== autoPip) draft.settings.autoPip = autoPip;
       if (pagePreviews !== undefined && draft.settings.pagePreviews !== pagePreviews) draft.settings.pagePreviews = pagePreviews;
+      const { presentingHidesSidebar } = cmd.settings;
+      if (presentingHidesSidebar !== undefined && draft.settings.presentingHidesSidebar !== presentingHidesSidebar) {
+        draft.settings.presentingHidesSidebar = presentingHidesSidebar;
+      }
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
       if (cmd.settings.duet) {
         const duet = cmd.settings.duet;
@@ -1204,6 +1218,24 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (keys === null) delete draft.settings.shortcuts[id];
         else draft.settings.shortcuts[id] = cleanKeys(id, keys);
       }
+      return;
+    }
+
+    case 'presenting.set': {
+      if (cmd.by === 'you') {
+        const next = cmd.on ? 'you' : null;
+        if (draft.presenting !== next) draft.presenting = next;
+      } else if (cmd.on) {
+        draft.presenting ??= 'share';
+      } else if (draft.presenting === 'share') {
+        draft.presenting = null;
+      }
+      return;
+    }
+
+    case 'sharing.windows': {
+      const ids = [...new Set(cmd.windowIds)].filter((id) => draft.windows[id]).sort();
+      if (ids.join(' ') !== draft.sharedWindows.join(' ')) draft.sharedWindows = ids;
       return;
     }
 
