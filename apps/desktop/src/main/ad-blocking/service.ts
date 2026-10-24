@@ -21,8 +21,7 @@
 import { isBlockingOff } from '@chord/core';
 import type { AdBlockingStatus } from '@chord/ipc';
 import { session as electronSession, type OnBeforeRequestListenerDetails, type Session, type WebContents } from 'electron';
-import { existsSync, readdirSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { requestDispatcher } from '../requests';
@@ -69,6 +68,8 @@ interface Saved {
 }
 
 const emptySaved = (): Saved => ({ lists: {}, failures: 0, notBefore: 0, profiles: {} });
+/** Whether a file is there (main never checks synchronously). */
+const exists = (path: string) => access(path).then(() => true, () => false);
 const sameSites = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((s, i) => s === b[i]);
 const folderName = (profileId: string) => profileId.replace(/[^\w-]/g, '_');
 
@@ -204,7 +205,7 @@ export class AdBlocking {
     await this.ready;
     const keep = new Set([...inUse].map(folderName));
     const dir = join(this.config.root, 'Extension');
-    for (const folder of existsSync(dir) ? readdirSync(dir) : []) if (!keep.has(folder)) await rm(join(dir, folder), { recursive: true, force: true }).catch(() => {});
+    for (const folder of await readdir(dir).catch(() => [])) if (!keep.has(folder)) await rm(join(dir, folder), { recursive: true, force: true }).catch(() => {});
     for (const profileId of Object.keys(this.saved.profiles)) if (!inUse.has(profileId)) delete this.saved.profiles[profileId];
     this.save();
   }
@@ -252,7 +253,7 @@ export class AdBlocking {
         const version = setVersion(this.current.info.versions);
         const offSites = [...this.deps.offSites(profileId)];
         const applied = this.saved.profiles[profileId];
-        const stale = applied?.rulesVersion !== version || !existsSync(join(blocker.folder, 'manifest.json'));
+        const stale = applied?.rulesVersion !== version || !(await exists(join(blocker.folder, 'manifest.json')));
         if (stale) {
           profile.ready = false;
           await this.writeRules(blocker);
@@ -446,7 +447,7 @@ export class AdBlocking {
     try {
       if (due.length > 0) {
         const refreshedDir = join(this.config.root, 'Lists');
-        const answers = await Promise.all(due.map((l) => this.fetchList(l.id, listUrl(l.id), existsSync(join(refreshedDir, `${l.id}.txt`)))));
+        const answers = await Promise.all(due.map(async (l) => this.fetchList(l.id, listUrl(l.id), await exists(join(refreshedDir, `${l.id}.txt`)))));
         if (answers.some((a) => a.bytes)) {
           // A list that didn't change comes from the last refreshed set: only one Chord has a copy of may come back unchanged.
           const lists = Object.fromEntries(FILTER_LISTS.map((l) => [l.id, answers.find((a) => a.id === l.id)?.bytes ?? null])) as Record<ListId, Uint8Array | null>;
