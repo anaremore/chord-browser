@@ -123,16 +123,26 @@ export class AutoPip {
   }
 
   /**
-   * The Now playing card's button: this tab's playing video pops out now, or
-   * goes back into its page if it's out (playing on, where it was). Chromium
-   * has one picture-in-picture window, so a video already in it goes back to
-   * its own page as this one takes it.
+   * The Now playing card's button: this tab's playing video pops out now; or,
+   * if it's out already (by Chord, or by the site's own button), the tab comes
+   * on screen and the video goes back into it, playing on, as the
+   * picture-in-picture window's "back to tab" does. Chromium has one
+   * picture-in-picture window, so a video already in it goes back to its own
+   * page as this one takes it.
    */
   async toggle(nodeId: NodeId): Promise<void> {
     const popped = this.popped;
-    if (popped?.nodeId === nodeId) return this.returned(nodeId);
     const contents = this.deps.contents(nodeId);
+    if (popped?.nodeId === nodeId) {
+      this.deps.bringBack(nodeId);
+      return this.returned(nodeId);
+    }
     if (!contents || contents.isDestroyed() || contents.isCrashed()) return;
+    if (await this.run(contents, contents.mainFrame, IN_PIP, false)) {
+      this.deps.bringBack(nodeId);
+      await this.run(contents, contents.mainFrame, EXIT, false);
+      return;
+    }
     if (popped) {
       popped.returning = true;
       await this.run(popped.contents, popped.frame, EXIT, false);

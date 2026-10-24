@@ -500,7 +500,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Focus-visible | 2 px `focus-ring`, inset 2 px |
 | Loading | Favicon replaced by a 16 px spinner ring (accent, 1.5 px stroke) |
 | Audible / muted | Speaker icon; click toggles mute |
-| Popped out (PiP) | PiP glyph in place of the speaker; click brings the video home |
+| Popped out (PiP) | PiP glyph (`picture-in-picture`, *Back to the tab*) in place of the speaker; click brings the tab on screen and the video home |
 | Unloaded (pinned, not opened yet) | Normal favicon; title `fg-muted` |
 | Navigated away (pinned) | Shows the current page's title. Hover shows ↩ *Back to pinned page* in place of ×; ⌘-click on ↩ opens the current page as a Today tab. |
 | Sleeping | Favicon at 70% opacity |
@@ -647,7 +647,7 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Where:** under the toasts, above the extensions shelf and the footer; the sidebar's width less 16 px. In minimal mode it's there while the sidebar peeks.
 - **Anatomy:** 36 px tall when the page says nothing about what it plays, 84 when it does.
   - What plays, from the page's Media Session: the artwork at 40 px (`radius-xs`, concentric with the card), the track in `text-label` and *artist · album* in `text-small`, `fg-muted`, each on one line with an ellipsis. Without artwork, the text alone.
-  - The tab: its favicon and title (`text-small`, `fg-muted`), a button that goes to the tab. Then **1 of 2 ›** with several tabs playing (`text-micro`, tabular figures), stepping to the next; **picture-in-picture** (`picture-in-picture-2`) for a playing video, *Bring the video back* once it's out; **Mute / Unmute** (`volume-2` / `volume-x`); and **Play / Pause**: a 28 px `accent` circle with a filled glyph in `accent-fg`, the card's one accent.
+  - The tab: its favicon and title (`text-small`, `fg-muted`), a button that goes to the tab. Then **1 of 2 ›** with several tabs playing (`text-micro`, tabular figures), stepping to the next; **picture-in-picture** (`picture-in-picture-2`) for a playing video; once it's out, by Chord or by the site's own button, *Back to the tab* (`picture-in-picture`, pressed), which brings the tab on screen with the video back in it, as the PiP window's own button does; **Mute / Unmute** (`volume-2` / `volume-x`); and **Play / Pause**: a 28 px `accent` circle with a filled glyph in `accent-fg`, the card's one accent.
   - Play and Pause show only for a player in the page itself. One in an embedded frame (a video in an article) can be muted from the card, but not paused (ARCHITECTURE.md §9).
 - **Surface:** `item-hover` on the chord's tint, `radius-md`, padding `space-1`: a soft square like a favorite's, in the chord's own colors, light and dark. The buttons are the sidebar's icon buttons. Windows High Contrast adds a `CanvasText` edge.
 - **Motion:** it rises 8 px and fades in on `overlay`, and leaves with `fade-fast` and a 4 px drop; with reduced motion, opacity only. It belongs to *Animate the sidebar* (§6.8): off, it just appears. When what it shows changes, it changes in place.

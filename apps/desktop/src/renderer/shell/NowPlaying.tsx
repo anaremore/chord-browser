@@ -14,7 +14,7 @@
 import { cardMedia, type State, type TabNode } from '@chord/core';
 import type { NowPlaying } from '@chord/ipc';
 import { durations, space, type Appearance } from '@chord/tokens';
-import { ChevronRight, Pause, PictureInPicture2, Play, Volume2, VolumeX } from 'lucide-react';
+import { ChevronRight, Pause, PictureInPicture, PictureInPicture2, Play, Volume2, VolumeX } from 'lucide-react';
 import { AnimatePresence, motion, type Transition } from 'motion/react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Favicon } from '../shared/Favicon';
@@ -121,11 +121,14 @@ function Card({ media, tab, popped, at, count, windowId, appearance, muteTitle, 
           <button
             type="button"
             className={styles.iconButton}
-            aria-label={popped ? 'Bring the video back' : 'Pop out the video'}
-            title={popped ? 'Bring the video back' : 'Pop out the video'}
+            // Popped out (by Chord or by the site): back into its tab, which comes on screen, as the
+            // picture-in-picture window's own "back to tab" does.
+            aria-label={popped ? 'Back to the tab' : 'Pop out the video'}
+            aria-pressed={popped}
+            title={popped ? 'Back to the tab' : 'Pop out the video'}
             onClick={() => void api.media.act(tab.id, 'pictureInPicture')}
           >
-            <PictureInPicture2 {...ICON} />
+            {popped ? <PictureInPicture {...ICON} /> : <PictureInPicture2 {...ICON} />}
           </button>
         )}
         <button
@@ -185,7 +188,7 @@ export function NowPlayingCard({
           key="now-playing"
           media={media}
           tab={tab}
-          popped={Boolean(state.live[tab.id]?.pip)}
+          popped={Boolean(state.live[tab.id]?.pip) || media.pip}
           at={at}
           count={offered.length}
           windowId={windowId}

@@ -419,6 +419,8 @@ export interface NowPlaying {
   pausable: boolean;
   /** A video is playing that can pop out into picture-in-picture. */
   video: boolean;
+  /** Its video is in picture-in-picture now, put there by Chord or by the site itself. */
+  pip: boolean;
 }
 
 /** What the Now playing card's buttons ask main to do (mute and Go to tab are commands). */

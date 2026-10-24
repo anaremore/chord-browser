@@ -53,6 +53,7 @@ const READ = `(() => {
     playing: players.some(heard),
     video: players.some((el) => el instanceof HTMLVideoElement && heard(el) && el.readyState >= 2 && !el.disablePictureInPicture && big(el)),
     players: players.length,
+    pip: Boolean(document.pictureInPictureElement),
   };
 })()`;
 
@@ -88,6 +89,8 @@ interface PageMedia {
   video: boolean;
   /** Media elements in the page itself: the ones Chord can pause and play. */
   players: number;
+  /** One of its videos is in picture-in-picture, whoever put it there (Chord, or the site's own button). */
+  pip: boolean;
 }
 
 interface Session {
@@ -298,6 +301,7 @@ function view(nodeId: NodeId, s: Session): NowPlaying {
     // Playing, its own players are what plays; paused, Play can start one of them again.
     pausable: Boolean(page && page.players > 0 && (page.playing || !s.playing)),
     video: s.playing && Boolean(page?.video),
+    pip: Boolean(page?.pip),
   };
 }
 

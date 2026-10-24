@@ -230,12 +230,28 @@ test('the card shows a page without Media Session by its tab, and pops a video o
     const pip = () => movie.evaluate(() => document.pictureInPictureElement?.id ?? null);
     await card(shell).getByRole('button', { name: 'Pop out the video' }).click();
     await expect.poll(pip).toBe('v');
-    // Its row and the card say so; bringing it back leaves it playing in its tab, out of sight.
-    await expect(row(shell, 'Movie').locator('[aria-label="Bring the video back"]')).toBeVisible();
-    await card(shell).getByRole('button', { name: 'Bring the video back' }).click();
+    // Its row and the card say so; back to the tab brings the tab on screen, the video in it, playing on.
+    await expect(row(shell, 'Movie').locator('[aria-label="Back to the tab"]')).toBeVisible();
+    await card(shell).getByRole('button', { name: 'Back to the tab' }).click();
     await expect.poll(pip).toBeNull();
     expect(await movie.evaluate(() => document.querySelector('video')!.paused)).toBe(false);
-    await expect(row(shell, 'Second page')).toHaveAttribute('aria-current', 'page');
+    await expect(row(shell, 'Movie')).toHaveAttribute('aria-current', 'page');
+
+    // Popped out by the site itself (its own button, out of Chord's sight): the card still knows, and brings it back.
+    await movie.evaluate(() => {
+      const button = document.createElement('button');
+      button.id = 'site-pip';
+      button.textContent = 'Picture-in-picture';
+      button.onclick = () => void document.querySelector('video')!.requestPictureInPicture();
+      document.body.append(button);
+    });
+    await movie.click('#site-pip');
+    await expect.poll(pip).toBe('v');
+    await row(shell, 'Second page').click();
+    await expect(card(shell).getByRole('button', { name: 'Back to the tab' })).toBeVisible({ timeout: 10_000 });
+    await card(shell).getByRole('button', { name: 'Back to the tab' }).click();
+    await expect.poll(pip).toBeNull();
+    await expect(row(shell, 'Movie')).toHaveAttribute('aria-current', 'page');
   } finally {
     await app.close();
   }
