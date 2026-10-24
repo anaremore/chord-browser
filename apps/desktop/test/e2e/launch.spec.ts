@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
@@ -974,6 +975,55 @@ test('a relaunch restores tabs, the sidebar and settings', async () => {
     const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
     await settings.getByRole('button', { name: 'Appearance' }).click();
     await expect(settings.getByRole('button', { name: 'Kept', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  } finally {
+    await app.close();
+  }
+});
+
+test('killed mid-session, Chord brings a tab back where it was: its page, back and forward, and the scroll position', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
+  try {
+    const first = await pageWhere(app, (url) => url === `${site.origin}/`);
+    await first.evaluate(() => (location.href = '/long'));
+    const long = await pageWhere(app, (url) => url === `${site.origin}/long`);
+    await long.evaluate(() => scrollTo(0, 2500));
+    // Chromium writes a page's scroll into its history entry about a second after it moves.
+    await long.waitForTimeout(1500);
+    await long.evaluate(() => (location.href = '/third'));
+    await pageWhere(app, (url) => url === `${site.origin}/third`);
+    // Saved about two seconds after a navigation: read it from chord-data's own database.
+    const db = join(profile, 'chord.db');
+    const saved = () => {
+      const sqlite = new DatabaseSync(db, { readOnly: true });
+      try {
+        const rows = sqlite.prepare('SELECT nav_state FROM tab WHERE nav_state IS NOT NULL').all() as { nav_state: Uint8Array }[];
+        return rows.map((r) => JSON.parse(Buffer.from(r.nav_state).toString('utf8')) as { entries: { url: string }[]; index: number });
+      } finally {
+        sqlite.close();
+      }
+    };
+    await expect
+      .poll(() => saved().map((nav) => nav.entries.map((e) => new URL(e.url).pathname).join(' ') + ` @${nav.index}`), { timeout: 10_000 })
+      .toContain('/ /long /third @2');
+  } finally {
+    // No quit, no flush: the way a crash, a power cut or a force-quit ends it.
+    const child = app.process();
+    const exited = new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done(null) : child.once('exit', done)));
+    child.kill('SIGKILL');
+    await exited;
+  }
+
+  app = await launch({}, profile);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const third = await pageWhere(app, (url) => url === `${site.origin}/third`);
+    await expect(shell.getByRole('button', { name: 'Back', exact: true })).toBeEnabled();
+    await runAction(shell, 'nav.back');
+    await expect.poll(() => third.url()).toBe(`${site.origin}/long`);
+    await expect.poll(() => third.evaluate(() => scrollY)).toBe(2500);
+    await runAction(shell, 'nav.back');
+    await expect.poll(() => third.url()).toBe(`${site.origin}/`);
   } finally {
     await app.close();
   }

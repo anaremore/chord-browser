@@ -310,10 +310,27 @@ export class ChordDatabase {
         else if (op.k === 'extension') this.writeExtension(op.id, op.value);
         else if (op.k === 'siteZoom') this.writeSiteZoom(op.id, op.value, now);
         else if (op.k === 'linkRoute') this.writeLinkRoute(op.id, op.value);
+        else if (op.k === 'nav') continue;
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
       }
+      // Histories last: a tab's row may be made in this same batch. A tab that's gone takes its history with it.
+      for (const op of ops) {
+        // The column is a BLOB (migration 1): the JSON goes in as UTF-8 bytes.
+        if (op.k === 'nav') this.sql('UPDATE tab SET nav_state = ? WHERE node_id = ?').run(op.value ? Buffer.from(JSON.stringify(op.value)) : null, op.id);
+      }
     });
+  }
+
+  /** Open tabs' saved back/forward histories, by node id. */
+  loadNavs(): Record<string, NavState> {
+    const navs: Record<string, NavState> = {};
+    for (const r of this.sql('SELECT node_id, nav_state FROM tab WHERE nav_state IS NOT NULL').all() as Row[]) {
+      const bytes = r['nav_state'];
+      const nav = bytes instanceof Uint8Array ? parseJson<NavState | null>(Buffer.from(bytes).toString('utf8'), null) : null;
+      if (nav && Array.isArray(nav.entries) && Number.isInteger(nav.index)) navs[str(r['node_id'])] = nav;
+    }
+    return navs;
   }
 
   private record(event: HistoryEvent): void {

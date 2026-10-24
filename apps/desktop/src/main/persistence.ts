@@ -18,6 +18,7 @@ import {
   type DuetResult,
   type DataResponse,
   type HistoryEvent,
+  type NavState,
   type PathPatch,
   type SearchResult,
   type WriteOp,
@@ -48,12 +49,12 @@ export class Persistence {
   private constructor(private readonly file: string) {}
 
   /** Start chord-data and read what was saved (null for a brand-new profile). Rows of unused profiles are dropped. */
-  static async open(file: string): Promise<{ persistence: Persistence; saved: PersistedState | null }> {
+  static async open(file: string): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState> }> {
     const persistence = new Persistence(file);
     persistence.spawn();
     const response = await persistence.request({ type: 'open', file, prune: true });
     if (!response.ok) throw new Error(response.error);
-    return { persistence, saved: response.saved ?? null };
+    return { persistence, saved: response.saved ?? null, navs: response.navs ?? {} };
   }
 
   private spawn(): void {
@@ -99,6 +100,14 @@ export class Persistence {
   /** Queue a whole state (a brand-new profile's first save). */
   recordAll(state: State): void {
     for (const op of opsForState(state)) this.pending.set(opKey(op), op);
+    this.schedule();
+  }
+
+  /** An open tab's back/forward history (never a private window's: the caller checks). */
+  nav(nodeId: string, nav: NavState | null): void {
+    if (this.closed) return;
+    const op: WriteOp = { k: 'nav', id: nodeId, value: nav };
+    this.pending.set(opKey(op), op);
     this.schedule();
   }
 

@@ -20,6 +20,7 @@ The first public preview: a calm, colorful browser for people leaving Arc. Build
 **Archive and sleeping tabs.**
 - Tabs you haven't looked at in 12 hours move to the archive. You can change the time or turn it off.
 - ⌘⇧T reopens closed tabs, even after a restart.
+- After a restart, or if Chord or your computer crashes, open tabs come back with their back and forward history, scrolled where you left them.
 - Background tabs sleep after an hour and wake where you left them.
 
 **Split view, Peek and the mini window.**

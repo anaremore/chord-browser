@@ -425,6 +425,8 @@ if (!app.requestSingleInstanceLock()) {
       permissions,
       screenShare,
       httpAuth,
+      histories: opened.navs,
+      saveHistory: (nodeId, nav) => persistence?.nav(nodeId, nav),
       history: (event) => store.history(event),
       archive: { entry: (which) => store.archiveEntry(which) },
       idle: {

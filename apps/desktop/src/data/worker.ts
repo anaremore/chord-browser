@@ -18,7 +18,7 @@ process.parentPort.on('message', (event) => {
         db?.close();
         db = new ChordDatabase(request.file);
         if (request.prune) db.pruneProfiles();
-        reply({ id: request.id, ok: true, saved: db.load() });
+        reply({ id: request.id, ok: true, saved: db.load(), navs: db.loadNavs() });
         break;
       case 'write':
         if (!db) throw new Error('chord-data: write before open');

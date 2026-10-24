@@ -56,6 +56,7 @@ import type { Verdict } from './safe-browsing/database';
 import { SafeBrowsingGuard } from './safe-browsing/guard';
 import type { ScreenShareBroker } from './screen-share';
 import type { AuthBroker } from './http-auth';
+import { HistorySaver } from './history-saver';
 import { SiteZoom } from './site-zoom';
 import { spellcheckLanguages } from './spellcheck';
 import { setUiScale, systemInfo } from './platform';
@@ -94,6 +95,10 @@ export interface BrowserOptions {
   httpAuth: AuthBroker;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
+  /** Open tabs' back/forward histories as chord-data saved them, by node id. */
+  histories?: Record<string, NavState>;
+  /** Save an open tab's back/forward history (never a private window's). */
+  saveHistory(nodeId: NodeId, nav: NavState | null): void;
   /** A private window closed: drop its session (cookies, storage, cache) and anything kept for it. */
   releaseProfile(profileId: string): void;
   /** Safe Browsing (ARCHITECTURE.md §14.5): checks pages while it's on, and whether to offer turning it on. */
@@ -125,6 +130,8 @@ const GESTURE_PHASES: Partial<Record<string, GesturePhase>> = {
 export class Browser {
   readonly store: Store;
   readonly tabs: TabManager;
+  /** Open tabs' histories, saved so a restart or a crash brings them back where they were. */
+  private readonly histories: HistorySaver;
   readonly extensions: Extensions;
   /** Safe Browsing's warnings: which pages show one, "Back to safety" and "Visit anyway". */
   readonly safeBrowsing: SafeBrowsingGuard;
@@ -237,6 +244,12 @@ export class Browser {
         contents.on('focus', () => this.paneFocused(nodeId));
         contents.on('input-event', (_event, input) => {
           if (input.type === 'mouseDown') this.paneFocused(nodeId);
+          // Scrolling, typing or a click changes what the saved history should bring back (scroll, form fields).
+          if (input.type === 'mouseWheel' || input.type === 'keyDown' || input.type === 'mouseUp') this.histories.touch(nodeId);
+        });
+        contents.on('did-navigate', () => this.histories.touch(nodeId, true));
+        contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+          if (isMainFrame) this.histories.touch(nodeId, true);
         });
         // A page going fullscreen (a video) covers the whole window; Esc, or the page, brings Chord back.
         contents.on('enter-html-full-screen', () => this.windowFor(contents)?.setPageFullScreen(true));
@@ -349,6 +362,18 @@ export class Browser {
       openSettings: (section) => this.openSettings(section),
       changed: () => this.settingsWindow?.update(this.settingsSnapshot()),
     });
+    this.histories = new HistorySaver({
+      history: (nodeId) => this.tabs.history(nodeId),
+      save: (nodeId, nav) => options.saveHistory(nodeId, nav),
+      savable: (nodeId) => this.store.state.nodes[nodeId]?.kind === 'tab' && !this.isPrivateNode(nodeId),
+    });
+    // Back where they were: each open tab's saved history, if it still ends on the tab's page.
+    for (const [nodeId, nav] of Object.entries(options.histories ?? {})) {
+      const node = this.store.state.nodes[nodeId];
+      if (node?.kind !== 'tab' || nav.entries[nav.index]?.url !== node.url) continue;
+      this.tabs.restoreHistoryOnLoad(nodeId as NodeId, nav);
+      this.histories.restored(nodeId as NodeId, nav);
+    }
     options.permissions.connect({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
@@ -453,6 +478,8 @@ export class Browser {
   /** Quitting: every window closing from now on is remembered for the next launch, as Chrome does. */
   prepareToQuit(): void {
     this.quitting = true;
+    // While the pages are still there: where each one is now.
+    this.histories.flush();
   }
 
   /**
@@ -587,6 +614,7 @@ export class Browser {
       // A mini window still open keeps Chord running; closing it then quits (window-all-closed).
       if (this.windows.size === 0 && this.minis.count === 0 && process.platform !== 'darwin') {
         this.idle.stop();
+        this.histories.flush();
         this.tabs.destroyAll();
         this.settingsWindow?.window.close();
         app.quit();
@@ -665,10 +693,13 @@ export class Browser {
           break;
         }
         case 'view.destroy':
+          this.histories.forget(effect.nodeId);
           this.tabs.destroy(effect.nodeId);
           break;
         case 'view.sleep':
           this.tabs.sleep(effect.nodeId);
+          // Asleep, its history is what brings it back, after a crash too.
+          this.histories.touch(effect.nodeId, true);
           break;
         case 'archive.save': {
           // Before its view goes: the history is what brings it back where it was.

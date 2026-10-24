@@ -168,6 +168,32 @@ describe('chord-data', () => {
     expect(count('favicon')).toBe(0);
   });
 
+  it("keeps an open tab's back/forward history across a restart, written after its row, and drops it with the tab", () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const windowId = Object.keys(state.windows)[0]!;
+    const result = apply(state, { t: 'tab.open', windowId, url: 'https://a.test/2' }, ctx);
+    state = result.state;
+    const tabId = Object.keys(state.nodes).find((id) => state.nodes[id]!.kind === 'tab' && (state.nodes[id] as TabNode).url === 'https://a.test/2')!;
+    const nav = { entries: [{ url: 'https://a.test/1', title: 'One' }, { url: 'https://a.test/2', title: 'Two', pageState: 'scrolled' }], index: 1 };
+    // The history arrives in the same batch as the tab's row, ahead of it: still kept.
+    db.write([{ k: 'nav', id: tabId, value: nav }, ...opsFromPatches(result.patches, state)]);
+    db.close();
+
+    db = new ChordDatabase(file);
+    expect(db.loadNavs()).toEqual({ [tabId]: nav });
+    // A tab's own row, written again, leaves its history alone; null clears it.
+    db.write(opsForState(state));
+    expect(db.loadNavs()[tabId]).toEqual(nav);
+    db.write([{ k: 'nav', id: tabId, value: null }]);
+    expect(db.loadNavs()).toEqual({});
+    db.write([{ k: 'nav', id: tabId, value: nav }]);
+    drive(db, state, [{ t: 'tab.close', windowId, nodeId: tabId as never }]);
+    expect(db.loadNavs()).toEqual({});
+    db.close();
+  });
+
   it('gives a chord with separate sign-ins its own profile, and prunes it once nothing uses it', () => {
     let db = new ChordDatabase(file);
     let state = seed();

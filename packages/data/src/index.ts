@@ -35,7 +35,9 @@ export type WriteOp =
   | { k: 'extension'; id: string; value: InstalledExtension | null }
   /** A site's page zoom, by host. */
   | { k: 'siteZoom'; id: string; value: number | null }
-  | { k: 'linkRoute'; id: string; value: LinkRoute | null };
+  | { k: 'linkRoute'; id: string; value: LinkRoute | null }
+  /** An open tab's back/forward history, by node id: what brings it back where it was after a restart or a crash. */
+  | { k: 'nav'; id: string; value: NavState | null };
 
 /**
  * A tab's back/forward history as Electron gives it (`navigationHistory`):
@@ -108,7 +110,8 @@ export type DataRequest =
 
 /** chord-data → main. */
 export type DataResponse =
-  | { id: number; ok: true; saved?: PersistedState | null; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult }
+  /** `navs`, from `open`: open tabs' saved back/forward histories, by node id. */
+  | { id: number; ok: true; saved?: PersistedState | null; navs?: Record<string, NavState>; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult }
   | { id: number; ok: false; error: string };
 
 /** The part of an Immer patch this needs. */
