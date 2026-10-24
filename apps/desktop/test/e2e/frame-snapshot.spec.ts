@@ -51,6 +51,7 @@ async function launch(home = '/', profile = mkdtempSync(join(tmpdir(), 'chord-e2
   const childEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),
     CHORD_USER_DATA: profile,
+    CHORD_E2E_HOOKS: '1',
     CHORD_HOME_URL: `${site.origin}${home}`,
     // Duet's panel opens without looking for a real Claude Code or Codex (paths that don't exist).
     CHORD_DUET_CLAUDE: join(profile, 'no-claude'),
@@ -200,23 +201,21 @@ const saveFrame = (shell: Page, name: string) => shell.screenshot({ path: join(f
 /**
  * Runs `act` and, once the pictures start gliding, saves a few frames of the
  * shell mid-glide (Chord's own view only): `<name>-1.png` and on. A machine
- * too slow to picture the pages inside PREPARE_TIMEOUT_MS (CI's Intel Macs)
- * gets no glide: the frame changes at once, as designed, and there's nothing
- * here to check, so the test is skipped as inconclusive rather than failed.
- * A machine quick enough that still shows no glide fails.
+ * too slow to picture the pages, or to show the pictures, inside
+ * PREPARE_TIMEOUT_MS (CI's slower Macs, now and then) gets no glide: the frame
+ * changes at once, as designed, and there's nothing here to check, so the test
+ * is skipped as inconclusive. No glide for any other reason fails.
  */
 async function glide(app: ElectronApplication, shell: Page, name: string, act: () => Promise<unknown>): Promise<void> {
   const gliding = shell.waitForFunction(() => [...document.querySelectorAll('canvas')].some((c) => c.style.transform !== ''), undefined, { polling: 'raf', timeout: 5000 });
   await act();
   const began = await gliding.then(() => true, (error: unknown) => error);
   if (began !== true) {
-    const ms = await app.evaluate(async ({ webContents }, origin) => {
-      const start = Date.now();
-      await Promise.all(webContents.getAllWebContents().filter((c) => c.getURL().startsWith(origin)).map((c) => c.capturePage()));
-      return Date.now() - start;
-    }, site.origin);
-    // Half the budget on one round of pictures: the shell's first frames with them take the rest.
-    test.skip(ms > 100, `no glide: a round of pictures takes ${ms} ms on this machine, more than a snapshot may wait`);
+    const fallbacks = await app.evaluate(() => (globalThis as unknown as { chordTestHooks: { snapshotFallbacks(): (string | null)[] } }).chordTestHooks.snapshotFallbacks());
+    test.skip(
+      fallbacks.some((f) => f === 'capture' || f === 'shown'),
+      `no glide: this machine took longer than a snapshot may wait (${fallbacks.join(', ')})`,
+    );
     throw began;
   }
   for (let i = 1; i <= 3 && (await picturesNow(shell)) > 0; i++) await saveFrame(shell, `${name}-${i}`);

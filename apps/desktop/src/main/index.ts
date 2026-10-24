@@ -494,6 +494,8 @@ if (!app.requestSingleInstanceLock()) {
       observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
         launch: () => launchTimings(),
+        /** Why each window's last frame change that wanted pictures happened at once (null: it glided). */
+        snapshotFallbacks: () => browser!.snapshotFallbacks(),
         /** Safe Browsing's state, and how long its checks took (ms). */
         safeBrowsing: () => ({ status: safeBrowsing.status(), timings: safeBrowsing.timings() }),
         /** Check addresses as a page's navigation would (for timing it). */

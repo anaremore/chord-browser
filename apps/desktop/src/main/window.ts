@@ -588,6 +588,11 @@ export class AppWindow {
     for (const view of this.panes) view.setVisible(!this.hiddenPanes.has(view));
   }
 
+  /** Why this window's last frame change that wanted pictures happened at once (FrameSnapshots.lastFallback). */
+  get snapshotFallback(): FrameSnapshots['lastFallback'] {
+    return this.snapshots.lastFallback;
+  }
+
   /** The shell is listening for the snapshot's events: give it a port of its own (a fresh one each time it asks). */
   connectSnapshots(): void {
     if (this.shell.webContents.isDestroyed()) return;

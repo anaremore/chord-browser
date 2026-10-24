@@ -156,6 +156,8 @@ describe('the frame snapshot', () => {
     await settle();
     expect(failed.events).toEqual([]);
     expect(failed.views[0]!.bounds).toEqual(COLLAPSED);
+    // It says why: tests tell a slow machine from a bug by it.
+    expect(failed.snapshots.lastFallback).toBe('capture');
 
     const hung = setUp({ capture: 'hang' });
     hung.snapshots.change(hung.collapse, true);
@@ -163,6 +165,7 @@ describe('the frame snapshot', () => {
     expect(hung.views[0]!.bounds).toEqual(DOCKED);
     await vi.advanceTimersByTimeAsync(1);
     expect(hung.views[0]!.bounds).toEqual(COLLAPSED);
+    expect(hung.snapshots.lastFallback).toBe('capture');
 
     const slow = setUp();
     slow.snapshots.change(slow.collapse, true);
@@ -173,6 +176,7 @@ describe('the frame snapshot', () => {
     expect(slow.phases()).toEqual(['show', 'drop']);
     expect(slow.views[0]!.bounds).toEqual(COLLAPSED);
     expect(slow.state.moves).toBe(1);
+    expect(slow.snapshots.lastFallback).toBe('shown');
   });
 
   it('brings the page back when a key is typed into it, or the shell never says the pictures arrived', async () => {

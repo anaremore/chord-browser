@@ -523,6 +523,11 @@ export class Browser {
     return this.windows.size;
   }
 
+  /** Each window's last snapshot fallback, for tests (chordTestHooks). */
+  snapshotFallbacks(): AppWindow['snapshotFallback'][] {
+    return [...this.windows.values()].map((w) => w.snapshotFallback);
+  }
+
   windowFor(contents: WebContents): AppWindow | undefined {
     for (const w of this.windows.values()) {
       if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.preview.webContents, w.peekContents, ...w.paneContents].includes(contents)) return w;
