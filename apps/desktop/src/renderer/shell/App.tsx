@@ -288,8 +288,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
     previousIndex.current = chordIndex;
   }, [chordIndex]);
 
-  // Downloads finished after this show a dot on the button until the panel is opened.
-  const [downloadsSeenAt, setDownloadsSeenAt] = useState(() => Date.now());
+  // Downloads finished after this show a dot on the button until the panel is opened. It starts when this window's
+  // shell began loading, not when it first rendered: a download that finishes while the window starts is new.
+  const [downloadsSeenAt, setDownloadsSeenAt] = useState(() => Math.floor(performance.timeOrigin));
   const downloads = summarizeDownloads(downloadsFor(state, windowId), downloadsSeenAt);
   const downloadsButton = <DownloadsButton summary={downloads} onOpen={() => setDownloadsSeenAt(Date.now())} />;
   const archiveKeys = keycap('app.history');
