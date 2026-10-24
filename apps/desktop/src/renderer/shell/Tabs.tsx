@@ -49,7 +49,7 @@ import { DragDropProvider, useDraggable, useDragDropMonitor, useDroppable } from
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import { size, type Appearance } from '@chord/tokens';
-import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Undo2, Volume2, VolumeX, X } from 'lucide-react';
+import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture, Plus, ScreenShare, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { motion, PresenceContext } from 'motion/react';
 import {
   createContext,
@@ -692,11 +692,11 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
           tabIndex={-1}
           aria-hidden
           className={styles.pip}
-          aria-label="Bring the video back"
-          title="Bring the video back"
+          aria-label="Back to the tab"
+          title="Back to the tab"
           onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
         >
-          <PictureInPicture2 size={14} strokeWidth={2} />
+          <PictureInPicture size={14} strokeWidth={2} />
         </button>
       )}
       {sharing && (

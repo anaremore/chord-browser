@@ -540,8 +540,8 @@ export class AdBlocking {
 
   /**
    * Quitting: the workers end, nothing new starts, and what's under way (a
-   * control page) finishes first, for at most two seconds. Sets are swapped
-   * in whole, so nothing is left half-written.
+   * control page) finishes first, for at most two seconds; past that its page
+   * is closed. Sets are swapped in whole, so nothing is left half-written.
    */
   async stop(): Promise<void> {
     this.stopping = true;
@@ -553,5 +553,7 @@ export class AdBlocking {
       compiler?.terminate(),
       Promise.race([this.settled(), new Promise<void>((resolve) => setTimeout(resolve, 2000).unref?.())]),
     ]);
+    // Whatever didn't finish in time: its control page closes before Electron tears down.
+    for (const profile of this.profiles.values()) profile.blocker?.closeControls();
   }
 }

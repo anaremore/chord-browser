@@ -594,7 +594,7 @@ test('a playing video pops out when you switch away, and comes home when you ret
     await overlay.keyboard.type(`${site.origin}/second`);
     await overlay.keyboard.press('Enter');
     await expect.poll(pip).toBe('v');
-    const bringBack = shell.locator('[aria-label="Bring the video back"]');
+    const bringBack = shell.locator('[aria-label="Back to the tab"]');
     await expect(bringBack).toBeVisible();
 
     // The glyph brings it home: its tab is shown and the video plays on, inline.
