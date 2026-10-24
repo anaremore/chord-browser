@@ -11,14 +11,18 @@ import {
   children,
   chordsFor,
   DEFAULT_PROFILE,
+  DEFAULT_READER,
   hostOf,
   isBlockingOff,
+  isCrossSite,
   isInternalUrl,
   isPrivateChord,
   isPrivateProfile,
+  keycapFor,
   markdownLink,
   mediaVisibleTo,
   motionEnabled,
+  READER_SIZES,
   reopenableIndex,
   routeFor,
   routeHost,
@@ -38,10 +42,10 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, GesturePhase, MediaAction, NowPlaying, PopoverState, PreviewTarget, Rect, SettingsSnapshot } from '@chord/ipc';
+import type { ArchiveSnapshot, GesturePhase, MediaAction, NowPlaying, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot } from '@chord/ipc';
 import { size } from '@chord/tokens';
 import { join } from 'node:path';
-import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, webContents, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, webContents, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
@@ -58,6 +62,7 @@ import { liveOf, Peeks } from './peek';
 import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
 import { Previews } from './previews';
+import { Readers, type ReaderLinkTarget } from './reader/service';
 import type { Verdict } from './safe-browsing/database';
 import { SafeBrowsingGuard } from './safe-browsing/guard';
 import type { ScreenShareBroker } from './screen-share';
@@ -65,7 +70,7 @@ import type { AuthBroker } from './http-auth';
 import { HistorySaver } from './history-saver';
 import { SiteZoom } from './site-zoom';
 import { spellcheckLanguages } from './spellcheck';
-import { setUiScale, systemInfo } from './platform';
+import { platform, setUiScale, systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
 import { TabManager } from './tabs';
@@ -190,6 +195,9 @@ export class Browser {
   private recordingIn: WebContents | null = null;
   /** Peek over each window (DESIGN.md §8.5), and the mini windows links from other apps open in (§7.9). */
   readonly peeks: Peeks;
+  /** Tabs' reader views (DESIGN.md §7.11), and what each was last told about how it looks. */
+  readonly readers: Readers;
+  private readonly readerSent = new Map<number, string>();
   readonly minis: MiniWindows;
   /** How often a site's pages went to each chord this session, for offering a link route (never silently). */
   private readonly routeHints = new Map<string, Map<string, number>>();
@@ -245,6 +253,7 @@ export class Browser {
         this.autoPip.attach(contents, nodeId);
         this.media.attach(contents, nodeId);
         this.siteZoom.attach(contents);
+        this.readers.attach(contents, nodeId);
         options.adBlocking.attachPage(contents);
         contents.on('did-stop-loading', () => this.previews.loaded(nodeId));
         // Whatever a page asked for is denied once it's gone or replaced by another page; a share ends.
@@ -338,9 +347,29 @@ export class Browser {
       tabs: this.tabs,
       sessionFor: sessionForChord,
       animates: () => motionEnabled(this.store.state.settings, 'commandBar', systemInfo().prefersReducedMotion),
-      adopted: (contents, nodeId) => this.extensions.tabCreated(contents, nodeId),
+      adopted: (contents, nodeId) => {
+        this.extensions.tabCreated(contents, nodeId);
+        this.readers.detect(nodeId);
+      },
       changed: () => this.syncPopovers(),
     });
+    this.readers = new Readers({
+      workerPath: join(import.meta.dirname, 'reader.js'),
+      dispatch: (command) => this.store.dispatch(command),
+      page: (nodeId) => this.tabs.get(nodeId)?.webContents,
+      createView: () => createUiView(options.uiSession, 'reader'),
+      changed: (nodeId) => {
+        for (const w of this.windows.values()) if (shownTabs(this.store.state, w.id).includes(nodeId)) this.showPanes(w);
+      },
+      wire: (contents, nodeId) => this.wireReader(contents, nodeId),
+      follow: (nodeId, url, target) => this.followFromReader(nodeId, url, target),
+      failed: (nodeId) => {
+        const windowId = this.windowShowing(nodeId);
+        this.windows.get(windowId ?? '')?.toast({ id: `reader:${nodeId}`, message: 'Chord couldn’t find an article on this page.' });
+      },
+    });
+    // Reader views follow the computer's appearance, accent and reduced motion, as Chord's other views do.
+    nativeTheme.on('updated', () => this.syncReaders(true));
     this.minis = new MiniWindows({
       state: () => this.store.state,
       tabs: this.tabs,
@@ -492,6 +521,8 @@ export class Browser {
         this.settingsWindow.update(this.settingsSnapshot());
       }
       if (change.patches.some((p) => p.path[0] === 'chords')) this.minis.refresh();
+      // Reader views: their chord's colors (a tab can move chords), their controls, their keys.
+      if (change.patches.some((p) => p.path[0] === 'settings' || p.path[0] === 'chords' || p.path[0] === 'nodes')) this.syncReaders();
       if (change.patches.some((p) => p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'interface'))) {
         for (const contents of this.archivePages()) send(contents, 'archive:snapshot', this.archiveSnapshot(contents));
       }
@@ -822,7 +853,9 @@ export class Browser {
    */
   private showPanes(w: AppWindow): void {
     const state = this.store.state;
-    const before = w.paneContents;
+    // A tab in reader view shows its reader view in the frame; its page waits behind, and counts as shown.
+    const pages = (list: WebContents[]) => list.map((contents) => this.readers.pageOf(contents) ?? contents);
+    const before = pages(w.paneContents);
     const active = activeTabId(state, w.id);
     const shown = shownTabs(state, w.id).flatMap((nodeId) => {
       const view = this.tabs.ensure(nodeId);
@@ -836,13 +869,13 @@ export class Browser {
       if (nodeId) this.previews.leaving(nodeId, contents);
     }
     w.showTabs(
-      shown.map((p) => p.view),
+      shown.map((p) => this.readers.viewFor(p.nodeId) ?? p.view),
       Math.max(0, shown.findIndex((p) => p.nodeId === active)),
       split ? { direction: split.direction, sizes: split.sizes } : null,
     );
     for (const { nodeId, view } of shown) if (!before.includes(view.webContents)) this.previews.shown(nodeId);
     this.extensions.tabShown(w);
-    const after = w.paneContents;
+    const after = pages(w.paneContents);
     for (const contents of before) if (!after.includes(contents) && !contents.isDestroyed()) this.autoPip.left(contents);
     for (const { nodeId } of shown) this.autoPip.returned(nodeId);
     this.syncPopover(w);
@@ -1091,6 +1124,7 @@ export class Browser {
       if (view) {
         this.store.dispatch({ t: 'tab.adopt', windowId: w.id, nodeId, chordId, url, title: page.getTitle(), live: liveOf(page) });
         this.extensions.tabCreated(page, nodeId);
+        this.readers.detect(nodeId);
       }
     } else {
       this.tabs.closeFloating(nodeId);
@@ -1228,10 +1262,94 @@ export class Browser {
           .map((c) => ({ id: c.id, label: `${c.icon}  ${c.name}`, signInsDiffer: c.profileId !== from?.profileId })),
         moveTo: (chordId) => this.moveToChord(w, nodeId, chordId),
         stopSharing: state.live[nodeId]?.sharing ? () => void this.options.screenShare.stop(nodeId) : null,
+        // Reader view, for a page that reads as an article (or shows one now): the tab comes to the front for it.
+        reader: state.live[nodeId]?.reader || state.live[nodeId]?.readable ? { on: Boolean(state.live[nodeId]?.reader) } : null,
+        toggleReader: () => {
+          if (!shownTabs(this.store.state, w.id).includes(nodeId)) this.store.dispatch({ t: 'tab.activate', windowId: w.id, nodeId });
+          void this.readers.toggle(nodeId);
+        },
         backToPinned: tab.pinnedUrl && tab.section === 'pinned' && !sameOrigin(tab.url, tab.pinnedUrl) ? () => this.store.dispatch({ t: 'tab.navigate', nodeId, url: tab.pinnedUrl! }) : null,
       }),
       { ...at, width: 0, height: 0 },
     );
+  }
+
+  /** The page in a window's focused pane: behind its reader view, if it has one open. */
+  pageIn(w: AppWindow): WebContents | null {
+    return this.readers.pageOf(w.activeTabContents) ?? w.activeTabContents;
+  }
+
+  /** A reader view's page gets what Chord's views get, plus what a tab's page gets: zoom keys and the wheel, and focus that picks a split's pane. */
+  private wireReader(contents: WebContents, nodeId: NodeId): void {
+    attachShortcuts(contents, this.keyboard);
+    attachContextMenu(contents, {
+      surface: 'reader',
+      inspect: !app.isPackaged,
+      searchEngine: () => this.store.state.settings.searchEngine,
+      openTab: (url, background) => {
+        const windowId = this.windowShowing(nodeId);
+        if (windowId) this.store.dispatch({ t: 'tab.open', windowId, url, background });
+      },
+      placement: () => {
+        const owner = this.windowFor(contents)?.window;
+        const bounds = this.readers.viewFor(nodeId)?.getBounds();
+        return owner && bounds ? { window: owner, x: bounds.x, y: bounds.y } : undefined;
+      },
+    });
+    contents.on('focus', () => this.paneFocused(nodeId));
+    contents.on('input-event', (_event, input) => {
+      if (input.type === 'mouseDown') this.paneFocused(nodeId);
+    });
+    // Ctrl + wheel (and pinching) changes the text size, as the zoom keys do.
+    contents.on('zoom-changed', (_event, direction) => this.stepReaderSize(direction === 'in' ? 1 : -1));
+    contents.once('destroyed', () => this.readerSent.delete(contents.id));
+  }
+
+  /** Reader view's text, a size bigger or smaller (every reader view follows: it's one setting). */
+  private stepReaderSize(by: 1 | -1): void {
+    const size = Math.min(READER_SIZES - 1, Math.max(0, this.store.state.settings.reader.size + by));
+    this.store.dispatch({ t: 'settings.set', settings: { reader: { size } } });
+  }
+
+  /**
+   * A link in a reader view, followed as one in its tab would be: from a
+   * pinned tab to another site, in Peek (unless asked for behind); otherwise
+   * in the tab (reader view closes as the page goes), or in a new tab.
+   */
+  private followFromReader(nodeId: NodeId, url: string, target: ReaderLinkTarget): void {
+    const windowId = this.windowShowing(nodeId);
+    const w = windowId ? this.windows.get(windowId) : undefined;
+    const node = this.store.state.nodes[nodeId];
+    if (!w || node?.kind !== 'tab') return;
+    if (target !== 'background' && node.section === 'pinned' && isCrossSite(node.url, url)) this.peeks.show(w, nodeId, url, null);
+    else if (target === 'here') this.store.dispatch({ t: 'tab.navigate', nodeId, url });
+    else this.store.dispatch({ t: 'tab.open', windowId: w.id, url, background: target === 'background' });
+  }
+
+  /** How a reader view looks: its tab's chord colors, the interface and reader settings, reduced motion, its keys. */
+  readerLook(contents: WebContents): ReaderLook {
+    const state = this.store.state;
+    const nodeId = this.readers.nodeOf(contents);
+    const node = nodeId ? state.nodes[nodeId] : undefined;
+    return {
+      theme: node ? (state.chords[node.chordId]?.theme ?? null) : null,
+      interface: state.settings.interface,
+      reader: state.settings.reader,
+      reducedMotion: state.settings.motion.followSystem && systemInfo().prefersReducedMotion,
+      toggleKeys: keycapFor('view.reader', platform, state.settings.shortcuts),
+    };
+  }
+
+  /** Each reader view hears when how it looks changed (and, with `system`, the computer's settings too). */
+  private syncReaders(system = false): void {
+    for (const contents of this.readers.contents()) {
+      if (system) send(contents, 'system:changed', systemInfo());
+      const look = this.readerLook(contents);
+      const json = JSON.stringify(look);
+      if (this.readerSent.get(contents.id) === json) continue;
+      this.readerSent.set(contents.id, json);
+      send(contents, 'reader:look', look);
+    }
   }
 
   openFavoriteMenu(contents: WebContents, favoriteId: string, at: { x: number; y: number }): void {
@@ -1492,7 +1610,10 @@ export class Browser {
     const tab = activeTab(this.store.state, w.id);
     // While Peek is open, page actions (back, reload, find, zoom, print, copy) act on its page.
     const peek = this.peeks.contents(w);
+    // What's in front: find and print act on a reader view; going back, reloading and developer tools, on its page.
     const activeContents = peek ?? w.activeTabContents;
+    const pageContents = peek ?? this.pageIn(w);
+    const reader = !peek && this.readers.pageOf(activeContents) !== undefined;
     const from = w.focusSource(source) === 'shell' ? 'shell' : 'page';
     switch (action) {
       case 'address.edit':
@@ -1538,16 +1659,16 @@ export class Browser {
         this.store.dispatch({ t: 'tab.cycle', windowId: w.id, direction: action === 'tab.next' ? 1 : -1 });
         return true;
       case 'nav.reload':
-        activeContents?.reload();
+        pageContents?.reload();
         return true;
       case 'nav.hardReload':
-        activeContents?.reloadIgnoringCache();
+        pageContents?.reloadIgnoringCache();
         return true;
       case 'nav.back':
-        if (activeContents?.navigationHistory.canGoBack()) activeContents.navigationHistory.goBack();
+        if (pageContents?.navigationHistory.canGoBack()) pageContents.navigationHistory.goBack();
         return true;
       case 'nav.forward':
-        if (activeContents?.navigationHistory.canGoForward()) activeContents.navigationHistory.goForward();
+        if (pageContents?.navigationHistory.canGoForward()) pageContents.navigationHistory.goForward();
         return true;
       case 'view.fullscreen':
         w.window.setFullScreen(!w.window.isFullScreen());
@@ -1557,11 +1678,17 @@ export class Browser {
         return true;
       case 'view.zoomIn':
       case 'view.zoomOut':
-        // Remembered for the site, as in Chrome.
-        if (activeContents) this.siteZoom.step(activeContents, action === 'view.zoomIn' ? 1 : -1);
+        // In reader view, the text size, as Safari does; otherwise remembered for the site, as in Chrome.
+        if (reader) this.stepReaderSize(action === 'view.zoomIn' ? 1 : -1);
+        else if (activeContents) this.siteZoom.step(activeContents, action === 'view.zoomIn' ? 1 : -1);
         return true;
       case 'view.zoomReset':
-        if (activeContents) this.siteZoom.reset(activeContents);
+        if (reader) this.store.dispatch({ t: 'settings.set', settings: { reader: { size: DEFAULT_READER.size } } });
+        else if (activeContents) this.siteZoom.reset(activeContents);
+        return true;
+      case 'view.reader':
+        // For the tab on screen; Peek's page isn't a tab.
+        if (!peek && active) void this.readers.toggle(active);
         return true;
       case 'page.print':
         activeContents?.print();
@@ -1626,7 +1753,7 @@ export class Browser {
         this.openSettings('shortcuts');
         return true;
       case 'app.devtools':
-        activeContents?.toggleDevTools();
+        pageContents?.toggleDevTools();
         return true;
       case 'window.close':
         w.window.close();

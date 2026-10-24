@@ -9,8 +9,8 @@ import { acceleratorFor } from './menu';
 import { platform } from './platform';
 
 export interface ContextMenuDeps {
-  /** `web` for pages, `ui` for Chord's shell and command bar. */
-  surface: 'web' | 'ui';
+  /** `web` for pages, `ui` for Chord's shell and command bar, `reader` for a reader view (its article's links and text). */
+  surface: 'web' | 'ui' | 'reader';
   /** Offer Inspect (always for pages; development builds only for Chord's UI). */
   inspect: boolean;
   /** The engine for "Search … for" on selected text. */
@@ -50,7 +50,7 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
   };
   const history = contents.navigationHistory;
   const web = deps.surface === 'web';
-  const isWebLink = web && /^https?:/i.test(params.linkURL);
+  const isWebLink = deps.surface !== 'ui' && /^https?:/i.test(params.linkURL);
 
   // Spelling first, where the user is looking.
   if (params.misspelledWord) {
