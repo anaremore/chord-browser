@@ -12,6 +12,7 @@ import {
   DEFAULT_PROFILE,
   GOOGLE_FREE_ENGINE,
   IDLE_LIVE,
+  MAX_FAVORITES,
   MAX_ZOOM,
   MIN_ZOOM,
   SIDEBAR_WIDTH,
@@ -23,11 +24,13 @@ import {
   type ArchivedTab,
   type ArchiveReason,
   type Bounds,
+  type Chord,
   type ChordId,
   type ChordThemeSpec,
   type ClosedTab,
   type CustomTheme,
   type Download,
+  type Favorite,
   type FolderNode,
   type InstalledExtension,
   type LiveTab,
@@ -191,6 +194,19 @@ export type Command =
   | { t: 'split.join'; windowId: WindowId; splitId: NodeId; nodeIds: NodeId[]; direction: SplitDirection; sizes?: number[]; focus?: NodeId }
   /** Focus the pane before (-1) or after (1) the focused one (⌘⌥[ / ⌘⌥]). */
   | { t: 'split.focus'; windowId: WindowId; direction: 1 | -1 }
+  /**
+   * Part of an import from another browser (main only; `planImport` in
+   * import.ts decides it): new chords, then folders and tabs, parents first,
+   * then favorites. Big imports arrive in several of these. Nothing lands in a
+   * private window's chord, and nothing loads until it's opened.
+   */
+  | { t: 'import.add'; importId: string; chords?: Chord[]; nodes?: SidebarNode[]; favorites?: Favorite[] }
+  /**
+   * Undo an import: the chords it made go, and so do the folders, tabs and
+   * favorites it added. With `limit`, that many folders and tabs at a time,
+   * the innermost first; main repeats it until the import is gone.
+   */
+  | { t: 'import.undo'; importId: string; limit?: number }
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -226,8 +242,6 @@ const MAX_CLOSED = 50;
 const MAX_DELETED_CHORDS = 5;
 /** Deleted folders kept for Undo this session. */
 const MAX_DELETED_FOLDERS = 10;
-/** The most favorites; the row wraps well before this. */
-const MAX_FAVORITES = 48;
 /** Longest folder name. */
 const MAX_FOLDER_TITLE = 64;
 /** The most custom themes kept. */
@@ -264,6 +278,8 @@ const CHANGES_SPLITS: ReadonlySet<Command['t']> = new Set<Command['t']>([
   'split.remove',
   'split.separate',
   'split.join',
+  // An imported tab may have been put in a split since.
+  'import.undo',
 ]);
 
 /** What a window's content frame holds: its panes and how they share it. */
@@ -1516,6 +1532,93 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (!next) return;
       leave(draft, win, ctx);
       activate(draft, cmd.windowId, next.id, ctx, effects);
+      return;
+    }
+
+    case 'import.add': {
+      const record = (draft.imports[cmd.importId] ??= { chordIds: [], nodeIds: [], favoriteIds: [] });
+      for (const chord of cmd.chords ?? []) {
+        if (draft.chords[chord.id] || chord.private) continue;
+        draft.chords[chord.id] = chord;
+        record.chordIds.push(chord.id);
+      }
+      const made = new Set(record.chordIds);
+      for (const node of cmd.nodes ?? []) {
+        const chord = draft.chords[node.chordId];
+        // Never into a private window's chord; folders only in Pinned; no splits.
+        if (!chord || chord.private || draft.nodes[node.id] || node.kind === 'split' || (node.kind === 'folder' && node.section !== 'pinned')) continue;
+        if (node.parentId !== null) {
+          // Parents arrive before their children, in this command or an earlier one.
+          const parent = draft.nodes[node.parentId];
+          if (parent?.kind !== 'folder' || parent.chordId !== node.chordId) continue;
+        }
+        draft.nodes[node.id] = node.kind === 'tab' && node.section === 'pinned' ? { ...node, pinnedUrl: node.pinnedUrl ?? node.url } : node;
+        // Undo removes the chords it made whole; elsewhere it needs the tops of what it added.
+        if (node.parentId === null && !made.has(node.chordId)) record.nodeIds.push(node.id);
+      }
+      for (const favorite of cmd.favorites ?? []) {
+        const order = Object.values(draft.favorites);
+        if (draft.favorites[favorite.id] || !/^https?:/i.test(favorite.url) || order.length >= MAX_FAVORITES || order.some((f) => f.url === favorite.url)) continue;
+        draft.favorites[favorite.id] = favorite;
+        record.favoriteIds.push(favorite.id);
+      }
+      return;
+    }
+
+    case 'import.undo': {
+      const record = draft.imports[cmd.importId];
+      if (!record) return;
+      const order = sortedChords(draft as State);
+      const gone = new Set(record.chordIds.filter((id) => draft.chords[id]));
+      // There's always a chord to land on (the import never removes one it didn't make).
+      if (order.every((c) => gone.has(c.id))) gone.clear();
+      // What it added: its chords' trees, and what it put at the top of chords you had, with everything
+      // inside. Listed parents first (breadth-first, through one index of the tree), taken children first,
+      // so a part never leaves anything without its folder.
+      const inside = new Map<NodeId, NodeId[]>();
+      const roots: NodeId[] = record.nodeIds.filter((id) => draft.nodes[id] && !gone.has(draft.nodes[id]!.chordId));
+      for (const node of Object.values(draft.nodes)) {
+        if (!node.parentId) {
+          if (gone.has(node.chordId)) roots.push(node.id);
+          continue;
+        }
+        const list = inside.get(node.parentId);
+        if (list) list.push(node.id);
+        else inside.set(node.parentId, [node.id]);
+      }
+      const listed: NodeId[] = [];
+      const seen = new Set<NodeId>();
+      for (let i = 0, queue = roots; i < queue.length; i++) {
+        const id = queue[i]!;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        listed.push(id);
+        queue.push(...(inside.get(id) ?? []));
+      }
+      const part = listed.reverse().slice(0, cmd.limit ?? listed.length);
+      // Windows on a chord that goes move to the nearest one that stays (the first part does it).
+      for (const win of Object.values(draft.windows)) {
+        if (!gone.has(win.activeChordId)) continue;
+        const at = order.findIndex((c) => c.id === win.activeChordId);
+        const next = order.slice(at + 1).find((c) => !gone.has(c.id)) ?? order.slice(0, Math.max(0, at)).reverse().find((c) => !gone.has(c.id));
+        if (next) switchChord(draft, win.id, next.id, ctx, effects);
+      }
+      const land = landWindows(draft, new Set(part.filter((id) => draft.nodes[id]?.kind === 'tab')), ctx, effects);
+      for (const id of part) {
+        if (draft.nodes[id]?.kind === 'tab' && draft.live[id]) effects.push({ e: 'view.destroy', nodeId: id });
+        delete draft.live[id];
+        delete draft.nodes[id];
+      }
+      land();
+      if (part.length < listed.length) return;
+      // The last part: the chords themselves, their routes, the favorites, and the record.
+      for (const chordId of gone) {
+        delete draft.chords[chordId];
+        for (const win of Object.values(draft.windows)) delete win.activeTab[chordId];
+        for (const [host, route] of Object.entries(draft.linkRoutes)) if (route.chordId === chordId) delete draft.linkRoutes[host];
+      }
+      for (const id of record.favoriteIds) delete draft.favorites[id];
+      delete draft.imports[cmd.importId];
       return;
     }
   }

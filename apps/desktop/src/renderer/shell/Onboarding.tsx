@@ -10,6 +10,7 @@ import { Check, Dices, ShieldCheck } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useRoving } from '../shared/a11y';
+import { ImportDetails, ImportSources, NEVER_COPIED, useImport, type ImportFlow } from '../shared/ImportPanel';
 import type { SpringFor } from '../shared/motion';
 import { announce } from './announce';
 import { api } from './api';
@@ -17,11 +18,13 @@ import { useKeys } from './keys';
 import styles from './Onboarding.module.css';
 import { asUrl, suggestSites } from './popular-sites';
 
-type Step = 'welcome' | 'name' | 'theme' | 'pins' | 'default' | 'safety' | 'tips';
+type Step = 'welcome' | 'name' | 'theme' | 'import' | 'pins' | 'default' | 'safety' | 'tips';
 const STEPS: { step: Step; optional: boolean }[] = [
   { step: 'welcome', optional: false },
   { step: 'name', optional: false },
   { step: 'theme', optional: false },
+  // Bookmarks, history and open tabs from another browser on this computer, when there is one (DESIGN.md §8.7).
+  { step: 'import', optional: true },
   { step: 'pins', optional: true },
   { step: 'default', optional: true },
   // Safe Browsing's notice, which Google's terms want seen before it's on. Not skippable with Esc: it's a choice.
@@ -92,9 +95,10 @@ function Mark({ spring }: { spring: SpringFor }) {
   );
 }
 
-function Primary({ children, onClick, disabled }: { children: ReactNode; onClick(): void; disabled?: boolean }) {
+/** `waiting`: not ready yet (an import still reading); it keeps the keyboard, but does nothing. */
+function Primary({ children, onClick, disabled, waiting }: { children: ReactNode; onClick(): void; disabled?: boolean; waiting?: boolean }) {
   return (
-    <button type="button" className={styles.primary} data-primary disabled={disabled} onClick={onClick}>
+    <button type="button" className={styles.primary} data-primary disabled={disabled} aria-disabled={waiting || undefined} onClick={() => !waiting && onClick()}>
       {children}
       <kbd className={styles.enter} aria-hidden>
         ↵
@@ -205,7 +209,40 @@ function ThemeStep({ chord, onNext }: { chord: Chord; onNext(): void }) {
   );
 }
 
-function PinsStep({ windowId, onNext }: { windowId: string; onNext(): void }) {
+/** "Bring your bookmarks?": pick a browser, map its folders to chords, import. Its history keeps coming in after Next. */
+function ImportStep({ flow, chords, onNext }: { flow: ImportFlow; chords: Pick<Chord, 'id' | 'name' | 'icon'>[]; onNext(): void }) {
+  return (
+    <>
+      <p className={styles.eyebrow}>
+        <Check size={14} strokeWidth={2.5} aria-hidden /> Chord created
+      </p>
+      <h1 className={styles.title}>Bring your bookmarks?</h1>
+      <p className={styles.body}>From another browser on this computer: bookmarks, history and open tabs. Each folder can become a chord of its own.</p>
+      <div className={styles.scroll}>
+        <ImportSources flow={flow} />
+        <ImportDetails flow={flow} chords={chords} onOpenAccess={() => void api.imports.openAccess()} />
+        <p className={styles.fine}>{NEVER_COPIED}</p>
+      </div>
+      <div className={styles.actions}>
+        {!flow.progress && (
+          <button type="button" className={styles.quiet} onClick={onNext}>
+            Skip for now <kbd className={styles.inlineKey}>Esc</kbd>
+          </button>
+        )}
+        <span className={styles.spacer} />
+        {flow.progress ? (
+          <Primary onClick={onNext}>Next</Primary>
+        ) : (
+          <Primary waiting={!flow.ready} onClick={() => void flow.start()}>
+            Import
+          </Primary>
+        )}
+      </div>
+    </>
+  );
+}
+
+function PinsStep({ windowId, onNext, created }: { windowId: string; onNext(): void; created: boolean }) {
   const [text, setText] = useState('');
   const [pinned, setPinned] = useState<string[]>([]);
   const suggestions = suggestSites(text).filter((site) => !pinned.includes(site));
@@ -225,9 +262,11 @@ function PinsStep({ windowId, onNext }: { windowId: string; onNext(): void }) {
   };
   return (
     <>
-      <p className={styles.eyebrow}>
-        <Check size={14} strokeWidth={2.5} aria-hidden /> Chord created
-      </p>
+      {created && (
+        <p className={styles.eyebrow}>
+          <Check size={14} strokeWidth={2.5} aria-hidden /> Chord created
+        </p>
+      )}
       <h1 className={styles.title}>What do you open every day?</h1>
       <p className={styles.body}>They’ll stay pinned at the top of this chord.</p>
       <input
@@ -358,19 +397,47 @@ function TipsStep({ info, onDone }: { info: SystemInfo; onDone(): void }) {
   );
 }
 
-export function Onboarding({ chord, windowId, info, spring }: { chord: Chord; windowId: string; info: SystemInfo; spring: SpringFor }) {
+export function Onboarding({
+  chord,
+  chords,
+  windowId,
+  info,
+  spring,
+}: {
+  chord: Chord;
+  chords: Pick<Chord, 'id' | 'name' | 'icon'>[];
+  windowId: string;
+  info: SystemInfo;
+  spring: SpringFor;
+}) {
   const [index, setIndex] = useState(0);
   const [defaultStatus, setDefaultStatus] = useState<DefaultBrowserStatus | null>(null);
   const [safeBrowsing, setSafeBrowsing] = useState(false);
   const card = useRef<HTMLDivElement>(null);
   useEffect(() => void api.defaultBrowser.status().then(setDefaultStatus), []);
   useEffect(() => void api.safeBrowsing.status().then((s) => setSafeBrowsing(s.available)), []);
+  // Chord looks for other browsers from the start, and reads the first one once its step comes up.
+  const [reachedImport, setReachedImport] = useState(false);
+  const imports = useImport(api.imports, { autoPick: reachedImport });
+  // Offered when browsers were found before the colors were picked, so the steps after it never shift.
+  const [offerImport, setOfferImport] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (offerImport === null && imports.sources) setOfferImport(imports.sources.length > 0);
+  }, [offerImport, imports.sources]);
 
   // Development builds can't be the default browser, and a default one needn't ask: skip that step.
   // A build without Safe Browsing (no API key) doesn't offer it.
-  const steps = STEPS.filter((s) => (s.step !== 'default' || defaultStatus === 'not-default') && (s.step !== 'safety' || safeBrowsing));
+  const steps = STEPS.filter(
+    (s) => (s.step !== 'default' || defaultStatus === 'not-default') && (s.step !== 'safety' || safeBrowsing) && (s.step !== 'import' || offerImport === true),
+  );
   const current = steps[Math.min(index, steps.length - 1)]!;
-  const next = () => setIndex((i) => Math.min(i + 1, steps.length - 1));
+  const next = () => {
+    if (current.step === 'theme') {
+      if (offerImport === null) setOfferImport(false);
+      else if (offerImport) setReachedImport(true);
+    }
+    setIndex((i) => Math.min(i + 1, steps.length - 1));
+  };
   const finish = () => {
     void api.state.dispatch({ t: 'settings.set', settings: { onboarded: true } });
     void api.overlay.open('new');
@@ -403,6 +470,7 @@ export function Onboarding({ chord, windowId, info, spring }: { chord: Chord; wi
           key={current.step}
           ref={arrived}
           className={styles.card}
+          data-tall={current.step === 'import' || undefined}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -4 }}
@@ -420,7 +488,8 @@ export function Onboarding({ chord, windowId, info, spring }: { chord: Chord; wi
           )}
           {current.step === 'name' && <NameStep chord={chord} onNext={next} />}
           {current.step === 'theme' && <ThemeStep chord={chord} onNext={next} />}
-          {current.step === 'pins' && <PinsStep windowId={windowId} onNext={next} />}
+          {current.step === 'import' && <ImportStep flow={imports} chords={chords} onNext={next} />}
+          {current.step === 'pins' && <PinsStep windowId={windowId} onNext={next} created={offerImport !== true} />}
           {current.step === 'default' && <DefaultStep info={info} onNext={next} />}
           {current.step === 'safety' && <SafetyStep onNext={next} />}
           {current.step === 'tips' && <TipsStep info={info} onDone={finish} />}

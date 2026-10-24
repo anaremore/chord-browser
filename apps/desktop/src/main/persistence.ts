@@ -23,7 +23,7 @@ import {
   type SearchResult,
   type WriteOp,
 } from '@chord/data';
-import { utilityProcess, type UtilityProcess } from 'electron';
+import { MessageChannelMain, utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron';
 
 const FLUSH_MS = 250;
 const CLOSE_TIMEOUT_MS = 2000;
@@ -108,11 +108,11 @@ export class Persistence {
     });
   }
 
-  private request(request: Request): Promise<DataResponse> {
+  private request(request: Request, transfer: MessagePortMain[] = []): Promise<DataResponse> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.waiting.set(id, { resolve, reject });
-      this.child.postMessage({ ...request, id });
+      this.child.postMessage({ ...request, id }, transfer);
     });
   }
 
@@ -156,6 +156,24 @@ export class Persistence {
     } catch {
       return { history: [], choices: [], archive: [] };
     }
+  }
+
+  /**
+   * A port straight to chord-data for one import's history: the import
+   * process sends its batches through it (`ImportBatch`, each answered), so
+   * the pages never pass through main. Resolves once chord-data listens.
+   */
+  async importPort(importId: string): Promise<MessagePortMain> {
+    const { port1, port2 } = new MessageChannelMain();
+    const response = await this.request({ type: 'import.port', importId }, [port1]);
+    if (!response.ok) throw new Error(response.error);
+    return port2;
+  }
+
+  /** Take back what an import added to history (its Undo). */
+  async undoImport(importId: string): Promise<void> {
+    const response = await this.request({ type: 'import.undo', importId });
+    if (!response.ok) throw new Error(response.error);
   }
 
   /** Duet's threads and messages. Throws if chord-data can't answer, so Duet can say so. */

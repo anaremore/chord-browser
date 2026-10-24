@@ -1,0 +1,243 @@
+/* Import from another browser (DESIGN.md §8.7): first run's card and Settings → Import. Tokens only. */
+
+.note {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+/* ---------- Browsers ---------- */
+
+.sources {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: 0 0 0 var(--size-hairline) var(--color-divider);
+}
+
+.source {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  min-block-size: var(--size-row);
+  padding: var(--space-2) var(--space-4);
+  border: 0;
+  background: transparent;
+  color: var(--color-fg);
+  text-align: start;
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.source + .source {
+  box-shadow: 0 calc(var(--size-hairline) * -1) 0 var(--color-divider);
+}
+
+.source:disabled {
+  opacity: 0.5;
+}
+
+.source:hover:not(:disabled) {
+  background: var(--color-item-hover);
+}
+
+.source[aria-checked='true'] {
+  background: var(--color-item-active-bg);
+  font: var(--text-label);
+}
+
+.sourceName {
+  flex: 1;
+}
+
+.sourceNote {
+  color: var(--color-fg-subtle);
+  font: var(--text-small);
+}
+
+/* ---------- What it holds, and where it goes ---------- */
+
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.counts {
+  margin: 0;
+  font: var(--text-label);
+}
+
+/* A long list scrolls inside, so the buttons stay in view. */
+.groups {
+  display: flex;
+  flex-direction: column;
+  max-block-size: calc(var(--size-setting-row) * 5);
+  margin: 0;
+  padding: 0;
+  overflow: hidden auto;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: 0 0 0 var(--size-hairline) var(--color-divider);
+  list-style: none;
+  scrollbar-color: var(--color-divider) transparent;
+  scrollbar-width: thin;
+}
+
+.group {
+  display: flex;
+  flex: none;
+  gap: var(--space-3);
+  align-items: center;
+  min-block-size: var(--size-setting-row);
+  padding: var(--space-2) var(--space-4);
+  box-sizing: border-box;
+}
+
+.group + .group {
+  box-shadow: 0 calc(var(--size-hairline) * -1) 0 var(--color-divider);
+}
+
+.groupText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
+.groupTitle {
+  overflow: hidden;
+  font: var(--text-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupCount {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.select {
+  flex: none;
+  max-inline-size: calc(var(--size-preview-width) * 0.7);
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+}
+
+.select:disabled {
+  opacity: 0.5;
+}
+
+/* ---------- History switch (as in Settings) ---------- */
+
+.switch {
+  position: relative;
+  flex: none;
+  inline-size: var(--size-switch-width);
+  block-size: var(--size-switch-height);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-fg-subtle);
+  transition: background-color var(--duration-fade-base) var(--ease-standard);
+}
+
+.switch[aria-checked='true'] {
+  background: var(--color-accent);
+}
+
+.switch:disabled {
+  opacity: 0.5;
+}
+
+.knob {
+  position: absolute;
+  inset-block-start: calc((var(--size-switch-height) - var(--size-switch-knob)) / 2);
+  inset-inline-start: calc((var(--size-switch-height) - var(--size-switch-knob)) / 2);
+  inline-size: var(--size-switch-knob);
+  block-size: var(--size-switch-knob);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  transition: transform var(--spring-snappy-duration) var(--spring-snappy);
+}
+
+.switch[aria-checked='true'] .knob {
+  transform: translateX(calc(var(--size-switch-width) - var(--size-switch-height)));
+}
+
+/* ---------- Problems and progress ---------- */
+
+.problem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-item-hover);
+}
+
+.problem p {
+  margin: 0;
+}
+
+.button {
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
+  font: var(--text-small);
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.bar {
+  overflow: hidden;
+  block-size: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--color-item-hover);
+}
+
+/* Scaled, not resized: the compositor moves it. */
+.fill {
+  display: block;
+  block-size: 100%;
+  background: var(--color-accent);
+  transform-origin: left center;
+  transition: transform var(--duration-fade-base) var(--ease-standard);
+}
+
+.status {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+@media (forced-colors: active) {
+  .source[aria-checked='true'] {
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .fill {
+    background: Highlight;
+  }
+
+  .switch[aria-checked='true'] {
+    background: Highlight;
+  }
+}

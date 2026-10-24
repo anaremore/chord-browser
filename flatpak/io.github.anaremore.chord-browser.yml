@@ -39,6 +39,12 @@ finish-args:
   - --device=all
   # Downloads land in ~/Downloads (src/main/downloads.ts).
   - --filesystem=xdg-download
+  # Import from other browsers (src/import): their profile folders, read-only.
+  - --filesystem=~/.config/google-chrome:ro
+  - --filesystem=~/.config/microsoft-edge:ro
+  - --filesystem=~/.config/BraveSoftware:ro
+  - --filesystem=~/.mozilla/firefox:ro
+  - --filesystem=~/.config/mozilla:ro
   # Web notifications, "Show in folder", keeping the screen awake for video.
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.freedesktop.FileManager1

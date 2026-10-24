@@ -86,6 +86,8 @@ async function launch({ profile = mkdtempSync(join(tmpdir(), 'chord-e2e-')), env
   };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
   if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
+  // No other browsers (import.spec.ts brings its own), so first run never offers to import from the machine's.
+  childEnv['CHORD_IMPORT_ROOT'] ??= join(profile, 'no-browsers');
   const app = watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
   return { app, profile, downloads };
 }
