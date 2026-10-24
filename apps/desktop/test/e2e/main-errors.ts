@@ -47,7 +47,9 @@ export async function kill(app: ElectronApplication): Promise<void> {
   killed.add(app);
   // Chromium's other processes (GPU, renderers, utilities) notice on their own and exit a moment later; on
   // Windows they hold the profile until then, and a Chord launched on it at once can't start.
-  const pids = await app.evaluate(({ app: electronApp }) => electronApp.getAppMetrics().map((m) => m.pid)).catch(() => [] as number[]);
+  const processes = await app
+    .evaluate(({ app: electronApp }) => electronApp.getAppMetrics().map((m) => ({ pid: m.pid, what: [m.type, m.serviceName, m.name].filter(Boolean).join(' ') })))
+    .catch(() => [] as { pid: number; what: string }[]);
   const child = app.process();
   const exited = new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done(null) : child.once('exit', done)));
   child.kill('SIGKILL');
@@ -61,5 +63,8 @@ export async function kill(app: ElectronApplication): Promise<void> {
       return (error as NodeJS.ErrnoException).code === 'EPERM';
     }
   };
-  for (const deadline = Date.now() + 15_000; pids.some(alive) && Date.now() < deadline; ) await new Promise((done) => setTimeout(done, 100));
+  for (const deadline = Date.now() + 15_000; processes.some((p) => alive(p.pid)) && Date.now() < deadline; ) await new Promise((done) => setTimeout(done, 100));
+  // Chord's own processes must not outlive its main one: they'd hold the profile, and Chord couldn't start again.
+  const left = processes.filter((p) => alive(p.pid));
+  expect(left, `still running 15 s after main was killed: ${left.map((p) => `${p.what} (pid ${p.pid})`).join(', ')}`).toEqual([]);
 }
