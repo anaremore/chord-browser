@@ -114,6 +114,30 @@ function uiUrl(surface: UiSurface): string {
 }
 
 /** A view of Chord's own UI: sandboxed, on the in-memory UI session, locked to its origin. */
+/** Chord's own views reload when their renderer dies, at most this often, so one that crashes as it loads doesn't spin. */
+const UI_CRASH_RELOADS = 3;
+const UI_CRASH_WINDOW_MS = 60_000;
+
+/**
+ * A view of Chord's own comes back by itself when its renderer crashes or is
+ * killed: reloaded, and the window, which resets what it knew of the view as
+ * it starts loading, carries on. The archive page is a tab: tabs.ts brings it back.
+ */
+function reloadOnCrash(contents: WebContents, surface: UiSurface): void {
+  const crashes: number[] = [];
+  contents.on('render-process-gone', (_event, details) => {
+    if (details.reason === 'clean-exit' || contents.isDestroyed()) return;
+    const now = Date.now();
+    while (crashes.length > 0 && now - crashes[0]! > UI_CRASH_WINDOW_MS) crashes.shift();
+    if (crashes.length >= UI_CRASH_RELOADS) {
+      console.error(`[chord] the ${surface} view keeps stopping (${details.reason}); not reloading it again`);
+      return;
+    }
+    crashes.push(now);
+    contents.reload();
+  });
+}
+
 export function createUiView(uiSession: Session, surface: UiSurface, hash?: string): WebContentsView {
   const { preload, role } = SURFACES[surface];
   const view = new WebContentsView({
@@ -141,6 +165,7 @@ export function createUiView(uiSession: Session, surface: UiSurface, hash?: stri
   if (!origin) throw new Error(`Bad UI URL ${url}`);
   registerCaller(view.webContents, role, [origin]);
   lockToOrigins(view.webContents, [origin]);
+  if (surface !== 'archive') reloadOnCrash(contents, surface);
   void view.webContents.loadURL(hash ? `${url}#${encodeURIComponent(hash)}` : url);
   return view;
 }
