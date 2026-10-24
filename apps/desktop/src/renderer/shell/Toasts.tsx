@@ -33,7 +33,7 @@ interface Place {
 }
 
 /** A toast leaving with the focus inside hands it to the sidebar's tabs, so the keyboard isn't left nowhere. */
-function keepFocusFrom(card: HTMLElement | null): void {
+export function keepFocusFrom(card: HTMLElement | null): void {
   if (!card?.contains(document.activeElement)) return;
   document.querySelector<HTMLElement>('[role="tree"] [role="treeitem"][tabindex="0"]')?.focus();
 }

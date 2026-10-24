@@ -50,6 +50,8 @@ export const size = {
   resultRow: 40,
   commandBarMax: 680,
   previewWidth: 280,
+  /** The Now playing card's artwork (DESIGN.md §7.10). */
+  artwork: 40,
   /** Popover cards over the page: the find bar, permission prompts. */
   popoverCard: 320,
   /** A mini window (DESIGN.md §7.9): its bar, and its size until you resize one. */

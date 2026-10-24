@@ -15,7 +15,7 @@ import {
 } from '@chord/core';
 import type { ChordEdit, DuetView, SystemInfo } from '@chord/ipc';
 import { durations } from '@chord/tokens';
-import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, X } from 'lucide-react';
+import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
 import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
@@ -36,6 +36,7 @@ import { DuetPanel } from './Duet';
 import { DuetReadTabs } from './duet-context';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { FrameSnapshots } from './FrameSnapshot';
+import { NowPlayingCard } from './NowPlaying';
 import { Onboarding } from './Onboarding';
 import { SafeBrowsingWarning } from './SafeBrowsingWarning';
 import { SplitPanes, useElementSize } from './Split';
@@ -279,6 +280,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
   // Keycaps follow your shortcut changes; App provides them to everything below.
   const keycap = (id: ActionId) => keycapFor(id, info.platform, state.settings.shortcuts);
+  const muteKeys = keycap('tab.mute');
+  const muteTitle = useMemo(() => ({ mute: `Mute tab  ${muteKeys}`.trim(), unmute: `Unmute tab  ${muteKeys}`.trim() }), [muteKeys]);
 
   // Which way the sidebar slides when switching chords: toward the new chord's place in the switcher.
   const chordIndex = chord ? chordsFor(state, windowId).findIndex((c) => c.id === chord.id) : 0;
@@ -545,6 +548,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
 
               {(!collapsed || peeking) && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} undoKeys={!collapsed} mac={info.platform === 'darwin'} />}
 
+              {/* Media playing in a tab you aren't looking at (DESIGN.md §7.10). */}
+              <NowPlayingCard state={state} windowId={windowId} appearance={appearance} muteTitle={muteTitle} enter={spring('overlay', 'sidebar')} />
+
               {!inTitleBar && <ExtensionsShelf bar={extensionsBar} />}
 
               <ChordSwitcher
@@ -598,6 +604,18 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                   <span className={styles.addressMuted}>Search or enter address</span>
                 )}
               </button>
+              {/* The tab on screen makes sound: its speaker, as on its row (hidden in the sidebar now). */}
+              {collapsed && active && live?.audible && (
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label={active.muted ? 'Unmute tab' : 'Mute tab'}
+                  title={active.muted ? muteTitle.unmute : muteTitle.mute}
+                  onClick={() => void api.state.dispatch({ t: 'tab.mute', nodeId: active.id, muted: !active.muted })}
+                >
+                  {active.muted ? <VolumeX {...ICON} /> : <Volume2 {...ICON} />}
+                </button>
+              )}
               <span className={styles.flex} />
               {(inTitleBar || collapsed) && <ExtensionButtons bar={extensionsBar} puzzleOnly={!inTitleBar} />}
               {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}

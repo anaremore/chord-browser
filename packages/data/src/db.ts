@@ -249,7 +249,7 @@ export class ChordDatabase {
     );
 
     const nodeRows = this.sql(
-      `SELECT n.*, t.url, t.title AS tab_title, t.pinned_url, t.custom_title, t.last_active_at,
+      `SELECT n.*, t.url, t.title AS tab_title, t.pinned_url, t.custom_title, t.last_active_at, t.muted,
               f.title AS folder_title, f.collapsed, s.layout AS split_layout, i.mime AS icon_mime, i.data AS icon_data
          FROM node n
          LEFT JOIN tab t ON t.node_id = n.id
@@ -272,6 +272,7 @@ export class ChordDatabase {
           customTitle: strOrNull(r['custom_title']),
           favicon: typeof r['icon_mime'] === 'string' && r['icon_data'] instanceof Uint8Array ? joinDataUrl(r['icon_mime'], r['icon_data']) : null,
           lastActiveAt: num(r['last_active_at']),
+          ...(num(r['muted']) === 1 ? { muted: true } : {}),
         };
         nodes.push(tab);
       } else if (r['kind'] === 'folder' && typeof r['folder_title'] === 'string') {
@@ -708,10 +709,10 @@ export class ChordDatabase {
     this.sql('DELETE FROM split WHERE node_id = ?').run(id);
     const iconKey = node.favicon ? this.storeFavicon(node.favicon, now) : null;
     this.sql(
-      `INSERT INTO tab (node_id, pinned_url, custom_title, url, title, favicon_key, last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO tab (node_id, pinned_url, custom_title, url, title, favicon_key, last_active_at, muted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(node_id) DO UPDATE SET pinned_url = excluded.pinned_url, custom_title = excluded.custom_title, url = excluded.url,
-         title = excluded.title, favicon_key = excluded.favicon_key, last_active_at = excluded.last_active_at`,
-    ).run(id, node.pinnedUrl, node.customTitle, node.url, node.title, iconKey, node.lastActiveAt);
+         title = excluded.title, favicon_key = excluded.favicon_key, last_active_at = excluded.last_active_at, muted = excluded.muted`,
+    ).run(id, node.pinnedUrl, node.customTitle, node.url, node.title, iconKey, node.lastActiveAt, node.muted ? 1 : 0);
   }
 
   private writeLinkRoute(host: string, route: LinkRoute | null): void {

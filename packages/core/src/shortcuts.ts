@@ -28,6 +28,7 @@ export type ActionId =
   | 'tab.moveDown'
   | 'tab.moveUp'
   | 'tab.pin'
+  | 'tab.mute'
   | 'tab.favorite'
   | 'folder.new'
   | 'today.clear'
@@ -107,6 +108,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('tab.moveDown', 'Move tab down', 'reserved', ['Mod+Alt+Shift+ArrowDown'], ['Mod+Shift+PageDown']),
   s('tab.moveUp', 'Move tab up', 'reserved', ['Mod+Alt+Shift+ArrowUp'], ['Mod+Shift+PageUp']),
   s('tab.pin', 'Pin or unpin tab', 'page-first', ['Mod+D']),
+  // Chrome has no key for this; Firefox and Edge use Ctrl+M (⌃M on macOS, where ⌘M minimizes the window).
+  s('tab.mute', 'Mute or unmute tab', 'page-first', ['Ctrl+M'], ['Mod+M']),
   // No keys: these live in menus and the command bar (DESIGN.md §8.3).
   s('tab.favorite', 'Add this tab to Favorites', 'page-first', []),
   s('folder.new', 'New folder with this tab', 'page-first', []),

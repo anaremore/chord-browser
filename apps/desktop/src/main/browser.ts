@@ -13,6 +13,7 @@ import {
   isInternalUrl,
   isPrivateChord,
   markdownLink,
+  mediaVisibleTo,
   motionEnabled,
   reopenableIndex,
   routeFor,
@@ -33,7 +34,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, GesturePhase, PopoverState, PreviewTarget, Rect, SettingsSnapshot } from '@chord/ipc';
+import type { ArchiveSnapshot, GesturePhase, MediaAction, NowPlaying, PopoverState, PreviewTarget, Rect, SettingsSnapshot } from '@chord/ipc';
 import { size } from '@chord/tokens';
 import { join } from 'node:path';
 import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, webContents, type Session, type WebContents } from 'electron';
@@ -48,6 +49,7 @@ import { attachShortcuts, type KeyboardHandlers } from './keyboard';
 import { setShortcutOverrides } from './shortcut-overrides';
 import { IdleKeeper, type IdleTiming } from './idle';
 import { MiniWindows } from './mini-window';
+import { MediaWatcher } from './media';
 import { liveOf, Peeks } from './peek';
 import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
 import type { PermissionBroker } from './permissions';
@@ -141,6 +143,9 @@ export class Browser {
   private readonly finders = new Map<WindowId, FindInPage>();
   /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
   private readonly popoverSent = new Map<WindowId, string>();
+  /** Tabs playing media, for the Now playing cards (DESIGN.md §7.10), and what each window's card was last sent. */
+  readonly media: MediaWatcher;
+  private readonly mediaSent = new Map<WindowId, string>();
   /** The sign-in box each window last gave the keyboard to, so a box takes it once. */
   private readonly authFocused = new Map<WindowId, number>();
   /** The browser window used most recently: menus, Settings and links from Settings act on it. */
@@ -228,6 +233,7 @@ export class Browser {
         this.extensions.tabCreated(contents, nodeId);
         this.safeBrowsing.attach(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
+        this.media.attach(contents, nodeId);
         this.siteZoom.attach(contents);
         contents.on('did-stop-loading', () => this.previews.loaded(nodeId));
         // Whatever a page asked for is denied once it's gone or replaced by another page; a share ends.
@@ -307,6 +313,10 @@ export class Browser {
           },
         });
       },
+    });
+    this.media = new MediaWatcher({
+      isTab: (contents, nodeId) => this.tabs.get(nodeId)?.webContents === contents,
+      changed: () => this.syncMedia(),
     });
     const sessionForChord = (chordId: string) => options.profileSession(this.store.state.chords[chordId]?.profileId ?? DEFAULT_PROFILE);
     this.peeks = new Peeks({
@@ -450,6 +460,8 @@ export class Browser {
       this.broadcast(change);
       this.runEffects(change.effects);
       this.syncPopovers();
+      // A playing tab moved, closed or changed chords: the cards that may show it change.
+      if (change.patches.some((p) => p.path[0] === 'nodes' || p.path[0] === 'chords' || p.path[0] === 'windows')) this.syncMedia();
       this.extensions.sync();
       if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
       // Pictures of tabs that were closed, archived or unpinned go; turning previews off takes them all.
@@ -590,6 +602,8 @@ export class Browser {
       if (this.windows.get(windowId) !== w) return;
       this.extensions.forget(windowId);
       this.extensions.sync();
+      // A shell that loaded again asks for the card's media itself, and hears every change from now on.
+      this.mediaSent.delete(windowId);
     });
     // The chord swipe's phases (DESIGN.md §6.4): the renderer sees only wheel events, which
     // don't say when the fingers lift. Where the OS sends none, the shell ends on idle.
@@ -617,6 +631,7 @@ export class Browser {
       this.windows.delete(windowId);
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
+      this.mediaSent.delete(windowId);
       this.authFocused.delete(windowId);
       this.extensions.forget(windowId);
       this.peeks.forget(windowId);
@@ -626,6 +641,7 @@ export class Browser {
       // A mini window still open keeps Chord running; closing it then quits (window-all-closed).
       if (this.windows.size === 0 && this.minis.count === 0 && process.platform !== 'darwin') {
         this.idle.stop();
+        this.media.stop();
         this.histories.flush();
         this.tabs.destroyAll();
         this.settingsWindow?.window.close();
@@ -707,6 +723,9 @@ export class Browser {
         case 'view.destroy':
           this.histories.forget(effect.nodeId);
           this.tabs.destroy(effect.nodeId);
+          break;
+        case 'view.mute':
+          this.tabs.setMuted(effect.nodeId, effect.muted);
           break;
         case 'view.sleep':
           this.tabs.sleep(effect.nodeId);
@@ -799,6 +818,33 @@ export class Browser {
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
     };
+  }
+
+  /** What a window's Now playing card may offer: tabs in its chords playing media, newest first. */
+  nowPlaying(windowId: WindowId): NowPlaying[] {
+    return mediaVisibleTo(this.store.state, windowId, this.media.list());
+  }
+
+  /** The card's Play, Pause and picture-in-picture, for a tab the window's card offers. */
+  async mediaAction(w: AppWindow, nodeId: NodeId, action: MediaAction): Promise<void> {
+    if (!this.media.has(nodeId) || mediaVisibleTo(this.store.state, w.id, [{ nodeId }]).length === 0) return;
+    if (action === 'pictureInPicture') await this.autoPip.toggle(nodeId);
+    else await this.media.act(nodeId, action);
+  }
+
+  /**
+   * Each window's card hears what changed: the media in its chords. Compared by
+   * the watcher's version and which tabs, so artwork isn't compared byte by byte.
+   */
+  private syncMedia(): void {
+    const playing = this.media.list();
+    for (const w of this.windows.values()) {
+      const shown = mediaVisibleTo(this.store.state, w.id, playing);
+      const key = `${this.media.version}:${shown.map((p) => p.nodeId).join(',')}`;
+      if (this.mediaSent.get(w.id) === key) continue;
+      this.mediaSent.set(w.id, key);
+      send(w.shell.webContents, 'media:state', shown);
+    }
   }
 
   findFor(contents: WebContents): FindInPage | undefined {
@@ -1113,6 +1159,8 @@ export class Browser {
         copyMarkdown: () => clipboard.writeText(markdownLink(tab.title, tab.url)),
         reload: () => this.tabs.get(nodeId)?.webContents.reload(),
         duplicate: () => this.store.dispatch({ t: 'tab.open', windowId: w.id, url: tab.url }),
+        muted: Boolean(tab.muted),
+        toggleMute: () => this.store.dispatch({ t: 'tab.mute', nodeId, muted: !tab.muted }),
         close: () => this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId }),
         addFavorite: this.canFavorite(tab) ? () => this.store.dispatch({ t: 'favorite.add', favoriteId: uuidv7(), nodeId }) : null,
         newFolder: () => this.createFolder(w, tab.chordId, nodeId),
@@ -1486,6 +1534,9 @@ export class Browser {
         return true;
       case 'tab.pin':
         if (tab) this.store.dispatch({ t: tab.section === 'pinned' ? 'tab.unpin' : 'tab.pin', nodeId: tab.id });
+        return true;
+      case 'tab.mute':
+        if (tab) this.store.dispatch({ t: 'tab.mute', nodeId: tab.id, muted: !tab.muted });
         return true;
       case 'tab.favorite':
         if (tab && this.canFavorite(tab)) this.store.dispatch({ t: 'favorite.add', favoriteId: uuidv7(), nodeId: tab.id });

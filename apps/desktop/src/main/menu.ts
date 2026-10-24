@@ -87,6 +87,7 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
       item('Previous Tab', 'tab.previous'),
       { type: 'separator' },
       item('Pin or Unpin Tab', 'tab.pin'),
+      item('Mute or Unmute Tab', 'tab.mute'),
     ];
     const template: MenuItemConstructorOptions[] = [
       {
@@ -249,6 +250,9 @@ export interface TabMenuActions {
   copyMarkdown(): void;
   reload(): void;
   duplicate(): void;
+  /** You muted it (the speaker on its row says so too). */
+  muted: boolean;
+  toggleMute(): void;
   close(): void;
   /** Null when the page can't be a favorite (not a web page, or already one). */
   addFavorite: (() => void) | null;
@@ -296,6 +300,8 @@ export function buildTabMenu(a: TabMenuActions): Menu {
     { type: 'separator' },
     { label: 'Reload', click: a.reload },
     { label: 'Duplicate', click: a.duplicate },
+    // Kept with the tab: a muted page stays silent after sleeping and restarts.
+    { label: a.muted ? 'Unmute tab' : 'Mute tab', accelerator: acceleratorFor('tab.mute'), enabled: web, click: a.toggleMute },
     { type: 'separator' },
     { label: a.pinned ? 'Close (stays pinned)' : 'Close tab', accelerator: acceleratorFor('tab.close'), click: a.close },
   ]);

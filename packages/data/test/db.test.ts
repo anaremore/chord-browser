@@ -230,6 +230,24 @@ describe('chord-data', () => {
     db.close();
   });
 
+  it('keeps a muted tab muted across a restart, until it’s unmuted', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const windowId = Object.keys(state.windows)[0]!;
+    state = drive(db, state, [{ t: 'tab.open', windowId, url: 'https://music.test/' }]);
+    const nodeId = state.windows[windowId]!.activeTab[state.windows[windowId]!.activeChordId]!;
+    state = drive(db, state, [{ t: 'tab.mute', nodeId, muted: true }]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect((db.load()!.nodes.find((n) => n.id === nodeId) as TabNode).muted).toBe(true);
+    drive(db, state, [{ t: 'tab.mute', nodeId, muted: false }]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect('muted' in db.load()!.nodes.find((n) => n.id === nodeId)!).toBe(false);
+    db.close();
+  });
+
   it('keeps link routes across a restart, and forgets one that was removed', () => {
     let db = new ChordDatabase(file);
     let state = seed();

@@ -78,6 +78,16 @@ describe('command bar ranking', () => {
     expect(actions(split, 'pane')).toEqual(expect.arrayContaining(['split.focusNext', 'split.focusPrevious']));
   });
 
+  it('offers Mute tab for the page on screen, and Unmute tab once it’s muted', () => {
+    const { state, windowId } = stateWith([]);
+    const titles = (s: State, q: string) => buildResults(q, s, windowId, 'new', null, now).flatMap((r) => (r.kind === 'action' && r.action === 'tab.mute' ? [r.title] : []));
+    expect(titles(state, 'mute')).toEqual(['Mute tab']);
+    const win = state.windows[windowId]!;
+    const muted = apply(state, { t: 'tab.mute', nodeId: win.activeTab[win.activeChordId]!, muted: true }, ctx).state;
+    expect(titles(muted, 'mute')).toEqual(['Unmute tab']);
+    expect(titles(muted, 'sound')).toEqual(['Unmute tab']);
+  });
+
   it('knows where each row leads, so picks can be remembered', () => {
     const { state, windowId } = stateWith([]);
     const [action] = buildResults('zoom in', state, windowId, 'new', null, now).filter((r) => r.kind === 'action');

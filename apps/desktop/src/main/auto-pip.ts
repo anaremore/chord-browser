@@ -121,6 +121,29 @@ export class AutoPip {
     void this.popOut(nodeId, contents);
   }
 
+  /**
+   * The Now playing card's button: this tab's playing video pops out now, or
+   * goes back into its page if it's out (playing on, where it was). Chromium
+   * has one picture-in-picture window, so a video already in it goes back to
+   * its own page as this one takes it.
+   */
+  async toggle(nodeId: NodeId): Promise<void> {
+    const popped = this.popped;
+    if (popped?.nodeId === nodeId) return this.returned(nodeId);
+    const contents = this.deps.contents(nodeId);
+    if (!contents || contents.isDestroyed() || contents.isCrashed()) return;
+    if (popped) {
+      popped.returning = true;
+      await this.run(popped.contents, popped.frame, EXIT, false);
+      if (this.popped === popped) {
+        this.popped = null;
+        this.setLive(popped.nodeId, false);
+      }
+    }
+    // You asked for it: a video you muted counts too.
+    await this.popOut(nodeId, contents, true);
+  }
+
   /** You're back on this tab: its video goes back in. */
   returned(nodeId: NodeId): void {
     const popped = this.popped;
@@ -129,8 +152,7 @@ export class AutoPip {
     void this.run(popped.contents, popped.frame, EXIT, false);
   }
 
-  private async popOut(nodeId: NodeId, contents: WebContents): Promise<void> {
-    const heard = this.heard.has(nodeId);
+  private async popOut(nodeId: NodeId, contents: WebContents, heard = this.heard.has(nodeId)): Promise<void> {
     // Most pages have one frame; an embedded player (a video in an article) is in a frame of its own.
     // Its renderer can go away at any moment (a crash, a reload): then there's nothing to pop out.
     let frames: WebFrameMain[];
