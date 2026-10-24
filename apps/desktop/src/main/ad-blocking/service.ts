@@ -248,8 +248,11 @@ export class AdBlocking {
     if (!profile) return;
     const on = this.deps.enabled();
     if (!profile.blocker) {
-      if (on && !profile.removeHandler) profile.removeHandler = requestDispatcher(profile.session).add({ urls: WEB_URLS, handle: (details) => this.checkPrivate(details) });
-      else if (!on && profile.removeHandler) {
+      if (on && !profile.removeHandler) {
+        profile.removeHandler = requestDispatcher(profile.session).add({ urls: WEB_URLS, handle: (details) => this.checkPrivate(details) });
+        // Started now, while the window opens, so its first page's requests don't wait for the engine to load.
+        if (this.restarts <= MAX_RESTARTS && !this.stopping) this.ensureWorker();
+      } else if (!on && profile.removeHandler) {
         profile.removeHandler();
         profile.removeHandler = null;
       }
