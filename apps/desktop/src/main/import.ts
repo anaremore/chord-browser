@@ -36,8 +36,11 @@ const READ_TIMEOUT_MS = 120_000;
 const STEP_TIMEOUT_MS = 60_000;
 /** A profile read but not imported is let go after this, with its copies. */
 const IDLE_MS = 10 * 60_000;
-/** Copies an import process never got to clean up (Chord was killed mid-import) go after a day. */
-const STALE_MS = 86_400_000;
+/** Copies an import process never got to clean up (Chord was killed mid-import), swept once they're this old. */
+const STALE_MS = 60 * 60_000;
+/** Folders and tabs an Undo takes away per store change, as the import added them. */
+const UNDO_PART = 200;
+const MAX_UNDO_PARTS = 10_000;
 const PREFIX = 'chord-import-';
 
 export interface ImporterOptions {
@@ -86,16 +89,26 @@ export function doneMessage(counts: ImportCounts, browser: string): string {
   return `Imported ${list} from ${browser}`;
 }
 
+/** A promise that gives up after `ms` (chord-data that never answers mustn't hold an import or its Undo forever). */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timed out')), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
 /**
  * One import process, with a temp folder for its copies; the folder goes
- * when the process ends, however it ends. Replies that arrive before they're
- * asked for wait in order.
+ * when the process ends, however it ends (`closed` says when it's gone).
+ * Replies that arrive before they're asked for wait in order.
  */
 class ImportProcess {
   private readonly child: UtilityProcess;
   private readonly inbox: ImportReply[] = [];
   private waiting: ((reply: ImportReply | null) => void) | null = null;
   private exited = false;
+  readonly closed: Promise<void>;
 
   private constructor(path: string, readonly temp: string) {
     this.child = utilityProcess.fork(path, [], { serviceName: 'Chord Import', stdio: 'ignore' });
@@ -103,10 +116,14 @@ class ImportProcess {
       if (this.waiting) this.settle(reply);
       else this.inbox.push(reply);
     });
-    this.child.once('exit', () => {
-      this.exited = true;
-      this.settle(null);
-      void rm(temp, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+    this.closed = new Promise((resolve) => {
+      this.child.once('exit', () => {
+        this.exited = true;
+        this.settle(null);
+        void rm(temp, { recursive: true, force: true, maxRetries: 3 })
+          .catch(() => undefined)
+          .then(() => resolve());
+      });
     });
   }
 
@@ -124,10 +141,10 @@ class ImportProcess {
     if (!this.exited) this.child.postMessage(request, transfer);
   }
 
-  /** The next reply; null if the process ended, or took too long (it's stopped then). */
+  /** The next reply; null if the process ended, took too long (it's stopped then), or is already being waited on. */
   next(timeoutMs: number): Promise<ImportReply | null> {
     if (this.inbox.length > 0) return Promise.resolve(this.inbox.shift()!);
-    if (this.exited) return Promise.resolve(null);
+    if (this.exited || this.waiting) return Promise.resolve(null);
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.settle(null);
@@ -155,6 +172,8 @@ interface Session {
   key: string;
   profile: FoundProfile;
   process: ImportProcess;
+  /** Read, and kept: it can be imported. */
+  ready: boolean;
   /** Pages of history it has. */
   history: number;
   idle: ReturnType<typeof setTimeout> | undefined;
@@ -172,11 +191,19 @@ export class Importer {
   private profiles = new Map<string, FoundProfile>();
   private session: Session | null = null;
   private running: Running | null = null;
+  /** Every import process alive, so quitting can end them all and wait for their copies to go. */
+  private readonly processes = new Set<ImportProcess>();
   /** Where each import reports, for Undo's report too. */
   private readonly notifiers = new Map<string, (progress: ImportProgress) => void>();
-  private swept = false;
 
   constructor(private readonly options: ImporterOptions) {}
+
+  private async start(): Promise<ImportProcess> {
+    const process = await ImportProcess.start(this.options.workerPath);
+    this.processes.add(process);
+    void process.closed.then(() => this.processes.delete(process));
+    return process;
+  }
 
   private letGo(): void {
     if (!this.session) return;
@@ -187,8 +214,7 @@ export class Importer {
 
   /** The browsers and profiles on this computer. */
   async sources(): Promise<ImportSource[]> {
-    void this.sweep();
-    const process = await ImportProcess.start(this.options.workerPath);
+    const process = await this.start();
     try {
       const reply = await process.ask({ type: 'scan', env: this.options.env() }, SCAN_TIMEOUT_MS);
       const profiles = reply?.type === 'profiles' ? reply.profiles : [];
@@ -205,17 +231,19 @@ export class Importer {
     if (!profile) return { ok: false, problem: 'missing' };
     if (profile.denied) return { ok: false, problem: 'denied' };
     if (this.running) return { ok: false, problem: 'busy' };
+    const process = await this.start();
+    // Whatever was read before, or started reading meanwhile, is let go: one kept profile at a time.
     this.letGo();
-    const process = await ImportProcess.start(this.options.workerPath);
-    const session: Session = { key, profile, process, history: 0, idle: undefined };
+    const session: Session = { key, profile, process, ready: false, history: 0, idle: undefined };
     this.session = session;
     const reply = await process.ask({ type: 'read', profile, temp: process.temp, chordId }, READ_TIMEOUT_MS);
-    // Another profile was picked meanwhile: this one's been let go.
+    // Another profile was picked meanwhile, and this one let go (its process has ended).
     if (this.session !== session) return { ok: false, problem: 'missing' };
     if (reply?.type !== 'overview') {
       this.letGo();
       return { ok: false, problem: reply?.type === 'error' ? reply.problem : 'unreadable' };
     }
+    session.ready = true;
     session.history = reply.overview.history;
     session.idle = setTimeout(() => this.session === session && this.letGo(), IDLE_MS);
     return { ok: true, summary: { key, ...reply.overview } };
@@ -227,7 +255,7 @@ export class Importer {
    */
   run(key: string, choices: ImportChoices, windowId: WindowId, notify: (progress: ImportProgress) => void): ImportRunResult {
     if (this.running) return { ok: false, problem: 'busy' };
-    const session = this.session?.key === key ? this.session : null;
+    const session = this.session?.key === key && this.session.ready ? this.session : null;
     const win = this.options.state().windows[windowId];
     if (!session || !win || win.private) return { ok: false, problem: 'missing' };
     // The run owns the process from here.
@@ -237,13 +265,7 @@ export class Importer {
     this.notifiers.set(importId, notify);
     const running: Running = { importId, process: session.process, cancelled: false, finished: Promise.resolve() };
     running.finished = this.work(running, session, choices, windowId)
-      .catch((error: unknown) => {
-        // Undo stopped it: that's no failure.
-        if (running.cancelled) return;
-        // What landed stays, with Undo still possible.
-        console.error('Import failed:', error);
-        notify({ importId, phase: 'failed', done: 0, total: 0, counts: NONE, problem: 'unreadable' });
-      })
+      .catch((error: unknown) => console.error('Import failed:', error))
       .finally(() => {
         session.process.end();
         if (this.running === running) this.running = null;
@@ -254,50 +276,64 @@ export class Importer {
 
   private async work(running: Running, session: Session, choices: ImportChoices, windowId: WindowId): Promise<void> {
     const { importId, process } = running;
-    const state = this.options.state();
-    const fallbackChordId = state.windows[windowId]?.activeChordId ?? sortedChords(state)[0]?.id ?? '';
-    const planned = await process.ask({ type: 'plan', importId, choices, context: importContext(state), themes: themesFor(state), fallbackChordId }, STEP_TIMEOUT_MS);
-    if (planned?.type !== 'plan') throw new Error(`no plan (${planned?.type === 'error' ? planned.problem : 'no answer'})`);
-    const counts: ImportCounts = { ...planned.counts, pages: 0 };
+    const counts: ImportCounts = { ...NONE };
     const total = choices.history ? session.history : 0;
     const report = (phase: ImportProgress['phase'], problem?: ImportProblem) =>
       this.notifiers.get(importId)?.({ importId, phase, done: counts.pages, total, counts: { ...counts }, ...(problem ? { problem } : {}) });
+    let problem: ImportProblem | undefined;
+    try {
+      const state = this.options.state();
+      const fallbackChordId = state.windows[windowId]?.activeChordId ?? sortedChords(state)[0]?.id ?? '';
+      const planned = await process.ask({ type: 'plan', importId, choices, context: importContext(state), themes: themesFor(state), fallbackChordId }, STEP_TIMEOUT_MS);
+      if (planned?.type !== 'plan') throw new Error(`no plan (${planned?.type === 'error' ? planned.problem : 'no answer'})`);
+      report('bookmarks');
+      if (planned.chords.length > 0 || planned.favorites.length > 0) this.options.dispatch({ t: 'import.add', importId, chords: planned.chords, favorites: planned.favorites });
+      counts.chords = planned.counts.chords;
+      counts.favorites = planned.counts.favorites;
+      // A part at a time, each its own store change; asking for the next lets input and painting go first.
+      let part = await process.ask({ type: 'more' }, STEP_TIMEOUT_MS);
+      while (part?.type === 'nodes' && !running.cancelled) {
+        this.options.dispatch({ t: 'import.add', importId, nodes: part.nodes });
+        for (const node of part.nodes) {
+          if (node.kind === 'folder') counts.folders++;
+          else if (node.section === 'today') counts.tabs++;
+          else counts.bookmarks++;
+        }
+        part = await process.ask({ type: 'more' }, STEP_TIMEOUT_MS);
+      }
+      if (running.cancelled) return;
+      if (part?.type !== 'planned') throw new Error('the plan stopped');
 
-    report('bookmarks');
-    if (planned.chords.length > 0 || planned.favorites.length > 0) this.options.dispatch({ t: 'import.add', importId, chords: planned.chords, favorites: planned.favorites });
-    // A part at a time, each its own store change; asking for the next lets input and painting go first.
-    let part = await process.ask({ type: 'more' }, STEP_TIMEOUT_MS);
-    while (part?.type === 'nodes' && !running.cancelled) {
-      this.options.dispatch({ t: 'import.add', importId, nodes: part.nodes });
-      part = await process.ask({ type: 'more' }, STEP_TIMEOUT_MS);
+      if (total > 0) {
+        report('history');
+        process.send({ type: 'history', importId }, [await within(this.options.history.port(importId), STEP_TIMEOUT_MS)]);
+        for (;;) {
+          const batch = await process.next(STEP_TIMEOUT_MS);
+          if (running.cancelled) return;
+          if (batch?.type === 'pages') {
+            counts.pages += batch.added;
+            report('history');
+            continue;
+          }
+          if (batch?.type !== 'done') problem = batch?.type === 'error' ? batch.problem : 'unreadable';
+          break;
+        }
+      }
+    } catch (error) {
+      if (running.cancelled) return;
+      console.error('Import failed:', error);
+      problem ??= 'unreadable';
     }
     if (running.cancelled) return;
-    if (part?.type !== 'planned') throw new Error('the plan stopped');
-
-    let problem: ImportProblem | undefined;
-    if (total > 0) {
-      report('history');
-      process.send({ type: 'history', importId }, [await this.options.history.port(importId)]);
-      for (;;) {
-        const batch = await process.next(STEP_TIMEOUT_MS);
-        if (running.cancelled) return;
-        if (batch?.type === 'pages') {
-          counts.pages += batch.added;
-          report('history');
-          continue;
-        }
-        if (batch?.type !== 'done') problem = batch?.type === 'error' ? batch.problem : 'unreadable';
-        break;
-      }
-    }
     report(problem ? 'failed' : 'done', problem);
+    // Whatever landed, even from an import that stopped part way, gets its Undo.
     const browser = IMPORT_BROWSER_NAMES[session.profile.browser];
-    const message = problem ? `${doneMessage(counts, browser)}. Chord couldn’t read all of its history.` : doneMessage(counts, browser);
-    const added = counts.tabs + counts.bookmarks + counts.favorites + counts.chords + counts.pages > 0;
-    this.options.toast(windowId, { id: `import:${importId}`, message, ...(added ? { action: { label: 'Undo', command: { t: 'import.undo', importId } } } : {}) });
+    const landed = Boolean(this.options.state().imports[importId]) || counts.pages > 0;
+    const message = !problem ? doneMessage(counts, browser) : landed ? `${doneMessage(counts, browser)}. Chord couldn’t read all of it.` : `Chord couldn’t import from ${browser}`;
+    this.options.toast(windowId, { id: `import:${importId}`, message, ...(landed ? { action: { label: 'Undo', command: { t: 'import.undo', importId } } } : {}) });
   }
 
-  /** Undo: a running import stops first; then what it added goes, history included. */
+  /** Undo: a running import stops first; then what it added goes, in parts as it came, history included. */
   async undo(importId: string): Promise<void> {
     const running = this.running?.importId === importId ? this.running : null;
     if (running) {
@@ -305,16 +341,29 @@ export class Importer {
       running.process.end();
       await running.finished;
     }
-    this.options.dispatch({ t: 'import.undo', importId });
-    await this.options.history.undo(importId).catch(() => undefined);
+    for (let i = 0; i < MAX_UNDO_PARTS && this.options.state().imports[importId]; i++) {
+      this.options.dispatch({ t: 'import.undo', importId, limit: UNDO_PART });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    await within(this.options.history.undo(importId), STEP_TIMEOUT_MS).catch(() => undefined);
     this.notifiers.get(importId)?.({ importId, phase: 'undone', done: 0, total: 0, counts: NONE });
     this.notifiers.delete(importId);
   }
 
-  /** Copies left behind by import processes that never finished (Chord was killed): gone after a day. */
-  private async sweep(): Promise<void> {
-    if (this.swept) return;
-    this.swept = true;
+  /** Quitting: every import process stops, and its copies are gone before Chord is. */
+  async quit(): Promise<void> {
+    if (this.running) this.running.cancelled = true;
+    clearTimeout(this.session?.idle);
+    const all = [...this.processes];
+    for (const process of all) process.end();
+    await Promise.all(all.map((process) => process.closed));
+  }
+
+  /**
+   * Copies left behind by an import process that never got to clean up (a
+   * killed Chord): main calls this a while after launch.
+   */
+  async sweep(): Promise<void> {
     const base = tmpdir();
     for (const name of await readdir(base).catch(() => [] as string[])) {
       if (!name.startsWith(PREFIX)) continue;

@@ -113,7 +113,7 @@ export function useImport(api: ImportApi, { autoPick = false }: { autoPick?: boo
     if (!key || !choices || started.current !== null) return;
     started.current = '';
     setStarting(true);
-    const result = await api.run(key, choices);
+    const result = await api.run(key, choices).catch(() => ({ ok: false, problem: 'unreadable' }) as const);
     if (!result.ok) {
       started.current = null;
       setStarting(false);
@@ -160,8 +160,6 @@ const PROBLEMS: Record<ImportProblem, (browser: string) => string> = {
 
 /** What the progress line says. */
 export function progressText(progress: ImportProgress): string {
-  const { counts } = progress;
-  const bookmarks = counts.bookmarks + counts.favorites;
   switch (progress.phase) {
     case 'bookmarks':
       return 'Adding bookmarks and tabs…';
@@ -169,13 +167,20 @@ export function progressText(progress: ImportProgress): string {
       return `Adding history: ${numbers.format(progress.done)} of ${plural(progress.total, 'page')}`;
     case 'undone':
       return 'Import undone.';
-    case 'failed':
-      return `Imported ${plural(bookmarks, 'bookmark')}, but Chord couldn’t read all of the history.`;
-    case 'done': {
-      const parts = [counts.tabs ? plural(counts.tabs, 'tab') : '', bookmarks ? plural(bookmarks, 'bookmark') : '', counts.pages ? `${plural(counts.pages, 'page')} of history` : ''].filter(Boolean);
-      return parts.length === 0 ? 'Nothing to import.' : `Imported ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`}.`;
+    case 'failed': {
+      const what = imported(progress);
+      return what ? `${what.slice(0, -1)}, but Chord couldn’t read all of it.` : 'Chord couldn’t import from this browser.';
     }
+    case 'done':
+      return imported(progress) ?? 'Nothing to import.';
   }
+}
+
+/** "Imported 6 tabs, 1,204 bookmarks and 34,551 pages of history.", or null when nothing came across. */
+function imported({ counts }: ImportProgress): string | null {
+  const bookmarks = counts.bookmarks + counts.favorites;
+  const parts = [counts.tabs ? plural(counts.tabs, 'tab') : '', bookmarks ? plural(bookmarks, 'bookmark') : '', counts.pages ? `${plural(counts.pages, 'page')} of history` : ''].filter(Boolean);
+  return parts.length === 0 ? null : `Imported ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`}.`;
 }
 
 /** The browsers found, as a radio group: one Tab stop, arrow keys choose. */

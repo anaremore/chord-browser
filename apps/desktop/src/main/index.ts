@@ -370,9 +370,12 @@ if (!app.requestSingleInstanceLock()) {
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
+    // An import stops, and its copies of another browser's files go (at most 2 s, like the rest).
+    const imports = Promise.race([importer?.quit().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
     // Duet first: replies in flight are kept as interrupted, and provider processes end.
     void (duet?.quit() ?? Promise.resolve())
       .catch(() => undefined)
+      .then(() => imports)
       .then(() => persistence!.close())
       .finally(() => app.quit());
   });
@@ -533,6 +536,8 @@ if (!app.requestSingleInstanceLock()) {
       history: { port: (importId) => store.importPort(importId), undo: (importId) => store.undoImport(importId) },
       toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
     });
+    // Copies of another browser's files an import left when Chord was killed go, once launch is long over.
+    setTimeout(() => void importer?.sweep(), 60_000).unref();
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu; and launch timing.

@@ -204,6 +204,36 @@ describe('import reducer', () => {
     expect(tabsInOrder(t.state, 'c1').map((x) => x.id)).toEqual(['t1']);
   });
 
+  it('Undo in parts takes the innermost first, never leaving anything without its folder, and the chords last', () => {
+    const t = setup();
+    const p = plan(t.state, { groups: { 'r0/1': 'new', 'r1/1': 'chord:c1', r1: 'chord:c1' }, tabs: 'chord:c1', history: false });
+    t.run({ t: 'import.add', importId: p.importId, chords: p.chords, nodes: p.nodes });
+    const total = p.nodes.length;
+    let parts = 0;
+    while (t.state.imports[p.importId]) {
+      t.run({ t: 'import.undo', importId: p.importId, limit: 2 });
+      parts++;
+      for (const node of Object.values(t.state.nodes)) if (node.parentId) expect(t.state.nodes[node.parentId]).toBeDefined();
+      if (t.state.imports[p.importId]) expect(t.state.chords[p.chords[0]!.id]).toBeDefined();
+    }
+    expect(parts).toBe(Math.ceil(total / 2));
+    expect(Object.keys(t.state.nodes)).toEqual(['t1']);
+    expect(Object.keys(t.state.chords)).toEqual(['c1']);
+  });
+
+  it('Undo leaves no split of one: an imported tab joined with one of yours', () => {
+    const t = setup();
+    const p = plan(t.state, { groups: {}, tabs: 'chord:c1', history: false });
+    t.run({ t: 'import.add', importId: p.importId, nodes: p.nodes });
+    const imported = children(t.state, 'c1', 'today', null)[0]!.id;
+    t.run({ t: 'tab.unpin', nodeId: 't1' });
+    t.run({ t: 'split.join', windowId: 'w1', splitId: 'sp', nodeIds: ['t1', imported], direction: 'row' });
+    expect(t.state.nodes['sp']).toBeDefined();
+    t.run({ t: 'import.undo', importId: p.importId });
+    expect(t.state.nodes['sp']).toBeUndefined();
+    expect(t.state.nodes['t1']).toMatchObject({ parentId: null });
+  });
+
   it('Undo moves a window off an imported tab it shows, and closes its page', () => {
     const t = setup();
     const p = plan(t.state, { groups: {}, tabs: 'chord:c1', history: false });
