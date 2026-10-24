@@ -868,7 +868,12 @@ export class Browser {
     for (const { nodeId, view } of shown) if (!before.includes(view.webContents)) this.previews.shown(nodeId);
     this.extensions.tabShown(w);
     const after = w.paneContents;
-    for (const contents of before) if (!after.includes(contents) && !contents.isDestroyed()) this.autoPip.left(contents);
+    for (const contents of before) {
+      if (after.includes(contents) || contents.isDestroyed()) continue;
+      this.autoPip.left(contents);
+      const nodeId = this.tabs.nodeFor(contents);
+      if (nodeId) this.media.left(nodeId);
+    }
     for (const { nodeId } of shown) this.autoPip.returned(nodeId);
     this.syncPopover(w);
   }

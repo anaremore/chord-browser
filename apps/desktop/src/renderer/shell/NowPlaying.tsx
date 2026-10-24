@@ -3,8 +3,10 @@
  * playing in a tab you aren't looking at, in any of the window's chords. It
  * shows the tab (its icon and title, which go to it), what it plays when the
  * page's Media Session says (track, artist, artwork), and Play or Pause, Mute,
- * and picture-in-picture for a video. Several tabs playing: the newest, with
- * a button that steps through the others.
+ * and picture-in-picture for a video. It offers what you left playing (or
+ * played from it), not a background tab's own autoplay (main decides). Several
+ * at once: the newest in full, up to two more as one-line rows, then "and N
+ * more", which shows the rest.
  *
  * Main says what plays (main/media.ts); the card leaves out the tabs this
  * window shows, whose own controls are on screen. It sits outside the
@@ -14,7 +16,7 @@
 import { cardMedia, type State, type TabNode } from '@chord/core';
 import type { NowPlaying } from '@chord/ipc';
 import { durations, space, type Appearance } from '@chord/tokens';
-import { ChevronRight, Pause, PictureInPicture, PictureInPicture2, Play, Volume2, VolumeX } from 'lucide-react';
+import { Pause, PictureInPicture, PictureInPicture2, Play, Volume2, VolumeX } from 'lucide-react';
 import { AnimatePresence, motion, type Transition } from 'motion/react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Favicon } from '../shared/Favicon';
@@ -47,22 +49,80 @@ function useNowPlaying(): NowPlaying[] {
   return playing;
 }
 
+interface LineProps {
+  media: NowPlaying;
+  tab: TabNode;
+  windowId: string;
+  appearance: Appearance;
+  muteTitle: { mute: string; unmute: string };
+  onLeave(): void;
+}
+
+/** One more tab playing, as a row under the newest: its icon and title (which go to it), Mute, and Play or Pause. */
+function Line({ media, tab, windowId, appearance, muteTitle, onLeave }: LineProps) {
+  const muted = Boolean(tab.muted);
+  const tabTitle = pageTitle(tab) || displayHost(tab.url) || 'New tab';
+  const title = media.title || tabTitle;
+  return (
+    <div className={styles.nowPlayingLine}>
+      <button
+        type="button"
+        className={styles.nowPlayingTab}
+        title={`Go to ${tabTitle}`}
+        onClick={() => {
+          void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id });
+          onLeave();
+        }}
+      >
+        <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} appearance={appearance} />
+        <span className="sr-only">Go to tab: </span>
+        <span className={styles.ellipsis}>{title}</span>
+      </button>
+      <button
+        type="button"
+        className={styles.iconButton}
+        aria-label={`${muted ? 'Unmute' : 'Mute'}: ${title}`}
+        title={muted ? muteTitle.unmute : muteTitle.mute}
+        onClick={() => void api.state.dispatch({ t: 'tab.mute', nodeId: tab.id, muted: !muted })}
+      >
+        {muted ? <VolumeX {...ICON} /> : <Volume2 {...ICON} />}
+      </button>
+      {media.pausable && (
+        <button
+          type="button"
+          className={styles.iconButton}
+          aria-label={`${media.playing ? 'Pause' : 'Play'}: ${title}`}
+          title={media.playing ? 'Pause' : 'Play'}
+          onClick={() => void api.media.act(tab.id, media.playing ? 'pause' : 'play')}
+        >
+          {media.playing ? <Pause {...ICON} fill="currentColor" /> : <Play {...ICON} fill="currentColor" />}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Rows shown under the newest before "and N more". */
+const LINES = 2;
+
 interface CardProps {
   media: NowPlaying;
   tab: TabNode;
   /** Its video plays in Chord's picture-in-picture window. */
   popped: boolean;
-  /** Where it is among the tabs playing (from 0), and how many there are. */
-  at: number;
-  count: number;
+  /** The other tabs playing, newest first, with their tabs. */
+  others: { media: NowPlaying; tab: TabNode }[];
   windowId: string;
   appearance: Appearance;
   muteTitle: { mute: string; unmute: string };
   enter: Transition;
-  onNext(): void;
 }
 
-function Card({ media, tab, popped, at, count, windowId, appearance, muteTitle, enter, onNext }: CardProps) {
+function Card({ media, tab, popped, others, windowId, appearance, muteTitle, enter }: CardProps) {
+  // "And N more" shows the rest.
+  const [all, setAll] = useState(false);
+  const shownOthers = all ? others : others.slice(0, LINES);
+  const hidden = others.length - shownOthers.length;
   const card = useRef<HTMLDivElement>(null);
   // Leaving with the keyboard inside, the card hands it to the sidebar's tabs rather than to nowhere.
   useLayoutEffect(() => {
@@ -109,14 +169,6 @@ function Card({ media, tab, popped, at, count, windowId, appearance, muteTitle, 
           <span className="sr-only">Go to tab: </span>
           <span className={styles.ellipsis}>{tabTitle}</span>
         </button>
-        {count > 1 && (
-          <button type="button" className={`${styles.iconButton} ${styles.nowPlayingNext}`} title="Next playing tab" onClick={onNext}>
-            {/* Named by what it shows too: "Next playing tab, 1 of 2". */}
-            <span className="sr-only">Next playing tab, </span>
-            {at + 1} of {count}
-            <ChevronRight {...ICON} aria-hidden />
-          </button>
-        )}
         {(media.video || popped) && (
           <button
             type="button"
@@ -153,6 +205,18 @@ function Card({ media, tab, popped, at, count, windowId, appearance, muteTitle, 
           </button>
         )}
       </div>
+      {shownOthers.length > 0 && (
+        <div className={styles.nowPlayingOthers}>
+          {shownOthers.map((o) => (
+            <Line key={o.tab.id} media={o.media} tab={o.tab} windowId={windowId} appearance={appearance} muteTitle={muteTitle} onLeave={() => keepFocusFrom(card.current)} />
+          ))}
+          {hidden > 0 && (
+            <button type="button" className={styles.nowPlayingMore} onClick={() => setAll(true)}>
+              and {hidden} more
+            </button>
+          )}
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -175,27 +239,25 @@ export function NowPlayingCard({
   muteTitle: { mute: string; unmute: string };
   enter: Transition;
 }) {
-  const offered = cardMedia(state, windowId, useNowPlaying());
-  // The tab the card shows: the newest, until you step to another (and while that one's still there).
-  const [chosen, setChosen] = useState<string | null>(null);
-  const at = Math.max(0, offered.findIndex((p) => p.nodeId === chosen));
-  const media = offered[at];
-  const tab = media ? (state.nodes[media.nodeId] as TabNode) : undefined;
+  // Newest first: the newest in full, the rest as rows.
+  const offered = cardMedia(state, windowId, useNowPlaying()).flatMap((media) => {
+    const tab = state.nodes[media.nodeId];
+    return tab?.kind === 'tab' ? [{ media, tab }] : [];
+  });
+  const [first, ...others] = offered;
   return (
     <AnimatePresence initial={false}>
-      {media && tab && (
+      {first && (
         <Card
           key="now-playing"
-          media={media}
-          tab={tab}
-          popped={Boolean(state.live[tab.id]?.pip) || media.pip}
-          at={at}
-          count={offered.length}
+          media={first.media}
+          tab={first.tab}
+          popped={Boolean(state.live[first.tab.id]?.pip) || first.media.pip}
+          others={others}
           windowId={windowId}
           appearance={appearance}
           muteTitle={muteTitle}
           enter={enter}
-          onNext={() => setChosen(offered[(at + 1) % offered.length]!.nodeId)}
         />
       )}
     </AnimatePresence>

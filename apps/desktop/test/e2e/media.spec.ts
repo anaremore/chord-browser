@@ -13,8 +13,8 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { ARTWORK_PNG, mediaPage, talkPage } from '../fixtures/media';
-import { dispatch, isOverlay, isShell, launch, newPage, pageWhere, runAction, where } from './a11y-kit';
+import { ARTWORK_PNG, mediaPage, talkPage, twitchPage } from '../fixtures/media';
+import { dispatch, isOverlay, isSettings, isShell, launch, leavePlaying, newPage, pageWhere, runAction, where } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -30,6 +30,8 @@ test.beforeAll(async () => {
     '/movie': mediaPage({ title: 'Movie', video: true, track: { title: 'Movie Night', artist: 'Director', album: '' } }),
     // Picture and sound in one element, as most sites' videos are.
     '/talk': talkPage(),
+    // A player like Twitch's: it plays only when its own button says so, and pauses its video if played from outside.
+    '/twitch': twitchPage(),
   };
   const server = createServer((req, res) => {
     if (req.url === '/art.png') {
@@ -166,8 +168,8 @@ test('the Now playing card: what plays, Play and Pause, Mute, Go to tab, and sev
     // Nothing plays: no card.
     await expect(card(shell)).toHaveCount(0);
 
-    // A tab you aren't looking at plays: the card shows it, with what its Media Session says.
-    await open(shell, '/audio', true);
+    // A tab left playing: the card shows it, with what its Media Session says.
+    await leavePlaying(app, shell, `${site.origin}/audio`);
     const audio = await pageWhere(app, (url) => url === `${site.origin}/audio`);
     await expect(card(shell)).toContainText('Probe Song');
     await expect(card(shell)).toContainText('Probe Artist · Probe Album');
@@ -189,18 +191,21 @@ test('the Now playing card: what plays, Play and Pause, Mute, Go to tab, and sev
     await card(shell).getByRole('button', { name: 'Unmute tab' }).click();
     await expect.poll(() => muted(app, `${site.origin}/audio`)).toBe(false);
 
-    // A second tab starts playing: it's the newest, and the card steps between the two.
-    await open(shell, '/radio', true);
+    // A second tab left playing: the newest in full, the other as a row with its own controls.
+    await leavePlaying(app, shell, `${site.origin}/radio`);
     await expect(card(shell)).toContainText('Radio Song');
-    const next = card(shell).getByRole('button', { name: 'Next playing tab, 1 of 2' });
-    await next.click();
-    await expect(card(shell)).toContainText('Probe Song');
+    const audioRow = card(shell).getByRole('button', { name: 'Go to tab: Probe Song' });
+    await expect(audioRow).toBeVisible();
+    await card(shell).getByRole('button', { name: 'Pause: Probe Song' }).click();
+    await expect.poll(() => paused(audio)).toBe(true);
+    await card(shell).getByRole('button', { name: 'Play: Probe Song' }).click();
+    await expect.poll(() => paused(audio)).toBe(false);
 
-    // Go to tab: it's on screen (its own controls are there), so the card shows the other one.
-    await card(shell).getByRole('button', { name: 'Go to tab: Audio' }).click();
+    // Go to tab: it's on screen (its own controls are there), so the card shows the other one alone.
+    await audioRow.click();
     await expect(row(shell, 'Audio')).toHaveAttribute('aria-current', 'page');
     await expect(card(shell)).toContainText('Radio Song');
-    await expect(card(shell).getByRole('button', { name: /^Next playing tab/ })).toHaveCount(0);
+    await expect(card(shell).getByRole('button', { name: /^Go to tab: / })).toHaveCount(1);
 
     // Closed, it's gone at once; with nothing else playing out of sight, so is the card.
     const { windowId } = await where(shell);
@@ -215,46 +220,107 @@ test('the Now playing card: what plays, Play and Pause, Mute, Go to tab, and sev
   }
 });
 
-for (const [what, path, by] of [
-  ['a video with sound, paused in its page while on screen', '/talk', 'page'],
-  ['a video paused from the card', '/movie', 'card'],
-  ['audio paused in its page', '/audio', 'page'],
+for (const [what, path] of [
+  ['a video with sound', '/talk'],
+  ['audio', '/audio'],
 ] as const) {
-  test(`paused, then another chord: the card still plays it (${what})`, async () => {
+  test(`paused in its page, then another chord: no card for it (${what})`, async () => {
     const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` });
     try {
       const shell = await pageWhere(app, isShell);
       await expect(row(shell, 'Second page')).toBeVisible();
-      // A page's own pause happens with its tab on screen (where the card leaves it out); the card's, from another tab.
-      await open(shell, path, by === 'card');
+      await open(shell, path);
       const page = await pageWhere(app, (url) => url === `${site.origin}${path}`);
       const media = path === '/audio' ? 'audio' : 'video';
       const isPaused = () => page.evaluate((m) => document.querySelector<HTMLMediaElement>(m)!.paused, media);
       await expect.poll(isPaused).toBe(false);
-      if (by === 'card') {
-        await expect(card(shell).getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
-        await card(shell).getByRole('button', { name: 'Pause', exact: true }).click();
-      } else {
-        await page.evaluate((m) => document.querySelector<HTMLMediaElement>(m)!.pause(), media);
-      }
+      await page.evaluate((m) => document.querySelector<HTMLMediaElement>(m)!.pause(), media);
       await expect.poll(isPaused).toBe(true);
+      // You left it paused: nothing to want controls for.
       const { windowId } = await where(shell);
       await dispatch(shell, { t: 'chord.create', windowId, name: 'Work', icon: 'W', theme: { stops: [{ l: 0.72, c: 0.12, h: 40 }], grain: 0.2, appearance: 'auto' } });
-      await expect(card(shell).getByRole('button', { name: 'Play', exact: true })).toBeVisible({ timeout: 10_000 });
-      await card(shell).getByRole('button', { name: 'Play', exact: true }).click();
-      await expect.poll(isPaused).toBe(false);
+      await shell.waitForTimeout(1000);
+      await expect(card(shell)).toHaveCount(0);
     } finally {
       await app.close();
     }
   });
 }
 
-test('paused, then another chord: the card still plays it', async () => {
+test('a background tab’s own autoplay gets the speaker on its row, not the card', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` });
   try {
     const shell = await pageWhere(app, isShell);
     await expect(row(shell, 'Second page')).toBeVisible();
     await open(shell, '/audio', true);
+    await expect(row(shell, 'Audio').locator('[aria-label="Mute tab"]')).toBeVisible();
+    await shell.waitForTimeout(1000);
+    await expect(card(shell)).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('several left playing: two rows under the newest, then "and 1 more", which shows the rest', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(row(shell, 'Second page')).toBeVisible();
+    for (const path of ['/plain', '/audio', '/radio', '/talk']) await leavePlaying(app, shell, `${site.origin}${path}`);
+    // Newest first: Talk in full; Radio Song and Probe Song as rows; Plain audio behind "and 1 more".
+    await expect(card(shell).getByRole('button', { name: /^Go to tab: / })).toHaveCount(3);
+    await card(shell).getByRole('button', { name: 'and 1 more' }).click();
+    await expect(card(shell).getByRole('button', { name: /^Go to tab: / })).toHaveCount(4);
+    await expect(card(shell).getByRole('button', { name: 'Go to tab: Plain audio' })).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
+test('on Twitch, Play and Pause press its own button: its player ignores its video being played', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` }, { args: ['--host-resolver-rules=MAP www.twitch.tv 127.0.0.1'] });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(row(shell, 'Second page')).toBeVisible();
+    const url = `${site.origin.replace('127.0.0.1', 'www.twitch.tv')}/twitch`;
+    await leavePlaying(app, shell, url);
+    const page = await pageWhere(app, (u) => u === url);
+    const state = () => page.evaluate(() => [document.querySelector('[data-a-target="player-play-pause-button"]')!.getAttribute('data-a-player-state'), document.querySelector('video')!.paused]);
+    await card(shell).getByRole('button', { name: 'Pause', exact: true }).click();
+    await expect.poll(state).toEqual(['paused', true]);
+    await card(shell).getByRole('button', { name: 'Play', exact: true }).click();
+    await expect.poll(state).toEqual(['playing', false]);
+  } finally {
+    await app.close();
+  }
+});
+
+test('paused from the card, then another chord: the card still plays it', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(row(shell, 'Second page')).toBeVisible();
+    await leavePlaying(app, shell, `${site.origin}/movie`);
+    const page = await pageWhere(app, (url) => url === `${site.origin}/movie`);
+    const isPaused = () => page.evaluate(() => document.querySelector('audio')!.paused);
+    await card(shell).getByRole('button', { name: 'Pause', exact: true }).click();
+    await expect.poll(isPaused).toBe(true);
+    const { windowId } = await where(shell);
+    await dispatch(shell, { t: 'chord.create', windowId, name: 'Work', icon: 'W', theme: { stops: [{ l: 0.72, c: 0.12, h: 40 }], grain: 0.2, appearance: 'auto' } });
+    await expect(card(shell).getByRole('button', { name: 'Play', exact: true })).toBeVisible({ timeout: 10_000 });
+    await card(shell).getByRole('button', { name: 'Play', exact: true }).click();
+    await expect.poll(isPaused).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
+test('paused, then another chord: the card still plays it', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(row(shell, 'Second page')).toBeVisible();
+    await leavePlaying(app, shell, `${site.origin}/audio`);
     const audio = await pageWhere(app, (url) => url === `${site.origin}/audio`);
     await expect(card(shell)).toContainText('Probe Song');
     await card(shell).getByRole('button', { name: 'Pause', exact: true }).click();
@@ -275,13 +341,18 @@ test('the card shows a page without Media Session by its tab, and pops a video o
   try {
     const shell = await pageWhere(app, isShell);
     await expect(row(shell, 'Second page')).toBeVisible();
-    await open(shell, '/plain', true);
+    // Auto picture-in-picture off (Settings → General), or leaving the video would pop it out before the card could.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ autoPip: false }));
+    await row(shell, 'Second page').click();
+    await leavePlaying(app, shell, `${site.origin}/plain`);
     await expect(card(shell).getByRole('button', { name: 'Go to tab: Plain audio' })).toBeVisible();
     await expect(card(shell).getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
     // No video: no picture-in-picture.
     await expect(card(shell).getByRole('button', { name: 'Pop out the video' })).toHaveCount(0);
 
-    await open(shell, '/movie', true);
+    await leavePlaying(app, shell, `${site.origin}/movie`);
     const movie = await pageWhere(app, (url) => url === `${site.origin}/movie`);
     await expect(card(shell)).toContainText('Movie Night');
     const pip = () => movie.evaluate(() => document.pictureInPictureElement?.id ?? null);
