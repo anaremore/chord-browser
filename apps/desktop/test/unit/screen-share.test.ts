@@ -63,6 +63,8 @@ function setup(picker: 'mac' | 'portal' | null = null) {
   const state = emptyState();
   state.live['meet'] = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null };
   state.live['slides'] = { ...state.live['meet'] };
+  state.nodes['meet'] = tab('meet', 'https://meet.test/', 'Meeting');
+  state.nodes['slides'] = tab('slides', 'https://slides.test/', 'Slides');
   const dispatched: Command[] = [];
   const changes = { popover: 0, sharing: 0 };
   const broker = new ScreenShareBroker(picker);
@@ -71,8 +73,8 @@ function setup(picker: 'mac' | 'portal' | null = null) {
     dispatch: (command) => dispatched.push(command),
     nodeFor: (contents) => Object.keys(pages).find((id) => (pages[id] as unknown) === contents),
     contentsOf: (nodeId) => pages[nodeId] as unknown as WebContents | undefined,
-    // Only the two tabs: a private window's are never among them (core's shareableTabs decides).
-    shareableTabs: (nodeId) => [tab(nodeId, `https://${nodeId}.test/`, nodeId === 'meet' ? 'Meeting' : 'Slides'), tab('slides', 'https://slides.test/', 'Slides')].filter((t, i, all) => all.findIndex((x) => x.id === t.id) === i),
+    // Only the two tabs, the asking one first: a private window's are never among them (core's shareableTabs decides).
+    shareableTabs: () => [state.nodes['meet'] as TabNode, state.nodes['slides'] as TabNode],
     onChange: () => changes.popover++,
     sharingChanged: () => changes.sharing++,
     cantStop: () => {},
@@ -93,7 +95,7 @@ function setup(picker: 'mac' | 'portal' | null = null) {
     handler!({ frame: meet.mainFrame, audioRequested }, answered);
     return answer;
   };
-  return { broker, meet, slides, dispatched, changes, ask, opts };
+  return { broker, state, meet, slides, dispatched, changes, ask, opts };
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -124,6 +126,9 @@ describe('the share picker', () => {
       ['Screen 1', ''],
       ['Notes', ''],
     ]);
+    // A tab's title that arrives while the picker is up fills in.
+    t.state.nodes['slides'] = { ...(t.state.nodes['slides'] as TabNode), title: 'Quarterly slides' };
+    expect(t.broker.promptFor('meet')!.sources[1]!.name).toBe('Quarterly slides');
     // …then pictured.
     picture([source('screen:1:0', 'Screen 1', true), source('window:9:0', 'Notes', true)]);
     await flush();

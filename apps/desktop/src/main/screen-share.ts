@@ -61,6 +61,7 @@ interface Pending {
   tabs: NodeId[];
   /** Screens and windows, with their pictures once they've arrived. */
   sources: DesktopCapturerSource[];
+  /** The picker, less its tabs, which `promptFor` lists as they are now. */
   prompt: SharePrompt;
   /** Wayland's portal is open, asking which screen or window. */
   choosing: boolean;
@@ -238,7 +239,7 @@ export class ScreenShareBroker {
       prompt: {
         id,
         host,
-        sources: tabs.map((t) => tabSource(t, nodeId)),
+        sources: [],
         loading: this.picker === null,
         audio: audioRequested,
         systemAudio: SYSTEM_AUDIO,
@@ -266,13 +267,24 @@ export class ScreenShareBroker {
   /** The screens and windows the picker shows after its tabs, as they are now. */
   private showDesktop(pending: Pending, sources: DesktopCapturerSource[]): void {
     pending.sources = sources;
-    pending.prompt = { ...pending.prompt, sources: [...pending.prompt.sources.filter((s) => s.kind === 'tab'), ...sources.map(desktopSource)] };
+    pending.prompt = { ...pending.prompt, sources: sources.map(desktopSource) };
     this.deps?.onChange();
   }
 
-  /** The picker to show for a tab, oldest first. */
+  /**
+   * The picker to show for a tab, oldest first. Its tabs are listed as they
+   * are now, so a title or icon that arrives while it's up fills in (the
+   * popover hears of every change), and a tab that closed leaves the list.
+   */
   promptFor(nodeId: NodeId | null): SharePrompt | null {
-    return (nodeId ? this.pending.find((p) => p.nodeId === nodeId)?.prompt : undefined) ?? null;
+    const pending = nodeId ? this.pending.find((p) => p.nodeId === nodeId) : undefined;
+    const state = this.deps?.state();
+    if (!pending || !state) return null;
+    const tabs = pending.tabs.flatMap((id) => {
+      const node = state.nodes[id];
+      return node?.kind === 'tab' ? [tabSource(node, pending.nodeId)] : [];
+    });
+    return { ...pending.prompt, sources: [...tabs, ...pending.prompt.sources] };
   }
 
   /**

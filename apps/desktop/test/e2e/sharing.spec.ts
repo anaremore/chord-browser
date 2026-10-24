@@ -67,14 +67,18 @@ const shareState = (page: Page) => page.evaluate(() => document.documentElement.
 
 type Probe = { r: number; g: number; b: number; level: number; audio: number; surface: string } | null;
 const probe = (page: Page) => page.evaluate(() => (window as unknown as { probe(): Probe }).probe());
-/** Whether the capturing page's picture is, in the middle, mostly this one color. */
-const shows = async (page: Page, color: 'red' | 'blue' | 'green') => {
+/**
+ * The color in the middle of the capturing page's picture, when it's mostly
+ * red, blue or green; otherwise what the page sees, so a failure says it.
+ */
+const showing = async (page: Page) => {
   const p = await probe(page);
-  if (!p) return false;
+  if (!p) return 'no picture yet';
   const [hi, lo] = [180, 90];
-  if (color === 'red') return p.r > hi && p.g < lo && p.b < lo;
-  if (color === 'blue') return p.b > hi && p.r < lo && p.g < lo;
-  return p.g > hi * 0.6 && p.r < lo && p.b < lo;
+  if (p.r > hi && p.g < lo && p.b < lo) return 'red';
+  if (p.b > hi && p.r < lo && p.g < lo) return 'blue';
+  if (p.g > hi * 0.6 && p.r < lo && p.b < lo) return 'green';
+  return `rgb(${p.r}, ${p.g}, ${p.b})`;
 };
 const paint = (page: Page, color: string) => page.evaluate((c) => (window as unknown as { paint(c: string): void }).paint(c), color);
 
@@ -131,6 +135,7 @@ test('a tab shared from Chord’s picker: the page gets its frames and its sound
     const meet = await pageWhere(app, (url) => url === `${site.origin}/meet`);
     await open(shell, '/slides');
     const page = await pageWhere(app, (url) => url === `${site.origin}/slides`);
+    await expect(row(shell, 'Slides')).toBeVisible();
 
     // Tabs come first, the asking tab leading; screens and windows are a click away, where Chord lists them.
     await meet.locator('#share').click();
@@ -144,7 +149,7 @@ test('a tab shared from Chord’s picker: the page gets its frames and its sound
 
     await shareTab(meet, popover, /Slides/);
     // Only that page goes out: its own picture and its own sound, as a tab ("browser" surface).
-    await expect.poll(() => shows(meet, 'red'), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => showing(meet), { timeout: 15_000 }).toBe('red');
     await expect.poll(async () => (await probe(meet))?.surface).toBe('browser');
     await expect.poll(async () => (await probe(meet))?.audio).toBe(1);
     await expect.poll(async () => (await probe(meet))?.level ?? 0, { timeout: 15_000 }).toBeGreaterThan(0.01);
@@ -154,7 +159,7 @@ test('a tab shared from Chord’s picker: the page gets its frames and its sound
       .toBe(true);
     // What it shows next is what the page sees next, though the tab isn't on screen.
     await paint(page, 'rgb(0, 0, 255)');
-    await expect.poll(() => shows(meet, 'blue'), { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => showing(meet), { timeout: 10_000 }).toBe('blue');
 
     // Both rows say so: the sharing page's Stop, and the shared tab's.
     await expect(row(shell, 'Meet').locator('[aria-label="Stop sharing"]')).toBeVisible();
@@ -177,8 +182,9 @@ test('a shared tab never sleeps or goes to the archive, and keeps painting off s
     const meet = await pageWhere(app, (url) => url === `${site.origin}/meet`);
     await open(shell, '/slides');
     const page = await pageWhere(app, (url) => url === `${site.origin}/slides`);
+    await expect(row(shell, 'Slides')).toBeVisible();
     await shareTab(meet, popover, /Slides/, false);
-    await expect.poll(() => shows(meet, 'red'), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => showing(meet), { timeout: 15_000 }).toBe('red');
 
     // Shown, the shared tab's frame has the tinted edge; back to the page sharing it, it waits out of sight,
     // still attached to the window (one corner pixel inside, which its rounded corner cuts away).
@@ -204,7 +210,7 @@ test('a shared tab never sleeps or goes to the archive, and keeps painting off s
     expect(await liveOf(shell, 'Slides')).toMatchObject({ shared: true });
     // And it still paints for the page sharing it.
     await paint(page, 'rgb(0, 160, 0)');
-    await expect.poll(() => shows(meet, 'green'), { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => showing(meet), { timeout: 10_000 }).toBe('green');
   } finally {
     await app.close();
   }
@@ -411,6 +417,8 @@ test('a private window’s tabs are offered only to its own pages, and its pages
     const call = await pageWhere(app, (url) => url === `${site.origin}/call`);
     await open(privateShell, '/slides');
     await pageWhere(app, (url) => url === `${site.origin}/slides`);
+    await expect(row(privateShell, 'Slides')).toBeVisible();
+    await expect(row(privateShell, 'Call')).toBeVisible();
 
     // The normal window's page: its own window's tabs, never the private one's.
     await meet.locator('#share').click();
@@ -429,7 +437,7 @@ test('a private window’s tabs are offered only to its own pages, and its pages
     await tabs.getByRole('option', { name: /Slides/ }).click();
     await picker(privatePopover).getByRole('button', { name: 'Share', exact: true }).click();
     await expect.poll(() => shareState(call)).toBe('sharing');
-    await expect.poll(() => shows(call, 'red'), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => showing(call), { timeout: 15_000 }).toBe('red');
   } finally {
     await app.close();
   }
