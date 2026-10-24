@@ -48,8 +48,14 @@ export async function kill(app: ElectronApplication): Promise<void> {
   // Chromium's other processes (GPU, renderers, utilities) notice on their own and exit a moment later; on
   // Windows they hold the profile until then, and a Chord launched on it at once can't start.
   const processes = await app
-    .evaluate(({ app: electronApp }) => electronApp.getAppMetrics().map((m) => ({ pid: m.pid, what: [m.type, m.serviceName, m.name].filter(Boolean).join(' ') })))
-    .catch(() => [] as { pid: number; what: string }[]);
+    .evaluate(({ app: electronApp }) =>
+      electronApp.getAppMetrics().map((m) => ({ pid: m.pid, type: m.type, what: [m.type, m.serviceName, m.name].filter(Boolean).join(' ') })),
+    )
+    .catch(() => [] as { pid: number; type: string; what: string }[]);
+  // Chord's own browser process, by its id: on Windows the process Playwright holds isn't it (killing that one
+  // left every Chord process running), so a crash is the browser process ending.
+  const browser = processes.find((p) => p.type === 'Browser');
+  if (browser) process.kill(browser.pid, 'SIGKILL');
   const child = app.process();
   const exited = new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done(null) : child.once('exit', done)));
   child.kill('SIGKILL');
