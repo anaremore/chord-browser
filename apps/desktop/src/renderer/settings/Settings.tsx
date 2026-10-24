@@ -376,6 +376,11 @@ function About({ about, snapshot }: { about: AboutInfo; snapshot: SettingsSnapsh
           description="Warnings about suspected phishing and malware come from Safe Browsing by Google, for non-commercial use under Google’s terms."
           control={<span className={styles.value}>Google</span>}
         />
+        <Row
+          label="Ad and tracker blocking"
+          description="EasyList and EasyPrivacy, by the EasyList authors, with Ghostery’s adblocker engine (MPL-2.0)."
+          control={<span className={styles.value}>EasyList</span>}
+        />
       </div>
       <div className={styles.links}>
         <button type="button" className={styles.linkButton} onClick={() => void api.settings.openUrl(REPO_URL)}>

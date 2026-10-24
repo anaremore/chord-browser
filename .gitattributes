@@ -13,3 +13,6 @@
 *.woff2 binary
 *.ttf binary
 *.db binary
+
+# EasyList and EasyPrivacy as bundled (pnpm --filter @chord/desktop lists): collapsed in diffs.
+apps/desktop/build/ad-blocking/*.txt linguist-generated=true

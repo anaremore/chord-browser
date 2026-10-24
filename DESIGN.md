@@ -778,12 +778,18 @@ With no other browser on the computer, first run leaves the step out, and Settin
 - **Settings → Privacy → Safe Browsing:** one row, *Warn before suspected phishing and malware*, with the notice as its description (so it's read beside the switch, before it's on), and under it, once on, how Google's lists are doing ("999,877 entries on this computer, updated 3 minutes ago."). In Google-free mode the row says it's off and why; in a build without the key, that it isn't in this build. A note under the group: "Safe Browsing by Google." No ↺: a new profile turns it on in first run, so there's no single default to go back to.
 - **The one-time offer**, for profiles from before Safe Browsing: a card in the popover at the frame's top-right, like a permission prompt, with a shield, *Warn you before risky sites?*, the notice, and *Not now* · **Turn on**. Either answer is final; Settings can change it.
 
+**Ad and tracker blocking** (ARCHITECTURE.md §9). On by default, so it asks nothing first; it says what the lists' host sees where you'd look for it, beside the switch.
+- **Settings → Privacy → Ads and trackers** (as built 2026-10-24), after Google-free mode: *Block ads and trackers*, with the notice as its description ("Chord checks what pages load against EasyList and EasyPrivacy, two public lists it keeps on this computer…") and ↺ once it's off. Under it, while on: *The lists* ("EasyList from Oct 24, 2026 and EasyPrivacy from Oct 24, 2026, checked for updates 3 hours ago."), then *Don't block on*, a field taking a site's name or any address on it, and the sites it's off for, one row each with an ✕ that blocks there again. A note under the group credits the EasyList authors and says private windows are filtered too.
+- **A page's right-click menu**, at the end of its page section: *Block ads on this site*, a checkmark item, checked while blocking applies there. Unchecking it reloads the site's pages on screen once the change is in, with ads, and a toast offers Undo. Left out when blocking is off or the page isn't a web page. In a private window, turning a site off lasts as long as the window.
+- **A site** is its registrable domain, subdomains included: turning it off on `cooking.nytimes.com` turns it off on `nytimes.com`.
+
 **Toast copy:**
 - "Tab closed · Undo"
 - "Archived 4 tabs · Undo"
 - "Deleted folder 'Reading' · Undo"
 - "Deleted 'Work' chord · Undo"
 - "Moved to Personal (sign-ins differ, so it reloaded) · Undo"
+- "Not blocking ads on nytimes.com · Undo" · "Blocking ads on nytimes.com again · Undo"
 
 Empty states get a small abstract illustration in the chord's own colors (three soft shapes echoing the mark), animated once with `gentle`. They never look like stock art.
 

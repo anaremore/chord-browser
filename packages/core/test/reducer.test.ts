@@ -237,6 +237,42 @@ describe('reducer', () => {
     expect(u.state.settings).toMatchObject({ safeBrowsing: false, safeBrowsingAsked: true });
   });
 
+  it('ad blocking: on by default, unaffected by Google-free mode, and off per site by registrable domain', () => {
+    const t = setup();
+    expect(t.state.settings.adBlocking).toEqual({ enabled: true, offSites: [] });
+    t.run({ t: 'settings.set', settings: { googleFree: true } });
+    expect(t.state.settings.adBlocking.enabled).toBe(true);
+    t.run({ t: 'settings.set', settings: { adBlocking: { enabled: false } } });
+    expect(t.state.settings.adBlocking).toEqual({ enabled: false, offSites: [] });
+    // Sites arrive as addresses or names; each is kept once, as its site, and junk is dropped.
+    t.run({ t: 'settings.set', settings: { adBlocking: { offSites: ['https://www.nytimes.com/section/world', 'cooking.nytimes.com', 'news.bbc.co.uk', 'not a site', ''] } } });
+    expect(t.state.settings.adBlocking.offSites).toEqual(['nytimes.com', 'bbc.co.uk']);
+    // The same list again changes nothing.
+    expect(t.run({ t: 'settings.set', settings: { adBlocking: { offSites: ['nytimes.com', 'bbc.co.uk'] } } }).patches).toHaveLength(0);
+    t.run({ t: 'settings.set', settings: { adBlocking: { offSites: [] } } });
+    expect(t.state.settings.adBlocking.offSites).toEqual([]);
+  });
+
+  it('a page’s “Block ads on this site”: saved for chords, kept only in a private window, and its pages reload', () => {
+    const t = setup();
+    const off = t.run({ t: 'adBlocking.site', site: 'https://www.nytimes.com/x', off: true });
+    expect(t.state.settings.adBlocking.offSites).toEqual(['nytimes.com']);
+    expect(off.effects).toEqual([{ e: 'site.reload', site: 'nytimes.com', chordId: null }]);
+    // Already off: nothing happens, nothing reloads.
+    expect(t.run({ t: 'adBlocking.site', site: 'nytimes.com', off: true }).effects).toEqual([]);
+    // A private window keeps its own, and never saves it.
+    t.run({ t: 'window.create', windowId: 'pw', privateChordId: 'pc' });
+    const priv = t.run({ t: 'adBlocking.site', site: 'example.org', off: true, chordId: 'pc' });
+    expect(t.state.chords['pc']!.blockingOff).toEqual(['example.org']);
+    expect(t.state.settings.adBlocking.offSites).toEqual(['nytimes.com']);
+    expect(priv.effects).toEqual([{ e: 'site.reload', site: 'example.org', chordId: 'pc' }]);
+    // Turning a saved site back on from a private window changes the saved list.
+    t.run({ t: 'adBlocking.site', site: 'nytimes.com', off: false, chordId: 'pc' });
+    expect(t.state.settings.adBlocking.offSites).toEqual([]);
+    // Not a site: ignored.
+    expect(t.run({ t: 'adBlocking.site', site: 'chord://settings', off: true }).patches).toHaveLength(0);
+  });
+
   it('a tab’s Safe Browsing warning is kept and cleared like its other live state', () => {
     const t = setup();
     t.run({ t: 'tab.open', windowId: 'w1', url: 'https://example.com/' });

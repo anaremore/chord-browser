@@ -4,6 +4,11 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 ## 0.2.0 · preview (unreleased)
 
+- **Ads and trackers blocked** by default, in every chord and in private windows, with EasyList and EasyPrivacy. The empty spaces ads leave behind are hidden too.
+  - Pages are checked against the lists on your computer; nothing about the sites you visit is sent anywhere. Chord fetches fresh lists from easylist.to every few days, which sees your IP address when it does. Google-free mode doesn't change any of this: the lists aren't Google's.
+  - Turn it off for one site from the page's right-click menu (*Block ads on this site*), with Undo, or list sites in Settings → Privacy, where the switch for everything is too. A private window's exceptions are forgotten with it.
+  - Extensions keep working beside it: uBlock Origin Lite and others block as before.
+  - Licenses: blocking uses Ghostery's adblocker engine, under the Mozilla Public License 2.0, and the EasyList lists, under the GPL-3.0 (or CC BY-SA 3.0). Their notices ship with every build.
 - **Import from other browsers:** bring your bookmarks, history and open tabs from Chrome, Edge, Brave, Firefox or Safari, in first run or Settings → Import.
   - Chord shows what a browser holds before anything comes across, and you say where each top-level folder goes: a new chord named after it, or a pinned folder in a chord you have. The bookmarks bar's own links can become Favorites.
   - Firefox's open tabs land in a chord's Today. Chrome, Edge and Brave keep theirs, since their files can't be read reliably.

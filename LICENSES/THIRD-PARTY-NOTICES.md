@@ -13,6 +13,13 @@ Chord's warnings about suspected phishing, malware and unwanted software come fr
 - What Chord sends: only when an address's 4-byte hash prefix is on one of the lists kept on your computer does Chord ask Google about that prefix. The address itself is never sent.
 - Settings → Privacy turns it off; Google-free mode keeps it off. Builds made without Chord's API key (development, forks) don't include it.
 
+### EasyList and EasyPrivacy
+
+Chord blocks ads and trackers with [EasyList and EasyPrivacy](https://easylist.to/), by the EasyList authors. A copy comes with every build (compiled into `out/main/ad-blocking`), and installed copies fetch fresh ones from easylist.to about every four days.
+
+- What Chord sends: a request for each list, from a session of its own with no cookies. easylist.to (served through Cloudflare from GitHub Pages) sees your IP address and when you ask, as any site would. Nothing about the pages you visit is sent; they're checked against the lists on your computer.
+- Settings → Privacy turns blocking off, which also stops the requests. Google-free mode doesn't change it: the lists aren't Google's.
+
 ## Components
 
 | Component | License | Where |
@@ -21,6 +28,8 @@ Chord's warnings about suspected phishing, malware and unwanted software come fr
 | electron-chrome-extensions (the iamEvanYT fork), vendored as `packages/chrome-extensions` | GPL-3.0-only | [GPL-3.0.txt](GPL-3.0.txt); Chord's changes are in its CHORD-CHANGES.md |
 | Crest's command bar ranking, adapted in `packages/core/src/rank.ts` | MPL-2.0 | [MPL-2.0.txt](MPL-2.0.txt) |
 | [pdf.js](https://mozilla.github.io/pdf.js/), Duet's PDF reader (`out/main/pdf.js`) | Apache-2.0 | [Apache-2.0.txt](Apache-2.0.txt) |
+| [Ghostery's adblocker engine](https://github.com/ghostery/adblocker) (`@ghostery/adblocker` and its `@ghostery/*` and `@remusao/*` packages), in ad blocking's worker (`out/main/ad-blocking.js`) | MPL-2.0; the source of each version is on npm and GitHub | [MPL-2.0.txt](MPL-2.0.txt) |
+| [EasyList and EasyPrivacy](https://easylist.to/), the lists ad blocking uses, and the rules and engine Chord compiles from them (`out/main/ad-blocking`) | GPL-3.0 or CC BY-SA 3.0, or any later version ([the lists' licence](https://easylist.to/pages/licence.html)); Chord distributes them under the GPL-3.0 | [GPL-3.0.txt](GPL-3.0.txt) |
 | [Onest](https://github.com/googlefonts/onest), Chord's typeface | SIL Open Font License 1.1 | `OFL.txt` beside the fonts |
 
-Other libraries bundled into Chord's own code (React, Motion, lucide-react, zod, immer, dnd-kit, fractional-indexing, uFuzzy and their dependencies) keep their MIT, ISC or CC0 licenses, listed in `pnpm-lock.yaml`.
+Other libraries bundled into Chord's own code (React, Motion, lucide-react, zod, immer, dnd-kit, fractional-indexing, uFuzzy, tldts and their dependencies) keep their MIT, ISC or CC0 licenses, listed in `pnpm-lock.yaml`.

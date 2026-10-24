@@ -105,6 +105,7 @@ Releases come only from CI, from a `v*` tag (§15.3). The tag must match `apps/d
 - [ ] Bump the patch `version` in `apps/desktop/package.json` (`A.B.C` → `A.B.C+1`).
 - [ ] Add the [release notes](#9-release-notes) entry at the top of `RELEASE_NOTES.md`.
 - [ ] Add a `<release>` line at the top of `<releases>` in `flatpak/io.github.anaremore.chord-browser.metainfo.xml` (Flathub shows it).
+- [ ] Refresh the ad-blocking lists every build bundles: `pnpm --filter @chord/desktop lists` (ARCHITECTURE.md §9). Installed copies refresh their own, so a security release can skip it.
 - [ ] Commit to `main` (through a PR if `main` is protected): `chore(release): vA.B.C`.
 - [ ] Tag that commit and push only the tag:
   ```sh

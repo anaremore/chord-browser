@@ -6,12 +6,16 @@ import {
   ARCHIVE_URL,
   activeTab,
   activeTabId,
+  blockingOffSites,
+  blockingSite,
   children,
   chordsFor,
   DEFAULT_PROFILE,
   hostOf,
+  isBlockingOff,
   isInternalUrl,
   isPrivateChord,
+  isPrivateProfile,
   markdownLink,
   motionEnabled,
   reopenableIndex,
@@ -109,6 +113,12 @@ export interface BrowserOptions {
     check(urls: string[]): Promise<Verdict>;
     /** The one-time offer applies: available, never asked, not in Google-free mode. */
     offer(): boolean;
+  };
+  /** Ad and tracker blocking (ARCHITECTURE.md §9): each page's element hiding, which profile a page's session is, and when a change is in. */
+  adBlocking: {
+    attachPage(contents: WebContents): void;
+    profileOf(contents: WebContents): string | undefined;
+    settled(): Promise<void>;
   };
   /** Chrome extensions (ARCHITECTURE.md §12). */
   extensions: {
@@ -229,6 +239,7 @@ export class Browser {
         this.safeBrowsing.attach(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
         this.siteZoom.attach(contents);
+        options.adBlocking.attachPage(contents);
         contents.on('did-stop-loading', () => this.previews.loaded(nodeId));
         // Whatever a page asked for is denied once it's gone or replaced by another page; a share ends.
         contents.on('did-start-navigation', (details) => {
@@ -281,6 +292,7 @@ export class Browser {
             return owner && bounds ? { window: owner, x: bounds.x, y: bounds.y } : undefined;
           },
           extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
+          adBlocking: this.blockingMenu(contents),
         });
       },
       onPeek: (openerNodeId, url, origin) => {
@@ -292,6 +304,7 @@ export class Browser {
       },
       onPopupCreated: (contents, openerNodeId) => {
         this.safeBrowsing.attachPopup(contents, openerNodeId);
+        options.adBlocking.attachPage(contents);
         attachContextMenu(contents, {
           surface: 'web',
           inspect: true,
@@ -734,8 +747,52 @@ export class Browser {
         case 'window.open':
           if (!this.windows.has(effect.windowId)) this.openWindow(effect.windowId, { commandBar: !this.quietWindows.has(effect.windowId) });
           break;
+        case 'site.reload': {
+          // Ad blocking changed for a site from its page's menu: its pages on screen reload once the change is in
+          // (after this change's subscribers have asked for it, hence the microtask).
+          const { site, chordId } = effect;
+          queueMicrotask(() =>
+            void this.options.adBlocking.settled().then(() => {
+              for (const w of this.windows.values()) {
+                if (chordId ? this.store.state.windows[w.id]?.activeChordId !== chordId : w.isPrivate) continue;
+                for (const contents of w.paneContents) if (!contents.isDestroyed() && isBlockingOff(contents.getURL(), [site])) contents.reload();
+              }
+            }),
+          );
+          break;
+        }
       }
     }
+  }
+
+  /** A page's "Block ads on this site": whether blocking is on there, and turning it off (or on again) with Undo. */
+  private blockingMenu(contents: WebContents): { on(url: string): boolean | null; set(url: string, on: boolean): void } {
+    const scope = () => {
+      const profileId = this.options.adBlocking.profileOf(contents);
+      const state = this.store.state;
+      if (!profileId) return null;
+      const privateChord = isPrivateProfile(profileId) ? Object.values(state.chords).find((c) => c.private && c.profileId === profileId) : undefined;
+      return { profileId, chordId: privateChord?.id };
+    };
+    return {
+      on: (url) => {
+        const where = scope();
+        if (!where || !this.store.state.settings.adBlocking.enabled || !blockingSite(url)) return null;
+        return !isBlockingOff(url, blockingOffSites(this.store.state, where.profileId));
+      },
+      set: (url, on) => {
+        const where = scope();
+        const site = blockingSite(url);
+        if (!where || !site) return;
+        const command = (off: boolean) => ({ t: 'adBlocking.site' as const, site, off, ...(where.chordId ? { chordId: where.chordId } : {}) });
+        this.store.dispatch(command(!on));
+        this.windowFor(contents)?.toast({
+          id: `blocking:${site}`,
+          message: on ? `Blocking ads on ${site} again` : `Not blocking ads on ${site}`,
+          action: { label: 'Undo', command: command(on) },
+        });
+      },
+    };
   }
 
   /**

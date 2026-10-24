@@ -6,6 +6,7 @@
  */
 import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
+import { blockingSite, cleanOffSites } from './ad-blocking';
 import { cleanKeys } from './bindings';
 import { isInternalUrl, visibleTabs } from './idle';
 import {
@@ -174,6 +175,13 @@ export type Command =
   /** The page zoom you chose for a site; 1 forgets it. */
   | { t: 'zoom.set'; host: string; factor: number }
   /**
+   * A page's "Block ads on this site" (and its Undo): ad blocking off or on
+   * again for the site of `site` (an address or a name), and the site's open
+   * pages reload. From a private window (`chordId` its chord), turning it off
+   * lasts only as long as the window; turning it on changes Settings' list too.
+   */
+  | { t: 'adBlocking.site'; site: string; off: boolean; chordId?: ChordId }
+  /**
    * Split view (DESIGN.md §8.4): show `nodeId` (or a new tab for `url`) as a
    * pane beside `withId`, at pane `index` (the end when absent). `withId`'s
    * split grows, or a new one takes `withId`'s place, running `direction`. A
@@ -224,7 +232,9 @@ export type Effect =
   /** The window's sidebar docked or collapsed, or changed width: lay the content frame out again. */
   | { e: 'window.layout'; windowId: WindowId; sidebar: 'docked' | 'collapsed'; width: number; animate: boolean }
   /** A window was created: open it. */
-  | { e: 'window.open'; windowId: WindowId };
+  | { e: 'window.open'; windowId: WindowId }
+  /** Ad blocking turned off or on for a site: its pages on screen reload, in that private window's chord only, or in every other. */
+  | { e: 'site.reload'; site: string; chordId: ChordId | null };
 
 export interface Context {
   now: number;
@@ -1127,6 +1137,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (safeBrowsing && !draft.settings.safeBrowsingAsked) draft.settings.safeBrowsingAsked = true;
       }
       if (draft.settings.googleFree && draft.settings.safeBrowsing) draft.settings.safeBrowsing = false;
+      if (cmd.settings.adBlocking) {
+        const { enabled, offSites } = cmd.settings.adBlocking;
+        const current = draft.settings.adBlocking;
+        if (enabled !== undefined && current.enabled !== enabled) current.enabled = enabled;
+        if (offSites) {
+          const clean = cleanOffSites(offSites);
+          if (clean.join('\n') !== current.offSites.join('\n')) current.offSites = clean;
+        }
+      }
       if (archiveAfter !== undefined && draft.settings.archiveAfter !== archiveAfter) draft.settings.archiveAfter = archiveAfter;
       if (sleepTabs !== undefined && draft.settings.sleepTabs !== sleepTabs) draft.settings.sleepTabs = sleepTabs;
       if (searchSuggestions !== undefined && draft.settings.searchSuggestions !== searchSuggestions) draft.settings.searchSuggestions = searchSuggestions;
@@ -1376,6 +1395,25 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       // Chromium's zoom steps aren't exact; anything this close to 100% is 100%.
       if (Math.abs(factor - 1) < 0.001) delete draft.siteZoom[cmd.host];
       else if (draft.siteZoom[cmd.host] !== factor) draft.siteZoom[cmd.host] = factor;
+      return;
+    }
+
+    case 'adBlocking.site': {
+      const site = blockingSite(cmd.site);
+      if (!site) return;
+      const chord = cmd.chordId ? draft.chords[cmd.chordId] : undefined;
+      const inPrivate = chord?.private === true;
+      const saved = draft.settings.adBlocking;
+      const own = inPrivate ? (chord.blockingOff ?? []) : [];
+      const isOff = saved.offSites.includes(site) || own.includes(site);
+      if (isOff === cmd.off) return;
+      if (cmd.off && inPrivate) chord.blockingOff = [...own, site];
+      else if (cmd.off) saved.offSites = cleanOffSites([...saved.offSites, site]);
+      else {
+        if (inPrivate && own.includes(site)) chord.blockingOff = own.filter((s) => s !== site);
+        if (saved.offSites.includes(site)) saved.offSites = saved.offSites.filter((s) => s !== site);
+      }
+      effects.push({ e: 'site.reload', site, chordId: inPrivate ? chord.id : null });
       return;
     }
 
