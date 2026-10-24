@@ -45,8 +45,20 @@ export function failOnMainErrors(): void {
  */
 export async function kill(app: ElectronApplication): Promise<void> {
   killed.add(app);
+  // Chromium's other processes (GPU, renderers, utilities) notice on their own and exit a moment later; on
+  // Windows they hold the profile until then, and a Chord launched on it at once can't start.
+  const pids = await app.evaluate(({ app: electronApp }) => electronApp.getAppMetrics().map((m) => m.pid)).catch(() => [] as number[]);
   const child = app.process();
   const exited = new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done(null) : child.once('exit', done)));
   child.kill('SIGKILL');
   await exited;
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const deadline = Date.now() + 15_000; pids.some(alive) && Date.now() < deadline; ) await new Promise((done) => setTimeout(done, 100));
 }
