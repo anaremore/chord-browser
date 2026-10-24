@@ -318,8 +318,8 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
 - **P1 Performance pass:**
   - cold launch: try Node's compile cache or a V8 snapshot for main, measured against the 1.5 s budget, kept only if it wins;
   - load Duet, the theme editor and Settings' code when first opened;
-  - the four interactions over the 8 ms frame budget on 120 Hz displays (Duet, drag, chord switch, Clear Today);
-  - memory from `app.getAppMetrics()`, and tabs sleep sooner when free memory runs low (Electron has no pressure event);
+  - the four interactions over the 8 ms frame budget on 120 Hz displays (Duet, drag, chord switch, Clear Today). *2026-10-24:* CPU profiles (`CHORD_PERF_PROFILE=1`) found the costs. The frame snapshot's pictures now skip the preload and become bitmaps in a worker (collapse 17.1 → 8.1 ms worst frame, dock 14.5 → 6.3 ms, with 200 tabs), and dragging no longer hit-tests on every move (dnd-kit's AutoScroller replaced by `EdgeScroller`). Left: mounting Duet's panel, forced layout on tab and chord switches, garbage on Clear Today;
+  - memory from `app.getAppMetrics()`, and tabs sleep sooner when free memory runs low (Electron has no pressure event). **Low-memory sleeping built 2026-10-24** (ARCHITECTURE.md §9);
   - CI fails when launch time or memory grows past a set margin.
   - Not doing: removing the app menu (shortcuts and the macOS Edit menu need it), or native modules (each Electron upgrade would need them rebuilt, against the 72-hour runbook).
 

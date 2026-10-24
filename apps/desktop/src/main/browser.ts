@@ -89,6 +89,8 @@ export interface BrowserOptions {
   archive: { entry(which: { archiveId: string } | { reasons: ArchiveReason[] }): Promise<ArchiveEntry | null> };
   /** When idle tabs are archived and put to sleep. */
   idle: IdleTiming;
+  /** The computer is low on memory: tabs sleep sooner (idle.ts). */
+  memoryLow(): boolean;
   /** Answers getDisplayMedia with Chord's picker; connected here once the store exists. */
   screenShare: ScreenShareBroker;
   /** Answers sites and proxies that ask for a username and password; connected here once the store exists. */
@@ -436,6 +438,7 @@ export class Browser {
         dispatch: (command) => this.store.dispatch(command),
         tabs: this.tabs,
         isCapturing: (nodeId) => options.permissions.isCapturing(nodeId),
+        memoryLow: options.memoryLow,
       },
       options.idle,
     );

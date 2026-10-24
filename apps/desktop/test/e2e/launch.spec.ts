@@ -1474,6 +1474,31 @@ test('sleeping: a tab hidden long enough frees its page, and wakes where it was'
   }
 });
 
+test('low on memory, a hidden tab goes to sleep after minutes, not the usual hour', async () => {
+  // The usual wait stays an hour; memory reads as low, and "minutes" here are a second.
+  const app = await launch({
+    CHORD_HOME_URL: `${site.origin}/`,
+    CHORD_MEMORY_LOW: '1',
+    CHORD_PRESSURE_SLEEP_AFTER_MS: '700',
+    CHORD_MEMORY_CHECK_MS: '200',
+  });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const today = shell.getByRole('tree', { name: 'Today' });
+    await expect(today).toContainText('First page');
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}/second`);
+    await overlay.keyboard.press('Enter');
+    await expect(today.getByRole('treeitem').first()).toContainText('Second page');
+    await expect(today.getByRole('treeitem', { name: 'First page', exact: true })).toHaveAttribute('data-asleep', 'true', { timeout: 10_000 });
+    // The tab on screen stays awake.
+    await expect(today.getByRole('treeitem', { name: 'Second page', exact: true })).not.toHaveAttribute('data-asleep');
+  } finally {
+    await app.close();
+  }
+});
+
 test('the archive: unused tabs are tidied away, come back from the archive page, and ⌘⇧T reopens closed ones', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   let app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_ARCHIVE_AFTER_MS: '900', CHORD_IDLE_CHECK_MS: '200' }, profile);
