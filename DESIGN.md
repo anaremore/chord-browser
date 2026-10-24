@@ -93,7 +93,7 @@ macOS                                            Windows / Linux
 | Row | Height | Contents |
 |---|---|---|
 | Header | 40 | macOS: traffic lights (≈ 68 px reserved, `trafficLightPosition` centered in the row) then back/forward/reload. Windows/Linux: app menu ≡ (native menu) then back/forward/reload. |
-| URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L edits the address **in place**: the pill becomes a text field with the URL selected, and results drop down beneath it (§7.3). Hover reveals copy link · page actions. |
+| URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L edits the address **in place**: the pill becomes a text field with the URL selected, and results drop down beneath it (§7.3). Hover reveals copy link · page actions. *(2026-10-24:)* On macOS with the sidebar docked, reader view's button (§7.11) sits just right of the pill while the page reads as an article; with a top strip (Windows, Linux) or the minimal bar, it's there instead. |
 | Chord header | 28 | Chord icon (16) + name (`text-label`). Hover shows the ⋯ menu (Edit theme, Rename, Keep sign-ins separate, Delete). |
 | Pinned | 32 / row | Pinned tabs and folders, nestable; indent 12 px per level, visually capped at 4 levels. |
 | Favorites | 40 + 8 | *(As built, M1.2.)* Tiles every chord shares, in a wrapping grid, each a site's icon on an `item-hover` square (`radius-md`). The one for the tab you're on is raised. A tile switches to this chord's tab on that site, or opens it in Today. Drag a tab onto the row to add it; right-click to remove. *(2026-10-24:)* A tile whose tab makes sound wears a small speaker on its corner (`volume-x` while muted); its row mutes it. |
@@ -126,6 +126,7 @@ Windows / Linux
 | Back · Forward · Reload | As in the sidebar header. Unavailable buttons sit at 40% opacity rather than disappearing, so nothing shifts. |
 | Address field | `domain / title`: domain in `fg`, the slash and title in `fg-muted`, one line, truncated at the end. Click or ⌘L and the field *grows into* the command bar in place (shared-element morph), with the URL selected. Hover shows the site-info icon. |
 | Speaker | *(Built 2026-10-24.)* Only while the tab on screen makes sound: the row's speaker (§7.2), which the hidden sidebar can't show. Click mutes or unmutes the tab. |
+| Reader view | *(Built 2026-10-24.)* Only while the page reads as an article, or shows in reader view: a book, pressed while it's open (§7.11). It sits right after the address, before the speaker; the Windows and Linux top strip has it there too with the sidebar docked. |
 | Drag region | Everything not interactive drags the window. Double-click follows the platform (maximize on Windows/Linux; the macOS title-bar preference). |
 | Downloads | Present only while a download is active or just finished. |
 | Extension actions | Only the puzzle piece, which lists every extension, so popups stay one click away while the header stays clean. With Settings → Extensions → "Show extension buttons: In the title bar", the pinned buttons sit here too: before ⋯ on Windows/Linux, and in the sidebar's header row on macOS (its title bar) while the sidebar is docked. |
@@ -204,6 +205,8 @@ Bundling: one variable `woff2`, preloaded. `font-display: block` is safe because
 
 - Numbers that change (counts, times, download progress) use `font-variant-numeric: tabular-nums`.
 - Weights 450 and 650 rely on the variable axis; they render crisper than 400 and 700 on Windows' grayscale antialiasing.
+
+**Reading scale** (reader view, §7.11; `packages/tokens/src/reader.ts`): six body sizes, 15, 17, 19, 21, 24 and 28 px (19 to start, between Safari's and Firefox's). Each has its title (1.75×, 650), h2 (1.35×, 650), h3 (1.15×, 600), h4 (600), body (450), captions (0.85×) and code (0.9×), every line height on the 4 px grid (about 1.6× for body text), and a paragraph gap of about one em. Line widths, in ems of the body: narrow 30, medium 36, wide 44 (about 60, 70 and 85 characters). Fonts: Onest, or the computer's reading serif (Charter on macOS, Sitka on Windows, the desktop's serif on Linux), so no second typeface ships; code in the computer's monospace.
 
 ### 4.3 Spacing and sizing (4 px grid)
 
@@ -477,7 +480,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 
 | Area | Components |
 |---|---|
-| Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
+| Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ReaderButton` (§7.11), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
 | Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `NowPlayingCard` (§7.10), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar` |
 | Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
@@ -485,7 +488,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Settings and help | `SettingRow` (label, control, and a ↺ reset button shown only when the value differs from its default), `ShortcutSheet` (the cheat sheet, generated from the shortcut registry) |
 | Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
 | Duet | `DuetPanel`, `ThreadHeader` (title, provider/model chip, thread menu), `MessageList`, `AssistantMessage` (with `CitationPill`), `ToolActivityRow`, `ApprovalCard`, `Composer` (`ContextChips`, input, send), `DuetSetup` |
-| Pages | `SettingsPage`, `ArchivePage`, `RecentlyDeleted` |
+| Pages | `SettingsPage`, `ArchivePage`, `RecentlyDeleted`, `ReaderView` (`ReaderBar`, `TextControls`, `ArticleContent`; §7.11) |
 | Primitives (`packages/ui`) | `Button` (primary, secondary, ghost, danger), `IconButton`, `Keycap`, `Toggle`, `Segmented`, `Slider`, `TextField`, `Favicon`, `ChordIcon`, `Menu` (wraps native menus) |
 
 ### 7.2 `TabRow`
@@ -653,6 +656,22 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Motion:** it rises 8 px and fades in on `overlay`, and leaves with `fade-fast` and a 4 px drop; with reduced motion, opacity only. It belongs to *Animate the sidebar* (§6.8): off, it just appears. When what it shows changes, it changes in place.
 - **Accessibility:** a group named *Now playing*, outside the sidebar's trees, so its buttons are ordinary Tab stops, named for what they do: *Go to tab: [title]*, *Next playing tab, 1 of 2*, *Pop out the video*, *Mute tab*, *Pause*. Going to the tab, or the card leaving with the keyboard in it, hands the keyboard to the sidebar's tab. A new track isn't announced.
 - **The OS's own controls** (Windows' media flyout, macOS's Now Playing, Linux's MPRIS) come from Chromium, not this card: ARCHITECTURE.md §9.
+
+### 7.11 `ReaderView`
+
+*Built 2026-10-24.* A page's article on its own, in Chord's typography and the chord's colors, without the site's layout, ads or scripts, as Firefox's and Safari's reader views show it. How it works, and why nothing in it can run: ARCHITECTURE.md §9.
+
+- **When it's offered:** while the page on screen reads as an article (Chord asks once it has loaded, and again a few seconds later), a book (`book-open-text`, 16 px) shows beside the address: in the top strip on Windows and Linux and in the minimal bar, or right of the URL pill on macOS with the sidebar docked. It's an icon button named *Reader view*, pressed while reader view shows (`aria-pressed`, the active row's raised surface), with the keys in its tooltip. Also: the tab's menu (*Show in reader view* or *Leave reader view*, bringing the tab to the front), the command bar (*Show reader view*, *Leave reader view*), the View menu, and **F9** (⌘⌥R on macOS), page-first. Asked on a page with no article, a toast says *Chord couldn’t find an article on this page.*
+- **Where:** in the frame, in place of the page, with the frame's radius and shadow; each pane of a split can show its own. The page waits behind as it was: Esc, ✕, the button or the keys bring it back, scrolled where you left it. Following a link from it in the tab leaves reader view, as the page goes.
+- **Anatomy:**
+  - **Bar**, 40 px, staying on top as the article scrolls: the book and the site's name (`text-small`, `fg-muted`) on the chord's tint over `surface`, a hairline under it; on the right *Text and colors* (`a-large-small`) and *Close reader view* (✕; its tooltip names Esc and the keys).
+  - **The article**, one column at the line width you chose, centered, `space-10` above and `space-16` below: the title (reading `title`, lines balanced), a line under it with the byline and *8 min read* (`small`, `fg-muted`), then the text in reading `body`, selectable.
+  - Headings start at h2 under the title and never skip a level. Links are `accent`, underlined, thicker on hover; they go where the tab's would (Peek from a pinned tab to another site, §8.5; ⌘/Ctrl-click or the middle button, a tab behind). Images fill the column at most (`radius-sm`), captions in `small`, `fg-muted`. Quotes get a 2 px `divider` rule and `fg-muted` text; code is in the computer's monospace on `item-hover`, wrapping; tables are `small` with hairline rows, and a wide one scrolls sideways in a region of its own.
+- **Text and colors:** a card under its button (`surface-raised`, `shadow-popover`, `radius-md`, 320 px, `space-3` padding) with four segmented choices on `item-hover`, the chosen one raised: *Text size* (smaller · the size in px · larger, over the six sizes of §4.2), *Font* (Sans: Onest; Serif: the computer's), *Line width* (Narrow, Medium, Wide), and *Colors*, each with a swatch of its page and ink: **Chord** (the chord's own theme, light or dark as the chord is; the default), **Light** and **Dark** (neutral, Graphite), **Sepia** (warm paper and brown ink). A change applies at once, to every reader view, and is remembered (Settings keeps it, from a private window too: it says nothing about what you read). The zoom keys and Ctrl + wheel change the text size as well, as in Safari. Esc or a click elsewhere puts the card away.
+- **Contrast:** every theme keeps text, secondary text and links at 4.5:1 or more on its page and focus rings at 3:1 (`createReaderTheme`, tested as the chord themes are).
+- **Motion:** none of its own. Reader view comes in once its article is laid out, so no blank frame shows, and goes at once; only its buttons' hover fades remain, which reduced motion removes.
+- **Accessibility:** the bar is the page's banner and the article its main landmark, with one h1, the title. Space, Page Down and the arrows scroll it as it opens (it takes the keyboard); F6 counts it as the page. The card's choices are radio groups (one Tab stop each, arrows choose); Esc closes the card, then reader view. An image without a description is decoration (empty `alt`), and a link with nothing to name it isn't one. Printing prints the article alone. Windows High Contrast: the card gets a `CanvasText` edge, a chosen option `Highlight`.
+- **Private windows:** the same, in the window's graphite colors with the Chord theme; images come through the window's own sign-ins, and nothing of the article is kept.
 
 ---
 
@@ -975,6 +994,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 | Close window | ⌘⇧W | Ctrl+Shift+W | R |
 | Show / hide the sidebar (minimal mode) | ⌘S | Ctrl+S | P |
 | Find in page | ⌘F | Ctrl+F | P |
+| Show / hide reader view (§7.11) | ⌘⌥R | F9 | P |
 | Find next / previous | ⌘G · ⌘⇧G | F3 · Shift+F3 | P |
 | Zoom in / out / actual size | ⌘= · ⌘− · ⌘0 | Ctrl+= · Ctrl+− · Ctrl+0 | P |
 | Full screen | ⌃⌘F | F11 | R |

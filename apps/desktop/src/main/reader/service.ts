@@ -43,7 +43,8 @@ const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/apng', 'image/svg+xml', 'image/bmp', 'image/x-icon', 'image/vnd.microsoft.icon']);
 const IMAGE_ACCEPT = 'image/avif,image/webp,image/apng,image/svg+xml,image/*;q=0.8';
 
-export const READER_IMAGE_PATH = /^\/image\/([0-9a-f]{32})\/(\d{1,4})$/;
+/** An image's address under chord://reader: its reader view's key, and its number in the article. */
+const READER_IMAGE_PATH = /^\/image\/([0-9a-f]{32})\/(\d{1,4})$/;
 
 /** Where a followed link opens: in the tab, or a new tab behind or in front. */
 export type ReaderLinkTarget = 'here' | 'background' | 'foreground';

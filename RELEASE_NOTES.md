@@ -16,6 +16,11 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
   - Big imports stay smooth and show their progress, and Undo takes all of it back, history included.
   - Chord reads copies of the other browser's files and never changes them. It never copies passwords, cookies or extensions; your password manager can bring passwords across.
   - Safari needs Full Disk Access, and Chord says where to turn it on.
+- **Reader view:** on a page that reads as an article, the book beside the address (or F9, ⌥⌘R on macOS) shows just the article, in Chord's typeface and your chord's colors, without the site's layout, ads or scripts. Esc brings the page back, where you were.
+  - Make the text bigger or smaller, pick a serif, a narrower or wider column, or Light, Dark or Sepia colors; Chord remembers them for every page.
+  - Pictures show as they do on the page, signed in as you are there; links go where they would from the page.
+  - It works in private windows too, and keeps nothing of what you read.
+  - It uses Mozilla's Readability, under the Apache License 2.0; its notice ships with every build.
 - **Media controls:** a tab playing sound shows a speaker on its row; click it (or press Ctrl+M, ⌃M on macOS) to mute the tab, and it stays muted after it sleeps or Chord restarts.
   - When something plays in a tab you aren't looking at, in any chord, a Now playing card at the bottom of the sidebar shows what it is (with the track and artist when the site says), with play and pause, mute, picture-in-picture for videos, and a way back to the tab.
 - **Peek** gets the sign-in box too, when a site in it asks for a username and password.
