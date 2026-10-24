@@ -234,6 +234,7 @@ Only borders and focus rings may be off-grid (1 px and 2 px). Text is vertically
 | `shadow-frame` | `0 0 0 1px oklch(0 0 0 / .06), 0 2px 6px oklch(0 0 0 / .06), 0 12px 32px -12px oklch(0 0 0 / .16)` | `0 0 0 1px oklch(1 0 0 / .07), 0 12px 32px -12px oklch(0 0 0 / .6)` | content frame, Duet panel, split panes |
 | `shadow-lift` | `0 8px 20px -6px oklch(0 0 0 / .22)` | `0 8px 20px -6px oklch(0 0 0 / .6)` | a row being dragged |
 | `shadow-popover` | `0 12px 32px -8px oklch(0 0 0 / .22), 0 0 0 1px oklch(0 0 0 / .06)` | `… / .6`, hairline `oklch(1 0 0 / .08)` | hover previews, toasts |
+| `shadow-card` | `0 4px 10px -3px oklch(0 0 0 / .24), 0 0 0 1px oklch(0 0 0 / .06)` | `… / .6`, hairline `oklch(1 0 0 / .08)` | the popover's cards (find, permissions, sign-in, screen sharing): their view is sized to them with `space-3` around, which the shadow stays inside, since a bigger view would take the page's clicks |
 | `shadow-modal` | `0 24px 64px -16px oklch(0 0 0 / .32), 0 0 0 1px oklch(0 0 0 / .06)` | `… / .7` | command bar, Peek |
 
 **Layers (inside one view):** `z-base` 0 · `z-raised` 1 · `z-sticky` 10 · `z-drag` 20 · `z-popover` 30 · `z-toast` 40 · `z-modal` 50. Stacking *across* views (shell, tabs, popover, overlay) is set in ARCHITECTURE.md §5, not by z-index.
