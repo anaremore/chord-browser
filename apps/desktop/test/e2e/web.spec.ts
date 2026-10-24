@@ -1,7 +1,8 @@
 /**
  * The web platform a daily browser needs (ARCHITECTURE.md §9): PDFs in a tab,
- * spelling suggestions, screen sharing through Chord's picker, Settings → Site
- * permissions, a page's fullscreen, and page zoom remembered per site.
+ * spelling suggestions, screen sharing through Chord's picker, sites that ask
+ * for a password in the browser's own box, Settings → Site permissions, a
+ * page's fullscreen, and page zoom remembered per site.
  */
 import { mkdtempSync, readdirSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -40,6 +41,20 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     if (path === '/doc.pdf' || path === '/dl.pdf') {
       res.writeHead(200, { 'content-type': 'application/pdf', ...(path === '/dl.pdf' ? { 'content-disposition': 'attachment; filename="dl.pdf"' } : {}) });
       res.end(PDF);
+      return;
+    }
+    // HTTP Basic auth: me / secret, and ops / other for /staging. Chromium sends a sign-in that worked to the
+    // rest of its folder unasked, so /staging needs credentials of its own to ask again.
+    if (path === '/private' || path === '/staging') {
+      const realm = path === '/private' ? 'Private area' : 'Staging';
+      const expected = path === '/private' ? 'me:secret' : 'ops:other';
+      if (req.headers.authorization !== `Basic ${Buffer.from(expected).toString('base64')}`) {
+        res.writeHead(401, { 'www-authenticate': `Basic realm="${realm}"`, 'content-type': 'text/html; charset=utf-8' });
+        res.end('<title>Unauthorized</title><p>No entry.</p>');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(`<title>${realm} page</title>`);
       return;
     }
     if (path === '/zoom') {
@@ -201,6 +216,50 @@ test('screen sharing goes through Chord’s picker, and Stop in the sidebar ends
     await stop.click();
     await expect.poll(() => tab.title()).toBe('Share ended');
     await expect(stop).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a site that asks for a password gets Chord’s own box: a wrong answer says so, a right one signs in, Cancel shows the site’s page', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/private` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const popover = await pageWhere(app, isPopover);
+    const box = popover.getByRole('alertdialog', { name: `Sign in to ${site.origin}` });
+    await expect(box).toBeVisible();
+    // The realm is quoted (`<q>`, whose marks are drawn by CSS).
+    await expect(box.locator('q')).toHaveText('Private area');
+    // This computer's own server isn't warned about; the username field has the keyboard.
+    await expect(box).not.toContainText('HTTPS');
+    await expect(box.getByLabel('Username')).toBeFocused();
+
+    await popover.keyboard.type('me');
+    await popover.keyboard.press('Tab');
+    await popover.keyboard.type('wrong');
+    await popover.keyboard.press('Enter');
+    await expect(box).toContainText("That username and password didn't work.");
+    await box.getByLabel('Username').fill('me');
+    await box.getByLabel('Password').fill('secret');
+    await box.getByRole('button', { name: 'Sign in' }).click();
+    const tab = await pageWhere(app, (url) => url === `${site.origin}/private`);
+    await expect.poll(() => tab.title()).toBe('Private area page');
+    await expect(box).toBeHidden();
+
+    // Cancel: the site's own "unauthorized" page.
+    await visit(shell, overlay, `${site.origin}/staging`);
+    const staging = popover.getByRole('alertdialog', { name: `Sign in to ${site.origin}` });
+    await expect(staging.locator('q')).toHaveText('Staging');
+    await popover.keyboard.press('Escape');
+    await expect(staging).toBeHidden();
+    const refused = await pageWhere(app, (url) => url === `${site.origin}/staging`);
+    await expect.poll(() => refused.title()).toBe('Unauthorized');
+
+    // A sign-in that worked holds until Chord quits: the private page loads without asking.
+    await visit(shell, overlay, `${site.origin}/private`);
+    await expect.poll(() => app.evaluate(({ webContents }, u) => webContents.getAllWebContents().filter((w) => w.getURL() === u).length, `${site.origin}/private`)).toBe(2);
+    await expect(box).toBeHidden();
   } finally {
     await app.close();
   }

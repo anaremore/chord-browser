@@ -312,7 +312,7 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
 - **P0** CI green on every OS, then tag `v0.1.0` and publish the draft as a prerelease.
 
 ### 0.1.x · Daily-driver gaps · November
-- **P0 HTTP Basic Auth.** Today a site that asks for a username and password in the browser's own box just fails: nothing handles `login`. A prompt in the content frame, themed like the permission prompts, never a native dialog. Chromium remembers the answer until you quit (D12).
+- **P0 HTTP Basic Auth.** **Built 2026-10-24** (ARCHITECTURE.md §9): a sign-in box in the popover over the tab that asked, for sites and proxies (Basic, Digest, NTLM), with the site's realm, a note after a wrong answer and a warning on plain HTTP. Chromium remembers a sign-in that worked until you quit; Chord keeps nothing (D12). Not yet: Peek and mini windows, whose pages get the site's 401 page.
 - **P0 Sign-in checks, by hand:** Google in a second chord on Windows, macOS and Linux; Microsoft, GitHub and Apple; 1Password, Bitwarden and KeePassXC-Browser (risk R2). No user-agent spoofing unless one fails (D15).
 - **P1 Crash resilience.** A test that kills Chord mid-session and checks every window, chord, split and tab comes back. Open tabs save their scroll and form state every 30 seconds, not only when they navigate.
 - **P1 Performance pass:**

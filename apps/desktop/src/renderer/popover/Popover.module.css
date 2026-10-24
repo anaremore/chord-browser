@@ -185,6 +185,70 @@
   opacity: 0.45;
 }
 
+/* ---------- Sign-in box (HTTP auth) ---------- */
+
+.authNotes {
+  display: contents;
+}
+
+.authRetry {
+  margin: var(--space-2) 0 0;
+  padding: 0 var(--space-4);
+  color: var(--color-danger);
+  font: var(--text-small);
+}
+
+.realm {
+  overflow-wrap: anywhere;
+}
+
+.authWarning {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin: var(--space-2) 0 0;
+  padding: 0 var(--space-4);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.authWarning svg {
+  flex: none;
+  margin-block-start: calc(var(--space-1) / 2);
+  color: var(--color-danger);
+}
+
+.authFields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  margin: var(--space-3) 0 0;
+  padding: 0 var(--space-4);
+}
+
+.authLabel {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.authInput {
+  min-inline-size: 0;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+  user-select: text;
+}
+
+.authInput:focus-visible {
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+}
+
 /* ---------- Screen-share picker ---------- */
 
 /* Wider than the other cards: two thumbnails side by side. */

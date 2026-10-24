@@ -29,6 +29,7 @@ import { WebStore } from './extensions/webstore';
 import { observeContextMenusForTests, type ObservedItem } from './context-menu';
 import { PermissionBroker } from './permissions';
 import { ScreenShareBroker } from './screen-share';
+import { AuthBroker } from './http-auth';
 import { applySpellcheck, setDictionarySource } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
@@ -69,6 +70,7 @@ let persistence: Persistence | undefined;
 let duet: DuetService | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker();
+const httpAuth = new AuthBroker();
 
 /**
  * Safe Browsing (ARCHITECTURE.md §14.5): Google's v5 API in Local List Mode.
@@ -267,6 +269,7 @@ function registerIpc(): void {
   });
   handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
   handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
+  handle('auth:respond', ({ id, credentials }) => httpAuth.respond(id, credentials));
   handle('settings:sitePermission', ({ origin, permission, decision }) =>
     browser!.store.dispatch({ t: 'permission.set', origin, permissions: [permission], decision }),
   );
@@ -291,6 +294,10 @@ if (!app.requestSingleInstanceLock()) {
     const urls = urlsFromArgv(argv);
     if (urls.length > 0) openUrls(urls);
     else browser?.focusFirstWindow();
+  });
+  // A site or proxy asking for a username and password: Chord's own box over the tab, or cancelled.
+  app.on('login', (event, contents, details, info, callback) => {
+    if (httpAuth.login(contents, details, info, callback)) event.preventDefault();
   });
   // macOS hands links and files over as events, from launch onward.
   app.on('open-url', (event, url) => {
@@ -417,6 +424,7 @@ if (!app.requestSingleInstanceLock()) {
       profileSession,
       permissions,
       screenShare,
+      httpAuth,
       history: (event) => store.history(event),
       archive: { entry: (which) => store.archiveEntry(which) },
       idle: {

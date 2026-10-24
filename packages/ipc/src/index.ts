@@ -339,6 +339,24 @@ export interface PermissionPrompt {
   permissions: SitePermission[];
 }
 
+/**
+ * A site (or a proxy) asking for a username and password in the browser's own
+ * box: HTTP Basic, Digest or NTLM (ARCHITECTURE.md §9).
+ */
+export interface AuthPrompt {
+  id: number;
+  /** The scheme, host and port that asked, as Chromium's own box shows it: `http://router.local:8080`. */
+  origin: string;
+  /** What the site calls the area (its realm), the site's own words; empty when it gave none. */
+  realm: string;
+  /** A proxy between you and the web is asking, not the site. */
+  proxy: boolean;
+  /** The site isn't on HTTPS: what you type crosses the network unencrypted. */
+  insecure: boolean;
+  /** The last answer didn't work. */
+  retry: boolean;
+}
+
 export interface FindState {
   text: string;
   matches: number;
@@ -419,6 +437,7 @@ export interface PopoverState {
   find: FindState | null;
   permission: PermissionPrompt | null;
   share: SharePrompt | null;
+  auth: AuthPrompt | null;
   /** The one-time offer to turn Safe Browsing on, with its notice (profiles from before it existed). */
   safeBrowsingOffer: boolean;
 }
@@ -784,6 +803,15 @@ export const invokeChannels = {
     request: z.object({ id: z.number().int().min(1), decision: z.enum(['allow', 'block', 'dismiss']) }),
     response: z.void(),
   },
+  /** A sign-in box's answer, or null to cancel (the site then shows its own "unauthorized" page). */
+  'auth:respond': {
+    roles: ['popover'],
+    request: z.strictObject({
+      id: z.number().int().min(1),
+      credentials: z.strictObject({ username: z.string().max(1000), password: z.string().max(1000) }).nullable(),
+    }),
+    response: z.void(),
+  },
   /** Open a web link from Settings (About, help) in a new tab of the last-used window. */
   'settings:openUrl': { roles: ['internal'], request: z.strictObject({ url: z.url({ protocol: /^https$/ }) }), response: z.void() },
 } as const satisfies Record<string, { roles: readonly Role[]; request: z.ZodType; response: z.ZodType }>;
@@ -1055,6 +1083,8 @@ export interface PopoverApi {
   permission: { respond(id: number, decision: 'allow' | 'block' | 'dismiss'): Promise<void> };
   /** The screen-share picker: a source to share, or null to cancel. */
   share: { respond(id: number, sourceId: string | null, audio: boolean): Promise<void> };
+  /** A sign-in box: a username and password, or null to cancel. */
+  auth: { respond(id: number, credentials: { username: string; password: string } | null): Promise<void> };
   /** The one-time offer: turn Safe Browsing on, or not now (either way it isn't offered again). */
   safeBrowsing: { choose(on: boolean): Promise<void> };
 }

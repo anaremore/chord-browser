@@ -55,6 +55,7 @@ import { Previews } from './previews';
 import type { Verdict } from './safe-browsing/database';
 import { SafeBrowsingGuard } from './safe-browsing/guard';
 import type { ScreenShareBroker } from './screen-share';
+import type { AuthBroker } from './http-auth';
 import { SiteZoom } from './site-zoom';
 import { spellcheckLanguages } from './spellcheck';
 import { setUiScale, systemInfo } from './platform';
@@ -89,6 +90,8 @@ export interface BrowserOptions {
   idle: IdleTiming;
   /** Answers getDisplayMedia with Chord's picker; connected here once the store exists. */
   screenShare: ScreenShareBroker;
+  /** Answers sites and proxies that ask for a username and password; connected here once the store exists. */
+  httpAuth: AuthBroker;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
   /** A private window closed: drop its session (cookies, storage, cache) and anything kept for it. */
@@ -129,6 +132,8 @@ export class Browser {
   private readonly finders = new Map<WindowId, FindInPage>();
   /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
   private readonly popoverSent = new Map<WindowId, string>();
+  /** The sign-in box each window last gave the keyboard to, so a box takes it once. */
+  private readonly authFocused = new Map<WindowId, number>();
   /** The browser window used most recently: menus, Settings and links from Settings act on it. */
   private lastWindowId: WindowId | null = null;
   private settingsWindow: SettingsWindow | null = null;
@@ -221,10 +226,12 @@ export class Browser {
           if (!details.isMainFrame || details.isSameDocument) return;
           options.permissions.forgetTab(nodeId);
           options.screenShare.forgetTab(nodeId);
+          options.httpAuth.forgetTab(nodeId);
         });
         contents.once('destroyed', () => {
           options.permissions.forgetTab(nodeId);
           options.screenShare.forgetTab(nodeId);
+          options.httpAuth.forgetTab(nodeId);
         });
         // Clicking into a split's pane focuses it: the address, buttons and keys act on it from then on.
         contents.on('focus', () => this.paneFocused(nodeId));
@@ -383,6 +390,10 @@ export class Browser {
         return node ? isPrivateChord(this.store.state, node.chordId) : false;
       },
     });
+    options.httpAuth.connect({
+      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      onChange: () => this.syncPopovers(),
+    });
     options.screenShare.connect({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
@@ -533,6 +544,7 @@ export class Browser {
     w.popover.webContents.on('did-finish-load', () => {
       if (this.windows.get(windowId) !== w) return;
       this.popoverSent.delete(windowId);
+      this.authFocused.delete(windowId);
       this.syncPopover(w);
     });
     w.shell.webContents.on('did-finish-load', () => {
@@ -566,6 +578,7 @@ export class Browser {
       this.windows.delete(windowId);
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
+      this.authFocused.delete(windowId);
       this.extensions.forget(windowId);
       this.peeks.forget(windowId);
       this.quietWindows.delete(windowId);
@@ -738,6 +751,7 @@ export class Browser {
       find: find && find.target === shown ? find.state : null,
       permission: this.options.permissions.promptFor(activeTabId(state, w.id)),
       share: this.options.screenShare.promptFor(activeTabId(state, w.id)),
+      auth: this.options.httpAuth.promptFor(activeTabId(state, w.id)),
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
     };
@@ -777,6 +791,9 @@ export class Browser {
     if (this.popoverSent.get(w.id) === json) return;
     this.popoverSent.set(w.id, json);
     send(w.popover.webContents, 'popover:state', popover);
+    // A new sign-in box takes the keyboard, ready to type the username.
+    if (popover.auth && this.authFocused.get(w.id) !== popover.auth.id) w.focusPopover();
+    this.authFocused.set(w.id, popover.auth?.id ?? 0);
   }
 
   /** Run an action for the window that owns this contents (keys, the shell's buttons, the command bar). */

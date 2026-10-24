@@ -4,9 +4,9 @@
  * these cards, so the rest of the page stays clickable.
  */
 import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
-import type { FindState, PermissionPrompt, PopoverState, SharePrompt, SystemInfo } from '@chord/ipc';
-import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, MapPin, Mic, Search, ShieldCheck, X } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import type { AuthPrompt, FindState, PermissionPrompt, PopoverState, SharePrompt, SystemInfo } from '@chord/ipc';
+import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, KeyRound, MapPin, Mic, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useLive, type Live } from '../shared/live';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
@@ -186,6 +186,86 @@ function ShareCard({ prompt }: { prompt: SharePrompt }) {
 }
 
 /**
+ * A site or proxy asking for a username and password (HTTP Basic, Digest or
+ * NTLM; ARCHITECTURE.md §9). What's typed goes to main once, on Sign in, and
+ * Chord keeps none of it: Chromium remembers a sign-in that worked until you quit.
+ */
+function AuthCard({ prompt }: { prompt: AuthPrompt }) {
+  const username = useRef<HTMLInputElement>(null);
+  const password = useRef<HTMLInputElement>(null);
+  const [sent, setSent] = useState(false);
+  const ids = useId();
+  // The username field has the keyboard when the box appears (main focuses the popover too).
+  useEffect(() => username.current?.focus(), []);
+  const respond = (credentials: { username: string; password: string } | null) => {
+    setSent(true);
+    void api.auth.respond(prompt.id, credentials);
+  };
+  const title = prompt.proxy ? 'The proxy' : 'Sign in to';
+  return (
+    <form
+      className={styles.card}
+      role="alertdialog"
+      aria-labelledby={`${ids}-title`}
+      aria-describedby={`${ids}-notes`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        respond({ username: username.current?.value ?? '', password: password.current?.value ?? '' });
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          respond(null);
+        }
+      }}
+    >
+      <div className={styles.permissionHead}>
+        <KeyRound className={styles.offerIcon} {...ICON} aria-hidden />
+        <p id={`${ids}-title`} className={styles.permissionTitle}>
+          {title} <span className={styles.host}>{prompt.origin}</span>
+          {prompt.proxy && ' needs you to sign in'}
+        </p>
+        <button type="button" className={styles.iconButton} aria-label="Cancel" title="Cancel" onClick={() => respond(null)}>
+          <X {...ICON} />
+        </button>
+      </div>
+      <div id={`${ids}-notes`} className={styles.authNotes}>
+        {prompt.retry && <p className={styles.authRetry}>That username and password didn't work.</p>}
+        {prompt.realm && (
+          <p className={styles.offerNotice}>
+            The site says: <q className={styles.realm}>{prompt.realm}</q>
+          </p>
+        )}
+        {prompt.insecure && (
+          <p className={styles.authWarning}>
+            <TriangleAlert size={14} strokeWidth={2} aria-hidden />
+            This site isn't on HTTPS, so what you type here can be read on its way there.
+          </p>
+        )}
+      </div>
+      <div className={styles.authFields}>
+        <label className={styles.authLabel} htmlFor={`${ids}-username`}>
+          Username
+        </label>
+        <input ref={username} id={`${ids}-username`} className={styles.authInput} autoComplete="username" spellCheck={false} autoCapitalize="off" />
+        <label className={styles.authLabel} htmlFor={`${ids}-password`}>
+          Password
+        </label>
+        <input ref={password} id={`${ids}-password`} className={styles.authInput} type="password" autoComplete="current-password" />
+      </div>
+      <div className={styles.actions}>
+        <button type="button" className={styles.secondary} onClick={() => respond(null)}>
+          Cancel
+        </button>
+        <button type="submit" className={styles.primary} disabled={sent}>
+          Sign in
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/**
  * Safe Browsing's one-time offer (ARCHITECTURE.md §14.5), for a profile from
  * before it existed: its notice in full, then on or not now. Either answer
  * is final; Settings → Privacy can change it later.
@@ -219,7 +299,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
   const info = useLive(infoSource);
   const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
-  const hasCards = Boolean(state.find || state.permission || state.share || state.safeBrowsingOffer);
+  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.safeBrowsingOffer);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -241,6 +321,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
       {state.find && <FindBar find={state.find} />}
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}
       {state.share && <ShareCard key={state.share.id} prompt={state.share} />}
+      {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}
       {state.safeBrowsingOffer && <SafeBrowsingOffer />}
     </div>
   );

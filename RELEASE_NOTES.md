@@ -46,6 +46,7 @@ The first public preview: a calm, colorful browser for people leaving Arc. Build
 - Chrome extensions from the Web Store, with buttons in the sidebar or the title bar.
 - Videos pop out into picture-in-picture when you switch away.
 - Find in page, downloads, permission prompts, and friendly error pages.
+- A sign-in box for sites and proxies that ask for a username and password (routers, staging servers). Chord keeps nothing; a sign-in that worked lasts until you quit.
 - Several windows, and private windows.
 - Editable keyboard shortcuts.
 - Interface size: Chord's own sidebar, bars and Settings at 90–150%, with pages at their own zoom.
