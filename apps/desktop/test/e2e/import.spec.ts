@@ -83,6 +83,8 @@ test('first run: bring Chrome’s bookmarks, a folder as a chord, the bar as Fav
     const first = await snapshot(shell);
     const home = first.state.windows[first.windowId]!.activeChordId;
     await where.getByRole('combobox', { name: 'Where Work goes' }).selectOption(`chord:${home}`);
+    // However many folders, the card fits the frame: its middle scrolls, and its buttons stay in view.
+    await expect(welcome.getByRole('button', { name: /^Import/ })).toBeInViewport({ ratio: 1 });
     expectClean(await audit(shell, 'first run: import', { include: '[role="dialog"]', appearance: 'light' }));
 
     await welcome.getByRole('button', { name: /^Import/ }).click();

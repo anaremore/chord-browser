@@ -218,9 +218,11 @@ function ImportStep({ flow, chords, onNext }: { flow: ImportFlow; chords: Pick<C
       </p>
       <h1 className={styles.title}>Bring your bookmarks?</h1>
       <p className={styles.body}>From another browser on this computer: bookmarks, history and open tabs. Each folder can become a chord of its own.</p>
-      <ImportSources flow={flow} />
-      <ImportDetails flow={flow} chords={chords} onOpenAccess={() => void api.imports.openAccess()} />
-      <p className={styles.fine}>{NEVER_COPIED}</p>
+      <div className={styles.scroll}>
+        <ImportSources flow={flow} />
+        <ImportDetails flow={flow} chords={chords} onOpenAccess={() => void api.imports.openAccess()} />
+        <p className={styles.fine}>{NEVER_COPIED}</p>
+      </div>
       <div className={styles.actions}>
         {!flow.progress && (
           <button type="button" className={styles.quiet} onClick={onNext}>
