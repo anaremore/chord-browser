@@ -56,7 +56,7 @@ function startSite(): Promise<{ server: Server; origin: string }> {
       res.end(JSON.stringify([q, [`${q} progressions`, `${q} finder`]]));
       return;
     }
-    // GitHub Releases (CHORD_UPDATE_FEED): one release newer than a development build's 0.0.0.
+    // GitHub Releases (CHORD_UPDATE_FEED): one release newer than this build (0.1.0).
     if (req.url === '/releases') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
@@ -1710,7 +1710,7 @@ test('a newer release is announced once, in a toast, and in Settings → About',
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_UPDATE_FEED: `${site.origin}/releases` });
   try {
     const shell = await pageWhere(app, isShell);
-    // The draft (9.0.0) never counts; 0.2.0 is newer than a development build's 0.0.0.
+    // The draft (9.0.0) never counts; 0.2.0 is newer than this build (0.1.0).
     await expect(shell.getByRole('group').filter({ hasText: 'Chord 0.2.0 is out' })).toBeVisible({ timeout: 10_000 });
     await expect(shell.getByRole('button', { name: 'What’s new' })).toBeVisible();
     await runAction(shell, 'app.settings');
