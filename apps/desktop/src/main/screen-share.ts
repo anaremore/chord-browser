@@ -13,7 +13,9 @@
  */
 import type { Command, NodeId, State } from '@chord/core';
 import type { SharePrompt, ShareSource } from '@chord/ipc';
+import { randomUUID } from 'node:crypto';
 import { desktopCapturer, webContents, type DesktopCapturerSource, type Session, type Streams, type WebContents, type WebFrameMain } from 'electron';
+import { pageCall } from './page-call';
 
 export interface ScreenShareDeps {
   state(): State;
@@ -41,10 +43,18 @@ interface Pending {
 const CHECK_MS = 2000;
 const THUMBNAIL = { width: 240, height: 135 };
 
+/**
+ * The names the hook answers to: new each launch and never in the global
+ * symbol registry, so a page can't claim them before sharing to fake "ended"
+ * (it would have hidden the sidebar's sharing state while still capturing).
+ */
+const KEY = randomUUID().replace(/-/g, '');
+const LIVE = `__chordSharing${KEY}`;
+const STOP_NAME = `__chordStopSharing${KEY}`;
+
 /** Installed in the sharing page's own world; see the file comment. Idempotent. */
 const HOOK = `(() => {
-  const live = Symbol.for('chord.sharing');
-  if (window[live]) return;
+  if (window[${JSON.stringify(LIVE)}]) return;
   const tracks = new Set();
   let seen = false;
   const keep = (t) => {
@@ -52,6 +62,9 @@ const HOOK = `(() => {
       if (t && t.kind === 'video' && 'displaySurface' in t.getSettings()) { tracks.add(t); seen = true; }
     } catch {}
   };
+  // A copy of a shared track captures just the same.
+  const clone = MediaStreamTrack.prototype.clone;
+  MediaStreamTrack.prototype.clone = function (...args) { const c = clone.apply(this, args); try { if (tracks.has(this)) keep(c); } catch {} return c; };
   const keepStream = (s) => { try { if (s && s.getTracks) s.getTracks().forEach(keep); } catch {} };
   const wrap = (proto, name, pick) => {
     const f = proto && proto[name];
@@ -71,9 +84,15 @@ const HOOK = `(() => {
     if (typeof C !== 'function') continue;
     window[name] = new Proxy(C, { construct(target, args) { try { const a = args[0]; keepStream(a); keep(a && a.track ? a.track : a); } catch {} return Reflect.construct(target, args); } });
   }
-  // How many shared tracks are still live: -1 until the page has used one Chord could see.
-  Object.defineProperty(window, live, { value: () => (seen ? [...tracks].filter((t) => t.readyState === 'live').length : -1) });
-  Object.defineProperty(window, Symbol.for('chord.stopSharing'), {
+  // How many shared tracks are still live: -1 until the page has used one Chord could see. Ended ones are let go,
+  // so the page can drop them.
+  const count = () => {
+    if (!seen) return -1;
+    for (const t of tracks) if (t.readyState !== 'live') tracks.delete(t);
+    return tracks.size;
+  };
+  Object.defineProperty(window, ${JSON.stringify(LIVE)}, { value: count });
+  Object.defineProperty(window, ${JSON.stringify(STOP_NAME)}, {
     value: () => {
       let stopped = 0;
       for (const t of tracks) {
@@ -90,9 +109,9 @@ const HOOK = `(() => {
 
 /** Ends what the hook saw: how many tracks stopped, or -1 when it saw none Chord could stop. */
 const STOP = `(() => {
-  const live = window[Symbol.for('chord.sharing')];
+  const live = window[${JSON.stringify(LIVE)}];
   const count = live ? live() : -1;
-  return count < 0 ? -1 : window[Symbol.for('chord.stopSharing')]();
+  return count < 0 ? -1 : window[${JSON.stringify(STOP_NAME)}]();
 })()`;
 
 export class ScreenShareBroker {
@@ -100,7 +119,7 @@ export class ScreenShareBroker {
   private readonly pending: Pending[] = [];
   private nextId = 1;
   /** Tabs sharing now, with the frame that's sharing and the check that notices when it ends. */
-  private readonly sharing = new Map<NodeId, { frame: WebFrameMain; host: string; timer: ReturnType<typeof setInterval> }>();
+  private readonly sharing = new Map<NodeId, { frame: WebFrameMain; host: string; timer: ReturnType<typeof setInterval>; checking: boolean }>();
 
   connect(deps: ScreenShareDeps): void {
     this.deps = deps;
@@ -171,7 +190,7 @@ export class ScreenShareBroker {
     // Refusing reaches the page as AbortError (Chrome says NotAllowedError; Electron has no way to).
     if (!source || prompt!.frame.isDestroyed()) return prompt!.answer(null);
     // The hook goes in before the page gets its stream, so it sees the page use it.
-    await prompt!.frame.executeJavaScript(HOOK).catch(() => undefined);
+    await pageCall(prompt!.frame.executeJavaScript(HOOK), undefined);
     if (prompt!.frame.isDestroyed()) return;
     prompt!.answer({ video: source, ...(audio && prompt!.audio ? { audio: 'loopback' as const } : {}) });
     this.started(prompt!.nodeId, prompt!.frame, prompt!.host);
@@ -181,7 +200,7 @@ export class ScreenShareBroker {
   async stop(nodeId: NodeId): Promise<void> {
     const share = this.sharing.get(nodeId);
     if (!share) return;
-    const stopped = share.frame.isDestroyed() ? 0 : ((await share.frame.executeJavaScript(STOP).catch(() => -1)) as number);
+    const stopped = share.frame.isDestroyed() ? 0 : ((await pageCall(share.frame.executeJavaScript(STOP), -1)) as number);
     if (stopped < 0) this.deps?.cantStop(nodeId, share.host);
     else this.ended(nodeId);
   }
@@ -205,17 +224,20 @@ export class ScreenShareBroker {
   private started(nodeId: NodeId, frame: WebFrameMain, host: string): void {
     this.ended(nodeId);
     const timer = setInterval(() => void this.check(nodeId), CHECK_MS);
-    this.sharing.set(nodeId, { frame, host, timer });
+    this.sharing.set(nodeId, { frame, host, timer, checking: false });
     this.deps?.dispatch({ t: 'tab.live', nodeId, live: { sharing: true } });
   }
 
   /** Over once every shared track Chord saw has ended, or the frame is gone. */
   private async check(nodeId: NodeId): Promise<void> {
     const share = this.sharing.get(nodeId);
-    if (!share) return;
+    // One check at a time: a page that's slow to answer doesn't get a pile of them.
+    if (!share || share.checking) return;
     if (share.frame.isDestroyed()) return this.ended(nodeId);
-    // -1: the page hasn't used its share where Chord can see yet (or the hook is gone): keep showing it.
-    const live = (await share.frame.executeJavaScript(`window[Symbol.for('chord.sharing')]?.() ?? -1`).catch(() => -1)) as number;
+    share.checking = true;
+    // -1: the page hasn't used its share where Chord can see yet, the hook is gone, or the page didn't answer: keep showing it.
+    const live = (await pageCall(share.frame.executeJavaScript(`window[${JSON.stringify(LIVE)}]?.() ?? -1`), -1)) as number;
+    share.checking = false;
     if (live === 0) this.ended(nodeId);
   }
 
