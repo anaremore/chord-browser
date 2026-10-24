@@ -2,6 +2,14 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.2.0 · preview (unreleased)
+
+**Ads and trackers blocked.** Chord now blocks ads and trackers by default, in every chord and in private windows, using EasyList and EasyPrivacy, and hides the empty spaces ads leave behind.
+- Pages are checked against the lists on your computer; nothing about the sites you visit is sent anywhere. Chord fetches fresh lists from easylist.to every few days, which sees your IP address when it does. Google-free mode doesn't change any of this: the lists aren't Google's.
+- Turn it off for one site from the page's right-click menu (*Block ads on this site*), with Undo, or list sites in Settings → Privacy, where the switch for everything is too. A private window's exceptions are forgotten with it.
+- Extensions keep working beside it: uBlock Origin Lite and others block as before.
+- Licenses: blocking uses Ghostery's adblocker engine, under the Mozilla Public License 2.0, and the EasyList lists, under the GPL-3.0 (or CC BY-SA 3.0). Their notices ship with every build.
+
 ## 0.1.0 · preview (unreleased)
 
 The first public preview: a calm, colorful browser for people leaving Arc. Builds aren't code-signed yet: see [Try the preview](README.md#try-the-preview) for the first-launch steps on each OS.

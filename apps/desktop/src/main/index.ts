@@ -2,6 +2,8 @@
 import { launchTimings, markLaunch } from './perf';
 import {
   ARCHIVE_AFTER_MS,
+  blockingOffSites,
+  DEFAULT_PROFILE,
   DEFAULT_SETTINGS,
   IDLE_CHECK_MS,
   SLEEP_AFTER_MS,
@@ -18,6 +20,8 @@ import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { delimiter, join } from 'node:path';
 import { app, clipboard, nativeTheme, net, session, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
+import { AdBlocking } from './ad-blocking/service';
+import { FILTER_LISTS } from './ad-blocking/lists';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { DuetService } from './duet/service';
@@ -91,6 +95,27 @@ const safeBrowsing = new SafeBrowsing(
   },
 );
 
+/**
+ * Ad and tracker blocking (ARCHITECTURE.md §9, decision D5): on by default.
+ * Release builds refresh the lists from their own host; development builds
+ * only from a test server (CHORD_AD_BLOCKING_URL, ignored when packaged), so
+ * they never need the network, and otherwise keep the lists they were built with.
+ */
+const adBlockingServer = app.isPackaged ? undefined : process.env['CHORD_AD_BLOCKING_URL']?.replace(/\/+$/, '') || undefined;
+const adBlocking = new AdBlocking(
+  {
+    bundledDir: join(import.meta.dirname, 'ad-blocking'),
+    root: join(app.getPath('userData'), 'Ad Blocking'),
+    workerPath: join(import.meta.dirname, 'ad-blocking.js'),
+    listUrl: app.isPackaged ? (id) => FILTER_LISTS.find((l) => l.id === id)!.url : adBlockingServer ? (id) => `${adBlockingServer}/${id}.txt` : null,
+    firstRefreshMs: app.isPackaged ? 5 * 60_000 : 500,
+  },
+  {
+    enabled: () => browser?.store.state.settings.adBlocking.enabled ?? DEFAULT_SETTINGS.adBlocking.enabled,
+    offSites: (profileId) => (browser ? blockingOffSites(browser.store.state, profileId) : []),
+  },
+);
+
 const downloads = new DownloadManager({
   state: () => browser!.store.state,
   dispatch: (command) => browser!.store.dispatch(command),
@@ -159,6 +184,7 @@ function registerIpc(): void {
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
   handle('safeBrowsing:status', () => safeBrowsing.status());
+  handle('adBlocking:status', () => adBlocking.status());
   // First run's step and the one-time offer, each with the notice on screen.
   handle('safeBrowsing:choose', ({ on }) => browser!.store.dispatch({ t: 'settings.set', settings: { safeBrowsing: on, safeBrowsingAsked: true } }));
   handle('safeBrowsing:back', ({ nodeId }, sender) => browser!.safeBrowsingAction(sender, nodeId, 'back'));
@@ -326,8 +352,9 @@ if (!app.requestSingleInstanceLock()) {
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
-    // Duet first: replies in flight are kept as interrupted, and provider processes end.
-    void (duet?.quit() ?? Promise.resolve())
+    // Duet first: replies in flight are kept as interrupted, and provider processes end. Ad blocking
+    // finishes a change under way (no control page may be open as Electron tears down) and ends its workers.
+    void Promise.all([duet?.quit(), adBlocking.stop()])
       .catch(() => undefined)
       .then(() => persistence!.close())
       .finally(() => app.quit());
@@ -364,6 +391,8 @@ if (!app.requestSingleInstanceLock()) {
         permissions.attach(ses, priv ? profileId : null);
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
         screenShare.attach(ses);
+        // A chord's session gets the blocker extension; a private window's, its request dispatcher.
+        adBlocking.attach(profileId, ses, priv);
         const settings = browser?.store.state.settings ?? DEFAULT_SETTINGS;
         applySpellcheck(ses, settings.spellcheck, settings.googleFree);
         profiles.set(profileId, ses);
@@ -375,6 +404,7 @@ if (!app.requestSingleInstanceLock()) {
       const ses = profiles.get(profileId);
       if (!isPrivateProfile(profileId)) return;
       permissions.forgetScope(profileId);
+      adBlocking.detach(profileId);
       if (!ses) return;
       profiles.delete(profileId);
       void ses
@@ -411,7 +441,10 @@ if (!app.requestSingleInstanceLock()) {
     }
     setDictionarySource(initial.settings.googleFree);
     // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
-    await removeUnusedPartitions(app.getPath('userData'), new Set(Object.values(initial.chords).map((c) => c.profileId)));
+    const profilesInUse = new Set(Object.values(initial.chords).map((c) => c.profileId));
+    await removeUnusedPartitions(app.getPath('userData'), profilesInUse);
+    // Their copies of the blocker extension too (not awaited: nothing loads from those).
+    void adBlocking.forgetProfiles(profilesInUse);
 
     const store = persistence;
     // Development and tests only (ignored when packaged): a stand-in Web Store and its signing key,
@@ -436,6 +469,11 @@ if (!app.requestSingleInstanceLock()) {
       },
       onChange: (change) => store.record(change.patches, change.state),
       releaseProfile,
+      adBlocking: {
+        attachPage: (contents) => adBlocking.attachPage(contents),
+        profileOf: (contents) => adBlocking.profileOf(contents),
+        settled: () => adBlocking.settled(),
+      },
       safeBrowsing: {
         enabled: () => safeBrowsing.active,
         check: (urls) => safeBrowsing.check(urls, 'frame'),
@@ -471,8 +509,13 @@ if (!app.requestSingleInstanceLock()) {
       }
       // Safe Browsing starts or stops with its switch, and with Google-free mode (which keeps it off).
       if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'safeBrowsing' || p.path[1] === 'googleFree'))) safeBrowsing.sync();
+      // Ad blocking follows its switch and the sites it's off for (a private window's own list lives on its chord).
+      if (change.patches.some((p) => (p.path[0] === 'settings' && p.path[1] === 'adBlocking') || (p.path[0] === 'chords' && p.path[2] === 'blockingOff'))) adBlocking.sync();
     });
     safeBrowsing.sync();
+    adBlocking.sync();
+    // The sessions restored windows show, made now, so their blocker extension starts loading before their pages do.
+    for (const w of Object.values(initial.windows)) profileSession(initial.chords[w.activeChordId]?.profileId ?? DEFAULT_PROFILE);
     // Before any of Chord's own pages loads (a text field there is what starts a dictionary download).
     applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
     duet = new DuetService(browser, persistence, app.getPath('userData'));
@@ -490,6 +533,10 @@ if (!app.requestSingleInstanceLock()) {
         safeBrowsing: () => ({ status: safeBrowsing.status(), timings: safeBrowsing.timings() }),
         /** Check addresses as a page's navigation would (for timing it). */
         safeBrowsingCheck: (urls: string[]) => safeBrowsing.check(urls, 'frame'),
+        /** Ad blocking's lists, and what each session has (the extension, the dispatcher). */
+        adBlocking: () => ({ status: adBlocking.status(), ...adBlocking.inspect() }),
+        /** Check the lists that are due now, as the timer would. */
+        adBlockingRefresh: () => adBlocking.refresh(),
         contextMenu: (contentsId: number) => contextMenus.get(contentsId)?.map((item) => item.label) ?? null,
         /** Choose an item in a page's last right-click menu, as clicking it would. */
         chooseContextMenuItem: (contentsId: number, label: string) => contextMenus.get(contentsId)?.find((item) => item.label === label)?.choose(),

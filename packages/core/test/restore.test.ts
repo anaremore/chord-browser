@@ -103,6 +103,13 @@ describe('restoreState', () => {
     expect(restored({ safeBrowsing: true, safeBrowsingAsked: true, googleFree: true })).toMatchObject({ safeBrowsing: false, googleFree: true });
   });
 
+  it('restores ad blocking, on for profiles from before it existed, with only real sites off', () => {
+    const restored = (settings: Record<string, unknown>) => restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings }, seed).settings;
+    expect(restored({}).adBlocking).toEqual({ enabled: true, offSites: [] });
+    expect(restored({ adBlocking: { enabled: false, offSites: ['example.com', 'www.example.org', 42, '%%%'] } }).adBlocking).toEqual({ enabled: false, offSites: ['example.com', 'example.org'] });
+    expect(restored({ adBlocking: { enabled: 'no' } }).adBlocking.enabled).toBe(true);
+  });
+
   it('restores the interface size only as one of its sizes', () => {
     const restored = (settings: Record<string, unknown>) => restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings }, seed).settings;
     expect(restored({ uiScale: 1.5 }).uiScale).toBe(1.5);

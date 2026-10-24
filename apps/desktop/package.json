@@ -23,7 +23,8 @@
     "test:perf": "playwright test perf",
     "test:packaged": "playwright test --config playwright.packaged.config.ts",
     "package": "node scripts/electron-vite.mjs build && electron-builder --config electron-builder.config.ts --publish never",
-    "package:dir": "node scripts/electron-vite.mjs build && electron-builder --config electron-builder.config.ts --publish never --dir"
+    "package:dir": "node scripts/electron-vite.mjs build && electron-builder --config electron-builder.config.ts --publish never --dir",
+    "lists": "node scripts/update-filter-lists.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
@@ -48,6 +49,7 @@
     "@dnd-kit/abstract": "0.5.1",
     "@dnd-kit/dom": "0.5.1",
     "@dnd-kit/react": "0.5.1",
+    "@ghostery/adblocker": "2.20.1",
     "electron-updater": "6.8.11",
     "immer": "11.2.9",
     "lucide-react": "1.61.0",

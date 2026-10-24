@@ -82,6 +82,8 @@ export interface Chord {
   createdAt: number;
   /** A private window's own chord: only that window sees it, and nothing of it is ever saved. */
   private?: boolean;
+  /** A private window's chord only: sites its page menu turned ad blocking off for, on top of Settings' list, forgotten with the window. */
+  blockingOff?: string[];
 }
 
 /** How a private window's chord looks: quiet graphite, always dark. */
@@ -358,6 +360,8 @@ export interface Settings {
   safeBrowsing: boolean;
   /** Safe Browsing's notice has been shown and answered (first run, the one-time offer, or Settings). */
   safeBrowsingAsked: boolean;
+  /** Ad and tracker blocking (ARCHITECTURE.md §9, decision D5): on by default, in every chord and private window. */
+  adBlocking: AdBlockingSettings;
   /** Duet, the chat panel (ARCHITECTURE.md §11). */
   duet: DuetSettings;
   /** Where links from other apps open (Chord as the default browser): a mini window, or a new tab. */
@@ -381,6 +385,13 @@ export interface LinkRoute {
 
 /** What Google-free mode searches with until you pick another (any engine but Google). */
 export const GOOGLE_FREE_ENGINE: SearchEngineId = 'duckduckgo';
+
+/** Settings → Privacy → Block ads and trackers, and the sites it's off for. */
+export interface AdBlockingSettings {
+  enabled: boolean;
+  /** Sites (registrable domains, `nytimes.com`) where nothing is blocked, subdomains included. */
+  offSites: string[];
+}
 
 /** Spelling in text fields (ARCHITECTURE.md §9). */
 export interface SpellcheckSettings {
@@ -427,6 +438,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Off until its notice has been seen: first run shows it (and turns it on), older profiles get a one-time offer.
   safeBrowsing: false,
   safeBrowsingAsked: false,
+  adBlocking: { enabled: true, offSites: [] },
   duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
   externalLinks: 'mini',
   miniWindowSize: null,
@@ -440,6 +452,7 @@ export const defaultSettings = (): Settings => ({
   themes: [],
   spellcheck: { ...DEFAULT_SETTINGS.spellcheck },
   shortcuts: {},
+  adBlocking: { ...DEFAULT_SETTINGS.adBlocking, offSites: [] },
   duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
 });
 
@@ -474,6 +487,8 @@ export interface SettingsPatch {
   /** Ignored while Google-free mode is on. Turning it on counts as having seen its notice. */
   safeBrowsing?: boolean;
   safeBrowsingAsked?: boolean;
+  /** `offSites` is the whole new list; entries that aren't sites are dropped. */
+  adBlocking?: Partial<AdBlockingSettings>;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
   duet?: Partial<DuetSettings>;

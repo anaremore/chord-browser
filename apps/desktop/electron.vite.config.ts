@@ -1,9 +1,32 @@
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import babel from '@rolldown/plugin-babel';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
+import type { Plugin } from 'vite';
+import { compileLists } from './src/main/ad-blocking/compile';
+import { FILTER_LISTS, type ListId } from './src/main/ad-blocking/lists';
 
 const src = (path: string) => resolve(import.meta.dirname, 'src', path);
+
+/**
+ * EasyList and EasyPrivacy, compiled once per build (ARCHITECTURE.md §9) from
+ * the copies in build/ad-blocking (`pnpm lists` refreshes them): Ghostery's
+ * engine and the declarativeNetRequest rules land in out/main/ad-blocking, so
+ * a fresh install blocks from its first page and parses nothing to start.
+ */
+function filterLists(): Plugin {
+  return {
+    name: 'chord-filter-lists',
+    generateBundle() {
+      const texts = Object.fromEntries(FILTER_LISTS.map((l) => [l.id, readFileSync(resolve(import.meta.dirname, 'build', 'ad-blocking', `${l.id}.txt`), 'utf8')])) as Record<ListId, string>;
+      const { engine, rules, info } = compileLists(texts);
+      this.emitFile({ type: 'asset', fileName: 'ad-blocking/engine.bin', source: engine });
+      for (const list of FILTER_LISTS) this.emitFile({ type: 'asset', fileName: `ad-blocking/rules/${list.id}.json`, source: JSON.stringify(rules[list.id]) });
+      this.emitFile({ type: 'asset', fileName: 'ad-blocking/lists.json', source: JSON.stringify(info) });
+    },
+  };
+}
 
 export default defineConfig({
   main: {
@@ -11,14 +34,22 @@ export default defineConfig({
     // release workflow passes the `release` environment's secret. Without it Safe Browsing is unavailable.
     define: { __CHORD_SAFE_BROWSING_KEY__: JSON.stringify(process.env['CHORD_SAFE_BROWSING_KEY'] ?? '') },
     // Bundle everything (workspace packages are TypeScript sources); only
-    // electron and Node built-ins stay external. Four entries: main itself,
+    // electron and Node built-ins stay external. Five entries: main itself,
     // chord-data's utility process (ARCHITECTURE.md §4), the PDF reader
     // Duet starts for each PDF it reads (§11.4; pdf.js stays out of main),
-    // and Safe Browsing's worker thread (§14.5).
+    // Safe Browsing's worker thread (§14.5), and ad blocking's (§9; the
+    // engine stays out of main).
+    plugins: [filterLists()],
     build: {
       externalizeDeps: false,
       rolldownOptions: {
-        input: { index: src('main/index.ts'), data: src('data/worker.ts'), pdf: src('pdf/worker.ts'), 'safe-browsing': src('main/safe-browsing/worker.ts') },
+        input: {
+          index: src('main/index.ts'),
+          data: src('data/worker.ts'),
+          pdf: src('pdf/worker.ts'),
+          'safe-browsing': src('main/safe-browsing/worker.ts'),
+          'ad-blocking': src('main/ad-blocking/worker.ts'),
+        },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },
       },

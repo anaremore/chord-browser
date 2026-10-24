@@ -30,6 +30,7 @@ import {
   type State,
   type WindowModel,
 } from './model';
+import { cleanOffSites } from './ad-blocking';
 import { cleanOverrides } from './bindings';
 import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
@@ -201,6 +202,12 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   // A profile saved before Safe Browsing existed never saw its notice: it stays off, and is offered once.
   if (typeof saved['safeBrowsingAsked'] === 'boolean') settings.safeBrowsingAsked = saved['safeBrowsingAsked'];
   if (typeof saved['safeBrowsing'] === 'boolean') settings.safeBrowsing = saved['safeBrowsing'] && settings.safeBrowsingAsked && !settings.googleFree;
+  // Profiles from before blocking existed get it on, as new ones do: the lists aren't anyone's account, and need no notice first.
+  const adBlocking = saved['adBlocking'] as Record<string, unknown> | undefined;
+  if (adBlocking && typeof adBlocking === 'object') {
+    if (typeof adBlocking['enabled'] === 'boolean') settings.adBlocking.enabled = adBlocking['enabled'];
+    if (Array.isArray(adBlocking['offSites'])) settings.adBlocking.offSites = cleanOffSites(adBlocking['offSites']);
+  }
   const motion = saved['motion'];
   if (motion && typeof motion === 'object') {
     for (const key of Object.keys(settings.motion) as (keyof MotionSettings)[]) {

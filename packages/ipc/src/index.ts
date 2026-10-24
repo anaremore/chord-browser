@@ -158,6 +158,8 @@ export const RendererCommand = z.discriminatedUnion('t', [
     focus: id.optional(),
   }),
   z.object({ t: z.literal('split.focus'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
+  // Undo for a page's "Block ads on this site".
+  z.object({ t: z.literal('adBlocking.site'), site: z.string().min(1).max(300), off: z.boolean(), chordId: id.optional() }),
   // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
@@ -183,6 +185,11 @@ export const SettingsPatch = z.strictObject({
   googleFree: z.boolean().optional(),
   // Settings → Privacy's switch, with the notice beside it (main ignores it in Google-free mode).
   safeBrowsing: z.boolean().optional(),
+  // Settings → Privacy → Block ads and trackers, and the sites it's off for (core normalizes them).
+  adBlocking: z
+    .strictObject({ enabled: z.boolean(), offSites: z.array(z.string().max(300)).max(1000) })
+    .partial()
+    .optional(),
   separateSignIns: z.boolean().optional(),
   externalLinks: z.enum(['mini', 'tab']).optional(),
   spellcheck: z
@@ -459,6 +466,16 @@ export interface SafeBrowsingStatus {
   entries: number;
 }
 
+/** Ad and tracker blocking's lists on this computer (ARCHITECTURE.md §9), for Settings → Privacy. */
+export interface AdBlockingStatus {
+  /** On (Settings' switch). */
+  active: boolean;
+  /** Each list's version (its `! Version:` line) and when Chord last got it or confirmed it was current. */
+  lists: { id: string; name: string; version: string | null; checkedAt: number | null }[];
+  /** The last refresh failed; Chord tries again later and keeps blocking with the lists it has. */
+  failing: boolean;
+}
+
 /** The permissions a site can be asked for, in Settings' order. */
 export const SITE_PERMISSIONS = ['camera', 'microphone', 'location', 'notifications', 'clipboard-read'] as const satisfies readonly SitePermission[];
 const _permissionsMatch = (p: SitePermission): (typeof SITE_PERMISSIONS)[number] => p;
@@ -681,6 +698,8 @@ export const invokeChannels = {
   'safeBrowsing:back': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   /** The warning's "Visit anyway": the site isn't flagged again until Chord quits. */
   'safeBrowsing:proceed': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
+  /** Ad and tracker blocking's lists (ARCHITECTURE.md §9), for Settings → Privacy. */
+  'adBlocking:status': { roles: ['internal'], request: z.void(), response: z.custom<AdBlockingStatus>() },
   'downloads:openFolder': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
   /** The command bar's history and learned picks for what was typed (in the window's chord). */
   'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
@@ -1012,6 +1031,8 @@ export interface SettingsApi {
     openUrl(url: string): Promise<void>;
     /** Settings → Privacy → Safe Browsing: available in this build, and how its lists are doing. */
     safeBrowsing(): Promise<SafeBrowsingStatus>;
+    /** Settings → Privacy → Block ads and trackers: the lists on this computer. */
+    adBlocking(): Promise<AdBlockingStatus>;
   };
   extensions: {
     install(input: string): Promise<InstallResult>;

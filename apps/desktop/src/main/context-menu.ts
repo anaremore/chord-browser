@@ -22,6 +22,12 @@ export interface ContextMenuDeps {
   placement(): { window: BaseWindow; x: number; y: number } | undefined;
   /** Items extensions added for what was clicked (ARCHITECTURE.md §12). */
   extensionItems?(params: ContextMenuParams): MenuItem[];
+  /**
+   * "Block ads on this site" (ARCHITECTURE.md §9): whether blocking is on for
+   * the page (null leaves the item out: blocking is off, or it isn't a web
+   * page), and turning it off or on again.
+   */
+  adBlocking?: { on(url: string): boolean | null; set(url: string, on: boolean): void };
 }
 
 type Item = MenuItemConstructorOptions | MenuItem;
@@ -95,6 +101,7 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
   }
 
   if (web && !isWebLink && params.mediaType === 'none' && !params.isEditable && !params.selectionText.trim()) {
+    const blocking = deps.adBlocking?.on(params.pageURL) ?? null;
     section(
       { label: 'Back', enabled: history.canGoBack(), click: () => history.goBack() },
       { label: 'Forward', enabled: history.canGoForward(), click: () => history.goForward() },
@@ -102,6 +109,9 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
       { type: 'separator' },
       { label: 'Print…', accelerator: accel('page.print'), click: () => contents.print() },
       { label: 'View page source', accelerator: accel('page.viewSource'), click: () => deps.openTab(`view-source:${params.pageURL}`, false) },
+      ...(blocking === null
+        ? []
+        : [{ type: 'separator' as const }, { label: 'Block ads on this site', type: 'checkbox' as const, checked: blocking, click: () => deps.adBlocking!.set(params.pageURL, !blocking) }]),
     );
   }
 

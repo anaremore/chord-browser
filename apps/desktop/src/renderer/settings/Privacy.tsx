@@ -11,10 +11,13 @@
  * go to the engine chosen here, spelling uses only dictionaries already
  * downloaded, Web Store extensions don't check for updates in the
  * background, and Safe Browsing is off. Pages you visit can still load from Google.
+ *
+ * Ad and tracker blocking (ARCHITECTURE.md §9): on by default, with what the
+ * lists' host sees beside the switch, and the sites it's off for.
  */
-import { DEFAULT_SETTINGS, SAFE_BROWSING_NOTICE, SEARCH_ENGINES } from '@chord/core';
-import type { SafeBrowsingStatus, SettingsSnapshot } from '@chord/ipc';
-import { Check } from 'lucide-react';
+import { AD_BLOCKING_NOTICE, blockingSite, DEFAULT_SETTINGS, SAFE_BROWSING_NOTICE, SEARCH_ENGINES } from '@chord/core';
+import type { AdBlockingStatus, SafeBrowsingStatus, SettingsSnapshot } from '@chord/ipc';
+import { Check, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { RadioGroup, Row, SectionHeader, Switch } from './controls';
@@ -36,6 +39,82 @@ function listsLine(status: SafeBrowsingStatus): string {
   if (status.failing) return 'Couldn’t update Google’s lists just now. Chord tries again later, and keeps checking with the lists it has.';
   if (status.updatedAt === null) return 'Getting Google’s lists…';
   return `${count.format(status.entries)} entries on this computer, updated ${updatedAgo(status.updatedAt)}. Chord updates them as often as Google asks.`;
+}
+
+/** A list's `! Version:` (202610241817) as a date people read. */
+function listDate(version: string | null): string | null {
+  const m = version ? /^(\d{4})(\d{2})(\d{2})/.exec(version) : null;
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString(undefined, { dateStyle: 'medium' }) : null;
+}
+
+/** Which lists, from when, and how their refresh is doing. */
+function blockingListsLine(status: AdBlockingStatus): string {
+  const lists = status.lists.map((l) => `${l.name}${listDate(l.version) ? ` from ${listDate(l.version)}` : ''}`).join(' and ');
+  if (status.failing) return `${lists}. Couldn’t get newer ones just now; Chord tries again later and keeps blocking with these.`;
+  const checked = status.lists.map((l) => l.checkedAt).filter((at): at is number => at !== null);
+  return checked.length ? `${lists}, checked for updates ${updatedAgo(Math.min(...checked))}.` : `${lists}, as this copy of Chord came. Chord checks for newer ones every few days.`;
+}
+
+function AdBlocking({ snapshot }: { snapshot: SettingsSnapshot }) {
+  const { enabled, offSites } = snapshot.settings.adBlocking;
+  const [status, setStatus] = useState<AdBlockingStatus | null>(null);
+  const [site, setSite] = useState('');
+  useEffect(() => {
+    void api.settings.adBlocking().then(setStatus);
+  }, [enabled]);
+  const set = (patch: Partial<typeof snapshot.settings.adBlocking>) => void api.settings.set({ adBlocking: patch });
+  const added = blockingSite(site.trim());
+  const addSite = () => {
+    if (!added) return;
+    set({ offSites: [...offSites, added] });
+    setSite('');
+  };
+  return (
+    <>
+      <h2 className={styles.groupTitle}>Ads and trackers</h2>
+      <div className={styles.group}>
+        <Row
+          label="Block ads and trackers"
+          description={AD_BLOCKING_NOTICE}
+          changed={enabled !== DEFAULT_SETTINGS.adBlocking.enabled}
+          onReset={() => set({ enabled: DEFAULT_SETTINGS.adBlocking.enabled })}
+          control={<Switch label="Block ads and trackers" checked={enabled} onChange={(on) => set({ enabled: on })} />}
+        />
+        {enabled && status && <Row label="The lists" description={blockingListsLine(status)} control={null} />}
+        {enabled && (
+          <Row
+            label="Don’t block on"
+            description="Sites where nothing is blocked, their subdomains too. A page’s right-click menu turns it off or on for its site."
+            control={
+              <span className={styles.slider}>
+                <input
+                  className={styles.siteInput}
+                  value={site}
+                  placeholder="news.example"
+                  aria-label="Add a site where ads aren’t blocked"
+                  onChange={(e) => setSite(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addSite()}
+                />
+              </span>
+            }
+          />
+        )}
+        {enabled &&
+          offSites.map((s) => (
+            <Row
+              key={s}
+              label={s}
+              control={
+                <button type="button" className={styles.reset} data-visible aria-label={`Block ads on ${s} again`} onClick={() => set({ offSites: offSites.filter((x) => x !== s) })}>
+                  <X size={13} strokeWidth={2} />
+                </button>
+              }
+            />
+          ))}
+      </div>
+      <p className={styles.groupNote}>EasyList and EasyPrivacy, by the EasyList authors. Pages are filtered in every window, private ones too, and a private window’s own exceptions are forgotten with it.</p>
+    </>
+  );
 }
 
 function SafeBrowsing({ snapshot }: { snapshot: SettingsSnapshot }) {
@@ -138,6 +217,7 @@ export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
           </div>
         </>
       )}
+      <AdBlocking snapshot={snapshot} />
       <SafeBrowsing snapshot={snapshot} />
       {/* What Chord keeps on this computer that you might not expect (DESIGN.md §7.6). */}
       <h2 className={styles.groupTitle}>On this computer</h2>

@@ -123,8 +123,9 @@ const config: Configuration = {
   // app is just the build output; electron-builder would otherwise copy the
   // production node_modules too. package.json is always added.
   files: ['out/**/*', '!**/node_modules/**/*'],
-  // Chord's licenses travel with every copy: MIT, plus MPL-2.0 for core/rank.ts (adapted from Crest),
-  // GPL-3.0 for the extensions library, and Apache-2.0 for pdf.js (Duet's PDF reader, out/main/pdf.js).
+  // Chord's licenses travel with every copy: MIT, plus MPL-2.0 for core/rank.ts (adapted from Crest)
+  // and Ghostery's adblocker engine (out/main/ad-blocking.js), GPL-3.0 for the extensions library and
+  // EasyList (out/main/ad-blocking), and Apache-2.0 for pdf.js (Duet's PDF reader, out/main/pdf.js).
   extraResources: [
     { from: '../../LICENSE', to: 'licenses/LICENSE' },
     { from: '../../LICENSES', to: 'licenses' },
