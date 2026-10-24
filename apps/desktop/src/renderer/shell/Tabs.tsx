@@ -44,7 +44,7 @@ import {
   type TabNode,
 } from '@chord/core';
 import { CollisionPriority } from '@dnd-kit/abstract';
-import { Accessibility, KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
+import { Accessibility, AutoScroller, KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import { DragDropProvider, useDraggable, useDragDropMonitor, useDroppable } from '@dnd-kit/react';
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
@@ -80,6 +80,7 @@ import styles from './App.module.css';
 import { canFly, flashArchive, flyToArchive, MAX_FLIGHTS, takeArchived } from './ArchiveArc';
 import { enter, leave, slideFrom, type Leaving } from './today-motion';
 import { DuetReadTabs } from './duet-context';
+import { EdgeScroller } from './edge-scroll';
 import { useKeys } from './keys';
 import { SPLIT_DROP, splitDropFor, type SplitDrop } from './split-drop';
 import { CHORD_DROP, flattenPinned, levelsFor, MAX_VISUAL_DEPTH, projectDrop, type Drop, type FlatRow } from './tree';
@@ -193,7 +194,8 @@ export function SidebarDnd({
       <DragDropProvider
         // The rows are a tree with keyboard moves of its own (treeKeys below), so dnd-kit's own
         // screen-reader layer (a "draggable" role description, a pressed state on rows) stays out.
-        plugins={(defaults) => defaults.filter((plugin) => plugin !== Accessibility)}
+        // Today scrolls at its edges with EdgeScroller, which reads no layout as the pointer moves.
+        plugins={(defaults) => [...defaults.filter((plugin) => plugin !== Accessibility && plugin !== AutoScroller), EdgeScroller]}
         sensors={(defaults) => [
           // The keyboard moves rows its own way (treeKeys below), so dnd-kit's keyboard sensor stays out.
           ...defaults.filter((sensor) => sensor !== PointerSensor && sensor !== KeyboardSensor),
@@ -1527,6 +1529,7 @@ export function SidebarTabs({
         <ul
           ref={todayRef}
           className={styles.list}
+          data-edge-scroll
           role="tree"
           aria-label="Today"
           aria-describedby={help}

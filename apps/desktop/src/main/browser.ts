@@ -93,6 +93,8 @@ export interface BrowserOptions {
   archive: { entry(which: { archiveId: string } | { reasons: ArchiveReason[] }): Promise<ArchiveEntry | null> };
   /** When idle tabs are archived and put to sleep. */
   idle: IdleTiming;
+  /** The computer is low on memory: tabs sleep sooner (idle.ts). */
+  memoryLow(): boolean;
   /** Answers getDisplayMedia with Chord's picker; connected here once the store exists. */
   screenShare: ScreenShareBroker;
   /** Answers sites and proxies that ask for a username and password; connected here once the store exists. */
@@ -429,7 +431,11 @@ export class Browser {
       },
     });
     options.httpAuth.connect({
-      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      // A tab's page, or Peek's (its box shows over Peek). A mini window has no popover to ask in.
+      nodeFor: (contents) => {
+        const floating = this.tabs.floatingNodeFor(contents);
+        return this.tabs.nodeFor(contents) ?? (floating && this.peeks.windowOf(floating) ? floating : undefined);
+      },
       onChange: () => this.syncPopovers(),
     });
     options.screenShare.connect({
@@ -449,6 +455,7 @@ export class Browser {
         dispatch: (command) => this.store.dispatch(command),
         tabs: this.tabs,
         isCapturing: (nodeId) => options.permissions.isCapturing(nodeId),
+        memoryLow: options.memoryLow,
       },
       options.idle,
     );
@@ -527,6 +534,11 @@ export class Browser {
 
   get windowCount(): number {
     return this.windows.size;
+  }
+
+  /** Each window's last snapshot fallback, for tests (chordTestHooks). */
+  snapshotFallbacks(): AppWindow['snapshotFallback'][] {
+    return [...this.windows.values()].map((w) => w.snapshotFallback);
   }
 
   windowFor(contents: WebContents): AppWindow | undefined {
@@ -839,7 +851,8 @@ export class Browser {
       find: find && find.target === shown ? find.state : null,
       permission: this.options.permissions.promptFor(activeTabId(state, w.id)),
       share: this.options.screenShare.promptFor(activeTabId(state, w.id)),
-      auth: this.options.httpAuth.promptFor(activeTabId(state, w.id)),
+      // Peek's page is in front while it's open: its sign-in box first.
+      auth: this.options.httpAuth.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
     };

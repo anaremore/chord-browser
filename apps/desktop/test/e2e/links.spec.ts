@@ -34,13 +34,26 @@ function startSite(): Promise<Site> {
     '/b': () => '<title>B</title><p>B</p>',
     '/c': () => '<title>C</title>',
     '/d': () => '<title>D</title>',
-    '/pinned': () => `<title>Pinned</title><p><a id="out" href="http://localhost:${port}/other">Elsewhere</a></p><p><a id="same" href="/b">Same site</a></p>`,
+    '/pinned': () =>
+      `<title>Pinned</title><p><a id="out" href="http://localhost:${port}/other">Elsewhere</a></p><p><a id="same" href="/b">Same site</a></p>` +
+      `<p><a id="staff" href="http://localhost:${port}/staff">Staff only</a></p>`,
     '/private': () => `<title>Private</title><p><a id="out" href="http://localhost:${port}/secret">Secret</a></p>`,
     '/other': () => '<title>Other</title><a id="next" href="/other2">More</a>',
     '/other2': () => '<title>Other 2</title>',
     '/secret': () => '<title>Secret</title>',
   };
   const server = createServer((req, res) => {
+    // HTTP Basic auth: me / secret.
+    if (req.url === '/staff') {
+      if (req.headers.authorization !== `Basic ${Buffer.from('me:secret').toString('base64')}`) {
+        res.writeHead(401, { 'www-authenticate': 'Basic realm="Staff"', 'content-type': 'text/html; charset=utf-8' });
+        res.end('<title>Unauthorized</title>');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end('<title>Staff page</title>');
+      return;
+    }
     const page = pages[(req.url ?? '/').split('?')[0]!];
     res.writeHead(page ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(page ? page() : 'not found');
@@ -175,6 +188,29 @@ test('a link from another app opens in a mini window, and Open in moves it into 
     await handOver(app, `${site.origin}/d`);
     await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('D');
     expect(app.windows().some((p) => isMini(p.url()))).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a site in Peek that asks for a password gets the sign-in box over Peek', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/pinned`, CHORD_E2E_HOOKS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const popover = await pageWhere(app, (url) => url.startsWith('chord://popover') || url.includes('/popover/index.html'));
+    await runAction(shell, 'tab.pin');
+    await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Pinned');
+    await clickLink(app, `${site.origin}/pinned`, '#staff');
+    await expect(overlay.getByRole('dialog', { name: /^Peek/ })).toBeVisible();
+    const box = popover.getByRole('alertdialog', { name: `Sign in to ${site.other}` });
+    await expect(box.locator('q')).toHaveText('Staff');
+    await box.getByLabel('Username').fill('me');
+    await box.getByLabel('Password').fill('secret');
+    await box.getByRole('button', { name: 'Sign in' }).click();
+    const staff = await pageWhere(app, (url) => url === `${site.other}/staff`);
+    await expect.poll(() => staff.title()).toBe('Staff page');
+    await expect(box).toBeHidden();
   } finally {
     await app.close();
   }
@@ -347,12 +383,18 @@ test('a link route sends a site’s links to its chord, from other apps and the 
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
     await expect(settings.getByRole('combobox', { name: 'Chord for localhost' })).toHaveValue(work);
-    await settings.getByRole('textbox', { name: 'Site for a new route' }).fill('https://www.example.org/path');
-    await settings.getByRole('combobox', { name: 'Chord for the new route' }).selectOption(personal);
-    await settings.getByRole('button', { name: 'Add route' }).click();
+    // An address, as pasted: the site's route. With a path, a route for that part of the site.
+    const add = async (site: string) => {
+      await settings.getByRole('textbox', { name: 'Site for a new route' }).fill(site);
+      await settings.getByRole('combobox', { name: 'Chord for the new route' }).selectOption(personal);
+      await settings.getByRole('button', { name: 'Add route' }).click();
+    };
+    await add('https://www.example.org/');
     await expect(settings.getByRole('combobox', { name: 'Chord for example.org' })).toHaveValue(personal);
+    await add('example.org/Team/*');
+    await expect(settings.getByRole('combobox', { name: 'Chord for example.org/team' })).toHaveValue(personal);
     await settings.getByRole('button', { name: 'Remove the route for localhost' }).click();
-    await expect.poll(async () => Object.keys((await snapshot(shell)).state.linkRoutes)).toEqual(['example.org']);
+    await expect.poll(async () => Object.keys((await snapshot(shell)).state.linkRoutes).sort()).toEqual(['example.org', 'example.org/team']);
   } finally {
     await app.close();
   }

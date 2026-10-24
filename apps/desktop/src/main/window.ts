@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { paneRects, type Bounds, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
-import { BaseWindow, WebContentsView, nativeTheme, type Menu, type Session, type WebContents } from 'electron';
+import { BaseWindow, MessageChannelMain, WebContentsView, nativeTheme, type Menu, type MessagePortMain, type Session, type WebContents } from 'electron';
 import { FrameSnapshots, offscreen } from './frame-snapshot';
 import { registerCaller, send } from './ipc';
 import { epochNow, markLaunch } from './perf';
@@ -182,6 +182,8 @@ export class AppWindow {
   private origin: FrameOrigin;
   /** The frame changes size by its pages' snapshot (ARCHITECTURE.md §5), never by moving them every frame. */
   private readonly snapshots: FrameSnapshots;
+  /** The shell's port for the snapshot's events, once it asks (connectSnapshots); gone when the shell loads again. */
+  private snapshotPort: MessagePortMain | null = null;
   /** Minimal mode's peek: the shell sits above the page so the sidebar can float over it. */
   private peeking = false;
   /** A tab is being dragged from the sidebar: the shell sits above the pages to show split drop zones. */
@@ -229,7 +231,11 @@ export class AppWindow {
 
     // The snapshot's rects are the layout's, in the shell's CSS pixels: the shell draws the pictures with them.
     this.snapshots = new FrameSnapshots({
-      tell: (event) => send(this.shell.webContents, 'frame:snapshot', event),
+      // Over the shell's own port when it has one: pictures skip the preload, and its worker makes them drawable.
+      tell: (event) => {
+        if (this.snapshotPort) this.snapshotPort.postMessage(event);
+        else send(this.shell.webContents, 'frame:snapshot', event);
+      },
       panes: () => {
         const frame = this.frameRect();
         const rects = this.paneRectsIn(frame);
@@ -299,6 +305,8 @@ export class AppWindow {
     });
     this.shell.webContents.on('did-start-loading', () => {
       this.shellLoaded = false;
+      this.snapshotPort?.close();
+      this.snapshotPort = null;
     });
     this.shell.webContents.on('did-finish-load', () => {
       this.shellLoaded = true;
@@ -578,6 +586,20 @@ export class AppWindow {
     if (next.size !== this.hiddenPanes.size || [...next].some((v) => !this.hiddenPanes.has(v))) this.snapshots.finish();
     this.hiddenPanes = next;
     for (const view of this.panes) view.setVisible(!this.hiddenPanes.has(view));
+  }
+
+  /** Why this window's last frame change that wanted pictures happened at once (FrameSnapshots.lastFallback). */
+  get snapshotFallback(): FrameSnapshots['lastFallback'] {
+    return this.snapshots.lastFallback;
+  }
+
+  /** The shell is listening for the snapshot's events: give it a port of its own (a fresh one each time it asks). */
+  connectSnapshots(): void {
+    if (this.shell.webContents.isDestroyed()) return;
+    this.snapshotPort?.close();
+    const { port1, port2 } = new MessageChannelMain();
+    this.snapshotPort = port1;
+    this.shell.webContents.postMessage('frame:port', null, [port2]);
   }
 
   /** The popover reports its cards' size; 0 × 0 hides it. */

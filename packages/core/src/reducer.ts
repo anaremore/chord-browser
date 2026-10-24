@@ -46,7 +46,7 @@ import {
   type WindowId,
   type WindowModel,
 } from './model';
-import { routeFor, routeHost } from './links';
+import { routeFor, routeKey } from './links';
 import { shortcutById, type ActionId } from './shortcuts';
 import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
@@ -587,7 +587,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'linkRoute.set': {
-      const host = routeHost(cmd.host);
+      const host = routeKey(cmd.host);
       const chord = draft.chords[cmd.chordId];
       if (!host || !chord || chord.private) return;
       const existing = draft.linkRoutes[host];
@@ -597,7 +597,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'linkRoute.delete': {
-      const host = routeHost(cmd.host) ?? cmd.host;
+      const host = routeKey(cmd.host) ?? cmd.host;
       if (draft.linkRoutes[host]) delete draft.linkRoutes[host];
       return;
     }

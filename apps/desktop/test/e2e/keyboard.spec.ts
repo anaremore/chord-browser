@@ -406,7 +406,11 @@ test('split view, keyboard only: Split with… from the command bar, move betwee
 
     // Separate it from the command bar's actions (no network: actions only).
     await runAction(shell, 'tab.new');
-    await overlay.keyboard.type('@actions separate');
+    await expect(overlay.getByRole('combobox')).toBeFocused();
+    // The filter first: once its chip shows, the rest is the query (typed in one go, keys can race it).
+    await overlay.keyboard.type('@actions ');
+    await expect(overlay.getByTestId('scope-chip')).toHaveText('Actions');
+    await overlay.keyboard.type('separate');
     await expect(overlay.getByRole('option', { selected: true })).toHaveText(/^Separate split tabs/);
     await overlay.keyboard.press('Enter');
     await expect(divider).toHaveCount(0);

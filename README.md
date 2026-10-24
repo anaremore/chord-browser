@@ -6,7 +6,7 @@ A calm, colorful, open-source browser built around a vertical sidebar. Tabs live
 
 Windows, macOS, and Linux (X11 and Wayland) are all first-class.
 
-> **Status: early development.** Unsigned preview builds appear on [Releases](https://github.com/anaremore/chord-browser/releases) as they're cut; the first preview (0.1) is planned for mid-December 2026. See the [roadmap](ROADMAP.md).
+> **Status: preview.** Chord 0.1, the first preview, is on [Releases](https://github.com/anaremore/chord-browser/releases): unsigned builds for Windows, macOS and Linux. See the [roadmap](ROADMAP.md) for what's next.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/chord-dark.png">

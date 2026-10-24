@@ -88,8 +88,9 @@ const chordName = z.string().max(64);
 export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('tab.open'), windowId: id, url, background: z.boolean().optional(), pinned: z.boolean().optional(), route: z.boolean().optional() }),
   // Link routes (from Crest): "Always open linear.app in Work?" answers with linkRoute.set.
-  z.object({ t: z.literal('linkRoute.set'), host: z.string().min(1).max(253), chordId: id }),
-  z.object({ t: z.literal('linkRoute.delete'), host: z.string().min(1).max(253) }),
+  // A route's site: a host, and maybe a path (`github.com/acme`).
+  z.object({ t: z.literal('linkRoute.set'), host: z.string().min(1).max(1000), chordId: id }),
+  z.object({ t: z.literal('linkRoute.delete'), host: z.string().min(1).max(1000) }),
   z.object({ t: z.literal('tab.activate'), windowId: id, nodeId: id, touch: z.boolean().optional() }),
   z.object({ t: z.literal('tab.close'), windowId: id, nodeId: id }),
   z.object({ t: z.literal('tab.reopenClosed'), windowId: id }),
@@ -750,6 +751,8 @@ export const invokeChannels = {
    * or have reached where the pages are going (`moved`).
    */
   'layout:snapshot': { roles: ['shell'], request: z.strictObject({ seq: z.number().int().min(1), phase: z.enum(['shown', 'moved']) }), response: z.void() },
+  /** The shell is listening: send it a MessagePort for the snapshot's events (`frame:port`). */
+  'layout:snapshotPort': { roles: ['shell'], request: z.void(), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
   // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
@@ -794,7 +797,7 @@ export const invokeChannels = {
   },
   'settings:forgetSite': { roles: ['internal'], request: z.strictObject({ origin: siteOrigin }), response: z.void() },
   /** Settings → General → Link routes: send a site's links to a chord, or (null) stop. */
-  'settings:linkRoute': { roles: ['internal'], request: z.strictObject({ host: z.string().min(1).max(253), chordId: id.nullable() }), response: z.void() },
+  'settings:linkRoute': { roles: ['internal'], request: z.strictObject({ host: z.string().min(1).max(1000), chordId: id.nullable() }), response: z.void() },
   // A mini window's bar (DESIGN.md §7.9): links from other apps open there.
   'mini:state': { roles: ['mini'], request: z.void(), response: z.custom<MiniState>() },
   /** Move the page into its "Open in" chord, as a tab with its history. */
@@ -876,7 +879,11 @@ export interface EventPayloads {
   'frame:snapshot': FrameSnapshotEvent;
 }
 
-/** One page's picture: where it is, in the shell's CSS pixels, and its pixels (RGBA, `width` × `height`, device pixels). */
+/**
+ * One page's picture: where it is, in the shell's CSS pixels, and its pixels
+ * as `capturePage` gives them (BGRA, `width` × `height`, device pixels). The
+ * shell turns them into RGBA off its main thread.
+ */
 export interface SnapshotPane {
   rect: Rect;
   width: number;
@@ -890,6 +897,9 @@ export interface SnapshotPane {
  * frame changed; again if it changes on the way); `drop` them once the pages
  * are back.
  */
+/** The `message` event's data on the shell's window when main's snapshot port arrives (`connectSnapshots`). */
+export const SNAPSHOT_PORT_MESSAGE = 'chord:frame-port';
+
 export type FrameSnapshotEvent =
   | { seq: number; phase: 'show'; panes: SnapshotPane[] }
   | { seq: number; phase: 'move'; rects: Rect[] }
@@ -929,6 +939,13 @@ export interface ShellApi {
     /** The frame's snapshot: main's pictures of the pages while the frame changes size, and the shell's replies. */
     onSnapshot(listener: (event: FrameSnapshotEvent) => void): () => void;
     snapshot(seq: number, phase: 'shown' | 'moved'): Promise<void>;
+    /**
+     * Ask main for a port of its own for the snapshot's events, so pictures skip
+     * the preload: it arrives as a `message` event on this window, data
+     * `SNAPSHOT_PORT_MESSAGE`. Until then (and if it never does), they come
+     * through `onSnapshot`.
+     */
+    connectSnapshots(): Promise<void>;
   };
   menu: {
     app(anchor: Rect): Promise<void>;

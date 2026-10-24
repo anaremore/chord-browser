@@ -378,6 +378,7 @@ export type ExternalLinks = 'mini' | 'tab';
  * subdomains (`github.com` covers `gist.github.com`).
  */
 export interface LinkRoute {
+  /** The site it covers, as `routeKey` gives it: a host, and maybe a path (`github.com/acme`). */
   host: string;
   chordId: ChordId;
   createdAt: number;

@@ -1,9 +1,10 @@
 /**
  * Tidying up (ARCHITECTURE.md §7, §9): every few minutes, and when the
  * computer wakes, Today tabs unused for longer than Settings allows go to the
- * archive, and background tabs unused for an hour go to sleep. Tabs that are
- * playing, using the camera or microphone, sharing the screen, or in
- * picture-in-picture are left alone.
+ * archive, and background tabs unused for an hour go to sleep. When the
+ * computer runs low on memory (checked every 30 seconds), background tabs go
+ * to sleep after 5 minutes instead. Tabs that are playing, using the camera or
+ * microphone, sharing the screen, or in picture-in-picture are left alone.
  */
 import { archiveCandidates, sleepCandidates, type ArchiveAfter, type Command, type NodeId, type State } from '@chord/core';
 import { powerMonitor } from 'electron';
@@ -15,6 +16,10 @@ export interface IdleTiming {
   /** How long a Today tab may sit unused for each setting (null: never archive). */
   archiveAfterMs(setting: ArchiveAfter): number | null;
   sleepAfterMs: number;
+  /** How long a background tab may sit hidden while memory is low. */
+  pressureSleepAfterMs: number;
+  /** How often to ask whether memory is low. */
+  memoryCheckMs: number;
 }
 
 export interface IdleDeps {
@@ -23,10 +28,13 @@ export interface IdleDeps {
   tabs: Pick<TabManager, 'loaded' | 'isPlaying' | 'inPictureInPicture'>;
   /** The tab's page was given the camera or microphone. */
   isCapturing(nodeId: NodeId): boolean;
+  /** The computer is low on memory (memory.ts). */
+  memoryLow(): boolean;
 }
 
 export class IdleKeeper {
   private timer: ReturnType<typeof setInterval> | undefined;
+  private memoryTimer: ReturnType<typeof setInterval> | undefined;
   private checking = false;
   private readonly onResume = () => void this.check();
 
@@ -38,12 +46,18 @@ export class IdleKeeper {
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => void this.check(), this.timing.checkMs);
+    // Low on memory: look now, with the shorter wait, rather than at the next regular check.
+    this.memoryTimer = setInterval(() => {
+      if (this.deps.memoryLow()) void this.check();
+    }, this.timing.memoryCheckMs);
     powerMonitor.on('resume', this.onResume);
   }
 
   stop(): void {
     clearInterval(this.timer);
+    clearInterval(this.memoryTimer);
     this.timer = undefined;
+    this.memoryTimer = undefined;
     powerMonitor.off('resume', this.onResume);
   }
 
@@ -68,7 +82,8 @@ export class IdleKeeper {
       const archived = archive.filter((id) => stillIdle.has(id));
       if (archived.length > 0) dispatch({ t: 'tab.archive', nodeIds: archived, reason: 'auto' });
       if (!state().settings.sleepTabs) return;
-      const toSleep = () => sleepCandidates(state(), now, this.timing.sleepAfterMs, tabs.loaded(), busy);
+      const sleepAfterMs = this.deps.memoryLow() ? Math.min(this.timing.sleepAfterMs, this.timing.pressureSleepAfterMs) : this.timing.sleepAfterMs;
+      const toSleep = () => sleepCandidates(state(), now, sleepAfterMs, tabs.loaded(), busy);
       const sleep = await this.withoutPictureInPicture(toSleep(), busy);
       const stillHidden = new Set(toSleep());
       for (const nodeId of sleep) if (stillHidden.has(nodeId)) dispatch({ t: 'tab.sleep', nodeId });

@@ -1,6 +1,6 @@
 import type { FrameSnapshotEvent, Rect } from '@chord/ipc';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FrameSnapshots, isTyping, offscreen, PREPARE_TIMEOUT_MS, toRgba, type FrameHost } from '../../src/main/frame-snapshot';
+import { FrameSnapshots, isTyping, offscreen, PREPARE_TIMEOUT_MS, type FrameHost } from '../../src/main/frame-snapshot';
 
 const WINDOW = { width: 1280, height: 820 };
 const DOCKED: Rect = { x: 248, y: 40, width: 1028, height: 776 };
@@ -81,7 +81,8 @@ describe('the frame snapshot', () => {
     // Pictured and shown first; the frame hasn't changed yet.
     expect(t.phases()).toEqual(['show']);
     const show = t.events[0] as Extract<FrameSnapshotEvent, { phase: 'show' }>;
-    expect(show.panes).toEqual([{ rect: DOCKED, width: 1, height: 1, pixels: new Uint8Array([3, 2, 1, 255]) }]);
+    // The pixels as captured (BGRA): the shell's worker converts them, not main.
+    expect(show.panes).toEqual([{ rect: DOCKED, width: 1, height: 1, pixels: Buffer.from([1, 2, 3, 255]) }]);
     expect(change).not.toHaveBeenCalled();
 
     t.snapshots.ack(show.seq, 'shown');
@@ -155,6 +156,8 @@ describe('the frame snapshot', () => {
     await settle();
     expect(failed.events).toEqual([]);
     expect(failed.views[0]!.bounds).toEqual(COLLAPSED);
+    // It says why: tests tell a slow machine from a bug by it.
+    expect(failed.snapshots.lastFallback).toBe('capture');
 
     const hung = setUp({ capture: 'hang' });
     hung.snapshots.change(hung.collapse, true);
@@ -162,6 +165,7 @@ describe('the frame snapshot', () => {
     expect(hung.views[0]!.bounds).toEqual(DOCKED);
     await vi.advanceTimersByTimeAsync(1);
     expect(hung.views[0]!.bounds).toEqual(COLLAPSED);
+    expect(hung.snapshots.lastFallback).toBe('capture');
 
     const slow = setUp();
     slow.snapshots.change(slow.collapse, true);
@@ -172,6 +176,7 @@ describe('the frame snapshot', () => {
     expect(slow.phases()).toEqual(['show', 'drop']);
     expect(slow.views[0]!.bounds).toEqual(COLLAPSED);
     expect(slow.state.moves).toBe(1);
+    expect(slow.snapshots.lastFallback).toBe('shown');
   });
 
   it('brings the page back when a key is typed into it, or the shell never says the pictures arrived', async () => {
@@ -221,14 +226,6 @@ describe('the frame snapshot', () => {
 });
 
 describe('frame snapshot helpers', () => {
-  it('turns BGRA into RGBA, pixel by pixel', () => {
-    expect([...toRgba(new Uint8Array([1, 2, 3, 4, 10, 20, 30, 40]))]).toEqual([3, 2, 1, 4, 30, 20, 10, 40]);
-    // A view into a bigger buffer is copied, not changed.
-    const big = new Uint8Array([9, 9, 9, 9, 1, 2, 3, 4]);
-    expect([...toRgba(big.subarray(4))]).toEqual([3, 2, 1, 4]);
-    expect([...big.subarray(4)]).toEqual([1, 2, 3, 4]);
-  });
-
   it('keeps one pixel of a waiting page inside the window, in its corner', () => {
     expect(offscreen(COLLAPSED, WINDOW)).toEqual({ x: 1279, y: 819, width: COLLAPSED.width, height: COLLAPSED.height });
   });

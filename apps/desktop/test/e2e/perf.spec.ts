@@ -4,9 +4,11 @@
  * §6.5, with a typical sidebar (20 Today tabs) and a full one (200), motion on
  * and off.
  *
- * Writes test-results/perf.json and prints a table. It only reports, because
- * CI runners are noisy; with CHORD_PERF_ENFORCE=1 (on reference hardware) any
- * budget miss fails. How to run it and read the report: docs/testing/performance.md.
+ * Writes test-results/perf.json and prints a table. Counts (renders in a
+ * frame, page moves, late results) don't depend on the machine, so a miss
+ * fails anywhere, CI included. Times only report, because CI runners are
+ * noisy; with CHORD_PERF_ENFORCE=1 (on reference hardware) a time over its
+ * budget fails too. How to run it and read the report: docs/testing/performance.md.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -15,13 +17,15 @@ import type { AddressInfo } from 'node:net';
 import { cpus, release, tmpdir, totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type CDPSession, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { frameIntervals, framesOf, layoutsOf, longestTask, trace, type Frame, type TraceEvent } from './frames';
+import { frameIntervals, framesOf, layoutsOf, longestTask, profile, trace, type Frame, type TraceEvent } from './frames';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
 
 const appDir = resolve(import.meta.dirname, '../..');
 const ENFORCE = process.env['CHORD_PERF_ENFORCE'] === '1';
+/** Also sample the shell's CPU during each interaction and report where its time goes (slows it a little; for finding costs). */
+const PROFILE = process.env['CHORD_PERF_PROFILE'] === '1';
 /** ARCHITECTURE.md §1. */
 const BUDGET = { launchMs: 1500, commandBarOpenMs: 50, historyKeystrokeMs: 16, frameMs: 16, fastFrameMs: 8 } as const;
 /** Long enough for the slowest functional spring (`gentle`, 417 ms) to settle. */
@@ -114,8 +118,8 @@ async function measureCpuBusy(ms = 1000): Promise<number> {
 function record(row: Omit<Row, 'cpuBusy'>): void {
   (row as Row).cpuBusy = cpuBusy;
   rows.push(row as Row);
-  if (!ENFORCE) return;
   for (const c of row.checks) {
+    if (!ENFORCE && c.unit === 'ms') continue;
     const what = `${row.name} (${row.scenario}${row.motion ? `, motion ${row.motion}` : ''}): ${c.label} ${c.value} ${c.unit}, budget ${c.limit}`;
     expect.soft(c.status, what).not.toMatch(/^(miss|no data)$/);
   }
@@ -361,12 +365,20 @@ async function interaction(s: Session, name: string, steps: Step[], traced?: (ev
   const frames: (Frame & { renderer: string })[] = [];
   const tasks: { renderer: string; ms: number; calls: { name: string; ms: number }[] }[] = [];
   const intervals: number[] = [];
+  const selfTime = new Map<string, number>();
   let locked: boolean | null = null;
   for (const step of steps) {
     await step.setup?.();
     locked = screenLocked() || locked;
     const events = await trace(s.cdp, async () => {
-      intervals.push(...(await frameIntervals(s.shell, step.act)));
+      if (!PROFILE) {
+        intervals.push(...(await frameIntervals(s.shell, step.act)));
+        return;
+      }
+      const self = await profile(s.cdp, async () => {
+        intervals.push(...(await frameIntervals(s.shell, step.act)));
+      });
+      for (const [fn, ms] of self) selfTime.set(fn, (selfTime.get(fn) ?? 0) + ms);
     });
     for (const { pid, name: renderer } of s.renderers) {
       frames.push(...framesOf(events, pid).map((f) => ({ ...f, renderer })));
@@ -407,6 +419,13 @@ async function interaction(s: Session, name: string, steps: Step[], traced?: (ev
         calls: worst.calls.map((c) => `${c.name} ${round(c.ms)} ms`),
       },
       medianFrameIntervalMs: round(median(intervals)),
+      // CHORD_PERF_PROFILE=1: the shell's functions with the most self time, over every step.
+      ...(PROFILE && {
+        shellSelfTime: [...selfTime]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 15)
+          .map(([fn, ms]) => `${fn} ${round(ms)} ms`),
+      }),
     },
   });
 }

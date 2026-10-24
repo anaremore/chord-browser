@@ -34,7 +34,7 @@ import { cleanOffSites } from './ad-blocking';
 import { cleanOverrides } from './bindings';
 import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
-import { routeHost } from './links';
+import { routeKey } from './links';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
 import type { Platform } from './shortcuts';
@@ -59,11 +59,11 @@ export interface PersistedState {
   linkRoutes?: LinkRoute[];
 }
 
-/** Routes that still make sense: a plausible host, pointing at a chord that's still there (and isn't a private window's). */
+/** Routes that still make sense: a plausible site (and path), pointing at a chord that's still there (and isn't a private window's). */
 function restoreRoutes(saved: LinkRoute[] | undefined, chords: Record<string, Chord>): Record<string, LinkRoute> {
   const out: Record<string, LinkRoute> = {};
   for (const route of saved ?? []) {
-    const host = typeof route?.host === 'string' ? routeHost(route.host) : null;
+    const host = typeof route?.host === 'string' ? routeKey(route.host) : null;
     const chord = typeof route?.chordId === 'string' ? chords[route.chordId] : undefined;
     if (!host || host !== route.host || !chord || chord.private) continue;
     out[host] = { host, chordId: chord.id, createdAt: typeof route.createdAt === 'number' ? route.createdAt : 0 };

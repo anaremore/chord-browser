@@ -1,19 +1,19 @@
 /**
  * Sites and proxies that ask for a username and password in the browser's
  * own box: HTTP Basic, Digest or NTLM, a 401 or a 407 (ARCHITECTURE.md §9,
- * decision D12). Chord asks in the window's popover, over the tab that asked,
- * and only while you're looking at it. Nothing is saved: Chromium keeps a
- * sign-in that worked for the rest of the session, so it lasts until you
- * quit. Requests that aren't a tab's (Chord's own pages, extensions, Duet)
- * and a page's requests to other sites for images or scripts are cancelled,
- * as Chrome does, and the site shows its own "unauthorized" page.
+ * decision D12). Chord asks in the window's popover, over the tab (or Peek)
+ * that asked, and only while you're looking at it. Nothing is saved: Chromium
+ * keeps a sign-in that worked for the rest of the session, so it lasts until
+ * you quit. Requests from anything else (Chord's own pages, extensions, Duet,
+ * mini windows) and a page's requests to other sites for images or scripts
+ * are cancelled, as Chrome does, and the site shows its own "unauthorized" page.
  */
 import type { NodeId } from '@chord/core';
 import type { AuthPrompt } from '@chord/ipc';
 import type { AuthInfo, AuthenticationResponseDetails, WebContents } from 'electron';
 
 export interface AuthDeps {
-  /** The tab a page belongs to (popups, Peek and Chord's own UI have none). */
+  /** The tab (or Peek) a page belongs to; popups, mini windows and Chord's own UI have none. */
   nodeFor(contents: WebContents): NodeId | undefined;
   /** The prompts changed: refresh every window's popover. */
   onChange(): void;

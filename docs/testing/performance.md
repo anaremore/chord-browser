@@ -1,6 +1,6 @@
 # Performance
 
-Chord's performance budgets ([ARCHITECTURE.md §1](../../ARCHITECTURE.md#1-scope)) are acceptance criteria for 0.1. `apps/desktop/test/e2e/perf.spec.ts` measures them on every E2E run. CI only reports, because its runners are noisy. The reference PC (Windows 11, Ryzen 9 5900X, 144 Hz display) enforces them.
+Chord's performance budgets ([ARCHITECTURE.md §1](../../ARCHITECTURE.md#1-scope)) are acceptance criteria for 0.1. `apps/desktop/test/e2e/perf.spec.ts` measures them on every E2E run. The checks that count something (one shell render a frame, pages moved at most twice, no late results) don't depend on the machine, so they fail CI too. Times only report in CI, because its runners are noisy; the reference PC (Windows 11, Ryzen 9 5900X, 144 Hz display) enforces them.
 
 ## Run it
 
@@ -55,4 +55,4 @@ These cost a clock read or a frame callback, so they're always on.
 - **Renderers:** User Timing entries show up in DevTools' Performance panel: `chord:shell-ready`, `chord:shell-painted` and `chord:shell-render` (each shell commit; the oldest are dropped past 500) marks; `chord:command-bar-open`, `chord:keystroke` and `chord:keystroke-history` measures.
 - **Development builds:** `CHORD_PERF_TABS=200` and `CHORD_PERF_VISITS=2000` give a brand-new profile sleeping Today tabs and history to measure against. Pages are `/perf/1` and up on `CHORD_HOME_URL`'s site.
 
-To profile a miss with readable names, build without minifying (`CHORD_NO_MINIFY=1 pnpm --filter @chord/desktop build`). Then record with DevTools' Performance panel, or attach a CDP session and use `Profiler.start`.
+To profile a miss with readable names, build without minifying (`CHORD_NO_MINIFY=1 pnpm --filter @chord/desktop build`). With `CHORD_PERF_PROFILE=1`, the spec also samples the shell's CPU during each interaction (V8's profiler, every 100 µs) and adds the 15 functions with the most self time to each frames measure (`detail.shellSelfTime`). Sampling slows the shell a little, so use it to find a cost, not to judge a budget. In the Linux container: `CHORD_NO_MINIFY=1 CHORD_PERF_PROFILE=1 pnpm test:e2e:linux perf.spec.ts -g "200 Today tabs, motion on"` (both variables are passed in).
