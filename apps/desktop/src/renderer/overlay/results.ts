@@ -24,6 +24,7 @@ import { type DuetHit,
   searchUrl,
   shownTabs,
   chordsFor,
+  activeTab,
   activeTabId,
   splitOf,
   usagePoints,
@@ -92,6 +93,12 @@ const inSplit = (state: State, windowId: string) => {
   return active !== null && splitOf(state, active) !== null;
 };
 
+/** The tab on screen is a web page, muted (`true`) or not. */
+const webTabMuted = (muted: boolean) => (state: State, windowId: string) => {
+  const tab = activeTab(state, windowId);
+  return tab !== null && /^https?:/i.test(tab.url) && Boolean(tab.muted) === muted;
+};
+
 /**
  * Every action the keyboard needs is here (DESIGN.md §14.1 rule 4). `when`:
  * shown only where it does something (Separate split tabs, in a split).
@@ -101,6 +108,9 @@ const ACTIONS: { action: ActionId; title: string; words: string; when?: (state: 
   { action: 'app.history', title: 'Archive', words: 'archive archived history closed tabs' },
   { action: 'tab.close', title: 'Close tab', words: 'close tab' },
   { action: 'tab.pin', title: 'Pin or unpin tab', words: 'pin unpin tab keep' },
+  // One of the two, for the tab on screen.
+  { action: 'tab.mute', title: 'Mute tab', words: 'mute tab sound audio silence quiet volume', when: webTabMuted(false) },
+  { action: 'tab.mute', title: 'Unmute tab', words: 'unmute tab sound audio volume', when: webTabMuted(true) },
   { action: 'tab.favorite', title: 'Add this tab to Favorites', words: 'add favorite favorites star bookmark tile' },
   { action: 'folder.new', title: 'New folder with this tab', words: 'new folder group organize pinned' },
   { action: 'today.clear', title: 'Clear Today', words: 'clear today archive tidy close all tabs' },

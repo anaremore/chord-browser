@@ -119,6 +119,8 @@ export type Command =
   | { t: 'tab.pin'; nodeId: NodeId }
   /** Unpin to the top of Today. */
   | { t: 'tab.unpin'; nodeId: NodeId }
+  /** Silence a tab's page, or let it be heard again. It's kept with the tab (sleep and restarts too). */
+  | { t: 'tab.mute'; nodeId: NodeId; muted: boolean }
   /** Engine reports (not user intent). */
   | { t: 'tab.updated'; nodeId: NodeId; url?: string; title?: string; favicon?: string | null }
   | { t: 'tab.live'; nodeId: NodeId; live: Partial<LiveTab> }
@@ -225,6 +227,8 @@ export type Effect =
   | { e: 'view.destroy'; nodeId: NodeId }
   /** Close the tab's page but keep its back/forward history and scroll position for when it's shown again. */
   | { e: 'view.sleep'; nodeId: NodeId }
+  /** Silence the tab's page, or let it be heard (a page made later is silenced as it's made). */
+  | { e: 'view.mute'; nodeId: NodeId; muted: boolean }
   /** A tab is going to the archive: save it, with its history, before its view is destroyed. */
   | { e: 'archive.save'; nodeId: NodeId; tab: ArchivedTab }
   /** A tab came back from the archive: its saved history goes into the new view, and the entry leaves the archive. */
@@ -1011,6 +1015,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const next = order[(current + cmd.direction + order.length) % order.length]!;
       if (next.id !== win.activeTab[win.activeChordId]) leave(draft, win, ctx);
       activate(draft, cmd.windowId, next.id, ctx, effects);
+      return;
+    }
+
+    case 'tab.mute': {
+      const node = draft.nodes[cmd.nodeId];
+      if (node?.kind !== 'tab' || Boolean(node.muted) === cmd.muted) return;
+      if (cmd.muted) node.muted = true;
+      else delete node.muted;
+      effects.push({ e: 'view.mute', nodeId: cmd.nodeId, muted: cmd.muted });
       return;
     }
 

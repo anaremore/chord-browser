@@ -730,6 +730,7 @@ kbd {
 }
 
 .favorite {
+  position: relative;
   display: grid;
   place-items: center;
   inline-size: 100%;
@@ -754,6 +755,21 @@ kbd {
 .favorite[aria-current='page'] {
   background: var(--color-item-active-bg);
   box-shadow: var(--shadow-raised);
+}
+
+/* A favorite whose tab makes sound: a small speaker on the tile's corner, like a badge. */
+.favoriteSound {
+  position: absolute;
+  inset-block-end: var(--space-1);
+  inset-inline-end: var(--space-1);
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-icon);
+  block-size: var(--size-icon);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
 }
 
 /* The sidebar's edge: drag to resize (DESIGN.md §3.1). */
@@ -786,11 +802,11 @@ kbd {
 }
 
 /*
- * A video popped out of this tab (auto picture-in-picture): the glyph sits in
- * the audio slot just before ×'s (DESIGN.md §7.2), so nothing moves on hover.
- * Click brings the video home.
+ * The audio slot just before ×'s (DESIGN.md §7.2), so nothing moves on hover:
+ * the speaker of a tab making sound, the glyph of a video popped out of it
+ * (auto picture-in-picture: click brings the video home), or Stop sharing.
  */
-.item[data-pip] > .row {
+.item[data-slot] > .row {
   padding-inline-end: calc(var(--space-2) + var(--size-hit-min) * 2);
 }
 
@@ -818,6 +834,15 @@ kbd {
 /* Sharing the screen: the same slot, in the color that says "live". */
 .sharing {
   color: var(--color-danger);
+}
+
+/* A tab making sound: a quiet speaker (crossed out while muted), there whether or not you hover. */
+.speaker {
+  color: var(--color-fg-muted);
+}
+
+.speaker:hover {
+  color: var(--color-fg);
 }
 
 /* ---------- Footer ---------- */
@@ -941,6 +966,118 @@ kbd {
 
 .toastAction:hover {
   background: var(--color-item-hover);
+}
+
+/* ---------- Now playing (DESIGN.md §7.10) ---------- */
+
+/*
+ * Above the footer, under the toasts: media playing in a tab you aren't
+ * looking at. A soft square on the chord's tint, like a favorite's, in the
+ * chord's own colors; Play or Pause is the one thing in the accent.
+ */
+.nowPlaying {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-block-end: var(--space-2);
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.nowPlayingTrack {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-inline-size: 0;
+  padding: var(--space-1) var(--space-1) 0;
+}
+
+/* Concentric with the card: its 12 less the 8 it sits in from the edge. */
+.nowPlayingArt {
+  flex: none;
+  inline-size: var(--size-artwork);
+  block-size: var(--size-artwork);
+  border-radius: var(--radius-xs);
+  object-fit: cover;
+}
+
+.nowPlayingText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
+.nowPlayingTitle {
+  font: var(--text-label);
+}
+
+.nowPlayingByline {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.nowPlayingBar {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+/* The tab, its icon and title: goes to it. */
+.nowPlayingTab {
+  display: flex;
+  flex: 1;
+  gap: var(--space-2);
+  align-items: center;
+  min-inline-size: 0;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  text-align: start;
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.nowPlayingTab:hover {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+/* Which of several playing tabs this is: "1 of 2 ›". */
+.nowPlayingNext {
+  display: flex;
+  flex: none;
+  gap: var(--space-0);
+  inline-size: auto;
+  padding-inline: var(--space-1) var(--space-0);
+  font: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.nowPlayingPlay {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-icon-button);
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  transition: transform var(--spring-press-duration) var(--spring-press);
+}
+
+.nowPlayingPlay:active {
+  transform: scale(0.94);
 }
 
 /* ---------- Downloads button ---------- */
@@ -1495,6 +1632,7 @@ kbd {
 
   .toast,
   .iconPicker,
+  .nowPlaying,
   .window[data-sidebar='collapsed'][data-peek] .sidebar {
     border: var(--size-hairline) solid CanvasText;
   }

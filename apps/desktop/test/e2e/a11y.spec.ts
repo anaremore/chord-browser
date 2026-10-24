@@ -41,6 +41,7 @@ import {
   type Finding,
   type ThemeName,
 } from './a11y-kit';
+import { ARTWORK_PNG, mediaPage } from '../fixtures/media';
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -58,6 +59,12 @@ test.beforeAll(async () => {
     '/pinned': '<title>Pinned</title><p><a id="out" href="http://localhost:{port}/other">Elsewhere</a></p>',
     '/other': '<title>Other</title><p>Another site.</p>',
     '/other2': '<title>Other 2</title><p>More of it.</p>',
+    // Pages that play sound: what the Now playing card shows (with artwork), and one without Media Session.
+    '/song': mediaPage({
+      title: 'Song page',
+      track: { title: 'Chord Song', artist: 'The Notes', album: 'Triads', artwork: `data:image/png;base64,${ARTWORK_PNG.toString('base64')}` },
+    }),
+    '/radio': mediaPage({ title: 'Radio' }),
   });
   mkdirSync(capturesDir, { recursive: true });
 });
@@ -424,6 +431,44 @@ for (const mode of APPEARANCES) {
         const settings = await pageWhere(app, isSettings);
         await expect(settings.getByRole('combobox', { name: 'Chord for localhost' })).toBeVisible();
         findings.push(...(await audit(settings, 'Settings → Links', { appearance: mode })));
+      } finally {
+        await app.close();
+      }
+      expectClean(findings);
+    });
+
+    test(`a tab's speaker, the Now playing card, and the minimal bar's speaker (${mode})`, async () => {
+      const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_APPEARANCE: mode });
+      const findings: Finding[] = [];
+      try {
+        const shell = await pageWhere(app, isShell);
+        await expect(today(shell)).toContainText('First page');
+        const card = shell.getByRole('group', { name: 'Now playing' });
+        // A tab playing out of sight: its row's speaker, and the card with its track and artwork.
+        const { windowId } = await where(shell);
+        await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/song`, background: true });
+        await expect(card).toContainText('Chord Song');
+        await expect(card.locator('img')).toBeVisible();
+        for (const theme of ['dusk', 'graphite', 'coral', 'aurora'] satisfies ThemeName[]) {
+          await setTheme(shell, theme);
+          findings.push(...(await audit(shell, `now playing, ${theme}`, { appearance: mode })));
+        }
+        // Two playing (the card steps between them), one muted and one paused.
+        await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/radio`, background: true });
+        await expect(card.getByRole('button', { name: /^Next playing tab/ })).toBeVisible();
+        await card.getByRole('button', { name: 'Mute tab' }).click();
+        await card.getByRole('button', { name: 'Pause', exact: true }).click();
+        await expect(card.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+        findings.push(...(await audit(shell, 'now playing: two tabs, muted, paused', { appearance: mode })));
+        // The tab on screen plays (muted), in the minimal bar.
+        await card.getByRole('button', { name: 'Play', exact: true }).click();
+        await expect(card.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+        await card.getByRole('button', { name: /^Go to tab/ }).click();
+        await expect(today(shell).getByRole('treeitem', { name: 'Radio', exact: true })).toHaveAttribute('aria-current', 'page');
+        await runAction(shell, 'view.toggleSidebar');
+        await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
+        await expect(shell.getByRole('button', { name: 'Unmute tab' })).toBeVisible();
+        findings.push(...(await audit(shell, 'minimal bar, playing', { appearance: mode })));
       } finally {
         await app.close();
       }

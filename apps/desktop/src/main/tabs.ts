@@ -137,6 +137,8 @@ export class TabManager {
     const nav = this.pendingHistory.get(nodeId);
     this.pendingHistory.delete(nodeId);
     const contents = view.webContents;
+    // Muted stays muted: after sleeping, a restart, or a move to other sign-ins (a new page each time).
+    if (node.muted) contents.setAudioMuted(true);
     if (nav) {
       // Back where it was: same page, same back/forward list, same scroll position.
       contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
@@ -206,6 +208,12 @@ export class TabManager {
       return;
     }
     if (!isInternalUrl(url)) void view.webContents.loadURL(url).catch(() => {});
+  }
+
+  /** Silence the tab's page, or let it be heard. A tab without a page is silenced when it gets one (ensure). */
+  setMuted(nodeId: NodeId, muted: boolean): void {
+    const contents = this.views.get(nodeId)?.webContents;
+    if (contents && !contents.isDestroyed()) contents.setAudioMuted(muted);
   }
 
   /** Close the tab's page, keeping its history to load when it's shown again. */

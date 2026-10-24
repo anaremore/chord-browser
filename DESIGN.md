@@ -96,11 +96,12 @@ macOS                                            Windows / Linux
 | URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L edits the address **in place**: the pill becomes a text field with the URL selected, and results drop down beneath it (§7.3). Hover reveals copy link · page actions. |
 | Chord header | 28 | Chord icon (16) + name (`text-label`). Hover shows the ⋯ menu (Edit theme, Rename, Keep sign-ins separate, Delete). |
 | Pinned | 32 / row | Pinned tabs and folders, nestable; indent 12 px per level, visually capped at 4 levels. |
-| Favorites | 40 + 8 | *(As built, M1.2.)* Tiles every chord shares, in a wrapping grid, each a site's icon on an `item-hover` square (`radius-md`). The one for the tab you're on is raised. A tile switches to this chord's tab on that site, or opens it in Today. Drag a tab onto the row to add it; right-click to remove. |
+| Favorites | 40 + 8 | *(As built, M1.2.)* Tiles every chord shares, in a wrapping grid, each a site's icon on an `item-hover` square (`radius-md`). The one for the tab you're on is raised. A tile switches to this chord's tab on that site, or opens it in Today. Drag a tab onto the row to add it; right-click to remove. *(2026-10-24:)* A tile whose tab makes sound wears a small speaker on its corner (`volume-x` while muted); its row mutes it. |
 | Today divider | 24 | Hairline + "Clear" (`text-micro`), which appears on hover or focus and archives all Today tabs. |
 | New tab | 32 | "+ New tab", muted. Same as ⌘T. |
 | Today | 32 / row | New tabs arrive at the top. |
 | (flex) | — | Toasts stack here, above the footer. |
+| Now playing | 36 or 84 | *(Built 2026-10-24, §7.10.)* Only while media plays in a tab the window isn't showing, or paused there in the last minute. |
 | Extensions shelf | 32 | Only when the chord's profile has extensions: pinned extensions' buttons (16 px icons in 28 px hit areas, with badges and tooltips), then the puzzle piece, which lists every extension with a pin toggle. A popup opens beside its button. Hidden when Settings puts extension buttons in the title bar. Right-click a button: the extension's items, Options, Unpin, Remove (with Undo), Manage in Settings. |
 | Footer | 44 | Archive · Downloads on the left; chord switcher in the center (icons 20 px; active one in a pill; scrolls with fade edges past ~6); + New chord on the right. |
 
@@ -124,6 +125,7 @@ Windows / Linux
 | Sidebar toggle ◧ | Click or the toggle shortcut (§13) docks the sidebar again. Hovering the toggle for 300 ms, or pointing at the left window edge, *peeks* the sidebar over the page without docking it (can be turned off). |
 | Back · Forward · Reload | As in the sidebar header. Unavailable buttons sit at 40% opacity rather than disappearing, so nothing shifts. |
 | Address field | `domain / title`: domain in `fg`, the slash and title in `fg-muted`, one line, truncated at the end. Click or ⌘L and the field *grows into* the command bar in place (shared-element morph), with the URL selected. Hover shows the site-info icon. |
+| Speaker | *(Built 2026-10-24.)* Only while the tab on screen makes sound: the row's speaker (§7.2), which the hidden sidebar can't show. Click mutes or unmutes the tab. |
 | Drag region | Everything not interactive drags the window. Double-click follows the platform (maximize on Windows/Linux; the macOS title-bar preference). |
 | Downloads | Present only while a download is active or just finished. |
 | Extension actions | Only the puzzle piece, which lists every extension, so popups stay one click away while the header stays clean. With Settings → Extensions → "Show extension buttons: In the title bar", the pinned buttons sit here too: before ⋯ on Windows/Linux, and in the sidebar's header row on macOS (its title bar) while the sidebar is docked. |
@@ -460,7 +462,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Animate into the command bar | On | The ⌘L address morph and the ⌘T panel entrance |
 | Slide between chords | On | The chord switch. A trackpad swipe still follows your fingers; release just snaps. |
 | Animate tab moves | On | Pin flight, archive arc, reorder make-room, drop settle, close collapse |
-| Animate the sidebar | On | Collapse and dock, peek slide-in, folder open and close, and Duet's panel opening and closing. Off, docking, collapsing and Duet take no frame snapshot at all. |
+| Animate the sidebar | On | Collapse and dock, peek slide-in, folder open and close, Duet's panel opening and closing, and the Now playing card coming and going. Off, docking, collapsing and Duet take no frame snapshot at all. |
 | Blend chord colors | On | The theme crossfade when switching chords |
 
 - **Every setting in Chord, not only motion,** shows a ↺ button beside its label when it differs from the default; clicking it restores the default.
@@ -476,7 +478,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Area | Components |
 |---|---|
 | Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
-| Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
+| Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `NowPlayingCard` (§7.10), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar` |
 | Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
 | Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer` and the `AuthCard` sign-in box (a site or proxy asking for a username and password: a key, *Sign in to* the origin, the site's realm as a quote, *That username and password didn't work* in `danger` after a failed try, a warning on plain HTTP, two fields, *Cancel* · **Sign in**; Escape cancels) |
@@ -506,6 +508,8 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Dragging | Scale 1.03, `shadow-lift`, cursor `grabbing` |
 
 **Close on a pinned tab** unloads it; it stays pinned. Tooltip: "Close (stays pinned)".
+
+*As built (2026-10-24), audible and muted:* the speaker (Lucide `volume-2`, `volume-x` while muted, 14 px in a 24 px hit area) sits in the slot just before × in `fg-muted`, and shows whenever the tab makes sound, muted or not: Chromium goes on reporting a muted tab's sound, so a muted tab that plays shows the crossed-out speaker, and one that stops loses it. Click mutes or unmutes the tab; the keyboard has the row's menu (*Mute tab* / *Unmute tab*), the command bar's actions and Ctrl+M (⌃M on macOS, where ⌘M minimizes; Firefox and Edge use these keys). The row's description says *Playing sound* or *Muted*. Muting is kept with the tab, through sleep and restarts, until you unmute it; in a private window it works and is never saved. A split's tabs, listed under its row, show it too. A popped-out video's PiP glyph, and Stop sharing, take the slot first.
 
 ### 7.3 `CommandBar`
 
@@ -634,6 +638,21 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 | **Mini window** | A small window (remembers its size; default 900×640) with a 36 px bar showing the domain, **Open in ▾ [chord]**, and close. Neutral tint. Promoting it fades the window out, and the tab lands in the chosen chord's Today with the pin bloom. On Wayland the compositor places the window.<br>**As built:** each link gets its own mini window, cascaded from the middle of the screen. The bar shows a lock or globe with the domain, *Copy link*, and a split button: **Open in [icon] [chord]** moves the page (⌘↵ / Ctrl+Enter), and ▾ picks another chord from a menu, which moves it there at once. Close is the window's own caption control (traffic lights on macOS, the caption buttons on Windows and Linux), as for Chord's other windows. A thin line along the bar's bottom shows loading. Chord launched just to open a link shows only the mini window. ⚠ Not yet: the pin bloom on arrival (the tab just appears at the top of Today), and the fade on Linux (it closes at once). |
 | **Auto picture-in-picture** | Leave a tab while its video plays and the video pops out into a floating window over everything, including other apps. Come back and it slides home inline.<br>**The window is Chromium's native PiP window**, the same one Chrome and Dia use. Its controls appear on hover: ↖ *back to tab* (top-left), the site's origin (top-center), ✕ (top-right), play/pause with the site's skip buttons (e.g. −10 / +30), and a progress bar. Chord doesn't restyle or animate this window; the OS and Chromium own it.<br>**In the sidebar** the tab's speaker icon becomes a PiP glyph (Lucide `picture-in-picture-2`). Clicking the glyph brings the video home.<br>**Settings:** *Pop out playing videos when you switch away* (on by default), plus a per-site "Don't pop out" in the site menu.<br>Details and limits: ARCHITECTURE.md §9. |
 | **Minimal mode** (sidebar collapsed; the brief's "hidden chrome") | Specified in §3.3. Toggled by the bar's ◧ button, the sidebar's collapse button, the command bar ("Hide sidebar"), or the toggle shortcut. Peek reveal: pointing within 6 px of the left edge for 120 ms, or hovering ◧ for 300 ms. In OS fullscreen the bar itself auto-hides. |
+
+### 7.10 `NowPlayingCard`
+
+*Built 2026-10-24.* Media playing in a tab you aren't looking at, at the bottom of the sidebar, as Arc has it.
+
+- **When:** a tab in any of the window's chords makes sound and the window isn't showing it (a split's panes on screen count as shown). Media in another chord shows too, so music started in Work keeps its controls when you switch to Personal. A normal window never shows a private window's media, and a private window shows only its own. The card stays a minute after the media pauses, so it can be played again from there; closing the tab or leaving the page ends it at once. With several tabs playing it shows the one that started most recently.
+- **Where:** under the toasts, above the extensions shelf and the footer; the sidebar's width less 16 px. In minimal mode it's there while the sidebar peeks.
+- **Anatomy:** 36 px tall when the page says nothing about what it plays, 84 when it does.
+  - What plays, from the page's Media Session: the artwork at 40 px (`radius-xs`, concentric with the card), the track in `text-label` and *artist · album* in `text-small`, `fg-muted`, each on one line with an ellipsis. Without artwork, the text alone.
+  - The tab: its favicon and title (`text-small`, `fg-muted`), a button that goes to the tab. Then **1 of 2 ›** with several tabs playing (`text-micro`, tabular figures), stepping to the next; **picture-in-picture** (`picture-in-picture-2`) for a playing video, *Bring the video back* once it's out; **Mute / Unmute** (`volume-2` / `volume-x`); and **Play / Pause**: a 28 px `accent` circle with a filled glyph in `accent-fg`, the card's one accent.
+  - Play and Pause show only for a player in the page itself. One in an embedded frame (a video in an article) can be muted from the card, but not paused (ARCHITECTURE.md §9).
+- **Surface:** `item-hover` on the chord's tint, `radius-md`, padding `space-1`: a soft square like a favorite's, in the chord's own colors, light and dark. The buttons are the sidebar's icon buttons. Windows High Contrast adds a `CanvasText` edge.
+- **Motion:** it rises 8 px and fades in on `overlay`, and leaves with `fade-fast` and a 4 px drop; with reduced motion, opacity only. It belongs to *Animate the sidebar* (§6.8): off, it just appears. When what it shows changes, it changes in place.
+- **Accessibility:** a group named *Now playing*, outside the sidebar's trees, so its buttons are ordinary Tab stops, named for what they do: *Go to tab: [title]*, *Next playing tab, 1 of 2*, *Pop out the video*, *Mute tab*, *Pause*. Going to the tab, or the card leaving with the keyboard in it, hands the keyboard to the sidebar's tab. A new track isn't announced.
+- **The OS's own controls** (Windows' media flyout, macOS's Now Playing, Linux's MPRIS) come from Chromium, not this card: ARCHITECTURE.md §9.
 
 ---
 
@@ -819,7 +838,8 @@ Empty states get a small abstract illustration in the chord's own colors (three 
 *As built (M1.6, the accessibility pass):*
 
 - **F6 / ⇧F6** go sidebar → page → (find bar or permission prompt) → Duet → top strip. Main knows which view has the keyboard; the shell picks the next region it shows and asks main to focus the page, the popover or itself (`focus:region`, `focus:move`). Coming back to a region lands where you left it; the first time, on the tab on screen, Duet's message field, or the address. The command bar and Peek are modal: F6 stays out.
-- **The sidebar** is two ARIA trees, Pinned and Today. Each row is a `treeitem` named by its title, with level, position and size (rows are drawn flat, indented by depth). Each tree is one Tab stop: the row last focused, else the tab on screen. Arrows, Home and End move; → / ← open, enter and close folders and splits; ↵ opens; Space picks a row up; Delete or ⌘⌫ closes. Picking up, moving and dropping are announced. A row's own buttons (×, ↩, Stop sharing, a split's chevron) are for the pointer; the keyboard has Delete and the row's menu (Shift+F10 or the menu key), which now also offers Stop sharing your screen and Back to pinned page.
+- **The sidebar** is two ARIA trees, Pinned and Today. Each row is a `treeitem` named by its title, with level, position and size (rows are drawn flat, indented by depth). Each tree is one Tab stop: the row last focused, else the tab on screen. Arrows, Home and End move; → / ← open, enter and close folders and splits; ↵ opens; Space picks a row up; Delete or ⌘⌫ closes. Picking up, moving and dropping are announced. A row's own buttons (×, ↩, Stop sharing, the speaker, a split's chevron) are for the pointer; the keyboard has Delete and the row's menu (Shift+F10 or the menu key), which now also offers Stop sharing your screen, Back to pinned page and Mute tab. A row's description says when its tab is playing sound or muted.
+- **Now playing** (§7.10) is a group outside the trees, with ordinary buttons: one Tab stop each, named for what they do.
 - **Composite widgets share one pattern** (`shared/a11y.ts`): radio groups, the chord switcher (tabs: ← → switch chords) and Duet's scope are one Tab stop, and arrow keys move and choose. Menus (Duet's model and Chats menus, Attach a tab) open on their first item, take ↑ ↓ Home End, and close on Esc or Tab with the keyboard back on their button. Popovers, pickers and in-place editors give the keyboard back to where it came from when they close.
 - **The command bar** is a modal dialog: a `combobox` (expanded while it has results) owning the `listbox` "Results", with the active option followed by `aria-activedescendant`. Esc gives the keyboard back where it came from (the sidebar row, or the page). Split with…, Separate split tabs and the pane moves are among its actions. The downloads and extensions panels take the keyboard when they open.
 - **Settings:** every row's description is read with its control; every ↺ is named for its setting ("Reset Search suggestions to default") and, once used, hands the keyboard to the setting it reset.
@@ -937,6 +957,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 | Next / previous tab in the sidebar | ⌘⌥↓ · ⌘⌥↑ | Ctrl+PageDown · Ctrl+PageUp | R |
 | Move tab down / up in the sidebar | ⌘⌥⇧↓ · ⌘⌥⇧↑ | Ctrl+Shift+PageDown · Ctrl+Shift+PageUp | R |
 | Pin / unpin tab | ⌘D | Ctrl+D | P |
+| Mute / unmute tab | ⌃M | Ctrl+M | P |
 
 **Chords**
 

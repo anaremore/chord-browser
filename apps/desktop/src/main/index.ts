@@ -320,6 +320,8 @@ function registerIpc(): void {
   });
   handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
   handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
+  handle('media:view', (_request, sender) => browser!.nowPlaying(senderWindow(sender).id));
+  handle('media:do', ({ nodeId, action }, sender) => browser!.mediaAction(senderWindow(sender), nodeId, action));
   handle('auth:respond', ({ id, credentials }) => httpAuth.respond(id, credentials));
   handle('settings:sitePermission', ({ origin, permission, decision }) =>
     browser!.store.dispatch({ t: 'permission.set', origin, permissions: [permission], decision }),

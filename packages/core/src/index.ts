@@ -7,6 +7,7 @@ export * from './bindings';
 export * from './input';
 export * from './keywords';
 export * from './links';
+export * from './media';
 export * from './model';
 export * from './page';
 export * from './rank';

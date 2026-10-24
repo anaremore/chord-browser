@@ -108,6 +108,8 @@ export interface TabNode {
   favicon: string | null;
   lastActiveAt: number;
   createdAt: number;
+  /** You muted it: its page stays silent through sleep and restarts until you unmute it. */
+  muted?: boolean;
 }
 
 export interface FolderNode {

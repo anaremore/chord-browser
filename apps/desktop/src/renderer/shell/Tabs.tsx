@@ -49,7 +49,7 @@ import { DragDropProvider, useDraggable, useDragDropMonitor, useDroppable } from
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import { size, type Appearance } from '@chord/tokens';
-import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Undo2, X } from 'lucide-react';
+import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture2, Plus, ScreenShare, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { motion, PresenceContext } from 'motion/react';
 import {
   createContext,
@@ -413,6 +413,8 @@ interface RowContext {
   toggleSplit(id: string, open: boolean): void;
   /** The close button's tooltip, keycap included: the same for every row. */
   closeTitle: { pinned: string; today: string };
+  /** The speaker's tooltips, keycap included. */
+  muteTitle: { mute: string; unmute: string };
 }
 
 /**
@@ -564,6 +566,35 @@ function SplitFace({ panes, appearance }: { panes: readonly TabNode[]; appearanc
 
 const splitTitle = (panes: readonly TabNode[]) => panes.map((p) => pageTitle(p) || displayHost(p.url) || 'New tab').join(' + ');
 
+/**
+ * A tab making sound (muted, it still is, silently) shows a speaker in the
+ * slot just before × (DESIGN.md §7.2); clicking it mutes or unmutes the tab.
+ * For the pointer, like the row's other buttons: the keyboard has the row's
+ * menu and Mute or unmute tab's keys. The row's description says what it shows.
+ */
+function Speaker({ tab, ctx }: { tab: TabNode; ctx: RowContext }) {
+  const muted = Boolean(tab.muted);
+  const Glyph = muted ? VolumeX : Volume2;
+  return (
+    <>
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden
+        className={`${styles.pip} ${styles.speaker}`}
+        aria-label={muted ? 'Unmute tab' : 'Mute tab'}
+        title={muted ? ctx.muteTitle.unmute : ctx.muteTitle.mute}
+        onClick={() => void api.state.dispatch({ t: 'tab.mute', nodeId: tab.id, muted: !muted })}
+      >
+        <Glyph size={14} strokeWidth={2} />
+      </button>
+      <span id={`audio-${tab.id}`} hidden>
+        {muted ? 'Muted' : 'Playing sound'}
+      </span>
+    </>
+  );
+}
+
 interface TabRowProps extends RowBase {
   tab: TabNode;
   live: LiveTab | undefined;
@@ -595,6 +626,8 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
   const popped = Boolean(live?.pip);
   // It's sharing your screen: the slot shows a Stop button instead, which matters more.
   const sharing = Boolean(live?.sharing);
+  // It's making sound (muted, it still is, silently): the slot shows a speaker, unless one of those is there.
+  const audible = Boolean(live?.audible) && !sharing && !popped;
   const dispatch = api.state.dispatch;
   const close = () => void dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
   const shownDepth = isDragging && projected ? projected.depth : depth;
@@ -604,7 +637,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
       {...treeItem({ depth, pos, size: count }, pageTitle(tab) || tab.url)}
       aria-selected={isActive}
       aria-current={isActive ? 'page' : undefined}
-      aria-describedby={sharing ? `sharing-${tab.id}` : popped ? `pip-${tab.id}` : undefined}
+      aria-describedby={sharing ? `sharing-${tab.id}` : popped ? `pip-${tab.id}` : audible ? `audio-${tab.id}` : undefined}
       className={styles.item}
       style={indent(shownDepth)}
       data-row="tab"
@@ -615,7 +648,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
       // A pinned tab that hasn't been opened yet reads quieter (DESIGN.md §7.2).
       data-unloaded={unloaded || undefined}
       data-asleep={asleep || undefined}
-      data-pip={popped || sharing || undefined}
+      data-slot={popped || sharing || audible || undefined}
       data-dragging={lifted || undefined}
       data-drop-target={(isDropTarget && !isDragging) || undefined}
       onMouseDown={(e: MouseEvent) => {
@@ -675,6 +708,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
           Its video plays in a small window
         </span>
       )}
+      {audible && <Speaker tab={tab} ctx={ctx} />}
       {away ? (
         <button
           type="button"
@@ -864,18 +898,21 @@ const SplitMemberRow = memo(function SplitMemberRow({ tab, live, depth, pos, siz
   const { ref, handleRef, isDragging } = useDraggable({ id: tab.id, type: 'tab' });
   const { windowId, appearance } = ctx;
   const close = () => void api.state.dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
+  const audible = Boolean(live?.audible);
   return (
     <li
       ref={ref}
       {...treeItem({ depth, pos, size: count }, pageTitle(tab) || tab.url)}
       aria-selected={focused}
       aria-current={focused ? 'true' : undefined}
+      aria-describedby={audible ? `audio-${tab.id}` : undefined}
       className={styles.item}
       style={indent(depth)}
       data-row="tab"
       data-id={tab.id}
       data-parent={tab.parentId ?? undefined}
       data-focused-pane={focused || undefined}
+      data-slot={audible || undefined}
       data-dragging={isDragging || undefined}
       onAuxClick={(e: MouseEvent) => {
         if (e.button === 1) close();
@@ -893,6 +930,7 @@ const SplitMemberRow = memo(function SplitMemberRow({ tab, live, depth, pos, siz
       >
         <TabFace tab={tab} live={live} appearance={appearance} />
       </div>
+      {audible && <Speaker tab={tab} ctx={ctx} />}
       <button type="button" tabIndex={-1} aria-hidden className={styles.close} aria-label={`Close ${tab.title || 'tab'}`} title={ctx.closeTitle.today} onClick={close}>
         <X size={14} strokeWidth={2} />
       </button>
@@ -959,17 +997,35 @@ function PinnedDropZone() {
 
 /* ---------- Favorites ---------- */
 
-function FavoriteTile({ favorite, index, active, appearance, windowId }: { favorite: Favorite; index: number; active: boolean; appearance: Appearance; windowId: string }) {
+/** What a favorite's tab is doing with sound: playing it, playing it muted, or neither. */
+type TileSound = 'playing' | 'muted' | null;
+
+function FavoriteTile({
+  favorite,
+  index,
+  active,
+  sound,
+  appearance,
+  windowId,
+}: {
+  favorite: Favorite;
+  index: number;
+  active: boolean;
+  sound: TileSound;
+  appearance: Appearance;
+  windowId: string;
+}) {
   const { ref, handleRef, isDragging, isDropTarget } = useSortable({ id: FAVORITE + favorite.id, index, group: 'favorites', type: 'favorite', accept: FAVORITE_ACCEPTS });
   const { active: dragged } = useDrag();
   const label = favorite.title || displayHost(favorite.url);
+  const Glyph = sound === 'muted' ? VolumeX : Volume2;
   return (
     <li ref={ref} className={styles.favoriteItem} data-dragging={isDragging || undefined} data-drop-target={(dragged && isDropTarget && !isDragging) || undefined}>
       <button
         ref={handleRef}
         type="button"
         className={styles.favorite}
-        aria-label={label}
+        aria-label={sound ? `${label}, ${sound === 'muted' ? 'muted' : 'playing sound'}` : label}
         aria-current={active ? 'page' : undefined}
         title={label}
         onClick={() => void api.state.dispatch({ t: 'favorite.open', windowId, favoriteId: favorite.id })}
@@ -979,6 +1035,12 @@ function FavoriteTile({ favorite, index, active, appearance, windowId }: { favor
         }}
       >
         <Favicon url={favorite.url} title={favorite.title} favicon={favorite.favicon} appearance={appearance} />
+        {/* Its tab makes sound: a small speaker on the tile's corner (its row, in the list, mutes it). */}
+        {sound && (
+          <span className={styles.favoriteSound} aria-hidden>
+            <Glyph size={10} strokeWidth={2.25} />
+          </span>
+        )}
       </button>
     </li>
   );
@@ -1008,16 +1070,21 @@ export function FavoritesRow({ state, windowId, activeId, appearance }: { state:
   if (favorites.length === 0) return active?.type === 'tab' ? <FavoritesDropZone /> : null;
   return (
     <FavoritesList>
-      {favorites.map((favorite, index) => (
-        <FavoriteTile
-          key={favorite.id}
-          favorite={favorite}
-          index={index}
-          active={Boolean(chordId && activeId && tabForFavorite(state, chordId, favorite.url)?.id === activeId)}
-          appearance={appearance}
-          windowId={windowId}
-        />
-      ))}
+      {favorites.map((favorite, index) => {
+        const tab = chordId ? tabForFavorite(state, chordId, favorite.url) : undefined;
+        const sound: TileSound = tab && state.live[tab.id]?.audible ? (tab.muted ? 'muted' : 'playing') : null;
+        return (
+          <FavoriteTile
+            key={favorite.id}
+            favorite={favorite}
+            index={index}
+            active={Boolean(activeId && tab?.id === activeId)}
+            sound={sound}
+            appearance={appearance}
+            windowId={windowId}
+          />
+        );
+      })}
     </FavoritesList>
   );
 }
@@ -1330,9 +1397,11 @@ export function SidebarTabs({
 
   const closeToday = withKeys('Close tab', 'tab.close');
   const closePinned = withKeys('Close (stays pinned)', 'tab.close');
+  const mute = withKeys('Mute tab', 'tab.mute');
+  const unmute = withKeys('Unmute tab', 'tab.mute');
   const ctx = useMemo<RowContext>(
-    () => ({ windowId, info, appearance, spring, setRenaming, toggleSplit, closeTitle: { today: closeToday, pinned: closePinned } }),
-    [windowId, info, appearance, spring, toggleSplit, closeToday, closePinned],
+    () => ({ windowId, info, appearance, spring, setRenaming, toggleSplit, closeTitle: { today: closeToday, pinned: closePinned }, muteTitle: { mute, unmute } }),
+    [windowId, info, appearance, spring, toggleSplit, closeToday, closePinned, mute, unmute],
   );
 
   useLayoutEffect(() => {

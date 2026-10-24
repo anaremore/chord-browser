@@ -126,6 +126,8 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('window.sidebarWidth'), windowId: id, width: z.number().min(0).max(10_000) }),
   z.object({ t: z.literal('tab.pin'), nodeId: id }),
   z.object({ t: z.literal('tab.unpin'), nodeId: id }),
+  // The speaker on a tab's row, its menu, and the Now playing card.
+  z.object({ t: z.literal('tab.mute'), nodeId: id, muted: z.boolean() }),
   z.object({ t: z.literal('download.clear'), windowId: id }),
   z.object({ t: z.literal('window.sidebar'), windowId: id, sidebar: z.enum(['docked', 'collapsed']) }),
   z.object({ t: z.literal('chord.create'), windowId: id, name: chordName, icon: chordIcon, theme: ChordTheme }),
@@ -397,6 +399,31 @@ export interface SharePrompt {
   /** Offer "Share audio too": the page asked for audio and this OS can capture it (Windows). */
   audio: boolean;
 }
+
+/**
+ * A tab playing media, or paused a moment ago, for the sidebar's Now playing
+ * card (DESIGN.md §7.10). What it plays comes from the page's Media Session,
+ * read where the page's scripts can't see (ARCHITECTURE.md §9).
+ */
+export interface NowPlaying {
+  nodeId: string;
+  /** The track, from the page's Media Session; empty when it gives none (the card shows the tab's title instead). */
+  title: string;
+  artist: string;
+  album: string;
+  /** The track's artwork as a small data: URL, or null (the card shows the site's icon). */
+  artwork: string | null;
+  /** Playing now; false while it waits, paused, for a little while before the card lets it go. */
+  playing: boolean;
+  /** Chord can pause and play it: its player is in the page itself, not an embedded frame. */
+  pausable: boolean;
+  /** A video is playing that can pop out into picture-in-picture. */
+  video: boolean;
+}
+
+/** What the Now playing card's buttons ask main to do (mute and Go to tab are commands). */
+export const MediaAction = z.enum(['play', 'pause', 'pictureInPicture']);
+export type MediaAction = z.infer<typeof MediaAction>;
 
 /** Everything the popover shows: cards stack top-right over the page. */
 /** One row of a folder's hover preview. */
@@ -893,6 +920,9 @@ export const invokeChannels = {
     response: z.void(),
   },
   'share:stop': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
+  // Now playing (DESIGN.md §7.10): what the window's card offers, and its play, pause and picture-in-picture buttons.
+  'media:view': { roles: ['shell'], request: z.void(), response: z.custom<NowPlaying[]>() },
+  'media:do': { roles: ['shell'], request: z.strictObject({ nodeId: id, action: MediaAction }), response: z.void() },
   // The popover: find bar and permission prompts, over the page (ARCHITECTURE.md §5).
   'popover:state': { roles: ['popover'], request: z.void(), response: z.custom<PopoverState>() },
   /** The popover's content size, so main can fit the view to its cards (0 × 0 hides it). */
@@ -958,6 +988,8 @@ export interface EventPayloads {
   'frame:snapshot': FrameSnapshotEvent;
   /** An import from another browser, to the view that started it. */
   'import:progress': ImportProgress;
+  /** Tabs in the window's chords playing media (or paused a moment ago), newest first, when that changes. */
+  'media:state': NowPlaying[];
 }
 
 /**
@@ -1060,6 +1092,12 @@ export interface ShellApi {
   duet: { view(): Promise<DuetView>; act(action: DuetAction): Promise<void>; onState(listener: (view: DuetView) => void): () => void };
   /** Stop a tab's screen share (its sidebar row shows it's sharing). */
   share: { stop(nodeId: string): Promise<void> };
+  /** The Now playing card: the window's media as main pushes it, and the card's own buttons. */
+  media: {
+    view(): Promise<NowPlaying[]>;
+    onState(listener: (playing: NowPlaying[]) => void): () => void;
+    act(nodeId: string, action: MediaAction): Promise<void>;
+  };
   /** The pinned tab or folder row the pointer rests on, for its hover preview (null when it leaves). */
   preview: { hover(target: PreviewTarget): Promise<void> };
   /** Launch timing: the sidebar is ready to use, then painted. */

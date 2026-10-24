@@ -51,6 +51,17 @@ describe('private windows and persistence', () => {
     expect(opsForState(state).some((op) => op.k === 'node' && op.value?.chordId === 'pc')).toBe(false);
   });
 
+  it('mutes a private window’s tab without writing it', () => {
+    const opened = drive(seeded, [
+      { t: 'window.create', windowId: 'p1', from: windowId, privateChordId: 'pc' },
+      { t: 'tab.open', windowId: 'p1', url: 'https://secret.test/' },
+    ]);
+    const nodeId = opened.state.windows['p1']!.activeTab['pc']!;
+    const { state, ops } = drive(opened.state, [{ t: 'tab.mute', nodeId, muted: true }]);
+    expect(state.nodes[nodeId]).toMatchObject({ muted: true });
+    expect(ops.filter((op) => op.value !== null)).toEqual([]);
+  });
+
   it('still saves the normal window next to it', () => {
     const { ops } = drive(seeded, [
       { t: 'window.create', windowId: 'p1', from: windowId, privateChordId: 'pc' },
