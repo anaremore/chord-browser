@@ -29,6 +29,31 @@ const FLUSH_MS = 250;
 const CLOSE_TIMEOUT_MS = 2000;
 const MAX_RESTARTS = 3;
 
+/** Waits before each further try at opening the database. */
+const OPEN_RETRY_WAITS_MS = [250, 1000];
+
+/**
+ * SQLite errors that can pass: the disk briefly unavailable or another
+ * process holding the file (seen once in CI as "disk I/O error" opening a
+ * brand-new profile's database, which left Chord with no window).
+ */
+const TRANSIENT = /disk I\/O error|database is locked|database is busy|SQLITE_BUSY|SQLITE_IOERR/i;
+
+/** Runs `attempt` until it succeeds, fails for a reason that won't pass, or the waits run out. */
+export async function withRetries(
+  attempt: () => Promise<DataResponse>,
+  waits: readonly number[],
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((done) => setTimeout(done, ms)),
+): Promise<DataResponse> {
+  let response = await attempt();
+  for (const ms of waits) {
+    if (response.ok || !TRANSIENT.test(response.error)) break;
+    await sleep(ms);
+    response = await attempt();
+  }
+  return response;
+}
+
 /** A request before main numbers it. */
 type Request = { [T in DataRequest['type']]: Omit<Extract<DataRequest, { type: T }>, 'id'> }[DataRequest['type']];
 
@@ -52,7 +77,8 @@ export class Persistence {
   static async open(file: string): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState> }> {
     const persistence = new Persistence(file);
     persistence.spawn();
-    const response = await persistence.request({ type: 'open', file, prune: true });
+    // A disk that's busy for a moment gets two more tries before Chord gives up on the profile.
+    const response = await withRetries(() => persistence.request({ type: 'open', file, prune: true }), OPEN_RETRY_WAITS_MS);
     if (!response.ok) throw new Error(response.error);
     return { persistence, saved: response.saved ?? null, navs: response.navs ?? {} };
   }
