@@ -312,6 +312,7 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
 - **P0** CI green on every OS, then tag `v0.1.0` and publish the draft as a prerelease.
 
 ### 0.1.x · Daily-driver gaps · November
+- **P1 DevTools in the window** (asked 2026-10-24): DevTools open popped out today; dock it into the window beside the page (right or bottom, resizable), with a button to pop it out and back in, as Chrome does.
 - **P0 HTTP Basic Auth.** **Built 2026-10-24** (ARCHITECTURE.md §9): a sign-in box in the popover over the tab that asked, for sites and proxies (Basic, Digest, NTLM), with the site's realm, a note after a wrong answer and a warning on plain HTTP. Chromium remembers a sign-in that worked until you quit; Chord keeps nothing (D12). Peek too (its box shows over Peek); not yet mini windows, whose pages get the site's 401 page.
 - **P0 Sign-in checks, by hand:** Google in a second chord on Windows, macOS and Linux; Microsoft, GitHub and Apple; 1Password, Bitwarden and KeePassXC-Browser (risk R2). No user-agent spoofing unless one fails (D15).
 - **P1 Crash resilience.** **Built 2026-10-24** (ARCHITECTURE.md §6.2): open tabs now keep their back/forward history, scroll position and form fields across a restart or a crash (before, they came back as just their address). E2E tests kill Chord mid-session and check a tab comes back where it was, and that every window, chord and split comes back.
@@ -354,6 +355,8 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   - By hand: your own CSS, hiding an element, a few presets.
   - *Ask Duet*: your Claude Code or Codex app writes a patch from a stripped outline of the page; same reading rules as Duet.
   - Every patch is parsed and stripped of anything that fetches before it's applied, and re-applied on each navigation.
+
+- **P2 Duet fills forms** (D16, decided 2026-10-24): "fill only, you submit". Only when you ask, on the tab on screen; a review card of each field's value, then Chord fills them, with Undo; never submits, never passwords, cards, one-time codes or hidden fields. After Effects, sharing its safety review of writing into pages.
 
 ### 0.4 · Your data · March
 - **P1 Export everything:** chords, tabs, folders, Favorites, themes, settings, routes, Effects, history and Duet chats, in the format sync uses.
