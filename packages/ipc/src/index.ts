@@ -23,6 +23,10 @@ import {
   type DuetMessage,
   type DuetProvider,
   type DuetScope,
+  type ImportBrowser,
+  type ImportChoices,
+  type ImportOverview,
+  type ImportTarget,
   type SearchEngineId,
   type Settings,
   type SettingsPatch as CoreSettingsPatch,
@@ -161,6 +165,8 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('split.focus'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
   // Undo for a page's "Block ads on this site".
   z.object({ t: z.literal('adBlocking.site'), site: z.string().min(1).max(300), off: z.boolean(), chordId: id.optional() }),
+  // An import's toast: Undo. (Main also takes its history back; import.add is main's alone.)
+  z.object({ t: z.literal('import.undo'), importId: id }),
   // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
@@ -652,8 +658,81 @@ export interface DuetView {
   lookingInWsl: DuetProvider[];
 }
 
+/* ---------- Import from other browsers (ARCHITECTURE.md §9) ---------- */
+
+/** A browser profile Chord found. Main keeps where it is; a renderer only names it back by `key`. */
+export interface ImportSource {
+  key: string;
+  browser: ImportBrowser;
+  /** "Chrome", or "Chrome · Work" when the browser has several profiles; Flatpak and Snap copies say so. */
+  label: string;
+  /** Safari without Full Disk Access: Chord says how to grant it. */
+  denied: boolean;
+}
+
+/**
+ * Why a profile couldn't be read: macOS' Full Disk Access (`denied`), a file
+ * the browser holds (`locked`), a damaged or unknown file (`unreadable`),
+ * nothing there (`missing`), or another import still running (`busy`).
+ */
+export type ImportProblem = 'denied' | 'locked' | 'unreadable' | 'missing' | 'busy';
+
+/** What a profile holds, counted before anything is imported, with each group's mapping to start from. */
+export interface ImportSummary extends ImportOverview {
+  key: string;
+}
+
+export type ImportPreviewResult = { ok: true; summary: ImportSummary } | { ok: false; problem: ImportProblem };
+export type ImportRunResult = { ok: true; importId: string } | { ok: false; problem: ImportProblem };
+
+/** What an import brought. */
+export interface ImportCounts {
+  bookmarks: number;
+  folders: number;
+  chords: number;
+  favorites: number;
+  tabs: number;
+  /** History pages written. */
+  pages: number;
+}
+
+/** How an import is going, pushed to whoever started it (`import:progress`). */
+export interface ImportProgress {
+  importId: string;
+  /**
+   * `bookmarks` while folders and tabs land, `history` while pages are
+   * written (`done` of `total`), then `done`; `failed` keeps what had landed;
+   * `undone` after Undo.
+   */
+  phase: 'bookmarks' | 'history' | 'done' | 'failed' | 'undone';
+  done: number;
+  total: number;
+  counts: ImportCounts;
+  problem?: ImportProblem;
+}
+
+const importTarget = z.custom<ImportTarget>((v) => typeof v === 'string' && /^(new|favorites|skip|chord:[A-Za-z0-9-]{1,64})$/.test(v));
+
+/** Where each group, the open tabs and the history go. Main checks every chord again, and never uses a private window's. */
+export const ImportChoicesSchema = z.strictObject({
+  groups: z.record(z.string().regex(/^r\d{1,4}(\/\d{1,6})?$/), importTarget).refine((groups) => Object.keys(groups).length <= 2000),
+  tabs: importTarget,
+  history: z.boolean(),
+});
+const _choicesMatch = (c: z.infer<typeof ImportChoicesSchema>): ImportChoices => c;
+void _choicesMatch;
+const importKey = z.string().regex(/^[0-9a-f]{16}$/);
+
 /** Renderer → main requests (`ipcRenderer.invoke`). */
 export const invokeChannels = {
+  // Import from other browsers: first run's step (shell) and Settings → Import. Never from a private window.
+  'import:sources': { roles: ['shell', 'internal'], request: z.void(), response: z.custom<ImportSource[]>() },
+  'import:preview': { roles: ['shell', 'internal'], request: z.strictObject({ key: importKey }), response: z.custom<ImportPreviewResult>() },
+  'import:run': { roles: ['shell', 'internal'], request: z.strictObject({ key: importKey, choices: ImportChoicesSchema }), response: z.custom<ImportRunResult>() },
+  /** Settings' Undo (the window's toast dispatches import.undo). */
+  'import:undo': { roles: ['internal'], request: z.strictObject({ importId: id }), response: z.void() },
+  /** macOS: System Settings → Privacy & Security → Full Disk Access, which Safari's files need. */
+  'import:openAccess': { roles: ['shell', 'internal'], request: z.void(), response: z.void() },
   'duet:view': { roles: ['shell'], request: z.void(), response: z.custom<DuetView>() },
   'duet:do': { roles: ['shell'], request: DuetAction, response: z.void() },
   /** The command bar's @duet. */
@@ -877,6 +956,8 @@ export interface EventPayloads {
   'duet:state': DuetView;
   /** The frame changes size by its snapshot (ARCHITECTURE.md §5): pictures of the pages to show, move, then drop. */
   'frame:snapshot': FrameSnapshotEvent;
+  /** An import from another browser, to the view that started it. */
+  'import:progress': ImportProgress;
 }
 
 /**
@@ -995,6 +1076,20 @@ export interface ShellApi {
     back(nodeId: string): Promise<void>;
     proceed(nodeId: string): Promise<void>;
   };
+  /** First run's "Bring your bookmarks?" step. */
+  imports: ImportApi;
+}
+
+/** Import from other browsers: first run's step and Settings → Import (ARCHITECTURE.md §9). */
+export interface ImportApi {
+  sources(): Promise<ImportSource[]>;
+  /** Read a profile (copies of its files, off main) and count what it holds. */
+  preview(key: string): Promise<ImportPreviewResult>;
+  run(key: string, choices: ImportChoices): Promise<ImportRunResult>;
+  undo(importId: string): Promise<void>;
+  /** macOS: open the Full Disk Access settings, for Safari. */
+  openAccess(): Promise<void>;
+  onProgress(listener: (progress: ImportProgress) => void): () => void;
 }
 
 /** F6 or ⇧F6: which way, where the keyboard is now, and whether a find bar or prompt shows over the page. */
@@ -1057,6 +1152,8 @@ export interface SettingsApi {
     options(profileId: string, id: string): Promise<void>;
     update(): Promise<number>;
   };
+  /** Settings → Import. */
+  imports: ImportApi;
 }
 
 /** `window.chord` in a mini window's bar. */

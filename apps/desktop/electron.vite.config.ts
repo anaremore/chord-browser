@@ -37,8 +37,9 @@ export default defineConfig({
     // electron and Node built-ins stay external. Five entries: main itself,
     // chord-data's utility process (ARCHITECTURE.md §4), the PDF reader
     // Duet starts for each PDF it reads (§11.4; pdf.js stays out of main),
-    // Safe Browsing's worker thread (§14.5), and ad blocking's (§9; the
-    // engine stays out of main).
+    // Safe Browsing's worker thread (§14.5), ad blocking's (§9; the engine
+    // stays out of main), and the process that reads other browsers' files
+    // for an import (§9).
     plugins: [filterLists()],
     build: {
       externalizeDeps: false,
@@ -49,6 +50,7 @@ export default defineConfig({
           pdf: src('pdf/worker.ts'),
           'safe-browsing': src('main/safe-browsing/worker.ts'),
           'ad-blocking': src('main/ad-blocking/worker.ts'),
+          import: src('import/worker.ts'),
         },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },

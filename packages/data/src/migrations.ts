@@ -222,4 +222,9 @@ export const MIGRATIONS: readonly string[] = [
     host TEXT PRIMARY KEY, chord_id TEXT NOT NULL, created_at INTEGER NOT NULL
   ) STRICT;
   `,
+  // 12: a page's visits by page (import, ARCHITECTURE.md §9). Without it, deleting a history page (an
+  // import's Undo) scans every visit to cascade, and Undo after a big import took minutes. Only an index.
+  `
+  CREATE INDEX IF NOT EXISTS history_visit_url ON history_visit(url_id, id);
+  `,
 ];

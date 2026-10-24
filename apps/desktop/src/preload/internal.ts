@@ -39,6 +39,14 @@ const api: SettingsApi = {
     options: (profileId, id) => invoke('extensions:options', { profileId, id }),
     update: () => invoke('extensions:update'),
   },
+  imports: {
+    sources: () => invoke('import:sources'),
+    preview: (key) => invoke('import:preview', { key }),
+    run: (key, choices) => invoke('import:run', { key, choices }),
+    undo: (importId) => invoke('import:undo', { importId }),
+    openAccess: () => invoke('import:openAccess'),
+    onProgress: (listener) => subscribe('import:progress', listener),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

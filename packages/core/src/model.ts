@@ -5,6 +5,7 @@
  * keeps closed tabs in its own table).
  */
 import type { DuetKeep, DuetProvider, DuetScope } from './duet';
+import type { ImportRecord } from './import';
 import type { PageThreat, ThreatKind } from './safe-browsing';
 import type { ActionId, ShortcutOverrides } from './shortcuts';
 
@@ -160,6 +161,9 @@ export interface Favorite {
   rank: string;
   createdAt: number;
 }
+
+/** The most favorites; the row wraps well before this. */
+export const MAX_FAVORITES = 48;
 
 /** The sidebar's width range (DESIGN.md §3.1): resizable, with a detent at the default. */
 export const SIDEBAR_WIDTH = { default: 248, min: 200, max: 400, detent: 8 } as const;
@@ -524,6 +528,8 @@ export interface State {
   siteZoom: Record<string, number>;
   /** Link routes, by host. */
   linkRoutes: Record<string, LinkRoute>;
+  /** What each import from another browser added this session, for its Undo (not persisted). */
+  imports: Record<string, ImportRecord>;
 }
 
 export interface DeletedFolder {
@@ -556,6 +562,7 @@ export const emptyState = (): State => ({
   deletedFolders: [],
   siteZoom: {},
   linkRoutes: {},
+  imports: {},
 });
 
 export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, threat: null };

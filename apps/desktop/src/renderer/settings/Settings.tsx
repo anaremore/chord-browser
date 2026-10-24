@@ -5,7 +5,7 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Check, EyeOff, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Check, EyeOff, FolderInput, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
@@ -18,6 +18,7 @@ import { AppearanceSection } from './Appearance';
 import { ShortcutsSection } from './Shortcuts';
 import { RadioGroup, ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import { ExtensionsSection } from './Extensions';
+import { ImportSection } from './Import';
 import { PrivacySection } from './Privacy';
 import styles from './Settings.module.css';
 import { Links } from './Links';
@@ -30,6 +31,7 @@ const SECTIONS = [
   { id: 'privacy', label: 'Privacy', icon: EyeOff },
   { id: 'sites', label: 'Site permissions', icon: ShieldCheck },
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
+  { id: 'import', label: 'Import', icon: FolderInput },
   { id: 'duet', label: 'Duet', icon: DuetIcon },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
@@ -468,6 +470,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'privacy' && <PrivacySection snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
+              {section === 'import' && <ImportSection snapshot={snapshot} info={info} />}
               {section === 'duet' && <DuetSettings snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}

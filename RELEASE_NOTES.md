@@ -9,6 +9,13 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
   - Turn it off for one site from the page's right-click menu (*Block ads on this site*), with Undo, or list sites in Settings → Privacy, where the switch for everything is too. A private window's exceptions are forgotten with it.
   - Extensions keep working beside it: uBlock Origin Lite and others block as before.
   - Licenses: blocking uses Ghostery's adblocker engine, under the Mozilla Public License 2.0, and the EasyList lists, under the GPL-3.0 (or CC BY-SA 3.0). Their notices ship with every build.
+- **Import from other browsers:** bring your bookmarks, history and open tabs from Chrome, Edge, Brave, Firefox or Safari, in first run or Settings → Import.
+  - Chord shows what a browser holds before anything comes across, and you say where each top-level folder goes: a new chord named after it, or a pinned folder in a chord you have. The bookmarks bar's own links can become Favorites.
+  - Firefox's open tabs land in a chord's Today. Chrome, Edge and Brave keep theirs, since their files can't be read reliably.
+  - History comes in with every visit, so the command bar ranks those pages as if you'd always used Chord.
+  - Big imports stay smooth and show their progress, and Undo takes all of it back, history included.
+  - Chord reads copies of the other browser's files and never changes them. It never copies passwords, cookies or extensions; your password manager can bring passwords across.
+  - Safari needs Full Disk Access, and Chord says where to turn it on.
 - **Peek** gets the sign-in box too, when a site in it asks for a username and password.
 - **Link routes for part of a site:** `github.com/acme` can go to Work while the rest of GitHub goes elsewhere (Settings → General → Link routes).
 - **Low on memory,** tabs you haven't looked at in 5 minutes go to sleep, instead of after an hour.

@@ -10,6 +10,7 @@ import type {
   Chord,
   Download,
   Favorite,
+  ImportedPage,
   InstalledExtension,
   LinkRoute,
   PersistedState,
@@ -106,7 +107,23 @@ export type DataRequest =
   | { id: number; type: 'archive.latest'; reasons: ArchiveReason[] }
   /** Duet's threads and messages (./duet.ts). */
   | { id: number; type: 'duet'; op: DuetOp }
+  /**
+   * A port (transferred with this request) on which the import process sends
+   * one import's history, a batch at a time (`ImportBatch`), so the pages
+   * never pass through main (ARCHITECTURE.md §9). Each batch is answered.
+   */
+  | { id: number; type: 'import.port'; importId: string }
+  /** Take back what an import added to history: its Undo. */
+  | { id: number; type: 'import.undo'; importId: string }
   | { id: number; type: 'close' };
+
+/** The import process → chord-data, on an import's port: one batch of history, written in one transaction. */
+export interface ImportBatch {
+  pages: ImportedPage[];
+}
+
+/** chord-data's answer to each batch: the pages written, or why it couldn't. */
+export type ImportBatchReply = { ok: true; added: number } | { ok: false; error: string };
 
 /** chord-data → main. */
 export type DataResponse =
