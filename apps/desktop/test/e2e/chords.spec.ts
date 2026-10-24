@@ -118,11 +118,9 @@ test("a mouse's tilt wheel steps one chord per notch, and the minimal bar swipes
     const chords = await threeChords(shell);
     const selected = (name: string) => expect(chords.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
 
-    // One notch (a single big step), one chord.
-    await swipe(shell, [{ x: 120 }], 0);
-    await selected('Work');
-    // Its repeats while held don't run away with it: still one chord.
-    await swipe(shell, steps(3, 120), 20);
+    // One notch (a single big step) held for a moment, its repeats 20 ms apart: one chord, the repeats
+    // don't run away with it. (One hold: a pause between them past the notch's cooldown is a second notch.)
+    await swipe(shell, steps(4, 120), 20);
     await shell.waitForTimeout(400);
     await selected('Work');
 
