@@ -145,11 +145,14 @@ test('a chord’s pages: ads and trackers blocked, ad slots hidden, and a site t
     const loaded = adHits();
     await chooseFromPageMenu(app, tab, 'Block ads on this site');
     await expect.poll(adHits, { timeout: 15_000 }).toBeGreaterThan(loaded);
-    await expect.poll(() => slotHidden(tab)).toBe(false);
+    await expect.poll(() => slotHidden(tab).catch(() => true)).toBe(false);
+    await tab.waitForLoadState('load');
     const toast = shell.getByRole('group', { name: 'Not blocking ads on news.test' });
     await expect(toast).toBeVisible();
-    await rulesReady(app);
+    // Undo reloads the page too, once blocking is back: its ad slot is hidden again.
     await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect.poll(() => slotHidden(tab).catch(() => false), { timeout: 15_000 }).toBe(true);
+    await tab.waitForLoadState('load');
     await rulesReady(app);
     expect(await reload(tab)).toEqual({ ad: 'blocked', own: 'loaded', adHits: 0 });
   } finally {

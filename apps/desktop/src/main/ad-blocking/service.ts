@@ -85,6 +85,9 @@ interface Profile {
   /** Its rules and sites are known to be in Chromium this run (applied, or checked). */
   ready: boolean;
   verified: boolean;
+  /** Resolves once the extension's first load has been tried (pages wait for it at launch). */
+  firstLoad: Promise<void>;
+  loadTried: () => void;
 }
 
 interface Page {
@@ -190,8 +193,21 @@ export class AdBlocking {
   attach(profileId: string, session: Session, isPrivate: boolean): void {
     if (this.profiles.has(profileId)) return;
     const blocker = isPrivate ? null : new BlockerExtension(session, join(this.config.root, 'Extension', folderName(profileId)));
-    this.profiles.set(profileId, { session, blocker, removeHandler: null, chain: Promise.resolve(), loadedOnce: false, ready: false, verified: false });
+    let loadTried = () => {};
+    const firstLoad = new Promise<void>((resolve) => (loadTried = resolve));
+    this.profiles.set(profileId, { session, blocker, removeHandler: null, chain: Promise.resolve(), loadedOnce: false, ready: false, verified: false, firstLoad, loadTried });
     this.syncProfile(profileId);
+  }
+
+  /**
+   * Once every attached chord's extension has loaded (or failed to), for at
+   * most `capMs`. Launch waits for this before any page loads, as it does for
+   * other extensions: the rules then apply to restored tabs' first requests,
+   * and no navigation starts while the extension is still being added.
+   */
+  async loaded(capMs = 3000): Promise<void> {
+    const loads = [...this.profiles.values()].filter((p) => p.blocker).map((p) => p.firstLoad);
+    await Promise.race([Promise.all(loads), new Promise<void>((resolve) => setTimeout(resolve, capMs).unref?.())]);
   }
 
   /** A private window closed: its session is going, and nothing was kept for it. */
@@ -261,6 +277,7 @@ export class AdBlocking {
         // At launch the rules just load; turned back on, applying again says when they're in.
         const reloaded = (await blocker.load()) && profile.loadedOnce;
         profile.loadedOnce = true;
+        profile.loadTried();
         if (stale || reloaded || !sameSites(applied.offSites, offSites)) {
           await blocker.apply(offSites);
           profile.ready = true;
@@ -272,7 +289,9 @@ export class AdBlocking {
           setTimeout(() => this.verify(profileId), VERIFY_AFTER_MS).unref?.();
         }
       })
-      .catch((error: unknown) => console.error(`Ad blocking couldn’t update profile ${profileId}:`, error));
+      .catch((error: unknown) => console.error(`Ad blocking couldn’t update profile ${profileId}:`, error))
+      // Off, quitting, or failed: nothing to wait for either.
+      .finally(() => profile.loadTried());
   }
 
   /** The newest set's rules into a profile's extension (read here, so a bundled set inside the asar works too). */

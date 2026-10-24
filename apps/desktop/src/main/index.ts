@@ -3,7 +3,6 @@ import { launchTimings, markLaunch } from './perf';
 import {
   ARCHIVE_AFTER_MS,
   blockingOffSites,
-  DEFAULT_PROFILE,
   DEFAULT_SETTINGS,
   IDLE_CHECK_MS,
   MEMORY_CHECK_MS,
@@ -522,8 +521,8 @@ if (!app.requestSingleInstanceLock()) {
     });
     safeBrowsing.sync();
     adBlocking.sync();
-    // The sessions restored windows show, made now, so their blocker extension starts loading before their pages do.
-    for (const w of Object.values(initial.windows)) profileSession(initial.chords[w.activeChordId]?.profileId ?? DEFAULT_PROFILE);
+    // Every chord's session, made now, so each one's blocker extension has loaded before any of its pages loads (below).
+    for (const profileId of profilesInUse) if (!isPrivateProfile(profileId)) profileSession(profileId);
     // Before any of Chord's own pages loads (a text field there is what starts a dictionary download).
     applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
     duet = new DuetService(browser, persistence, app.getPath('userData'));
@@ -556,8 +555,9 @@ if (!app.requestSingleInstanceLock()) {
         },
       };
     }
-    // Extensions load before any page does, so their content scripts reach restored tabs.
-    await browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean));
+    // Extensions load before any page does, so their content scripts reach restored tabs; Chord's blocker
+    // too, so its rules cover their first requests and no page starts loading while it's being added.
+    await Promise.all([browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean)), adBlocking.loaded()]);
     // Launched to open a link: just its mini window, quickly; your windows come back when you want them.
     if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
     else browser.start();
