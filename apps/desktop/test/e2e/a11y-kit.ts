@@ -146,6 +146,20 @@ export async function where(shell: Page): Promise<{ windowId: string; chordId: s
   });
 }
 
+/**
+ * Plays a page in a tab of its own, then goes back to the tab you were on:
+ * media left playing is what the Now playing card offers (a background tab's
+ * own autoplay isn't).
+ */
+export async function leavePlaying(app: ElectronApplication, shell: Page, url: string): Promise<void> {
+  const { windowId, tabId } = await where(shell);
+  await dispatch(shell, { t: 'tab.open', windowId, url, background: false });
+  await expect
+    .poll(() => app.evaluate(({ webContents }, u) => webContents.getAllWebContents().some((w) => !w.isDestroyed() && w.getURL() === u && w.isCurrentlyAudible()), url), { timeout: 10_000 })
+    .toBe(true);
+  if (tabId) await dispatch(shell, { t: 'tab.activate', windowId, nodeId: tabId });
+}
+
 /** A tab's id by its title. */
 export async function tabIdByTitle(shell: Page, title: string): Promise<string> {
   return shell.evaluate(async (t) => {

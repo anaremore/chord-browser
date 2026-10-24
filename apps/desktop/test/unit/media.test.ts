@@ -12,6 +12,7 @@ interface Page {
   playing: boolean;
   video: boolean;
   players: number;
+  pip: boolean;
 }
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
@@ -20,7 +21,7 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 class FakePage extends EventEmitter {
   destroyed = false;
   audible = false;
-  page: Page = { title: 'Song', artist: 'Artist', album: 'Album', artwork: [], playing: true, video: false, players: 1 };
+  page: Page = { title: 'Song', artist: 'Artist', album: 'Album', artwork: [], playing: true, video: false, players: 1, pip: false };
   reads = 0;
   scripts: { world: number; gesture: boolean | undefined; kind: string }[] = [];
   artwork = { type: 'image/png', bytes: PNG };
@@ -59,10 +60,12 @@ function setUp() {
   const changed = vi.fn();
   const tabs = new Map<string, FakePage>();
   const media = new MediaWatcher({ isTab: (contents, nodeId) => tabs.get(nodeId) === (contents as unknown as FakePage), changed });
-  const open = (nodeId: string) => {
+  /** A tab's page; unless `left` is false, one you left playing (the cards offer only those) as it first plays. */
+  const open = (nodeId: string, left = true) => {
     const page = new FakePage();
     tabs.set(nodeId, page);
     media.attach(page as unknown as WebContents, nodeId as never);
+    if (left) page.once('audio-state-changed', () => media.left(nodeId as never));
     return page;
   };
   return { media, changed, tabs, open };
@@ -76,10 +79,11 @@ describe('MediaWatcher', () => {
     const { media, open, changed } = setUp();
     const page = open('t1');
     page.sound(true);
-    expect(media.list()).toHaveLength(1);
+    // Offered once it's read.
+    expect(media.list()).toEqual([]);
     expect(changed).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(200);
-    expect(media.list()).toEqual([{ nodeId: 't1', title: 'Song', artist: 'Artist', album: 'Album', artwork: null, playing: true, pausable: true, video: false }]);
+    expect(media.list()).toEqual([{ nodeId: 't1', title: 'Song', artist: 'Artist', album: 'Album', artwork: null, playing: true, pausable: true, video: false, pip: false }]);
     expect(changed).toHaveBeenCalledTimes(1);
     // Read in Chord's own isolated world, never the page's.
     expect(page.scripts.every((s) => s.world === 1008)).toBe(true);
@@ -187,7 +191,7 @@ describe('MediaWatcher', () => {
     media.stop();
   });
 
-  it('lists the newest first, and drops a tab at once when its page goes or navigates', async () => {
+  it('lists the newest first, where playing again doesn’t move it, and drops a tab at once when its page goes or navigates', async () => {
     const { media, open } = setUp();
     const a = open('a');
     a.sound(true);
@@ -196,11 +200,56 @@ describe('MediaWatcher', () => {
     b.sound(true);
     await vi.advanceTimersByTimeAsync(200);
     expect(media.list().map((p) => p.nodeId)).toEqual(['b', 'a']);
+    // Paused and played again, the older stays where it was: rows don't jump under the pointer.
+    a.page.playing = false;
+    a.sound(false);
+    await vi.advanceTimersByTimeAsync(200);
+    a.page.playing = true;
+    a.sound(true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(media.list().map((p) => p.nodeId)).toEqual(['b', 'a']);
     b.emit('did-navigate');
     expect(media.list().map((p) => p.nodeId)).toEqual(['a']);
     a.destroyed = true;
     a.emit('destroyed');
     expect(media.list()).toEqual([]);
+    media.stop();
+  });
+
+  it('offers what you left playing or played from the card, not a background tab’s own autoplay; left paused, not any more', async () => {
+    const { media, open, changed } = setUp();
+    const page = open('t1', false);
+    page.sound(true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(media.list()).toEqual([]);
+    expect(changed).not.toHaveBeenCalled();
+    // You left it playing (as a read from then says).
+    media.left('t1' as never);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(media.list()).toHaveLength(1);
+    expect(changed).toHaveBeenCalledTimes(1);
+    // Back to it, paused there and left at once (before its read settles): nothing to want controls for.
+    page.page.playing = false;
+    page.sound(false);
+    media.left('t1' as never);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(media.list()).toEqual([]);
+    // Played from a card (another window's, say): offered again.
+    await media.act('t1' as never, 'play');
+    expect(media.list()[0]).toMatchObject({ nodeId: 't1', playing: true });
+    media.stop();
+  });
+
+  it('keeps offering a tab you left playing through its next page', async () => {
+    const { media, open } = setUp();
+    const page = open('t1', false);
+    page.sound(true);
+    media.left('t1' as never);
+    await vi.advanceTimersByTimeAsync(0);
+    page.emit('did-navigate');
+    expect(media.list()).toEqual([]);
+    page.sound(true);
+    expect(media.list().map((p) => p.nodeId)).toEqual(['t1']);
     media.stop();
   });
 

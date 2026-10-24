@@ -29,6 +29,7 @@ import {
   isSettings,
   isShell,
   launch,
+  leavePlaying,
   newPage,
   pageWhere,
   runAction,
@@ -444,18 +445,17 @@ for (const mode of APPEARANCES) {
         const shell = await pageWhere(app, isShell);
         await expect(today(shell)).toContainText('First page');
         const card = shell.getByRole('group', { name: 'Now playing' });
-        // A tab playing out of sight: its row's speaker, and the card with its track and artwork.
-        const { windowId } = await where(shell);
-        await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/song`, background: true });
+        // A tab left playing: its row's speaker, and the card with its track and artwork.
+        await leavePlaying(app, shell, `${site.origin}/song`);
         await expect(card).toContainText('Chord Song');
         await expect(card.locator('img')).toBeVisible();
         for (const theme of ['dusk', 'graphite', 'coral', 'aurora'] satisfies ThemeName[]) {
           await setTheme(shell, theme);
           findings.push(...(await audit(shell, `now playing, ${theme}`, { appearance: mode })));
         }
-        // Two playing (the card steps between them), one muted and one paused.
-        await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/radio`, background: true });
-        await expect(card.getByRole('button', { name: /^Next playing tab/ })).toBeVisible();
+        // Two left playing (the newest in full, the other as a row), one muted and one paused.
+        await leavePlaying(app, shell, `${site.origin}/radio`);
+        await expect(card.getByRole('button', { name: /^Go to tab: / })).toHaveCount(2);
         await card.getByRole('button', { name: 'Mute tab' }).click();
         await card.getByRole('button', { name: 'Pause', exact: true }).click();
         await expect(card.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
@@ -463,7 +463,7 @@ for (const mode of APPEARANCES) {
         // The tab on screen plays (muted), in the minimal bar.
         await card.getByRole('button', { name: 'Play', exact: true }).click();
         await expect(card.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
-        await card.getByRole('button', { name: /^Go to tab/ }).click();
+        await card.getByRole('button', { name: 'Go to tab: Radio' }).click();
         await expect(today(shell).getByRole('treeitem', { name: 'Radio', exact: true })).toHaveAttribute('aria-current', 'page');
         await runAction(shell, 'view.toggleSidebar');
         await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();

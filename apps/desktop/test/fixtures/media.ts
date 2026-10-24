@@ -63,5 +63,26 @@ export function talkPage(): string {
   );
 }
 
+/**
+ * A player like Twitch's: its button (with Twitch's own data attributes) is the
+ * player's state, and a play from outside (the video element played directly)
+ * is undone at once, as a paused live stream doesn't resume that way.
+ */
+export function twitchPage(): string {
+  return (
+    `<title>Twitch</title><video id="v" width="640" height="360" loop></video>` +
+    `<button data-a-target="player-play-pause-button" data-a-player-state="paused">Play</button><script>{` +
+    `const rate = 8000, n = rate * 2, buf = new ArrayBuffer(44 + n * 2), d = new DataView(buf);` +
+    `const w = (o, s) => { for (let i = 0; i < s.length; i++) d.setUint8(o + i, s.charCodeAt(i)); };` +
+    `w(0, 'RIFF'); d.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); d.setUint32(16, 16, true); d.setUint16(20, 1, true);` +
+    `d.setUint16(22, 1, true); d.setUint32(24, rate, true); d.setUint32(28, rate * 2, true); d.setUint16(32, 2, true); d.setUint16(34, 16, true);` +
+    `w(36, 'data'); d.setUint32(40, n * 2, true);` +
+    `for (let i = 0; i < n; i++) d.setInt16(44 + i * 2, Math.sin((2 * Math.PI * 262 * i) / rate) * 4000, true);` +
+    `const v = document.getElementById('v'), b = document.querySelector('button'); v.src = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));` +
+    `let on = false; const set = (play) => { on = play; b.setAttribute('data-a-player-state', play ? 'playing' : 'paused'); if (play) v.play(); else v.pause(); };` +
+    `v.addEventListener('play', () => { if (!on) v.pause(); }); b.addEventListener('click', () => set(!on)); set(true);}</script>`
+  );
+}
+
 /** A 1 × 1 PNG, for artwork. */
 export const ARTWORK_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');

@@ -17,7 +17,9 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
   - Chord reads copies of the other browser's files and never changes them. It never copies passwords, cookies or extensions; your password manager can bring passwords across.
   - Safari needs Full Disk Access, and Chord says where to turn it on.
 - **Media controls:** a tab playing sound shows a speaker on its row; click it (or press Ctrl+M, ⌃M on macOS) to mute the tab, and it stays muted after it sleeps or Chord restarts.
-  - When something plays in a tab you aren't looking at, in any chord, a Now playing card at the bottom of the sidebar shows what it is (with the track and artist when the site says), with play and pause, mute, picture-in-picture for videos, and a way back to the tab.
+  - Leave a tab while it plays, in any chord, and a Now playing card at the bottom of the sidebar shows what it is (with the track and artist when the site says), with play and pause, mute, picture-in-picture for videos, and a way back to the tab. A tab that starts playing on its own in the background just gets its speaker.
+  - Several playing: the newest in full, and a row for each of the others with its own mute and play and pause.
+  - Play and pause work with Twitch, SoundCloud and Bandcamp's own players too.
 - **Peek** gets the sign-in box too, when a site in it asks for a username and password.
 - **Link routes for part of a site:** `github.com/acme` can go to Work while the rest of GitHub goes elsewhere (Settings → General → Link routes).
 - **Low on memory,** tabs you haven't looked at in 5 minutes go to sleep, instead of after an hour.
