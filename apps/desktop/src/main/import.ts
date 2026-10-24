@@ -45,6 +45,7 @@ const BATCH_TIMEOUT_MS = 60_000;
 /** Copies an import process never got to clean up (Chord was killed mid-import) go after a day. */
 const STALE_MS = 86_400_000;
 const PREFIX = 'chord-import-';
+const MAX_PREVIEWS = 3;
 
 export interface ImporterOptions {
   /** The import process's script, as built (out/main/import.js). */
@@ -108,11 +109,13 @@ export function doneMessage(counts: ImportCounts, browser: string): string {
 class ImportProcess {
   private readonly child: UtilityProcess;
   private waiting: ((reply: ImportReply | null) => void) | null = null;
+  private exited = false;
 
   private constructor(path: string, readonly temp: string) {
     this.child = utilityProcess.fork(path, [], { serviceName: 'Chord Import', stdio: 'ignore' });
     this.child.on('message', (reply: ImportReply) => this.settle(reply));
     this.child.once('exit', () => {
+      this.exited = true;
       this.settle(null);
       void rm(temp, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
     });
@@ -130,6 +133,7 @@ class ImportProcess {
 
   /** The reply to `request`; null if the process ended, or took too long (it's stopped then). */
   ask(request: ImportRequest, timeoutMs: number): Promise<ImportReply | null> {
+    if (this.exited) return Promise.resolve(null);
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.settle(null);
@@ -157,8 +161,8 @@ interface Running {
 export class Importer {
   /** The profiles the last search found, by key: renderers name one, never a path. */
   private profiles = new Map<string, FoundProfile>();
-  /** The profile read last, until it's imported. */
-  private preview: { key: string; preview: ImportPreview } | null = null;
+  /** The profiles read lately, by key, until one is imported (a few at most: switching back and forth needs no new read). */
+  private readonly previews = new Map<string, ImportPreview>();
   private running: Running | null = null;
   /** Where each import reports, for Undo's report too. */
   private readonly notifiers = new Map<string, (progress: ImportProgress) => void>();
@@ -192,7 +196,9 @@ export class Importer {
     const reply = await this.once((temp) => ({ type: 'read', profile, temp }), READ_TIMEOUT_MS);
     if (reply?.type === 'error') return { ok: false, problem: reply.problem };
     if (reply?.type !== 'preview') return { ok: false, problem: 'unreadable' };
-    this.preview = { key, preview: reply.preview };
+    this.previews.delete(key);
+    this.previews.set(key, reply.preview);
+    for (const old of [...this.previews.keys()].slice(0, -MAX_PREVIEWS)) this.previews.delete(old);
     return { ok: true, summary: summarize(key, reply.preview, chordId) };
   }
 
@@ -203,11 +209,11 @@ export class Importer {
   run(key: string, choices: ImportChoices, windowId: WindowId, notify: (progress: ImportProgress) => void): ImportRunResult {
     if (this.running) return { ok: false, problem: 'busy' };
     const profile = this.profiles.get(key);
+    const preview = this.previews.get(key);
     const state = this.options.state();
     const win = state.windows[windowId];
-    if (!profile || this.preview?.key !== key || !win || win.private) return { ok: false, problem: 'missing' };
-    const { preview } = this.preview;
-    this.preview = null;
+    if (!profile || !preview || !win || win.private) return { ok: false, problem: 'missing' };
+    this.previews.clear();
     const importId = uuidv7();
     this.notifiers.set(importId, notify);
     const running: Running = { importId, cancelled: false, finished: Promise.resolve() };

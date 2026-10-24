@@ -258,7 +258,7 @@ for (const mode of APPEARANCES) {
         await runAction(shell, 'app.settings');
         const settings = await pageWhere(app, isSettings);
         const nav = settings.getByRole('navigation', { name: 'Settings sections' });
-        for (const name of ['General', 'Appearance', 'Motion', 'Privacy', 'Site permissions', 'Extensions', 'Duet', 'Keyboard shortcuts', 'About']) {
+        for (const name of ['General', 'Appearance', 'Motion', 'Privacy', 'Site permissions', 'Extensions', 'Import', 'Duet', 'Keyboard shortcuts', 'About']) {
           await nav.getByRole('button', { name }).click();
           await expect(settings.getByRole('heading', { level: 1 }).first()).toBeVisible();
           await settings.waitForTimeout(250);
@@ -269,7 +269,7 @@ for (const mode of APPEARANCES) {
             await expect(settings.getByRole('slider', { name: 'Color 1' })).toBeVisible();
             findings.push(...(await audit(settings, 'Settings → Appearance → theme editor', { appearance: mode })));
             await settings.getByRole('button', { name: 'Cancel' }).click();
-            await settings.getByRole('button', { name: 'Import' }).click();
+            await settings.getByRole('main').getByRole('button', { name: 'Import' }).click();
             await settings.getByRole('textbox', { name: 'Theme code' }).fill('not a theme');
             findings.push(...(await audit(settings, 'Settings → Appearance → import', { appearance: mode })));
             await settings.getByRole('button', { name: 'Cancel' }).click();

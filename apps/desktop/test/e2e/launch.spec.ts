@@ -398,7 +398,7 @@ test('Settings opens from the shell and its changes apply live', async () => {
     await expect(seaGlass).toHaveAttribute('aria-pressed', 'false');
 
     // Importing a theme code adds it to the library and applies it.
-    await settings.getByRole('button', { name: 'Import' }).click();
+    await settings.getByRole('main').getByRole('button', { name: 'Import' }).click();
     const code = settings.getByRole('textbox', { name: 'Theme code' });
     await code.fill('not a theme');
     await expect(settings.getByText('That isn’t a theme code.')).toBeVisible();
@@ -951,7 +951,7 @@ test('a relaunch restores tabs, the sidebar and settings', async () => {
     await expect(settings.getByRole('radio', { name: /Kagi/ })).toHaveAttribute('aria-checked', 'true');
     // A theme of your own, on this chord, and a dark color scheme.
     await settings.getByRole('button', { name: 'Appearance' }).click();
-    await settings.getByRole('button', { name: 'Import' }).click();
+    await settings.getByRole('main').getByRole('button', { name: 'Import' }).click();
     await settings.getByRole('textbox', { name: 'Theme code' }).fill(JSON.stringify({ chordTheme: 1, name: 'Kept', stops: [{ l: 0.72, c: 0.12, h: 40 }], grain: 0.1 }));
     await settings.getByRole('button', { name: 'Add theme' }).click();
     await expect(settings.getByRole('button', { name: 'Kept', exact: true })).toHaveAttribute('aria-pressed', 'true');

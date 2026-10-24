@@ -131,7 +131,7 @@ test('Settings: Firefox’s folders, open tabs and history land in the window be
     await where.getByRole('combobox', { name: 'Where Mozilla Firefox goes' }).selectOption('skip');
     expectClean(await audit(settings, 'Settings → Import', { appearance: 'dark' }));
 
-    await settings.getByRole('button', { name: 'Import', exact: true }).click();
+    await settings.getByRole('main').getByRole('button', { name: 'Import', exact: true }).click();
     await expect(settings.getByText('Imported 2 tabs, 3 bookmarks and 2 pages of history.')).toBeVisible();
     await expect(shell.getByRole('group', { name: 'Imported 2 tabs, 3 bookmarks and 2 pages of history from Firefox' })).toBeVisible();
 
@@ -172,7 +172,7 @@ test('a big import comes in parts while history streams, and the toast’s Undo 
     await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Import' }).click();
     await settings.getByRole('radiogroup', { name: 'Import from' }).getByRole('radio', { name: 'Chrome · Alex' }).click();
     await expect(settings.getByText('3,005 bookmarks in 4 folders · 6,002 pages of history')).toBeVisible();
-    await settings.getByRole('button', { name: 'Import', exact: true }).click();
+    await settings.getByRole('main').getByRole('button', { name: 'Import', exact: true }).click();
     // History goes a batch at a time, and says how far it's got.
     await expect(settings.getByRole('progressbar', { name: 'Import' })).toBeVisible();
     await expect(settings.getByText('Imported 3,005 bookmarks and 6,002 pages of history.')).toBeVisible({ timeout: 60_000 });

@@ -2,6 +2,16 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.2.0 · preview (unreleased)
+
+**Import from other browsers.** Bring your bookmarks, history and open tabs from Chrome, Edge, Brave, Firefox or Safari, in first run or Settings → Import.
+- Chord shows what a browser holds before anything comes across, and you say where each top-level folder goes: a new chord named after it, or a pinned folder in a chord you have. The bookmarks bar's own links can become Favorites.
+- Firefox's open tabs land in a chord's Today. Chrome, Edge and Brave keep theirs, since their files can't be read reliably.
+- History comes in with every visit, so the command bar ranks those pages as if you'd always used Chord.
+- Big imports stay smooth and show their progress, and Undo takes all of it back, history included.
+- Chord reads copies of the other browser's files and never changes them. It never copies passwords, cookies or extensions; your password manager can bring passwords across.
+- Safari needs Full Disk Access, and Chord says where to turn it on.
+
 ## 0.1.0 · preview (unreleased)
 
 The first public preview: a calm, colorful browser for people leaving Arc. Builds aren't code-signed yet: see [Try the preview](README.md#try-the-preview) for the first-launch steps on each OS.

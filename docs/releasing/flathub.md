@@ -73,6 +73,7 @@ To switch the files to B: rename the three `io.github.anaremore.chord-browser.*`
 | `--socket=pulseaudio` | Sound, and microphones for sites you allow |
 | `--device=all` | GPU, cameras, and security keys for WebAuthn (`/dev/hidraw*`). Flathub's Chromium does the same ✅ |
 | `--filesystem=xdg-download` | Downloads save to `~/Downloads`. Other files go through the file-chooser portal |
+| `--filesystem=~/.config/google-chrome:ro`, `~/.config/microsoft-edge:ro`, `~/.config/BraveSoftware:ro`, `~/.mozilla/firefox:ro`, `~/.config/mozilla:ro` | Import from other browsers (ARCHITECTURE.md §9): their profile folders, read-only. Chord copies their databases into its own temp folder and never writes there |
 | `--talk-name=org.freedesktop.Notifications` | Web notifications |
 | `--talk-name=org.freedesktop.FileManager1` | "Show in folder" for downloads |
 | `--talk-name=org.freedesktop.ScreenSaver` | Keeping the screen awake during video |

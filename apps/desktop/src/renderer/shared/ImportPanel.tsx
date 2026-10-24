@@ -57,9 +57,12 @@ export function useImport(api: ImportApi, { autoPick = false }: { autoPick?: boo
    */
   const started = useRef<string | null>(null);
   const [starting, setStarting] = useState(false);
+  /** Each read's number: a slow read of a browser you've since moved off is dropped. */
+  const reads = useRef(0);
 
   const pick = useCallback(
     (next: string) => {
+      const read = ++reads.current;
       setKey(next);
       setSummary(null);
       setChoices(null);
@@ -69,11 +72,13 @@ export function useImport(api: ImportApi, { autoPick = false }: { autoPick?: boo
       setStarting(false);
       const source = sources?.find((s) => s.key === next);
       if (source?.denied) {
+        setReading(false);
         setProblem('denied');
         return;
       }
       setReading(true);
       void api.preview(next).then((result) => {
+        if (read !== reads.current) return;
         setReading(false);
         if (!result.ok) return setProblem(result.problem);
         setSummary(result.summary);
@@ -132,6 +137,8 @@ export function useImport(api: ImportApi, { autoPick = false }: { autoPick?: boo
       if (started.current) void api.undo(started.current);
     },
     reset: () => {
+      reads.current++;
+      setReading(false);
       setKey(null);
       setSummary(null);
       setChoices(null);

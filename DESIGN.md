@@ -651,10 +651,12 @@ The window opens at 1200×800, centered, with the real sidebar on the left showi
 | 5 | Open links in Chord? *(optional)* | 5 s | "Links from Mail, Slack, and other apps will open here." Platform-specific outcome copy: on macOS the system asks to confirm; on Windows, "Windows will open Settings — pick Chord under Web browser"; on Linux it's set directly (Flatpak shows instructions). | **Make Chord my default** · *Not now* |
 | 6 | Three things to know | 10 s | Three cards with live keycaps: **⌘T** Search or open anything · **⌘1–9** Jump between chords (or swipe the sidebar) · **Drag a tab up** to pin it for good | **Start browsing** → command bar opens: "Where to?" |
 
+*As built (2026-10-24), between 3 and 4:* **Bring your bookmarks?** (optional), when another browser is on the computer: the import card from §8.7, with *Chord created* above its title, *Skip for now* (Esc) and **Import** (↵). It reads the first browser it found as the step comes up. Once the import starts, **Next** (↵) moves on while history keeps coming in, and the toast with Undo arrives in the sidebar when it's done. Whether the step is there is settled before the colors step ends, so the dots never shift under you.
+
 *As built, between 5 and 6:* **Warn you before risky sites?** (Safe Browsing, ARCHITECTURE.md §14.5). An eyebrow with a shield, the title, and Safe Browsing's notice in full: "Chord checks the addresses you visit against Google's lists on this computer. Only when one matches does it send Google a short partial fingerprint of the address, never the address itself. Google sees your IP address when Chord fetches the lists or asks about a match. Protection isn't perfect: a dangerous site can be missed, and a safe one can be flagged by mistake." **Turn on warnings** (↵) · *Not now*. It's a choice, so Esc doesn't skip it. Builds without Google's API key leave the step out.
 
 - *As built:* a brand-new profile starts here. Chrome's `--no-first-run` skips it, and development builds can force it with `CHORD_FIRST_RUN=1` (Playwright adds `--no-first-run` to every Electron app it drives). The page waits hidden behind the cards. Step 5 is left out when Chord is already the default, and in development builds, which can't be.
-- Progress shows as a dot per step (6 or 7): filled for required steps, hollow for optional.
+- Progress shows as a dot per step (6 to 8): filled for required steps, hollow for optional.
 - Every optional step can be skipped with Esc.
 - Duet is **not** part of onboarding; it sets itself up the first time you open it (§8.6).
 
@@ -711,6 +713,34 @@ A link clicked inside a pinned tab opens in Peek instead of replacing the pinned
 4. **Ready, empty:** "Ask about this page, your tabs, or anything you're working on." Chips: *Summarize this page* · *What should I know before I decide?* · *Compare with my other tabs*.
 5. **First answer:** citations link back into the page; tool activity is visible; reading beyond what's attached asks first (by default).
 6. **Turning it off:** Settings → Duet → *Show Duet* removes the panel, the button and the shortcut. *Turn off in this chord* (Chats menu) does it for one chord.
+
+### 8.7 Import from another browser
+
+*Built 2026-10-24* (ARCHITECTURE.md §9). Two places, one panel (`shared/ImportPanel.tsx`): first run's **Bring your bookmarks?** step (§8.1) and **Settings → Import**, between Extensions and Duet. Each wraps it in its own title and buttons.
+
+1. **Pick a browser.** A radio group, *Import from*, one row per profile: *Chrome*, or *Chrome · Work* when a browser has several profiles, *Firefox (Flatpak)* for a sandboxed copy. Safari without Full Disk Access is listed with *Needs Full Disk Access* beside it. First run starts on the first browser Chord can read; Settings waits for a pick. While Chord reads: *Reading Chrome…*.
+2. **See what it holds,** before anything is imported: one line in `text-label`, *1,204 bookmarks in 18 folders · 34,551 pages of history · 6 open tabs*. For Chrome, Edge and Brave a quieter line under it: *Open tabs stay in Chrome: Chord can't read them reliably.*
+3. **Say where it goes.** A card, *Where they go*, one row per group, each with a native select (`radius-sm`, `item-hover`) named *Where Recipes goes*:
+   - **The bar's own links** (*12 links of its own*): **Favorites** (to start with), a new chord, a chord you have, or *Don't import*. Favorites takes up to 24; the rest stay together in a folder named after the bar.
+   - **Each top-level folder** (*42 bookmarks*): **New chord "Recipes"**, a chord you have, or *Don't import*. A new chord is named after the folder, gets the folder's first letter as its icon and the next preset's colors, and the folder's contents become its Pinned. In a chord you have, the folder lands as one pinned folder at the end of Pinned. Imported folders start closed. The first six folders start as new chords; the rest, the chord you're in.
+   - **Other roots' own links** (Other bookmarks, the Bookmarks Menu): a folder in the chord you're in, to start with.
+   - **Open tabs** (*6 tabs, into Today*), where the browser's files can be read: a chord's Today, at the top, unloaded until you open them, or *Don't import*.
+   - **History** (*34,551 pages, for search in every chord*): a switch, on to start with. It isn't tied to a chord, like the rest of Chord's history.
+   The card holds five rows and scrolls past that, so the buttons stay in view. A private window's chord is never offered.
+4. **Import.** First run's **Import** is the accent pill (↵); Settings' is a quiet pill. Bookmarks and tabs land in the sidebar in a moment, then history comes in under a 4 px accent bar that fills as it goes: *Adding history: 12,500 of 34,551 pages*. Then *Imported 6 tabs, 1,204 bookmarks and 34,551 pages of history.*, and the window's toast says the same, *from Chrome*, with **Undo**. Settings has **Undo** and **Import more** beside the line too, since it may be covering that window. Undo takes back everything the import added, history included, even while it's still running: *Import undone.*
+5. **Always under the panel**, in `text-small`: *Chord never copies passwords, cookies or extensions. Your password manager can bring passwords across, or use the browser's own export.*
+
+When a browser can't be read, the panel says why in plain words, in a soft card with one button:
+
+| Problem | Copy | Button |
+|---|---|---|
+| Safari without Full Disk Access | Chord needs Full Disk Access to read Safari. In System Settings, open Privacy & Security, then Full Disk Access, turn on Chord, and quit and reopen Chord. | Open System Settings |
+| The browser holds its files (Windows) | Chrome is holding its files. Quit Chrome, then try again. | Try again |
+| A damaged or unknown file | Chord couldn't read Chrome's files. | Try again |
+| Another import still running | Another import is still running. Try again when it's done. | Try again |
+| The profile has gone since Chord looked | That browser profile isn't there any more. | — |
+
+With no other browser on the computer, first run leaves the step out, and Settings says *No other browsers found. Chord looks for Chrome, Edge, Brave and Firefox* (*…, Firefox and Safari* on a Mac).
 
 ---
 
