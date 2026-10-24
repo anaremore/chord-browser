@@ -122,6 +122,8 @@ export const shadow = {
     frame: '0 0 0 1px oklch(0 0 0 / 0.06), 0 2px 6px oklch(0 0 0 / 0.06), 0 12px 32px -12px oklch(0 0 0 / 0.16)',
     lift: '0 8px 20px -6px oklch(0 0 0 / 0.22)',
     popover: '0 12px 32px -8px oklch(0 0 0 / 0.22), 0 0 0 1px oklch(0 0 0 / 0.06)',
+    // A card in a view sized to it (the popover's): it ends inside the view's space-3 padding, so the view's edge never cuts it.
+    card: '0 4px 10px -3px oklch(0 0 0 / 0.24), 0 0 0 1px oklch(0 0 0 / 0.06)',
     modal: '0 24px 64px -16px oklch(0 0 0 / 0.32), 0 0 0 1px oklch(0 0 0 / 0.06)',
   },
   dark: {
@@ -129,6 +131,7 @@ export const shadow = {
     frame: '0 0 0 1px oklch(1 0 0 / 0.07), 0 12px 32px -12px oklch(0 0 0 / 0.6)',
     lift: '0 8px 20px -6px oklch(0 0 0 / 0.6)',
     popover: '0 12px 32px -8px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.08)',
+    card: '0 4px 10px -3px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.08)',
     modal: '0 24px 64px -16px oklch(0 0 0 / 0.7), 0 0 0 1px oklch(1 0 0 / 0.08)',
   },
 } as const;
