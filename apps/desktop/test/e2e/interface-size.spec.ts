@@ -37,11 +37,11 @@ const isTab = (url: string) => url === 'about:blank';
 const runAction = (shell: Page, action: string) => shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
 const ratio = (page: Page) => page.evaluate(() => devicePixelRatio);
 
-/** The content frame the shell draws, in its CSS pixels. */
-const frameInShell = (shell: Page): Promise<Box> =>
+/** The content frame the shell draws, in its CSS pixels; null until it's drawn (just after launch). */
+const frameInShell = (shell: Page): Promise<Box | null> =>
   shell.evaluate(() => {
-    const r = document.querySelector('[data-region="page"]')!.getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height };
+    const r = document.querySelector('[data-region="page"]')?.getBoundingClientRect();
+    return r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
   });
 
 /** Where main put the page's view, in window pixels. */
@@ -60,6 +60,7 @@ async function expectPageOnFrame(app: ElectronApplication, shell: Page, scale: n
   await expect
     .poll(async () => {
       const [frame, page] = await Promise.all([frameInShell(shell), pageInWindow(app)]);
+      if (!frame) return 'no frame';
       if (!page) return 'no page';
       const off = [page.x - frame.x * scale, page.y - frame.y * scale, page.width - frame.width * scale, page.height - frame.height * scale];
       return off.every((d) => Math.abs(d) <= 1.5) ? 'on frame' : `page ${JSON.stringify(page)} vs frame ${JSON.stringify(frame)} × ${scale}`;
