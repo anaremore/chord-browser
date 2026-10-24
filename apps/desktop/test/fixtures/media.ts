@@ -49,5 +49,19 @@ export function mediaPage({ title, track, video = false, autoplay = true, second
   );
 }
 
+/** A video whose sound is its own (one element, as on most sites): a looping tone in a 640 × 360 player. */
+export function talkPage(): string {
+  return (
+    `<title>Talk</title><video id="v" width="640" height="360" loop></video><script>{` +
+    `const rate = 8000, n = rate * 2, buf = new ArrayBuffer(44 + n * 2), d = new DataView(buf);` +
+    `const w = (o, s) => { for (let i = 0; i < s.length; i++) d.setUint8(o + i, s.charCodeAt(i)); };` +
+    `w(0, 'RIFF'); d.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); d.setUint32(16, 16, true); d.setUint16(20, 1, true);` +
+    `d.setUint16(22, 1, true); d.setUint32(24, rate, true); d.setUint32(28, rate * 2, true); d.setUint16(32, 2, true); d.setUint16(34, 16, true);` +
+    `w(36, 'data'); d.setUint32(40, n * 2, true);` +
+    `for (let i = 0; i < n; i++) d.setInt16(44 + i * 2, Math.sin((2 * Math.PI * 330 * i) / rate) * 4000, true);` +
+    `const v = document.getElementById('v'); v.src = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })); v.play();}</script>`
+  );
+}
+
 /** A 1 × 1 PNG, for artwork. */
 export const ARTWORK_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
