@@ -383,12 +383,18 @@ test('a link route sends a site’s links to its chord, from other apps and the 
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
     await expect(settings.getByRole('combobox', { name: 'Chord for localhost' })).toHaveValue(work);
-    await settings.getByRole('textbox', { name: 'Site for a new route' }).fill('https://www.example.org/path');
-    await settings.getByRole('combobox', { name: 'Chord for the new route' }).selectOption(personal);
-    await settings.getByRole('button', { name: 'Add route' }).click();
+    // An address, as pasted: the site's route. With a path, a route for that part of the site.
+    const add = async (site: string) => {
+      await settings.getByRole('textbox', { name: 'Site for a new route' }).fill(site);
+      await settings.getByRole('combobox', { name: 'Chord for the new route' }).selectOption(personal);
+      await settings.getByRole('button', { name: 'Add route' }).click();
+    };
+    await add('https://www.example.org/');
     await expect(settings.getByRole('combobox', { name: 'Chord for example.org' })).toHaveValue(personal);
+    await add('example.org/Team/*');
+    await expect(settings.getByRole('combobox', { name: 'Chord for example.org/team' })).toHaveValue(personal);
     await settings.getByRole('button', { name: 'Remove the route for localhost' }).click();
-    await expect.poll(async () => Object.keys((await snapshot(shell)).state.linkRoutes)).toEqual(['example.org']);
+    await expect.poll(async () => Object.keys((await snapshot(shell)).state.linkRoutes).sort()).toEqual(['example.org', 'example.org/team']);
   } finally {
     await app.close();
   }

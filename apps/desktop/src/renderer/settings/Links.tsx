@@ -3,7 +3,7 @@
  * window, or a new tab), and link routes (from Crest) that send a site's links
  * to a chord, from other apps and from the command bar.
  */
-import { DEFAULT_SETTINGS, routeHost, type ExternalLinks } from "@chord/core";
+import { DEFAULT_SETTINGS, routeKey, type ExternalLinks } from "@chord/core";
 import type { SettingsSnapshot } from "@chord/ipc";
 import { X } from "lucide-react";
 import { useState, type FormEvent } from "react";
@@ -22,7 +22,7 @@ export function Links({ snapshot }: { snapshot: SettingsSnapshot }) {
   const { settings, chords, linkRoutes } = snapshot;
   const [site, setSite] = useState("");
   const [chordId, setChordId] = useState(chords[0]?.id ?? "");
-  const host = routeHost(site);
+  const host = routeKey(site);
   const target = chords.some((c) => c.id === chordId)
     ? chordId
     : (chords[0]?.id ?? "");
@@ -104,7 +104,7 @@ export function Links({ snapshot }: { snapshot: SettingsSnapshot }) {
           <input
             className={local.input}
             value={site}
-            placeholder="github.com"
+            placeholder="github.com or github.com/acme"
             aria-label="Site for a new route"
             spellCheck={false}
             autoComplete="off"

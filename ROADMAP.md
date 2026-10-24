@@ -328,7 +328,7 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   - **First, spike S11:** measure main's time per page load on a set of ad-heavy pages two ways. (a) Ghostery's engine answering `webRequest` in main, where every request crosses main's JavaScript thread. (b) `declarativeNetRequest` rules compiled from the same lists, which Chromium applies in its network process. (b) can't reach private windows, since Electron won't load extensions into in-memory sessions; (a) can. Pick by the numbers, or combine them (rules for normal windows, the engine for private ones). See ARCHITECTURE.md's performance rules 2 and 3.
   - Then: one request dispatcher per session, EasyList and EasyPrivacy on by default, a switch per site, private windows included, cosmetic filtering, and lists bundled at build time and refreshed from the lists' own hosts.
 - **P1 Import** from Chrome, Edge, Brave, Firefox and Safari: bookmarks, history, and open tabs where the files can be read. First run and Settings map each bookmark folder to a chord. No passwords or cookies: Chrome locks them to Chrome on Windows, and they're your password manager's job. Safari needs Full Disk Access, and Chord says so. Still no Arc import.
-- **P2 Link routes by path**, such as `github.com/acme/*` → Work.
+- **P2 Link routes by path**, such as `github.com/acme/*` → Work. **Built 2026-10-24** (ARCHITECTURE.md §9).
 - **P2 Media controls** in the sidebar (the audible and muted states in DESIGN.md §7, plus play and pause), and **reader mode**.
 
 ### Electron 46 · January 5, 2027

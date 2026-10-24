@@ -2,6 +2,14 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.2.0 · preview (unreleased)
+
+- **Peek** gets the sign-in box too, when a site in it asks for a username and password.
+- **Link routes for part of a site:** `github.com/acme` can go to Work while the rest of GitHub goes elsewhere (Settings → General → Link routes).
+- **Low on memory,** tabs you haven't looked at in 5 minutes go to sleep, instead of after an hour.
+- **Smoother:** collapsing and docking the sidebar and opening Duet take half the time per frame they did with many tabs, and dragging through a long Today list no longer stutters.
+- **Sturdier start:** if the disk is busy for a moment as Chord opens your saved tabs, it tries again instead of opening no window.
+
 ## 0.1.0 · preview · 2026-10-24
 
 The first public preview: a calm, colorful browser for people leaving Arc. Builds aren't code-signed yet: see [Try the preview](README.md#try-the-preview) for the first-launch steps on each OS.

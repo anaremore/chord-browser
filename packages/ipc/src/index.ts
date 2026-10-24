@@ -88,8 +88,9 @@ const chordName = z.string().max(64);
 export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('tab.open'), windowId: id, url, background: z.boolean().optional(), pinned: z.boolean().optional(), route: z.boolean().optional() }),
   // Link routes (from Crest): "Always open linear.app in Work?" answers with linkRoute.set.
-  z.object({ t: z.literal('linkRoute.set'), host: z.string().min(1).max(253), chordId: id }),
-  z.object({ t: z.literal('linkRoute.delete'), host: z.string().min(1).max(253) }),
+  // A route's site: a host, and maybe a path (`github.com/acme`).
+  z.object({ t: z.literal('linkRoute.set'), host: z.string().min(1).max(1000), chordId: id }),
+  z.object({ t: z.literal('linkRoute.delete'), host: z.string().min(1).max(1000) }),
   z.object({ t: z.literal('tab.activate'), windowId: id, nodeId: id, touch: z.boolean().optional() }),
   z.object({ t: z.literal('tab.close'), windowId: id, nodeId: id }),
   z.object({ t: z.literal('tab.reopenClosed'), windowId: id }),
@@ -777,7 +778,7 @@ export const invokeChannels = {
   },
   'settings:forgetSite': { roles: ['internal'], request: z.strictObject({ origin: siteOrigin }), response: z.void() },
   /** Settings → General → Link routes: send a site's links to a chord, or (null) stop. */
-  'settings:linkRoute': { roles: ['internal'], request: z.strictObject({ host: z.string().min(1).max(253), chordId: id.nullable() }), response: z.void() },
+  'settings:linkRoute': { roles: ['internal'], request: z.strictObject({ host: z.string().min(1).max(1000), chordId: id.nullable() }), response: z.void() },
   // A mini window's bar (DESIGN.md §7.9): links from other apps open there.
   'mini:state': { roles: ['mini'], request: z.void(), response: z.custom<MiniState>() },
   /** Move the page into its "Open in" chord, as a tab with its history. */
