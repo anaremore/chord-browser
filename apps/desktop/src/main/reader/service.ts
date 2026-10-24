@@ -73,6 +73,8 @@ interface Reader {
   /** The tab's session, where its images are fetched. */
   session: Session;
   view: WebContentsView;
+  /** The view's page, kept: at quit, a view can have let go of it before its tab's page goes. */
+  contents: WebContents;
   /** In image addresses: only this reader's images, and only while it's open. */
   key: string;
   /** The cleaned article, as JSON text for the view (core's ReaderArticle without its images). */
@@ -201,7 +203,17 @@ export class Readers {
       }
       const view = this.deps.createView();
       view.setBorderRadius(frameRadius[platform]);
-      const reader: Reader = { nodeId, page, session: page.session, view, key: randomBytes(16).toString('hex'), article: clean.article, images: clean.images, shown: false };
+      const reader: Reader = {
+        nodeId,
+        page,
+        session: page.session,
+        view,
+        contents: view.webContents,
+        key: randomBytes(16).toString('hex'),
+        article: clean.article,
+        images: clean.images,
+        shown: false,
+      };
       this.open.set(nodeId, reader);
       this.wire(reader);
       await new Promise<void>((done) => {
@@ -250,7 +262,7 @@ export class Readers {
       this.deps.dispatch({ t: 'tab.live', nodeId, live: { reader: false } });
       this.deps.changed(nodeId);
     }
-    if (!reader.view.webContents.isDestroyed()) reader.view.webContents.close();
+    if (!reader.contents.isDestroyed()) reader.contents.close();
   }
 
   /** The page behind a reader view went somewhere else, crashed or closed: so does its reader view. */
@@ -259,7 +271,7 @@ export class Readers {
   }
 
   private wire(reader: Reader): void {
-    const contents = reader.view.webContents;
+    const contents = reader.contents;
     this.deps.wire(contents, reader.nodeId);
     // The view itself never goes anywhere (its links to places in the article stay on the page): a link
     // is followed from the tab, as a click there would be. Chord's views are already locked to their own
@@ -283,7 +295,7 @@ export class Readers {
 
   private readerOf(contents: WebContents | null | undefined): Reader | undefined {
     if (!contents) return undefined;
-    for (const reader of this.open.values()) if (reader.view.webContents === contents) return reader;
+    for (const reader of this.open.values()) if (reader.contents === contents) return reader;
     return undefined;
   }
 
@@ -299,7 +311,7 @@ export class Readers {
 
   /** Every open reader view's page. */
   *contents(): IterableIterator<WebContents> {
-    for (const reader of this.open.values()) if (!reader.view.webContents.isDestroyed()) yield reader.view.webContents;
+    for (const reader of this.open.values()) if (!reader.contents.isDestroyed()) yield reader.contents;
   }
 
   /** What a reader view shows: its own tab's article (never another's), with the address its images load from. */
