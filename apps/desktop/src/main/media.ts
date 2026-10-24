@@ -19,6 +19,7 @@
 import { isArtworkType, pickArtwork, usableDataIcon, type MediaImage, type NodeId } from '@chord/core';
 import type { NowPlaying } from '@chord/ipc';
 import type { WebContents } from 'electron';
+import { pageCall } from './page-call';
 
 /** Chord's isolated world for this: same DOM as the page, none of its scripts. */
 const WORLD = 1008;
@@ -163,7 +164,7 @@ export class MediaWatcher {
     const s = this.sessions.get(nodeId);
     if (!s || s.contents.isDestroyed()) return;
     // Playing again counts as your gesture, as a click in the page would.
-    await s.contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: action === 'pause' ? PAUSE : PLAY }], action === 'play').catch(() => 0);
+    await pageCall(s.contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: action === 'pause' ? PAUSE : PLAY }], action === 'play'), 0);
     await this.read(nodeId);
   }
 
@@ -303,12 +304,9 @@ function view(nodeId: NodeId, s: Session): NowPlaying {
 /** Reads the page from Chord's isolated world; null when it can't be read (crashed, between documents). */
 async function readPage(contents: WebContents): Promise<PageMedia | null> {
   if (contents.isDestroyed() || contents.isCrashed()) return null;
-  try {
-    const page = (await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: READ }])) as PageMedia | null;
-    return page && typeof page === 'object' && Array.isArray(page.artwork) ? page : null;
-  } catch {
-    return null;
-  }
+  // A hung page answers nothing (page-call.ts), so the 5-second watch never piles up behind it.
+  const page = (await pageCall(contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: READ }]), null)) as PageMedia | null;
+  return page && typeof page === 'object' && Array.isArray(page.artwork) ? page : null;
 }
 
 /**
