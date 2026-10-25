@@ -6,6 +6,8 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.2.1; it gets its version when it's released.
 
+- **Fixed: tabs losing their site's icon.** A tab could drop to the letter tile when a page named no icon, its icon failed to load, or a navigation never arrived (a download, a cancelled link): sites that update their pages in place, like YouTube, did it most. A tab now keeps its site's icon. On a site Chord already has an icon for, it shows at once.
+
 - **Effects:** restyle a site your way, in place of Arc's Boosts. Open them from the page's right-click menu (*Effects for this site…*) or the command bar, then:
   - write your own CSS, which applies as you type;
   - hide an element: click it on the page, and it stays hidden on the site's other pages too;

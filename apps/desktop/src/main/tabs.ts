@@ -14,6 +14,18 @@ import { platform } from './platform';
 import { pageCall } from './page-call';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
+/** Sites whose icon each session keeps (TabManager.siteIcons). */
+const SITE_ICONS = 256;
+
+/** A web page's site, for its icon: its origin. Null for anything else (Chord's pages, about:, files). */
+export function siteOf(url: string): string | null {
+  if (!/^https?:\/\//i.test(url)) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
 const MAX_CRASH_RELOADS = 2;
 /** A navigation this soon after a click (or Enter) in the page counts as you following a link, not the page redirecting itself. */
 const LINK_GESTURE_MS = 1500;
@@ -59,8 +71,38 @@ export class TabManager {
   private readonly badges = new Map<NodeId, Exclude<TabCount, null>>();
   /** The count each service worker gave its site, by its scope, per session: its tabs show it when their page has none. */
   private readonly scopeBadges = new WeakMap<Session, Map<string, Exclude<TabCount, null>>>();
+  /**
+   * Each site's icon, by origin, per session (a private window's go with it):
+   * a tab arriving on a site Chord has an icon for shows it at once, and a
+   * page that never names its icon, or whose icon can't be fetched, keeps it.
+   */
+  private readonly siteIcons = new WeakMap<Session, Map<string, string>>();
 
   constructor(private readonly deps: TabManagerDeps) {}
+
+  /** Keep a site's icon, the newest first out of `SITE_ICONS` (a few KB each). */
+  private rememberIcon(session: Session, url: string, icon: string): void {
+    const site = siteOf(url);
+    if (!site) return;
+    let icons = this.siteIcons.get(session);
+    if (!icons) this.siteIcons.set(session, (icons = new Map()));
+    icons.delete(site);
+    icons.set(site, icon);
+    if (icons.size > SITE_ICONS) icons.delete(icons.keys().next().value!);
+  }
+
+  /** A site's icon if Chord has one: kept from earlier, or on another of this session's tabs there. */
+  private knownIcon(session: Session, site: string): string | null {
+    const kept = this.siteIcons.get(session)?.get(site);
+    if (kept) return kept;
+    for (const node of Object.values(this.deps.state().nodes)) {
+      if (node.kind !== 'tab' || !node.favicon || (node.url !== site && !node.url.startsWith(`${site}/`))) continue;
+      if (this.deps.sessionFor(node) !== session) continue;
+      this.rememberIcon(session, node.url, node.favicon);
+      return node.favicon;
+    }
+    return null;
+  }
 
   get(nodeId: NodeId): WebContentsView | undefined {
     return this.views.get(nodeId);
@@ -329,7 +371,15 @@ export class TabManager {
       const had = this.badges.delete(nodeId);
       const shown = this.shownBadge(nodeId, url);
       if (had || shown !== null) live({ badge: shown });
-      dispatch({ t: 'tab.updated', nodeId, url });
+      // Its icon stays while the site does (a page may never name one, or fail to load it). On another
+      // site, the icon Chord has for that one, or none until the page's own arrives: never the last site's.
+      const before = this.deps.state().nodes[nodeId];
+      const site = siteOf(url);
+      if (before?.kind === 'tab' && siteOf(before.url) !== site) {
+        dispatch({ t: 'tab.updated', nodeId, url, favicon: site ? this.knownIcon(contents.session, site) : null });
+      } else {
+        dispatch({ t: 'tab.updated', nodeId, url });
+      }
       live(history());
       visited = null;
       if (code > 0) visit(url);
@@ -342,7 +392,7 @@ export class TabManager {
     });
     contents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
-      dispatch({ t: 'tab.updated', nodeId, favicon: null });
+      // The icon waits for the page to commit (did-navigate): a navigation can still be cancelled, or download.
       live({ error: null });
     });
     // The frame explains failures instead of showing a blank page. -3 is ERR_ABORTED: the
@@ -464,25 +514,33 @@ export class TabManager {
     this.deps.onPopupCreated(contents, openerNodeId);
   }
 
-  /** Fetch through the tab's own session (its cookies apply), keep small icons as data: URLs. */
+  /**
+   * Fetch through the tab's own session (its cookies apply), keep small icons
+   * as data: URLs, and remember each for its site. An icon that can't be had
+   * changes nothing: the tab keeps the one it has (its site's, or the monogram).
+   */
   private async loadFavicon(nodeId: NodeId, contents: WebContents, favicons: string[]): Promise<void> {
     const url = favicons.find((u) => /^(https?|data):/i.test(u));
     if (!url) return;
+    // The page this icon is for: by the time it's fetched, the tab may be on another site.
+    const page = contents.getURL();
+    const session = contents.session;
+    let icon: string | null = null;
     try {
       if (url.startsWith('data:')) {
-        if (usableDataIcon(url, MAX_FAVICON_BYTES)) this.deps.dispatch({ t: 'tab.updated', nodeId, favicon: url });
-        return;
+        if (usableDataIcon(url, MAX_FAVICON_BYTES)) icon = url;
+      } else {
+        const response = await contents.session.fetch(url, { signal: AbortSignal.timeout(8000) });
+        const type = (response.headers.get('content-type') ?? '').split(';')[0]!.trim();
+        const bytes = response.ok && /^image\//.test(type) ? Buffer.from(await response.arrayBuffer()) : null;
+        if (bytes && bytes.length > 0 && bytes.length <= MAX_FAVICON_BYTES) icon = `data:${type};base64,${bytes.toString('base64')}`;
       }
-      const response = await contents.session.fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (!response.ok) return;
-      const type = (response.headers.get('content-type') ?? '').split(';')[0]!.trim();
-      if (!/^image\//.test(type)) return;
-      const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length === 0 || bytes.length > MAX_FAVICON_BYTES) return;
-      if (contents.isDestroyed()) return;
-      this.deps.dispatch({ t: 'tab.updated', nodeId, favicon: `data:${type};base64,${bytes.toString('base64')}` });
     } catch {
-      // Unreachable icons fall back to the monogram.
+      // Unreachable: the tab keeps the icon it has.
     }
+    if (!icon) return;
+    this.rememberIcon(session, page, icon);
+    if (contents.isDestroyed() || siteOf(contents.getURL()) !== siteOf(page)) return;
+    this.deps.dispatch({ t: 'tab.updated', nodeId, favicon: icon });
   }
 }
