@@ -6,6 +6,11 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.2.0; it gets its version when it's released.
 
+- **Developer tools in the window:** F12 (⌥⌘I on macOS) now opens a tab's developer tools beside the page, on the right, as Chrome does, instead of in a separate window.
+  - Drag the edge between the page and the developer tools to resize them. Their header moves them to the bottom (and back), pops them out into a window of their own, or closes them. In that window, *Dock in the window* puts them back. Ctrl+Shift+D (⌘⇧D) inside them does both.
+  - Chord remembers the side and the size, and whether you like them in a window.
+  - Each tab keeps its own: switch tabs and you see that tab's, or none. Closing the tab closes them, and a tab with them open doesn't go to sleep.
+
 ## 0.2.0 · preview · 2026-10-25
 
 - **Ads and trackers blocked** by default, in every chord and in private windows, with EasyList and EasyPrivacy. The empty spaces ads leave behind are hidden too.
