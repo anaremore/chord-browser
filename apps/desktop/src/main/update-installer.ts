@@ -36,7 +36,8 @@ class SignedReleaseProvider extends Provider<UpdateInfo> {
     _updater: AppUpdater,
     runtimeOptions: ProviderRuntimeOptions,
   ) {
-    super(runtimeOptions);
+    // GitHub's downloads answer one byte range per request, as electron-updater's own GitHub provider assumes.
+    super({ ...runtimeOptions, isUseMultipleRangeRequest: false });
   }
 
   async getLatestVersion(): Promise<UpdateInfo> {
@@ -112,8 +113,10 @@ export class UpdateInstaller {
     updater.autoDownload = true;
     // An update that's ready also installs when you quit, as in Chrome (never in development, whose download is a test file).
     updater.autoInstallOnAppQuit = app.isPackaged;
-    // No blockmaps are published, and the web installer isn't used.
-    updater.disableDifferentialDownload = true;
+    // Only the blocks that changed are downloaded (the installer's .blockmap; an AppImage carries its
+    // own). What they make is still checked against the signed manifest's SHA-512, and anything that
+    // goes wrong falls back to the whole file. The web installer isn't used.
+    updater.disableDifferentialDownload = false;
     updater.disableWebInstaller = true;
     updater.logger = null;
     // electron-updater reports failures as 'error' events too; prepare() already rejects with them.

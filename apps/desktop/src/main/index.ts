@@ -541,6 +541,17 @@ if (!app.requestSingleInstanceLock()) {
         adBlocking.attach(profileId, ses, priv);
         // Before any page's own scripts: what Electron lacks and every Chromium browser has (preload/page.ts).
         ses.registerPreloadScript({ type: 'frame', id: 'chord-page', filePath: join(import.meta.dirname, '../preload/page.cjs') });
+        // A site's service worker's app badge goes to its tabs too (counts on tabs): its IPC reaches only its own ServiceWorkerMain.
+        ses.registerPreloadScript({ type: 'service-worker', id: 'chord-service-worker', filePath: join(import.meta.dirname, '../preload/service-worker.cjs') });
+        const own = ses;
+        const listening = new Set<number>();
+        own.serviceWorkers.on('running-status-changed', ({ versionId, runningStatus }) => {
+          if (runningStatus === 'stopped') return void listening.delete(versionId);
+          const worker = listening.has(versionId) ? undefined : own.serviceWorkers.getWorkerFromVersionID(versionId);
+          if (!worker) return;
+          listening.add(versionId);
+          worker.ipc.on('page:badge', (_event, raw: unknown) => browser?.tabs.setScopeBadge(own, worker.scope, raw));
+        });
         const settings = browser?.store.state.settings ?? DEFAULT_SETTINGS;
         applySpellcheck(ses, settings.spellcheck, settings.googleFree);
         profiles.set(profileId, ses);

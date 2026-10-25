@@ -364,12 +364,18 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
 - **P0 HTTP Basic Auth.** **Built 2026-10-24** (ARCHITECTURE.md §9): a sign-in box in the popover over the tab that asked, for sites and proxies (Basic, Digest, NTLM), with the site's realm, a note after a wrong answer and a warning on plain HTTP. Chromium remembers a sign-in that worked until you quit; Chord keeps nothing (D12). Peek too (its box shows over Peek); not yet mini windows, whose pages get the site's 401 page.
 - **P0 Sign-in checks, by hand:** Google in a second chord on Windows, macOS and Linux; Microsoft, GitHub and Apple; 1Password, Bitwarden and KeePassXC-Browser (risk R2). No user-agent spoofing unless one fails (D15).
 - **P1 Crash resilience.** **Built 2026-10-24** (ARCHITECTURE.md §6.2): open tabs now keep their back/forward history, scroll position and form fields across a restart or a crash (before, they came back as just their address). E2E tests kill Chord mid-session and check a tab comes back where it was, and that every window, chord and split comes back.
-- **P1 Performance pass:**
-  - cold launch: try Node's compile cache or a V8 snapshot for main, measured against the 1.5 s budget, kept only if it wins;
-  - load Duet, the theme editor and Settings' code when first opened;
-  - the four interactions over the 8 ms frame budget on 120 Hz displays (Duet, drag, chord switch, Clear Today). *2026-10-24:* CPU profiles (`CHORD_PERF_PROFILE=1`) found the costs. The frame snapshot's pictures now skip the preload and become bitmaps in a worker (collapse 17.1 → 8.1 ms worst frame, dock 14.5 → 6.3 ms, with 200 tabs), and dragging no longer hit-tests on every move (dnd-kit's AutoScroller replaced by `EdgeScroller`). Left: mounting Duet's panel, forced layout on tab and chord switches, garbage on Clear Today;
-  - memory from `app.getAppMetrics()`, and tabs sleep sooner when free memory runs low (Electron has no pressure event). **Low-memory sleeping built 2026-10-24** (ARCHITECTURE.md §9);
-  - CI fails when launch time or memory grows past a set margin.
+- **P0 Performance** (critical, the maintainer's call 2026-10-25). In this order, each measured before and after, and kept only if it wins:
+  1. **Smaller updates:** differential downloads. **Built 2026-10-25** (ARCHITECTURE.md §14.4): releases publish the Windows installers' blockmaps (an AppImage carries its own), and updates fetch only the blocks that changed, checked against the signed manifest's SHA-512. With the app archive stored as it is in the installer, a change to Chord's code is a 0.38 MB update instead of 3.24 MB (or the whole 126+ MB). macOS updates wait on signing.
+  2. **Preconnect from the command bar:** while you type, Chord connects to the top result's host (`session.preconnect`), as Chrome's address bar does, so the page starts sooner when you press Enter.
+  3. **Chord's own processes:** measure what each window's UI views cost (shell, command bar, popover, hover preview: a renderer each, `app.getAppMetrics()`), then make the rarely used ones only when first needed, or share them, if that wins.
+  4. **The rest of the pass:**
+     - cold launch: Node's compile cache or a V8 snapshot for main, measured against the 1.5 s budget; the database open that took 4.5 s on Windows CI (the launch timeline now says where); non-critical launch work (ad-blocking lists, Safe Browsing, sweeps) after the first page;
+     - Duet, the theme editor and Settings' code loaded when first opened;
+     - the interactions over the 8 ms frame budget on 120 Hz displays. *2026-10-24:* CPU profiles (`CHORD_PERF_PROFILE=1`) found the costs. The frame snapshot's pictures now skip the preload and become bitmaps in a worker (collapse 17.1 → 8.1 ms worst frame, dock 14.5 → 6.3 ms, with 200 tabs), and dragging no longer hit-tests on every move (dnd-kit's AutoScroller replaced by `EdgeScroller`). Left: mounting Duet's panel, forced layout on tab and chord switches, garbage on Clear Today;
+     - memory from `app.getAppMetrics()`, and tabs sleep sooner when free memory runs low (Electron has no pressure event). **Low-memory sleeping built 2026-10-24** (ARCHITECTURE.md §9);
+     - CI fails when launch time or memory grows past a set margin.
+  5. **Battery:** on battery, hidden tabs sleep sooner and Chord's own timers (Now playing's reads, update checks) slow down.
+  6. **Back and Forward** reload the page in Chord (checked 2026-10-25: `pageshow` not persisted), where Chrome restores it from its back/forward cache. Chromium needs its embedder to opt in (`WebContentsDelegate::IsBackForwardCacheSupported`), and Electron 45 doesn't. Ask Electron upstream (an issue, with a patch if wanted); nothing in Chord can turn it on.
   - Not doing: removing the app menu (shortcuts and the macOS Edit menu need it), or native modules (each Electron upgrade would need them rebuilt, against the 72-hour runbook).
 
 ### 0.2 · Cleaner pages · December
@@ -421,7 +427,7 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   3. **Engine and main:** Chromium and Node can't be swapped while running, so these still need a restart, made nearly invisible. The update downloads in the background and Chord restarts at a quiet moment: nothing playing, sharing or typed but unsent. Tabs come back with their history, scroll and form fields (0.1.x's crash resilience did this groundwork), and Chord says what changed afterwards.
 - **Translation.** Needs its own decision: an on-device engine, or Google's, which Google-free mode rules out.
 - **Search the text of pages you've read**, kept on your computer.
-- **Counts on tabs** (asked 2026-10-25). **Built 2026-10-25** (ARCHITECTURE.md §9, DESIGN.md §7.2): the Badging API's count on the tab, its tile, a closed folder and the chord switcher, the total on Chord's icon; a site's hidden from the tab's menu. Next: a service worker's count (service-worker preloads), and a hand check of the Dock and taskbar.
+- **Counts on tabs** (asked 2026-10-25). **Built 2026-10-25** (ARCHITECTURE.md §9, DESIGN.md §7.2): the Badging API's count on the tab, its tile, a closed folder and the chord switcher, the total on Chord's icon; a site's hidden from the tab's menu. A service worker's count shows on its site's tabs too (built 2026-10-25). Next: a hand check of the Dock and taskbar.
 - **Duet makes images** (asked 2026-10-25). **Built 2026-10-25** with Codex's own image tool (ARCHITECTURE.md §11.5); Claude can't make images and offers Codex. A real image needs a hand check on the maintainer's plan.
 - **Duet tidying your tabs.** It conflicts with D8 ("Duet reads, it doesn't rearrange"), so it waits for you to ask again.
 

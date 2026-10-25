@@ -1,5 +1,6 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { Provider } from 'electron-updater';
 import { downloadsFor, manifestFor, signatureFile, verifyManifest } from '../../src/main/update-signing';
 
 const MANIFEST = `version: 0.2.0
@@ -70,5 +71,13 @@ describe('where updates come from', () => {
   it("downloads from the release's tag folder", () => {
     expect(downloadsFor('v0.2.0')).toBe('https://github.com/anaremore/chord-browser/releases/download/v0.2.0/');
     expect(downloadsFor('v0.2.0', 'http://127.0.0.1:9/download')).toBe('http://127.0.0.1:9/download/v0.2.0/');
+  });
+
+  it('finds both blockmaps of a differential update: the version is in the tag and the file name, so the old one is the old release’s', async () => {
+    // electron-updater's own rule, which Chord's provider inherits: every place the new version appears becomes the old one.
+    const installer = new URL('Chord-0.3.0-win-x64-setup.exe', downloadsFor('v0.3.0'));
+    const [old, fresh] = await Provider.prototype.getBlockMapFiles.call(null, installer, '0.2.0', '0.3.0');
+    expect(old!.href).toBe('https://github.com/anaremore/chord-browser/releases/download/v0.2.0/Chord-0.2.0-win-x64-setup.exe.blockmap');
+    expect(fresh!.href).toBe('https://github.com/anaremore/chord-browser/releases/download/v0.3.0/Chord-0.3.0-win-x64-setup.exe.blockmap');
   });
 });

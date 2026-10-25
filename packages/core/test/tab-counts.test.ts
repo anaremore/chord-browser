@@ -95,16 +95,19 @@ describe('counts in the sidebar', () => {
       whatsapp: tab('whatsapp', 'c1', 'pinned', 'f2', 'https://web.whatsapp.com/'),
       mail: tab('mail', 'c1', 'today', null, 'https://mail.example.com/'),
       slack: tab('slack', 'c2', 'pinned', null, 'https://app.slack.com/'),
+      // Telegram again, in Today: the same site, its own count.
+      telegram2: tab('telegram2', 'c1', 'today', null, 'https://web.telegram.org/k/'),
     };
-    s.live = { telegram: { ...IDLE_LIVE, badge: 3 }, whatsapp: { ...IDLE_LIVE, badge: 'dot' }, mail: { ...IDLE_LIVE, badge: 250 } };
+    s.live = { telegram: { ...IDLE_LIVE, badge: 3 }, whatsapp: { ...IDLE_LIVE, badge: 'dot' }, mail: { ...IDLE_LIVE, badge: 250 }, telegram2: { ...IDLE_LIVE, badge: 2 } };
     return s;
   }
 
-  it('a closed folder adds up what’s inside it, any depth; the icon adds up every tab; a sleeping tab has none', () => {
+  it('a closed folder adds up what’s inside it, any depth; the icon adds up every site once; a sleeping tab has none', () => {
     const s = state();
     expect(countWithin(s, 'f1')).toBe(3);
     expect(countWithin(s, 'f2')).toBe('dot');
-    expect(appCount(s.live)).toBe(253);
+    // Telegram's 3 and 2 count once, as 3: 3 + 250 (the dot adds no number).
+    expect(appCount(s)).toBe(253);
     expect([...chordsWithCounts(s)]).toEqual(['c1']);
   });
 

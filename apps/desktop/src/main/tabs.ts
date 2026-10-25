@@ -57,6 +57,8 @@ export class TabManager {
   private readonly floating = new Map<NodeId, FloatingPage>();
   /** The count each tab's page gave itself (the Badging API), shown or not: Settings can hide it, then show it again. */
   private readonly badges = new Map<NodeId, Exclude<TabCount, null>>();
+  /** The count each service worker gave its site, by its scope, per session: its tabs show it when their page has none. */
+  private readonly scopeBadges = new WeakMap<Session, Map<string, Exclude<TabCount, null>>>();
 
   constructor(private readonly deps: TabManagerDeps) {}
 
@@ -218,22 +220,46 @@ export class TabManager {
     if (contents && !contents.isDestroyed()) contents.setAudioMuted(muted);
   }
 
-  /** A tab's count as it shows: hidden when counts are off, or off for its site. */
+  /** A tab's count as it shows: its page's, else its site's service worker's; hidden when counts are off, or off for its site. */
   private shownBadge(nodeId: NodeId, url: string): TabCount {
-    const badge = this.badges.get(nodeId) ?? null;
+    const badge = this.badges.get(nodeId) ?? this.scopeBadge(nodeId, url);
     return badge !== null && countShows(url, this.deps.state().settings.tabCounts) ? badge : null;
   }
 
-  /** Whether the tab's page gave itself a count (its menu offers to hide or show it). */
-  hasBadge(nodeId: NodeId): boolean {
-    return this.badges.has(nodeId);
+  /** The count a service worker gave the tab's site: the one whose scope is the longest start of its address, in its session. */
+  private scopeBadge(nodeId: NodeId, url: string): TabCount {
+    const node = this.deps.state().nodes[nodeId];
+    const scopes = node?.kind === 'tab' ? this.scopeBadges.get(this.deps.sessionFor(node)) : undefined;
+    let best: { scope: string; badge: Exclude<TabCount, null> } | null = null;
+    for (const [scope, badge] of scopes ?? []) if (url.startsWith(scope) && (!best || scope.length > best.scope.length)) best = { scope, badge };
+    return best?.badge ?? null;
   }
 
-  /** Counts were turned on or off, or hidden for a site: every tab shows its own as Settings now says. */
+  /** A service worker set or cleared its site's count: its tabs under `scope`, in its session, show it now. */
+  setScopeBadge(ses: Session, scope: string, raw: unknown): void {
+    const badge = pageBadge(raw);
+    if (badge === undefined || !/^https?:\/\//.test(scope)) return;
+    let scopes = this.scopeBadges.get(ses);
+    if (!scopes) this.scopeBadges.set(ses, (scopes = new Map()));
+    if (badge === null) scopes.delete(scope);
+    else scopes.set(scope, badge);
+    this.refreshCounts();
+  }
+
+  /** Whether the tab has a count of its own or its site's (its menu offers to hide or show it). */
+  hasBadge(nodeId: NodeId): boolean {
+    const contents = this.views.get(nodeId)?.webContents;
+    return this.badges.has(nodeId) || (contents && !contents.isDestroyed() ? this.scopeBadge(nodeId, contents.getURL()) !== null : false);
+  }
+
+  /** Counts were turned on or off, hidden for a site, or a service worker's changed: every awake tab shows its own as it is now. */
   refreshCounts(): void {
-    for (const nodeId of this.badges.keys()) {
-      const contents = this.views.get(nodeId)?.webContents;
-      if (contents && !contents.isDestroyed()) this.deps.dispatch({ t: 'tab.live', nodeId, live: { badge: this.shownBadge(nodeId, contents.getURL()) } });
+    const state = this.deps.state();
+    for (const [nodeId, view] of this.views) {
+      const contents = view.webContents;
+      if (contents.isDestroyed() || !state.live[nodeId]) continue;
+      const badge = this.shownBadge(nodeId, contents.getURL());
+      if (state.live[nodeId]!.badge !== badge) this.deps.dispatch({ t: 'tab.live', nodeId, live: { badge } });
     }
   }
 
@@ -300,7 +326,9 @@ export class TabManager {
     };
     contents.on('did-navigate', (_event, url, code) => {
       // A new page: the last one's count goes with it.
-      if (this.badges.delete(nodeId)) live({ badge: null });
+      const had = this.badges.delete(nodeId);
+      const shown = this.shownBadge(nodeId, url);
+      if (had || shown !== null) live({ badge: shown });
       dispatch({ t: 'tab.updated', nodeId, url });
       live(history());
       visited = null;

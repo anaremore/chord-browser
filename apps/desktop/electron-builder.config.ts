@@ -170,6 +170,10 @@ const config: Configuration = {
     artifactName: '${productName}-${version}-${os}-${arch}-setup.${ext}',
     // Registers Chord as a browser Windows can offer as the default.
     include: 'build/installer.nsh',
+    // Updates fetch only the blocks that changed (the installer's .blockmap, ARCHITECTURE.md §14.4).
+    // The app archive goes in as it is, not recompressed with Electron's files, so a change to
+    // Chord's own code changes only those bytes; otherwise it would scramble most of the installer.
+    differentialPackage: 'store-asar',
   },
   // Microsoft Store (MSIX), off by default: win.target builds only the installer above. A Store
   // package is built by hand with `--win appx` (docs/releasing/signing.md, Microsoft Store). The

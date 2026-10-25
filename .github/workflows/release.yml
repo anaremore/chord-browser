@@ -341,8 +341,10 @@ jobs:
           if-no-files-found: error
           path: |
             apps/desktop/release/*-setup.exe
+            apps/desktop/release/*-setup.exe.blockmap
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
+            apps/desktop/release/*.zip.blockmap
             apps/desktop/release/*.AppImage
             apps/desktop/release/*.deb
             apps/desktop/release/*.rpm
