@@ -766,15 +766,20 @@ const panelStart = (panel: HTMLElement | null) =>
 function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string, present: boolean): void {
   // Where the panel last put the keyboard.
   const placed = useRef<HTMLElement | null>(null);
+  // Without scrolling: the panel's start is always in view, and scrolling it there would lay out the panel again.
   const focusStart = () => {
     placed.current = panelStart(panel.current) ?? null;
-    placed.current?.focus();
+    placed.current?.focus({ preventScroll: true });
   };
   useEffect(() => {
     // Only when the keyboard was left nowhere (its button went with the step): never taken from elsewhere.
-    const now = document.activeElement;
-    if (now && now !== document.body) return;
-    focusStart();
+    // A frame later, as on opening, so it never lays out a panel that's just mounted.
+    const frame = requestAnimationFrame(() => {
+      const now = document.activeElement;
+      if (now && now !== document.body) return;
+      focusStart();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [step]);
   useEffect(() => {
     if (!present || !placed.current || document.activeElement !== placed.current) return;
@@ -786,9 +791,16 @@ function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string, prese
     // have focused it), which is still there, inert, while the panel slides out, so focusing it would do nothing.
     const now = document.activeElement;
     const before = document.hasFocus() && now instanceof HTMLElement && now !== document.body && !panel.current?.contains(now) ? now : null;
-    focusStart();
+    // After the panel's first frame, not in the commit that mounts it: focusing then forced a layout of the whole new
+    // panel in the middle of the opening frame (6.9 ms, the slowest part of opening Duet).
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        if (panel.current && !panel.current.contains(document.activeElement)) focusStart();
+      });
+    });
     void api.focus.move('shell');
     return () => {
+      cancelAnimationFrame(frame);
       // Closing (sliding out, or gone): the keyboard leaves the panel now, not when the slide ends.
       if (document.activeElement instanceof HTMLElement && panel.current?.contains(document.activeElement)) document.activeElement.blur();
       setTimeout(() => {

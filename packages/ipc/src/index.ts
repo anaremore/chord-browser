@@ -1004,6 +1004,8 @@ export const invokeChannels = {
   'focus:move': { roles: ['shell'], request: z.strictObject({ to: z.enum(['page', 'devtools', 'popover', 'shell']) }), response: z.void() },
   /** The command bar has started and listens for openings (a new window opens it as soon as it is). */
   'overlay:ready': { roles: ['overlay'], request: z.void(), response: z.void() },
+  /** The command bar's chosen row is a page: main opens a connection to its server now, so it loads sooner on Enter. */
+  'overlay:preconnect': { roles: ['overlay'], request: z.object({ url: z.string().max(4096) }), response: z.void() },
   /** The shell reports where the URL pill / address field sits, for anchored ⌘L. */
   'layout:anchor': { roles: ['shell'], request: Rect.nullable(), response: z.void() },
   /**
@@ -1616,6 +1618,8 @@ export interface OverlayApi {
     close(seq: number, dismissed?: boolean): Promise<void>;
     /** Listening now: main may open the command bar. */
     ready(): Promise<void>;
+    /** The chosen row would open this page: connect to its server ahead of Enter. */
+    preconnect(url: string): Promise<void>;
   };
   action: { run(action: CoreActionId): Promise<void> };
   downloads: DownloadsApi;

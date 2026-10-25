@@ -6,6 +6,8 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.2.0; it gets its version when it's released.
 
+- **Pages open sooner from the command bar:** while you type, Chord connects to the site you're about to open, so it starts loading the moment you press Enter.
+
 - **Videos stay in their tab** when you switch away: popping out by themselves is now off, and turned off once for everyone. Pop one out from Now playing in the sidebar, or turn it back on in Settings → General → *Pop out playing videos when you switch away*.
 
 - **Smaller updates** on Windows and with the AppImage, once in-app updates are on: Chord downloads only what changed, often well under 1 MB instead of the whole 130 MB installer. The installer you download from the release page is about 11 MB larger for it.

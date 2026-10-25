@@ -303,6 +303,7 @@ function registerIpc(): void {
   handle('mini:chooseChord', (anchor, sender) => browser!.minis.chooseChord(sender, anchor));
   handle('mini:copyLink', (_request, sender) => browser!.minis.copyLink(sender));
   handle('overlay:ready', (_request, sender) => senderWindow(sender).markOverlayReady());
+  handle('overlay:preconnect', ({ url }, sender) => browser!.preconnect(senderWindow(sender), url));
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('perf:shell', ({ milestone }, sender) => {
     markLaunch(milestone === 'ready' ? 'shellReady' : 'shellPainted');

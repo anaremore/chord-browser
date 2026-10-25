@@ -1663,6 +1663,34 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
 const isSettings = (url: string) => url.startsWith('chord://settings') || url.includes('/settings/index.html');
 const selection = (field: Locator) => field.evaluate((input: HTMLInputElement) => [input.selectionStart, input.selectionEnd]);
 
+test('the command bar connects to the server of the page it would open while you type, before Enter', async () => {
+  // A server nothing has touched yet: it counts connections and requests apart.
+  let connections = 0;
+  let requests = 0;
+  const other = createServer((_req, res) => {
+    requests++;
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<title>Other server</title>');
+  });
+  other.on('connection', () => connections++);
+  await new Promise<void>((done) => other.listen(0, '127.0.0.1', done));
+  const url = `http://127.0.0.1:${(other.address() as AddressInfo).port}/page`;
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(url);
+    // Connected while you type, and nothing asked of it yet.
+    await expect.poll(() => connections).toBeGreaterThan(0);
+    expect(requests).toBe(0);
+    await overlay.keyboard.press('Enter');
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Other server');
+  } finally {
+    await app.close();
+    other.close();
+  }
+});
+
 test('the command bar completes an address inline; Backspace never brings it back, Tab accepts it', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
