@@ -2,6 +2,15 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## Next · preview (unreleased)
+
+What's built since 0.2.1; it gets its version when it's released.
+
+- **Developer tools in the window:** F12 (⌥⌘I on macOS) now opens a tab's developer tools beside the page, on the right, as Chrome does, instead of in a separate window.
+  - Drag the edge between the page and the developer tools to resize them. Their header moves them to the bottom (and back), pops them out into a window of their own, or closes them. In that window, *Dock in the window* puts them back. Ctrl+Shift+D (⌘⇧D) inside them does both.
+  - Chord remembers the side and the size, and whether you like them in a window.
+  - Each tab keeps its own: switch tabs and you see that tab's, or none. Closing the tab closes them, and a tab with them open doesn't go to sleep.
+
 ## 0.2.1 · preview · 2026-10-25
 
 - **Signed for Windows:** the installer and Chord itself are signed by Austin Naremore, through Microsoft's Artifact Signing, so Windows shows who made them. SmartScreen may still warn about the first few signed releases until it knows the publisher. Once you're on this version, Chord installs only updates signed by the same name. Mac builds aren't signed yet.
@@ -17,11 +26,6 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 - **Smaller updates** on Windows and with the AppImage, once in-app updates are on: Chord downloads only what changed, often well under 1 MB instead of the whole 130 MB installer. The installer you download from the release page is about 11 MB larger for it.
 
 - **Counts on tabs** also come from a site's background worker, so a message that arrives while the tab sleeps can show when it wakes. A site open in two tabs counts once on Chord's icon.
-
-- **Developer tools in the window:** F12 (⌥⌘I on macOS) now opens a tab's developer tools beside the page, on the right, as Chrome does, instead of in a separate window.
-  - Drag the edge between the page and the developer tools to resize them. Their header moves them to the bottom (and back), pops them out into a window of their own, or closes them. In that window, *Dock in the window* puts them back. Ctrl+Shift+D (⌘⇧D) inside them does both.
-  - Chord remembers the side and the size, and whether you like them in a window.
-  - Each tab keeps its own: switch tabs and you see that tab's, or none. Closing the tab closes them, and a tab with them open doesn't go to sleep.
 
 ## 0.2.0 · preview · 2026-10-25
 
