@@ -314,7 +314,12 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
 ### 0.1.x · Daily-driver gaps · November
 - **P1 DRM notice.** **Built 2026-10-24** (ARCHITECTURE.md §16 D4, `main/drm.ts`): on the top DRM services (Netflix, Spotify, Disney+, Prime Video, Max, Hulu, Apple Music and TV, Peacock, Paramount+, Tidal), a notice that the site needs Widevine, which Chord doesn't include yet, with *Open in…* the other browsers import finds (opening "externally" would come back to Chord when it's the default). Recognized by address: catching a page's own DRM request would need a script in every page.
 - **P1 Spike S12, Widevine.** **Done 2026-10-24** (docs/decisions/S12-widevine.md): ECS trailed four of the last five CVE releases by 23 to 34 days, so D4 is decided as stock Electron for now.
-- **P2 Spike S14, a Widevine player** (D4's path, chosen 2026-10-24): an optional companion app on castLabs ECS, installed from the DRM notice, that opens only the notice's services, in a window of its own; any other link opens in Chord. Spike:
+- **P2 Spike S14, a Widevine player** (D4's path, chosen 2026-10-24): an optional companion app on castLabs ECS, installed from the DRM notice, that opens only the notice's services, in a window of its own; any other link opens in Chord. **Done 2026-10-25** (docs/decisions/S14-widevine-player.md, prototypes in `spikes/widevine-player/`):
+  - **Plays:** ECS plays Widevine test streams on Windows, macOS and Linux, X11 and Wayland, up to 4K in software (L3), with picture-in-picture and fullscreen. The navigation lock and the control channel work.
+  - **Recommends:** a window of its own on every OS, once the maintainer has an EVS account for production VMP.
+  - **Glueing it over Chord's content area:** works on Windows as an owned window (under a frame of trail), trails on macOS, and is impossible on Wayland.
+
+  It covered:
   - playback of Widevine test streams per OS, and which services refuse without VMP;
   - EVS signing of the companion in CI;
   - locking its navigation to the services;

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>bar</title>
+<style>
+  /* Approach (a): the player's own window, with a bar in the colors of the chord it came from. */
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: flex; align-items: center; gap: 10px; padding: 0 12px 0 84px;
+    background: linear-gradient(90deg, #efe7ff, #e3f0ff); color: #2b2540;
+    font: 500 13px system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-app-region: drag; user-select: none;
+  }
+  .dot { width: 18px; height: 18px; border-radius: 5px; background: #e50914; }
+  .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .host { color: #6b6385; font-weight: 400; }
+  button { -webkit-app-region: no-drag; border: 0; border-radius: 7px; padding: 5px 10px; background: rgb(255 255 255 / 0.7); color: #2b2540; font: inherit; }
+  @media (platform: win32) { body { padding-left: 12px; } }
+</style>
+</head>
+<body>
+<div class="dot"></div>
+<div class="title">Netflix <span class="host">· netflix.com · plays with Widevine</span></div>
+<button>Back to Chord</button>
+<button aria-label="Close">✕</button>
+</body>
+</html>
