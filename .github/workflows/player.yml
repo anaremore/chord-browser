@@ -1,32 +1,23 @@
 name: Chord Player
 
 # Chord Player (ARCHITECTURE.md §9, §15.1): packaged on castLabs ECS for each OS on its own runner
-# (apps/player/scripts/package.mjs), castLabs-VMP-signed through EVS when asked and the
-# EVS_ACCOUNT_NAME and EVS_PASSWD secrets exist, smoke-tested (it plays a Widevine test stream,
-# apps/player/scripts/smoke.mjs), and uploaded as artifacts. It never publishes anything:
-# player-release.yml drafts releases from `player-v*` tags.
+# (apps/player/scripts/package.mjs), castLabs-VMP-signed through EVS for a release, smoke-tested
+# (it plays a Widevine test stream, apps/player/scripts/smoke.mjs), and uploaded as artifacts. It
+# never publishes anything: player-release.yml drafts releases from `player-v*` tags.
 #
-# Called from ci.yml on every run (VMP signing only when CI is started by hand), from
-# player-release.yml for a tag (always VMP-signed), or by hand.
+# The EVS_ACCOUNT_NAME and EVS_PASSWD secrets live in the protected `release` environment, so only
+# a release build (player-release.yml, for a tag) can read them, after its reviewers approve. Every
+# other build, from ci.yml on every run or by hand, keeps ECS's development signature.
 #
 # Linux arm64 isn't built: no Widevine CDM there that spike S14 could test. Linux has no VMP.
 on:
   workflow_call:
     inputs:
-      vmp:
-        description: VMP-sign the Windows and macOS builds through castLabs EVS
-        type: boolean
-        default: false
       release:
-        description: A release build, which must be VMP-signed
+        description: A release build, VMP-signed in the protected `release` environment
         type: boolean
         default: false
   workflow_dispatch:
-    inputs:
-      vmp:
-        description: VMP-sign the Windows and macOS builds through castLabs EVS (needs the EVS secrets)
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -35,6 +26,9 @@ jobs:
   package:
     name: Player · ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # A release build reads the EVS secrets, so it runs in the protected `release` environment and
+    # waits for its reviewers. Other builds get no environment and no secrets.
+    environment: ${{ inputs.release && 'release' || '' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -67,7 +61,7 @@ jobs:
         id: vmp
         shell: bash
         env:
-          WANT: ${{ inputs.vmp == true && matrix.target != 'linux-x64' }}
+          WANT: ${{ inputs.release == true && matrix.target != 'linux-x64' }}
           RELEASE: ${{ inputs.release == true }}
           HAS_EVS: ${{ secrets.EVS_ACCOUNT_NAME != '' && secrets.EVS_PASSWD != '' }}
           TARGET: ${{ matrix.target }}
@@ -79,7 +73,7 @@ jobs:
             echo "mode=production" >> "$GITHUB_OUTPUT"
             echo "CHORD_PLAYER_VMP=production" >> "$GITHUB_ENV"
           elif [ "$RELEASE" = "true" ]; then
-            echo "::error::A Chord Player release must be VMP-signed: the EVS_ACCOUNT_NAME and EVS_PASSWD secrets aren't set (docs/releasing/signing.md, Chord Player)."
+            echo "::error::A Chord Player release must be VMP-signed: the EVS_ACCOUNT_NAME and EVS_PASSWD secrets aren't in the release environment (docs/releasing/signing.md, Chord Player)."
             exit 1
           else
             echo "mode=development" >> "$GITHUB_OUTPUT"

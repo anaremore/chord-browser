@@ -689,7 +689,7 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
 - **castLabs VMP signing** (EVS) runs in CI only when the `EVS_ACCOUNT_NAME` and `EVS_PASSWD` secrets exist, non-interactively (`--no-ask`, `EVS_NO_ASK`).
   - One step signs in (`account reauth`) and alone sees the password. EVS's token and signature caches live in the runner's temp folder, never in the workspace or an artifact, and go after the step.
   - The order is castLabs': on macOS before code signing (`afterPack`, before electron-builder's ad-hoc signature), on Windows after it (once electron-builder, which code-signs when it has a certificate, is done). Then `verify-pkg` checks it.
-  - CI's own runs sign only when CI is started by hand; `player-v*` tags always do, and fail without the secrets.
+  - Only `player-v*` tags sign, and fail without the secrets. The secrets belong in the protected `release` environment, where a tag's builds run after its reviewers approve (2026-10-25); CI's own runs keep the development signature.
 - **Without the secrets,** the Windows and macOS binaries stay byte for byte as castLabs built them, so ECS's development signature stays valid: no fuses, no edited `.exe` resources, no asar integrity resource. Such builds are for tests: real services refuse development clients (S14 §1). Linux has no VMP, so its fuses are always flipped.
 - **Code signing** stays off until the maintainer's certificates exist, as for Chord (§15.2): macOS gets an ad-hoc signature after VMP signing.
 - **Targets:** Windows x64, macOS x64 and arm64, Linux x64. **Linux arm64 isn't built:** S14 found no Widevine CDM there it could test (ECS 44.9.3 lists one, untried).

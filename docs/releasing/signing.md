@@ -158,11 +158,9 @@ If the Cloudsmith work ends up using your own GPG key, that key belongs in the s
 
 Chord Player (ARCHITECTURE.md §9, `apps/player`) runs on castLabs ECS. The streaming services play only in a build that castLabs' EVS service has **VMP-signed** for production. This is separate from code signing: a build can have either, both or neither.
 
-**Turns on with:** the secrets `EVS_ACCOUNT_NAME` and `EVS_PASSWD` (your castLabs EVS account, S14 §5). They're set (2026-10-25) as **repository** secrets.
-- `.github/workflows/player.yml` VMP-signs the Windows and macOS builds when they're there and signing is asked for:
-  - always for a `player-v*` tag (`player-release.yml`), which fails without them;
-  - when CI is started by hand (`gh workflow run ci.yml --ref <branch>`), unless with `-f vmp=false`, for a run that doesn't change the player;
-  - never on ordinary pushes and pull requests.
+**Turns on with:** the secrets `EVS_ACCOUNT_NAME` and `EVS_PASSWD` (your castLabs EVS account, S14 §5) in the protected `release` environment.
+- `.github/workflows/player.yml` VMP-signs the Windows and macOS builds of a `player-v*` tag (`player-release.yml`). Those builds run in the `release` environment, so they wait for its reviewers, and fail without the secrets.
+- Every other build (CI on pushes, pull requests and hand-started runs) keeps ECS's development signature: enough for the smoke test, not for the services.
 - **Linux has no VMP.**
 
 **How it runs:**
@@ -179,10 +177,10 @@ Chord Player (ARCHITECTURE.md §9, `apps/player`) runs on castLabs ECS. The stre
 **Without the secrets** (forks, pull requests), the Windows and macOS binaries stay as castLabs built them, so ECS's development signature stays valid. Only Widevine's test servers accept that, so such builds are for tests, not for release.
 
 **Your steps:**
-- **Move the secrets into the `release` environment** for releases.
-  - Add `player-v*` to its *Deployment branches and tags*, and run `player.yml`'s package job for tags in that environment, as `release.yml` does for Chord.
-  - Until then, every workflow on any branch can read the two secrets.
-  - CI's hand-started runs sign with them too; decide whether those should stop once releases sign from the environment.
+- **Move the secrets into the `release` environment** (they were repository secrets until 2026-10-25, which every workflow on any branch could read):
+  1. *Settings → Environments → release → Deployment branches and tags → Add deployment branch or tag rule*: ref type **Tag**, pattern `player-v*`. Without it, a player tag can't use the environment.
+  2. On the same page, *Environment secrets → Add environment secret*: `EVS_ACCOUNT_NAME`, then `EVS_PASSWD`, with your castLabs EVS sign-in. GitHub never shows a secret again, so type them from your castLabs account.
+  3. *Settings → Secrets and variables → Actions → Repository secrets*: delete `EVS_ACCOUNT_NAME` and `EVS_PASSWD`.
 - **Tokens expire about monthly.** CI signs in afresh each run (`reauth`). If castLabs changes how that works, *Sign in to castLabs EVS* is where it fails.
 - **Check a released player** with docs/testing/widevine-player.md, and its VMP status offline with `castlabs_evs.vmp verify-pkg`.
 - **A release** needs Chord's update key too (`CHORD_UPDATE_SIGNING_KEY` in `release`, and the public half in `apps/desktop/src/main/update-key.ts`). Chord installs a player only from a manifest that key signed.

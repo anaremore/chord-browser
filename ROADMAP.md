@@ -323,7 +323,7 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   - how it is installed and updated;
   - what signing in feels like without Chord's extensions;
   - Google-free mode (its CDM comes from Google).
-  - **Next: build it** (P2, started 2026-10-25). The maintainer's castLabs EVS account exists (2026-10-25). Production signing in CI needs two repository secrets the maintainer adds, `EVS_ACCOUNT_NAME` and `EVS_PASSWD`; code signing on Windows and macOS stays on the maintainer's track.
+  - **Next: build it** (P2, started 2026-10-25). The maintainer's castLabs EVS account exists (2026-10-25). Production signing needs the maintainer's two secrets, `EVS_ACCOUNT_NAME` and `EVS_PASSWD`, in the `release` environment (docs/releasing/signing.md, Chord Player); code signing on Windows and macOS stays on the maintainer's track.
   - **Built 2026-10-25: Chord Player** (ARCHITECTURE.md §9 and D4, DESIGN.md §7.14). What it does:
     - It's `apps/player`, on castLabs ECS 44.9.3+wvcus, in a window of its own with a bar in the chord's colors. On Windows the window joins Chord's taskbar button.
     - The DRM notice offers it first: *Install Chord Player (about N MB)*, its progress, then *Open in Chord Player*.

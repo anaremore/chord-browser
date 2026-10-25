@@ -19,7 +19,6 @@ jobs:
   build:
     uses: ./.github/workflows/player.yml
     with:
-      vmp: true
       release: true
     secrets: inherit
 
