@@ -416,3 +416,47 @@ test('page zoom is remembered for the site: in its other tabs, from the wheel, a
     await app.close();
   }
 });
+
+test('pages get what every Chromium browser has: chrome.app, and passkey autofill that never opens the system dialog by itself', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const page = await pageWhere(app, (url) => url === `${site.origin}/`);
+    const seen = await page.evaluate(async () => {
+      const w = window as unknown as {
+        chrome: { app: { isInstalled: boolean; getDetails(): unknown; getIsInstalled(): boolean; runningState(): string; installState(cb: (s: string) => void): void; InstallState: Record<string, string> } };
+      };
+      const app = w.chrome.app;
+      const state = await new Promise<string>((done) => app.installState(done));
+      const PKC = PublicKeyCredential as unknown as { isConditionalMediationAvailable(): Promise<boolean>; getClientCapabilities(): Promise<Record<string, boolean>> };
+      // An autofill request a site makes anyway waits (no dialog), and aborting it ends it.
+      const abort = new AbortController();
+      const request = navigator.credentials.get({ mediation: 'conditional', signal: abort.signal, publicKey: { challenge: new Uint8Array(16) } }).then(
+        () => 'resolved',
+        (e: unknown) => (e as { name: string }).name,
+      );
+      const early = await Promise.race([request, new Promise((d) => setTimeout(() => d('waiting'), 300))]);
+      abort.abort();
+      return {
+        app: [app.isInstalled, app.getDetails(), app.getIsInstalled(), app.runningState(), state, app.InstallState['NOT_INSTALLED']],
+        native: [app.getDetails, PKC.isConditionalMediationAvailable, PKC.getClientCapabilities, navigator.credentials.get].map((f) => String(f).includes('[native code]')),
+        conditional: await PKC.isConditionalMediationAvailable(),
+        caps: await PKC.getClientCapabilities().then((c) => [c['conditionalGet'], c['conditionalCreate']]),
+        early,
+        after: await request,
+      };
+    });
+    expect(seen).toEqual({
+      app: [false, null, false, 'cannot_run', 'not_installed', 'not_installed'],
+      native: [true, true, true, true],
+      conditional: false,
+      caps: [false, false],
+      early: 'waiting',
+      after: 'AbortError',
+    });
+    // Chord's own pages are left as they are.
+    expect(await shell.evaluate(() => 'app' in ((window as unknown as { chrome?: object }).chrome ?? {}))).toBe(false);
+  } finally {
+    await app.close();
+  }
+});

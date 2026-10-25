@@ -454,6 +454,8 @@ if (!app.requestSingleInstanceLock()) {
         screenShare.attach(ses);
         // A chord's session gets the blocker extension; a private window's, its request dispatcher.
         adBlocking.attach(profileId, ses, priv);
+        // Before any page's own scripts: what Electron lacks and every Chromium browser has (preload/page.ts).
+        ses.registerPreloadScript({ type: 'frame', id: 'chord-page', filePath: join(import.meta.dirname, '../preload/page.cjs') });
         const settings = browser?.store.state.settings ?? DEFAULT_SETTINGS;
         applySpellcheck(ses, settings.spellcheck, settings.googleFree);
         profiles.set(profileId, ses);
