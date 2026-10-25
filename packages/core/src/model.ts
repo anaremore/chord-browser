@@ -361,8 +361,10 @@ export interface Settings {
   archiveAfter: ArchiveAfter;
   /** Background tabs unused for an hour free their memory, and wake when shown again. */
   sleepTabs: boolean;
-  /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). */
+  /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). Off by default. */
   autoPip: boolean;
+  /** The one-time switch-off of `autoPip`, when its default became off (2026-10-25), is done: profiles from before get it once. */
+  autoPipDefaultOff: boolean;
   /** Hovering a pinned tab or folder shows a preview; pinned pages are kept as small pictures in `<userData>/Captures/` (DESIGN.md §7.6). */
   pagePreviews: boolean;
   /** Presenting mode collapses each window's sidebar, and docks it again when it ends (ARCHITECTURE.md §9). */
@@ -472,7 +474,8 @@ export const DEFAULT_SETTINGS: Settings = {
   onboarded: true,
   archiveAfter: '12h',
   sleepTabs: true,
-  autoPip: true,
+  autoPip: false,
+  autoPipDefaultOff: true,
   pagePreviews: true,
   presentingHidesSidebar: false,
   keepScreenshots: true,
@@ -529,6 +532,7 @@ export interface SettingsPatch {
   archiveAfter?: ArchiveAfter;
   sleepTabs?: boolean;
   autoPip?: boolean;
+  autoPipDefaultOff?: boolean;
   pagePreviews?: boolean;
   presentingHidesSidebar?: boolean;
   keepScreenshots?: boolean;

@@ -583,11 +583,15 @@ test('first run: name, colors and pins land in the real sidebar, and it never co
   }
 });
 
-test('a playing video pops out when you switch away, and comes home when you return', async () => {
+test('with auto picture-in-picture on, a playing video pops out when you switch away, and comes home when you return', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/video` });
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
+    // Off by default: turned on, as in Settings → General.
+    await runAction(shell, 'app.settings');
+    await (await pageWhere(app, isSettings)).evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ autoPip: true }));
+    await shell.bringToFront();
     const video = await pageWhere(app, (url) => url === `${site.origin}/video`);
     const pip = () => video.evaluate(() => document.pictureInPictureElement?.id ?? null);
     const paused = () => video.evaluate(() => document.querySelector('video')!.paused);

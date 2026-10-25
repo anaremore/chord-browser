@@ -755,6 +755,9 @@ if (!app.requestSingleInstanceLock()) {
       save: async (filename, bytes, mime) => void (await downloads.addFile(filename, bytes, mime, '', null)),
     });
     browser.duet = duet;
+    // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
+    // from before gets it switched off once, through the store, so it's saved like any other change.
+    if (!browser.store.state.settings.autoPipDefaultOff) browser.store.dispatch({ t: 'settings.set', settings: { autoPip: false, autoPipDefaultOff: true } });
     serveDuetImages((url) => duet!.serveImage(url));
     importer = new Importer({
       workerPath: join(import.meta.dirname, 'import.js'),

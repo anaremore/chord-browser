@@ -188,6 +188,8 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
     if (typeof saved[key] === 'boolean') settings[key] = saved[key];
   }
   if (typeof saved['autoPip'] === 'boolean') settings.autoPip = saved['autoPip'];
+  // A profile from before auto picture-in-picture's default became off: main switches it off once (index.ts).
+  settings.autoPipDefaultOff = saved['autoPipDefaultOff'] === true;
   if (saved['externalLinks'] === 'mini' || saved['externalLinks'] === 'tab') settings.externalLinks = saved['externalLinks'];
   settings.miniWindowSize = restoreMiniSize(saved['miniWindowSize']);
   const devtools = saved['devtools'];
