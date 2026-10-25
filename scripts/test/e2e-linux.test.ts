@@ -7,11 +7,12 @@ import { ELECTRON_VOLUME, STALE_MS, STORE_VOLUME, containerName, dockerRunArgs, 
 
 describe('parseArgs', () => {
   it('runs X11 by default and hands everything else to Playwright, in order', () => {
-    expect(parseArgs([])).toEqual({ display: 'x11', rebuild: false, help: false, playwright: [] });
+    expect(parseArgs([])).toEqual({ display: 'x11', rebuild: false, help: false, cpus: null, playwright: [] });
     expect(parseArgs(['launch.spec.ts', '-g', 'Peek', '--repeat-each', '3', '--workers=2'])).toEqual({
       display: 'x11',
       rebuild: false,
       help: false,
+      cpus: null,
       playwright: ['launch.spec.ts', '-g', 'Peek', '--repeat-each', '3', '--workers=2'],
     });
   });
@@ -20,6 +21,9 @@ describe('parseArgs', () => {
     expect(parseArgs(['-g', 'Peek', '--wayland', '--rebuild'])).toMatchObject({ display: 'wayland', rebuild: true, playwright: ['-g', 'Peek'] });
     expect(parseArgs(['--wayland', '--x11'])).toMatchObject({ display: 'x11' });
     expect(parseArgs(['--help'])).toMatchObject({ help: true });
+    expect(parseArgs(['perf.spec.ts', '--cpus', '4', '-g', 'memory'])).toMatchObject({ cpus: 4, playwright: ['perf.spec.ts', '-g', 'memory'] });
+    expect(parseArgs(['--cpus=2'])).toMatchObject({ cpus: 2, playwright: [] });
+    expect(parseArgs(['--cpus', 'four']).cpus).toBeNaN();
   });
 
   it('drops the -- pnpm passes along', () => {
@@ -105,6 +109,13 @@ describe('dockerRunArgs', () => {
     const withEnv = dockerRunArgs({ ...base, env: { CHORD_NO_MINIFY: '1', CHORD_PERF_ENFORCE: '', CHORD_E2E_SCREEN: '3200x2000x24', HOME: '/home/me', CHORD_USER_DATA: '/tmp/x' } });
     const envs = withEnv.flatMap((a, i) => (withEnv[i - 1] === '--env' ? [a] : []));
     expect(envs).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000', 'CHORD_NO_MINIFY=1', 'CHORD_E2E_SCREEN=3200x2000x24']);
+  });
+
+  it('runs on every CPU, or with --cpus on the first n only', () => {
+    expect(args).not.toContain('--cpuset-cpus');
+    const pinned = dockerRunArgs({ ...base, cpus: 4 });
+    expect(pinned[pinned.indexOf('--cpuset-cpus') + 1]).toBe('0-3');
+    expect(pinned.indexOf('--cpuset-cpus')).toBeLessThan(pinned.indexOf('chord-e2e-runner:abc'));
   });
 
   it('ends with the image, the container script and Playwright’s arguments, untouched', () => {

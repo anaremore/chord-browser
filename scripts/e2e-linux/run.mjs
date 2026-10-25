@@ -11,6 +11,7 @@
 // Every argument but these goes to Playwright:
 //   --wayland / --x11   which display server (x11 by default)
 //   --rebuild           rebuild the image from scratch (fresh Ubuntu packages)
+//   --cpus <n>          only n CPUs, as CI's runners have 4 (perf.spec.ts's baselines are taken so)
 // CHORD_E2E_WSL_DISTRO picks the WSL distro that has Docker (WSL's default otherwise).
 // CHORD_NO_MINIFY, CHORD_PERF_ENFORCE, CHORD_PERF_PROFILE and CHORD_E2E_SCREEN (Xvfb's screen, e.g. 3200x2000x24),
 // when set, are passed into the container (PASSED_ENV).
@@ -41,12 +42,16 @@ const WINDOWS_SPEC_PATH = /^[^-][^\\]*\\.*\.[cm]?[jt]sx?(:\d+)*$/;
 
 /** The runner's own options, and the arguments that go to Playwright. */
 export function parseArgs(argv) {
-  const options = { display: 'x11', rebuild: false, help: false, playwright: [] };
+  const options = { display: 'x11', rebuild: false, help: false, cpus: null, playwright: [] };
   // `pnpm test:e2e:linux -- -g x` hands the script the `--` too.
-  for (const arg of argv[0] === '--' ? argv.slice(1) : argv) {
+  const args = argv[0] === '--' ? argv.slice(1) : argv;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--wayland' || arg === '--x11') options.display = arg.slice(2);
     else if (arg === '--rebuild') options.rebuild = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
+    else if (arg === '--cpus') options.cpus = Number(args[++i]);
+    else if (arg.startsWith('--cpus=')) options.cpus = Number(arg.slice('--cpus='.length));
     else options.playwright.push(WINDOWS_SPEC_PATH.test(arg) ? arg.replaceAll('\\', '/') : arg);
   }
   return options;
@@ -92,7 +97,7 @@ export function staleRuns(inspected, now = Date.now()) {
 export const PASSED_ENV = ['CHORD_NO_MINIFY', 'CHORD_PERF_ENFORCE', 'CHORD_PERF_PROFILE', 'CHORD_E2E_SCREEN'];
 
 /** `docker run`'s arguments: the tar of the working tree arrives on stdin and is unpacked in /work. */
-export function dockerRunArgs({ name, image, display, root, startedAt, playwright, env = {} }) {
+export function dockerRunArgs({ name, image, display, root, startedAt, playwright, cpus = null, env = {} }) {
   return [
     'run',
     '--interactive',
@@ -103,6 +108,10 @@ export function dockerRunArgs({ name, image, display, root, startedAt, playwrigh
     '--init',
     // Chromium keeps its shared memory in /dev/shm; Docker's default 64 MB isn't enough for a browser.
     '--shm-size', '2g',
+    // --cpus: only the first n CPUs, as CI's runners have 4. How much of a launch runs side by side depends on
+    // how many CPUs Chromium may use (warm launches took 4.0 times bare Electron's on 24, 4.5 on 4); a CPU
+    // quota would slow it down without changing that.
+    ...(cpus ? ['--cpuset-cpus', `0-${cpus - 1}`] : []),
     // No core dumps. WSL 2 pipes every Linux crash, a container's included, to Windows' %TEMP%\wsl-crashes,
     // and a renderer's core can be gigabytes (two forced crashes filled a disk). The kernel ignores a
     // limit of 0 for a piped core_pattern; 1 is the value that makes it give up on the dump.
@@ -209,6 +218,7 @@ async function main() {
     console.log(readFileSync(import.meta.filename, 'utf8').split('\nimport ')[0].replace(/^#!.*\n/, '').replaceAll(/^\/\/ ?/gm, ''));
     return 0;
   }
+  if (options.cpus !== null && !(Number.isInteger(options.cpus) && options.cpus > 0)) fail('--cpus takes a whole number of CPUs, such as 4');
 
   // Every spawn has windowsHide: started without a console (an editor's task, a background shell),
   // each wsl.exe and git would flash a console window of its own.
@@ -321,9 +331,9 @@ async function main() {
     });
   }
 
-  const where = options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)';
+  const where = `${options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)'}${options.cpus ? `, ${options.cpus} CPUs` : ''}`;
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
-  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, env: process.env }), tar);
+  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpus: options.cpus, env: process.env }), tar);
 
   // Results, back where a local run leaves them. A folder the run didn't write isn't touched.
   const appInDocker = dockerPath(appDir);
