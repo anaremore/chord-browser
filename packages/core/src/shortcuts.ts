@@ -51,6 +51,7 @@ export type ActionId =
   | 'window.newPrivate'
   | 'window.close'
   | 'view.toggleSidebar'
+  | 'view.presenting'
   | 'view.find'
   | 'view.findNext'
   | 'view.findPrevious'
@@ -135,6 +136,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('window.newPrivate', 'New private window', 'reserved', ['Mod+Shift+N']),
   s('window.close', 'Close window', 'reserved', ['Mod+Shift+W']),
   s('view.toggleSidebar', 'Show or hide the sidebar', 'page-first', ['Mod+S']),
+  // For when another app (Zoom, Teams) shares Chord's window, which Chord can't tell. Page-first: web editors'
+  // command palettes (github.dev's Ctrl+Shift+P) keep it.
+  s('view.presenting', 'Presenting mode', 'page-first', ['Mod+Shift+P']),
   s('view.find', 'Find in page', 'page-first', ['Mod+F']),
   s('view.findNext', 'Find next', 'page-first', ['Mod+G'], ['F3']),
   s('view.findPrevious', 'Find previous', 'page-first', ['Mod+Shift+G'], ['Shift+F3']),

@@ -1,6 +1,6 @@
 # Chord Player: checking the services by hand
 
-Chord Player (ARCHITECTURE.md §9, §16 D4; DESIGN.md §7.13) plays the streaming services Chord's stock Electron can't, in a window of its own, on castLabs ECS.
+Chord Player (ARCHITECTURE.md §9, §16 D4; DESIGN.md §7.14) plays the streaming services Chord's stock Electron can't, in a window of its own, on castLabs ECS.
 
 What's tested automatically:
 - **E2E** (`apps/desktop/test/e2e/player.spec.ts`, Linux x64): Chord installs the player from a stand-in release with a test-signed manifest, opens a Widevine test page in it, sees it play, and controls it from the Now playing card. Also: a link handed back to Chord, Back to Chord, closing it, removing it in Settings, a corrupted download refused, and no player in private windows or Google-free mode.

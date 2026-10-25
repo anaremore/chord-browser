@@ -1,6 +1,6 @@
 /**
  * Chord Player in Chord (ARCHITECTURE.md §9, §16 D4; DESIGN.md §7.1, §7.10,
- * §7.13): what the DRM notice offers, installing and opening a service's page
+ * §7.14): what the DRM notice offers, installing and opening a service's page
  * in the player, the tab that stays behind ("Playing in Chord Player"), the
  * Now playing card's entry for it, links it hands back, and Settings.
  *

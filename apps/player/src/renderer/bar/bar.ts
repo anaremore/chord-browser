@@ -1,5 +1,5 @@
 /**
- * The bar's page (DESIGN.md §7.13): the service's name, Widevine's state
+ * The bar's page (DESIGN.md §7.14): the service's name, Widevine's state
  * while it's getting ready, and Back to Chord, in the chord's colors. Chord's
  * token variables and colors go in through the CSSOM (the page's CSP has no
  * inline styles). The main process checked every theme value before it got

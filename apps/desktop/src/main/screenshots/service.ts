@@ -82,6 +82,8 @@ export class Screenshots {
   private readonly memory = new Map<string, MemoryShots>();
   /** Each window's last screenshot, so its toast's Save works even when none are kept. */
   private readonly last = new Map<string, { entry: ScreenshotEntry; png: Buffer; thumb: Buffer; ask: Buffer | null }>();
+  /** A screenshot still being written, per window: the recent list waits for it, so the one just taken is in it. */
+  private readonly saving = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: ScreenshotDeps) {}
 
@@ -89,7 +91,7 @@ export class Screenshots {
   start(w: AppWindow): void {
     const target = w.captureTarget();
     if (!target) {
-      w.toast({ id: 'screenshot', message: 'There’s no page here to take a screenshot of' });
+      w.toast({ id: 'screenshot', whilePresenting: true, message: 'There’s no page here to take a screenshot of' });
       return;
     }
     this.capturing.set(w.id, { contents: target.contents, pane: target.rect });
@@ -141,7 +143,7 @@ export class Screenshots {
     }
     void pageCall(c.contents.executeJavaScriptInIsolatedWorld(SHOT_WORLD, [{ code: FORGET_SCRIPT }]), null);
     if (!shot) {
-      w.toast({ id: 'screenshot', message: 'Couldn’t take the screenshot' });
+      w.toast({ id: 'screenshot', whilePresenting: true, message: 'Couldn’t take the screenshot' });
       return;
     }
     const entry: ScreenshotEntry = {
@@ -156,10 +158,16 @@ export class Screenshots {
     };
     const copied = await copyPng(shot.png);
     this.last.set(w.id, { entry, png: shot.png, thumb: shot.thumb, ask: shot.ask });
-    if (this.deps.keep()) await this.store(w).add(entry, shot.png, shot.thumb, shot.ask ?? undefined);
+    if (this.deps.keep()) {
+      const saving = this.store(w).add(entry, shot.png, shot.thumb, shot.ask ?? undefined);
+      this.saving.set(w.id, saving);
+      await saving.finally(() => this.saving.get(w.id) === saving && this.saving.delete(w.id));
+    }
     // Saved either way: if the clipboard said no, Save is how to keep it.
     w.toast({
       id: 'screenshot',
+      // It answers what you just did, and shows nothing private: presenting doesn't hide it.
+      whilePresenting: true,
       message: copied ? 'Screenshot copied' : 'Screenshot taken, but couldn’t be copied',
       action: { label: 'Save', screenshot: { id: entry.id, do: 'save' } },
       ...(shot.ask && this.deps.duetReady(w, entry.url) ? { secondary: { label: 'Ask Duet', screenshot: { id: entry.id, do: 'duet' as const } } } : {}),
@@ -169,6 +177,7 @@ export class Screenshots {
   /** The window's recent screenshots, newest first, with thumbnails. */
   async list(w: AppWindow): Promise<ScreenshotItem[]> {
     if (!this.deps.keep()) return [];
+    await this.saving.get(w.id)?.catch(() => undefined);
     const store = this.store(w);
     return Promise.all(
       (await store.list()).map(async (entry) => {
@@ -198,11 +207,11 @@ export class Screenshots {
       return;
     }
     if (action === 'copy') {
-      w.toast({ id: 'screenshot', message: (await copyPng(png)) ? 'Screenshot copied' : 'Couldn’t copy the screenshot' });
+      w.toast({ id: 'screenshot', whilePresenting: true, message: (await copyPng(png)) ? 'Screenshot copied' : 'Couldn’t copy the screenshot' });
       return;
     }
     await this.deps.saveFile(screenshotFilename(new Date(entry.createdAt)), png, entry.url, w.isPrivate ? w.id : null);
-    w.toast({ id: 'screenshot', message: 'Screenshot saved to Downloads' });
+    w.toast({ id: 'screenshot', whilePresenting: true, message: 'Screenshot saved to Downloads' });
   }
 
   async clear(w: AppWindow): Promise<void> {

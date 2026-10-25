@@ -136,6 +136,9 @@ const ACTIONS: { action: ActionId; title: string; words: string; when?: (state: 
   { action: 'tab.previous', title: 'Previous tab', words: 'previous tab up' },
   { action: 'nav.hardReload', title: 'Reload, skipping the cache', words: 'hard reload refresh cache' },
   { action: 'view.toggleSidebar', title: 'Show or hide sidebar', words: 'toggle hide show collapse sidebar minimal' },
+  // One of the two (ARCHITECTURE.md §9): for when another app shares Chord's window, which Chord can't tell.
+  { action: 'view.presenting', title: 'Start presenting', words: 'presenting mode present share screen meeting call zoom teams hide history notifications private', when: (s) => s.presenting === null },
+  { action: 'view.presenting', title: 'Stop presenting', words: 'presenting mode present stop end turn off share screen meeting', when: (s) => s.presenting !== null },
   { action: 'view.zoomIn', title: 'Zoom in', words: 'zoom in bigger larger' },
   { action: 'view.zoomOut', title: 'Zoom out', words: 'zoom out smaller' },
   { action: 'view.zoomReset', title: 'Actual size', words: 'zoom reset actual size 100' },

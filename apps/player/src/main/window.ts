@@ -1,5 +1,5 @@
 /**
- * Chord Player's window (DESIGN.md §7.13; spike S14's approach (a)): a
+ * Chord Player's window (DESIGN.md §7.14; spike S14's approach (a)): a
  * frameless window of its own with a 40 px bar in the colors of the chord it
  * came from (the service's name and *Back to Chord*, the OS's own window
  * controls), and the service's page below. Moving, resizing, fullscreen,

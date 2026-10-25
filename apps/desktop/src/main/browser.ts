@@ -28,6 +28,7 @@ import {
   reopenableIndex,
   routeFor,
   routeHost,
+  shareableTabs,
   shownTabs,
   sortedChords,
   splitMembers,
@@ -49,7 +50,7 @@ import { THEME_VARS, type Theme } from '@chord/player-protocol';
 import { createChordTheme, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, webContents, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, webContents, type Session, type WebContents, type WebContentsView } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
@@ -236,6 +237,11 @@ export class Browser {
   private readonly routeOffered = new Set<string>();
   /** Windows opened for a page that's on its way (a mini window's): they don't open the command bar. */
   private readonly quietWindows = new Set<WindowId>();
+  /** Whether a page was sharing when Chord last looked: presenting mode starts and ends with that. */
+  private wasSharing = false;
+  /** Whether presenting mode was on when Chord last acted on it, and the windows whose sidebar it collapsed (Settings), to dock again. */
+  private presentingOn = false;
+  private readonly collapsedForPresenting = new Set<WindowId>();
   private readonly keyboard: KeyboardHandlers = {
     run: (action, contents) => this.run(action, contents),
     onControlUp: () => this.finishRecentCycle(),
@@ -262,7 +268,7 @@ export class Browser {
     });
     // Before any window: Chord's own views open at the interface size (DESIGN.md §10).
     setUiScale(this.store.state.settings.uiScale);
-    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
+    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action), this.store.state.presenting !== null);
     this.tabs = new TabManager({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
@@ -548,11 +554,19 @@ export class Browser {
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       nodeFor: (contents) => this.tabs.nodeFor(contents),
+      // A tab picked that fell asleep while the picker was up wakes to be shared.
+      contentsOf: (nodeId) => this.tabs.ensure(nodeId)?.webContents,
+      shareableTabs: (nodeId) => shareableTabs(this.store.state, nodeId, this.tabs.loaded()),
       onChange: () => this.syncPopovers(),
+      sharingChanged: () => this.syncSharing(),
+      repaint: (nodeId) => {
+        const view = this.tabs.get(nodeId);
+        if (view) for (const w of this.windows.values()) w.repaintParked(view);
+      },
       cantStop: (nodeId, host) => {
         const windowId = this.windowShowing(nodeId);
         const w = windowId ? this.windows.get(windowId) : undefined;
-        if (w) w.toast({ id: `share:${nodeId}`, message: `Chord can't stop this share. Use ${host}'s own Stop button.` });
+        if (w) w.toast({ id: `share:${nodeId}`, message: `Chord can't stop this share. Use ${host}'s own Stop button.`, whilePresenting: true });
       },
     });
     this.idle = new IdleKeeper(
@@ -582,6 +596,15 @@ export class Browser {
       if (change.patches.some((p) => p.path[0] === 'nodes' || p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'pagePreviews'))) {
         this.previews.sync();
         if (!change.state.settings.pagePreviews) for (const w of this.windows.values()) w.hidePreview();
+      }
+      // Presenting mode started or ended: what it hides, and the sidebars it collapses (after this change is out).
+      if (change.patches.some((p) => p.path[0] === 'presenting')) {
+        const presenting = change.state.presenting !== null;
+        queueMicrotask(() => this.presentingChanged(presenting));
+      }
+      // A window moved while a screen is shared: whether it's on the shared screen may have changed.
+      if (change.patches.some((p) => p.path[0] === 'windows') && this.options.screenShare.sources().some((s) => s.kind === 'screen')) {
+        queueMicrotask(() => this.syncSharedWindows());
       }
       // New keys apply at once: the router reads them live, and the menus are rebuilt to show and accept them.
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'shortcuts')) {
@@ -704,6 +727,7 @@ export class Browser {
       sidebarWidth: model.sidebarWidth,
       private: Boolean(model.private),
       onBounds: (bounds) => this.store.dispatch({ t: 'window.bounds', windowId, bounds }),
+      presenting: () => this.store.state.presenting !== null,
     });
     this.windows.set(windowId, w);
     this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));
@@ -753,8 +777,11 @@ export class Browser {
       this.extensions.forget(windowId);
       this.peeks.forget(windowId);
       this.quietWindows.delete(windowId);
+      this.collapsedForPresenting.delete(windowId);
       if (this.lastWindowId === windowId) this.lastWindowId = this.windows.keys().next().value ?? null;
       this.windowClosed(windowId);
+      // A shared tab waiting out of sight in this window goes to another one, so it keeps painting.
+      this.syncParking();
       // A mini window still open keeps Chord running; closing it then quits (window-all-closed).
       if (this.windows.size === 0 && this.minis.count === 0 && process.platform !== 'darwin') {
         this.idle.stop();
@@ -838,6 +865,7 @@ export class Browser {
           break;
         }
         case 'view.destroy':
+          this.shareLost(effect.nodeId);
           this.histories.forget(effect.nodeId);
           this.tabs.destroy(effect.nodeId);
           break;
@@ -953,6 +981,8 @@ export class Browser {
       const nodeId = showing.includes(contents) || contents.isDestroyed() ? undefined : this.tabs.nodeFor(contents);
       if (nodeId) this.previews.leaving(nodeId, contents);
     }
+    // A shared tab leaving the screen stays where it is, out of sight, rather than being taken off the window.
+    this.syncParking();
     w.showTabs(
       shown.map((p) => this.readers.viewFor(p.nodeId) ?? p.view),
       Math.max(0, shown.findIndex((p) => p.nodeId === active)),
@@ -972,6 +1002,117 @@ export class Browser {
       if (!before.includes(view.webContents)) this.autoPip.cameBack(nodeId);
     }
     this.syncPopover(w);
+  }
+
+  /**
+   * A share started or ended (ARCHITECTURE.md §9): presenting mode starts
+   * with the first and ends with the last, unless you turned it on yourself;
+   * windows being shared get their tinted edge; shared tabs keep painting.
+   */
+  private syncSharing(): void {
+    const sharing = this.options.screenShare.count > 0;
+    if (sharing !== this.wasSharing) {
+      this.wasSharing = sharing;
+      this.store.dispatch({ t: 'presenting.set', on: sharing, by: 'share' });
+    }
+    this.syncSharedWindows();
+    this.syncParking();
+  }
+
+  /**
+   * Which of Chord's windows a page is sharing: one shared as a window, and
+   * every window on a shared screen (all of them when the OS doesn't say
+   * which screen). What the system's picker chose, Chord can't know.
+   */
+  private syncSharedWindows(): void {
+    const windowIds: WindowId[] = [];
+    for (const source of this.options.screenShare.sources()) {
+      for (const w of this.windows.values()) {
+        if (w.window.isDestroyed()) continue;
+        const shared =
+          source.kind === 'window'
+            ? w.window.getMediaSourceId() === source.id
+            : source.kind === 'screen' && (source.displayId === '' || String(screen.getDisplayMatching(w.window.getBounds()).id) === source.displayId);
+        if (shared) windowIds.push(w.id);
+      }
+    }
+    this.store.dispatch({ t: 'sharing.windows', windowIds });
+  }
+
+  /**
+   * Shared tabs keep painting for the page capturing them (ARCHITECTURE.md
+   * §9): one that isn't on screen stays attached to the window that has it,
+   * out of sight, as the frame snapshot parks pages; a detached view has no
+   * compositor, and its stream would freeze. A shared tab no window has yet
+   * goes to the window of the page sharing it. One a window is about to show
+   * stays where it is until it's a pane there.
+   */
+  private syncParking(): void {
+    const state = this.store.state;
+    const wanted = new Map<WindowId, WebContentsView[]>();
+    const windows = [...this.windows.values()].filter((w) => !w.window.isDestroyed());
+    for (const { nodeId, by } of this.options.screenShare.sharedTabs()) {
+      const view = this.tabs.get(nodeId);
+      if (!view || view.webContents.isDestroyed()) continue;
+      const shownIn = Object.values(state.windows).find((m) => shownTabs(state, m.id).includes(nodeId))?.id;
+      const holder = windows.find((w) => w.holds(view))?.id;
+      // In reader view, the article stands in the frame and the page isn't on the window at all: it waits behind it.
+      const reading = Boolean(this.readers.viewFor(nodeId));
+      if (shownIn && !reading && shownIn !== holder) continue;
+      const home = holder ?? (reading ? shownIn : undefined) ?? by.map((id) => this.windowShowing(id)).find((id) => id && this.windows.has(id)) ?? this.windowShowing(nodeId);
+      if (home) wanted.set(home, [...(wanted.get(home) ?? []), view]);
+    }
+    for (const w of windows) w.park(wanted.get(w.id) ?? []);
+  }
+
+  /**
+   * Presenting mode started or ended. Starting, hover previews go and, with
+   * Settings → General's switch, sidebars collapse; ending, the sidebars it
+   * collapsed dock again. The rest (history, previews, notifications,
+   * toasts) is refused where it comes from, as long as it's on.
+   */
+  private presentingChanged(presenting: boolean): void {
+    // Only on and off count (a share's mode becoming yours changes nothing here), and only the latest.
+    if (presenting === this.presentingOn || presenting !== (this.store.state.presenting !== null)) return;
+    this.presentingOn = presenting;
+    this.applyAppMenu();
+    if (presenting) {
+      for (const w of this.windows.values()) w.hidePreview();
+      if (!this.store.state.settings.presentingHidesSidebar) return;
+      for (const w of this.windows.values()) {
+        if (this.store.state.windows[w.id]?.sidebar !== 'docked') continue;
+        this.collapsedForPresenting.add(w.id);
+        this.setSidebar(w, 'collapsed');
+      }
+      return;
+    }
+    for (const id of this.collapsedForPresenting) {
+      const w = this.windows.get(id);
+      if (w) this.setSidebar(w, 'docked');
+    }
+    this.collapsedForPresenting.clear();
+  }
+
+  /**
+   * A shared tab's page is about to close while the tab stays: it moved to
+   * other sign-ins (a page can't change session), so its share ends with it.
+   * The window says so, even while presenting: it's about the share itself.
+   */
+  private shareLost(nodeId: NodeId): void {
+    const contents = this.tabs.get(nodeId)?.webContents;
+    const node = this.store.state.nodes[nodeId];
+    const chord = node ? this.store.state.chords[node.chordId] : undefined;
+    if (!contents || contents.isDestroyed() || node?.kind !== 'tab' || !chord || !this.options.screenShare.isShared(nodeId)) return;
+    if (contents.session === this.options.profileSession(chord.profileId)) return;
+    // In the window of the page that was sharing it.
+    const by = this.options.screenShare.sharedTabs().find((t) => t.nodeId === nodeId)?.by ?? [];
+    const windowId = [...by, nodeId].map((id) => this.windowShowing(id)).find(Boolean);
+    const title = node.customTitle || node.title || hostOf(node.url) || 'the tab';
+    this.windows.get(windowId ?? '')?.toast({
+      id: `share-ended:${nodeId}`,
+      message: `Stopped sharing “${title}”: it moved to other sign-ins, so it loaded again`,
+      whilePresenting: true,
+    });
   }
 
   /** A page took the keyboard: if it's a pane of its window's split, that pane is now the focused one. */
@@ -1259,7 +1400,7 @@ export class Browser {
 
   /** Builds the menus from the current shortcuts and installs the app menu. */
   applyAppMenu(): void {
-    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action));
+    this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action), this.store.state.presenting !== null);
     Menu.setApplicationMenu(this.appMenu);
   }
 
@@ -1485,7 +1626,10 @@ export class Browser {
           .filter((c) => c.id !== tab.chordId)
           .map((c) => ({ id: c.id, label: `${c.icon}  ${c.name}`, signInsDiffer: c.profileId !== from?.profileId })),
         moveTo: (chordId) => this.moveToChord(w, nodeId, chordId),
-        stopSharing: state.live[nodeId]?.sharing ? () => void this.options.screenShare.stop(nodeId) : null,
+        stopSharing:
+          state.live[nodeId]?.sharing || state.live[nodeId]?.shared
+            ? { label: state.live[nodeId]?.sharing ? 'Stop sharing' : 'Stop sharing this tab', click: () => void this.options.screenShare.stop(nodeId) }
+            : null,
         // Reader view, for a page that reads as an article (or shows one now): the tab comes to the front for it.
         reader: state.live[nodeId]?.reader || state.live[nodeId]?.readable ? { on: Boolean(state.live[nodeId]?.reader) } : null,
         toggleReader: () => {
@@ -1627,11 +1771,14 @@ export class Browser {
     const from = tab.chordId;
     const place = { section: tab.section, parentId: tab.parentId, rank: tab.rank };
     const reloads = state.chords[from]?.profileId !== to.profileId;
+    // A shared tab's page closes with other sign-ins, and its share ends: the move's own toast says so (replacing shareLost's).
+    const unshared = reloads && this.options.screenShare.isShared(nodeId);
     this.store.dispatch({ t: 'node.moveToChord', nodeId, chordId });
     const offer = this.routeOffer(tab.url, chordId, w);
     w.toast({
-      id: `tab-moved:${nodeId}`,
-      message: reloads ? `Moved to ${to.name} (sign-ins differ, so it reloaded)` : `Moved to ${to.name}`,
+      id: unshared ? `share-ended:${nodeId}` : `tab-moved:${nodeId}`,
+      message: unshared ? `Moved to ${to.name} (sign-ins differ, so it reloaded and is no longer shared)` : reloads ? `Moved to ${to.name} (sign-ins differ, so it reloaded)` : `Moved to ${to.name}`,
+      ...(unshared ? { whilePresenting: true } : {}),
       action: { label: 'Undo', command: { t: 'node.moveToChord', nodeId, chordId: from, place } },
       // The second move of a site's page to this chord: offer a route on the same toast.
       ...(offer ? { also: { message: `Always open ${offer} here?`, action: { label: 'Always', command: { t: 'linkRoute.set', host: offer, chordId } } } } : {}),
@@ -1899,6 +2046,10 @@ export class Browser {
         return true;
       case 'view.toggleSidebar':
         this.setSidebar(w);
+        return true;
+      case 'view.presenting':
+        // The switch (and its shortcut), for when another app shares Chord's window: Chord can't tell.
+        this.store.dispatch({ t: 'presenting.set', on: this.store.state.presenting === null, by: 'you' });
         return true;
       case 'view.zoomIn':
       case 'view.zoomOut':

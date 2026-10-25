@@ -1,5 +1,5 @@
 /**
- * Settings → General → Chord Player (ARCHITECTURE.md §9; DESIGN.md §7.13):
+ * Settings → General → Chord Player (ARCHITECTURE.md §9; DESIGN.md §7.14):
  * whether it's installed, which version and ECS build, an update waiting to
  * start, and Remove (it and its sign-ins), which asks once more inline.
  * Nothing shows where it can't run and isn't installed.

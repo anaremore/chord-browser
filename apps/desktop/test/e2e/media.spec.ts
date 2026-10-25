@@ -360,6 +360,9 @@ test('two videos with auto picture-in-picture on (the default): the first left p
     await leavePlaying(app, shell, `${site.origin}/movie`);
     await expect.poll(() => pipOf('/movie')).toBe('v');
     await expect(card(shell).getByRole('button', { name: 'Back to the tab', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    // Longer than a page call may take (2 s): Chord still knows which video it popped out (it once forgot).
+    await shell.waitForTimeout(2500);
+    await expect(card(shell).getByRole('button', { name: 'Back to the tab', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
     // The second stays in its tab (there's one picture-in-picture window): newest in full, the first as a row, still out.
     await leavePlaying(app, shell, `${site.origin}/film`);

@@ -1,5 +1,5 @@
 /**
- * Chord Player (ARCHITECTURE.md §9; DESIGN.md §7.1, §7.10, §7.13), Chord
+ * Chord Player (ARCHITECTURE.md §9; DESIGN.md §7.1, §7.10, §7.14), Chord
  * driving the real player: packaged on castLabs ECS for Linux x64 exactly as
  * CI packages it (apps/player/scripts/package.mjs), served from a local
  * stand-in for GitHub Releases with its manifest signed by a test key, as

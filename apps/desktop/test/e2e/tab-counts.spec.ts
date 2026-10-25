@@ -101,6 +101,8 @@ test('a page’s count shows on its tab and adds up on Chord’s icon; frames do
     await expect.poll(() => appBadge(app)).toBe(250);
 
     // Hidden for its site (the tab's menu): gone from the tab and the icon; listed in Settings, to show again.
+    // On screen meanwhile: with its count hidden, a tab out of sight sleeps like any other.
+    await mailRow.click();
     await dispatch(shell, { t: 'tabCounts.site', site: mailUrl, off: true });
     await expect(mailRow.locator('[data-count]')).toHaveCount(0);
     await expect.poll(() => appBadge(app)).toBe(null);
@@ -109,8 +111,7 @@ test('a page’s count shows on its tab and adds up on Chord’s icon; frames do
     await shell.bringToFront();
     await expect(mailRow.locator('[data-count]')).toHaveText('99+');
 
-    // A closed folder adds up what's inside it (Mail, put on screen, goes into a new one).
-    await mailRow.click();
+    // A closed folder adds up what's inside it (Mail, the tab on screen, goes into a new one).
     await runAction(shell, 'folder.new');
     const name = shell.getByRole('textbox', { name: 'Folder name' });
     await name.fill('Messages');

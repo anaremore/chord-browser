@@ -13,7 +13,7 @@
  * sidebar's trees, so its buttons are ordinary Tab stops, each named for what
  * it does.
  *
- * Chord Player (DESIGN.md §7.13) shows as the tab it plays for would, with
+ * Chord Player (DESIGN.md §7.14) shows as the tab it plays for would, with
  * *Back to the player* instead of *Go to tab*, and the player's own mute.
  */
 import { cardMedia, type State, type TabNode } from '@chord/core';

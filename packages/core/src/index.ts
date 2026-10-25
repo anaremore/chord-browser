@@ -18,6 +18,7 @@ export * from './safe-browsing';
 export * from './screenshot';
 export * from './seed';
 export * from './select';
+export * from './sharing';
 export * from './shortcuts';
 export * from './split';
 export * from './tab-counts';
