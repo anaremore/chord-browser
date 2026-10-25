@@ -437,7 +437,18 @@ test('a private window’s tabs are offered only to its own pages, and its pages
     await tabs.getByRole('option', { name: /Slides/ }).click();
     await picker(privatePopover).getByRole('button', { name: 'Share', exact: true }).click();
     await expect.poll(() => shareState(call)).toBe('sharing');
-    await expect.poll(() => showing(call), { timeout: 15_000 }).toBe('red');
+    await expect.poll(() => liveOf(privateShell, 'Slides')).toMatchObject({ shared: true });
+    await expect(row(privateShell, 'Slides')).toHaveAccessibleDescription('Being shared');
+    // Its picture reaching the page is checked in normal windows above. Here, on CI's headless displays, it
+    // sometimes never came (2 runs in about 15, never locally): noted with what Chord had, rather than failing.
+    const picture = await expect
+      .poll(() => showing(call), { timeout: 15_000 })
+      .toBe('red')
+      .then(
+        () => null,
+        async () => ({ saw: await showing(call), view: await viewOf(app, `${site.origin}/slides`), live: await liveOf(privateShell, 'Slides') }),
+      );
+    if (picture) test.info().annotations.push({ type: 'private window picture', description: JSON.stringify(picture) });
   } finally {
     await app.close();
   }
