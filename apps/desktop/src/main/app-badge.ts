@@ -22,7 +22,7 @@ export function watchAppBadge(store: Store): void {
   let scheduled = false;
   const apply = () => {
     scheduled = false;
-    const count = appCount(store.state.live);
+    const count = appCount(store.state);
     const windowCount = Object.keys(store.state.windows).length;
     // On Windows the count is drawn on each window's button, so a new window needs it again.
     if (count === shown && windowCount === windows) return;

@@ -7,7 +7,7 @@
  * every count with Settings → General.
  */
 import { hostOf, routeHost } from './links';
-import type { ChordId, LiveTab, NodeId, State, TabCountsSettings } from './model';
+import type { ChordId, NodeId, State, TabCountsSettings } from './model';
 
 /** What a tab shows: a number, a dot (the page set a badge with no number), or nothing. */
 export type TabCount = number | 'dot' | null;
@@ -79,9 +79,21 @@ export function unreadWords(count: TabCount): string {
   return count === 'dot' ? 'unread' : `${count > COUNT_SHOWN_MAX ? `more than ${COUNT_SHOWN_MAX}` : count} unread`;
 }
 
-/** The app icon's count: every tab's, as shown. */
-export function appCount(live: Readonly<Record<string, Pick<LiveTab, 'badge'>>>): TabCount {
-  return sumCounts(Object.values(live).map((l) => l.badge));
+/**
+ * The app icon's count: every site's, added up. A site open in several tabs
+ * (Telegram twice) counts once, its highest, or two tabs of one inbox would
+ * double its unread messages.
+ */
+export function appCount(state: Pick<State, 'live' | 'nodes'>): TabCount {
+  const bySite = new Map<string, TabCount>();
+  for (const [id, live] of Object.entries(state.live)) {
+    if (live.badge === null) continue;
+    const node = state.nodes[id];
+    const site = (node?.kind === 'tab' && countSite(node.url)) || id;
+    const was = bySite.get(site) ?? null;
+    bySite.set(site, was === null || was === 'dot' ? live.badge : live.badge === 'dot' ? was : Math.max(was, live.badge));
+  }
+  return sumCounts(bySite.values());
 }
 
 /** The counts of the tabs inside a folder or a split, any depth down: what it shows closed. */

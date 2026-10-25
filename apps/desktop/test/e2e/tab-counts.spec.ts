@@ -28,8 +28,15 @@ test.beforeAll(async () => {
     '/framed': '<title>Framed</title><iframe src="/inner"></iframe>',
     '/inner': '<script>navigator.setAppBadge(9)</script>',
     '/plain': '<title>Plain</title>',
+    // A site with a service worker, which sets the count it's sent (a push, in real life).
+    '/app': '<title>App</title><script>navigator.serviceWorker.register("/sw.js")</script>',
+    '/app/other': '<title>Other</title>',
   };
+  const worker =
+    'self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));' +
+    'self.addEventListener("message", (event) => event.waitUntil(event.data === "clear" ? self.navigator.clearAppBadge() : self.navigator.setAppBadge(event.data)));';
   server = createServer((req, res) => {
+    if (req.url === '/sw.js') return void res.writeHead(200, { 'content-type': 'text/javascript' }).end(worker);
     const body = pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' }).end(body ?? 'not found');
   });
@@ -142,6 +149,44 @@ test('a page’s count shows on its tab and adds up on Chord’s icon; frames do
     // Off in Settings: no counts anywhere, Chord's icon included.
     await setSettings(app, shell, { tabCounts: { enabled: false } });
     await expect(chords.getByRole('tab', { name: 'Personal', exact: true })).toBeVisible();
+    await expect.poll(() => appBadge(app)).toBe(null);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a site’s service worker gives its count to the site’s tabs; the page’s own comes first, and Chord’s icon counts the site once', async () => {
+  const url = `http://127.0.0.1:${port}/app`;
+  const app = await launch({ CHORD_HOME_URL: url, CHORD_E2E_HOOKS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const today = shell.getByRole('tree', { name: 'Today' });
+    const page = await pageWhere(app, (u) => u === url);
+    const toWorker = (value: number | 'clear') =>
+      page.evaluate(async (v) => {
+        const registration = await navigator.serviceWorker.ready;
+        registration.active!.postMessage(v);
+      }, value);
+    const row = today.getByRole('treeitem', { name: 'App', exact: true });
+
+    await toWorker(7);
+    await expect(row.locator('[data-count]')).toHaveText('7');
+    await expect.poll(() => appBadge(app)).toBe(7);
+    // The page's own count comes first; cleared, the worker's shows again.
+    await page.evaluate(() => navigator.setAppBadge(2));
+    await expect(row.locator('[data-count]')).toHaveText('2');
+    await page.evaluate(() => navigator.clearAppBadge());
+    await expect(row.locator('[data-count]')).toHaveText('7');
+
+    // Another of the site's tabs shows it too; Chord's icon counts the site once.
+    const { windowId } = await where(shell);
+    await dispatch(shell, { t: 'tab.open', windowId, url: `http://127.0.0.1:${port}/app/other`, background: false });
+    await expect(today.getByRole('treeitem', { name: 'Other', exact: true }).locator('[data-count]')).toHaveText('7');
+    await expect.poll(() => appBadge(app)).toBe(7);
+
+    // The worker clears it: gone from both, and from the icon.
+    await toWorker('clear');
+    await expect(today.locator('[data-count]')).toHaveCount(0);
     await expect.poll(() => appBadge(app)).toBe(null);
   } finally {
     await app.close();
