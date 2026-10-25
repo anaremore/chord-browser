@@ -947,6 +947,22 @@ export const invokeChannels = {
   /** The command bar's history and learned picks for what was typed (in the window's chord). */
   'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
   /** Search suggestions while typing, from the chosen engine (or a keyword's engine); empty when they're off. */
+  /** "Search … for this image" in the command bar: the window opens the engine's upload (main/image-search.ts). */
+  'search:image': {
+    roles: ['overlay'],
+    request: z.strictObject({
+      engine: z.enum(['google', 'bing']),
+      where: z.enum(['current', 'front', 'background']),
+      image: z.strictObject({
+        bytes: z.instanceof(Uint8Array).refine((b) => b.byteLength > 0 && b.byteLength <= 4_000_000),
+        width: z.number().int().positive().max(4096),
+        height: z.number().int().positive().max(4096),
+        originalWidth: z.number().int().positive().max(100_000),
+        originalHeight: z.number().int().positive().max(100_000),
+      }),
+    }),
+    response: z.void(),
+  },
   'search:suggest': {
     roles: ['overlay'],
     request: z.strictObject({ query: z.string().max(200), engine: z.enum(engineIds).optional() }),
@@ -1468,6 +1484,8 @@ export interface OverlayApi {
   search: {
     /** What the engine suggests for the text; a newer call cancels an older one. */
     suggest(query: string, engine?: SearchEngineId): Promise<string[]>;
+    /** Search by a pasted image, in a new tab (front or behind) or the current one. */
+    image(engine: 'google' | 'bing', image: { bytes: Uint8Array<ArrayBuffer>; width: number; height: number; originalWidth: number; originalHeight: number }, where: 'current' | 'front' | 'background'): Promise<void>;
   };
   archive: { restore(archiveId: string): Promise<void> };
   /** Peek's chrome: its page's title and address as they change, and "Open in Today". */

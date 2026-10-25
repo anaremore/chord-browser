@@ -233,6 +233,7 @@ function registerIpc(): void {
     // Presenting mode may have started while chord-data looked.
     return presenting() ? nothing : found;
   });
+  handle('search:image', ({ engine, image, where }, sender) => browser!.searchByImage(senderWindow(sender), engine, image, where));
   handle('search:suggest', ({ query, engine }, sender) => suggestions.suggest(sender.id, query, engine));
   handle('history:choose', ({ text, destination, address }, sender) => {
     const chordId = activeChordOf(sender);

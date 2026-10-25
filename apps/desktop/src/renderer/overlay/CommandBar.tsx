@@ -7,9 +7,9 @@
  * keyword or `@filter` followed by Tab narrows the bar to a chip, and the
  * engine's suggestions slot in under the local rows when they arrive.
  */
-import { keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
+import { imageSearchFor, keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
 import type { CaptureStart, HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
-import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, PanelLeft, Pin, Presentation, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, PanelLeft, Pin, Presentation, Printer, RotateCcw, RotateCw, ScanSearch, Search, Settings, SquareTerminal, TextSearch, Trash2, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
@@ -23,6 +23,7 @@ import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 import { CaptureLayer } from './Capture';
+import { imageIn, prepareImage, type PastedImage } from './image';
 import { DownloadsPanel } from './DownloadsPanel';
 import { ExtensionsPanel } from './ExtensionsPanel';
 import { PeekChrome } from './Peek';
@@ -119,6 +120,7 @@ const EDGE = 8;
 const SUGGEST_DELAY_MS = 120;
 
 function hintFor(result: Result, mode: Session['mode']): { text: string; key: string } {
+  if (result.kind === 'imageSearch') return { text: 'Search', key: '↵' };
   if (result.kind === 'scope') return { text: result.scope.kind === 'keyword' ? `Search ${scopeLabel(result.scope).name}` : 'Show only these', key: result.scope.kind === 'keyword' ? 'Tab' : '↵' };
   if (mode === 'split') return { text: 'Open in split', key: '↵' };
   if (result.kind === 'tab') return { text: 'Switch to tab', key: '↵' };
@@ -174,6 +176,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
         ...(event.capture ? { capture: event.capture } : {}),
       });
       setQuery(event.mode === 'edit' ? event.url : '');
+      setImage(null);
       setSelected(0);
       setScope(null);
       setMayComplete(false);
@@ -320,16 +323,32 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     [suggested, typedNow, engineForSuggestions, state.settings.searchSuggestions],
   );
 
+  // A pasted or dropped image (DESIGN.md §7.3): its own rows instead of the rest.
+  const [image, setImage] = useState<PastedImage | null>(null);
   // Presenting mode (ARCHITECTURE.md §9): main answers nothing from history, the archive or Duet while it's on;
   // a reply that left before it started isn't shown either.
   const presenting = state.presenting !== null;
-  const results = useMemo(
+  const textResults = useMemo(
     () =>
       isCommandBar(session)
         ? buildResults(query, state, windowId, session.mode, presenting ? null : history, Date.now(), { scope, suggestions, duetHits: presenting ? [] : duetHits })
         : [],
     [session, query, state, windowId, history, scope, suggestions, duetHits, presenting],
   );
+  const imageEngine = imageSearchFor(state.settings.searchEngine, state.settings.googleFree);
+  const results = useMemo<Result[]>(
+    () => (image ? [{ kind: 'imageSearch', key: 'image-search', title: `Search ${imageEngine.label} for this image`, engine: imageEngine.engine }] : textResults),
+    [image, imageEngine.label, imageEngine.engine, textResults],
+  );
+  const takeImage = (file: File | null) => {
+    if (!file) return false;
+    void prepareImage(file).then((ready) => {
+      if (!ready) return;
+      setImage(ready);
+      setSelected(0);
+    });
+    return true;
+  };
   const current = Math.min(selected, Math.max(0, results.length - 1));
   // Inline autocomplete: only the leading row completes, and only while it's the one selected.
   const completion = mayComplete && !scope && current === 0 ? completionFor(query, results[0]) : '';
@@ -385,6 +404,15 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
       enterScope(result.scope);
       return;
     }
+    if (result.kind === 'imageSearch') {
+      if (image) {
+        const at = session?.mode === 'edit' && where === 'here' ? 'current' : where === 'background' ? 'background' : 'front';
+        const { preview: _preview, ...upload } = image;
+        void api.search.image(result.engine, upload, at);
+      }
+      close();
+      return;
+    }
     const dispatch = api.state.dispatch;
     const activeId = win ? win.activeTab[win.activeChordId] : null;
     // Learn the pick for what was typed (Crest's learned picks), and count a typed visit.
@@ -428,6 +456,12 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
     const caretAtEnd = input.selectionStart === input.value.length || (completion !== '' && input.selectionStart === query.length);
+    // Backspace on an empty field takes the image out.
+    if (event.key === 'Backspace' && image && input.value === '') {
+      event.preventDefault();
+      setImage(null);
+      return;
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
       dismiss();
@@ -526,7 +560,9 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   const entrance = anchored ? { opacity: 0, y: -4 } : { opacity: 0, scale: 0.97, y: -8 };
   const InputIcon = query && results[0]?.kind === 'open' && !results[0].search ? Globe : Search;
   const label = scope ? scopeLabel(scope) : null;
-  const placeholder = label?.placeholder ?? (session.mode === 'split' ? 'Split with a tab or a page' : 'Search or enter address');
+  const placeholder = image
+    ? 'Press Enter to search by this image'
+    : (label?.placeholder ?? (session.mode === 'split' ? 'Split with a tab or a page' : 'Search or enter address'));
   const ScopeIcon = scope ? scopeIcon(scope) : null;
 
   return (
@@ -552,7 +588,16 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
             aria-modal={session.warm ? undefined : true}
             aria-label={anchored ? 'Edit address' : session.mode === 'split' ? 'Split with' : 'New tab'}
           >
-            <div className={styles.inputRow}>
+            <div
+              className={styles.inputRow}
+              // An image dropped on the field is searched by, as one pasted is.
+              onDragOver={(e) => {
+                if ([...e.dataTransfer.items].some((item) => item.kind === 'file' && item.type.startsWith('image/'))) e.preventDefault();
+              }}
+              onDrop={(e) => {
+                if (takeImage(imageIn(e.dataTransfer))) e.preventDefault();
+              }}
+            >
               {scope && label && ScopeIcon ? (
                 <motion.span
                   className={styles.scopeChip}
@@ -566,6 +611,21 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                 </motion.span>
               ) : (
                 <InputIcon className={styles.inputIcon} size={anchored ? 14 : 18} strokeWidth={1.75} aria-hidden />
+              )}
+              {image && (
+                <span className={styles.imageChip} data-testid="image-chip">
+                  <img className={styles.imageThumb} src={image.preview} alt="Pasted image" />
+                  <button
+                    type="button"
+                    className={styles.imageRemove}
+                    aria-label="Remove image"
+                    title="Remove image"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setImage(null)}
+                  >
+                    <X size={12} strokeWidth={2} aria-hidden />
+                  </button>
+                </span>
               )}
               <input
                 ref={inputRef}
@@ -599,6 +659,9 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                   setSelected(0);
                 }}
                 onKeyDown={onKeyDown}
+                onPaste={(e) => {
+                  if (takeImage(imageIn(e.clipboardData))) e.preventDefault();
+                }}
               />
             </div>
             {results.length > 0 && (
@@ -607,6 +670,8 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                   const Icon =
                     result.kind === 'action'
                       ? (ACTION_ICONS[result.action] ?? CornerDownLeft)
+                      : result.kind === 'imageSearch'
+                        ? ScanSearch
                       : result.kind === 'history'
                         ? History
                         : result.kind === 'archive'
