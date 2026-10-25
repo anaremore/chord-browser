@@ -99,7 +99,9 @@ export const EFFECT_PRESETS: readonly EffectPreset[] = [
     id: 'no-sticky',
     name: 'No sticky bars',
     description: 'Headers scroll away, and cookie banners stay hidden.',
-    css: `header, [role="banner"], body > nav, [class*="sticky" i]:not(html, body), [class*="fixed-top" i] { position: relative; top: auto; }\n${CONSENT.join(',\n')} { display: none; }\nhtml, body { overflow-y: auto; }`,
+    // Nothing on html or body: overflow there makes the body a scroll container of its own, which breaks sites' scrolling
+    // and doubled a heavy page's layout in effects.spec.ts.
+    css: `header, [role="banner"], body > nav, [class*="sticky" i]:not(html, body), [class*="fixed-top" i] { position: relative; top: auto; }\n${CONSENT.join(',\n')} { display: none; }`,
   },
 ];
 
