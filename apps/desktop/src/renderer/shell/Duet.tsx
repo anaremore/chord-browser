@@ -48,17 +48,23 @@ const host = (url: string) => {
 
 /* ---------- Text: a small, safe Markdown subset, no HTML, no images ---------- */
 
-/** Renders a citation marker as a pill, in place (see Reply); `quoted`: it stands in for words of the sentence. */
-type Cite = (ref: string, quote: string, quoted: boolean) => ReactNode;
+/** What Reply puts in place of a reply's marks: citations as pills, and tabs mentioned by handle as their names. */
+interface Marks {
+  /** `quoted`: the citation stands in for words of the sentence. */
+  cite(ref: string, quote: string, quoted: boolean): ReactNode;
+  /** `whole`: the words as written ("tab t1"), kept for a handle Chord doesn't know. */
+  tab(ref: string, whole: string): ReactNode;
+}
 
-function Inline({ text, onLink, cite }: { text: string; onLink(url: string): void; cite: Cite }) {
+function Inline({ text, onLink, marks }: { text: string; onLink(url: string): void; marks: Marks }) {
   const parts: ReactNode[] = [];
-  const pattern = /\[\[(t\d{1,4}):"([^"\]\n]{1,300})"\]\]|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|!?\[([^\]\n]{0,200})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
+  const pattern = /\[\[(t\d{1,4}):"([^"\]\n]{1,300})"\]\]|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|!?\[([^\]\n]{0,200})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])|(?<![\w./-])((?:[Tt]ab )?(t\d{1,3}))(?![\w-]|\.\w)/g;
   let last = 0;
   for (const m of text.matchAll(pattern)) {
     if (m.index > last) parts.push(text.slice(last, m.index));
     const key = `${m.index}`;
-    if (m[1]) parts.push(<Fragment key={key}>{cite(m[1], m[2]!, citationIsQuoted(text.slice(0, m.index)))}</Fragment>);
+    if (m[1]) parts.push(<Fragment key={key}>{marks.cite(m[1], m[2]!, citationIsQuoted(text.slice(0, m.index)))}</Fragment>);
+    else if (m[10]) parts.push(<Fragment key={key}>{marks.tab(m[10], m[9]!)}</Fragment>);
     else if (m[3]) parts.push(<code key={key}>{m[3].slice(1, -1)}</code>);
     else if (m[4]) parts.push(<strong key={key}>{m[4].slice(2, -2)}</strong>);
     else if (m[5]) parts.push(<em key={key}>{m[5].slice(1, -1)}</em>);
@@ -78,7 +84,7 @@ function Inline({ text, onLink, cite }: { text: string; onLink(url: string): voi
   return <>{parts}</>;
 }
 
-function Markdown({ text, onLink, cite }: { text: string; onLink(url: string): void; cite: Cite }) {
+function Markdown({ text, onLink, marks }: { text: string; onLink(url: string): void; marks: Marks }) {
   const blocks: ReactNode[] = [];
   const lines = text.split('\n');
   let i = 0;
@@ -96,7 +102,7 @@ function Markdown({ text, onLink, cite }: { text: string; onLink(url: string): v
     if (heading) {
       blocks.push(
         <p key={i} className={styles.heading}>
-          <Inline text={heading[2]!} onLink={onLink} cite={cite} />
+          <Inline text={heading[2]!} onLink={onLink} marks={marks} />
         </p>,
       );
       i++;
@@ -111,7 +117,7 @@ function Markdown({ text, onLink, cite }: { text: string; onLink(url: string): v
         <List key={i}>
           {items.map((item, n) => (
             <li key={n}>
-              <Inline text={item} onLink={onLink} cite={cite} />
+              <Inline text={item} onLink={onLink} marks={marks} />
             </li>
           ))}
         </List>,
@@ -126,7 +132,7 @@ function Markdown({ text, onLink, cite }: { text: string; onLink(url: string): v
     while (i < lines.length && lines[i]!.trim() && !lines[i]!.startsWith('```') && !/^(#{1,4})\s/.test(lines[i]!) && !/^\s*([-*]|\d+\.)\s+/.test(lines[i]!)) para.push(lines[i++]!);
     blocks.push(
       <p key={i}>
-        <Inline text={para.join('\n')} onLink={onLink} cite={cite} />
+        <Inline text={para.join('\n')} onLink={onLink} marks={marks} />
       </p>,
     );
   }
@@ -134,12 +140,12 @@ function Markdown({ text, onLink, cite }: { text: string; onLink(url: string): v
 }
 
 /** A reply: Markdown with numbered citation pills, in the sentence where Duet quoted a tab. */
-function Reply({ message, onLink }: { message: DuetMessage; onLink(url: string): void }) {
+function Reply({ message, onLink, names }: { message: DuetMessage; onLink(url: string): void; names: DuetView['tabNames'] }) {
   if (message.body.role !== 'assistant') return null;
   const numbers = new Map<string, number>();
   for (const seg of splitCitations(message.body.text)) if (seg.kind === 'citation') numbers.set(`${seg.ref}:${seg.quote}`, seg.n);
   const citations = message.body.citations;
-  const cite: Cite = (ref, quote, quoted) => {
+  const cite: Marks['cite'] = (ref, quote, quoted) => {
     const n = numbers.get(`${ref}:${quote}`);
     if (n === undefined) return null;
     // A PDF's citation names its page (found in the text Duet read).
@@ -164,9 +170,19 @@ function Reply({ message, onLink }: { message: DuetMessage; onLink(url: string):
       pill
     );
   };
+  // A tab named by its handle ("tab t1"), which Duet is asked not to write: its title, which shows the tab.
+  const tab: Marks['tab'] = (ref, whole) => {
+    const name = names[ref];
+    if (!name) return whole;
+    return (
+      <button type="button" className={styles.tabName} title={name.url} aria-label={`Tab: ${name.title}`} onClick={() => act({ do: 'showTab', ref })}>
+        {name.title}
+      </button>
+    );
+  };
   return (
     <div className={styles.reply}>
-      <Markdown text={message.body.text} onLink={onLink} cite={cite} />
+      <Markdown text={message.body.text} onLink={onLink} marks={{ cite, tab }} />
     </div>
   );
 }
@@ -262,7 +278,7 @@ function Approval({ message }: { message: DuetMessage }) {
   );
 }
 
-function MessageView({ message, last, onLink, onEdit, view }: { message: DuetMessage; last: boolean; onLink(url: string): void; onEdit(text: string): void; view: DuetView }) {
+function MessageView({ message, last, onLink, onEdit, view }: { message: DuetMessage; last: boolean; onLink(url: string): void; onEdit(message: DuetMessage): void; view: DuetView }) {
   const [copied, setCopied] = useState(false);
   const copy = (text: string) => {
     void navigator.clipboard.writeText(text);
@@ -275,6 +291,13 @@ function MessageView({ message, last, onLink, onEdit, view }: { message: DuetMes
   if (body.role === 'user') {
     return (
       <div className={styles.userWrap}>
+        {body.images && body.images.length > 0 && (
+          <div className={styles.userImages}>
+            {body.images.map((image) =>
+              view.imageThumbs[image.id] ? <img key={image.id} className={styles.userImage} src={view.imageThumbs[image.id]} alt={`Image you sent, ${image.width} × ${image.height}`} /> : null,
+            )}
+          </div>
+        )}
         <div className={styles.user}>{body.text}</div>
         {body.attachments.length > 0 && <p className={styles.attachedNote}>{body.attachments.map((a) => a.title || host(a.url)).join(' · ')}</p>}
         <div className={styles.messageActions}>
@@ -282,7 +305,7 @@ function MessageView({ message, last, onLink, onEdit, view }: { message: DuetMes
             {copied ? <Check {...ICON} /> : <Copy {...ICON} />}
           </button>
           {last && (
-            <button type="button" className={styles.iconButton} aria-label="Edit and send again" title="Edit and send again" onClick={() => onEdit(body.text)}>
+            <button type="button" className={styles.iconButton} aria-label="Edit and send again" title="Edit and send again" onClick={() => onEdit(message)}>
               <Pencil {...ICON} />
             </button>
           )}
@@ -294,7 +317,7 @@ function MessageView({ message, last, onLink, onEdit, view }: { message: DuetMes
   const working = body.status === 'streaming' && !body.text;
   return (
     <div className={styles.assistant}>
-      {working ? <Working startedAt={view.startedAt} /> : <Reply message={message} onLink={onLink} />}
+      {working ? <Working startedAt={view.startedAt} /> : <Reply message={message} onLink={onLink} names={view.tabNames} />}
       {body.status === 'interrupted' && (
         <p className={styles.statusLine}>
           Interrupted.
@@ -341,7 +364,7 @@ function Working({ startedAt }: { startedAt: number | null }) {
   );
 }
 
-function Timeline({ view, onLink, onEdit }: { view: DuetView; onLink(url: string): void; onEdit(text: string): void }) {
+function Timeline({ view, onLink, onEdit }: { view: DuetView; onLink(url: string): void; onEdit(message: DuetMessage): void }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   const lastUser = [...view.messages].reverse().find((m) => m.body.role === 'user');
@@ -415,9 +438,11 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
     clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => act({ do: 'draft', text: value }), 400);
   };
+  const hasImages = view.pendingImages.length > 0;
   const send = () => {
-    if (!text.trim()) return;
-    act({ do: 'send', text });
+    // An image alone is a question too.
+    if (!text.trim() && !hasImages) return;
+    act({ do: 'send', text: text.trim() || (view.pendingImages.length > 1 ? 'What is in these images?' : 'What is in this image?') });
     setText('');
     clearTimeout(draftTimer.current);
   };
@@ -458,6 +483,20 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
         </ul>
       )}
       <div className={styles.chips}>
+        {view.pendingImages.map((p, i) => (
+          <span key={p.id} className={styles.imageChip}>
+            {view.imageThumbs[p.id] && <img className={styles.imageChipThumb} src={view.imageThumbs[p.id]} alt="Image to send" />}
+            <button
+              type="button"
+              className={styles.chipX}
+              // Each × names its own image when there are several.
+              aria-label={view.pendingImages.length > 1 ? `Don't send image ${i + 1}` : "Don't send this image"}
+              onClick={() => act({ do: 'unattachImage', id: p.id })}
+            >
+              <X size={11} strokeWidth={2.25} />
+            </button>
+          </span>
+        ))}
         {view.attachments.map((a) => (
           <span key={a.nodeId} className={styles.chip} title={chipNote}>
             <span className={styles.ellipsis}>{a.current ? `This tab · ${host(a.url)}` : a.title}</span>
@@ -525,7 +564,7 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
             <Square size={13} strokeWidth={2.5} fill="currentColor" />
           </button>
         ) : (
-          <button type="button" className={styles.send} aria-label="Send" title="Send (Enter)" disabled={!text.trim()} onClick={send}>
+          <button type="button" className={styles.send} aria-label="Send" title="Send (Enter)" disabled={!text.trim() && !hasImages} onClick={send}>
             <ArrowUp size={16} strokeWidth={2.25} />
           </button>
         )}
@@ -944,7 +983,15 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
               )}
             </div>
           ) : (
-            <Timeline view={view} onLink={openLink} onEdit={(text) => setSeed({ text, n: seed.n + 1 })} />
+            <Timeline
+              view={view}
+              onLink={openLink}
+              onEdit={(message) => {
+                if (message.body.role !== 'user') return;
+                setSeed({ text: message.body.text, n: seed.n + 1 });
+                if (message.body.images?.length) act({ do: 'reuseImages', messageId: message.id });
+              }}
+            />
           )}
           <Composer view={view} providerName={providerName} draftSeed={seed} />
         </>

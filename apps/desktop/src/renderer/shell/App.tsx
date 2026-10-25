@@ -334,13 +334,15 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
     // A push can arrive before the answer and be the newer of the two (live.ts says why): it wins.
     // It renders in the frame with the state patches (shared/frames.ts).
     let pushed = false;
-    const show = inNextFrame(setDuet);
+    // Thumbnails arrive once each (main/duet/service.ts): kept as later views come.
+    const merge = (view: DuetView) => setDuet((was) => ({ ...view, imageThumbs: was ? { ...was.imageThumbs, ...view.imageThumbs } : view.imageThumbs }));
+    const show = inNextFrame(merge);
     const unsubscribe = api.duet.onState((view) => {
       pushed = true;
       show(view);
     });
     void api.duet.view().then((view) => {
-      if (!pushed) setDuet(view);
+      if (!pushed) merge(view);
     });
     return unsubscribe;
   }, []);

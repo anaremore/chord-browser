@@ -7,6 +7,7 @@ import {
   DUET_READ_MAX,
   DUET_TOOLS,
   isNeverReadable,
+  nameTabs,
   pageResult,
   pdfPageOf,
   pdfPageUrl,
@@ -147,6 +148,22 @@ describe('Duet: context meter', () => {
     expect(contextLabel('codex', { used: 1, window: 100 })).toMatch(/^1% of context used\. When it fills up, Codex compacts/);
     // A first answer against a 1,000,000-token window (Claude Code 2.1.309's own report): some used, rounds to 0.
     expect(contextLabel('claude', { used: 3984, window: 1_000_000 })).toMatch(/^Under 1% of context used\. /);
+  });
+});
+
+describe('nameTabs: a tab written by its handle reads as its title', () => {
+  const names = { t1: { title: 'Guess The Number - YouTube', url: 'https://www.youtube.com/watch?v=1' }, t12: { title: '', url: 'https://example.com/' } };
+  it.each([
+    ['Tab t1 is now a YouTube page.', '“Guess The Number - YouTube” is now a YouTube page.'],
+    ['the frame from t1, as you asked', 'the frame from “Guess The Number - YouTube”, as you asked'],
+    ['(t1)', '(“Guess The Number - YouTube”)'],
+    ['See tab t12.', 'See “https://example.com/”.'],
+    // Not a handle: part of a word, a name or a path, or a handle Chord doesn't know.
+    ['a t2.micro or t1.small instance', 'a t2.micro or t1.small instance'],
+    ['the T1 line, at1, t1x, t1-mini, v/t1', 'the T1 line, at1, t1x, t1-mini, v/t1'],
+    ['tab t7 is gone', 'tab t7 is gone'],
+  ])('%j', (text, named) => {
+    expect(nameTabs(text, names)).toBe(named);
   });
 });
 

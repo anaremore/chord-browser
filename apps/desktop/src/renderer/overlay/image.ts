@@ -11,6 +11,8 @@
 export interface PastedImage {
   preview: string;
   bytes: Uint8Array<ArrayBuffer>;
+  /** At most 240 px a side, for Duet's panel. */
+  thumb: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;
   originalWidth: number;
@@ -18,6 +20,7 @@ export interface PastedImage {
 }
 
 const MAX_SIDE = 1000;
+const THUMB_SIDE = 240;
 /** Bigger than this isn't a picture someone means to search by. */
 const MAX_INPUT_BYTES = 50 * 1024 * 1024;
 
@@ -53,11 +56,15 @@ export async function prepareImage(blob: Blob): Promise<PastedImage | null> {
   bitmap.close();
   const jpeg = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 });
   const bytes = new Uint8Array(await jpeg.arrayBuffer());
+  const t = Math.min(1, THUMB_SIDE / Math.max(width, height));
+  const small = new OffscreenCanvas(Math.max(1, Math.round(width * t)), Math.max(1, Math.round(height * t)));
+  small.getContext('2d')?.drawImage(canvas, 0, 0, small.width, small.height);
+  const thumb = new Uint8Array(await (await small.convertToBlob({ type: 'image/jpeg', quality: 0.75 })).arrayBuffer());
   const preview = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(jpeg);
   });
-  return { preview, bytes, width, height, originalWidth, originalHeight };
+  return { preview, bytes, thumb, width, height, originalWidth, originalHeight };
 }

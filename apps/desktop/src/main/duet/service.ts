@@ -10,6 +10,7 @@ import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   children,
+  DUET_MAX_IMAGES,
   DUET_MAX_PROCESSES,
   DUET_PDF_MAX_PAGES,
   DUET_PROCESS_IDLE_MS,
@@ -19,6 +20,7 @@ import {
   duetPruneBefore,
   duetTool,
   isNeverReadable,
+  nameTabs,
   pageResult,
   pdfPageOf,
   pdfPageUrl,
@@ -35,6 +37,8 @@ import {
   uuidv7,
   type DuetAttachment,
   type DuetCitation,
+  type DuetImage,
+  type DuetTabName,
   type DuetContextUsage,
   type DuetMessage,
   type DuetMessageBody,
@@ -51,15 +55,32 @@ import { app, type WebContents } from 'electron';
 import type { Browser } from '../browser';
 import { send } from '../ipc';
 import type { Persistence } from '../persistence';
-import type { DuetSession, ProviderError, ToolOutput } from './adapter';
+import type { DuetSession, ProviderError, SessionImage, ToolOutput } from './adapter';
 import { ClaudeSession } from './claude';
 import { CodexSession } from './codex';
 import { claudeConfigDir, claudeProjectFolder, detect, detectInWsl, mayBeInWsl, notInstalled, openSignIn, rememberedInWsl, type Detected, type Launch, type ProviderStatus } from './detect';
 import { readPage, screenshot, type PageRead } from './extract';
+import { DuetImages, newImageId } from './images';
 import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
 import { extractPdf, fetchPdf, PdfError, pdfProblemCopy } from './pdf';
 
 type Decision = 'once' | 'thread' | 'denied';
+
+/** An image for Duet, as a pasted image or a screenshot brings it: the picture for the model, and a thumbnail. */
+export interface ImageInput {
+  mime: DuetImage['mime'];
+  width: number;
+  height: number;
+  bytes: Uint8Array;
+  thumb: Uint8Array;
+}
+
+/** One waiting in the composer: kept in memory until its message is sent. */
+interface PendingImage {
+  image: DuetImage;
+  bytes: Buffer;
+  thumb: Buffer;
+}
 
 interface ThreadState {
   chordId: string;
@@ -140,6 +161,14 @@ export class DuetService {
   private readonly toggled = new Set<WindowId>();
   private firstUseSeen = false;
   private readonly root: string;
+  /** Images you've given Duet, kept with their chats (images.ts). */
+  private readonly images: DuetImages;
+  /** Images waiting in each window's composer for the next message. */
+  private readonly pending = new Map<WindowId, PendingImage[]>();
+  /** Which thumbnails each window's panel has been sent, so a streaming reply doesn't resend them. */
+  private readonly thumbsSent = new Map<WindowId, Set<string>>();
+  /** Thumbnails as data URLs, by image id (a chat's few, kept once read). */
+  private readonly thumbs = new Map<string, string>();
 
   constructor(
     private readonly browser: Browser,
@@ -147,6 +176,7 @@ export class DuetService {
     userData: string,
   ) {
     this.root = join(userData, 'duet');
+    this.images = new DuetImages(join(this.root, 'images'));
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'windows' || p.path[0] === 'settings' || p.path[0] === 'nodes' || p.path[0] === 'chords')) this.schedulePush();
     });
@@ -175,8 +205,9 @@ export class DuetService {
     // Keep Duet chats: threads past their date go, the provider's copy with them.
     const before = duetPruneBefore(this.settings.keep, Date.now());
     if (before !== null) {
-      const removed = (await this.persistence.duet({ op: 'prune', before }).catch(() => ({ removed: [] }))).removed ?? [];
+      const { removed = [], images = [] } = await this.persistence.duet({ op: 'prune', before }).catch(() => ({ removed: [], images: [] }));
       for (const thread of removed) void this.deleteProviderCopy(thread);
+      void this.images.remove(images);
     }
     // Launching never starts WSL: a WSL install found earlier stands until Setup or the panel looks again.
     void this.refreshProviders('never');
@@ -196,6 +227,8 @@ export class DuetService {
   forgetWindow(windowId: WindowId): void {
     this.panels.delete(windowId);
     this.toggled.delete(windowId);
+    this.pending.delete(windowId);
+    this.thumbsSent.delete(windowId);
   }
 
   private chordOf(windowId: WindowId): string | null {
@@ -304,7 +337,7 @@ export class DuetService {
     return out;
   }
 
-  async view(windowId: WindowId): Promise<DuetView> {
+  async view(windowId: WindowId, full = false): Promise<DuetView> {
     const chordId = this.chordOf(windowId);
     const settings = this.settings;
     const privateWindow = chordId ? this.isPrivateChord(chordId) : false;
@@ -317,7 +350,8 @@ export class DuetService {
       firstUse: !this.firstUseSeen,
       lookingInWsl: this.lookingInWsl,
     };
-    if (!chordId || privateWindow) return { ...base, thread: null, continueFrom: null, threads: [], messages: [], busy: false, startedAt: null, queue: [], attachments: [], attachable: [], readTabIds: [], error: null, draft: '', context: null };
+    if (!chordId || privateWindow)
+      return { ...base, thread: null, continueFrom: null, threads: [], messages: [], busy: false, startedAt: null, queue: [], attachments: [], attachable: [], readTabIds: [], error: null, draft: '', context: null, pendingImages: [], imageThumbs: {}, tabNames: {} };
     const state = await this.stateFor(chordId);
     const nodes = this.browser.store.state.nodes;
     const attachable = children(this.browser.store.state, chordId, 'pinned', null)
@@ -342,7 +376,82 @@ export class DuetService {
       error: state.lastError,
       draft: this.drafts[state.thread?.id ?? `fresh:${chordId}`] ?? '',
       context: state.context,
+      pendingImages: (this.pending.get(windowId) ?? []).map((p) => ({ id: p.image.id })),
+      imageThumbs: await this.thumbsFor(windowId, state, full),
+      tabNames: this.tabNames(state),
     };
+  }
+
+  /** The chat's tabs by handle: open ones by their current title, closed ones as they were attached or cited. */
+  private tabNames(state: ThreadState): Record<string, DuetTabName> {
+    const names: Record<string, DuetTabName> = {};
+    for (const m of state.messages) {
+      if (m.body.role === 'user') for (const a of m.body.attachments) names[a.ref] = { title: a.title, url: a.url };
+      else if (m.body.role === 'assistant') for (const c of m.body.citations) if (c.url) names[c.ref] = { title: c.title || c.url, url: c.url };
+    }
+    const nodes = this.browser.store.state.nodes;
+    for (const [ref, id] of state.refs) {
+      const node = nodes[id];
+      if (node?.kind === 'tab') names[ref] = { title: node.title || node.url, url: node.url };
+    }
+    return names;
+  }
+
+  /** Thumbnails for the chat's images and the composer's that this window hasn't been sent (all of them for a full view). */
+  private async thumbsFor(windowId: WindowId, state: ThreadState, full: boolean): Promise<Record<string, string>> {
+    let sent = this.thumbsSent.get(windowId);
+    if (!sent || full) this.thumbsSent.set(windowId, (sent = new Set()));
+    const out: Record<string, string> = {};
+    for (const p of this.pending.get(windowId) ?? []) {
+      if (sent.has(p.image.id)) continue;
+      out[p.image.id] = `data:image/jpeg;base64,${p.thumb.toString('base64')}`;
+      sent.add(p.image.id);
+    }
+    for (const m of state.messages) {
+      if (m.body.role !== 'user') continue;
+      for (const image of m.body.images ?? []) {
+        if (sent.has(image.id)) continue;
+        let url = this.thumbs.get(image.id);
+        if (!url) {
+          const thumb = await this.images.thumb(image.id);
+          if (!thumb) continue;
+          url = `data:image/jpeg;base64,${thumb.toString('base64')}`;
+          this.thumbs.set(image.id, url);
+        }
+        out[image.id] = url;
+        sent.add(image.id);
+      }
+    }
+    return out;
+  }
+
+  /* ---------- Images (a pasted image, a screenshot) ---------- */
+
+  /** Whether a picture of this page may go to Duet from this window: set up, on in its chord, and a page Duet may read. */
+  canAskAbout(windowId: WindowId, url: string): boolean {
+    const chordId = this.chordOf(windowId);
+    return Boolean(this.settings.enabled && this.settings.provider && chordId && !this.isPrivateChord(chordId) && !this.settings.offChords.includes(chordId) && !isNeverReadable(url, this.settings.neverSites));
+  }
+
+  /** Put an image in the window's composer, for the next message, and open the panel. */
+  attachImage(windowId: WindowId, image: ImageInput): void {
+    const w = this.browser.allWindows.find((x) => x.id === windowId);
+    if (!w || w.isPrivate) return;
+    const list = this.pending.get(windowId) ?? [];
+    if (list.length >= DUET_MAX_IMAGES) list.shift();
+    list.push({ image: { id: newImageId(), mime: image.mime, width: image.width, height: image.height }, bytes: Buffer.from(image.bytes), thumb: Buffer.from(image.thumb) });
+    this.pending.set(windowId, list);
+    const panel = this.panel(windowId);
+    if (!panel.open) this.toggled.add(windowId);
+    panel.open = true;
+    this.schedulePush();
+  }
+
+  /** "Ask Duet about this image": the panel opens and the message goes, with the words you typed or a plain question. */
+  async askAboutImage(windowId: WindowId, text: string, image: ImageInput): Promise<void> {
+    this.attachImage(windowId, image);
+    if (!this.pending.get(windowId)?.length) return;
+    await this.act(windowId, { do: 'send', text: text.trim() || 'What is in this image?' });
   }
 
   private schedulePush(): void {
@@ -377,6 +486,11 @@ export class DuetService {
         if (open !== panel.open) this.toggled.add(windowId);
         panel.open = open;
         if (panel.open) void this.refreshProviders('if-needed');
+        break;
+      }
+      case 'unattachImage': {
+        const list = this.pending.get(windowId) ?? [];
+        this.pending.set(windowId, list.filter((p) => p.image.id !== action.id));
         break;
       }
       case 'dismissFirstUse':
@@ -417,9 +531,21 @@ export class DuetService {
         state.queue = [];
         if (state.thread) this.live.get(state.thread.id)?.session.stop();
         return;
+      case 'reuseImages': {
+        const message = state.messages.find((m) => m.id === action.messageId);
+        if (message?.body.role !== 'user' || !message.body.images?.length) return;
+        // The same files: sending again writes the same bytes, and taking one out of the composer deletes nothing.
+        const list: PendingImage[] = [];
+        for (const image of message.body.images) {
+          const [bytes, thumb] = await Promise.all([this.images.read(image), this.images.thumb(image.id)]);
+          if (bytes && thumb) list.push({ image, bytes, thumb });
+        }
+        this.pending.set(windowId, list);
+        return;
+      }
       case 'retry': {
         const lastUser = [...state.messages].reverse().find((m) => m.body.role === 'user');
-        if (lastUser?.body.role === 'user') return this.send(windowId, state, lastUser.body.text, lastUser.body.attachments);
+        if (lastUser?.body.role === 'user') return this.send(windowId, state, lastUser.body.text, lastUser.body.attachments, lastUser.body.images ?? []);
         return;
       }
       case 'unqueue':
@@ -478,6 +604,15 @@ export class DuetService {
         return;
       case 'citation':
         return this.openCitation(windowId, state, action.messageId, action.n);
+      case 'showTab': {
+        const node = this.browser.store.state.nodes[state.refs.get(action.ref) ?? ''];
+        if (node?.kind === 'tab') this.browser.store.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
+        else {
+          const url = this.tabNames(state)[action.ref]?.url;
+          if (url) this.browser.store.dispatch({ t: 'tab.open', windowId, url });
+        }
+        return;
+      }
       case 'export':
         return this.exportThread(state);
     }
@@ -505,7 +640,7 @@ export class DuetService {
 
   /* ---------- Sending and sessions ---------- */
 
-  private async send(windowId: WindowId, state: ThreadState, text: string, reuse?: DuetAttachment[]): Promise<void> {
+  private async send(windowId: WindowId, state: ThreadState, text: string, reuse?: DuetAttachment[], reuseImages?: readonly DuetImage[]): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed || this.settings.offChords.includes(state.chordId)) return;
     if (state.streaming) {
@@ -552,7 +687,12 @@ export class DuetService {
       await this.addMessage(state, { role: 'divider', text: state.pendingDivider });
       state.pendingDivider = null;
     }
-    await this.addMessage(state, { role: 'user', text: trimmed, attachments });
+    // The composer's images go with this message, kept with the chat; a retry sends its own again.
+    const pending = reuseImages ? [] : (this.pending.get(windowId) ?? []);
+    this.pending.delete(windowId);
+    for (const p of pending) await this.images.save(p.image, p.bytes, p.thumb);
+    const images = reuseImages ?? pending.map((p) => p.image);
+    await this.addMessage(state, images.length > 0 ? { role: 'user', text: trimmed, attachments, images: [...images] } : { role: 'user', text: trimmed, attachments });
     delete this.drafts[thread.id];
     thread.lastUsedAt = now;
     thread.updatedAt = now;
@@ -567,7 +707,17 @@ export class DuetService {
       await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Duet couldn't start. Check Settings → Duet." } });
       return;
     }
-    session.send(userTurnText(trimmed, attachments));
+    session.send(userTurnText(trimmed, attachments), await this.imagesToSend(images, pending));
+  }
+
+  /** The message's images for the model, base64-encoded: from the composer, or from disk for a retry. */
+  private async imagesToSend(images: readonly DuetImage[], pending: readonly PendingImage[]): Promise<SessionImage[]> {
+    const out: SessionImage[] = [];
+    for (const image of images) {
+      const bytes = pending.find((p) => p.image.id === image.id)?.bytes ?? (await this.images.read(image));
+      if (bytes) out.push({ mime: image.mime, data: bytes.toString('base64') });
+    }
+    return out;
   }
 
   private refFor(state: ThreadState, nodeId: NodeId): string {
@@ -961,10 +1111,11 @@ export class DuetService {
   private async exportThread(state: ThreadState): Promise<void> {
     if (!state.thread) return;
     const lines = [`# ${state.thread.title}`, ''];
+    const names = this.tabNames(state);
     for (const m of state.messages) {
       if (m.body.role === 'user') lines.push(`**You:** ${m.body.text}`, '');
       else if (m.body.role === 'assistant') {
-        lines.push(`**Duet:** ${stripCitations(m.body.text)}`, '');
+        lines.push(`**Duet:** ${nameTabs(stripCitations(m.body.text), names)}`, '');
         for (const c of m.body.citations) lines.push(`[${c.n}] ${c.title} — ${c.url} — “${c.quote}”`);
         if (m.body.citations.length) lines.push('');
       } else if (m.body.role === 'approval') lines.push(`*${m.body.description}: ${m.body.decision}*`, '');
@@ -985,8 +1136,9 @@ export class DuetService {
       this.close(state);
       this.threads.delete(threadId);
     }
-    const removed = (await this.persistence.duet({ op: 'deleteThread', threadId }).catch(() => ({ removed: [] }))).removed ?? [];
+    const { removed = [], images = [] } = await this.persistence.duet({ op: 'deleteThread', threadId }).catch(() => ({ removed: [], images: [] }));
     for (const thread of removed) await this.deleteProviderCopy(thread);
+    await this.images.remove(images);
     delete this.drafts[threadId];
     if (this.showing.get(chordId) === threadId) this.fresh(chordId);
     await this.refreshRecent(chordId);
@@ -998,6 +1150,9 @@ export class DuetService {
     this.showing.clear();
     const removed = (await this.persistence.duet({ op: 'deleteAll' }).catch(() => ({ removed: [] }))).removed ?? [];
     for (const thread of removed) await this.deleteProviderCopy(thread);
+    await rm(join(this.root, 'images'), { recursive: true, force: true }).catch(() => {});
+    this.pending.clear();
+    this.thumbs.clear();
     this.recent.clear();
     this.drafts = {};
     void this.savePanel();

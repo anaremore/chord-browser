@@ -11,7 +11,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { DuetContextUsage, DuetToolSpec } from '@chord/core';
-import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionOptions, type ToolOutput } from './adapter';
+import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionImage, type SessionOptions, type ToolOutput } from './adapter';
 import { cliPath, spawnSpec } from './launch';
 
 const SERVER = 'chord';
@@ -155,10 +155,11 @@ export class ClaudeSession implements DuetSession {
     return !this.ended;
   }
 
-  send(text: string): void {
+  send(text: string, images: readonly SessionImage[] = []): void {
     this.turnRunning = true;
     this.lastUsage = null;
-    this.write({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] }, parent_tool_use_id: null });
+    const pictures = images.map((image) => ({ type: 'image', source: { type: 'base64', media_type: image.mime, data: image.data } }));
+    this.write({ type: 'user', message: { role: 'user', content: [...pictures, { type: 'text', text }] }, parent_tool_use_id: null });
   }
 
   stop(): void {

@@ -23,7 +23,7 @@ export interface ScreenshotEntry {
   /** In image pixels. */
   width: number;
   height: number;
-  /** The PNG's size. */
+  /** What it takes on disk: the PNG, its thumbnail and Duet's copy. */
   bytes: number;
   /** The page it's of. */
   title: string;

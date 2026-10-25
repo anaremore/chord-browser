@@ -4,7 +4,7 @@
  * is the source of truth; `provider_session_id` only caches the provider's
  * side, so losing it costs a summary, never the conversation.
  */
-import { duetMessageText, type DuetHit, type DuetMessage, type DuetMessageBody, type DuetProvider, type DuetThread } from '@chord/core';
+import { duetMessageText, type DuetHit, type DuetImage, type DuetMessage, type DuetMessageBody, type DuetProvider, type DuetThread } from '@chord/core';
 import type { StatementSync } from 'node:sqlite';
 
 export type DuetOp =
@@ -22,12 +22,13 @@ export type DuetOp =
   | { op: 'prune'; before: number }
   | { op: 'search'; query: string; limit: number };
 
-/** Deleted threads come back so main can delete the provider's copy too. */
+/** Deleted threads come back so main can delete the provider's copy too, and their images. */
 export interface DuetResult {
   threads?: DuetThread[];
   thread?: DuetThread | null;
   messages?: DuetMessage[];
   removed?: DuetThread[];
+  images?: DuetImage[];
   hits?: DuetHit[];
 }
 
@@ -49,6 +50,19 @@ const threadOf = (r: Row): DuetThread => ({
   updatedAt: num(r['updated_at']),
   lastUsedAt: num(r['last_used_at']),
 });
+
+/** The images in the messages of the threads `where` picks (a condition on `t`), read before they're deleted. */
+function imagesIn(sql: Sql, where: string, ...params: (string | number)[]): DuetImage[] {
+  const rows = sql(`SELECT m.body FROM duet_message m JOIN duet_thread t ON t.id = m.thread_id WHERE ${where} AND m.body LIKE '%"images":%'`).all(...params) as Row[];
+  return rows.flatMap((r) => {
+    try {
+      const body = JSON.parse(str(r['body'])) as DuetMessageBody;
+      return body.role === 'user' ? (body.images ?? []) : [];
+    } catch {
+      return [];
+    }
+  });
+}
 
 function messageOf(r: Row): DuetMessage | null {
   try {
@@ -99,8 +113,9 @@ export function runDuet(sql: Sql, op: DuetOp): DuetResult {
     }
     case 'deleteThread': {
       const row = sql('SELECT * FROM duet_thread WHERE id = ?').get(op.threadId) as Row | undefined;
+      const images = imagesIn(sql, 't.id = ?', op.threadId);
       sql('DELETE FROM duet_thread WHERE id = ?').run(op.threadId);
-      return { removed: row ? [threadOf(row)] : [] };
+      return { removed: row ? [threadOf(row)] : [], images };
     }
     case 'deleteAll': {
       const removed = (sql('SELECT * FROM duet_thread').all() as Row[]).map(threadOf);
@@ -109,8 +124,9 @@ export function runDuet(sql: Sql, op: DuetOp): DuetResult {
     }
     case 'prune': {
       const removed = (sql('SELECT * FROM duet_thread WHERE last_used_at < ?').all(op.before) as Row[]).map(threadOf);
+      const images = imagesIn(sql, 't.last_used_at < ?', op.before);
       sql('DELETE FROM duet_thread WHERE last_used_at < ?').run(op.before);
-      return { removed };
+      return { removed, images };
     }
     case 'search': {
       const match = ftsQuery(op.query);

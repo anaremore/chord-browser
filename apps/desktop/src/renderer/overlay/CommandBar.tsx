@@ -121,6 +121,7 @@ const SUGGEST_DELAY_MS = 120;
 
 function hintFor(result: Result, mode: Session['mode']): { text: string; key: string } {
   if (result.kind === 'imageSearch') return { text: 'Search', key: '↵' };
+  if (result.kind === 'imageDuet') return { text: 'Ask', key: '↵' };
   if (result.kind === 'scope') return { text: result.scope.kind === 'keyword' ? `Search ${scopeLabel(result.scope).name}` : 'Show only these', key: result.scope.kind === 'keyword' ? 'Tab' : '↵' };
   if (mode === 'split') return { text: 'Open in split', key: '↵' };
   if (result.kind === 'tab') return { text: 'Switch to tab', key: '↵' };
@@ -336,10 +337,16 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     [session, query, state, windowId, history, scope, suggestions, duetHits, presenting],
   );
   const imageEngine = imageSearchFor(state.settings.searchEngine, state.settings.googleFree);
-  const results = useMemo<Result[]>(
-    () => (image ? [{ kind: 'imageSearch', key: 'image-search', title: `Search ${imageEngine.label} for this image`, engine: imageEngine.engine }] : textResults),
-    [image, imageEngine.label, imageEngine.engine, textResults],
-  );
+  // Duet, where it can be asked: set up, this chord not turned off for it, and not a private window.
+  const duetReady = Boolean(win && !win.private && state.settings.duet.enabled && state.settings.duet.provider && !state.settings.duet.offChords.includes(win.activeChordId));
+  const results = useMemo<Result[]>(() => {
+    if (!image) return textResults;
+    const search: Result = { kind: 'imageSearch', key: 'image-search', title: `Search ${imageEngine.label} for this image`, engine: imageEngine.engine };
+    const words = query.trim();
+    const duet: Result = { kind: 'imageDuet', key: 'image-duet', title: words ? `Ask Duet: ${words}` : 'Ask Duet about this image' };
+    // With words typed, they're most likely a question for Duet.
+    return duetReady ? (words ? [duet, search] : [search, duet]) : [search];
+  }, [image, imageEngine.label, imageEngine.engine, textResults, duetReady, query]);
   const takeImage = (file: File | null) => {
     if (!file) return false;
     void prepareImage(file).then((ready) => {
@@ -407,9 +414,14 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     if (result.kind === 'imageSearch') {
       if (image) {
         const at = session?.mode === 'edit' && where === 'here' ? 'current' : where === 'background' ? 'background' : 'front';
-        const { preview: _preview, ...upload } = image;
-        void api.search.image(result.engine, upload, at);
+        const { bytes, width, height, originalWidth, originalHeight } = image;
+        void api.search.image(result.engine, { bytes, width, height, originalWidth, originalHeight }, at);
       }
+      close();
+      return;
+    }
+    if (result.kind === 'imageDuet') {
+      if (image) void api.duet.ask(query.trim(), { bytes: image.bytes, thumb: image.thumb, width: image.width, height: image.height });
       close();
       return;
     }
@@ -561,7 +573,9 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   const InputIcon = query && results[0]?.kind === 'open' && !results[0].search ? Globe : Search;
   const label = scope ? scopeLabel(scope) : null;
   const placeholder = image
-    ? 'Press Enter to search by this image'
+    ? duetReady
+      ? 'Press Enter to search, or ask Duet about it'
+      : 'Press Enter to search by this image'
     : (label?.placeholder ?? (session.mode === 'split' ? 'Split with a tab or a page' : 'Search or enter address'));
   const ScopeIcon = scope ? scopeIcon(scope) : null;
 
@@ -672,6 +686,8 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                       ? (ACTION_ICONS[result.action] ?? CornerDownLeft)
                       : result.kind === 'imageSearch'
                         ? ScanSearch
+                      : result.kind === 'imageDuet'
+                        ? DuetIcon
                       : result.kind === 'history'
                         ? History
                         : result.kind === 'archive'

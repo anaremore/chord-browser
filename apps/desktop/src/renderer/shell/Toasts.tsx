@@ -9,7 +9,7 @@
  * live region (DESIGN.md §10). ⌘Z / Ctrl+Z, while the shell has focus and no
  * text field does, presses the newest toast's Undo.
  */
-import type { Toast } from '@chord/ipc';
+import type { Toast, ToastAction } from '@chord/ipc';
 import { durations, space } from '@chord/tokens';
 import { AnimatePresence, motion, type Transition } from 'motion/react';
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
@@ -38,8 +38,7 @@ export function keepFocusFrom(card: HTMLElement | null): void {
   document.querySelector<HTMLElement>('[role="tree"] [role="treeitem"][tabindex="0"]')?.focus();
 }
 
-function runAction(toast: Toast): void {
-  const action = toast.action;
+function runAction(action: ToastAction | undefined): void {
   if (!action) return;
   if ('update' in action) void api.updates.restart();
   else if ('screenshot' in action) void api.screenshots.act(action.screenshot.id, action.screenshot.do);
@@ -96,20 +95,24 @@ function ToastCard({
       <span id={messageId} className={styles.toastMessage}>
         {toast.message}
       </span>
-      {toast.action && (
-        <button
-          type="button"
-          className={styles.toastAction}
-          // Several toasts can each have an Undo: each names what it undoes.
-          aria-describedby={messageId}
-          onClick={() => {
-            runAction(toast);
-            keepFocusFrom(card.current);
-            onDone();
-          }}
-        >
-          {toast.action.label}
-        </button>
+      {[toast.secondary, toast.action].map(
+        (action) =>
+          action && (
+            <button
+              key={action.label}
+              type="button"
+              className={styles.toastAction}
+              // Several toasts can each have an Undo: each names what it undoes.
+              aria-describedby={messageId}
+              onClick={() => {
+                runAction(action);
+                keepFocusFrom(card.current);
+                onDone();
+              }}
+            >
+              {action.label}
+            </button>
+          ),
       )}
     </>
   );
@@ -204,7 +207,7 @@ export function Toasts({ store, transition, compact, undoKeys, mac }: { store: T
       const target = event.target as HTMLElement;
       if (target.closest('input, textarea, [contenteditable="true"]')) return;
       event.preventDefault();
-      runAction(newest);
+      runAction(newest.action);
       dismiss(newest.id);
     };
     document.addEventListener('keydown', onKey);

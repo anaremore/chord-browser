@@ -13,6 +13,7 @@ import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { DUET_WORLD, EXTRACT_SCRIPT } from '../../src/main/duet/extract';
 import { buildPdf, SAMPLE_PDF_PAGES } from '../fixtures/pdf';
+import { isOverlay, isSettings, pageWhere } from './a11y-kit';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -146,6 +147,26 @@ test('Duet: set up, ask about the page with a citation, gate reads, stop, and re
     await expect(shell.getByRole('img', { name: 'Duet read this tab' })).toBeVisible();
     // Browse mode: no built-in tools, the user's settings ignored.
     expect(fakeLog(setup)[0]).toMatchObject({ restricted: true, tools: '', resume: null });
+
+    // A tab named by its handle shows as its title (not "t2.micro"); clicking it goes back to that tab.
+    await send(panel, 'which tab is this');
+    const named = panel.getByText(/the one you attached/);
+    await expect(named.getByRole('button', { name: 'Tab: Article' })).toBeVisible();
+    await expect(named).toContainText('a t2.micro');
+    await expect(named).not.toContainText('tab t1');
+    const activeTitle = () =>
+      shell.evaluate(async () => {
+        const { windowId, state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, { title?: string }> } }> } } }).chord.state.snapshot();
+        const w = state.windows[windowId]!;
+        return state.nodes[w.activeTab[w.activeChordId] ?? '']?.title;
+      });
+    await shell.evaluate(async (url) => {
+      const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string }>; dispatch(c: unknown): Promise<void> } } }).chord;
+      await chord.state.dispatch({ t: 'tab.open', windowId: (await chord.state.snapshot()).windowId, url });
+    }, `${site.origin}/second`);
+    await expect.poll(activeTitle).toBe('Second page');
+    await named.getByRole('button', { name: 'Tab: Article' }).click();
+    await expect.poll(activeTitle).toBe('Article');
 
     // Ask first: listing tabs asks; "Allow for this chat" stops it asking again.
     await send(panel, 'list my tabs');
@@ -311,6 +332,106 @@ test('Duet: a Claude Code too old for browse mode isn’t asked whether it’s s
 
 /** Every page URL main has open (tabs, and the PDF viewer inside them). */
 const openUrls = (app: ElectronApplication) => app.evaluate(({ webContents }) => webContents.getAllWebContents().map((w) => w.getURL()));
+
+test('Duet sees an image: pasted in the command bar, or a screenshot from its toast or the recent list; not a Never site’s; kept with the chat, and deleted with it', async () => {
+  const setup = fresh();
+  const images = join(setup.profile, 'duet', 'images');
+  const toastOf = (shell: Page) => shell.getByRole('region', { name: 'Notifications' }).getByRole('group', { name: 'Screenshot copied' });
+  let app = await launch(setup, '/article');
+  try {
+    const shell = await shellOf(app);
+    const overlay = await pageWhere(app, isOverlay);
+    const panel = await openDuet(shell);
+    await setUp(panel);
+    await runAction(shell, 'duet.toggle');
+    await expect(panel).toBeHidden();
+
+    // Pasted in the command bar: searching by it comes first, then Duet. Words typed make Duet's row the first.
+    await app.evaluate(async ({ clipboard, ClipboardItem, nativeImage }) => {
+      const [width, height] = [1600, 900];
+      const bitmap = Buffer.alloc(width * height * 4, 200);
+      const png = nativeImage.createFromBitmap(bitmap, { width, height }).toPNG();
+      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })]);
+    });
+    await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
+    const field = overlay.getByRole('dialog', { name: 'New tab' }).getByRole('combobox');
+    await field.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+V`);
+    await expect(overlay.getByTestId('image-chip')).toBeVisible();
+    await expect(overlay.getByRole('option')).toHaveText([/Search Google Lens for this image/, /Ask Duet about this image/]);
+    await field.fill('what colors are these');
+    await expect(overlay.getByRole('option').first()).toContainText('Ask Duet: what colors are these');
+    await field.press('Enter');
+    // The panel opens with the question asked: the model gets the JPEG the overlay made, at most 1,000 px a side.
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole('img', { name: 'Image you sent, 1000 × 563' })).toBeVisible();
+    await expect(panel.getByText('I see one image: image/jpeg 1000×563. You asked: what colors are these')).toBeVisible();
+
+    // A screenshot's toast: Ask Duet puts it in the composer; the message sends it, the whole of what's on screen.
+    const tab = await pageWhere(app, (url) => url === `${site.origin}/article`);
+    const viewport = await tab.evaluate(() => `${document.documentElement.clientWidth}×${document.documentElement.clientHeight}`);
+    await runAction(shell, 'page.screenshot');
+    await expect(overlay.getByRole('dialog', { name: 'Take a screenshot' })).toBeVisible();
+    await overlay.keyboard.press('v');
+    await toastOf(shell).getByRole('button', { name: 'Ask Duet' }).click();
+    await expect(panel.getByRole('img', { name: 'Image to send' })).toBeVisible();
+    await send(panel, 'describe it');
+    await expect(panel.getByText(`I see one image: image/jpeg ${viewport}. You asked: describe it`)).toBeVisible();
+    await expect(panel.getByRole('img', { name: 'Image to send' })).toHaveCount(0);
+    // Edit and send again: the words and the picture come back to the composer, and go again.
+    await panel.getByText('describe it', { exact: true }).hover();
+    await panel.getByRole('button', { name: 'Edit and send again' }).click();
+    await expect(panel.getByRole('img', { name: 'Image to send' })).toBeVisible();
+    await panel.getByRole('textbox', { name: 'Message Duet' }).fill('describe it again');
+    await panel.getByRole('textbox', { name: 'Message Duet' }).press('Enter');
+    await expect(panel.getByText(`I see one image: image/jpeg ${viewport}. You asked: describe it again`)).toBeVisible();
+
+    // The recent list's Ask Duet: into the composer, and the panel steps aside. Taken out again with its ×.
+    await shell.getByRole('button', { name: /^Downloads/ }).click();
+    const downloads = overlay.getByRole('dialog', { name: 'Downloads' });
+    await downloads.getByRole('button', { name: 'Ask Duet about the screenshot of Article' }).click();
+    await expect(downloads).toHaveCount(0);
+    await expect(panel.getByRole('img', { name: 'Image to send' })).toBeVisible();
+    await panel.getByRole('button', { name: "Don't send this image" }).click();
+    await expect(panel.getByRole('img', { name: 'Image to send' })).toHaveCount(0);
+
+    // A Never site: its screenshots don't offer Duet, on the toast or in the list.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Duet' }).click();
+    const add = settings.getByRole('textbox', { name: 'Add a site Duet never reads' });
+    await add.fill('127.0.0.1');
+    await add.press('Enter');
+    await shell.bringToFront();
+    await runAction(shell, 'page.screenshot');
+    await expect(overlay.getByRole('dialog', { name: 'Take a screenshot' })).toBeVisible();
+    await overlay.keyboard.press('v');
+    await expect(toastOf(shell).getByRole('button', { name: 'Save' })).toBeVisible();
+    await expect(toastOf(shell).getByRole('button', { name: 'Ask Duet' })).toHaveCount(0);
+    await shell.getByRole('button', { name: /^Downloads/ }).click();
+    await expect(downloads.getByRole('button', { name: /^Copy screenshot/ }).first()).toBeVisible();
+    await expect(downloads.getByRole('button', { name: /^Ask Duet/ })).toHaveCount(0);
+    await overlay.keyboard.press('Escape');
+    // Two pictures sent (one twice, the same files), each kept with a thumbnail; the one taken out of the composer isn't.
+    expect(readdirSync(images).sort()).toHaveLength(4);
+  } finally {
+    await app.close();
+  }
+
+  // After a relaunch the chat still shows them; deleting it deletes them.
+  app = await launch(setup, '/second');
+  try {
+    const shell = await shellOf(app);
+    const panel = await openDuet(shell);
+    await expect(panel.getByRole('img', { name: 'Image you sent, 1000 × 563' })).toBeVisible();
+    await expect(panel.getByRole('img', { name: /^Image you sent/ })).toHaveCount(3);
+    await panel.getByRole('button', { name: 'Chats' }).click();
+    await panel.getByRole('menuitem', { name: 'Delete this chat' }).click();
+    await expect(panel.getByRole('img', { name: /^Image you sent/ })).toHaveCount(0);
+    await expect.poll(() => readdirSync(images).length).toBe(0);
+  } finally {
+    await app.close();
+  }
+});
 
 test('Duet: reads a PDF through the tab’s own session, cites its page, and shows how full the context is', async () => {
   pdfRequests.length = 0;

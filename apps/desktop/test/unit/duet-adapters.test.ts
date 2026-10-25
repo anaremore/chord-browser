@@ -87,6 +87,18 @@ describe('Claude Code adapter', () => {
     session.close();
   });
 
+  it('sends an image as a base64 block, before the words', async () => {
+    const { seen, events, turnEnded } = recorder(() => ({}));
+    const session = new ClaudeSession(options(fakeClaude), events);
+    const ended = turnEnded();
+    // A 2 × 1 JPEG's header is enough for the fake to read its size.
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x02, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01, 0xff, 0xd9]).toString('base64');
+    session.send('What is this?', [{ mime: 'image/jpeg', data: jpeg }]);
+    await ended;
+    expect(seen.text).toBe('I see one image: image/jpeg 2×1. You asked: What is this?');
+    session.close();
+  });
+
   it('reads how full the context is from the result, as 2.1.309 reports it', () => {
     // Shapes copied from a real 2.1.309 run (haiku), trimmed.
     const result = {
@@ -164,6 +176,16 @@ describe('Codex adapter', () => {
     expect(seen.ends).toEqual([{ status: 'done' }]);
     expect(seen.session).toBe('thr_fake');
     expect(seen.usage).toEqual([{ used: 25_840, window: 258_400 }]);
+    session.close();
+  });
+
+  it('sends an image as a data URL, before the words', async () => {
+    const { seen, events, turnEnded } = recorder(() => ({}));
+    const session = new CodexSession(options(fakeCodex), events);
+    const ended = turnEnded();
+    session.send('What is this?', [{ mime: 'image/jpeg', data: '/9j/4AAQ' }]);
+    await ended;
+    expect(seen.text).toBe('images:data:image/jpeg first:image');
     session.close();
   });
 
