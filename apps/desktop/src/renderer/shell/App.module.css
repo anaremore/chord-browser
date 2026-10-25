@@ -144,18 +144,34 @@
   transform: scale(0.94);
 }
 
+/* A page's button that's on (reader view): the active row's raised surface. */
+.iconButton[aria-pressed='true'] {
+  background: var(--color-item-active-bg);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
+}
+
 kbd {
   font: var(--text-micro);
   letter-spacing: var(--text-micro-tracking);
 }
 
-.urlPill {
+/* The address, and beside it the page's own button (reader view) when there's no bar for it. */
+.urlRow {
   display: flex;
   flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  margin-block-end: var(--space-2);
+}
+
+.urlPill {
+  display: flex;
+  flex: 1;
   gap: var(--space-2);
   align-items: center;
+  min-inline-size: 0;
   block-size: var(--size-url-pill);
-  margin-block-end: var(--space-2);
   padding-inline: var(--space-3);
   border: 0;
   border-radius: var(--radius-sm);
@@ -1730,6 +1746,7 @@ kbd {
   .chordButton[aria-selected='true'],
   .favorite[aria-current='page'],
   .iconCell[aria-pressed='true'],
+  .iconButton[aria-pressed='true'],
   .duetButton[aria-pressed='true'] {
     forced-color-adjust: none;
     background: Highlight;

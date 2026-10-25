@@ -1,0 +1,383 @@
+/*
+ * Reader view (DESIGN.md §7.11): an article on the reader theme's surface, in
+ * the reading type scale (packages/tokens, reader.ts). Tokens only: the reader's
+ * own variables are set on the document by Reader.tsx.
+ */
+
+/* The document scrolls, not a box inside it: keyboard scrolling works from anywhere. */
+.document {
+  block-size: auto;
+  overflow: hidden auto;
+  background: var(--color-surface);
+  color: var(--color-fg);
+  cursor: auto;
+  scrollbar-color: var(--color-divider) transparent;
+}
+
+.flow {
+  block-size: auto;
+  overflow: visible;
+}
+
+::selection {
+  background: var(--color-selection);
+}
+
+/* ---------- The bar: whose article this is, the text controls, Close ---------- */
+
+.bar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--z-sticky);
+  box-sizing: border-box;
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-header);
+  padding-inline: var(--space-3) var(--space-2);
+  border-block-end: var(--size-hairline) solid var(--color-divider);
+  background: var(--color-tint), var(--color-surface);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  letter-spacing: var(--text-small-tracking);
+}
+
+.barIcon {
+  flex: none;
+}
+
+.site {
+  overflow: hidden;
+  padding-inline-start: var(--space-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flex {
+  flex: 1;
+}
+
+.iconButton {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-icon-button);
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+}
+
+.iconButton:hover:not(:disabled),
+.iconButton[aria-expanded='true'] {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+/* ---------- The text controls: a card under their button ---------- */
+
+.controls {
+  position: absolute;
+  inset-block-start: calc(100% + var(--space-1));
+  inset-inline-end: var(--space-2);
+  z-index: var(--z-popover);
+  box-sizing: border-box;
+  display: grid;
+  gap: var(--space-3);
+  inline-size: var(--size-popover-card);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-fg);
+}
+
+.group {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.groupLabel {
+  color: var(--color-fg-muted);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+}
+
+.sizes,
+.choices {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+}
+
+.sizes {
+  justify-content: space-between;
+}
+
+.sizeValue {
+  color: var(--color-fg);
+  font: var(--text-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.choice {
+  display: inline-flex;
+  flex: 1;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: center;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  transition:
+    background-color var(--duration-fade-fast) var(--ease-standard),
+    color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.choice:hover {
+  color: var(--color-fg);
+}
+
+.choice[aria-checked='true'] {
+  background: var(--color-surface);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
+}
+
+/* A theme's page and ink, as its choice's preview. */
+.swatch {
+  flex: none;
+  inline-size: var(--size-icon-sm);
+  block-size: var(--size-icon-sm);
+  border-radius: var(--radius-full);
+  background: var(--swatch-surface);
+  box-shadow: inset 0 0 0 var(--size-focus-ring) var(--swatch-fg);
+}
+
+/* ---------- The article ---------- */
+
+/* A wide table scrolls sideways in its own region (Article.tsx). */
+.table {
+  overflow-x: auto;
+}
+
+.main {
+  padding: var(--space-10) var(--space-8) var(--space-16);
+}
+
+.article {
+  max-inline-size: var(--reader-measure);
+  margin-inline: auto;
+  font: var(--reader-body);
+  letter-spacing: var(--reader-body-tracking);
+  overflow-wrap: break-word;
+  user-select: text;
+}
+
+.head {
+  margin-block-end: calc(var(--reader-space) * 2);
+}
+
+.title {
+  margin: 0 0 var(--space-3);
+  font: var(--reader-title);
+  letter-spacing: var(--reader-title-tracking);
+  text-wrap: balance;
+}
+
+.details {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--reader-small);
+  letter-spacing: var(--reader-small-tracking);
+}
+
+.body p,
+.body ul,
+.body ol,
+.body dl,
+.body blockquote,
+.body pre,
+.body figure,
+.body .table {
+  margin-block: 0 var(--reader-space);
+  margin-inline: 0;
+}
+
+.body h2,
+.body h3,
+.body h4,
+.body h5,
+.body h6 {
+  margin-block: calc(var(--reader-space) * 2) var(--reader-space);
+  text-wrap: balance;
+}
+
+.body h2 {
+  font: var(--reader-h2);
+  letter-spacing: var(--reader-h2-tracking);
+}
+
+.body h3 {
+  font: var(--reader-h3);
+  letter-spacing: var(--reader-h3-tracking);
+}
+
+.body h4,
+.body h5,
+.body h6 {
+  font: var(--reader-h4);
+  letter-spacing: var(--reader-h4-tracking);
+}
+
+/* A place in the article lands below the bar, not under it. */
+.body [id] {
+  scroll-margin-block-start: calc(var(--size-header) + var(--space-4));
+}
+
+.body a {
+  color: var(--color-accent);
+  text-decoration-line: underline;
+  text-decoration-thickness: var(--size-hairline);
+  text-underline-offset: 0.2em;
+}
+
+.body a:hover {
+  text-decoration-thickness: var(--size-focus-ring);
+}
+
+.body ul,
+.body ol {
+  padding-inline-start: var(--space-6);
+}
+
+.body li + li {
+  margin-block-start: var(--space-1);
+}
+
+.body dt {
+  font-weight: 600;
+}
+
+.body dd {
+  margin-inline-start: var(--space-6);
+}
+
+.body blockquote {
+  padding-inline-start: var(--space-4);
+  border-inline-start: var(--size-focus-ring) solid var(--color-divider);
+  color: var(--color-fg-muted);
+}
+
+.body img {
+  display: block;
+  max-inline-size: 100%;
+  block-size: auto;
+  margin-inline: auto;
+  border-radius: var(--radius-sm);
+}
+
+/* A small image in running text (an icon, an emoji) stays in its line. */
+.body p img {
+  display: inline;
+  vertical-align: middle;
+}
+
+.body figcaption {
+  margin-block-start: var(--space-2);
+  color: var(--color-fg-muted);
+  font: var(--reader-small);
+  letter-spacing: var(--reader-small-tracking);
+}
+
+.body code,
+.body kbd,
+.body samp {
+  font-family: var(--reader-mono);
+  font-size: var(--reader-code-size);
+}
+
+.body pre {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  font: var(--reader-code);
+  white-space: pre-wrap;
+}
+
+.body pre code {
+  font: inherit;
+}
+
+.body mark {
+  background: var(--color-selection);
+  color: inherit;
+}
+
+.body hr {
+  margin-block: calc(var(--reader-space) * 2);
+  border: 0;
+  border-block-start: var(--size-hairline) solid var(--color-divider);
+}
+
+.body table {
+  border-collapse: collapse;
+  font: var(--reader-small);
+  letter-spacing: var(--reader-small-tracking);
+}
+
+.body caption {
+  padding-block-end: var(--space-2);
+  color: var(--color-fg-muted);
+  text-align: start;
+}
+
+.body th,
+.body td {
+  padding: var(--space-1) var(--space-3);
+  border-block-end: var(--size-hairline) solid var(--color-divider);
+  text-align: start;
+  vertical-align: top;
+}
+
+/* ---------- Printing an article: just the article ---------- */
+
+@media print {
+  .bar {
+    display: none;
+  }
+
+  .main {
+    padding: 0;
+  }
+}
+
+/* ---------- Windows High Contrast (DESIGN.md §10) ---------- */
+
+@media (forced-colors: active) {
+  .controls {
+    border: var(--size-hairline) solid CanvasText;
+  }
+
+  .choice[aria-checked='true'] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+}

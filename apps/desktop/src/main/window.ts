@@ -71,7 +71,7 @@ export interface PaneLayout {
   sizes: number[];
 }
 
-export type UiSurface = 'shell' | 'overlay' | 'popover' | 'preview' | 'settings' | 'archive' | 'mini';
+export type UiSurface = 'shell' | 'overlay' | 'popover' | 'preview' | 'settings' | 'archive' | 'mini' | 'reader';
 
 /** A view that floats over the page until something else happens (an extension's popup). */
 export interface FloatingView {
@@ -81,7 +81,8 @@ export interface FloatingView {
 
 /**
  * Each surface's preload and IPC role. Settings and the archive page are both
- * Chord's own pages, but only the archive sees archived tabs.
+ * Chord's own pages, but only the archive sees archived tabs; a reader view
+ * sees its own tab's article.
  */
 const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
   shell: { preload: 'shell', role: 'shell' },
@@ -91,6 +92,7 @@ const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
   settings: { preload: 'internal', role: 'internal' },
   archive: { preload: 'archive', role: 'archive' },
   mini: { preload: 'mini', role: 'mini' },
+  reader: { preload: 'reader', role: 'reader' },
 };
 
 /**

@@ -15,7 +15,7 @@ import {
 } from '@chord/core';
 import type { ChordEdit, DuetView, SystemInfo } from '@chord/ipc';
 import { durations } from '@chord/tokens';
-import { Archive, ArrowLeft, ArrowRight, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
+import { Archive, ArrowLeft, ArrowRight, BookOpenText, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
 import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
@@ -127,6 +127,27 @@ function SidebarToggle({ collapsed, info, onToggle, onHover }: { collapsed: bool
       onPointerLeave={() => onHover?.(false)}
     >
       <PanelLeft {...ICON} />
+    </button>
+  );
+}
+
+/**
+ * Reader view (DESIGN.md §7.11): offered beside the address while the page
+ * reads as an article, pressed while it shows in reader view.
+ */
+function ReaderButton({ live, info }: { live: LiveTab | undefined; info: SystemInfo }) {
+  const { withKeys } = useKeys(info);
+  if (!live?.readable && !live?.reader) return null;
+  return (
+    <button
+      type="button"
+      className={styles.iconButton}
+      aria-label="Reader view"
+      aria-pressed={Boolean(live.reader)}
+      title={withKeys(live.reader ? 'Leave reader view' : 'Reader view', 'view.reader')}
+      onClick={() => void api.action.run('view.reader')}
+    >
+      <BookOpenText {...ICON} />
     </button>
   );
 }
@@ -485,25 +506,29 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
               {inTitleBar && !overlayChrome && <ExtensionButtons bar={extensionsBar} puzzleOnly={false} />}
             </header>
 
-            <button
-              ref={collapsed ? undefined : anchorRef}
-              type="button"
-              className={styles.urlPill}
-              title={active?.url ?? ''}
-              // Its name is the address, not the keycap beside it; whether it's secure is said too.
-              aria-label={host ? `Address: ${host}${secure ? ', secure' : ''}` : 'Search or enter address'}
-              onClick={() => void api.overlay.open('edit')}
-            >
-              {internal ? (
-                <Archive size={12} strokeWidth={2} aria-hidden />
-              ) : secure ? (
-                <Lock size={12} strokeWidth={2} aria-hidden />
-              ) : (
-                <Globe size={12} strokeWidth={2} aria-hidden />
-              )}
-              <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
-              <kbd className={styles.pillKeycap}>{keycap('address.edit')}</kbd>
-            </button>
+            <div className={styles.urlRow}>
+              <button
+                ref={collapsed ? undefined : anchorRef}
+                type="button"
+                className={styles.urlPill}
+                title={active?.url ?? ''}
+                // Its name is the address, not the keycap beside it; whether it's secure is said too.
+                aria-label={host ? `Address: ${host}${secure ? ', secure' : ''}` : 'Search or enter address'}
+                onClick={() => void api.overlay.open('edit')}
+              >
+                {internal ? (
+                  <Archive size={12} strokeWidth={2} aria-hidden />
+                ) : secure ? (
+                  <Lock size={12} strokeWidth={2} aria-hidden />
+                ) : (
+                  <Globe size={12} strokeWidth={2} aria-hidden />
+                )}
+                <span className={styles.ellipsis}>{host || 'Search or enter address'}</span>
+                <kbd className={styles.pillKeycap}>{keycap('address.edit')}</kbd>
+              </button>
+              {/* Beside the address when there's no bar to hold it (macOS, docked). */}
+              {!overlayChrome && !collapsed && <ReaderButton live={live} info={info} />}
+            </div>
 
             {/* One drag space: tabs move between lists, onto Favorites, and onto chords in the switcher. */}
             <SidebarDnd state={state} chordId={chord?.id ?? ''} windowId={windowId} frame={dropHost} onLift={lift}>
@@ -557,7 +582,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
 
               {(!collapsed || peeking) && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} undoKeys={!collapsed} mac={info.platform === 'darwin'} />}
 
-              {/* Presenting mode is on, and how to turn it off (DESIGN.md §7.11). */}
+              {/* Presenting mode is on, and how to turn it off (DESIGN.md §7.12). */}
               <PresentingCard presenting={presenting} keys={presentingKeys} enter={spring('overlay', 'sidebar')} />
 
               {/* Media playing in a tab you aren't looking at (DESIGN.md §7.10). */}
@@ -616,6 +641,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                   <span className={styles.addressMuted}>Search or enter address</span>
                 )}
               </button>
+              <ReaderButton live={live} info={info} />
               {/* The tab on screen makes sound: its speaker, as on its row (hidden in the sidebar now). */}
               {collapsed && active && live?.audible && (
                 <button

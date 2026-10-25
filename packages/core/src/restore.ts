@@ -35,6 +35,7 @@ import { cleanOverrides } from './bindings';
 import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
 import { routeKey } from './links';
+import { cleanReaderSettings } from './reader';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
 import type { Platform } from './shortcuts';
@@ -227,6 +228,7 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
     settings.duet.neverSites = strings(duet['neverSites']);
     settings.duet.offChords = strings(duet['offChords']);
   }
+  settings.reader = cleanReaderSettings(settings.reader, saved['reader']);
   return settings;
 }
 

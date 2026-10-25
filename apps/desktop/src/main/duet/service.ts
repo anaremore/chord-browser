@@ -848,7 +848,8 @@ export class DuetService {
     state.read.add(node.id);
     const ref = this.refFor(state, node.id);
     if (tool === 'tab_screenshot') {
-      const shot = await screenshot(contents);
+      // What's on screen: a tab in reader view shows its article (its page waits, detached, where no picture can be taken).
+      const shot = await screenshot(this.browser.readers.viewFor(node.id)?.webContents ?? contents);
       await this.activity(state, tool, `Looked at “${node.title || safeHost(node.url)}”`, node.url, Boolean(shot));
       return shot ? { image: shot } : refuse('Could not take the picture.');
     }
@@ -944,8 +945,8 @@ export class DuetService {
       this.browser.store.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
       const contents = await this.loadedContents(node.id);
       if (!contents) return;
-      // Scroll to the quote and mark it, as find in page does (Chromium's PDF viewer included).
-      const matches = await findMatches(contents, citation.quote);
+      // Scroll to the quote and mark it, as find in page does (Chromium's PDF viewer included), in reader view if it's open.
+      const matches = await findMatches(this.browser.readers.viewFor(node.id)?.webContents ?? contents, citation.quote);
       // A PDF quote the viewer can't find as written (a word split across lines): open its page instead.
       // The viewer reads #page= only when it loads, so it reloads there.
       if (!matches && citation.page && !contents.isDestroyed()) {

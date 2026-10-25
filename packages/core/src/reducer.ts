@@ -51,6 +51,7 @@ import {
   type WindowModel,
 } from './model';
 import { routeFor, routeKey } from './links';
+import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
 import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
@@ -1208,6 +1209,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         const size = miniWindowSize && { width: clampSize(miniWindowSize.width), height: clampSize(miniWindowSize.height) };
         const same = size && draft.settings.miniWindowSize?.width === size.width && draft.settings.miniWindowSize.height === size.height;
         if (!same && !(size === null && draft.settings.miniWindowSize === null)) draft.settings.miniWindowSize = size;
+      }
+      // Reader view's controls: only steps and choices it has.
+      if (cmd.settings.reader) {
+        const next = cleanReaderSettings(draft.settings.reader, cmd.settings.reader);
+        const current = draft.settings.reader;
+        if (current.size !== next.size) current.size = next.size;
+        if (current.width !== next.width) current.width = next.width;
+        if (current.theme !== next.theme) current.theme = next.theme;
+        if (current.font !== next.font) current.font = next.font;
       }
       const { spellcheck } = cmd.settings;
       if (spellcheck?.enabled !== undefined && draft.settings.spellcheck.enabled !== spellcheck.enabled) draft.settings.spellcheck.enabled = spellcheck.enabled;

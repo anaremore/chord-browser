@@ -6,6 +6,7 @@
  */
 import type { DuetKeep, DuetProvider, DuetScope } from './duet';
 import type { ImportRecord } from './import';
+import { DEFAULT_READER, type ReaderSettings } from './reader';
 import type { PageThreat, ThreatKind } from './safe-browsing';
 import type { ActionId, ShortcutOverrides } from './shortcuts';
 
@@ -214,6 +215,10 @@ export interface LiveTab {
   shared: boolean;
   /** Safe Browsing suspects the page (or a frame in it): the frame shows a warning instead (ARCHITECTURE.md §14.5). */
   threat: PageThreat | null;
+  /** The page reads as an article: the address offers reader view (ARCHITECTURE.md §9). */
+  readable: boolean;
+  /** The tab shows its article in reader view, over its page. */
+  reader: boolean;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -378,6 +383,8 @@ export interface Settings {
   externalLinks: ExternalLinks;
   /** The mini window's size, as you last left it; null until you resize one (DESIGN.md §7.9). */
   miniWindowSize: { width: number; height: number } | null;
+  /** Reader view's text size, line width, colors and font, the same on every page (DESIGN.md §7.11). */
+  reader: ReaderSettings;
 }
 
 export type ExternalLinks = 'mini' | 'tab';
@@ -454,6 +461,7 @@ export const DEFAULT_SETTINGS: Settings = {
   duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
   externalLinks: 'mini',
   miniWindowSize: null,
+  reader: DEFAULT_READER,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -466,6 +474,7 @@ export const defaultSettings = (): Settings => ({
   shortcuts: {},
   adBlocking: { ...DEFAULT_SETTINGS.adBlocking, offSites: [] },
   duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
+  reader: { ...DEFAULT_SETTINGS.reader },
 });
 
 /**
@@ -505,6 +514,7 @@ export interface SettingsPatch {
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
   duet?: Partial<DuetSettings>;
+  reader?: Partial<ReaderSettings>;
 }
 
 /**
@@ -586,7 +596,7 @@ export const emptyState = (): State => ({
   sharedWindows: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

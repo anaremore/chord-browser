@@ -11,6 +11,7 @@ export * from './media';
 export * from './model';
 export * from './page';
 export * from './rank';
+export * from './reader';
 export * from './reducer';
 export * from './restore';
 export * from './safe-browsing';

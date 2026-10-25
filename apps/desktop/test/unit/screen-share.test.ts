@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { Command, TabNode } from '@chord/core';
-import { emptyState } from '@chord/core';
+import { emptyState, IDLE_LIVE } from '@chord/core';
 import { SYSTEM_SHARE_SOURCE } from '@chord/ipc';
 import type { DesktopCapturerSource, Session, Streams, WebContents, WebFrameMain } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -61,7 +61,7 @@ function setup(picker: 'mac' | 'portal' | null = null) {
   const slides = new FakePage('https://slides.test');
   const pages: Record<string, FakePage> = { meet, slides };
   const state = emptyState();
-  state.live['meet'] = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null };
+  state.live['meet'] = { ...IDLE_LIVE };
   state.live['slides'] = { ...state.live['meet'] };
   state.nodes['meet'] = tab('meet', 'https://meet.test/', 'Meeting');
   state.nodes['slides'] = tab('slides', 'https://slides.test/', 'Slides');

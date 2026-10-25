@@ -28,6 +28,7 @@ Chord blocks ads and trackers with [EasyList and EasyPrivacy](https://easylist.t
 | electron-chrome-extensions (the iamEvanYT fork), vendored as `packages/chrome-extensions` | GPL-3.0-only | [GPL-3.0.txt](GPL-3.0.txt); Chord's changes are in its CHORD-CHANGES.md |
 | Crest's command bar ranking, adapted in `packages/core/src/rank.ts` | MPL-2.0 | [MPL-2.0.txt](MPL-2.0.txt) |
 | [pdf.js](https://mozilla.github.io/pdf.js/), Duet's PDF reader (`out/main/pdf.js`) | Apache-2.0 | [Apache-2.0.txt](Apache-2.0.txt) |
+| [Readability](https://github.com/mozilla/readability) (`@mozilla/readability`, © 2010 Arc90 Inc and Mozilla), reader view's article finder: its source is in `out/main/index.js` and runs in pages' isolated worlds | Apache-2.0 | [Apache-2.0.txt](Apache-2.0.txt) |
 | [Ghostery's adblocker engine](https://github.com/ghostery/adblocker) (`@ghostery/adblocker` and its `@ghostery/*` and `@remusao/*` packages), in ad blocking's worker (`out/main/ad-blocking.js`) | MPL-2.0; the source of each version is on npm and GitHub | [MPL-2.0.txt](MPL-2.0.txt) |
 | [EasyList and EasyPrivacy](https://easylist.to/), the lists ad blocking uses, and the rules and engine Chord compiles from them (`out/main/ad-blocking`) | GPL-3.0 or CC BY-SA 3.0, or any later version ([the lists' licence](https://easylist.to/pages/licence.html)); Chord distributes them under the GPL-3.0 | [GPL-3.0.txt](GPL-3.0.txt) |
 | [Onest](https://github.com/googlefonts/onest), Chord's typeface | SIL Open Font License 1.1 | `OFL.txt` beside the fonts |

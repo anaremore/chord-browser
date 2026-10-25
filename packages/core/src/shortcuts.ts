@@ -61,6 +61,7 @@ export type ActionId =
   | 'view.fullscreen'
   | 'view.focusNextRegion'
   | 'view.focusPreviousRegion'
+  | 'view.reader'
   | 'page.print'
   | 'page.save'
   | 'page.viewSource'
@@ -146,6 +147,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('view.fullscreen', 'Full screen', 'reserved', ['Ctrl+Mod+F'], ['F11']),
   s('view.focusNextRegion', 'Move focus to the next area', 'reserved', ['F6']),
   s('view.focusPreviousRegion', 'Move focus to the previous area', 'reserved', ['Shift+F6']),
+  // Reader view (DESIGN.md §7.11): Firefox's keys, page-first. Safari's ⌘⇧R reloads without the cache here, and
+  // Ctrl+Alt+R is AltGr+R on Windows, which types a letter on some layouts; F9 is Firefox's and Edge's there.
+  s('view.reader', 'Show or hide reader view', 'page-first', ['Mod+Alt+R'], ['F9']),
   s('page.print', 'Print', 'page-first', ['Mod+P']),
   s('page.save', 'Save page as', 'page-first', ['Mod+Shift+S']),
   s('page.viewSource', 'View page source', 'page-first', ['Mod+Alt+U'], ['Mod+U']),

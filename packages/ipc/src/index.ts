@@ -5,6 +5,10 @@
  */
 import {
   ARCHIVE_AFTER_MS,
+  READER_FONTS,
+  READER_SIZES,
+  READER_THEMES,
+  READER_WIDTHS,
   SEARCH_ENGINES,
   SHORTCUTS,
   UI_SCALES,
@@ -27,6 +31,8 @@ import {
   type ImportChoices,
   type ImportOverview,
   type ImportTarget,
+  type ReaderArticle,
+  type ReaderSettings,
   type SearchEngineId,
   type Settings,
   type SettingsPatch as CoreSettingsPatch,
@@ -37,8 +43,11 @@ import {
 } from '@chord/core';
 import { z } from 'zod';
 
-/** `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs); `preview` draws hover previews; `mini` is a mini window's bar. */
-export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive' | 'preview' | 'mini';
+/**
+ * `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs); `preview` draws hover
+ * previews; `mini` is a mini window's bar; `reader` is a tab's reader view (it sees that tab's article and nothing else).
+ */
+export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive' | 'preview' | 'mini' | 'reader';
 
 export const Platform = z.enum(['darwin', 'win32', 'linux']);
 export type Platform = z.infer<typeof Platform>;
@@ -560,6 +569,43 @@ export interface HistorySearch {
   archive: ArchivedTab[];
 }
 
+/**
+ * A tab's article for its reader view (ARCHITECTURE.md §9), already cleaned
+ * by core's `sanitizeArticle`, as JSON text of a `ReaderArticleView`: main
+ * passes it along without walking it. An image's `src` is a number: the
+ * reader loads `imageBase` + that number, which main fetches through the
+ * tab's own session (its cookies), and nothing else.
+ */
+export interface ReaderPage {
+  article: string;
+  /** `chord://reader/image/<this reader's key>/`. */
+  imageBase: string;
+}
+
+/** What a reader view's `article` holds. */
+export type ReaderArticleView = Omit<ReaderArticle, 'images'>;
+
+/** How a reader view looks: its tab's chord colors, Settings' interface and reader choices, and its keys. */
+export interface ReaderLook {
+  theme: ChordThemeSpec | null;
+  interface: InterfaceSettings;
+  reader: ReaderSettings;
+  /** The OS asks for reduced motion and Settings → Motion follows it. */
+  reducedMotion: boolean;
+  /** The keycap for showing and hiding reader view ("F9", "⌥⌘R"), as you set it; empty when it has none. */
+  toggleKeys: string;
+}
+
+/** A change to the reader's controls, from the reader itself. */
+export const ReaderSettingsPatch = z
+  .strictObject({
+    size: z.number().int().min(0).max(READER_SIZES - 1),
+    width: z.enum(READER_WIDTHS),
+    theme: z.enum(READER_THEMES),
+    font: z.enum(READER_FONTS),
+  })
+  .partial();
+
 /** The archive page's entries, newest first (chord-data's ArchivePage). */
 export interface ArchiveList {
   items: ArchivedTab[];
@@ -810,7 +856,7 @@ export const invokeChannels = {
     request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }), z.object({ do: z.literal('clearAll') })]),
     response: z.custom<DuetProviderInfo[]>(),
   },
-  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview', 'mini'], request: z.void(), response: SystemInfo },
+  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview', 'mini', 'reader'], request: z.void(), response: SystemInfo },
   'preview:hover': { roles: ['shell'], request: PreviewTarget, response: z.void() },
   'preview:size': { roles: ['preview'], request: z.object({ width: z.number().min(0).max(2000), height: z.number().min(0).max(2000) }), response: z.void() },
   'state:snapshot': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<StateSnapshot>() },
@@ -986,6 +1032,14 @@ export const invokeChannels = {
   /** The DRM notice's buttons: the window's page in another browser the notice offered, or not now (until Chord quits). */
   'drm:open': { roles: ['popover'], request: z.strictObject({ browser: z.enum(OTHER_BROWSERS) }), response: z.void() },
   'drm:dismiss': { roles: ['popover'], request: z.void(), response: z.void() },
+  // A tab's reader view (chord://reader): its own tab's article, how it looks, its controls, and closing it.
+  'reader:page': { roles: ['reader'], request: z.void(), response: z.custom<ReaderPage>() },
+  'reader:look': { roles: ['reader'], request: z.void(), response: z.custom<ReaderLook>() },
+  /** The article is on the page: main can put the view in front of the tab's page now. */
+  'reader:ready': { roles: ['reader'], request: z.void(), response: z.void() },
+  'reader:set': { roles: ['reader'], request: ReaderSettingsPatch, response: z.void() },
+  /** Esc or the close button: the tab's page comes back, as it was. */
+  'reader:close': { roles: ['reader'], request: z.void(), response: z.void() },
   /** Open a web link from Settings (About, help) in a new tab of the last-used window. */
   'settings:openUrl': { roles: ['internal'], request: z.strictObject({ url: z.url({ protocol: /^https$/ }) }), response: z.void() },
 } as const satisfies Record<string, { roles: readonly Role[]; request: z.ZodType; response: z.ZodType }>;
@@ -1033,6 +1087,8 @@ export interface EventPayloads {
   'import:progress': ImportProgress;
   /** Tabs in the window's chords playing media (or paused a moment ago), newest first, when that changes. */
   'media:state': NowPlaying[];
+  /** A reader view's look changed: its chord's colors, its controls, reduced motion. */
+  'reader:look': ReaderLook;
 }
 
 /**
@@ -1265,6 +1321,22 @@ export interface ArchiveApi {
     onChange(listener: () => void): () => void;
     restore(archiveId: string): Promise<void>;
     remove(archiveId: string): Promise<void>;
+  };
+}
+
+/** `window.chord` in a reader view. */
+export interface ReaderApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  reader: {
+    page(): Promise<ReaderPage>;
+    look(): Promise<ReaderLook>;
+    onLook(listener: (look: ReaderLook) => void): () => void;
+    ready(): Promise<void>;
+    set(patch: z.input<typeof ReaderSettingsPatch>): Promise<void>;
+    close(): Promise<void>;
   };
 }
 
