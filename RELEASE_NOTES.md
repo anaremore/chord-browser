@@ -6,6 +6,8 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.2.0; it gets its version when it's released.
 
+- **Smaller updates** on Windows and with the AppImage, once in-app updates are on: Chord downloads only what changed, often well under 1 MB instead of the whole 130 MB installer. The installer you download from the release page is about 11 MB larger for it.
+
 - **Counts on tabs** also come from a site's background worker, so a message that arrives while the tab sleeps can show when it wakes. A site open in two tabs counts once on Chord's icon.
 
 ## 0.2.0 · preview · 2026-10-25
