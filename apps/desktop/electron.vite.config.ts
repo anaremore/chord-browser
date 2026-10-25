@@ -40,7 +40,8 @@ export default defineConfig({
     // Safe Browsing's worker thread (§14.5), ad blocking's (§9; the engine
     // stays out of main), the process that reads other browsers' files
     // for an import (§9), the worker that cleans reader view's
-    // articles (§9), and the one that installs Chord Player (§9).
+    // articles (§9), the one that installs Chord Player (§9), and Effects'
+    // sanitizer (§9).
     plugins: [filterLists()],
     build: {
       externalizeDeps: false,
@@ -55,6 +56,8 @@ export default defineConfig({
           'player-unpack': src('main/player/unpack-worker.ts'),
           import: src('import/worker.ts'),
           reader: src('main/reader/worker.ts'),
+          // Effects' sanitizer: every stylesheet an Effect applies is checked there, never on main (§9).
+          effects: src('main/effects/worker.ts'),
         },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },

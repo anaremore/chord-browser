@@ -62,6 +62,10 @@ export type ActionId =
   | 'view.focusNextRegion'
   | 'view.focusPreviousRegion'
   | 'view.reader'
+  | 'effects.open'
+  | 'effects.site'
+  | 'effects.everywhere'
+  | 'effects.hide'
   | 'page.print'
   | 'page.screenshot'
   | 'page.save'
@@ -151,6 +155,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // Reader view (DESIGN.md §7.11): Firefox's keys, page-first. Safari's ⌘⇧R reloads without the cache here, and
   // Ctrl+Alt+R is AltGr+R on Windows, which types a letter on some layouts; F9 is Firefox's and Edge's there.
   s('view.reader', 'Show or hide reader view', 'page-first', ['Mod+Alt+R'], ['F9']),
+  // Effects (DESIGN.md §7.15): the card, and Dry/Wet for the site in front, page-first (Google Docs' Ctrl+Shift+E centers text,
+  // and keeps it). Dry everywhere and hiding an element are in the card, the menus and the command bar.
+  s('effects.open', 'Effects for this site', 'page-first', []),
+  s('effects.site', 'Effects on this site: dry or wet', 'page-first', ['Mod+Shift+E']),
+  s('effects.everywhere', 'Effects everywhere: dry or wet', 'page-first', []),
+  s('effects.hide', 'Hide an element on this page', 'page-first', []),
   s('page.print', 'Print', 'page-first', ['Mod+P']),
   // Screenshots (DESIGN.md §7.12): Arc's key, clear of macOS's own ⌘⇧3/4/5. Chord's before the page's: sites rarely use it.
   s('page.screenshot', 'Take a screenshot', 'reserved', ['Mod+Shift+2']),

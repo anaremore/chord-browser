@@ -12,6 +12,7 @@ import { Favicon } from '../shared/Favicon';
 import { useLive, type Live } from '../shared/live';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
+import { EffectsCard } from './EffectsCard';
 import styles from './Popover.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -541,7 +542,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
   const info = useLive(infoSource);
   const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
-  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.passkey || state.safeBrowsingOffer || state.drm);
+  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.passkey || state.safeBrowsingOffer || state.drm || state.effects);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -567,6 +568,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
       {state.passkey && <PasskeyCard key={state.passkey.id} prompt={state.passkey} />}
       {state.safeBrowsingOffer && <SafeBrowsingOffer />}
       {state.drm && <DrmNoticeCard key={state.drm.service} notice={state.drm} />}
+      {state.effects && <EffectsCard key={state.effects.host} opened={state.effects.opened} />}
     </div>
   );
 }

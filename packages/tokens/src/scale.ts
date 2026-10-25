@@ -54,6 +54,8 @@ export const size = {
   artwork: 40,
   /** Popover cards over the page: the find bar, permission prompts. */
   popoverCard: 320,
+  /** The tallest a popover card grows (the Effects card, DESIGN.md §7.15) before it scrolls inside. */
+  popoverMax: 520,
   /** A mini window (DESIGN.md §7.9): its bar, and its size until you resize one. */
   miniBar: 36,
   miniWidth: 900,
@@ -119,6 +121,8 @@ export const type = {
 } as const satisfies Record<string, TypeStyle>;
 
 export const fontFamily = `'Onest', system-ui, -apple-system, 'Segoe UI', sans-serif`;
+/** The computer's own monospace, for code you write (Effects' CSS, DESIGN.md §7.15). */
+export const fontMono = `ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace`;
 
 export const shadow = {
   light: {

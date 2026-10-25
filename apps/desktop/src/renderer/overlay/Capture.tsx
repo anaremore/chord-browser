@@ -6,6 +6,10 @@
  * and F take what's on screen and the whole page, Esc cancels. The wheel
  * still scrolls the page, which never sees the pointer: main asks it what's
  * there from Chord's own isolated world.
+ *
+ * The same layer picks elements to hide for Effects (`capture.hide`, DESIGN.md
+ * §7.15): a click hides the element under the pointer on the site and picking
+ * goes on, until Done (Esc). No areas, nothing taken.
  */
 import { MIN_AREA, rectFromPoints, intersectRect, type ShotRect } from '@chord/core';
 import type { CaptureHit, CaptureStart, ScreenshotChoice } from '@chord/ipc';
@@ -29,6 +33,9 @@ export function CaptureLayer({ capture, onClose, onTaken }: { capture: CaptureSt
   const hintId = useId();
   const [hit, setHit] = useState<CaptureHit | null>(null);
   const [drag, setDrag] = useState<{ from: Point; to: Point } | null>(null);
+  const hiding = capture.hide ?? null;
+  const [hidden, setHidden] = useState(0);
+  const [said, setSaid] = useState('');
   // One question to the page at a time; meanwhile only the newest point waits.
   const asking = useRef(false);
   // Where the pointer was when ↑ or ↓ chose an element: that choice holds until the pointer really moves.
@@ -58,6 +65,18 @@ export function CaptureLayer({ capture, onClose, onTaken }: { capture: CaptureSt
     void api.capture.take(choice);
   };
 
+  /** Effects: hide what's outlined, and look again under the pointer (what was behind it shows now). */
+  const hide = () => {
+    if (!hit) return;
+    setHit(null);
+    void api.capture.hide().then((done) => {
+      if (!done) return;
+      setHidden((n) => n + 1);
+      setSaid(`Hid ${done.label}`);
+      if (pointer.current) hover(pointer.current);
+    });
+  };
+
   const area = drag ? intersectRect(rectFromPoints(drag.from, drag.to), pane) : null;
   const dragging = area !== null && area.width >= MIN_AREA && area.height >= MIN_AREA;
 
@@ -66,12 +85,16 @@ export function CaptureLayer({ capture, onClose, onTaken }: { capture: CaptureSt
     const at = { x: event.clientX, y: event.clientY };
     // A click outside the page cancels, as a click outside the command bar does.
     if (!inside(at, pane)) return onClose();
+    // Picking for Effects has no areas: a click is a click.
+    if (hiding) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     setDrag({ from: at, to: at });
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const at = { x: event.clientX, y: event.clientY };
     pointer.current = at;
+    // What was hidden has been said; what's under the pointer is said again from here.
+    if (said) setSaid('');
     const held = steppedAt.current;
     if (held && Math.hypot(at.x - held.x, at.y - held.y) < MIN_AREA) return;
     steppedAt.current = null;
@@ -80,7 +103,11 @@ export function CaptureLayer({ capture, onClose, onTaken }: { capture: CaptureSt
     else if (bar.current?.contains(event.target as Node)) setHit(null);
     else hover(at);
   };
-  const onPointerUp = () => {
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    if (hiding) {
+      if (event.button === 0 && !bar.current?.contains(event.target as Node)) hide();
+      return;
+    }
     if (!drag) return;
     setDrag(null);
     if (dragging && area) take({ kind: 'area', rect: area });
@@ -97,9 +124,11 @@ export function CaptureLayer({ capture, onClose, onTaken }: { capture: CaptureSt
       steppedAt.current = pointer.current;
       void api.capture.step(key === 'arrowup' ? 'parent' : 'child').then((answer) => answer && setHit(answer));
     }
-    else if (key === 'enter' && hit) take({ kind: 'element' });
-    else if (key === 'v' && !event.metaKey && !event.ctrlKey) take({ kind: 'visible' });
-    else if (key === 'f' && !event.metaKey && !event.ctrlKey) take({ kind: 'page' });
+    else if (key === 'enter' && hit) {
+      if (hiding) hide();
+      else take({ kind: 'element' });
+    } else if (key === 'v' && !hiding && !event.metaKey && !event.ctrlKey) take({ kind: 'visible' });
+    else if (key === 'f' && !hiding && !event.metaKey && !event.ctrlKey) take({ kind: 'page' });
     else return;
     event.preventDefault();
   };
@@ -111,7 +140,7 @@ export function CaptureLayer({ capture, onClose, onTaken }: { capture: CaptureSt
       ref={root}
       className={styles.root}
       role="dialog"
-      aria-label="Take a screenshot"
+      aria-label={hiding ? `Hide elements on ${hiding.host}` : 'Take a screenshot'}
       aria-describedby={hintId}
       tabIndex={-1}
       onKeyDown={onKeyDown}
@@ -128,21 +157,35 @@ export function CaptureLayer({ capture, onClose, onTaken }: { capture: CaptureSt
         </div>
       )}
       <div ref={bar} className={styles.bar} style={{ left: pane.x + pane.width / 2, top: pane.y + 12 }} onPointerDown={(event) => event.stopPropagation()}>
-        <span id={hintId} className={styles.hint}>
-          Click an element or drag an area
-        </span>
-        <button type="button" className={styles.button} onClick={() => take({ kind: 'visible' })}>
-          Visible <kbd className={styles.key}>V</kbd>
-        </button>
-        <button type="button" className={styles.button} onClick={() => take({ kind: 'page' })}>
-          Full page <kbd className={styles.key}>F</kbd>
-        </button>
-        <button type="button" className={styles.close} aria-label="Cancel" title="Cancel (Esc)" onClick={onClose}>
-          <X size={16} strokeWidth={1.75} aria-hidden />
-        </button>
+        {hiding ? (
+          <>
+            <span id={hintId} className={styles.hint}>
+              Click what to hide on {hiding.host}
+            </span>
+            {hidden > 0 && <span className={styles.hint}>{hidden} hidden</span>}
+            <button type="button" className={styles.button} onClick={onClose}>
+              Done <kbd className={styles.key}>Esc</kbd>
+            </button>
+          </>
+        ) : (
+          <>
+            <span id={hintId} className={styles.hint}>
+              Click an element or drag an area
+            </span>
+            <button type="button" className={styles.button} onClick={() => take({ kind: 'visible' })}>
+              Visible <kbd className={styles.key}>V</kbd>
+            </button>
+            <button type="button" className={styles.button} onClick={() => take({ kind: 'page' })}>
+              Full page <kbd className={styles.key}>F</kbd>
+            </button>
+            <button type="button" className={styles.close} aria-label="Cancel" title="Cancel (Esc)" onClick={onClose}>
+              <X size={16} strokeWidth={1.75} aria-hidden />
+            </button>
+          </>
+        )}
       </div>
       <div className="sr-only" aria-live="polite">
-        {hit && !drag ? `${hit.label}, ${hit.width} by ${hit.height}` : ''}
+        {said || (hit && !drag ? `${hit.label}, ${hit.width} by ${hit.height}` : '')}
       </div>
     </div>
   );

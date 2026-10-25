@@ -240,6 +240,8 @@ function registerIpc(): void {
     const w = senderWindow(sender);
     // An import's toast: its history goes too, and a running import stops first.
     if (command.t === 'import.undo') return importer!.undo(command.importId);
+    // A toast's Undo for Effects: they live in main, not in the store.
+    if (command.t === 'effects.undo') return browser!.effects.undo(command.token);
     // Docking and collapsing picture the page first, so its frame can glide (ARCHITECTURE.md §5).
     if (command.t === 'window.sidebar') {
       browser!.setSidebar(w, command.sidebar);
@@ -288,6 +290,11 @@ function registerIpc(): void {
   handle('capture:step', ({ to }, sender) => browser!.screenshots.step(senderWindow(sender), to));
   handle('capture:take', (choice, sender) => browser!.screenshots.take(senderWindow(sender), choice));
   handle('capture:scroll', ({ x, y, deltaX, deltaY }, sender) => browser!.screenshots.scroll(senderWindow(sender), x, y, deltaX, deltaY));
+  // Effects (DESIGN.md §7.15): the picker's click, the card in the popover, and Settings' list. Each acts on the sender's own window.
+  handle('capture:hide', (_request, sender) => browser!.effects.hidePicked(senderWindow(sender).id));
+  handle('effects:view', (_request, sender) => browser!.effects.view(senderWindow(sender).id));
+  handle('effects:do', (action, sender) => browser!.effects.act(senderWindow(sender), action));
+  handle('settings:effects', (change) => browser!.effects.settingsChange(change));
   handle('screenshots:list', (_request, sender) => browser!.screenshots.list(senderWindow(sender)));
   handle('screenshots:do', ({ id, do: action }, sender) => browser!.screenshots.act(senderWindow(sender), id, action));
   handle('screenshots:clear', (_request, sender) => browser!.screenshots.clear(senderWindow(sender)));
@@ -493,6 +500,7 @@ if (!app.requestSingleInstanceLock()) {
     // finishes a change under way (no control page may be open as Electron tears down) and ends its workers.
     // Chord Player quits by itself once Chord's channel closes: nothing to wait for.
     browser?.player.stopUpdates();
+    browser?.effects.stop();
     void Promise.all([duet?.quit(), adBlocking.stop()])
       .catch(() => undefined)
       .then(() => imports)
@@ -631,6 +639,11 @@ if (!app.requestSingleInstanceLock()) {
       screenshots,
       histories: opened.navs,
       saveHistory: (nodeId, nav) => persistence?.nav(nodeId, nav),
+      effects: {
+        saved: opened.effects,
+        persist: (host, site) => persistence?.effect(host, site),
+        workerPath: join(import.meta.dirname, 'effects.js'),
+      },
       history: (event) => store.history(event),
       archive: { entry: (which) => store.archiveEntry(which) },
       idle: {
@@ -726,6 +739,11 @@ if (!app.requestSingleInstanceLock()) {
       save: async (filename, bytes, mime) => void (await downloads.addFile(filename, bytes, mime, '', null)),
     });
     browser.duet = duet;
+    // Effects' Ask Duet: Duet's own reading rules, one request at a time, nothing kept.
+    browser.effects.duet = {
+      available: (windowId, url) => duet!.effectsProvider(windowId, url),
+      ask: (request) => duet!.oneShot(request),
+    };
     serveDuetImages((url) => duet!.serveImage(url));
     importer = new Importer({
       workerPath: join(import.meta.dirname, 'import.js'),
@@ -754,6 +772,8 @@ if (!app.requestSingleInstanceLock()) {
         safeBrowsing: () => ({ status: safeBrowsing.status(), timings: safeBrowsing.timings() }),
         /** Check addresses as a page's navigation would (for timing it). */
         safeBrowsingCheck: (urls: string[]) => safeBrowsing.check(urls, 'frame'),
+        /** Effects: the saved sites, what each page has, and how long applying and checking took (ms). */
+        effects: () => browser!.effects.inspect(),
         /** Ad blocking's lists, and what each session has (the extension, the dispatcher). */
         adBlocking: () => ({ status: adBlocking.status(), ...adBlocking.inspect() }),
         /** Check the lists that are due now, as the timer would. */

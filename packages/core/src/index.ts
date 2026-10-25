@@ -1,6 +1,7 @@
 export * from './ad-blocking';
 export * from './idle';
 export * from './duet';
+export * from './effects';
 export * from './ids';
 export * from './import';
 export * from './bindings';

@@ -227,4 +227,20 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE INDEX IF NOT EXISTS history_visit_url ON history_visit(url_id, id);
   `,
+  // 13: Effects (ARCHITECTURE.md §9, D13): your styles for a site, by host (`www.` folded, a port kept), shared by every
+  // chord. css is what you wrote; hidden, presets and duet are JSON; compiled is all of it as the sanitizer made it (what
+  // main inserts), with that sanitizer's version, so a newer one makes it again. Private windows' Effects are never here.
+  `
+  CREATE TABLE IF NOT EXISTS effect (
+    host TEXT PRIMARY KEY,
+    wet INTEGER NOT NULL DEFAULT 1,
+    css TEXT NOT NULL DEFAULT '',
+    hidden TEXT NOT NULL DEFAULT '[]',
+    presets TEXT NOT NULL DEFAULT '[]',
+    duet TEXT NOT NULL DEFAULT '[]',
+    compiled TEXT NOT NULL DEFAULT '',
+    sanitizer INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  ) STRICT;
+  `,
 ];

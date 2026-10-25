@@ -5,6 +5,8 @@
  */
 import {
   ARCHIVE_AFTER_MS,
+  EFFECT_PRESET_IDS,
+  EFFECTS_LIMITS,
   READER_FONTS,
   READER_SIZES,
   READER_THEMES,
@@ -24,6 +26,7 @@ import {
   type DownloadAction,
   type DuetContextUsage,
   type DuetTabName,
+  type EffectPresetId,
   type DuetHit,
   type DuetMessage,
   type DuetProvider,
@@ -181,6 +184,8 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('tabCounts.site'), site: z.string().min(1).max(300), off: z.boolean() }),
   // An import's toast: Undo. (Main also takes its history back; import.add is main's alone.)
   z.object({ t: z.literal('import.undo'), importId: id }),
+  // A toast's Undo for a change to a site's Effects (main takes it over: Effects live outside the store).
+  z.object({ t: z.literal('effects.undo'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // Presenting mode's indicator turns it off. Only yours: shares start and end it in main.
   z.object({ t: z.literal('presenting.set'), on: z.boolean(), by: z.literal('you') }),
   // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
@@ -242,6 +247,8 @@ export const SettingsPatch = z.strictObject({
     })
     .partial()
     .optional(),
+  // Settings → Effects: dry or wet everywhere.
+  effects: z.strictObject({ wet: z.boolean() }).partial().optional(),
   duet: z
     .strictObject({
       enabled: z.boolean(),
@@ -316,7 +323,76 @@ export interface SettingsSnapshot {
   spellcheckLanguages: string[];
   /** Settings → General → Link routes, by site. */
   linkRoutes: LinkRoute[];
+  /** Settings → Effects: every site with Effects, newest change first. */
+  effects: EffectsSite[];
 }
+
+/** A site with Effects, as Settings → Effects lists it. */
+export interface EffectsSite {
+  host: string;
+  /** Its own switch. */
+  wet: boolean;
+  /** "Your CSS · 2 hidden · Dark". */
+  summary: string;
+  updatedAt: number;
+}
+
+/** Settings → Effects: a site dry or wet, or its Effects removed (Settings asks a second time first). */
+export const EffectsSiteChange = z.discriminatedUnion('do', [
+  z.strictObject({ do: z.literal('wet'), host: z.string().min(1).max(300), wet: z.boolean() }),
+  z.strictObject({ do: z.literal('remove'), host: z.string().min(1).max(300) }),
+]);
+export type EffectsSiteChange = z.infer<typeof EffectsSiteChange>;
+
+/** One site's Effects as the card shows them (DESIGN.md §7.15), pushed as `effects:state` while it's open. */
+export interface EffectsView {
+  host: string;
+  /** The site's own switch. */
+  wet: boolean;
+  /** Settings' switch for every site: dry there makes every site dry, whatever its own switch says. */
+  everywhere: boolean;
+  /** Your CSS, as you wrote it. */
+  css: string;
+  /** What the sanitizer left out of your CSS, and the line each was on. */
+  removed: { what: string; line: number; kind: 'fetch' | 'unknown' }[];
+  hidden: { selector: string; label: string }[];
+  presets: EffectPresetId[];
+  duet: { id: string; ask: string; summary: string }[];
+  /**
+   * Ask Duet: offered only where Duet may read the page (set up, on in this
+   * chord, not a Never site, not a private window); how a request is going.
+   */
+  ask: {
+    available: boolean;
+    /** "Claude Code" or "Codex". */
+    provider: string | null;
+    busy: boolean;
+    startedAt: number | null;
+    /** Why the last request gave nothing, in a sentence. */
+    error: string | null;
+    /** What Chord left out of the last patch Duet wrote. */
+    note: string | null;
+  };
+  /** A private window's: what's changed here lasts only as long as the window. */
+  private: boolean;
+}
+
+/** What the card asks main to do. Main checks it against the card's own site again. */
+export const EffectsAction = z.discriminatedUnion('do', [
+  z.object({ do: z.literal('css'), css: z.string().max(EFFECTS_LIMITS.css) }),
+  z.object({ do: z.literal('wet'), wet: z.boolean() }),
+  z.object({ do: z.literal('everywhere'), wet: z.boolean() }),
+  z.object({ do: z.literal('preset'), id: z.enum(EFFECT_PRESET_IDS), on: z.boolean() }),
+  z.object({ do: z.literal('unhide'), selector: z.string().min(1).max(EFFECTS_LIMITS.selector) }),
+  z.object({ do: z.literal('removeDuet'), id: z.string().min(1).max(64) }),
+  z.object({ do: z.literal('clear') }),
+  /** Hide an element: the card steps aside for the picker. */
+  z.object({ do: z.literal('pick') }),
+  z.object({ do: z.literal('ask'), text: z.string().trim().min(1).max(EFFECTS_LIMITS.ask) }),
+  z.object({ do: z.literal('stop') }),
+  z.object({ do: z.literal('close') }),
+]);
+export type EffectsAction = z.infer<typeof EffectsAction>;
 
 /** What a mini window's bar shows (DESIGN.md §7.9): the page, and the chord "Open in" puts it in. */
 export interface MiniState {
@@ -544,6 +620,8 @@ export interface PopoverState {
   safeBrowsingOffer: boolean;
   /** The page is on a service that needs Widevine, which Chord doesn't include yet (D4). */
   drm: DrmNotice | null;
+  /** The Effects card for the site on screen (DESIGN.md §7.15); `opened` changes each time it opens, and it takes the keyboard. */
+  effects: { host: string; opened: number } | null;
 }
 
 export const OTHER_BROWSERS = ['chrome', 'edge', 'firefox', 'safari', 'brave'] as const;
@@ -698,6 +776,8 @@ export interface Toast {
 /** Taking a screenshot (DESIGN.md §7.12): where the page is, in UI units (the overlay's CSS pixels). */
 export interface CaptureStart {
   pane: Rect;
+  /** Picking elements to hide (Effects, DESIGN.md §7.15) rather than a screenshot; the site they're hidden on. */
+  hide?: { host: string };
 }
 
 /** The element under the pointer: where it shows (UI units, cut to the pane), what it is, and its size in the page. */
@@ -1011,6 +1091,13 @@ export const invokeChannels = {
   'capture:step': { roles: ['overlay'], request: z.strictObject({ to: z.enum(['parent', 'child']) }), response: z.custom<CaptureHit | null>() },
   'capture:take': { roles: ['overlay'], request: ScreenshotChoice, response: z.void() },
   'capture:scroll': { roles: ['overlay'], request: z.strictObject({ x: z.number(), y: z.number(), deltaX: z.number(), deltaY: z.number() }), response: z.void() },
+  /** Picking for Effects: hide the element under the pointer on the site, and stay picking. Answers what was hidden. */
+  'capture:hide': { roles: ['overlay'], request: z.void(), response: z.custom<{ label: string } | null>() },
+  // The Effects card (DESIGN.md §7.15), in the popover: its site's Effects, and what it changes.
+  'effects:view': { roles: ['popover'], request: z.void(), response: z.custom<EffectsView | null>() },
+  'effects:do': { roles: ['popover'], request: EffectsAction, response: z.void() },
+  /** Settings → Effects: a site dry or wet, or removed. */
+  'settings:effects': { roles: ['internal'], request: EffectsSiteChange, response: z.void() },
   // The recent screenshots, in the downloads panel (the window's own, for a private window), and the toast's Save.
   'screenshots:list': { roles: ['overlay'], request: z.void(), response: z.custom<ScreenshotItem[]>() },
   'screenshots:do': { roles: ['overlay', 'shell'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{24}$/), do: z.enum(['copy', 'save', 'delete', 'duet']) }), response: z.void() },
@@ -1250,6 +1337,8 @@ export interface EventPayloads {
   'media:state': NowPlaying[];
   /** A reader view's look changed: its chord's colors, its controls, reduced motion. */
   'reader:look': ReaderLook;
+  /** The Effects card's site changed (or the card closed: null). */
+  'effects:state': EffectsView | null;
 }
 
 /**
@@ -1450,6 +1539,8 @@ export interface SettingsApi {
     /** Settings → General → Chord Player. */
     player(): Promise<PlayerStatus>;
     removePlayer(): Promise<PlayerStatus>;
+    /** Settings → Effects: a site dry or wet, or removed. */
+    effects(change: EffectsSiteChange): Promise<void>;
   };
   extensions: {
     install(input: string): Promise<InstallResult>;
@@ -1547,6 +1638,8 @@ export interface PopoverApi {
   safeBrowsing: { choose(on: boolean): Promise<void> };
   /** The DRM notice: open the page in another browser or Chord Player (installing it first), or not now. */
   drm: { open(browser: OtherBrowserId): Promise<void>; dismiss(): Promise<void>; player(action: 'install' | 'open' | 'retry'): Promise<void> };
+  /** The Effects card: its site's Effects as main pushes them, and its changes. */
+  effects: { view(): Promise<EffectsView | null>; onState(listener: (view: EffectsView | null) => void): () => void; act(action: z.input<typeof EffectsAction>): Promise<void> };
 }
 
 /** `window.chord` in the command bar overlay. */
@@ -1602,6 +1695,8 @@ export interface OverlayApi {
     step(to: 'parent' | 'child'): Promise<CaptureHit | null>;
     take(choice: ScreenshotChoice): Promise<void>;
     scroll(x: number, y: number, deltaX: number, deltaY: number): Promise<void>;
+    /** Picking for Effects: hide the element under the pointer. */
+    hide(): Promise<{ label: string } | null>;
   };
   /** The recent screenshots, in the downloads panel. */
   screenshots: {

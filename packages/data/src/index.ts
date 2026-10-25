@@ -14,6 +14,7 @@ import type {
   InstalledExtension,
   LinkRoute,
   PersistedState,
+  SavedEffects,
   Settings,
   SidebarNode,
   SitePermissions,
@@ -37,6 +38,8 @@ export type WriteOp =
   /** A site's page zoom, by host. */
   | { k: 'siteZoom'; id: string; value: number | null }
   | { k: 'linkRoute'; id: string; value: LinkRoute | null }
+  /** A site's Effects, by host (main/effects: they never pass through the store). */
+  | { k: 'effect'; id: string; value: SavedEffects | null }
   /** An open tab's back/forward history, by node id: what brings it back where it was after a restart or a crash. */
   | { k: 'nav'; id: string; value: NavState | null };
 
@@ -136,8 +139,8 @@ export interface OpenTiming {
 }
 
 export type DataResponse =
-  /** `navs`, from `open`: open tabs' saved back/forward histories, by node id. */
-  | { id: number; ok: true; saved?: PersistedState | null; navs?: Record<string, NavState>; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult; timing?: OpenTiming }
+  /** `navs`, from `open`: open tabs' saved back/forward histories, by node id; `effects`: every site's Effects. */
+  | { id: number; ok: true; saved?: PersistedState | null; navs?: Record<string, NavState>; effects?: SavedEffects[]; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult; timing?: OpenTiming }
   | { id: number; ok: false; error: string };
 
 /** The part of an Immer patch this needs. */

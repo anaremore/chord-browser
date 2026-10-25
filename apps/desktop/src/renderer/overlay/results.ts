@@ -111,6 +111,18 @@ const inReader = (on: boolean) => (state: State, windowId: string) => {
   return on ? Boolean(live?.reader) : Boolean(live?.readable && !live.reader);
 };
 
+/** The tab on screen is a website (Effects work on those). */
+const onWebsite = (state: State, windowId: string) => {
+  const tab = activeTab(state, windowId);
+  return tab !== null && /^https?:/i.test(tab.url);
+};
+
+/** The site on screen has Effects, wet (`'wet'`) or dry (`'dry'`). */
+const effectsAre = (now: 'wet' | 'dry') => (state: State, windowId: string) => {
+  const active = activeTabId(state, windowId);
+  return (active ? state.live[active]?.effects : null) === now;
+};
+
 /**
  * Every action the keyboard needs is here (DESIGN.md §14.1 rule 4). `when`:
  * shown only where it does something (Separate split tabs, in a split).
@@ -147,6 +159,13 @@ const ACTIONS: { action: ActionId; title: string; words: string; when?: (state: 
   { action: 'page.screenshot', title: 'Take a screenshot', words: 'screenshot capture screen grab snip picture image copy element area page' },
   { action: 'view.reader', title: 'Show reader view', words: 'reader view mode read article text clean distraction', when: inReader(false) },
   { action: 'view.reader', title: 'Leave reader view', words: 'reader view leave exit close article page', when: inReader(true) },
+  // Effects (DESIGN.md §7.15): the card, Dry/Wet for the site and for every site, and hiding an element.
+  { action: 'effects.open', title: 'Effects for this site', words: 'effects style restyle css boost customize theme look font dark site', when: onWebsite },
+  { action: 'effects.site', title: 'Make this site dry', words: 'effects dry off turn off original style site', when: effectsAre('wet') },
+  { action: 'effects.site', title: 'Make this site wet', words: 'effects wet on turn on style site', when: effectsAre('dry') },
+  { action: 'effects.everywhere', title: 'Make every site dry', words: 'effects dry everywhere all sites off original', when: (s) => s.settings.effects.wet },
+  { action: 'effects.everywhere', title: 'Make every site wet', words: 'effects wet everywhere all sites on', when: (s) => !s.settings.effects.wet },
+  { action: 'effects.hide', title: 'Hide an element on this page', words: 'hide element zap remove block banner sidebar effects', when: onWebsite },
   { action: 'page.print', title: 'Print', words: 'print pdf' },
   { action: 'page.viewSource', title: 'View page source', words: 'view source html code' },
   { action: 'app.devtools', title: 'Developer tools', words: 'developer tools devtools inspect console' },

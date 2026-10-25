@@ -144,7 +144,9 @@ export type DuetToolName =
   | 'read_selection'
   | 'tab_screenshot'
   | 'search_history'
-  | 'search_archive';
+  | 'search_archive'
+  /** Effects' one tool (effects.ts): never offered in a chat. */
+  | 'read_page_outline';
 
 export interface DuetToolSpec {
   name: DuetToolName;

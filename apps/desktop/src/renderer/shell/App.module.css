@@ -144,11 +144,17 @@
   transform: scale(0.94);
 }
 
-/* A page's button that's on (reader view): the active row's raised surface. */
-.iconButton[aria-pressed='true'] {
+/* A page's button that's on (reader view; Effects while they're wet): the active row's raised surface. */
+.iconButton[aria-pressed='true'],
+.iconButton[data-effects='wet'] {
   background: var(--color-item-active-bg);
   box-shadow: var(--shadow-raised);
   color: var(--color-fg);
+}
+
+/* Effects kept but dry: there, and quieter. */
+.iconButton[data-effects='dry'] {
+  color: var(--color-fg-subtle);
 }
 
 kbd {
@@ -1837,6 +1843,7 @@ kbd {
   .favorite[aria-current='page'],
   .iconCell[aria-pressed='true'],
   .iconButton[aria-pressed='true'],
+  .iconButton[data-effects='wet'],
   .duetButton[aria-pressed='true'] {
     forced-color-adjust: none;
     background: Highlight;

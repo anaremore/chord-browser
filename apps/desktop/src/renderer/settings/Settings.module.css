@@ -498,3 +498,11 @@
     border: var(--size-hairline) solid CanvasText;
   }
 }
+
+/* A row's two controls side by side (Settings → Effects: Remove, then the site's switch). */
+.inlineControls {
+  display: flex;
+  flex: none;
+  gap: var(--space-3);
+  align-items: center;
+}

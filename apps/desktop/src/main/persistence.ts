@@ -6,7 +6,7 @@
  */
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ArchiveReason, PersistedState, State } from '@chord/core';
+import type { ArchiveReason, PersistedState, SavedEffects, State } from '@chord/core';
 import {
   opKey,
   opsForState,
@@ -76,7 +76,9 @@ export class Persistence {
 
   /** Start chord-data and read what was saved (null for a brand-new profile). Rows of unused profiles are dropped. */
   /** `timing` and `attempts`: how the open went, for the launch timeline. */
-  static async open(file: string): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState>; timing: OpenTiming | null; attempts: number }> {
+  static async open(
+    file: string,
+  ): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState>; effects: SavedEffects[]; timing: OpenTiming | null; attempts: number }> {
     const persistence = new Persistence(file);
     persistence.spawn();
     // A disk that's busy for a moment gets two more tries before Chord gives up on the profile.
@@ -86,7 +88,7 @@ export class Persistence {
       return persistence.request({ type: 'open', file, prune: true });
     }, OPEN_RETRY_WAITS_MS);
     if (!response.ok) throw new Error(response.error);
-    return { persistence, saved: response.saved ?? null, navs: response.navs ?? {}, timing: response.timing ?? null, attempts };
+    return { persistence, saved: response.saved ?? null, navs: response.navs ?? {}, effects: response.effects ?? [], timing: response.timing ?? null, attempts };
   }
 
   private spawn(): void {
@@ -139,6 +141,14 @@ export class Persistence {
   nav(nodeId: string, nav: NavState | null): void {
     if (this.closed) return;
     const op: WriteOp = { k: 'nav', id: nodeId, value: nav };
+    this.pending.set(opKey(op), op);
+    this.schedule();
+  }
+
+  /** A site's Effects (never a private window's: the caller checks), or null when the site has none any more. */
+  effect(host: string, value: SavedEffects | null): void {
+    if (this.closed) return;
+    const op: WriteOp = { k: 'effect', id: host, value };
     this.pending.set(opKey(op), op);
     this.schedule();
   }
