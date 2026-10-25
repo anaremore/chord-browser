@@ -191,15 +191,32 @@ test('DevTools dock beside the page, resize, move, pop out and back, stay with t
 
     // Dragging the edge 120 px toward the page: 560 px, live, saved once let go.
     const edge = shell.getByRole('separator', { name: 'Resize developer tools' });
+    // The pointer rests on it first (Playwright checks nothing else would take it there), as a hand does.
+    await edge.hover();
     const box = (await edge.boundingBox())!;
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
+    // What the shell hears of the drag, to say so if it doesn't take.
+    await shell.evaluate(() => {
+      const w = window as unknown as { edgeEvents: string[] };
+      w.edgeEvents = [];
+      for (const type of ['pointerdown', 'gotpointercapture', 'pointermove', 'pointerup', 'lostpointercapture']) {
+        document.addEventListener(type, (e) => w.edgeEvents.push(`${type} on ${(e.target as Element).getAttribute('aria-label') ?? (e.target as Element).tagName}`), true);
+      }
+      window.addEventListener('error', (e) => w.edgeEvents.push(`error: ${e.message}`));
+    });
     await shell.mouse.move(cx, cy);
     await shell.mouse.down();
     await shell.mouse.move(cx - 60, cy, { steps: 5 });
     await shell.mouse.move(cx - 120, cy, { steps: 5 });
     await shell.mouse.up();
-    await expect.poll(async () => (await devtoolsState(shell)).settings.width).toBe(560);
+    await expect
+      .poll(async () => (await devtoolsState(shell)).settings.width)
+      .toBe(560)
+      .catch(async (error: Error) => {
+        const heard = await shell.evaluate(() => [...new Set((window as unknown as { edgeEvents: string[] }).edgeEvents)].join('; '));
+        throw new Error(`${error.message}\nThe shell heard: ${heard || 'nothing'}`);
+      });
     await expect.poll(async () => (await docked(app, shell, second, 'right', 560)).fits).toBe(true);
 
     // The other side: at the bottom, 320 px tall; the width waits for the right side.
