@@ -286,10 +286,25 @@ test('Favorites: added by action or by dragging, shared by chords, and a favorit
   }
 });
 
+/**
+ * Motion on whatever the OS says (CI's Windows and macOS machines ask for
+ * reduced motion), as frame-snapshot.spec.ts does: main's reading is
+ * replaced and announced, and the shell's own media query follows.
+ */
+async function motionOn(app: ElectronApplication, shell: Page): Promise<void> {
+  await app.evaluate(({ nativeTheme, systemPreferences }) => {
+    systemPreferences.getAnimationSettings = () => ({ shouldRenderRichAnimation: true, scrollAnimationsEnabledBySystem: true, prefersReducedMotion: false });
+    nativeTheme.emit('updated');
+  });
+  await shell.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect.poll(() => shell.evaluate(() => document.documentElement.hasAttribute('data-reduced-motion'))).toBe(false);
+}
+
 test('the active highlight glides to the tab you switch to, from Pinned into Today too, and just appears with tab moves off', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const { shell, today, pinned } = await setUp(app, ['/second', '/third']);
+    await motionOn(app, shell);
     // The pill on the row on screen: whether it's gliding there (a running animation of its own).
     const gliding = () =>
       shell.evaluate(() => {
