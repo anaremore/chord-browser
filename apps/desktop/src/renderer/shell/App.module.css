@@ -1067,15 +1067,35 @@ kbd {
   color: var(--color-fg);
 }
 
-/* Which of several playing tabs this is: "1 of 2 ›". */
-.nowPlayingNext {
+/* The other tabs playing: a row each under a hairline, then "and N more". */
+.nowPlayingOthers {
   display: flex;
-  flex: none;
+  flex-direction: column;
   gap: var(--space-0);
-  inline-size: auto;
-  padding-inline: var(--space-1) var(--space-0);
+  padding-block-start: var(--space-1);
+  border-block-start: var(--size-hairline) solid var(--color-divider);
+}
+
+.nowPlayingLine {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.nowPlayingMore {
+  align-self: flex-start;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
   font: var(--text-micro);
-  font-variant-numeric: tabular-nums;
+}
+
+.nowPlayingMore:hover {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
 }
 
 .nowPlayingPlay {

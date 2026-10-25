@@ -19,6 +19,7 @@
 import { isArtworkType, pickArtwork, usableDataIcon, type MediaImage, type NodeId } from '@chord/core';
 import type { NowPlaying } from '@chord/ipc';
 import type { WebContents } from 'electron';
+import { SITE_CONTROLS } from './media-sites';
 import { pageCall } from './page-call';
 
 /** Chord's isolated world for this: same DOM as the page, none of its scripts. */
@@ -37,9 +38,10 @@ const MAX_ARTWORK_BYTES = 256 * 1024;
 
 /**
  * What the page says it plays. A player counts as playing when the page
- * hasn't silenced it itself (a muted background loop isn't "now playing").
+ * hasn't silenced it itself (a muted background loop isn't "now playing");
+ * on a site with its own controls (media-sites.ts), when its button says so.
  */
-const READ = `(() => {
+const READ = `(() => {${SITE_CONTROLS}
   const clip = (s, n = 200) => (typeof s === 'string' ? s.slice(0, n) : '');
   const m = navigator.mediaSession ? navigator.mediaSession.metadata : null;
   const players = [...document.querySelectorAll('video, audio')];
@@ -50,15 +52,19 @@ const READ = `(() => {
     artist: clip(m && m.artist),
     album: clip(m && m.album),
     artwork: m ? [...m.artwork].slice(0, 8).map((a) => ({ src: clip(a.src, ${Math.ceil((MAX_ARTWORK_BYTES * 4) / 3) + 64}), sizes: clip(a.sizes), type: clip(a.type) })) : [],
-    playing: players.some(heard),
+    playing: siteButton ? sitePlays() : players.some(heard),
     video: players.some((el) => el instanceof HTMLVideoElement && heard(el) && el.readyState >= 2 && !el.disablePictureInPicture && big(el)),
-    players: players.length,
+    players: players.length + (siteButton ? 1 : 0),
     pip: Boolean(document.pictureInPictureElement),
   };
 })()`;
 
-/** Pauses what the page plays, and remembers it (in this world only) for Play. */
-const PAUSE = `(() => {
+/** Pauses what the page plays: with the site's own button where it has one (media-sites.ts), else its players, remembered (in this world only) for Play. */
+const PAUSE = `(() => {${SITE_CONTROLS}
+  if (siteButton) {
+    if (sitePlays()) siteButton.click();
+    return 1;
+  }
   const paused = [];
   for (const el of document.querySelectorAll('video, audio')) {
     if (el.paused || el.ended || el.muted || el.volume === 0) continue;
@@ -69,8 +75,12 @@ const PAUSE = `(() => {
   return paused.length;
 })()`;
 
-/** Plays what Chord paused; or, paused in the page itself, the player it got furthest into. */
-const PLAY = `(() => {
+/** Plays with the site's own button where it has one; else what Chord paused, or, paused in the page itself, the player it got furthest into. */
+const PLAY = `(() => {${SITE_CONTROLS}
+  if (siteButton) {
+    if (!sitePlays()) siteButton.click();
+    return 1;
+  }
   const mine = (globalThis.__chordPaused || []).map((r) => r.deref()).filter((el) => el && el.isConnected && el.paused && !el.ended);
   globalThis.__chordPaused = [];
   const last = [...document.querySelectorAll('video, audio')].filter((el) => el.paused && !el.ended && el.currentTime > 0).sort((a, b) => b.currentTime - a.currentTime);
@@ -95,7 +105,7 @@ interface PageMedia {
 
 interface Session {
   contents: WebContents;
-  /** When it last started playing: the card shows the newest. */
+  /** When it started playing: the cards list the newest first, and playing again after a pause doesn't move it. */
   since: number;
   playing: boolean;
   page: PageMedia | null;
@@ -108,6 +118,9 @@ interface Session {
   pending: ReturnType<typeof setTimeout> | null;
   reading: boolean;
   again: boolean;
+  /** Reads started so far; and, once you've left its tab, the count then (the next read decides whether it's wanted). */
+  reads: number;
+  leftAt: number | null;
   /** What the card shows of it, the last time it changed (artwork by address, not its bytes). */
   shown: string;
 }
@@ -121,6 +134,13 @@ export interface MediaDeps {
 
 export class MediaWatcher {
   private readonly sessions = new Map<NodeId, Session>();
+  /**
+   * The tabs the cards offer: playing when you left them (for another tab, chord
+   * or window), or played or paused from a card. A background tab's own autoplay
+   * isn't. Kept by tab, not by session: a playlist's quiet moment or next page
+   * is still what you left playing.
+   */
+  private readonly wanted = new Set<NodeId>();
   private timer: ReturnType<typeof setInterval> | null = null;
   /** Goes up whenever what the cards would show changes, so windows compare a number, not the list. */
   version = 0;
@@ -154,18 +174,53 @@ export class MediaWatcher {
     });
     // A new document: whatever played is gone.
     contents.on('did-navigate', () => this.end(nodeId, contents));
-    contents.once('destroyed', () => this.end(nodeId, contents));
+    contents.once('destroyed', () => {
+      this.end(nodeId, contents);
+      this.wanted.delete(nodeId);
+    });
   }
 
-  /** What's playing (or paused a moment ago), newest first. */
+  /** What the cards offer: playing (or paused a moment ago) and wanted, newest first. */
   list(): NowPlaying[] {
-    return [...this.sessions.entries()].sort(([, a], [, b]) => b.since - a.since).map(([nodeId, s]) => view(nodeId, s));
+    return [...this.sessions.entries()]
+      .filter(([nodeId]) => this.wanted.has(nodeId))
+      .sort(([, a], [, b]) => b.since - a.since)
+      .map(([nodeId, s]) => view(nodeId, s));
+  }
+
+  /**
+   * You left the tab (another tab, chord or window took its place): what it
+   * plays now is what you'd want controls for; paused, it isn't.
+   */
+  left(nodeId: NodeId): void {
+    const s = this.sessions.get(nodeId);
+    if (!s) {
+      this.wanted.delete(nodeId);
+      return;
+    }
+    // Decided by a read from now, not the last one: paused a moment ago (its read still settling), it's paused.
+    s.leftAt = s.reads;
+    if (s.pending) clearTimeout(s.pending);
+    s.pending = null;
+    void this.read(nodeId);
+  }
+
+  private decide(nodeId: NodeId, s: Session): void {
+    s.leftAt = null;
+    if (s.playing === this.wanted.has(nodeId)) return;
+    if (s.playing) this.wanted.add(nodeId);
+    else this.wanted.delete(nodeId);
+    // Not shown yet: update() tells the windows.
+    if (!s.shown) return;
+    this.version++;
+    this.deps.changed();
   }
 
   /** The card's Play or Pause. */
   async act(nodeId: NodeId, action: 'play' | 'pause'): Promise<void> {
     const s = this.sessions.get(nodeId);
     if (!s || s.contents.isDestroyed()) return;
+    this.wanted.add(nodeId);
     // Playing again counts as your gesture, as a click in the page would.
     await pageCall(s.contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: action === 'pause' ? PAUSE : PLAY }], action === 'play'), 0);
     await this.read(nodeId);
@@ -182,7 +237,7 @@ export class MediaWatcher {
     if (s && s.contents !== contents) this.end(nodeId);
     s = this.sessions.get(nodeId);
     if (!s) {
-      s = { contents, since: Date.now(), playing: true, page: null, quietAt: null, artwork: null, linger: null, pending: null, reading: false, again: false, shown: '' };
+      s = { contents, since: Date.now(), playing: true, page: null, quietAt: null, artwork: null, linger: null, pending: null, reading: false, again: false, reads: 0, leftAt: null, shown: '' };
       this.sessions.set(nodeId, s);
       this.poll();
     }
@@ -207,6 +262,7 @@ export class MediaWatcher {
       return;
     }
     s.reading = true;
+    const read = ++s.reads;
     const page = await readPage(s.contents);
     s.reading = false;
     if (this.sessions.get(nodeId) !== s || s.contents.isDestroyed()) return;
@@ -221,6 +277,7 @@ export class MediaWatcher {
     const settling = s.quietAt !== null && now - s.quietAt < SOUND_LAG_MS;
     this.setPlaying(nodeId, s, Boolean(page?.playing) || (audible && !settling));
     if (audible && settling) this.soon(nodeId, SOUND_LAG_MS - (now - s.quietAt!));
+    if (s.leftAt !== null && read > s.leftAt) this.decide(nodeId, s);
     void this.loadArtwork(nodeId, s);
     this.update(nodeId, s);
     if (s.again) {
@@ -233,7 +290,6 @@ export class MediaWatcher {
     if (playing === s.playing) return;
     s.playing = playing;
     if (playing) {
-      s.since = Date.now();
       if (s.linger) clearTimeout(s.linger);
       s.linger = null;
     } else {
@@ -271,6 +327,7 @@ export class MediaWatcher {
     const shown = JSON.stringify({ ...view(nodeId, s), artwork: s.artwork?.data ? s.artwork.src : null, since: s.since });
     if (shown === s.shown) return;
     s.shown = shown;
+    if (!this.wanted.has(nodeId)) return;
     this.version++;
     this.deps.changed();
   }
@@ -282,7 +339,7 @@ export class MediaWatcher {
     if (s.pending) clearTimeout(s.pending);
     this.sessions.delete(nodeId);
     this.poll();
-    if (s.shown) {
+    if (s.shown && this.wanted.has(nodeId)) {
       this.version++;
       this.deps.changed();
     }

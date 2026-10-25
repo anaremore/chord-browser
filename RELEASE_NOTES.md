@@ -22,7 +22,10 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
   - It works in private windows too, and keeps nothing of what you read.
   - It uses Mozilla's Readability, under the Apache License 2.0; its notice ships with every build.
 - **Media controls:** a tab playing sound shows a speaker on its row; click it (or press Ctrl+M, ⌃M on macOS) to mute the tab, and it stays muted after it sleeps or Chord restarts.
-  - When something plays in a tab you aren't looking at, in any chord, a Now playing card at the bottom of the sidebar shows what it is (with the track and artist when the site says), with play and pause, mute, picture-in-picture for videos, and a way back to the tab.
+  - Leave a tab while it plays, in any chord, and a Now playing card at the bottom of the sidebar shows what it is (with the track and artist when the site says), with play and pause, mute, picture-in-picture for videos, and a way back to the tab. A tab that starts playing on its own in the background just gets its speaker.
+  - Several playing: the newest in full, and a row for each of the others with its own mute and play and pause.
+  - Play and pause work with Twitch, SoundCloud and Bandcamp's own players too.
+- **Duet reads whole pages** on sites it used to read only part of: Substack newsletters (just their footer before), MDN and BBC News among them, and a long page's top after you've scrolled down.
 - **Peek** gets the sign-in box too, when a site in it asks for a username and password.
 - **Link routes for part of a site:** `github.com/acme` can go to Work while the rest of GitHub goes elsewhere (Settings → General → Link routes).
 - **Low on memory,** tabs you haven't looked at in 5 minutes go to sleep, instead of after an hour.
