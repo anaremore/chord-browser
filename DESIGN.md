@@ -548,6 +548,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 - 40 px tall, `radius-md`, `surface-raised`, `shadow-popover`.
 - Anatomy: `[icon] [message text-small] … [Undo — text-label, accent] [⌘Z keycap when the shell has focus]`.
 - Announced through a polite live region.
+- A click on the toast itself, not one of its buttons, dismisses it, as a notification's does.
 - *As built (M1.6):* the stack is the one live region (each toast is announced once, as it arrives), and each Undo is described by its toast's message. ⌘Z / Ctrl+Z, while the shell has focus and no text field does, presses the newest toast's Undo. Up to three stack as the deck in §6.5: older ones tuck behind the newest, each 6 px higher and 4% smaller, with only their top edge showing. Hovering the stack, or moving focus into it, fans them out upward over the tabs (the sidebar doesn't jump), so every toast's buttons can be reached; every clock pauses while the deck is open. `test/e2e/toasts.spec.ts`.
 
 ### 7.6 `HoverPreview`
@@ -613,7 +614,7 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Messages:** `text-body`, max width 64ch.
   - User messages sit in a soft accent-tinted bubble, with the attached tabs' titles under it; hovering shows **Copy** and, on the last one, **Edit and send again**.
   - Assistant messages are unbubbled for calm reading: a small, safe Markdown subset with no images. A link shows its full address and opens only when clicked.
-  - **Citations** are small numbered pills inside the sentence they support. Clicking one switches to the source tab and finds the quote; if the tab is gone, it opens the page scrolled to the quote. A PDF's pill names its page, "1 · p. 3" (its accessible name, "Source 1, page 3: “…”"), and opens the PDF there.
+  - **Citations** are small numbered pills inside the sentence they support. Clicking one switches to the source tab and finds the quote; if the tab is gone, it opens the page scrolled to the quote. A PDF's pill names its page, "1 · p. 3" (its accessible name, "Source 1, page 3: “…”"), and opens the PDF there. A citation that stands in for words of its sentence (after a comma, a colon, or a verb a quote follows: "Gruber called it [1] rather than…") shows its quote in place, “in quotation marks”, then its pill, so the sentence still reads; the prompt also asks Duet to write quoted words itself.
   - An interrupted reply says *Interrupted* with **Retry**; an error gives the plain cause and the fix.
   - Dividers mark *Continued with a summary* and *Switched to Codex*.
 - **`ToolActivityRow`:** a single quiet line ("Read “Article”", "Read 3 tabs · 1 more", "Searched history for 'flights'") that expands to show details.

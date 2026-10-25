@@ -90,6 +90,11 @@ test('three toasts stack like a deck, and fan out on hover and on focus', async 
     await expect.poll(tucked).toBe('deck');
     await oldestUndo.focus();
     await expect.poll(apart).toBe('apart');
+
+    // A click on a toast itself, not its button, dismisses just that one.
+    await stack.getByRole('group', { name: 'Moved “Release notes” to Work' }).getByText('Moved “Release notes” to Work').click();
+    await expect(stack.getByRole('group')).toHaveCount(2);
+    await expect(stack.getByRole('group', { name: 'Moved “Release notes” to Work' })).toHaveCount(0);
   } finally {
     await app.close();
   }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  citationIsQuoted,
   cleanPageText,
   contextLabel,
   contextPercent,
@@ -146,5 +147,26 @@ describe('Duet: context meter', () => {
     expect(contextLabel('codex', { used: 1, window: 100 })).toMatch(/^1% of context used\. When it fills up, Codex compacts/);
     // A first answer against a 1,000,000-token window (Claude Code 2.1.309's own report): some used, rounds to 0.
     expect(contextLabel('claude', { used: 3984, window: 1_000_000 })).toMatch(/^Under 1% of context used\. /);
+  });
+});
+
+describe('citationIsQuoted', () => {
+  it.each([
+    // Standing in for words of the sentence: its quote shows.
+    ['Brownlee said that for someone who mostly texts and browses, ', true],
+    ['John Gruber called it ', true],
+    ['Gruber described it as ', true],
+    ['As the review put it: ', true],
+    ['The headline reads “', true],
+    ['Reviewers are calling it', true],
+    // After a claim: just its number.
+    ['Prices rose 5% ', false],
+    ['IDC expects Apple to lead the market in 2027.', false],
+    ['It costs $2,000', false],
+    ['(see ', false],
+    ['', false],
+    ['The recall was called off ', false],
+  ])('%j → %s', (before, quoted) => {
+    expect(citationIsQuoted(before)).toBe(quoted);
   });
 });
