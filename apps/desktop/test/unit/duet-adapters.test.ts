@@ -3,11 +3,11 @@
  * (Claude's stream-json with the control channel, Codex's app-server), so CI
  * never needs the real CLIs or the network.
  */
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DUET_TOOLS, type DuetContextUsage } from '@chord/core';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import type { MadeImage, ProviderError, SessionEvents, SessionOptions, ToolOutput } from '../../src/main/duet/adapter';
 import { ClaudeSession, claudeArgs, claudeContextUsage, claudeError } from '../../src/main/duet/claude';
 import { CodexSession, codexArgs, codexContextUsage, codexError, imageLimitError } from '../../src/main/duet/codex';
@@ -15,8 +15,21 @@ import { CodexSession, codexArgs, codexContextUsage, codexError, imageLimitError
 const fakeClaude = resolve(import.meta.dirname, '../e2e/fake-claude.mjs');
 const fakeCodex = resolve(import.meta.dirname, 'fixtures/fake-codex.mjs');
 
+/** Each session's folder, removed once every test is done. On Windows a fake CLI still exiting keeps its folder a moment longer, and that one stays. */
+const dirs: string[] = [];
+afterAll(() => {
+  for (const dir of dirs) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    } catch {
+      // Still in use: a few KB left in the temp folder.
+    }
+  }
+});
+
 function options(script: string, extra: Partial<SessionOptions> = {}): SessionOptions {
   const dir = mkdtempSync(join(tmpdir(), 'chord-duet-unit-'));
+  dirs.push(dir);
   const instructionsFile = join(dir, 'instructions.md');
   writeFileSync(instructionsFile, 'Duet test instructions');
   return {
