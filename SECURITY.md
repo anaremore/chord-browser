@@ -20,4 +20,4 @@ Chord is built on Electron, which ships Chromium. When Electron publishes a rele
 - Renovate raises the Electron update right away, and merges it once CI passes on every OS.
 - The steps from there to a published release are in the runbook, [docs/releasing/patch-runbook.md](docs/releasing/patch-runbook.md). The design is in [ARCHITECTURE.md §14](ARCHITECTURE.md#14-security-updates-and-the-72-hour-patch-process).
 
-Signed builds and staged rollouts don't exist yet, and the Linux package repositories and Flathub aren't live yet, so for now the fix ships as a GitHub release.
+The fix ships as a GitHub release. Since 0.2.1, Chord on Windows and the AppImage install it by themselves, and only accept an update whose manifest is signed with Chord's update key. Windows builds are code-signed. The macOS builds aren't signed yet, and the Linux package repositories, Flathub and staged rollouts don't exist yet.

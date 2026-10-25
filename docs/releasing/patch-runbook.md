@@ -2,11 +2,12 @@
 
 **Goal:** when Electron ships a release with Chromium or Electron security fixes, a Chord release with them is on every channel **within 72 hours** of Electron's release. The design is in [ARCHITECTURE.md §14.3](../../ARCHITECTURE.md#143-the-72-hour-chromium-security-process); this is the checklist.
 
-**Today (2026-10-23):**
-- Automated: detection, the Renovate PR, CI, automerge, the release builds and their smoke tests.
-- By hand: tagging, checking the draft release, publishing it.
+**Today (2026-10-25):**
+- Automated: detection, the Renovate PR, CI, automerge, the release builds and their smoke tests, Windows code signing, the signed update manifests, and the website's download links once the release is published.
+- By hand: tagging, approving the `release` environment, checking the draft release, publishing it.
+- Live since 0.2.1: in-app updates on Windows and the AppImage, gated by the [update signing key](#update-signing-key) (§14.4, §15.2).
 - Built but switched off: the apt and dnf repositories ([linux-repos.md](linux-repos.md)). They update by themselves once `CLOUDSMITH_API_KEY` exists.
-- Built but waiting on keys: code signing and notarization ([signing.md](signing.md)), and in-app updates on Windows and the AppImage, which need the [update signing key](#update-signing-key) (§14.4, §15.2).
+- Built but waiting on an Apple account: macOS signing and notarization ([signing.md](signing.md)).
 - Not built yet: staged rollout. Chord isn't on Flathub yet ([flathub.md](flathub.md)).
 
 The [dry run](#dry-run-2026-10-23) at the end records how long each step took.
