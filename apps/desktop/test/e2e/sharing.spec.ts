@@ -116,6 +116,26 @@ const viewOf = (app: ElectronApplication, url: string) =>
     return null;
   }, url);
 
+/**
+ * Wait for the capturing page to show `color`. Failing, say what Chord had of the shared page: whether it was
+ * loading, heard, throttled, and where its view was.
+ */
+async function expectPicture(app: ElectronApplication, page: Page, color: 'red' | 'blue' | 'green', timeout = 15_000): Promise<void> {
+  await expect
+    .poll(() => showing(page), { timeout })
+    .toBe(color)
+    .catch(async (error: Error) => {
+      const url = `${site.origin}/slides`;
+      const shared = await app.evaluate(({ webContents }, u) => {
+        const c = webContents.getAllWebContents().find((w) => w.getURL() === u);
+        return c ? { loading: c.isLoading(), audible: c.isCurrentlyAudible(), throttled: c.getBackgroundThrottling() } : null;
+      }, url);
+      throw new Error(`${error.message}
+The shared page: ${JSON.stringify(shared)}
+Its view: ${JSON.stringify(await viewOf(app, url))}`);
+    });
+}
+
 /** The live state of a tab, by its title. */
 const liveOf = (shell: Page, title: string) =>
   shell.evaluate(async (t) => {
@@ -136,6 +156,7 @@ test('a tab shared from Chord’s picker: the page gets its frames and its sound
     await open(shell, '/slides');
     const page = await pageWhere(app, (url) => url === `${site.origin}/slides`);
     await expect(row(shell, 'Slides')).toBeVisible();
+    await page.waitForLoadState('load');
 
     // Tabs come first, the asking tab leading; screens and windows are a click away, where Chord lists them.
     await meet.locator('#share').click();
@@ -149,7 +170,7 @@ test('a tab shared from Chord’s picker: the page gets its frames and its sound
 
     await shareTab(meet, popover, /Slides/);
     // Only that page goes out: its own picture and its own sound, as a tab ("browser" surface).
-    await expect.poll(() => showing(meet), { timeout: 15_000 }).toBe('red');
+    await expectPicture(app, meet, 'red');
     await expect.poll(async () => (await probe(meet))?.surface).toBe('browser');
     await expect.poll(async () => (await probe(meet))?.audio).toBe(1);
     await expect.poll(async () => (await probe(meet))?.level ?? 0, { timeout: 15_000 }).toBeGreaterThan(0.01);
@@ -159,7 +180,7 @@ test('a tab shared from Chord’s picker: the page gets its frames and its sound
       .toBe(true);
     // What it shows next is what the page sees next, though the tab isn't on screen.
     await paint(page, 'rgb(0, 0, 255)');
-    await expect.poll(() => showing(meet), { timeout: 10_000 }).toBe('blue');
+    await expectPicture(app, meet, 'blue', 10_000);
 
     // Both rows say so: the sharing page's Stop, and the shared tab's.
     await expect(row(shell, 'Meet').locator('[aria-label="Stop sharing"]')).toBeVisible();
@@ -183,8 +204,9 @@ test('a shared tab never sleeps or goes to the archive, and keeps painting off s
     await open(shell, '/slides');
     const page = await pageWhere(app, (url) => url === `${site.origin}/slides`);
     await expect(row(shell, 'Slides')).toBeVisible();
+    await page.waitForLoadState('load');
     await shareTab(meet, popover, /Slides/, false);
-    await expect.poll(() => showing(meet), { timeout: 15_000 }).toBe('red');
+    await expectPicture(app, meet, 'red');
 
     // Shown, the shared tab's frame has the tinted edge; back to the page sharing it, it waits out of sight,
     // still attached to the window (one corner pixel inside, which its rounded corner cuts away).
@@ -210,7 +232,7 @@ test('a shared tab never sleeps or goes to the archive, and keeps painting off s
     expect(await liveOf(shell, 'Slides')).toMatchObject({ shared: true });
     // And it still paints for the page sharing it.
     await paint(page, 'rgb(0, 160, 0)');
-    await expect.poll(() => showing(meet), { timeout: 10_000 }).toBe('green');
+    await expectPicture(app, meet, 'green', 10_000);
   } finally {
     await app.close();
   }
