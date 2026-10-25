@@ -221,8 +221,9 @@ Verified constraints and how they shape this:
   - *As built (M1.2), simpler and with no cost to the page:*
     - The hot strip is the 4 px bezel left of the frame, which is already the shell's. Hovering the bar's toggle for 300 ms also peeks.
     - Peeking lifts the shell above the page (`AppWindow.setPeek`) at full size. While it's lifted the shell paints nothing over the page: the backdrop is clipped to the bar, and the frame placeholder is hidden.
+    - It's the docked sidebar's own markup: `data-peek` on the window hides its header row and URL pill (CSS only), since the bar above has them.
     - The pointer resting over the page, a click there, or Esc puts it away. The shell goes back under the page once the slide-out finishes.
-    - There's no setting to turn it off yet.
+    - *(2026-10-25)* Settings → Appearance turns it off (`settings.sidebarPeek`). Off, the edge strip isn't rendered and the toggle has no hover handler, so pointing does no work at all.
 - **Closing a tab really releases it.** `removeChildView` alone does not free the renderer; `webContents.close()` does. The `WebContentsView.destroy()` request (#42884) was closed without explanation on 2026-09-25.
 - **A shared tab off screen stays in the tree** (2026-10-24, §9 Screen sharing). A detached view has no compositor, so a page capturing it would get a frozen picture. `AppWindow.park` keeps it just above the shell, at the frame's size, where `offscreen()` puts the frame snapshot's pages: all but its own top-left pixel past the window's corner, which its rounded corner cuts away. It stays in the window it was shown in, and `Browser.syncParking` decides again whenever panes change, a share starts or ends, or a window closes.
 

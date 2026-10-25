@@ -1199,10 +1199,11 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const { autoPipDefaultOff } = cmd.settings;
       if (autoPipDefaultOff !== undefined && draft.settings.autoPipDefaultOff !== autoPipDefaultOff) draft.settings.autoPipDefaultOff = autoPipDefaultOff;
       if (pagePreviews !== undefined && draft.settings.pagePreviews !== pagePreviews) draft.settings.pagePreviews = pagePreviews;
-      const { presentingHidesSidebar } = cmd.settings;
+      const { presentingHidesSidebar, sidebarPeek } = cmd.settings;
       if (presentingHidesSidebar !== undefined && draft.settings.presentingHidesSidebar !== presentingHidesSidebar) {
         draft.settings.presentingHidesSidebar = presentingHidesSidebar;
       }
+      if (sidebarPeek !== undefined && draft.settings.sidebarPeek !== sidebarPeek) draft.settings.sidebarPeek = sidebarPeek;
       if (keepScreenshots !== undefined && draft.settings.keepScreenshots !== keepScreenshots) draft.settings.keepScreenshots = keepScreenshots;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
       if (cmd.settings.duet) {

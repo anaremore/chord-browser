@@ -1,13 +1,15 @@
 /**
  * Settings → Appearance (DESIGN.md §5, §7.7): the color scheme, a library of
- * themes (built-in and your own) for the current chord, and how strongly the
- * interface shows them. Every preview comes from the same generator as the
- * window, so what you see here is what you get.
+ * themes (built-in and your own) for the current chord, how strongly the
+ * interface shows them, and whether the hidden sidebar peeks (§3.3). Every
+ * preview comes from the same generator as the window, so what you see here
+ * is what you get.
  */
 import {
   DEFAULT_SETTINGS,
   UI_SCALES,
   isUiScale,
+  keycapFor,
   parseThemeCode,
   themeCode,
   uuidv7,
@@ -26,7 +28,7 @@ import { INSTANT } from '../shared/motion';
 import { api } from './api';
 import styles from './Appearance.module.css';
 import { ColorWheel } from './ColorWheel';
-import { RadioGroup, ResetButton, Row, SectionHeader, Segmented } from './controls';
+import { RadioGroup, ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import settingsStyles from './Settings.module.css';
 import { MAX_STOPS, addedStop, surpriseStops } from './wheel';
 
@@ -428,6 +430,7 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
   const stops = current?.stops ?? presetStops('dusk');
   const grain = current?.grain ?? PRESET_GRAIN;
   const look = { info, ui };
+  const toggleKeys = keycapFor('view.toggleSidebar', info.platform, settings.shortcuts);
   // Decorative, so off whenever the OS asks for less motion (DESIGN.md §6.6).
   const spin: Transition = info.prefersReducedMotion && settings.motion.followSystem ? INSTANT : { type: 'spring', ...springs.playful };
 
@@ -566,6 +569,23 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
           changed={ui.glass !== DEFAULT_SETTINGS.interface.glass}
           onReset={() => void api.settings.set({ interface: { glass: DEFAULT_SETTINGS.interface.glass } })}
           control={<Percent label="Window tint" value={ui.glass} onChange={(glass) => void api.settings.set({ interface: { glass } })} />}
+        />
+      </div>
+
+      <h2 className={settingsStyles.groupTitle}>Sidebar</h2>
+      <div className={settingsStyles.group}>
+        <Row
+          label="Show the sidebar when you point at the window’s edge"
+          description={`With the sidebar hidden, pointing at the window’s left edge or resting on the sidebar button shows it over the page. Off, it appears only when you click that button${toggleKeys ? ` or press ${toggleKeys}` : ''}.`}
+          changed={settings.sidebarPeek !== DEFAULT_SETTINGS.sidebarPeek}
+          onReset={() => void api.settings.set({ sidebarPeek: DEFAULT_SETTINGS.sidebarPeek })}
+          control={
+            <Switch
+              label="Show the sidebar when you point at the window’s edge"
+              checked={settings.sidebarPeek}
+              onChange={(sidebarPeek) => void api.settings.set({ sidebarPeek })}
+            />
+          }
         />
       </div>
     </>

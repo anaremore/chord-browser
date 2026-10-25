@@ -12,6 +12,8 @@ What's built since 0.2.1; it gets its version when it's released.
   - **The tab you're on** (the default, which was called *Ask first*): the tab on screen goes with each message, as *Reading example.com*. Remove it and Duet asks first.
   - **Tabs in this chord** and **All your tabs**, as before. Each chat can pick these from the top of Duet's panel; *Nothing* is only set in Settings.
 
+- **The hidden sidebar's peek shows each button once.** With the sidebar hidden, pointing at the window's left edge (or resting on the sidebar button) shows your tabs just below the top bar, without a second sidebar button, back, forward, reload and address under the ones the bar already has. Settings → Appearance → *Show the sidebar when you point at the window's edge* turns the peek off; then the sidebar comes back only when you click its button or press its shortcut.
+
 - **Fixed: tabs losing their site's icon.** A tab could drop to the letter tile when a page named no icon, its icon failed to load, or a navigation never arrived (a download, a cancelled link): sites that update their pages in place, like YouTube, did it most. A tab now keeps its site's icon. On a site Chord already has an icon for, it shows at once.
 
 - **Effects:** restyle a site your way, in place of Arc's Boosts. Open them from the page's right-click menu (*Effects for this site…*) or the command bar, then:
