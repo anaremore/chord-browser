@@ -2,9 +2,9 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
-## Next · preview (unreleased)
+## 0.2.1 · preview · 2026-10-25
 
-What's built since 0.2.0; it gets its version when it's released.
+- **Signed for Windows:** the installer and Chord itself are signed by Austin Naremore, through Microsoft's Artifact Signing, so Windows shows who made them. SmartScreen may still warn about the first few signed releases until it knows the publisher. Once you're on this version, Chord installs only updates signed by the same name. Mac builds aren't signed yet.
 
 - **Fixed: dragging a tab onto the page to split it.** In 0.2.0 a dragged tab showed as a strip across the middle of the window. Letting go over that strip could show the tab you were dragging instead of splitting, and then there was nothing to split it with. A dragged tab now stays a row under your pointer.
 
