@@ -58,3 +58,32 @@ A browser shows untrusted pages all day, so a Chromium fix weeks late is a real 
 **Decided 2026-10-24: A.** Re-run the script before revisiting. The path to these services is spike S14, a Widevine player: an optional companion app on ECS that opens only them, so ECS's lag stays off the open web.
 
 **The original recommendation: A, and re-run the script every quarter.** B is the fallback if many people ask: it doubles the release matrix (builds, signing, E2E per OS), and it trails the way D does, only for people who chose it.
+
+## A Widevine licence (asked 2026-10-24)
+
+**The licence itself is free.** Google's overview says: "A license agreement is required for the use of Widevine products or services" and "Widevine does not assess any fee for use of its products and services" ([developers.google.com/widevine/drm/overview](https://developers.google.com/widevine/drm/overview)).
+
+**Granting it is Google's call.** In 2019 Google declined Metastream, an MIT-licensed Electron browser, saying it was "not supporting an open source solution like this" ([developer's account](https://blog.samuelmaddock.com/posts/google-widevine-blocked-my-browser/), [The Register](https://www.theregister.com/2019/04/03/googles_widevine_drm/)). Brave's CTO said then that Brave had trouble getting replies. Nothing found says the policy changed, and nothing says it didn't.
+
+**What a licence would and wouldn't change:**
+- castLabs' route doesn't need one. With EVS, "a license agreement with Google Widevine" is "no longer necessary" for VMP signing ([castlabs/electron-releases](https://github.com/castlabs/electron-releases)). Its updates, "including security updates", are "provided on a best-effort basis", which is the lag measured above.
+- A licence would let Chord have its own VMP signing certificate. With it, Chord could build Electron with Widevine itself and ship security fixes on its own schedule. That means hours of Chromium compile per release on large CI machines, and keeping Widevine's integration patched on every upgrade.
+- So it's the long-term path, and it's worth asking now, since asking is free and the answer may take months. Spike S14 doesn't wait on it.
+
+**Who applies:** the maintainer, at [widevine.com/contact](https://www.widevine.com/contact), under *General Questions* for new inquiries ([how to reach Widevine](https://developers.google.com/widevine/contact/support)). The agreement is the maintainer's (or their company's) to sign.
+
+### Draft inquiry
+
+> **Subject:** Widevine CDM licence for Chord, an open-source desktop browser
+>
+> Hello,
+>
+> I maintain Chord (https://github.com/anaremore/chord-browser), an open-source desktop web browser built on Electron, for Windows, macOS and Linux (x64 and arm64). We'd like our users to be able to play Widevine-protected services such as Netflix, Spotify and Disney+, and we're asking about a Widevine CDM licence for the browser.
+>
+> 1. Is a Widevine licence available to an open-source, Electron-based browser? What does the agreement require (a legal entity, robustness rules, release or update practices)?
+> 2. With a licence, could we get our own VMP signing certificate for our Windows and macOS builds, and have the CDM delivered through Google's component updater as Chromium does?
+> 3. Are there requirements on how quickly we ship Chromium security fixes? We follow Electron's releases, usually within a day.
+> 4. Which platforms would be covered, Linux arm64 included?
+>
+> Thank you,
+> [Your name], maintainer of Chord
