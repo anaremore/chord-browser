@@ -33,10 +33,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   no session bus either: Chromium logs that it can't connect and carries on.
 # - Fonts the runner has: DejaVu (fontconfig's default), Liberation (Chrome
 #   depends on it) and Noto Color Emoji.
+# - xdotool: a real pointer for the tests that drag across Chord's views
+#   (split.spec.ts). Playwright's mouse goes straight to one page, past
+#   the window's own routing between views; CI installs it too.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl xz-utils \
-      xvfb xauth openbox weston \
+      xvfb xauth openbox weston xdotool \
       dbus \
       libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 \
       libcups2t64 libcurl4t64 libdbus-1-3 libdrm2 libexpat1 libgbm1 libglib2.0-0t64 \

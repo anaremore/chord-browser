@@ -1,0 +1,33 @@
+# Temporary: the split view's real-pointer test on Windows (a bug report on 0.2.0). Delete before merging.
+name: Pointer repro
+on:
+  push:
+    branches: [agent/split-pointer]
+permissions:
+  contents: read
+jobs:
+  repro:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Real-pointer split test
+        run: pnpm --filter @chord/desktop exec playwright test test/e2e/split.spec.ts -g "system pointer" --retries 0
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: captures-${{ matrix.os }}
+          path: apps/desktop/test-results/
+          if-no-files-found: ignore

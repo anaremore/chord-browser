@@ -14,6 +14,7 @@ import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { failOnMainErrors, kill, watchForMainErrors } from './main-errors';
+import { systemPointer, systemPointerAvailable } from './system-pointer';
 
 failOnMainErrors();
 
@@ -115,6 +116,54 @@ async function drag(shell: Page, from: Locator, to: { x: number; y: number }) {
   await shell.mouse.up();
   // A new drag can't start while this drop's animation settles.
   await shell.waitForTimeout(600);
+}
+
+/**
+ * `drag`, with the system's pointer (system-pointer.ts) instead of
+ * Playwright's mouse, so it meets the pages' views over the frame as a hand's
+ * does. Returns the drop zone the shell showed just before letting go.
+ */
+async function pointerDrag(app: ElectronApplication, shell: Page, from: Locator, to: { x: number; y: number }, uiScale = 1): Promise<string | null> {
+  const pointer = await systemPointer(app);
+  try {
+    // `to` is in the window's pixels (pageViews); the row's box is in the shell's, which the interface size zooms.
+    const a = (await from.boundingBox())!;
+    const start = { x: (a.x + a.width / 2) * uiScale, y: (a.y + a.height / 2) * uiScale };
+    await pointer.move(start.x, start.y);
+    await shell.waitForTimeout(100);
+    await pointer.down();
+    for (let i = 1; i <= 4; i++) {
+      await pointer.move(start.x, start.y + (6 * i) / 4);
+      await shell.waitForTimeout(16);
+    }
+    for (let i = 1; i <= 16; i++) {
+      await pointer.move(start.x + ((to.x - start.x) * i) / 16, start.y + 6 + ((to.y - start.y - 6) * i) / 16);
+      await shell.waitForTimeout(16);
+    }
+    await shell.waitForTimeout(250);
+    await pointer.move(to.x + 1, to.y);
+    await shell.waitForTimeout(50);
+    const zone = await shell.evaluate(() => document.querySelector('[data-testid="split-drop"]')?.getAttribute('data-zone') ?? null);
+    if (zone === null) {
+      // What the shell drew and where things were, to see why there was no zone.
+      const seen = await shell.evaluate(() => {
+        const box = (el: Element | null) => (el ? JSON.stringify(el.getBoundingClientRect()) : 'none');
+        return {
+          lifted: document.querySelector('[data-lifted]') !== null,
+          dragged: box(document.querySelector('[data-dnd-dragging]')),
+          host: box(document.querySelector('[data-testid="split-drop"]')),
+          viewport: `${innerWidth}×${innerHeight} at ${devicePixelRatio}`,
+        };
+      });
+      console.log(`[pointer drag] no drop zone: ${JSON.stringify(seen)}`);
+      await shell.screenshot({ path: join(appDir, 'test-results', 'captures', `pointer-drag-${Date.now()}.png`) });
+    }
+    await pointer.up();
+    await shell.waitForTimeout(600);
+    return zone;
+  } finally {
+    pointer.close();
+  }
 }
 
 /** Catch the next native menu main pops up, and click its item labeled `label`. */
@@ -231,6 +280,48 @@ test('a tab dropped on the page splits the frame; clicks move focus, keys act on
     expect((await splitState(shell)).active).toBe('First page');
     await expect.poll(async () => (await pageViews(app)).map((v) => v.url)).toEqual([`${site.origin}/`]);
     expect((await pageViews(app))[0]).toMatchObject({ x: frame!.x, width: frame!.width });
+  } finally {
+    await app.close();
+  }
+});
+
+// At the default interface size and a larger one: it zooms the shell, and with it the drag's geometry.
+for (const uiScale of [1, 1.25]) test(`a tab dragged onto the page with the system pointer splits it, beside or below (interface size ${uiScale * 100}%)`, async () => {
+  test.skip(!systemPointerAvailable, 'needs a pointer a test can move: X11 with xdotool, or Windows');
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const { shell, today } = await setUp(app, ['/second']);
+    if (uiScale !== 1) {
+      const before = await shell.evaluate(() => devicePixelRatio);
+      // Through Settings, as a person would (the shell may only finish onboarding with settings.set).
+      await runAction(shell, 'app.settings');
+      const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
+      await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Appearance' }).click();
+      await settings.getByRole('radiogroup', { name: 'Interface size' }).getByRole('radio', { name: `${uiScale * 100}%` }).click();
+      await app.evaluate(({ BaseWindow }) => {
+        for (const w of BaseWindow.getAllWindows()) {
+          if (w.contentView.children.some((v) => 'webContents' in v && /settings/.test((v as { webContents: { getURL(): string } }).webContents.getURL()))) w.close();
+        }
+      });
+      await expect.poll(() => app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows().length)).toBe(1);
+      await expect.poll(() => shell.evaluate(() => devicePixelRatio)).toBeCloseTo(before * uiScale, 2);
+      await shell.waitForTimeout(300);
+    }
+    const [frame] = await pageViews(app);
+    const beside = await pointerDrag(app, shell, today.getByRole('treeitem').filter({ hasText: 'First page' }), { x: frame!.x + frame!.width - 60, y: frame!.y + frame!.height / 2 }, uiScale);
+    // The shell showed where it would go (so it had the pointer over the page), then the drop made the split.
+    expect(beside, 'the drop zone shown just before letting go').not.toBeNull();
+    await expect.poll(async () => (await splitState(shell)).panes).toEqual(['Second page', 'First page']);
+    expect((await splitState(shell)).direction).toBe('row');
+
+    // Separate, then the bottom edge: one above the other.
+    await runAction(shell, 'split.separate');
+    await expect.poll(async () => (await splitState(shell)).splits).toBe(0);
+    const [whole] = await pageViews(app);
+    const below = await pointerDrag(app, shell, today.getByRole('treeitem').filter({ hasText: 'Second page' }), { x: whole!.x + whole!.width / 2, y: whole!.y + whole!.height - 30 }, uiScale);
+    expect(below, 'the drop zone shown just before letting go').not.toBeNull();
+    await expect.poll(async () => (await splitState(shell)).splits).toBe(1);
+    expect((await splitState(shell)).direction).toBe('column');
   } finally {
     await app.close();
   }
