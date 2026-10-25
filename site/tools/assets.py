@@ -120,7 +120,7 @@ def stamp() -> None:
 
     def versioned(match: re.Match[str]) -> str:
         name = match.group(1)
-        digest = hashlib.sha256((IMAGES / name).read_bytes()).hexdigest()[:10]
+        digest = hashlib.sha256((IMAGES / name).read_bytes()).hexdigest()[:12]
         return f"/images/{name}?v={digest}"
 
     page.write_bytes(re.sub(r"/images/([\w.-]+)(?:\?v=\w+)?", versioned, html).encode("utf-8"))
