@@ -62,14 +62,19 @@ export interface DuetAttachment {
 }
 
 /**
- * An image you gave Duet with a message (a pasted image, a screenshot): kept
- * in `<userData>/Duet/Images/` by its id, sent to the model with the message.
+ * An image in a chat, kept in `<userData>/duet/images/` by its id: one you
+ * gave Duet with a message (a pasted image, a screenshot), sent to the model
+ * with it, or one Codex made, shown with its reply.
  */
 export interface DuetImage {
   id: string;
-  mime: 'image/jpeg' | 'image/png';
+  mime: 'image/jpeg' | 'image/png' | 'image/webp';
   width: number;
   height: number;
+  /** One Codex made: what it made it from (its own wording of the request), for its alt text. */
+  prompt?: string;
+  /** One Codex made: the copy Codex saved itself, deleted with the chat. */
+  codexCopy?: string;
 }
 
 /** At most this many images with one message. */
@@ -91,7 +96,17 @@ export type DuetApprovalDecision = 'pending' | 'once' | 'thread' | 'denied' | 'e
 
 export type DuetMessageBody =
   | { role: 'user'; text: string; attachments: DuetAttachment[]; images?: DuetImage[] }
-  | { role: 'assistant'; text: string; citations: DuetCitation[]; status: 'streaming' | 'done' | 'interrupted' | 'error'; error?: string }
+  | {
+      role: 'assistant';
+      text: string;
+      citations: DuetCitation[];
+      status: 'streaming' | 'done' | 'interrupted' | 'error';
+      error?: string;
+      /** Images Codex made in this reply. */
+      images?: DuetImage[];
+      /** Images it's still making (while the reply streams). */
+      making?: number;
+    }
   | { role: 'tool'; tool: string; summary: string; detail: string; ok: boolean }
   /** A read beyond the thread's scope that asked first, kept as a record of the grant. */
   | { role: 'approval'; tool: string; description: string; target: string[]; decision: DuetApprovalDecision }
@@ -397,7 +412,13 @@ export function citationIsQuoted(before: string): boolean {
   return /[,:“"‘']$/.test(text) || REPORTING.test(text);
 }
 
-export const stripCitations = (text: string): string => text.replace(CITATION, '').replace(/[ \t]+\n/g, '\n');
+/** A reply's words alone: no citations, and no mark for Codex's button (MAKE_IMAGE_MARK). */
+export const stripCitations = (text: string): string =>
+  text
+    .replace(CITATION, '')
+    .replace(/\[\[make-image\]\]/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .trimEnd();
 
 /** A tab's name for the user, by its handle: what the panel shows where a reply mentions the handle. */
 export interface DuetTabName {
@@ -477,8 +498,25 @@ export function threadToShow(threads: readonly DuetThread[], now: number, idleMs
   return { current: null, continueFrom: latest };
 }
 
+/** Where a reply says it can't make the image asked for: Chord shows a button to ask Codex instead. */
+export const MAKE_IMAGE_MARK = '[[make-image]]';
+
+/**
+ * What Duet's instructions say about making images: Codex with its image
+ * tool on makes them; Codex with it off says where to turn it on; Claude,
+ * which can't make images at all, says so and leaves the mark for Codex's button.
+ */
+export type DuetImageMaking = 'codex' | 'codex-off' | 'claude';
+
+const IMAGE_LINES: Record<DuetImageMaking, string> = {
+  codex: '- When the user asks you to make, draw or change an image, make it with your image generation tool. The image shows in the chat by itself, so say only a short sentence about it. Otherwise, answer in plain prose with light Markdown (paragraphs, lists, bold, code).',
+  'codex-off':
+    "- Answer in plain prose with light Markdown (paragraphs, lists, bold, code). You can't make images here: if the user asks for one, say that making images is off in Chord's Settings → Duet.",
+  claude: `- Answer in plain prose with light Markdown (paragraphs, lists, bold, code). You can't make or change images. If the user asks you to, say so in one short sentence, then end your reply with ${MAKE_IMAGE_MARK} on a line of its own: Chord shows a button there to ask Codex to make it.`,
+};
+
 /** Duet's browse-mode instructions, appended to the provider's own system prompt. */
-export function duetInstructions(summary?: string): string {
+export function duetInstructions(summary?: string, images: DuetImageMaking = 'claude'): string {
   const base = [
     "You are Duet, an assistant inside the Chord web browser, chatting with the browser's user about their tabs and the web.",
     '',
@@ -489,7 +527,7 @@ export function duetInstructions(summary?: string): string {
     '- A citation shows only as a small number, so it never stands in for words of your sentence. To quote, write the words in your sentence, then cite: Gruber called it “an extraordinarily polished prototype” [[t3:"an extraordinarily polished prototype"]]. Not: Gruber called it [[t3:"an extraordinarily polished prototype"]].',
     '- Tab ids (t1, t2…) are only for tools and citations; the user never sees them. In your sentences, call a tab by its title or its site (the Reuters article, the YouTube video), never t1 or tab t1.',
     "- You can only read. You can't open, close or move tabs; if the user wants that, tell them how to do it in Chord.",
-    '- Answer in plain prose with light Markdown (paragraphs, lists, bold, code). No images.',
+    IMAGE_LINES[images],
   ].join('\n');
   return summary ? `${base}\n\nThis conversation continues an earlier one. A summary of it, oldest first:\n${summary}` : base;
 }

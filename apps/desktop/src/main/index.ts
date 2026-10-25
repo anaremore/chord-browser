@@ -43,7 +43,7 @@ import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo, uiScale } from './platform';
-import { handleChordProtocol, registerSchemes, serveReaderImages } from './protocol';
+import { handleChordProtocol, registerSchemes, serveDuetImages, serveReaderImages } from './protocol';
 import { SAFE_BROWSING_KEY } from './safe-browsing/key';
 import { listsFile, SafeBrowsing, safeBrowsingEndpoint } from './safe-browsing/service';
 import { configureUiSession, hardenAllWebContents } from './security';
@@ -633,8 +633,11 @@ if (!app.requestSingleInstanceLock()) {
     for (const profileId of profilesInUse) if (!isPrivateProfile(profileId)) profileSession(profileId);
     // Before any of Chord's own pages loads (a text field there is what starts a dictionary download).
     applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
-    duet = new DuetService(browser, persistence, app.getPath('userData'));
+    duet = new DuetService(browser, persistence, app.getPath('userData'), {
+      save: async (filename, bytes, mime) => void (await downloads.addFile(filename, bytes, mime, '', null)),
+    });
     browser.duet = duet;
+    serveDuetImages((url) => duet!.serveImage(url));
     importer = new Importer({
       workerPath: join(import.meta.dirname, 'import.js'),
       env: importEnv,

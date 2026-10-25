@@ -33,6 +33,9 @@ export interface SessionEvents {
   onTurnEnd(outcome: { status: 'done' | 'interrupted' | 'error'; error?: ProviderError }): void;
   /** How full the model's context is, when the CLI reports both the tokens and the window. */
   onUsage?(usage: DuetContextUsage): void;
+  /** Codex started making an image (its image tool); `onImage` follows with it, or without one if it failed. */
+  onImageStart?(callId: string): void;
+  onImage?(callId: string, image: MadeImage | null): void;
   /** The process ended. `resume-failed` means the stored session is gone: start over with a summary. */
   onExit(error: ProviderError | null): void;
 }
@@ -49,6 +52,16 @@ export interface SessionOptions {
   resumeId: string | null;
   newSessionId: string;
   tools: readonly DuetToolSpec[];
+  /** Codex's image tool is on (Settings → Duet). */
+  images?: boolean;
+}
+
+/** An image Codex made: its bytes, base64-encoded as Codex sent them, and what it made it from. */
+export interface MadeImage {
+  data: string;
+  prompt: string | null;
+  /** Where Codex saved its own copy, if it did. */
+  savedPath: string | null;
 }
 
 /** An image with a message: its type and its bytes, base64-encoded. */

@@ -6,6 +6,8 @@
  * own MCP servers disabled by name, and Chord's tools as dynamic tools in the
  * `chord` namespace. Command and file-change approvals are declined without
  * asking; any item outside the allowed set trips the wire and stops the turn.
+ * Its image tool is the one exception, when Settings → Duet allows it: what
+ * it makes goes to Duet as an image, never anywhere else.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -33,8 +35,18 @@ export const CODEX_FEATURES_OFF = [
 /** What a browse thread may produce; anything else is the tripwire. */
 const ALLOWED_ITEMS = new Set(['agentMessage', 'reasoning', 'userMessage', 'dynamicToolCall', 'contextCompaction']);
 
-export function codexArgs(): string[] {
-  return ['app-server', ...CODEX_FEATURES_OFF.flatMap((f) => ['--disable', f]), '-c', 'web_search="disabled"'];
+/** The features a thread starts with off: all of them, except the image tool when images are allowed. */
+const featuresOff = (images: boolean) => CODEX_FEATURES_OFF.filter((f) => !(images && f === 'image_generation'));
+
+export function codexArgs(images = false): string[] {
+  return ['app-server', ...featuresOff(images).flatMap((f) => ['--disable', f]), '-c', 'web_search="disabled"'];
+}
+
+/** The plan's limit for making images, from an imageGeneration item's `failure` (`resetsAt` in seconds). */
+export function imageLimitError(resetsAt: unknown): ProviderError {
+  const when = typeof resetsAt === 'number' && resetsAt > 0 ? new Date(resetsAt < 1e12 ? resetsAt * 1000 : resetsAt) : null;
+  const resets = when ? ` It resets ${when.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}.` : '';
+  return { kind: 'usage-limit', message: `Codex has reached your plan's limit for making images.${resets}` };
 }
 
 /** `error` notifications → Duet's provider errors (S5 saw usageLimitExceeded and an unsupported default model). */
@@ -84,7 +96,7 @@ export class CodexSession implements DuetSession {
     private readonly options: SessionOptions,
     private readonly events: SessionEvents,
   ) {
-    const spec = spawnSpec(options.launch, codexArgs(), { cwd: options.cwd });
+    const spec = spawnSpec(options.launch, codexArgs(Boolean(options.images)), { cwd: options.cwd });
     this.child = spawn(spec.command, spec.args, { cwd: spec.cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: spec.env, detached: process.platform !== 'win32' });
     this.child.on('error', () => this.exit({ kind: 'crashed', message: errorCopy('codex', 'crashed', "Chord couldn't start it.") }));
     this.child.on('exit', () => {
@@ -149,7 +161,7 @@ export class CodexSession implements DuetSession {
     const servers = await this.call('mcpServerStatus/list', {});
     const names = ((servers.result?.['data'] as { name?: string }[] | undefined) ?? []).map((s) => s.name).filter((n): n is string => Boolean(n));
     const config = Object.fromEntries([
-      ...CODEX_FEATURES_OFF.map((f) => [`features.${f}`, false]),
+      ...featuresOff(Boolean(this.options.images)).map((f) => [`features.${f}`, false]),
       ['web_search', 'disabled'],
       ...names.map((n) => [`mcp_servers.${n}.enabled`, false]),
     ]);
@@ -258,7 +270,9 @@ export class CodexSession implements DuetSession {
       }
       case 'item/started':
       case 'item/completed': {
-        const type = (p['item'] as { type?: string } | undefined)?.type ?? '';
+        const item = (p['item'] as Record<string, unknown> | undefined) ?? {};
+        const type = typeof item['type'] === 'string' ? item['type'] : '';
+        if (type === 'imageGeneration' && this.options.images) return this.onImageItem(m.method === 'item/completed', item);
         if (type && !ALLOWED_ITEMS.has(type)) this.tripwire(type);
         return;
       }
@@ -276,6 +290,19 @@ export class CodexSession implements DuetSession {
         return this.endTurn('done');
       }
     }
+  }
+
+  /** Codex's image tool: started, then done with the image (base64 in `result`) or a failure. */
+  private onImageItem(completed: boolean, item: Record<string, unknown>): void {
+    const callId = typeof item['id'] === 'string' ? item['id'] : '';
+    if (!completed) return void this.events.onImageStart?.(callId);
+    const result = typeof item['result'] === 'string' ? item['result'] : '';
+    const failure = item['failure'] as { type?: string; resetsAt?: unknown } | null | undefined;
+    if (!result && failure?.type === 'usageLimitExceeded') this.turnError = imageLimitError(failure.resetsAt);
+    this.events.onImage?.(
+      callId,
+      result ? { data: result, prompt: typeof item['revisedPrompt'] === 'string' ? item['revisedPrompt'] : null, savedPath: typeof item['savedPath'] === 'string' ? item['savedPath'] : null } : null,
+    );
   }
 
   private async onRequest(id: number, method: string, params: Record<string, unknown>): Promise<void> {

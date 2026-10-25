@@ -109,6 +109,8 @@ async function turn(text, images = []) {
     const sizes = images.map((i) => `${i.source.media_type} ${jpegSize(i.source.data)}`).join(', ');
     return finish(await say(`I see ${images.length === 1 ? 'one image' : `${images.length} images`}: ${sizes}. You asked: ${text.split('\n')[0]}`));
   }
+  // Asked for an image, it says it can't and leaves the mark for Codex's button, as Duet's instructions ask.
+  if (/draw|cartoon/i.test(text)) return finish(await say("Claude can't make images.\n\n[[make-image]]"));
   // Writes a tab's handle in its own words, as Duet is asked not to.
   if (/which tab/i.test(text) && ref) return finish(await say(`That's tab ${ref}, the one you attached. Not to be confused with a t2.micro.`));
   if (/long/i.test(text)) return finish(await say(Array.from({ length: 400 }, (_, i) => `word${i} `).join(''), true));

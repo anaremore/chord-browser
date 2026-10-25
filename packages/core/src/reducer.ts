@@ -1194,6 +1194,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (duet.scope !== undefined && current.scope !== duet.scope) current.scope = duet.scope;
         if (duet.neverSites) current.neverSites = [...new Set(duet.neverSites)];
         if (duet.offChords) current.offChords = [...new Set(duet.offChords)];
+        if (duet.codexImages !== undefined && current.codexImages !== duet.codexImages) current.codexImages = duet.codexImages;
       }
       const { separateSignIns, onboarded } = cmd.settings;
       if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;

@@ -85,10 +85,10 @@ export function captureScale(width: number, height: number, deviceScale: number,
 const pad = (n: number) => String(n).padStart(2, '0');
 
 /** "Screenshot 2026-10-24 at 18.32.10.png", as macOS names them (dots, since Windows forbids colons). */
-export function screenshotFilename(date: Date): string {
+export function screenshotFilename(date: Date, name = 'Screenshot', extension = 'png'): string {
   const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   const time = `${pad(date.getHours())}.${pad(date.getMinutes())}.${pad(date.getSeconds())}`;
-  return `Screenshot ${day} at ${time}.png`;
+  return `${name} ${day} at ${time}.${extension}`;
 }
 
 /** How many recent screenshots stay, and how much room they may take. */

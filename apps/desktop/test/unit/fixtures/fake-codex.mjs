@@ -1,7 +1,25 @@
 // A stand-in for `codex app-server` in Duet's adapter tests: JSON-RPC without the "jsonrpc"
 // field, one message per line (research §3.2). It calls Chord's dynamic tool, asks to change a
 // file (Chord must decline), and, for "run", produces a commandExecution item (the tripwire).
+// Asked to draw, it makes an image as Codex's image tool does (when Chord left the tool on),
+// saving its own copy under CODEX_HOME/generated_images. Duet's E2E tests run it as Codex too
+// (CHORD_DUET_CODEX), so it answers `--version` and `login status` the way codex-cli does.
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { crc32, deflateSync } from 'node:zlib';
+
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  process.stdout.write('codex-cli 0.160.1\n');
+  process.exit(0);
+}
+if (args[0] === 'login' && args[1] === 'status') {
+  process.stdout.write('Logged in using ChatGPT\n');
+  process.exit(0);
+}
+/** Chord leaves the image tool on only when Settings allows it. */
+const imagesOn = !args.includes('image_generation');
 
 process.on('uncaughtException', (e) => {
   process.stderr.write(String(e?.stack ?? e));
@@ -21,8 +39,56 @@ const thread = 'thr_fake';
 let turn = 0;
 let interrupted = false;
 
+/** A solid 64 × 48 PNG, as the image tool returns one (base64). */
+function png(width, height, [r, g, b]) {
+  const row = Buffer.alloc(1 + width * 3);
+  for (let x = 0; x < width; x++) row.set([r, g, b], 1 + x * 3);
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const out = Buffer.alloc(8 + data.length + 4);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE(crc32(body), 8 + data.length);
+    return out;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  const pixels = deflateSync(Buffer.concat(Array.from({ length: height }, () => row)));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header), chunk('IDAT', pixels), chunk('IEND', Buffer.alloc(0))]);
+}
+
+async function makeImage(text, turnId) {
+  const say = (delta) => write({ method: 'item/agentMessage/delta', params: { threadId: thread, turnId, itemId: 'm1', delta } });
+  if (!imagesOn) {
+    say('images:off');
+    return write({ method: 'turn/completed', params: { threadId: thread, turn: { id: turnId, status: 'completed' } } });
+  }
+  const id = `ig_${turnId}`;
+  write({ method: 'item/started', params: { threadId: thread, turnId, item: { type: 'imageGeneration', id, status: 'in_progress', revisedPrompt: null, result: '', failure: null } } });
+  // Long enough for the panel's placeholder to be seen.
+  await new Promise((r) => setTimeout(r, 800));
+  if (/limit/.test(text)) {
+    write({ method: 'item/completed', params: { threadId: thread, turnId, item: { type: 'imageGeneration', id, status: 'failed', revisedPrompt: null, result: '', failure: { type: 'usageLimitExceeded', limitId: 'images', resetsAt: 1_800_000_000 } } } });
+    return write({ method: 'turn/completed', params: { threadId: thread, turn: { id: turnId, status: 'completed' } } });
+  }
+  const image = png(64, 48, [230, 120, 40]);
+  let savedPath;
+  if (process.env.CODEX_HOME) {
+    const dir = join(process.env.CODEX_HOME, 'generated_images', thread);
+    mkdirSync(dir, { recursive: true });
+    savedPath = join(dir, `${id}.png`);
+    writeFileSync(savedPath, image);
+  }
+  write({ method: 'item/completed', params: { threadId: thread, turnId, item: { type: 'imageGeneration', id, status: 'completed', revisedPrompt: 'A cartoon of the page', result: image.toString('base64'), failure: null, ...(savedPath ? { savedPath } : {}) } } });
+  say('Here it is.');
+  write({ method: 'turn/completed', params: { threadId: thread, turn: { id: turnId, status: 'completed' } } });
+}
+
 async function runTurn(text, turnId) {
   write({ method: 'turn/started', params: { threadId: thread, turn: { id: turnId } } });
+  if (/draw|cartoon/i.test(text)) return makeImage(text, turnId);
   if (/run/.test(text)) {
     write({ method: 'item/started', params: { threadId: thread, turnId, item: { type: 'commandExecution', id: 'cmd_1' } } });
     await new Promise((r) => setTimeout(r, 50));

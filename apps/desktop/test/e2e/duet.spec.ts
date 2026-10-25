@@ -23,6 +23,8 @@ const pdfRequests: { signedIn: boolean }[] = [];
 
 const appDir = resolve(import.meta.dirname, '../..');
 const fake = resolve(import.meta.dirname, 'fake-claude.mjs');
+/** The adapter tests' stand-in for Codex, which passes Setup's checks too. */
+const fakeCodex = resolve(import.meta.dirname, '../unit/fixtures/fake-codex.mjs');
 const capturesDir = resolve(appDir, 'test-results', 'captures');
 
 let site: { server: Server; origin: string };
@@ -428,6 +430,75 @@ test('Duet sees an image: pasted in the command bar, or a screenshot from its to
     await panel.getByRole('menuitem', { name: 'Delete this chat' }).click();
     await expect(panel.getByRole('img', { name: /^Image you sent/ })).toHaveCount(0);
     await expect.poll(() => readdirSync(images).length).toBe(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('Duet makes images with Codex: Claude says it can’t and offers Codex; the image shows, copies and saves, stays after a relaunch, and goes with the chat, Codex’s copy too; off in Settings, no offer', async () => {
+  const setup = fresh();
+  const codexHome = join(setup.config, 'codex');
+  const downloads = mkdtempSync(join(tmpdir(), 'chord-downloads-'));
+  const images = join(setup.profile, 'duet', 'images');
+  const env = { CHORD_DUET_CODEX: fakeCodex, CODEX_HOME: codexHome, CHORD_DOWNLOADS_DIR: downloads };
+  const made = (panel: Locator) => panel.getByRole('img', { name: 'Image Duet made: A cartoon of the page' });
+  let app = await launch(setup, '/article', env);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openDuet(shell);
+    await setUp(panel);
+
+    // Claude can't: it says so, and the reply offers Codex, which is asked again and makes it.
+    await send(panel, 'draw a cartoon of this page');
+    await expect(panel.getByText("Claude can't make images.")).toBeVisible();
+    await panel.getByRole('button', { name: 'Make it with Codex' }).click();
+    await expect(panel.getByText('Switched to Codex')).toBeVisible();
+    await expect(panel.getByRole('status').filter({ hasText: 'Making an image…' })).toBeVisible();
+    await expect(made(panel)).toBeVisible();
+    await expect.poll(() => made(panel).evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBe(64);
+    await expect(panel.getByText('Here it is.')).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Make it with Codex' })).toHaveCount(0);
+
+    // Copy puts it on the clipboard; Save puts it in Downloads.
+    await made(panel).hover();
+    mkdirSync(capturesDir, { recursive: true });
+    await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-made-image.png`) });
+    await panel.getByRole('button', { name: 'Copy image' }).click();
+    await expect
+      .poll(() =>
+        app.evaluate(async ({ clipboard, nativeImage }) => {
+          const item = (await clipboard.read()).find((i) => i.types.includes('image/png'));
+          return item ? nativeImage.createFromBuffer(Buffer.from(await ((await item.getType('image/png')) as Blob).arrayBuffer())).getSize() : null;
+        }),
+      )
+      .toEqual({ width: 64, height: 48 });
+    await panel.getByRole('button', { name: 'Save image to Downloads' }).click();
+    await expect.poll(() => readdirSync(downloads).filter((f) => /^Duet image .+\.png$/.test(f)).length).toBe(1);
+    expect(readdirSync(join(codexHome, 'generated_images', 'thr_fake'))).toHaveLength(1);
+  } finally {
+    await app.close();
+  }
+
+  app = await launch(setup, '/article', env);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openDuet(shell);
+    // Kept with the chat, shown from Chord's own copy.
+    await expect.poll(() => made(panel).evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBe(64);
+    await panel.getByRole('button', { name: 'Chats' }).click();
+    await panel.getByRole('menuitem', { name: 'Delete this chat' }).click();
+    await expect(made(panel)).toHaveCount(0);
+    await expect.poll(() => readdirSync(images).length).toBe(0);
+    expect(readdirSync(join(codexHome, 'generated_images', 'thr_fake'))).toHaveLength(0);
+
+    // Off in Settings: Claude still says it can't, and nothing offers Codex.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ duet: { codexImages: false } }));
+    await shell.bringToFront();
+    await send(panel, 'draw a cartoon of this page');
+    await expect(panel.getByText("Claude can't make images.")).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Make it with Codex' })).toHaveCount(0);
   } finally {
     await app.close();
   }

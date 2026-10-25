@@ -25,6 +25,7 @@ import {
   pdfPageOf,
   pdfPageUrl,
   pdfText,
+  screenshotFilename,
   readNeedsApproval,
   splitCitations,
   stripCitations,
@@ -38,6 +39,7 @@ import {
   type DuetAttachment,
   type DuetCitation,
   type DuetImage,
+  type DuetImageMaking,
   type DuetTabName,
   type DuetContextUsage,
   type DuetMessage,
@@ -51,16 +53,17 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { DuetAction, DuetView } from '@chord/ipc';
-import { app, type WebContents } from 'electron';
+import { app, clipboard, ClipboardItem, nativeImage, net, type WebContents } from 'electron';
+import { pathToFileURL } from 'node:url';
 import type { Browser } from '../browser';
 import { send } from '../ipc';
 import type { Persistence } from '../persistence';
-import type { DuetSession, ProviderError, SessionImage, ToolOutput } from './adapter';
+import type { DuetSession, MadeImage, ProviderError, SessionImage, ToolOutput } from './adapter';
 import { ClaudeSession } from './claude';
 import { CodexSession } from './codex';
 import { claudeConfigDir, claudeProjectFolder, detect, detectInWsl, mayBeInWsl, notInstalled, openSignIn, rememberedInWsl, type Detected, type Launch, type ProviderStatus } from './detect';
 import { readPage, screenshot, type PageRead } from './extract';
-import { DuetImages, newImageId } from './images';
+import { DuetImages, imageInfo, newImageId } from './images';
 import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
 import { extractPdf, fetchPdf, PdfError, pdfProblemCopy } from './pdf';
 
@@ -107,6 +110,13 @@ interface ThreadState {
   context: DuetContextUsage | null;
   /** PDFs read in this chat, per tab: later ranges reuse them, and citations find their page in them. */
   pdfs: Map<NodeId, PdfRead>;
+  /** Images Codex made that are still being written: the reply is kept only once they're on disk. */
+  saving: Set<Promise<void>>;
+}
+
+/** Where Duet's images go when you save one: Downloads, listed as a finished download. */
+export interface DuetFiles {
+  save(filename: string, bytes: Uint8Array, mime: string): Promise<void>;
 }
 
 interface PdfRead {
@@ -174,11 +184,16 @@ export class DuetService {
     private readonly browser: Browser,
     private readonly persistence: Persistence,
     userData: string,
+    private readonly files?: DuetFiles,
   ) {
     this.root = join(userData, 'duet');
     this.images = new DuetImages(join(this.root, 'images'));
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'windows' || p.path[0] === 'settings' || p.path[0] === 'nodes' || p.path[0] === 'chords')) this.schedulePush();
+      // Codex starts with its image tool on or off: idle Codex sessions start again with the new choice.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'duet' && p.path[2] === 'codexImages')) {
+        for (const [threadId, live] of [...this.live]) if (live.session.provider === 'codex' && !live.session.busy) this.drop(threadId);
+      }
     });
     void this.init();
   }
@@ -207,7 +222,7 @@ export class DuetService {
     if (before !== null) {
       const { removed = [], images = [] } = await this.persistence.duet({ op: 'prune', before }).catch(() => ({ removed: [], images: [] }));
       for (const thread of removed) void this.deleteProviderCopy(thread);
-      void this.images.remove(images);
+      void this.images.remove(images, !this.launches.codex?.wsl);
     }
     // Launching never starts WSL: a WSL install found earlier stands until Setup or the panel looks again.
     void this.refreshProviders('never');
@@ -277,6 +292,7 @@ export class DuetService {
       lastError: null,
       context: null,
       pdfs: new Map(),
+      saving: new Set(),
     };
   }
 
@@ -347,6 +363,7 @@ export class DuetService {
       provider: settings.provider,
       providers: DUET_PROVIDERS.map((p) => this.statuses[p] ?? notInstalled(p)),
       chordOff: chordId ? settings.offChords.includes(chordId) : false,
+      codexImages: this.codexMakesImages(),
       firstUse: !this.firstUseSeen,
       lookingInWsl: this.lookingInWsl,
     };
@@ -426,6 +443,61 @@ export class DuetService {
   }
 
   /* ---------- Images (a pasted image, a screenshot) ---------- */
+
+  /**
+   * An image Codex made: written to the chat's images, then shown with the reply. Codex's base64 is
+   * decoded here (one string per image); its size comes from the file's header, never by decoding it.
+   */
+  private keepMadeImage(state: ThreadState, made: MadeImage | null): void {
+    const streaming = state.streaming;
+    if (streaming?.body.role !== 'assistant') return;
+    streaming.body = { ...streaming.body, making: Math.max(0, (streaming.body.making ?? 1) - 1) };
+    const bytes = made ? Buffer.from(made.data, 'base64') : null;
+    const info = bytes ? imageInfo(bytes) : null;
+    if (!made || !bytes || !info) return this.schedulePush();
+    const image: DuetImage = { id: newImageId(), ...info, ...(made.prompt ? { prompt: made.prompt.slice(0, 1000) } : {}), ...(made.savedPath ? { codexCopy: made.savedPath } : {}) };
+    const saving = this.images.save(image, bytes).then(() => {
+      if (streaming.body.role === 'assistant') streaming.body = { ...streaming.body, images: [...(streaming.body.images ?? []), image] };
+      this.schedulePush();
+    });
+    state.saving.add(saving);
+    void saving.catch(() => undefined).finally(() => state.saving.delete(saving));
+  }
+
+  /** `chord://shell/duet-image/<id>.<ext>`: a chat's image, from disk, for the panel. */
+  async serveImage(url: string): Promise<Response> {
+    const file = this.images.file(url.slice(url.lastIndexOf('/') + 1));
+    const response = file ? await net.fetch(pathToFileURL(file.path).toString()).catch(() => null) : null;
+    if (!file || !response?.ok) return new Response('Not found', { status: 404 });
+    return new Response(response.body, { headers: { 'content-type': file.mime, 'x-content-type-options': 'nosniff', 'cache-control': 'private, max-age=31536000, immutable' } });
+  }
+
+  /** Copy an image in the chat, or save it to Downloads. */
+  private async imageAction(windowId: WindowId, state: ThreadState, id: string, what: 'copy' | 'save'): Promise<void> {
+    const image = state.messages.flatMap((m) => (m.body.role === 'user' || m.body.role === 'assistant' ? (m.body.images ?? []) : [])).find((i) => i.id === id);
+    const bytes = image ? await this.images.read(image) : null;
+    if (!image || !bytes) return;
+    if (what === 'save') {
+      await this.files?.save(screenshotFilename(new Date(), image.prompt ? 'Duet image' : 'Image', image.mime === 'image/jpeg' ? 'jpg' : image.mime.slice(6)), bytes, image.mime);
+      this.toast(windowId, { id: 'duet-image', message: 'Image saved to Downloads' });
+      return;
+    }
+    // The clipboard takes images as PNG: a JPEG or WebP is turned into one (on asking, not as it arrives).
+    const png = image.mime === 'image/png' ? bytes : nativeImage.createFromBuffer(bytes).toPNG();
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })]);
+    this.toast(windowId, { id: 'duet-image', message: 'Image copied' });
+  }
+
+  private toast(windowId: WindowId, toast: { id: string; message: string }): void {
+    const shell = this.browser.window(windowId)?.shell.webContents;
+    if (shell) send(shell, 'toast:show', toast);
+  }
+
+  /** Codex can make images: allowed in Settings → Duet, installed, signed in and new enough. */
+  private codexMakesImages(): boolean {
+    const codex = this.statuses.codex;
+    return Boolean(this.settings.codexImages && codex?.installed && codex.signedIn && !codex.tooOld);
+  }
 
   /** Whether a picture of this page may go to Duet from this window: set up, on in its chord, and a page Duet may read. */
   canAskAbout(windowId: WindowId, url: string): boolean {
@@ -604,6 +676,15 @@ export class DuetService {
         return;
       case 'citation':
         return this.openCitation(windowId, state, action.messageId, action.n);
+      case 'image':
+        return this.imageAction(windowId, state, action.id, action.what);
+      case 'makeWithCodex': {
+        // Claude said it can't make the image: the chat goes on with Codex, which is asked again.
+        const lastUser = [...state.messages].reverse().find((m) => m.body.role === 'user');
+        if (lastUser?.body.role !== 'user' || !this.codexMakesImages() || state.streaming) return;
+        await this.setModel(state, 'codex', null);
+        return this.send(windowId, state, lastUser.body.text, lastUser.body.attachments, lastUser.body.images ?? []);
+      }
       case 'showTab': {
         const node = this.browser.store.state.nodes[state.refs.get(action.ref) ?? ''];
         if (node?.kind === 'tab') this.browser.store.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
@@ -748,7 +829,9 @@ export class DuetService {
       const idle = [...this.live.entries()].filter(([, l]) => !l.session.busy).sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0];
       if (idle) this.drop(idle[0]);
     }
-    const instructions = duetInstructions(summary);
+    const images = thread.provider === 'codex' && this.settings.codexImages;
+    const making: DuetImageMaking = thread.provider === 'codex' ? (images ? 'codex' : 'codex-off') : 'claude';
+    const instructions = duetInstructions(summary, making);
     const instructionsFile = join(this.root, 'instructions', `${thread.id}.md`);
     await writeFile(instructionsFile, instructions, { encoding: 'utf8', mode: 0o600 });
     const resumeId = summary ? null : thread.providerSessionId;
@@ -761,6 +844,7 @@ export class DuetService {
       resumeId,
       newSessionId: randomUUID(),
       tools: DUET_TOOLS,
+      images,
     };
     let resumeFailed = false;
     const events = {
@@ -780,6 +864,12 @@ export class DuetService {
         state.context = usage;
         this.schedulePush();
       },
+      onImageStart: () => {
+        if (state.streaming?.body.role !== 'assistant') return;
+        state.streaming.body = { ...state.streaming.body, making: (state.streaming.body.making ?? 0) + 1 };
+        this.schedulePush();
+      },
+      onImage: (_callId: string, made: MadeImage | null) => this.keepMadeImage(state, made),
       onTurnEnd: (outcome: { status: 'done' | 'interrupted' | 'error'; error?: ProviderError }) => void this.finishTurn(state, outcome),
       onExit: (error: ProviderError | null) => {
         this.live.delete(thread.id);
@@ -815,7 +905,7 @@ export class DuetService {
       await this.persistence.duet({ op: 'saveMessage', message: divider }).catch(() => undefined);
     }
     const session = await this.sessionFor(state, transcriptSummary(earlier) || undefined);
-    if (session && lastUser?.body.role === 'user') session.send(userTurnText(lastUser.body.text, lastUser.body.attachments));
+    if (session && lastUser?.body.role === 'user') session.send(userTurnText(lastUser.body.text, lastUser.body.attachments), await this.imagesToSend(lastUser.body.images ?? [], []));
     else if (!session) await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Duet couldn't start." } });
   }
 
@@ -841,6 +931,8 @@ export class DuetService {
   }
 
   private async finishTurn(state: ThreadState, outcome: { status: 'done' | 'interrupted' | 'error'; error?: ProviderError }): Promise<void> {
+    // An image Codex made a moment ago is kept with the reply once it's written.
+    if (state.saving.size) await Promise.all(state.saving);
     const streaming = state.streaming;
     if (!streaming || streaming.body.role !== 'assistant') return;
     state.streaming = null;
@@ -866,9 +958,10 @@ export class DuetService {
         ...(page ? { page } : {}),
       });
     }
-    const body: DuetMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}) };
+    const images = streaming.body.images ?? [];
+    const body: DuetMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}), ...(images.length ? { images } : {}) };
     if (outcome.status === 'error') state.lastError = outcome.error ?? null;
-    if (text.trim() || outcome.status !== 'done') {
+    if (text.trim() || images.length || outcome.status !== 'done') {
       const message = { ...streaming, body };
       state.messages.push(message);
       await this.persistence.duet({ op: 'saveMessage', message }).catch(() => undefined);
@@ -1138,7 +1231,7 @@ export class DuetService {
     }
     const { removed = [], images = [] } = await this.persistence.duet({ op: 'deleteThread', threadId }).catch(() => ({ removed: [], images: [] }));
     for (const thread of removed) await this.deleteProviderCopy(thread);
-    await this.images.remove(images);
+    await this.images.remove(images, !this.launches.codex?.wsl);
     delete this.drafts[threadId];
     if (this.showing.get(chordId) === threadId) this.fresh(chordId);
     await this.refreshRecent(chordId);

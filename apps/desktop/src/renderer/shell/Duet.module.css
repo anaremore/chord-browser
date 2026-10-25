@@ -505,6 +505,73 @@
   overflow-wrap: anywhere;
 }
 
+/* Images Codex made: the whole picture at the reply's width, with Copy and Save over its corner on hover or focus. */
+.madeImages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-block-start: var(--space-2);
+}
+
+.madeImage {
+  position: relative;
+  margin: 0;
+}
+
+.madeImage img {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  border-radius: var(--radius-sm);
+  outline: var(--size-hairline) solid var(--color-divider);
+  background: var(--color-item-hover);
+}
+
+.madeImageActions {
+  position: absolute;
+  inset-block-start: var(--space-1);
+  inset-inline-end: var(--space-1);
+  display: flex;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--duration-fade-fast) var(--ease-standard);
+}
+
+.madeImage:hover .madeImageActions,
+.madeImage:focus-within .madeImageActions {
+  opacity: 1;
+}
+
+.imageAction {
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-icon-button);
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
+}
+
+.imageAction:hover {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+/* While Codex makes one: a square where it will be. */
+.making {
+  display: grid;
+  place-items: center;
+  inline-size: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
 /* A tab a reply names by its handle: its title, in a soft pill, kept to one short line; clicking it shows the tab. */
 .tabName {
   display: inline-block;
