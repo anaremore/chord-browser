@@ -59,8 +59,8 @@ A milestone is done when all of these hold:
 | **4 · Deeper** | — | Mar 2027 + | install signed builds that update themselves on every OS |
 | **After 0.1** | 0.1.x | Nov 2026 | sign in to sites that ask for a password in a box, and trust that a force-quit loses nothing |
 | | 0.2 · Cleaner pages | Dec 2026 | browse without ads or trackers, and bring your bookmarks and history from Chrome, Edge, Brave, Firefox or Safari |
-| | 0.3 · Effects | Feb 2027 | restyle a site by hand or by asking Duet, with a Dry/Wet switch |
-| | 0.4 · Your data | Mar 2027 | export everything, and sync your setup through a folder you already sync, end-to-end encrypted |
+| | 0.3 · Effects | next, after the performance plan (moved up 2026-10-25) | restyle a site by hand or by asking Duet, with a Dry/Wet switch; then Duet fills forms |
+| | 0.4 · Your data | right after Effects (moved up 2026-10-25) | export everything, and sync your setup through a folder you already sync, end-to-end encrypted |
 
 ## Where we are (updated 2026-10-23)
 
@@ -398,20 +398,22 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   - **Built 2026-10-24** (ARCHITECTURE.md §9, *Screen sharing* and *Presenting mode*; DESIGN.md §7.13). Chord's picker lists its tabs first (a private window's only to that window's pages), then screens and windows by name, pictured a moment later. A tab goes out with its sound, still heard here; while shared it never sleeps or archives, isn't throttled, and stays attached to its window out of sight. On macOS 15+ and Wayland, *Screen or window…* opens the system's picker from Chord's (on macOS with the same stand-in source Electron uses for its own `useSystemPicker`). Presenting mode starts with a share and ends with the last, or with ⌘⇧P / Ctrl+Shift+P and the command bar; a card in the sidebar (a chip in the minimal bar) says so and turns it off; main refuses history, archive and Duet suggestions, preview cards, websites' notifications and Chord's toasts while it's on; Settings → General can collapse the sidebar too. A shared tab's frame, and a window a page shares, get a tinted edge, and the shared tab's row has its own Stop. Moving a shared tab to other sign-ins ends the share, with a toast. E2E tests share a tab and check its picture, sound, local echo, painting off screen, no sleep, presenting mode, the shortcut, private windows and the move (`sharing.spec.ts`, on every OS).
   - *Not yet:* swapping the shared tab mid-call; a window edge when the system's picker chose (Chord can't know what it chose); by hand, the hand-over to macOS's picker (CI's macOS can't drive it) and to the portal on a real Wayland desktop, and a tab shared to a call on Windows and macOS.
 
-### Electron 46 · January 5, 2027
-- **P0** The first major upgrade (Phase 2's first task), on the 72-hour clock.
+### 0.3 · Effects · next (moved up 2026-10-25)
+The maintainer moved Effects and Your data up, right after the P0 performance plan and ahead of everything else planned (2026-10-25). Effects is built beside the performance work, by an agent in its own worktree.
 
-### 0.3 · Effects · February
-- **P2 Effects**, in place of Boosts (D13): per-site styles with a Dry/Wet switch that removes them at once.
+- **P1 Effects**, in place of Boosts (D13): per-site styles with a Dry/Wet switch that removes them at once.
   - By hand: your own CSS, hiding an element, a few presets.
   - *Ask Duet*: your Claude Code or Codex app writes a patch from a stripped outline of the page; same reading rules as Duet.
   - Every patch is parsed and stripped of anything that fetches before it's applied, and re-applied on each navigation.
 
-- **P2 Duet fills forms** (D16, decided 2026-10-24): "fill only, you submit". Only when you ask, on the tab on screen; a review card of each field's value, then Chord fills them, with Undo; never submits, never passwords, cards, one-time codes or hidden fields. After Effects, sharing its safety review of writing into pages.
+- **P1 Duet fills forms** (D16, decided 2026-10-24): "fill only, you submit". Only when you ask, on the tab on screen; a review card of each field's value, then Chord fills them, with Undo; never submits, never passwords, cards, one-time codes or hidden fields. After Effects, sharing its safety review of writing into pages.
 
-### 0.4 · Your data · March
+### 0.4 · Your data · right after Effects (moved up 2026-10-25)
 - **P1 Export everything:** chords, tabs, folders, Favorites, themes, settings, routes, Effects, history and Duet chats, in the format sync uses.
-- **P2 Sync** through a folder you already sync, end-to-end encrypted with your passphrase (D14). Setup only in its first version: no history, no open tabs. One log per device, merged on every device.
+- **P1 Sync** through a folder you already sync, end-to-end encrypted with your passphrase (D14). Setup only in its first version: no history, no open tabs. One log per device, merged on every device.
+
+### Electron 46 · January 5, 2027
+- **P0** The first major upgrade, on the 72-hour clock, whatever else is under way.
 
 ### Later (P3)
 - **Updates on the fly** (asked 2026-10-24), in three layers, safest first. Every layer is signed with the update key, pinned to the contract of the main process that runs it, and rolls back to the last good version on failure. Main never runs code it downloaded.
