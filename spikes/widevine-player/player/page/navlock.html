@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Navigation lock test</title>
+</head>
+<body>
+<p>Each of these tries to leave the allowed hosts; the player should stay here and hand the address to the host.</p>
+<script>
+  const click = (attrs) => {
+    const a = Object.assign(document.createElement('a'), attrs);
+    a.textContent = attrs.href;
+    document.body.append(a);
+    a.click();
+    return true;
+  };
+  const frame = (src) => {
+    const f = document.createElement('iframe');
+    f.src = src;
+    document.body.append(f);
+    return true;
+  };
+  window.navtest = {
+    link: () => click({ href: 'https://example.com/link' }),
+    targetBlank: () => click({ href: 'https://example.org/blank', target: '_blank' }),
+    popupBlocked: () => (window.open('https://example.net/popup', 'x', 'width=400,height=300'), true),
+    popupAllowed: () => (window.open('/probe.html?popup=1', 'y', 'width=400,height=300'), true),
+    redirect: () => ((location.href = '/redirect?to=' + encodeURIComponent('https://example.com/redirected')), true),
+    meta: () => ((location.href = '/meta?to=' + encodeURIComponent('https://example.com/meta')), true),
+    form: () => {
+      const f = Object.assign(document.createElement('form'), { method: 'post', action: 'https://example.com/form' });
+      document.body.append(f);
+      f.submit();
+      return true;
+    },
+    assign: () => (location.assign('https://www.wikipedia.org/'), true),
+    frameBlocked: () => frame('https://example.com/frame'),
+    frameAllowed: () => frame('/probe.html?frame=1'),
+    mailto: () => ((location.href = 'mailto:someone@example.com'), true),
+    customScheme: () => ((location.href = 'spotify:track:4uLU6hMCjMI75M1A2tKUQC'), true),
+    download: () => click({ href: '/probe.js', download: 'probe.js' }),
+    httpLink: () => click({ href: 'http://neverssl.com/' }),
+  };
+</script>
+</body>
+</html>
