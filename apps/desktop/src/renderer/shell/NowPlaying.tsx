@@ -104,7 +104,7 @@ function Line({ media, tab, popped, windowId, appearance, muteTitle, onLeave }: 
         type="button"
         className={styles.iconButton}
         aria-label={`${muted ? 'Unmute' : 'Mute'}: ${title}`}
-        title={muted ? muteTitle.unmute : muteTitle.mute}
+        title={muteLabel(media, muted, muteTitle)}
         onClick={() => toggleMute(media, tab, muted)}
       >
         {muted ? <VolumeX {...ICON} /> : <Volume2 {...ICON} />}
@@ -126,6 +126,10 @@ function Line({ media, tab, popped, windowId, appearance, muteTitle, onLeave }: 
 
 /** Rows shown under the newest before "and N more". */
 const LINES = 2;
+
+/** The mute button's tooltip: the tab's (with its shortcut), or Chord Player's own. */
+const muteLabel = (media: NowPlaying, muted: boolean, tab: { mute: string; unmute: string }) =>
+  media.player ? (muted ? 'Unmute Chord Player' : 'Mute Chord Player') : muted ? tab.unmute : tab.mute;
 
 /** Chord Player's mute is its own; a tab's is the tab's. */
 const mutedOf = (media: NowPlaying, tab: TabNode) => (media.player ? Boolean(media.muted) : Boolean(tab.muted));
@@ -223,7 +227,7 @@ function Card({ media, tab, popped, others, windowId, appearance, muteTitle, ent
           type="button"
           className={styles.iconButton}
           aria-label={media.player ? (muted ? 'Unmute Chord Player' : 'Mute Chord Player') : muted ? 'Unmute tab' : 'Mute tab'}
-          title={muted ? muteTitle.unmute : muteTitle.mute}
+          title={muteLabel(media, muted, muteTitle)}
           onClick={() => toggleMute(media, tab, muted)}
         >
           {muted ? <VolumeX {...ICON} /> : <Volume2 {...ICON} />}

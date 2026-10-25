@@ -17,6 +17,7 @@ import electron, { app, BrowserWindow, Menu, session, type BrowserWindowConstruc
 import { lockContents, lockSession } from './lock';
 import { MediaWatch } from './media';
 import { chromiumUserAgent } from './user-agent';
+import { BAR_URL, registerBarScheme, serveBar } from './bar-protocol';
 import { barFiles, PlayerWindow } from './window';
 
 /** Chord's AppUserModelID: the player's window joins Chord's taskbar button on Windows (S14 §2). */
@@ -40,23 +41,24 @@ if (launch.test) {
   if (launch.test.secureOrigins?.length) app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', launch.test.secureOrigins.join(','));
 }
 app.enableSandbox();
+registerBarScheme();
 // One player per profile: a second one started on it leaves at once.
 if (!app.requestSingleInstanceLock()) process.exit(0);
 // Chromium's own user agent, as Chord's (no Electron or app tokens), so services see a Chromium browser.
 app.userAgentFallback = chromiumUserAgent(app.userAgentFallback, app.getName());
 app.on('window-all-closed', () => app.quit());
-// macOS: the few menu items a window you watch in needs (copy and paste in sign-in forms, full screen, quit).
-Menu.setApplicationMenu(
-  process.platform === 'darwin'
-    ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { label: 'View', submenu: [{ role: 'togglefullscreen' }] }, { role: 'windowMenu' }])
-    : null,
-);
 
 // Not awaited: Electron emits `ready` only once the entry module, top-level awaits included, has finished.
 void run(launch);
 
 async function run(launch: Launch): Promise<void> {
   await app.whenReady();
+  // macOS: the few menu items a window you watch in needs (copy and paste in sign-in forms, full screen, quit).
+  Menu.setApplicationMenu(
+    process.platform === 'darwin'
+      ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { label: 'View', submenu: [{ role: 'togglefullscreen' }] }, { role: 'windowMenu' }])
+      : null,
+  );
   const peer = await connect({ path: launch.path }, launch.secret, { protocol: PROTOCOL, app: app.getVersion(), ecs: __ECS_VERSION__, pid: process.pid });
   new Player(peer, launch);
 }
@@ -84,11 +86,13 @@ class Player {
     const deps = { lock: this.lock, handoff: (url: string, why: LinkReason) => this.handoff(url, why), popup: () => this.popupOptions(ses) };
     lockSession(ses, deps);
     const files = barFiles(import.meta.dirname);
+    const uiSession = session.fromPartition('player-ui');
+    serveBar(uiSession, files.renderer);
     this.window = new PlayerWindow({
       session: ses,
-      uiSession: session.fromPartition('player-ui'),
+      uiSession,
       preload: files.preload,
-      barPage: files.page,
+      barUrl: BAR_URL,
       onBack: () => peer.send('back'),
       onClosed: () => this.quit('closed'),
     });

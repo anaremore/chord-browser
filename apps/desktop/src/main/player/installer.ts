@@ -30,7 +30,7 @@ import { Worker } from 'node:worker_threads';
 import { downloadsFor, verifyManifest } from '../update-signing';
 import { nextState, type InstallEvent, type InstallState, type Installed } from './install-state';
 import { downloadsDir, stateFile, versionDir } from './paths';
-import type { UnpackJob, UnpackMessage } from './unpack-worker';
+import type { RemoveJob, UnpackJob, UnpackMessage } from './unpack-worker';
 
 interface StateFile {
   current: Installed | null;
@@ -256,7 +256,7 @@ export class PlayerInstaller {
   async remove(): Promise<void> {
     await this.busy?.catch(() => false);
     await this.updating?.catch(() => undefined);
-    await rm(this.deps.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    await this.removePaths([this.deps.root]);
     this.file = { current: null, pending: null, bad: [] };
     this.dispatch({ e: 'removed' });
   }
@@ -278,11 +278,23 @@ export class PlayerInstaller {
     } catch {
       return;
     }
-    for (const name of names) {
-      if (!/^\d+\.\d+\.\d+/.test(name) || keep.has(name)) continue;
-      // A version still running (Windows keeps its files open) goes next time.
-      await rm(versionDir(this.deps.root, name), { recursive: true, force: true, maxRetries: 2, retryDelay: 200 }).catch(() => {});
-    }
+    // A version still running (Windows keeps its files open) goes next time.
+    const old = names.filter((name) => /^\d+\.\d+\.\d+/.test(name) && !keep.has(name)).map((name) => versionDir(this.deps.root, name));
+    if (old.length) await this.removePaths(old);
+  }
+
+  /** Deletes folders in the worker, where Electron's file functions don't treat the player's app.asar as an archive. */
+  private removePaths(paths: string[]): Promise<void> {
+    return new Promise((resolve) => {
+      const worker = new Worker(this.deps.workerPath, { workerData: { op: 'remove', paths } satisfies RemoveJob });
+      const finish = () => {
+        void worker.terminate();
+        resolve();
+      };
+      worker.once('message', finish);
+      worker.once('error', finish);
+      worker.once('exit', finish);
+    });
   }
 
   /** Downloads a release's zip and has the worker check and unpack it. True, or why it failed. */
@@ -311,7 +323,7 @@ export class PlayerInstaller {
       }
       if (received !== manifest.size) return received < manifest.size ? 'download' : 'verify';
       on.downloaded?.();
-      return await this.unpack({ zip, sha512: manifest.sha512, dest: versionDir(this.deps.root, manifest.version), maxBytes: Math.ceil(manifest.unpackedSize * 1.05) }, on);
+      return await this.unpack({ op: 'unpack', zip, sha512: manifest.sha512, dest: versionDir(this.deps.root, manifest.version), maxBytes: Math.ceil(manifest.unpackedSize * 1.05) }, on);
     } catch {
       return 'download';
     } finally {

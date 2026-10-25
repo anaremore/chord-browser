@@ -1,0 +1,5 @@
+# What castlabs-evs 1.3.2 needs (its METADATA's Requires-Dist), pinned by version.
+boto3==1.43.118
+cryptography==50.0.2
+macholib==1.16.4
+requests==2.34.2

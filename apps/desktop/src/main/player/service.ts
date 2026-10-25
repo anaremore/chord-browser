@@ -134,10 +134,12 @@ export class ChordPlayer {
       if (theme) this.host.send('theme', { ...theme });
       const answer = await this.host.request<{ ok: boolean; why?: string }>('open', { url }, OPEN_MS);
       if (!answer?.ok) {
+        console.warn(`[chord] Chord Player didn't open the page: ${answer?.why ?? 'no answer'}`);
         this.failure = answer?.why === 'cdm' ? 'widevine' : 'start';
         this.detach();
       }
-    } catch {
+    } catch (error) {
+      console.warn(`[chord] Chord Player didn't open: ${(error as Error).message}`);
       this.failure = 'start';
     } finally {
       this.opening = false;
@@ -155,8 +157,10 @@ export class ChordPlayer {
         await installer.started(candidate.version);
         return;
       } catch (error) {
+        console.warn(`[chord] Chord Player ${candidate.version} didn't start: ${(error as Error).message}`);
         if (error instanceof StartError && error.why === 'missing') continue;
-        await installer.failedToStart(candidate.version);
+        // An update that won't start is skipped from now on; the version that ran before is still there to fall back on.
+        if (candidate.version === installer.pendingVersion) await installer.failedToStart(candidate.version);
       }
     }
     throw new Error('No version of Chord Player started');

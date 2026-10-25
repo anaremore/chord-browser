@@ -484,7 +484,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `NowPlayingCard` (§7.10), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar`, `CaptureLayer` (§7.12) |
 | Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
-| Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer`, the `PasskeyCard` (when a security key holds several passkeys for a site: a fingerprint glyph, *Sign in to [site] with a passkey*, a button per account with the site's display name over its account name, the first one focused, and Cancel; Escape declines), the `DrmNotice` (on a service that needs Widevine: a screen-and-play glyph, *[Service] won’t play in Chord yet*, why in a line, *Open in [browser]* for up to two other browsers on the computer, the likeliest primary; × is Not now, until Chord quits) and the `AuthCard` sign-in box (a site or proxy asking for a username and password: a key, *Sign in to* the origin, the site's realm as a quote, *That username and password didn't work* in `danger` after a failed try, a warning on plain HTTP, two fields, *Cancel* · **Sign in**; Escape cancels) |
+| Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer`, the `PasskeyCard` (when a security key holds several passkeys for a site: a fingerprint glyph, *Sign in to [site] with a passkey*, a button per account with the site's display name over its account name, the first one focused, and Cancel; Escape declines), the `DrmNotice` (on a service that needs Widevine: a screen-and-play glyph, *[Service] won’t play in Chord yet*, why in a line, Chord Player first when it's offered (§7.13: its own full-width row, primary), then *Open in [browser]* for up to two other browsers on the computer, the likeliest primary when Chord Player isn't offered; × is Not now, until Chord quits) and the `AuthCard` sign-in box (a site or proxy asking for a username and password: a key, *Sign in to* the origin, the site's realm as a quote, *That username and password didn't work* in `danger` after a failed try, a warning on plain HTTP, two fields, *Cancel* · **Sign in**; Escape cancels) |
 | Settings and help | `SettingRow` (label, control, and a ↺ reset button shown only when the value differs from its default), `ShortcutSheet` (the cheat sheet, generated from the shortcut registry) |
 | Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
 | Duet | `DuetPanel`, `ThreadHeader` (title, provider/model chip, thread menu), `MessageList`, `AssistantMessage` (with `CitationPill`), `ToolActivityRow`, `ApprovalCard`, `Composer` (`ContextChips`, input, send), `DuetSetup` |
@@ -658,6 +658,11 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Motion:** it rises 8 px and fades in on `overlay`, and leaves with `fade-fast` and a 4 px drop; with reduced motion, opacity only. It belongs to *Animate the sidebar* (§6.8): off, it just appears. When what it shows changes, it changes in place.
 - **Accessibility:** a group named *Now playing*, outside the sidebar's trees, so its buttons are ordinary Tab stops, named for what they do: *Go to tab: [title]*, *Pop out the video*, *Mute tab*, *Pause*; a row's name the title it plays: *Go to tab: [title]*, *Pop out the video: [title]* (or *Back to the tab: [title]*, pressed), *Mute: [title]*, *Pause: [title]*. Going to the tab, or the card leaving with the keyboard in it, hands the keyboard to the sidebar's tab. A new track isn't announced.
 - **The OS's own controls** (Windows' media flyout, macOS's Now Playing, Linux's MPRIS) come from Chromium, not this card: ARCHITECTURE.md §9.
+- **Chord Player** (§7.13) is on the card as the tab it plays for would be, once something has played in it, until it closes.
+  - Its line reads *[tab's title] · Chord Player*.
+  - Instead of *Go to tab*, the button is ***Back to the player*** (it brings the player forward; named *Back to the player: [title]*).
+  - Mute is the player's own (*Mute Chord Player* / *Unmute Chord Player*), not the tab's.
+  - Play and Pause work as for a tab; there's no picture-in-picture button (the player's page has its own).
 
 ### 7.11 `ReaderView`
 
@@ -691,6 +696,51 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Recent screenshots:** the downloads panel lists them under its downloads, newest first: a thumbnail, the page's title, when and how big, then Copy, Save and Delete, and Clear for all. Up to 50, within 256 MB. Settings → Privacy → *Keep recent screenshots* (on) turns this off, deleting them. A private window's are in memory only, listed only in that window, and gone with it.
 - **What can't be pictured:** video under DRM comes out black, as in every browser.
 - **Accessibility:** a dialog named *Take a screenshot*, described by its hint, with the keyboard in it; the bar's buttons are ordinary Tab stops; the element under the pointer is announced politely ("div#box, 200 by 120"). Forced colors draw the outline and label in `Highlight`.
+
+### 7.13 Chord Player
+
+*Built 2026-10-25* (ARCHITECTURE.md §9, D4). The streaming services that need Widevine play in Chord Player, a companion app with a window of its own (S14's approach (a) on every OS). It should read as part of Chord: the chord's colors, Chord's type, and always a way back.
+
+**The DRM notice's states** (the popover card above; `PlayerAction`). Chord Player is offered first, in a full-width row of its own between the notice's line and the other browsers, which drop to secondary buttons.
+- **Install:** **Install Chord Player (about 125 MB)**, the download's size in decimal megabytes; **Update Chord Player (about … MB)** when the installed one is too old for this Chord.
+- **Installing:** a 4 px progress bar (`accent` on `item-hover`, `radius-full`) under a line in `text-small`, `fg-muted`, tabular figures: *Downloading Chord Player · 42%*, *Checking the download*, *Unpacking Chord Player · 80%*. A `progressbar` named *Installing Chord Player*, its value text the same line.
+- **Ready:** **Open in Chord Player**. Installing ends here too: the page then opens in the player.
+- **Opening:** the same button, disabled: *Opening in Chord Player…*.
+- **Failed:** why, in `danger`, `text-small` (an `alert`), then **Try again**:
+  - *Chord Player didn't download. Check your connection and try again.*
+  - *The download didn't match its signature, so Chord didn't install it.*
+  - *Chord Player couldn't be unpacked. Check there's room on the disk and try again.*
+  - *Chord Player didn't start.*
+  - *Chord Player couldn't get Widevine from Google. Check your connection and try again.*
+- **The line:** with Chord Player offered, *It needs Widevine, the copy protection streaming services use. Chord Player, a companion app with Widevine, plays it in a window of its own.* On Linux it adds *On Linux, some services play only in lower quality, or not at all.*
+- **Never** in Google-free mode or a private window: there the card is as before, with other browsers only.
+
+**The player's window.** Frameless, with a 40 px bar (`size-player-bar`) above the service's page. The bar wears the chord the service came from: its base and tint (as a solid window draws them, light or dark as the chord is), in Chord's type.
+- **Left to right:** a 16 px rounded square in `accent` (`radius-xs`), the service's name in `text-label`, then, while Widevine installs on first use, *Getting Widevine ready…* in `text-small`, `fg-muted`.
+- **On the right:** **Back to Chord** (an arrow-left and the words; a 28 px pill in `item-hover`, `item-active-bg` on hover, `focus-ring` outline), then the window's controls.
+- **Window controls** are the OS's own:
+  - macOS: the traffic lights, centered in the bar, 76 px kept for them on the left;
+  - Windows and Linux: the caption buttons through the title bar overlay, on a transparent ground so the tint runs under them, with 138 px (Windows) or 120 px (Linux) kept on the right.
+  - The bar is the window's drag region; the button isn't.
+- **Before Chord sends the chord's colors:** Chord's default theme in the system's appearance. When the chord's colors or the appearance change, the bar follows.
+- **Fullscreen** (a video's) covers the bar; leaving brings it back. Picture-in-picture is Chromium's window, as in Chord.
+- **Sign-in popups** a service opens are small windows of the player's own (520 × 700), without the bar.
+- **On Windows** the window joins Chord's taskbar button. On macOS it's an app of its own in the Dock and Cmd+Tab, named *Chord Player*.
+- *Icon:* Chord's, for now; one of its own is a follow-up.
+
+**The tab that stays** (`PlayerState`, in the frame where the page was). *Playing in Chord Player* (`text-heading`), *[host] plays in Chord Player, in a window of its own. This tab stays here.* (`fg-muted`), then **Show the page here** (secondary pill) and **Back to the player** (the `accent` pill), side by side. A `status`, so it's announced once.
+- The page waits behind it, hidden; the DRM notice doesn't show over it.
+- *Show the page here* shows the page again (to manage the account, say); the notice then offers *Open in Chord Player* again.
+- Closing the player, or the tab leaving its service, does the same.
+- Only one tab at a time: opening another service's page in the player moves it there.
+
+**Settings → General → Chord Player** (after Spelling):
+- **Installed:** *Chord Player 0.1.0*, *Plays Netflix, Spotify and the other services that need Widevine, in a window of its own, on castLabs ECS 44.9.3.* An update waiting adds *Version 0.1.1 starts the next time it opens.*
+- **Remove** is a link button that asks once more inline: *Remove it and its sign-ins?* (for 5 seconds), then *Removing…*.
+- **Not installed:** *It installs from the notice on their pages.*
+- **Google-free mode:** *Off in Google-free mode, because Widevine, which it plays with, comes from Google.*
+- **Where it can't run** (a Flatpak, Linux arm64), nothing shows.
+- Settings → Privacy → Google-free mode lists it under *Also changed*.
 
 ## 8. Key flows
 

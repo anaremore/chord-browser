@@ -1,10 +1,15 @@
 /**
- * Installing a downloaded Chord Player (ARCHITECTURE.md §9), off main
- * (performance rule 1): a worker thread hashes the zip, refuses it unless its
- * SHA-512 is the one the signed manifest names, then unpacks it beside its
- * final folder and moves it into place only once every file checked out
- * (@chord/player-protocol's extractZip). Built as out/main/player-unpack.js;
- * started for one zip and ended after.
+ * Chord Player's files (ARCHITECTURE.md §9), off main (performance rule 1):
+ * a worker thread installs a downloaded player (hashes the zip, refuses it
+ * unless its SHA-512 is the one the signed manifest names, unpacks it beside
+ * its final folder and moves it into place only once every file checked out,
+ * with @chord/player-protocol's extractZip), and removes versions. Built as
+ * out/main/player-unpack.js; started for one job and ended after.
+ *
+ * The player's folders hold an `app.asar`, which Electron's file functions
+ * would open as an archive (and refuse to write or delete): this thread
+ * turns that off for itself (`process.noAsar`), which main can't do without
+ * affecting how Chord reads its own app.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -13,7 +18,10 @@ import { pipeline } from 'node:stream/promises';
 import { parentPort, workerData } from 'node:worker_threads';
 import { extractZip } from '@chord/player-protocol';
 
+(process as unknown as { noAsar: boolean }).noAsar = true;
+
 export interface UnpackJob {
+  op: 'unpack';
   zip: string;
   /** The manifest's SHA-512 of the zip, base64. */
   sha512: string;
@@ -22,11 +30,17 @@ export interface UnpackJob {
   maxBytes: number;
 }
 
-export type UnpackMessage = { t: 'verified' } | { t: 'progress'; percent: number } | { t: 'done' } | { t: 'error'; why: 'verify' | 'unpack'; message: string };
+/** Folders to delete (versions, or the whole player): what fails (a version still running, on Windows) is left for next time. */
+export interface RemoveJob {
+  op: 'remove';
+  paths: string[];
+}
+
+export type UnpackMessage = { t: 'verified' } | { t: 'progress'; percent: number } | { t: 'done'; failed?: string[] } | { t: 'error'; why: 'verify' | 'unpack'; message: string };
 
 const post = (message: UnpackMessage) => parentPort?.postMessage(message);
 
-async function run(job: UnpackJob): Promise<void> {
+async function unpack(job: UnpackJob): Promise<void> {
   const hash = createHash('sha512');
   try {
     await pipeline(createReadStream(job.zip), hash);
@@ -55,4 +69,19 @@ async function run(job: UnpackJob): Promise<void> {
   }
 }
 
-if (parentPort) void run(workerData as UnpackJob);
+async function remove(job: RemoveJob): Promise<void> {
+  const failed: string[] = [];
+  for (const path of job.paths) {
+    try {
+      await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    } catch {
+      failed.push(path);
+    }
+  }
+  post({ t: 'done', failed });
+}
+
+if (parentPort) {
+  const job = workerData as UnpackJob | RemoveJob;
+  void (job.op === 'remove' ? remove(job) : unpack(job));
+}

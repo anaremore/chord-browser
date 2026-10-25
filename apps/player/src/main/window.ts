@@ -34,7 +34,8 @@ export interface WindowDeps {
   session: Session;
   uiSession: Session;
   preload: string;
-  barPage: string;
+  /** The bar's page (chord-player://bar/…, bar-protocol.ts). */
+  barUrl: string;
   onBack(): void;
   onClosed(): void;
 }
@@ -92,7 +93,7 @@ export class PlayerWindow {
     ipcMain.on('bar:back', (event) => {
       if (event.sender === bar) deps.onBack();
     });
-    void bar.loadFile(deps.barPage);
+    void bar.loadURL(deps.barUrl);
 
     // A page going fullscreen (a video) covers the bar; leaving brings it back. Electron makes the window fullscreen itself.
     this.page.webContents.on('enter-html-full-screen', () => {
@@ -182,4 +183,4 @@ export class PlayerWindow {
 }
 
 /** Where the bar's files are in the packaged app. */
-export const barFiles = (dir: string) => ({ preload: join(dir, '../preload/bar.cjs'), page: join(dir, '../renderer/bar/index.html') });
+export const barFiles = (dir: string) => ({ preload: join(dir, '../preload/bar.cjs'), renderer: join(dir, '../renderer') });

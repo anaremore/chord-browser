@@ -142,6 +142,40 @@ If the Cloudsmith work ends up using your own GPG key, that key belongs in the s
 
 ---
 
+## Chord Player: castLabs VMP
+
+Chord Player (ARCHITECTURE.md §9, `apps/player`) runs on castLabs ECS. The streaming services play only in a build that castLabs' EVS service has **VMP-signed** for production. This is separate from code signing: a build can have either, both or neither.
+
+**Turns on with:** the secrets `EVS_ACCOUNT_NAME` and `EVS_PASSWD` (your castLabs EVS account, S14 §5). They're set (2026-10-25) as **repository** secrets.
+- `.github/workflows/player.yml` VMP-signs the Windows and macOS builds when they're there and signing is asked for:
+  - always for a `player-v*` tag (`player-release.yml`), which fails without them;
+  - when CI is started by hand (`gh workflow run ci.yml --ref <branch>`);
+  - never on ordinary pushes and pull requests.
+- **Linux has no VMP.**
+
+**How it runs:**
+1. *Install castLabs EVS*: `castlabs-evs` 1.3.2, pinned by its wheel's hash (`apps/player/build/evs-requirements.txt`), in a venv of its own, run with `python -I`.
+2. *Sign in to castLabs EVS*, the only step that sees the two secrets: `castlabs_evs.account --no-ask reauth`, once.
+   - An expired or wrong login fails here, and nothing retries: castLabs asks accounts not to repeat requests needlessly.
+   - EVS's tokens (`EVS_CONFIG_FILE`) and signature cache (`EVS_CACHE_FILE`) live in the runner's temp folder, never in the workspace or an artifact. *Forget the EVS tokens* deletes them, even after a failure.
+3. *Package* (`apps/player/scripts/package.mjs`, non-interactive with `EVS_NO_ASK`), in castLabs' order:
+   - **macOS:** the fuses are flipped, then VMP signing (`sign-pkg`), all in electron-builder's `afterPack`. Then code signing: ad-hoc today, Developer ID once it's set up for Chord.
+   - **Windows:** code signing (by electron-builder, once a certificate is set up), then VMP signing. Nothing touches the `.exe` after it.
+   - `verify-pkg` then checks the signature, and the job fails if it doesn't hold.
+
+**Without the secrets** (forks, pull requests), the Windows and macOS binaries stay as castLabs built them, so ECS's development signature stays valid. Only Widevine's test servers accept that, so such builds are for tests, not for release.
+
+**Your steps:**
+- **Move the secrets into the `release` environment** for releases.
+  - Add `player-v*` to its *Deployment branches and tags*, and run `player.yml`'s package job for tags in that environment, as `release.yml` does for Chord.
+  - Until then, every workflow on any branch can read the two secrets.
+  - CI's hand-started runs sign with them too; decide whether those should stop once releases sign from the environment.
+- **Tokens expire about monthly.** CI signs in afresh each run (`reauth`). If castLabs changes how that works, *Sign in to castLabs EVS* is where it fails.
+- **Check a released player** with docs/testing/widevine-player.md, and its VMP status offline with `castlabs_evs.vmp verify-pkg`.
+- **A release** needs Chord's update key too (`CHORD_UPDATE_SIGNING_KEY` in `release`, and the public half in `apps/desktop/src/main/update-key.ts`). Chord installs a player only from a manifest that key signed.
+
+---
+
 ## After the first signed release
 
 - **Set the variable `CHORD_REQUIRE_SIGNING` to `true`** in `release`. From then on, a tag build whose secrets went missing fails, instead of shipping:

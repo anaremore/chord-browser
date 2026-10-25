@@ -118,6 +118,17 @@ describe('the control channel', () => {
     await until(() => h.peers.length === 2);
   });
 
+  it('a newer Chord takes an older player, and both know which version they speak', async () => {
+    const secret = newSecret();
+    const h = await host(secret, [1, 2]);
+    const player = await connect(h.address, secret, HELLO);
+    cleanups.push(() => player.destroy());
+    await until(() => h.peers.length === 1);
+    expect(h.peers[0]!.peer.protocol).toBe(1);
+    expect(h.peers[0]!.hello.protocol).toBe(1);
+    expect(player.protocol).toBe(1);
+  });
+
   it('refuses a player speaking a protocol Chord doesn’t, after it proved the secret', async () => {
     const secret = newSecret();
     const h = await host(secret, [2, 3]);

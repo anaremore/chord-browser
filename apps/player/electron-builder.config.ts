@@ -33,7 +33,11 @@ const config: Configuration = {
   directories: { output: process.env['CHORD_PLAYER_OUT'] ?? 'release', buildResources: 'build' },
   // Everything is bundled (electron.vite.config.ts): the app is the build output.
   files: ['out/**/*', '!**/node_modules/**/*'],
-  extraResources: [{ from: '../../LICENSE', to: 'licenses/LICENSE' }],
+  // Chord's license, and the Onest typeface's (SIL OFL 1.1), which the bar uses. ECS's zip brings Electron's and Chromium's.
+  extraResources: [
+    { from: '../../LICENSE', to: 'licenses/LICENSE' },
+    { from: '../desktop/src/renderer/assets/fonts/OFL.txt', to: 'licenses/Onest-OFL.txt' },
+  ],
   asar: true,
   // On Windows the asar's integrity goes into the .exe as a resource, which would invalidate ECS's development
   // signature; without the fuses (production only) nothing checks it anyway.

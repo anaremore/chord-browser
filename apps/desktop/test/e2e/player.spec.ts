@@ -27,6 +27,13 @@ import { capturesDir, dispatch, isPopover, isSettings, isShell, launch, newPage,
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
+/** Chord's console (the player's goes there too, in development builds), shown when a test fails. */
+let output = '';
+test.afterEach(async () => {
+  const info = test.info();
+  if (info.status !== info.expectedStatus) console.log(`--- Chord's output (last 12000 characters) ---\n${output.slice(-12_000)}`);
+  output = '';
+});
 test.skip(!(process.platform === 'linux' && process.arch === 'x64'), 'Chord Player is driven end to end on Linux x64; other OSes run its smoke test');
 
 const repo = resolve(import.meta.dirname, '../../../..');
@@ -120,6 +127,7 @@ async function launchChord(root = mkdtempSync(join(tmpdir(), 'chord-player-root-
     },
     { args: ['--host-resolver-rules=MAP www.netflix.com 127.0.0.1'] },
   );
+  for (const stream of [app.process().stdout, app.process().stderr]) stream?.on('data', (chunk: Buffer) => (output = (output + chunk.toString()).slice(-50_000)));
   return { app, root };
 }
 
@@ -181,10 +189,10 @@ test('installs Chord Player from the notice, plays a Widevine stream in it, and 
     await expect(nowPlaying).toContainText('Shaka Player test streams');
     await nowPlaying.screenshot({ path: join(capturesDir, 'player-now-playing.png') });
 
-    await nowPlaying.getByRole('button', { name: 'Pause' }).click();
+    await nowPlaying.getByRole('button', { name: 'Pause', exact: true }).click();
     await expect.poll(async () => (await debug(app))?.video?.paused).toBe(true);
-    await expect(nowPlaying.getByRole('button', { name: 'Play' })).toBeVisible();
-    await nowPlaying.getByRole('button', { name: 'Play' }).click();
+    await expect(nowPlaying.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+    await nowPlaying.getByRole('button', { name: 'Play', exact: true }).click();
     await expect.poll(async () => (await debug(app))?.video?.paused).toBe(false);
     await nowPlaying.getByRole('button', { name: 'Mute Chord Player' }).click();
     await expect.poll(async () => (await debug(app))?.muted).toBe(true);
