@@ -531,7 +531,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 - **Where a result opens** is chosen by the Enter key: ↵ here · ⌘↵ new background tab · ⇧↵ new window · ⌥↵ split (Phase 2).
 - **Search by image** (*built 2026-10-25*): paste an image (a copied screenshot, an image file) or drop one on the field. It shows as a thumbnail chip before the text, with ✕ (Backspace on the empty field also takes it out), the placeholder becomes *Press Enter to search by this image*, and the rows become the image's:
   - **Search [engine] for this image** (`scan-search` icon): your engine's own image search, Google Lens or Bing. An engine that has none (DuckDuckGo, Brave, Kagi, Ecosia) gets Google Lens, named on the row so sending the image there is a choice; Google-free mode gets Bing. ↵ opens it in a new tab (here, when editing an address), ⌘↵ behind.
-  - Next: **Ask Duet about this image**, with any words you typed as the question.
+  - **Ask Duet about this image** (Duet's icon), when Duet is set up and on in this chord: the panel opens and the message goes, the image with the words you typed as the question (or *What is in this image?*). With no words typed it's the second row; with words it's the first, as *Ask Duet: [your words]*.
   Nothing leaves Chord before a row is chosen.
 - **Narrowing:** `@tabs`, `@pinned`, `@history`, `@archive`, `@chords`, `@actions` filter the results. A site keyword such as `yt` or `gh` followed by Tab switches to searching that site.
 - **Ranking** follows Crest's tested scoring (MPL-2.0; ported in M1.4): match position, recency, frecency, open/pinned bonuses, top-hit rules, and learning which result you pick for the same text.
@@ -553,6 +553,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 - Anatomy: `[icon] [message text-small] … [Undo — text-label, accent] [⌘Z keycap when the shell has focus]`.
 - Announced through a polite live region.
 - A click on the toast itself, not one of its buttons, dismisses it, as a notification's does.
+- A toast can have a second button, before its main one: a screenshot's **Ask Duet**, before **Save**.
 - *As built (M1.6):* the stack is the one live region (each toast is announced once, as it arrives), and each Undo is described by its toast's message. ⌘Z / Ctrl+Z, while the shell has focus and no text field does, presses the newest toast's Undo. Up to three stack as the deck in §6.5: older ones tuck behind the newest, each 6 px higher and 4% smaller, with only their top edge showing. Hovering the stack, or moving focus into it, fans them out upward over the tabs (the sidebar doesn't jump), so every toast's buttons can be reached; every clock pauses while the deck is open. `test/e2e/toasts.spec.ts`.
 
 ### 7.6 `HoverPreview`
@@ -617,8 +618,11 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Reading line:** "Duet can read:" with *What you attach (asks for more)* · *Tabs in this chord* · *All my tabs*, for this chat (the default is set in Settings → Duet).
 - **Messages:** `text-body`, max width 64ch.
   - User messages sit in a soft accent-tinted bubble, with the attached tabs' titles under it; hovering shows **Copy** and, on the last one, **Edit and send again**.
-  - Assistant messages are unbubbled for calm reading: a small, safe Markdown subset with no images. A link shows its full address and opens only when clicked.
+  - Assistant messages are unbubbled for calm reading: a small, safe Markdown subset with no images from the web. A link shows its full address and opens only when clicked.
+  - **Images Codex made** (*built 2026-10-25*) show whole at the reply's width, `radius-sm`, with **Copy** and **Save** (to Downloads) over the top corner on hover or focus. While one is being made, a square placeholder says *Making an image…*. Its alt text is what Codex made it from. Settings → Duet → *Codex can make images* (on) turns this off.
+  - **Claude can't make images.** Asked for one, it says so in a sentence and the reply ends with **Make it with Codex** (a `secondary` button) when Codex is set up and allowed: the chat goes on with Codex (*Switched to Codex*) and the message is asked again. Only on the latest reply.
   - **Citations** are small numbered pills inside the sentence they support. Clicking one switches to the source tab and finds the quote; if the tab is gone, it opens the page scrolled to the quote. A PDF's pill names its page, "1 · p. 3" (its accessible name, "Source 1, page 3: “…”"), and opens the PDF there. A citation that stands in for words of its sentence (after a comma, a colon, or a verb a quote follows: "Gruber called it [1] rather than…") shows its quote in place, “in quotation marks”, then its pill, so the sentence still reads; the prompt also asks Duet to write quoted words itself.
+  - **Tabs by name:** Duet names a tab by its title or site. If it writes the tab's handle anyway ("tab t1"), the panel shows the tab's title there instead, in a soft pill (one line, at most 24 characters before …) that switches to the tab, or opens its page if it's closed.
   - An interrupted reply says *Interrupted* with **Retry**; an error gives the plain cause and the fix.
   - Dividers mark *Continued with a summary* and *Switched to Codex*.
 - **`ToolActivityRow`:** a single quiet line ("Read “Article”", "Read 3 tabs · 1 more", "Searched history for 'flights'") that expands to show details.
@@ -630,6 +634,7 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Follow:** the list follows new text until you scroll up more than 40 px; then a **Jump to latest** pill appears.
 - **Composer:**
   - `ContextChips` above the input. The current tab is attached by default as a removable chip ("This tab · example.com"); sites Duet can never read are never offered. The chip's tooltip says what's sent where.
+  - **Images** (*built 2026-10-25*): one asked about from the command bar, or a screenshot's **Ask Duet**, is a thumbnail chip with ✕ before the tab chips. Up to four; a fifth replaces the oldest. They go with the next message, which may be images alone. The model gets the picture itself: the command bar's at most 1,000 px a side, a screenshot's at most 1,568 (what Claude reads best). A user message shows its images as thumbnails above its words; Edit and send again brings them back with the words.
   - `@` opens a picker of this chord's tabs.
   - Enter sends; Shift+Enter adds a line; ↑ in an empty composer recalls your last message; Esc stops a reply.
   - Messages sent while Duet is answering are **queued** as chips (removable) and go in order.
@@ -696,8 +701,8 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
   - **Drag** draws an area (a dashed hairline, 8% fill) with its size; let go to take it. A drag under 4 px is a click.
   - **The bar**, a pill centered at the page's top (`surface-raised`, `shadow-popover`): *Click an element or drag an area* in `fg-muted`, **Visible** (V), **Full page** (F), and ✕ (Esc).
   - **Keys:** ↑ and ↓ step to the element's parent or child, Enter takes it, V and F as above, Esc cancels. The wheel still scrolls the page. A click outside the page cancels.
-- **After:** it's on the clipboard at once, as a PNG, and a toast says *Screenshot copied* with **Save**, which puts it in Downloads as "Screenshot 2026-10-24 at 18.32.10.png" and lists it there. ⌘Z never presses Save. Next: **Ask Duet**, which attaches it to Duet's chat.
-- **Recent screenshots:** the downloads panel lists them under its downloads, newest first: a thumbnail, the page's title, when and how big, then Copy, Save and Delete, and Clear for all. Up to 50, within 256 MB. Settings → Privacy → *Keep recent screenshots* (on) turns this off, deleting them. A private window's are in memory only, listed only in that window, and gone with it.
+- **After:** it's on the clipboard at once, as a PNG, and a toast says *Screenshot copied* with **Save**, which puts it in Downloads as "Screenshot 2026-10-24 at 18.32.10.png" and lists it there. ⌘Z never presses Save. Where Duet may see that page (set up, on in this chord, not a Never site), the toast also has **Ask Duet**, which puts it in Duet's composer and opens the panel.
+- **Recent screenshots:** the downloads panel lists them under its downloads, newest first: a thumbnail, the page's title, when and how big, then Ask Duet (where Duet may see that page; the panel steps aside for Duet's), Copy, Save and Delete, and Clear for all. Up to 50, within 256 MB. Settings → Privacy → *Keep recent screenshots* (on) turns this off, deleting them. A private window's are in memory only, listed only in that window, and gone with it.
 - **What can't be pictured:** video under DRM comes out black, as in every browser.
 - **Accessibility:** a dialog named *Take a screenshot*, described by its hint, with the keyboard in it; the bar's buttons are ordinary Tab stops; the element under the pointer is announced politely ("div#box, 200 by 120"). Forced colors draw the outline and label in `Highlight`.
 

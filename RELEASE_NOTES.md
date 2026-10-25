@@ -38,6 +38,10 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 - **Signing in to Google works again**, where it said "This browser or app may not be secure". On Windows, the passkey dialog no longer pops up by itself each time you click a sign-in field; choose the site's passkey option when you want one.
 - **Passkeys on a security key** sign in on every OS. When the key holds more than one for a site, Chord asks which.
 - **Search by image:** paste or drop an image into the command bar to search Google Lens or Bing by it (your engine's own; Google Lens, clearly named, when yours can't search by image; Bing in Google-free mode).
+  - Or ask Duet about it, with your words as the question.
+- **Duet makes images with Codex:** ask for one and Codex makes it with its own image tool, within your plan's limits. It shows in the chat with Copy and Save, and is deleted with the chat, Codex's own copy too. Claude can't make images; when you ask it, the reply offers **Make it with Codex**. Settings → Duet → *Codex can make images* turns it off.
+- **Duet names tabs by their titles,** not "t1"; a tab it mentions is a button that takes you there.
+- **Duet sees images:** a screenshot's toast, and your recent screenshots, have Ask Duet, which puts the picture in Duet's chat. Up to four go with a message, kept with the chat and deleted with it.
 - **Screenshots, built in:** press ⌘⇧2 (Ctrl+Shift+2) and click an element, drag an area, or take what's on screen or the whole page. It's on your clipboard at once; Save puts it in Downloads, and your recent screenshots wait in the downloads panel (a private window's only until it closes). Based on Screenboard.
 - **Peek** gets the sign-in box too, when a site in it asks for a username and password.
 - **Link routes for part of a site:** `github.com/acme` can go to Work while the rest of GitHub goes elsewhere (Settings → General → Link routes).

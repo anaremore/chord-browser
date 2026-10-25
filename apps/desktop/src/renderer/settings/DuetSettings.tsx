@@ -70,6 +70,13 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
             }
           />
         ))}
+        <Row
+          label="Codex can make images"
+          description="When you ask, Codex makes them with its own image tool, within your plan's limits. They're kept with the chat, and deleted with it, Codex's own copy too."
+          changed={duet.codexImages !== DEFAULT_SETTINGS.duet.codexImages}
+          onReset={() => set({ codexImages: DEFAULT_SETTINGS.duet.codexImages })}
+          control={<Switch label="Codex can make images" checked={duet.codexImages} onChange={(codexImages) => set({ codexImages })} />}
+        />
       </div>
 
       <h2 className={styles.groupTitle}>Reading</h2>

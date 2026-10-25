@@ -90,10 +90,29 @@ const finish = (ok) => {
   else write({ type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_streaming', session_id: session, ...usage() });
 };
 
-async function turn(text) {
+/** A JPEG's size, from its frame header: what the test checks Chord sent. */
+function jpegSize(data) {
+  const b = Buffer.from(data, 'base64');
+  if (b[0] !== 0xff || b[1] !== 0xd8) return 'not a JPEG';
+  for (let i = 2; i + 9 < b.length; i += 2 + b.readUInt16BE(i + 2)) {
+    const marker = b[i + 1];
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return `${b.readUInt16BE(i + 7)}×${b.readUInt16BE(i + 5)}`;
+  }
+  return 'no size';
+}
+
+async function turn(text, images = []) {
   interrupted = false;
   turns++;
   const ref = /Attached: tab (t\d+)/.exec(text)?.[1];
+  if (images.length) {
+    const sizes = images.map((i) => `${i.source.media_type} ${jpegSize(i.source.data)}`).join(', ');
+    return finish(await say(`I see ${images.length === 1 ? 'one image' : `${images.length} images`}: ${sizes}. You asked: ${text.split('\n')[0]}`));
+  }
+  // Asked for an image, it says it can't and leaves the mark for Codex's button, as Duet's instructions ask.
+  if (/draw|cartoon/i.test(text)) return finish(await say("Claude can't make images.\n\n[[make-image]]"));
+  // Writes a tab's handle in its own words, as Duet is asked not to.
+  if (/which tab/i.test(text) && ref) return finish(await say(`That's tab ${ref}, the one you attached. Not to be confused with a t2.micro.`));
   if (/long/i.test(text)) return finish(await say(Array.from({ length: 400 }, (_, i) => `word${i} `).join(''), true));
   if (/pdf/i.test(text) && ref) {
     // Quotes the second line of page 2: Chord, not the model, works out which page that is.
@@ -138,7 +157,11 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       inited = true;
       write({ type: 'system', subtype: 'init', session_id: session, model: MODEL, tools: ['mcp__chord__read_tab'], capabilities: ['interrupt_receipt_v1'], claude_code_version: '2.1.309' });
     }
-    void turn(m.message.content.map((c) => c.text).join(''));
+    const content = m.message.content;
+    void turn(
+      content.filter((c) => c.type === 'text').map((c) => c.text).join(''),
+      content.filter((c) => c.type === 'image'),
+    );
   }
 });
 process.stdin.on('end', () => process.exit(0));

@@ -43,7 +43,7 @@ import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo, uiScale } from './platform';
-import { handleChordProtocol, registerSchemes, serveReaderImages } from './protocol';
+import { handleChordProtocol, registerSchemes, serveDuetImages, serveReaderImages } from './protocol';
 import { SAFE_BROWSING_KEY } from './safe-browsing/key';
 import { listsFile, SafeBrowsing, safeBrowsingEndpoint } from './safe-browsing/service';
 import { configureUiSession, hardenAllWebContents } from './security';
@@ -359,7 +359,8 @@ function registerIpc(): void {
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
-  handle('duet:view', (_request, sender) => duet!.view(senderWindow(sender).id));
+  handle('duet:view', (_request, sender) => duet!.view(senderWindow(sender).id, true));
+  handle('duet:ask', ({ text, image }, sender) => duet!.askAboutImage(senderWindow(sender).id, text, { mime: 'image/jpeg', ...image }));
   handle('duet:do', (action, sender) => duet!.act(senderWindow(sender).id, action));
   handle('duet:search', ({ query }, sender) => (fromPrivateWindow(sender) ? [] : duet!.search(query)));
   handle('duet:openHit', ({ chordId, threadId }, sender) => duet!.openHit(senderWindow(sender).id, chordId, threadId));
@@ -587,6 +588,8 @@ if (!app.requestSingleInstanceLock()) {
       keep: () => browser?.store.state.settings.keepScreenshots ?? true,
       disk: shots,
       saveFile: async (filename, bytes, url, privateWindow) => void (await downloads.addFile(filename, bytes, 'image/png', url, privateWindow)),
+      duetReady: (w, url) => Boolean(duet?.canAskAbout(w.id, url)),
+      askDuet: (windowId, image) => duet?.attachImage(windowId, image),
     });
     browser = new Browser({
       initial,
@@ -686,8 +689,11 @@ if (!app.requestSingleInstanceLock()) {
     for (const profileId of profilesInUse) if (!isPrivateProfile(profileId)) profileSession(profileId);
     // Before any of Chord's own pages loads (a text field there is what starts a dictionary download).
     applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
-    duet = new DuetService(browser, persistence, app.getPath('userData'));
+    duet = new DuetService(browser, persistence, app.getPath('userData'), {
+      save: async (filename, bytes, mime) => void (await downloads.addFile(filename, bytes, mime, '', null)),
+    });
     browser.duet = duet;
+    serveDuetImages((url) => duet!.serveImage(url));
     importer = new Importer({
       workerPath: join(import.meta.dirname, 'import.js'),
       env: importEnv,

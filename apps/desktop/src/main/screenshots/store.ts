@@ -1,6 +1,7 @@
 /**
  * The recent screenshots (DESIGN.md §7.12): files in `<userData>/Screenshots/`
- * (`<id>.png`, `<id>.jpg` for the thumbnail) and an `index.json`, like hover
+ * (`<id>.png`; `<id>.jpg`, the thumbnail; `<id>.ask.jpg`, at most 1,568 px a
+ * side, what Duet is sent) and an `index.json`, like hover
  * previews' pictures (captures.ts): files, not database rows. A private
  * window's live in memory only, and go with it. Both keep within
  * SCREENSHOT_HISTORY. Plain Node file APIs, so it's unit-tested.
@@ -18,9 +19,11 @@ export const newShotId = (): string => randomBytes(12).toString('hex');
 export interface ShotStore {
   /** Newest first. */
   list(): Promise<ScreenshotEntry[]>;
-  add(entry: ScreenshotEntry, png: Buffer, thumb: Buffer): Promise<void>;
+  add(entry: ScreenshotEntry, png: Buffer, thumb: Buffer, ask?: Buffer): Promise<void>;
   png(id: string): Promise<Buffer | null>;
   thumb(id: string): Promise<Buffer | null>;
+  /** The picture Duet is sent (none for one kept before there was one). */
+  ask(id: string): Promise<Buffer | null>;
   remove(id: string): Promise<void>;
   clear(): Promise<void>;
 }
@@ -74,11 +77,12 @@ export class DiskShots implements ShotStore {
     return [...this.entries];
   }
 
-  async add(entry: ScreenshotEntry, png: Buffer, thumb: Buffer): Promise<void> {
+  async add(entry: ScreenshotEntry, png: Buffer, thumb: Buffer, ask?: Buffer): Promise<void> {
     if (!ID.test(entry.id)) return;
     await this.open();
     await writeFile(join(this.dir, `${entry.id}.png`), png);
     await writeFile(join(this.dir, `${entry.id}.jpg`), thumb);
+    if (ask) await writeFile(join(this.dir, `${entry.id}.ask.jpg`), ask);
     this.entries = [entry, ...this.entries.filter((e) => e.id !== entry.id)];
     const forget = new Set(screenshotsToForget(this.entries, this.limits));
     this.entries = this.entries.filter((e) => !forget.has(e.id));
@@ -94,6 +98,11 @@ export class DiskShots implements ShotStore {
   async thumb(id: string): Promise<Buffer | null> {
     await this.open();
     return this.has(id) ? readFile(join(this.dir, `${id}.jpg`)).catch(() => null) : null;
+  }
+
+  async ask(id: string): Promise<Buffer | null> {
+    await this.open();
+    return this.has(id) ? readFile(join(this.dir, `${id}.ask.jpg`)).catch(() => null) : null;
   }
 
   async remove(id: string): Promise<void> {
@@ -118,7 +127,7 @@ export class DiskShots implements ShotStore {
 
   private async deleteFiles(id: string): Promise<void> {
     if (!ID.test(id)) return;
-    await Promise.all([rm(join(this.dir, `${id}.png`), { force: true }), rm(join(this.dir, `${id}.jpg`), { force: true })]).catch(() => {});
+    await Promise.all([`${id}.png`, `${id}.jpg`, `${id}.ask.jpg`].map((name) => rm(join(this.dir, name), { force: true }))).catch(() => {});
   }
 
   private saveIndex(): Promise<void> {
@@ -134,7 +143,7 @@ export class DiskShots implements ShotStore {
 
 /** A private window's: in memory, never on disk, gone when the window closes. */
 export class MemoryShots implements ShotStore {
-  private readonly items = new Map<string, { entry: ScreenshotEntry; png: Buffer; thumb: Buffer }>();
+  private readonly items = new Map<string, { entry: ScreenshotEntry; png: Buffer; thumb: Buffer; ask?: Buffer }>();
 
   constructor(private readonly limits: { count: number; bytes: number } = SCREENSHOT_HISTORY) {}
 
@@ -142,8 +151,8 @@ export class MemoryShots implements ShotStore {
     return this.entries();
   }
 
-  async add(entry: ScreenshotEntry, png: Buffer, thumb: Buffer): Promise<void> {
-    this.items.set(entry.id, { entry, png, thumb });
+  async add(entry: ScreenshotEntry, png: Buffer, thumb: Buffer, ask?: Buffer): Promise<void> {
+    this.items.set(entry.id, { entry, png, thumb, ...(ask ? { ask } : {}) });
     for (const id of screenshotsToForget(this.entries(), this.limits)) this.items.delete(id);
   }
 
@@ -157,6 +166,10 @@ export class MemoryShots implements ShotStore {
 
   async thumb(id: string): Promise<Buffer | null> {
     return this.items.get(id)?.thumb ?? null;
+  }
+
+  async ask(id: string): Promise<Buffer | null> {
+    return this.items.get(id)?.ask ?? null;
   }
 
   async remove(id: string): Promise<void> {

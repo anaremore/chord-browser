@@ -61,10 +61,21 @@ describe('Duet store (migration 9)', () => {
     expect(db.duet({ op: 'thread', threadId: 'a' }).messages).toEqual([]);
   });
 
-  it('prunes threads past the keep-by date, returning them', () => {
+  it('prunes threads past the keep-by date, returning them and their images', () => {
     db.duet({ op: 'saveThread', thread: thread('old', 10) });
     db.duet({ op: 'saveThread', thread: thread('new', 1000) });
-    expect(db.duet({ op: 'prune', before: 500 }).removed?.map((t) => t.id)).toEqual(['old']);
+    const picture = { id: 'a'.repeat(24), mime: 'image/jpeg' as const, width: 800, height: 600 };
+    db.duet({ op: 'saveMessage', message: { ...message('m1', 'old', 'What is this?'), body: { role: 'user', text: 'What is this?', attachments: [], images: [picture] } } });
+    db.duet({ op: 'saveMessage', message: { ...message('m2', 'new', 'And this?'), body: { role: 'user', text: 'And this?', attachments: [], images: [{ ...picture, id: 'b'.repeat(24) }] } } });
+    // One Codex made, in a reply.
+    const made = { ...picture, id: 'c'.repeat(24), mime: 'image/png' as const, prompt: 'A cartoon', codexCopy: '/home/me/.codex/generated_images/t/ig.png' };
+    db.duet({ op: 'saveMessage', message: { ...message('m3', 'old', 'Here it is.', 'assistant'), body: { role: 'assistant', text: 'Here it is.', citations: [], status: 'done', images: [made] } } });
+    const pruned = db.duet({ op: 'prune', before: 500 });
+    expect(pruned.removed?.map((t) => t.id)).toEqual(['old']);
+    // Main deletes their files: only the pruned thread's, Codex's copy of the one it made too.
+    expect(pruned.images).toEqual([picture, made]);
+    expect(db.duet({ op: 'deleteThread', threadId: 'new' }).images?.map((i) => i.id)).toEqual(['b'.repeat(24)]);
+    db.duet({ op: 'saveThread', thread: thread('new', 1000) });
     expect(db.duet({ op: 'threads', chordId: 'c1', limit: 10 }).threads?.map((t) => t.id)).toEqual(['new']);
     expect(db.duet({ op: 'deleteAll' }).removed?.map((t) => t.id)).toEqual(['new']);
   });

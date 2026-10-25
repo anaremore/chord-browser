@@ -401,6 +401,39 @@
   overflow-wrap: anywhere;
 }
 
+/* Images you sent with a message, above it; and ones waiting in the composer, as chips. */
+.userImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  justify-content: flex-end;
+  margin-block-end: var(--space-1);
+}
+
+.userImage {
+  max-inline-size: calc(var(--space-8) * 5);
+  max-block-size: calc(var(--space-8) * 4);
+  border-radius: var(--radius-sm);
+  outline: var(--size-hairline) solid var(--color-divider);
+  object-fit: cover;
+}
+
+.imageChip {
+  display: inline-flex;
+  gap: var(--space-0);
+  align-items: center;
+  padding: var(--space-0);
+  border-radius: var(--radius-xs);
+  background: var(--color-item-hover);
+}
+
+.imageChipThumb {
+  block-size: var(--space-6);
+  max-inline-size: calc(var(--space-6) * 2);
+  border-radius: var(--radius-xs);
+  object-fit: cover;
+}
+
 .attachedNote {
   max-inline-size: 85%;
   margin: 0;
@@ -470,6 +503,94 @@
   text-decoration: underline;
   text-decoration-thickness: var(--size-hairline);
   overflow-wrap: anywhere;
+}
+
+/* Images Codex made: the whole picture at the reply's width, with Copy and Save over its corner on hover or focus. */
+.madeImages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-block-start: var(--space-2);
+}
+
+.madeImage {
+  position: relative;
+  margin: 0;
+}
+
+.madeImage img {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  border-radius: var(--radius-sm);
+  outline: var(--size-hairline) solid var(--color-divider);
+  background: var(--color-item-hover);
+}
+
+.madeImageActions {
+  position: absolute;
+  inset-block-start: var(--space-1);
+  inset-inline-end: var(--space-1);
+  display: flex;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--duration-fade-fast) var(--ease-standard);
+}
+
+.madeImage:hover .madeImageActions,
+.madeImage:focus-within .madeImageActions {
+  opacity: 1;
+}
+
+.imageAction {
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-icon-button);
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
+}
+
+.imageAction:hover {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+/* While Codex makes one: a square where it will be. */
+.making {
+  display: grid;
+  place-items: center;
+  inline-size: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+/* A tab a reply names by its handle: its title, in a soft pill, kept to one short line; clicking it shows the tab. */
+.tabName {
+  display: inline-block;
+  max-inline-size: 24ch;
+  padding: 0 var(--space-1);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--color-selection);
+  color: var(--color-fg);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.tabName:hover {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
 }
 
 /* Citations: small numbered pills; clicking one shows the quote in its tab. */
