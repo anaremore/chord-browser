@@ -85,7 +85,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/apt-archives
-          key: apt-${{ matrix.os }}-${{ matrix.display }}-v1
+          key: apt-${{ matrix.os }}-${{ matrix.display }}-v2
 
       - name: Linux display servers
         if: runner.os == 'Linux'
@@ -100,6 +100,8 @@ jobs:
           # The Wayland job installs Weston, which is its own.
           if ! command -v Xvfb >/dev/null; then NEED="xvfb"; fi
           if [ "${{ matrix.display }}" = "x11" ] && ! command -v openbox >/dev/null; then NEED="$NEED openbox"; fi
+          # xdotool: the system pointer for tests that drag across Chord's views (test/e2e/system-pointer.ts).
+          if [ "${{ matrix.display }}" = "x11" ] && ! command -v xdotool >/dev/null; then NEED="$NEED xdotool"; fi
           if [ "${{ matrix.display }}" = "wayland" ]; then NEED="$NEED weston"; fi
           if [ -n "$NEED" ]; then
             ARCHIVES="$HOME/apt-archives"
