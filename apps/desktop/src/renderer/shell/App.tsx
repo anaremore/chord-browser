@@ -336,6 +336,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
     });
     void api.duet.view().then((view) => {
       if (!pushed) merge(view);
+      // A newer push wins, but the answer's thumbnails count: main sent them only in it.
+      else setDuet((was) => (was ? { ...was, imageThumbs: { ...view.imageThumbs, ...was.imageThumbs } } : view));
     });
     return unsubscribe;
   }, []);
