@@ -90,6 +90,8 @@ import { AppWindow, createUiView } from './window';
 
 /** Histories of tabs archived this session, kept in memory so ⌘⇧T doesn't wait on the database. */
 const MAX_REMEMBERED_HISTORIES = 100;
+/** The command bar connects to the same server ahead of Enter at most this often (`preconnect`). */
+const PRECONNECT_EVERY_MS = 10_000;
 
 /** Whether two addresses share an origin (a pinned tab that left its site shows ↩). Unparseable counts as the same. */
 function sameOrigin(a: string, b: string): boolean {
@@ -185,6 +187,8 @@ export class Browser {
   private readonly finders = new Map<WindowId, FindInPage>();
   /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
   private readonly popoverSent = new Map<WindowId, string>();
+  /** When the command bar last had each server connected ahead of Enter, by profile and origin (`preconnect`). */
+  private readonly preconnected = new Map<string, number>();
   /** Tabs playing media, for the Now playing cards (DESIGN.md §7.10), and what each window's card was last sent. */
   readonly media: MediaWatcher;
   private readonly drm: DrmNotices;
@@ -914,6 +918,33 @@ export class Browser {
         }
       }
     }
+  }
+
+  /**
+   * The command bar's chosen row would open this page: open a connection to its server now (DNS, TCP, TLS),
+   * in the session the page would load in, so it starts sooner on Enter, as Chrome's address bar does
+   * (ROADMAP, P0 Performance). One connection, at most once per server every 10 s; web addresses only.
+   */
+  preconnect(w: AppWindow, url: string): void {
+    let origin: string;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return;
+      origin = parsed.origin;
+    } catch {
+      return;
+    }
+    const chordId = this.store.state.windows[w.id]?.activeChordId;
+    const profileId = chordId ? this.store.state.chords[chordId]?.profileId : undefined;
+    if (!profileId) return;
+    const key = `${profileId} ${origin}`;
+    const now = Date.now();
+    if (now - (this.preconnected.get(key) ?? -Infinity) < PRECONNECT_EVERY_MS) return;
+    // Forget the oldest once the list is long: it only stops repeats.
+    if (this.preconnected.size >= 256) this.preconnected.delete(this.preconnected.keys().next().value!);
+    this.preconnected.delete(key);
+    this.preconnected.set(key, now);
+    this.options.profileSession(profileId).preconnect({ url: origin, numSockets: 1 });
   }
 
   /**

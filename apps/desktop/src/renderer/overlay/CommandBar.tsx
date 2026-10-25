@@ -118,6 +118,8 @@ const ANCHORED_MIN_WIDTH = 560;
 const EDGE = 8;
 /** Suggestions wait for a pause this long in typing, so not every keystroke goes out. */
 const SUGGEST_DELAY_MS = 120;
+/** How long the chosen row must stay chosen before Chord connects to its server: a pause in typing, not every key. */
+const PRECONNECT_AFTER_MS = 150;
 
 function hintFor(result: Result, mode: Session['mode']): { text: string; key: string } {
   if (result.kind === 'imageSearch') return { text: 'Search', key: '↵' };
@@ -357,6 +359,14 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     return true;
   };
   const current = Math.min(selected, Math.max(0, results.length - 1));
+  // The row Enter would open, if it's a page: Chord connects to its server while you're still typing (ROADMAP, P0 Performance).
+  const chosen = results[current];
+  const ahead = chosen && (chosen.kind === 'open' || chosen.kind === 'history') ? chosen.url : null;
+  useEffect(() => {
+    if (!ahead) return;
+    const timer = setTimeout(() => void api.overlay.preconnect(ahead), PRECONNECT_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [ahead]);
   // Inline autocomplete: only the leading row completes, and only while it's the one selected.
   const completion = mayComplete && !scope && current === 0 ? completionFor(query, results[0]) : '';
 
