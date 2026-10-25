@@ -10,7 +10,7 @@
  * Nothing here loads anything remote: no images, no link previews, and links
  * show their full address and open only when clicked (research §6, rule 5).
  */
-import { contextLabel, contextPercent, DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, splitCitations, type DuetContextUsage, type DuetMessage, type DuetProvider, type DuetScope } from '@chord/core';
+import { citationIsQuoted, contextLabel, contextPercent, DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, splitCitations, type DuetContextUsage, type DuetMessage, type DuetProvider, type DuetScope } from '@chord/core';
 import type { DuetAction, DuetView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
@@ -48,8 +48,8 @@ const host = (url: string) => {
 
 /* ---------- Text: a small, safe Markdown subset, no HTML, no images ---------- */
 
-/** Renders a citation marker as a pill, in place (see Reply). */
-type Cite = (ref: string, quote: string) => ReactNode;
+/** Renders a citation marker as a pill, in place (see Reply); `quoted`: it stands in for words of the sentence. */
+type Cite = (ref: string, quote: string, quoted: boolean) => ReactNode;
 
 function Inline({ text, onLink, cite }: { text: string; onLink(url: string): void; cite: Cite }) {
   const parts: ReactNode[] = [];
@@ -58,7 +58,7 @@ function Inline({ text, onLink, cite }: { text: string; onLink(url: string): voi
   for (const m of text.matchAll(pattern)) {
     if (m.index > last) parts.push(text.slice(last, m.index));
     const key = `${m.index}`;
-    if (m[1]) parts.push(<Fragment key={key}>{cite(m[1], m[2]!)}</Fragment>);
+    if (m[1]) parts.push(<Fragment key={key}>{cite(m[1], m[2]!, citationIsQuoted(text.slice(0, m.index)))}</Fragment>);
     else if (m[3]) parts.push(<code key={key}>{m[3].slice(1, -1)}</code>);
     else if (m[4]) parts.push(<strong key={key}>{m[4].slice(2, -2)}</strong>);
     else if (m[5]) parts.push(<em key={key}>{m[5].slice(1, -1)}</em>);
@@ -139,12 +139,12 @@ function Reply({ message, onLink }: { message: DuetMessage; onLink(url: string):
   const numbers = new Map<string, number>();
   for (const seg of splitCitations(message.body.text)) if (seg.kind === 'citation') numbers.set(`${seg.ref}:${seg.quote}`, seg.n);
   const citations = message.body.citations;
-  const cite: Cite = (ref, quote) => {
+  const cite: Cite = (ref, quote, quoted) => {
     const n = numbers.get(`${ref}:${quote}`);
     if (n === undefined) return null;
     // A PDF's citation names its page (found in the text Duet read).
     const page = citations.find((c) => c.n === n)?.page;
-    return (
+    const pill = (
       <button
         type="button"
         className={styles.cite}
@@ -154,6 +154,14 @@ function Reply({ message, onLink }: { message: DuetMessage; onLink(url: string):
       >
         {page ? `${n} · p. ${page}` : n}
       </button>
+    );
+    // Used as the words of the sentence ("Gruber called it [n] rather than…"): the quote reads in place, then its number.
+    return quoted ? (
+      <>
+        “{quote}” {pill}
+      </>
+    ) : (
+      pill
     );
   };
   return (

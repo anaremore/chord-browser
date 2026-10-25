@@ -138,6 +138,12 @@ function ToastCard({
       animate={{ opacity: 1, y: place?.y ?? 0, scale: place?.scale ?? 1 }}
       exit={{ opacity: 0, y: (place?.y ?? 0) + 6, transition: { duration: durations.fadeFast / 1000 } }}
       transition={transition}
+      // A click on the toast itself, not one of its buttons, dismisses it, as a notification's does.
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest('button')) return;
+        keepFocusFrom(card.current);
+        onDone();
+      }}
     >
       {also && !compact ? (
         <>

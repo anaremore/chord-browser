@@ -25,6 +25,10 @@ Ship B: the standard Chromium user agent, the same format other Chromium browser
 - An E2E test asserts that pages see no `Electron/` or `Chord` token.
 - Development builds can compare against Electron's default with `CHORD_UA=electron`.
 
+## Update, 2026-10-24: refused again, and the cause
+
+The maintainer's hand sign-in failed with the same message. In Chord, `window.chrome` is an empty object, while every Chromium browser fills it (`app`, `csi`, `loadTimes`). Another project on Electron 45 isolated each difference at Google's first sign-in step ([opencx-labs/catamorphic#260](https://github.com/opencx-labs/catamorphic/pull/260)). Only `chrome.app` turned a refusal into admission, 5 of 5; client hints on page loads, a Firefox user agent, `chrome.csi` and `chrome.loadTimes` didn't. Chord now gives pages Chromium's `chrome.app` (ARCHITECTURE.md §9, Page compatibility). Google's check changes over time, which is why the hand sign-in above passed two days earlier. Measured in Chord on Linux: page loads carry no `Sec-CH-UA` headers (subresources do), a known Electron gap, which on the evidence above isn't what Google checks.
+
 ## Still to check (by hand, once M1.1 adds an address bar)
 
 - Google on macOS and Linux.

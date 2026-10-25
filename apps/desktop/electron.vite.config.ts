@@ -75,6 +75,8 @@ export default defineConfig({
           archive: src('preload/archive.ts'),
           mini: src('preload/mini.ts'),
           reader: src('preload/reader.ts'),
+          // Every web page's: Chromium's chrome.app, and no passkey autofill dialog (ARCHITECTURE.md §9).
+          page: src('preload/page.ts'),
           // The extension library's preload (GPL-3.0, packages/chrome-extensions): extension
           // pages and workers, and every page of a profile that has extensions (ARCHITECTURE.md §12).
           extensions: resolve(import.meta.dirname, '../../packages/chrome-extensions/src/preload.ts'),
