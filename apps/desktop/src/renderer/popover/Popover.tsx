@@ -4,8 +4,8 @@
  * these cards, so the rest of the page stays clickable.
  */
 import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
-import type { AuthPrompt, FindState, PermissionPrompt, PopoverState, SharePrompt, SystemInfo } from '@chord/ipc';
-import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, KeyRound, MapPin, Mic, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import type { AuthPrompt, DrmNotice, FindState, PermissionPrompt, PopoverState, SharePrompt, SystemInfo } from '@chord/ipc';
+import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, KeyRound, MapPin, Mic, MonitorPlay, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useLive, type Live } from '../shared/live';
 import { chordStyle } from '../shared/theme';
@@ -295,11 +295,50 @@ function SafeBrowsingOffer() {
   );
 }
 
+/**
+ * On a service that needs Widevine (ARCHITECTURE.md §16, D4): it won't play
+ * here yet, with up to two other browsers on this computer to open the page
+ * in. Not now hides it for the service until Chord quits.
+ */
+function DrmNoticeCard({ notice }: { notice: DrmNotice }) {
+  const id = useId();
+  const [first, second] = notice.browsers;
+  return (
+    <div className={styles.card} role="dialog" aria-labelledby={`${id}-title`} aria-describedby={`${id}-notice`}>
+      <div className={styles.permissionHead}>
+        <MonitorPlay className={styles.offerIcon} {...ICON} aria-hidden />
+        <p id={`${id}-title`} className={styles.permissionTitle}>
+          <span className={styles.host}>{notice.service} won’t play in Chord yet</span>
+        </p>
+        <button type="button" className={styles.iconButton} aria-label="Not now" title="Not now" onClick={() => void api.drm.dismiss()}>
+          <X {...ICON} />
+        </button>
+      </div>
+      <p id={`${id}-notice`} className={styles.offerNotice}>
+        It needs Widevine, the copy protection streaming services use, which Chord doesn’t include yet.
+        {first ? '' : ' Another browser can play it for now.'}
+      </p>
+      {first && (
+        <div className={styles.actions}>
+          {second && (
+            <button type="button" className={styles.secondary} onClick={() => void api.drm.open(second.id)}>
+              Open in {second.name}
+            </button>
+          )}
+          <button type="button" className={styles.primary} onClick={() => void api.drm.open(first.id)}>
+            Open in {first.name}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Popover({ info: infoSource, state: stateSource }: { info: Live<SystemInfo>; state: Live<PopoverState> }) {
   const info = useLive(infoSource);
   const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
-  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.safeBrowsingOffer);
+  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.safeBrowsingOffer || state.drm);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -323,6 +362,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
       {state.share && <ShareCard key={state.share.id} prompt={state.share} />}
       {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}
       {state.safeBrowsingOffer && <SafeBrowsingOffer />}
+      {state.drm && <DrmNoticeCard key={state.drm.service} notice={state.drm} />}
     </div>
   );
 }

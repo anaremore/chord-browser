@@ -38,13 +38,15 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, GesturePhase, MediaAction, NowPlaying, PopoverState, PreviewTarget, Rect, SettingsSnapshot } from '@chord/ipc';
+import type { ArchiveSnapshot, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, Rect, SettingsSnapshot } from '@chord/ipc';
 import { size } from '@chord/tokens';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { app, BaseWindow, BrowserWindow, clipboard, Menu, screen, webContents, type Session, type WebContents } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
+import { DrmNotices, findBrowsers, launchEnv } from './drm';
 import { Extensions } from './extensions';
 import type { WebStore } from './extensions/webstore';
 import { FindInPage } from './find';
@@ -155,6 +157,7 @@ export class Browser {
   private readonly popoverSent = new Map<WindowId, string>();
   /** Tabs playing media, for the Now playing cards (DESIGN.md §7.10), and what each window's card was last sent. */
   readonly media: MediaWatcher;
+  private readonly drm: DrmNotices;
   private readonly mediaSent = new Map<WindowId, string>();
   /** The sign-in box each window last gave the keyboard to, so a box takes it once. */
   private readonly authFocused = new Map<WindowId, number>();
@@ -331,6 +334,7 @@ export class Browser {
       isTab: (contents, nodeId) => this.tabs.get(nodeId)?.webContents === contents,
       changed: () => this.syncMedia(),
     });
+    this.drm = new DrmNotices({ browsers: () => findBrowsers(launchEnv(process.env, homedir())), changed: () => this.syncPopovers() });
     const sessionForChord = (chordId: string) => options.profileSession(this.store.state.chords[chordId]?.profileId ?? DEFAULT_PROFILE);
     this.peeks = new Peeks({
       state: () => this.store.state,
@@ -879,7 +883,16 @@ export class Browser {
       auth: this.options.httpAuth.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
+      drm: state.settings.onboarded || w.isPrivate ? this.drm.noticeFor(this.activeUrl(w.id)) : null,
     };
+  }
+
+  /** The DRM notice's buttons, for the page the window shows. */
+  drmAction(sender: WebContents, action: { open: OtherBrowserId } | 'dismiss'): void {
+    const w = this.windowFor(sender);
+    if (!w) return;
+    if (action === 'dismiss') this.drm.dismiss(this.activeUrl(w.id));
+    else this.drm.open(this.activeUrl(w.id), action.open);
   }
 
   /** What a window's Now playing card may offer: tabs in its chords playing media, newest first. */
