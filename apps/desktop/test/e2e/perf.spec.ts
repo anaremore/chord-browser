@@ -8,15 +8,18 @@
  * frame, page moves, late results) don't depend on the machine, so a miss
  * fails anywhere, CI included. Times only report, because CI runners are
  * noisy; with CHORD_PERF_ENFORCE=1 (on reference hardware) a time over its
- * budget fails too. How to run it and read the report: docs/testing/performance.md.
+ * budget fails too. Memory at idle and warm launches are held to what the
+ * same runner measured before (perf-baseline.json, baselines.ts) instead of
+ * a budget. How to run it and read the report: docs/testing/performance.md.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { cpus, release, tmpdir, totalmem } from 'node:os';
+import { availableParallelism, cpus, release, tmpdir, totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type CDPSession, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { grew, launchLimit, memoryLimit, runnerKey, UPDATE_COMMAND, type Baselines, type Measured } from './baselines';
 import { frameIntervals, framesOf, layoutsOf, longestTask, profile, trace, type Frame, type TraceEvent } from './frames';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
@@ -34,8 +37,11 @@ const VISITS = 2000;
 
 /* ---------- The report ---------- */
 
-/** `no data`: nothing was measured (a headless runner may paint no frames); enforced runs count it as a miss. */
-type Status = 'pass' | 'miss' | 'needs an unlocked run' | 'needs a 120 Hz display' | 'no data';
+/**
+ * `no data`: nothing was measured (a headless runner may paint no frames); enforced runs count it as a miss.
+ * `no baseline`: held to a baseline this runner doesn't have (perf-baseline.json), so only reported.
+ */
+type Status = 'pass' | 'miss' | 'needs an unlocked run' | 'needs a 120 Hz display' | 'no data' | 'no baseline';
 
 interface Check {
   /** What's measured, e.g. "frame work". */
@@ -43,12 +49,14 @@ interface Check {
   value: number;
   /** The budget: the value is held to at most this. */
   limit: number;
-  unit: 'ms' | 'late' | 'renders' | 'moves';
+  unit: 'ms' | 'late' | 'renders' | 'moves' | 'MB' | '×';
   status: Status;
+  /** Held to this runner's baseline rather than a budget: what it measured before (`limit` adds the margin). */
+  baseline?: number;
 }
 
 interface Row {
-  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view';
+  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view' | 'memory';
   name: string;
   scenario: string;
   motion: 'on' | 'off' | null;
@@ -105,6 +113,19 @@ function check(
   return { label, value: round(value), limit, unit, status };
 }
 
+/** This runner's baseline for memory and warm launches, if it has one (baselines.ts says which runners can). */
+const RUNNER = runnerKey(process.platform, process.arch, process.env, availableParallelism());
+const BASELINE = RUNNER ? (JSON.parse(readFileSync(resolve(import.meta.dirname, 'perf-baseline.json'), 'utf8')) as Baselines)[RUNNER] : undefined;
+/** What this run measured, in the baseline's terms: perf.json's `measured`, which `perf:baseline` takes in. */
+const measured: Omit<Measured, 'runner'> = {};
+
+/** Held to this runner's baseline plus its margin; with no baseline, reported only. */
+function againstBaseline(label: string, value: number, base: number | undefined, limit: (base: number) => number, unit: Check['unit']): Check {
+  if (base === undefined) return { label, value, limit: NaN, unit, status: 'no baseline' };
+  const max = limit(base);
+  return { label, value, limit: max, unit, status: !Number.isFinite(value) ? 'no data' : value <= max ? 'pass' : 'miss', baseline: base };
+}
+
 /** CPU use over `ms`, all cores, as a percentage. Taken before each test, while Chord sits idle. */
 let cpuBusy = 0;
 async function measureCpuBusy(ms = 1000): Promise<number> {
@@ -119,6 +140,14 @@ function record(row: Omit<Row, 'cpuBusy'>): void {
   (row as Row).cpuBusy = cpuBusy;
   rows.push(row as Row);
   for (const c of row.checks) {
+    if (c.baseline !== undefined) {
+      const what = `${row.name} (${row.scenario}, ${RUNNER})`;
+      const why = Number.isFinite(c.value)
+        ? grew(what, c.value, c.baseline, c.limit, c.unit)
+        : `${what}: not measured, where the baseline has ${c.baseline} ${c.unit}. If it's meant to be gone, take a new baseline: ${UPDATE_COMMAND}`;
+      expect.soft(c.status, why).toBe('pass');
+      continue;
+    }
     if (!ENFORCE && c.unit === 'ms') continue;
     const what = `${row.name} (${row.scenario}${row.motion ? `, motion ${row.motion}` : ''}): ${c.label} ${c.value} ${c.unit}, budget ${c.limit}`;
     expect.soft(c.status, what).not.toMatch(/^(miss|no data)$/);
@@ -142,10 +171,19 @@ test.afterAll(() => {
   const file = join(out, 'perf.json');
   // A failed test restarts Playwright's worker, and this file's state with it; the measures the worker
   // before it took are already in the report (Playwright empties test-results when a run starts).
-  const earlier = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as { results: Row[]; environment: Environment | null }) : null;
+  const earlier = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as { results: Row[]; environment: Environment | null; measured: Measured | null }) : null;
   if (earlier) rows.unshift(...earlier.results);
   environment ??= earlier?.environment ?? null;
-  const report = { version: 1, date: new Date().toISOString(), enforced: ENFORCE, budgets: BUDGET, environment, results: rows };
+  const all = { ...earlier?.measured, ...measured };
+  const report = {
+    version: 1,
+    date: new Date().toISOString(),
+    enforced: ENFORCE,
+    budgets: BUDGET,
+    environment,
+    measured: RUNNER && (all.launch !== undefined || all.memoryMb) ? { ...all, runner: RUNNER } : null,
+    results: rows,
+  };
   writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`);
   console.log(table());
 });
@@ -157,12 +195,13 @@ function table(): string {
   const lines = [
     `Performance (${ENFORCE ? 'enforced' : 'report only'}): ${env?.cpu ?? '?'}; display ${env?.display?.hz ?? '?'} Hz, idle frame ${env?.idleFrameMs ?? '?'} ms` +
       `; other CPU use ${busy.length ? `${Math.min(...busy)}–${Math.max(...busy)}%` : '?'}` +
-      `${rows.some((r) => r.locked) ? '; screen LOCKED for some (display-bound checks not held)' : ''}`,
+      `${rows.some((r) => r.locked) ? '; screen LOCKED for some (display-bound checks not held)' : ''}` +
+      `; baseline ${RUNNER ? `${RUNNER}${BASELINE ? '' : ' (none yet)'}` : 'none here'}`,
   ];
   const pad = (s: string, n: number) => (s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length));
-  const mark: Record<Status, string> = { pass: 'ok', miss: 'MISS', 'needs an unlocked run': 'unlocked run', 'needs a 120 Hz display': '120 Hz display', 'no data': 'no data' };
+  const mark: Record<Status, string> = { pass: 'ok', miss: 'MISS', 'needs an unlocked run': 'unlocked run', 'needs a 120 Hz display': '120 Hz display', 'no data': 'no data', 'no baseline': 'no baseline' };
   for (const r of rows) {
-    const checks = r.checks.map((c) => `${c.label} ${c.value}/${c.limit}${c.unit === 'ms' ? '' : ` ${c.unit}`} ${mark[c.status]}`).join('; ');
+    const checks = r.checks.map((c) => `${c.label} ${c.value}${c.status === 'no baseline' ? '' : `/${c.limit}`}${c.unit === 'ms' ? '' : ` ${c.unit}`} ${mark[c.status]}`).join('; ');
     lines.push(`${pad(r.name, 44)} ${pad(r.scenario, 17)} ${pad(r.motion ?? '', 3)} ${checks}${r.locked ? ' [locked]' : ''}`);
   }
   return lines.join('\n');
@@ -200,6 +239,25 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
   };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
   return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
+}
+
+/**
+ * Electron alone, from its process starting to one small page loaded in a
+ * window (test/fixtures/bare-electron): how fast this machine launches
+ * anything at that moment, so Chord's launch can be judged against it.
+ */
+async function bareElectronLaunch(profile: string): Promise<number> {
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile };
+  delete env['ELECTRON_RUN_AS_NODE'];
+  const app = await electron.launch({ chromiumSandbox: true, args: [resolve(appDir, 'test/fixtures/bare-electron/main.mjs')], env, cwd: appDir });
+  try {
+    const read = () => app.evaluate(() => (globalThis as { bareLaunch?: () => Record<string, number> }).bareLaunch?.() ?? null);
+    await expect.poll(async () => (await read())?.['loaded'] ?? null, { timeout: 30_000 }).not.toBeNull();
+    const marks = (await read())!;
+    return marks['loaded']! - marks['processStart']!;
+  } finally {
+    await app.close();
+  }
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
@@ -276,13 +334,17 @@ async function readEnvironment(app: ElectronApplication, shell: Page): Promise<E
 /* ---------- Launch ---------- */
 
 test('launch: from main entry to a usable window', async () => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   cpuBusy = await measureCpuBusy();
-  const runs = async (scenario: string, profile: (() => string) | null, count: number) => {
+  /** With `bareProfile`, bare Electron launches before each of Chord's, and the median of Chord's is held to its baseline against them. */
+  const runs = async (scenario: string, profile: (() => string) | null, count: number, bareProfile?: string) => {
     const all: LaunchTimings[] = [];
+    const bare: number[] = [];
     let locked: boolean | null = null;
     for (let i = 0; i < count; i++) {
       locked = screenLocked() || locked;
+      // In turns, so a busy moment on the machine slows both.
+      if (bareProfile) bare.push(await bareElectronLaunch(bareProfile));
       const app = await launch({}, profile ? profile() : undefined);
       try {
         all.push(await launchTimings(app));
@@ -315,6 +377,21 @@ test('launch: from main entry to a usable window', async () => {
       checks: [check('worst run', max(painted), BUDGET.launchMs, { display: true, locked })],
       detail: { runs: painted.map(round), median: round(median(painted)) },
     });
+    if (!bareProfile) return;
+    // From the process starting, so what runs before main's first line counts too. Times vary from machine to
+    // machine, and between CI's runners of one kind; Chord's launch against Electron's own on the same machine varies far less.
+    const total = all.map((t) => t.shellReady! - t.processStart!);
+    const times = Math.round((100 * median(total)) / median(bare)) / 100;
+    measured.launch = times;
+    record({
+      group: 'launch',
+      name: `Launch to sidebar ready, against bare Electron (median of ${count})`,
+      scenario,
+      motion: null,
+      locked,
+      checks: [againstBaseline('median', times, BASELINE?.launch, launchLimit, '×')],
+      detail: { chordMs: total.map(round), bareElectronMs: bare.map(round), medianChordMs: round(median(total)), medianBareElectronMs: round(median(bare)) },
+    });
   };
 
   await runs('fresh profile', null, 3);
@@ -328,7 +405,114 @@ test('launch: from main entry to a usable window', async () => {
   } finally {
     await seeded.close();
   }
-  await runs('200 tabs restored', () => profile, 3);
+  // Warm launches: the profile, the disk cache and the OS's file cache are as a day's second launch finds them.
+  const bareProfile = mkdtempSync(join(tmpdir(), 'chord-perf-'));
+  await bareElectronLaunch(bareProfile);
+  await runs('200 tabs restored', () => profile, 7, bareProfile);
+});
+
+/* ---------- Memory ---------- */
+
+/**
+ * Chord's own processes, held to the runner's baseline: main, the window's
+ * views of Chord's UI (a renderer each), the GPU process, chord-data's
+ * utility process, and the page's renderer, as Chord's scripts run in every
+ * page. Chromium's other utilities (the network service and the like) are reported only.
+ */
+const OWN_PROCESSES = ['main', 'shell', 'command bar', 'popover', 'hover preview', 'page', 'GPU', 'chord-data'] as const;
+const UI_VIEWS: Record<string, string> = { shell: 'shell', overlay: 'command bar', popover: 'popover', preview: 'hover preview' };
+
+/**
+ * Each process's private memory, MB, the way Chromium counts its own
+ * footprint: on Linux its anonymous memory and swap (/proc's RssAnon and
+ * VmSwap), on Windows its private bytes, on macOS (reported only) its
+ * resident set. Private pages from smaps_rollup made main and the GPU process
+ * jump 10–16 MB from launch to launch: a library's pages count as private
+ * only while no other process on the machine maps them.
+ */
+async function processMemory(app: ElectronApplication): Promise<Map<string, number>> {
+  const metrics = await app.evaluate(
+    ({ app: electronApp, webContents }, { from, views }) => {
+      const byPid = new Map<number, string>();
+      for (const contents of webContents.getAllWebContents()) {
+        const url = contents.getURL();
+        const view = views[/^chord:\/\/([a-z]+)\//.exec(url)?.[1] ?? ''];
+        if (view || url.startsWith(from)) byPid.set(contents.getOSProcessId(), view ?? 'page');
+      }
+      return electronApp.getAppMetrics().map((m) => ({
+        pid: m.pid,
+        name: m.type === 'Browser' ? 'main' : m.type === 'GPU' ? 'GPU' : m.name === 'Chord Data' ? 'chord-data' : (byPid.get(m.pid) ?? [m.type, m.name].filter(Boolean).join(' ')),
+        kb: m.memory.privateBytes ?? m.memory.workingSetSize,
+      }));
+    },
+    { from: site.origin, views: UI_VIEWS },
+  );
+  const status = (pid: number, key: string) => Number(new RegExp(`^${key}:\\s+(\\d+) kB`, 'm').exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1] ?? NaN);
+  const memory = new Map<string, number>();
+  for (const { pid, name, kb } of metrics) {
+    const mb = (process.platform === 'linux' ? status(pid, 'RssAnon') + status(pid, 'VmSwap') : kb) / 1024;
+    memory.set(name, (memory.get(name) ?? 0) + mb);
+  }
+  return memory;
+}
+
+/** A full garbage collection in main and in every renderer, so what's measured is what's kept, not what's waiting to go. */
+async function collectGarbage(app: ElectronApplication): Promise<void> {
+  for (const page of app.windows()) {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.detach();
+  }
+  await app.evaluate(() => {
+    process.getBuiltinModule('v8').setFlagsFromString('--expose-gc');
+    (process.getBuiltinModule('vm').runInNewContext('gc') as () => void)();
+  });
+}
+
+test("memory: Chord's own processes, idle with one window and one page", async () => {
+  test.setTimeout(180_000);
+  cpuBusy = await measureCpuBusy();
+  const launches: Map<string, number>[] = [];
+  for (let i = 0; i < 3; i++) {
+    const app = await launch({});
+    try {
+      await launchTimings(app);
+      // The page has loaded, and so have the window's four views of Chord's UI.
+      const loaded = () =>
+        app.evaluate(
+          ({ webContents }, from) => webContents.getAllWebContents().filter((c) => (c.getURL().startsWith(from) || /^chord:\/\/(shell|overlay|popover|preview)\//.test(c.getURL())) && !c.isLoading()).length,
+          site.origin,
+        );
+      await expect.poll(loaded, { timeout: 30_000 }).toBe(5);
+      await new Promise((done) => setTimeout(done, 3000));
+      // The GPU process first: attaching DevTools to collect garbage makes the views paint again, which grew it by 3.5 MB.
+      const gpu = (await processMemory(app)).get('GPU') ?? NaN;
+      await collectGarbage(app);
+      await new Promise((done) => setTimeout(done, 1000));
+      const memory = await processMemory(app);
+      memory.set('GPU', gpu);
+      launches.push(memory);
+    } finally {
+      await app.close();
+    }
+  }
+  // The median of three launches, process by process.
+  const memoryMb: Record<string, number> = {};
+  for (const name of new Set(launches.flatMap((m) => [...m.keys()]))) memoryMb[name] = round(median(launches.map((m) => m.get(name) ?? NaN).filter(Number.isFinite)));
+  measured.memoryMb = Object.fromEntries(OWN_PROCESSES.filter((name) => Number.isFinite(memoryMb[name])).map((name) => [name, memoryMb[name]!]));
+  for (const name of OWN_PROCESSES) {
+    record({
+      group: 'memory',
+      name: `Memory at idle: ${name}`,
+      scenario: 'one window, one page',
+      motion: null,
+      locked: null,
+      checks: [againstBaseline('private', memoryMb[name] ?? NaN, BASELINE?.memoryMb?.[name], memoryLimit, 'MB')],
+      detail: { launches: launches.map((m) => round(m.get(name) ?? NaN)) },
+    });
+  }
+  const others = Object.entries(memoryMb).filter(([name]) => !(OWN_PROCESSES as readonly string[]).includes(name));
+  record({ group: 'memory', name: 'Memory at idle: other processes (reported only)', scenario: 'one window, one page', motion: null, locked: null, checks: [], detail: Object.fromEntries(others) });
 });
 
 /* ---------- Interactions ---------- */

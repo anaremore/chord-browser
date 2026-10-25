@@ -21,6 +21,7 @@
     "test:e2e": "playwright test",
     "test:e2e:linux": "node ../../scripts/e2e-linux/run.mjs",
     "test:perf": "playwright test perf",
+    "perf:baseline": "node scripts/perf-baseline.mjs",
     "test:packaged": "playwright test --config playwright.packaged.config.ts",
     "package": "node scripts/electron-vite.mjs build && electron-builder --config electron-builder.config.ts --publish never",
     "package:dir": "node scripts/electron-vite.mjs build && electron-builder --config electron-builder.config.ts --publish never --dir",

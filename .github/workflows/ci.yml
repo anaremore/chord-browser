@@ -154,8 +154,9 @@ jobs:
           path: apps/desktop/test-results/captures/
           if-no-files-found: ignore
 
-      # Performance budgets (test/e2e/perf.spec.ts): reported here for trends, enforced only on
-      # reference hardware (docs/testing/performance.md).
+      # Performance budgets (test/e2e/perf.spec.ts): times reported here for trends, enforced only on
+      # reference hardware; memory and warm launches held to each runner's baseline, which
+      # `pnpm --filter @chord/desktop perf:baseline --run <id>` takes from these reports (docs/testing/performance.md).
       - name: Upload performance report
         if: always()
         uses: actions/upload-artifact@v7

@@ -1,0 +1,32 @@
+{
+  "linux-x64-wayland, container, 4 CPUs": {
+    "from": "Linux container, 4 CPUs",
+    "date": "2026-10-25",
+    "launch": 4.22,
+    "memoryMb": {
+      "main": 84.1,
+      "shell": 34.9,
+      "command bar": 27.3,
+      "popover": 25.2,
+      "hover preview": 21.7,
+      "page": 19,
+      "GPU": 32.3,
+      "chord-data": 20.3
+    }
+  },
+  "linux-x64-x11, container, 4 CPUs": {
+    "from": "Linux container, 4 CPUs",
+    "date": "2026-10-25",
+    "launch": 4.48,
+    "memoryMb": {
+      "main": 85.2,
+      "shell": 35.1,
+      "command bar": 27.3,
+      "popover": 25.2,
+      "hover preview": 21.8,
+      "page": 19,
+      "GPU": 34.1,
+      "chord-data": 20.2
+    }
+  }
+}
