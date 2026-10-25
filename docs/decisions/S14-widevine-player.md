@@ -2,6 +2,8 @@
 
 *2026-10-25 · D4 (ARCHITECTURE.md §16) · prototypes in `spikes/widevine-player/` · re-run: `node spikes/widevine-player/run-linux.mjs`, or push to `agent/widevine-spike` for Windows and macOS*
 
+**Built 2026-10-25 as Chord Player** (`apps/player`; ARCHITECTURE.md §9, *Chord Player*). One finding since: castLabs EVS signs only ECS with its own fuses or one set castLabs accepts, so the player keeps `GrantFileProtocolExtraPrivileges` on.
+
 **Result: go, with a window of its own (a) on every OS.** ECS installs the CDM and plays Widevine test streams on Windows, macOS and Linux, up to 4K, with picture-in-picture and fullscreen. The navigation lock holds in all 14 cases tested, and the control channel answers in well under a millisecond. The real services are a separate question: they need production VMP signing through castLabs' EVS (the maintainer's account), and some refuse Linux whatever you do.
 
 Glueing the player over Chord's content area (b) works, with a seam per OS:
