@@ -52,14 +52,21 @@ function useNowPlaying(): NowPlaying[] {
 interface LineProps {
   media: NowPlaying;
   tab: TabNode;
+  /** Its video plays in the picture-in-picture window. */
+  popped: boolean;
   windowId: string;
   appearance: Appearance;
   muteTitle: { mute: string; unmute: string };
   onLeave(): void;
 }
 
-/** One more tab playing, as a row under the newest: its icon and title (which go to it), Mute, and Play or Pause. */
-function Line({ media, tab, windowId, appearance, muteTitle, onLeave }: LineProps) {
+/**
+ * One more tab playing, as a row under the newest: its icon and title (which
+ * go to it), picture-in-picture for a video (so you choose which one is out:
+ * Chromium has one window, and popping out another swaps them), Mute, and
+ * Play or Pause.
+ */
+function Line({ media, tab, popped, windowId, appearance, muteTitle, onLeave }: LineProps) {
   const muted = Boolean(tab.muted);
   const tabTitle = pageTitle(tab) || displayHost(tab.url) || 'New tab';
   const title = media.title || tabTitle;
@@ -78,6 +85,18 @@ function Line({ media, tab, windowId, appearance, muteTitle, onLeave }: LineProp
         <span className="sr-only">Go to tab: </span>
         <span className={styles.ellipsis}>{title}</span>
       </button>
+      {(media.video || popped) && (
+        <button
+          type="button"
+          className={styles.iconButton}
+          aria-label={`${popped ? 'Back to the tab' : 'Pop out the video'}: ${title}`}
+          aria-pressed={popped}
+          title={popped ? 'Back to the tab' : 'Pop out the video'}
+          onClick={() => void api.media.act(tab.id, 'pictureInPicture')}
+        >
+          {popped ? <PictureInPicture {...ICON} /> : <PictureInPicture2 {...ICON} />}
+        </button>
+      )}
       <button
         type="button"
         className={styles.iconButton}
@@ -111,7 +130,7 @@ interface CardProps {
   /** Its video plays in Chord's picture-in-picture window. */
   popped: boolean;
   /** The other tabs playing, newest first, with their tabs. */
-  others: { media: NowPlaying; tab: TabNode }[];
+  others: { media: NowPlaying; tab: TabNode; popped: boolean }[];
   windowId: string;
   appearance: Appearance;
   muteTitle: { mute: string; unmute: string };
@@ -208,7 +227,7 @@ function Card({ media, tab, popped, others, windowId, appearance, muteTitle, ent
       {shownOthers.length > 0 && (
         <div className={styles.nowPlayingOthers}>
           {shownOthers.map((o) => (
-            <Line key={o.tab.id} media={o.media} tab={o.tab} windowId={windowId} appearance={appearance} muteTitle={muteTitle} onLeave={() => keepFocusFrom(card.current)} />
+            <Line key={o.tab.id} media={o.media} tab={o.tab} popped={o.popped} windowId={windowId} appearance={appearance} muteTitle={muteTitle} onLeave={() => keepFocusFrom(card.current)} />
           ))}
           {hidden > 0 && (
             <button type="button" className={styles.nowPlayingMore} onClick={() => setAll(true)}>
@@ -242,7 +261,8 @@ export function NowPlayingCard({
   // Newest first: the newest in full, the rest as rows.
   const offered = cardMedia(state, windowId, useNowPlaying()).flatMap((media) => {
     const tab = state.nodes[media.nodeId];
-    return tab?.kind === 'tab' ? [{ media, tab }] : [];
+    // Out by Chord (the tab's live state) or by the site's own button (what the page says).
+    return tab?.kind === 'tab' ? [{ media, tab, popped: Boolean(state.live[tab.id]?.pip) || media.pip }] : [];
   });
   const [first, ...others] = offered;
   return (
@@ -252,7 +272,7 @@ export function NowPlayingCard({
           key="now-playing"
           media={first.media}
           tab={first.tab}
-          popped={Boolean(state.live[first.tab.id]?.pip) || first.media.pip}
+          popped={first.popped}
           others={others}
           windowId={windowId}
           appearance={appearance}

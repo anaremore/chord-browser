@@ -28,6 +28,9 @@ test.beforeAll(async () => {
     '/plain': mediaPage({ title: 'Plain audio' }),
     '/quiet': mediaPage({ title: 'Quiet', autoplay: false }),
     '/movie': mediaPage({ title: 'Movie', video: true, track: { title: 'Movie Night', artist: 'Director', album: '' } }),
+    '/film': mediaPage({ title: 'Film', video: true, track: { title: 'Film Score', artist: 'Composer', album: '' } }),
+    // A video its page muted (a player you muted there): silent to Chord.
+    '/hushed': talkPage({ title: 'Hushed', muted: true }),
     // Picture and sound in one element, as most sites' videos are.
     '/talk': talkPage(),
     // A player like Twitch's: it plays only when its own button says so, and pauses its video if played from outside.
@@ -247,14 +250,23 @@ for (const [what, path] of [
   });
 }
 
-test('a background tab’s own autoplay gets the speaker on its row, not the card', async () => {
+test('no card for what you didn’t leave sounding: a background tab’s own autoplay (its row has the speaker), or a video its page muted (no speaker either)', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` });
   try {
     const shell = await pageWhere(app, isShell);
     await expect(row(shell, 'Second page')).toBeVisible();
     await open(shell, '/audio', true);
     await expect(row(shell, 'Audio').locator('[aria-label="Mute tab"]')).toBeVisible();
+
+    // Playing, muted by its own player, and left: the tab makes no sound, so Chord has nothing to offer.
+    const { windowId, tabId } = await where(shell);
+    await open(shell, '/hushed');
+    const hushed = await pageWhere(app, (url) => url === `${site.origin}/hushed`);
+    await expect.poll(() => hushed.evaluate(() => document.querySelector('video')!.currentTime)).toBeGreaterThan(0.3);
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: tabId! });
+    await expect(row(shell, 'Second page')).toHaveAttribute('aria-current', 'page');
     await shell.waitForTimeout(1000);
+    await expect(row(shell, 'Hushed').locator('[aria-label="Mute tab"]')).toHaveCount(0);
     await expect(card(shell)).toHaveCount(0);
   } finally {
     await app.close();
@@ -331,6 +343,50 @@ test('paused, then another chord: the card still plays it', async () => {
     await expect(card(shell)).toContainText('Probe Song');
     await card(shell).getByRole('button', { name: 'Play', exact: true }).click();
     await expect.poll(() => paused(audio)).toBe(false);
+  } finally {
+    await app.close();
+  }
+});
+
+test('two videos with auto picture-in-picture on (the default): the first left pops out, the next stays in, and you choose which is out', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(row(shell, 'Second page')).toBeVisible();
+    const pipOf = async (path: string) => (await pageWhere(app, (url) => url === `${site.origin}${path}`)).evaluate(() => document.pictureInPictureElement?.id ?? null);
+    const playing = async (path: string) => (await pageWhere(app, (url) => url === `${site.origin}${path}`)).evaluate(() => !document.querySelector('video')!.paused);
+
+    // Left playing, the first video pops out on its own; the card says it's out.
+    await leavePlaying(app, shell, `${site.origin}/movie`);
+    await expect.poll(() => pipOf('/movie')).toBe('v');
+    await expect(card(shell).getByRole('button', { name: 'Back to the tab', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+    // The second stays in its tab (there's one picture-in-picture window): newest in full, the first as a row, still out.
+    await leavePlaying(app, shell, `${site.origin}/film`);
+    await expect(card(shell)).toContainText('Film Score');
+    expect(await pipOf('/film')).toBeNull();
+    await expect(card(shell).getByRole('button', { name: 'Back to the tab: Movie Night' })).toHaveAttribute('aria-pressed', 'true');
+
+    // Choose the newest: they swap. The other goes back into its tab, playing on, and you stay where you are.
+    await card(shell).getByRole('button', { name: 'Pop out the video', exact: true }).click();
+    await expect.poll(() => pipOf('/film')).toBe('v');
+    await expect.poll(() => pipOf('/movie')).toBeNull();
+    expect(await playing('/movie')).toBe(true);
+    await expect(row(shell, 'Second page')).toHaveAttribute('aria-current', 'page');
+    await expect(card(shell).getByRole('button', { name: 'Pop out the video: Movie Night' })).toHaveAttribute('aria-pressed', 'false');
+
+    // And back again, from its row.
+    await card(shell).getByRole('button', { name: 'Pop out the video: Movie Night' }).click();
+    await expect.poll(() => pipOf('/movie')).toBe('v');
+    await expect.poll(() => pipOf('/film')).toBeNull();
+    expect(await playing('/film')).toBe(true);
+
+    // Back to the tab, from the row: that tab comes on screen with its video in it, and leaves the card.
+    await card(shell).getByRole('button', { name: 'Back to the tab: Movie Night' }).click();
+    await expect(row(shell, 'Movie')).toHaveAttribute('aria-current', 'page');
+    await expect.poll(() => pipOf('/movie')).toBeNull();
+    expect(await playing('/movie')).toBe(true);
+    await expect(card(shell).getByRole('button', { name: /^Go to tab: / })).toHaveCount(1);
   } finally {
     await app.close();
   }

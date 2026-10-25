@@ -18,7 +18,7 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
   - Safari needs Full Disk Access, and Chord says where to turn it on.
 - **Media controls:** a tab playing sound shows a speaker on its row; click it (or press Ctrl+M, ⌃M on macOS) to mute the tab, and it stays muted after it sleeps or Chord restarts.
   - Leave a tab while it plays, in any chord, and a Now playing card at the bottom of the sidebar shows what it is (with the track and artist when the site says), with play and pause, mute, picture-in-picture for videos, and a way back to the tab. A tab that starts playing on its own in the background just gets its speaker.
-  - Several playing: the newest in full, and a row for each of the others with its own mute and play and pause.
+  - Several playing: the newest in full, and a row for each of the others with its own mute and play and pause, and picture-in-picture for videos, so you choose which one is popped out.
   - Play and pause work with Twitch, SoundCloud and Bandcamp's own players too.
 - **Duet reads whole pages** on sites it used to read only part of: Substack newsletters (just their footer before), MDN and BBC News among them, and a long page's top after you've scrolled down.
 - **Streaming services that need Widevine** (Netflix, Spotify, Disney+, Prime Video, HBO Max, Hulu, Apple Music and TV, Peacock, Paramount+, Tidal) say so when you open them, since Chord can't play them yet, with a button to open the page in Chrome, Edge, Firefox, Safari or Brave if you have one.
