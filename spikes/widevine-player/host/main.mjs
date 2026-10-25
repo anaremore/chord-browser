@@ -14,7 +14,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listen, newAddress, newSecret, now } from '../shared/channel.mjs';
+import { LAUNCH_ENV, listen, newAddress, newSecret, now } from '../shared/channel.mjs';
 
 const { app, BaseWindow, WebContentsView, nativeImage, screen } = electron;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -71,10 +71,13 @@ async function startPlayer(launch = {}) {
     gotPeer(peer);
   });
   const t0 = now();
-  const child = spawn(playerExe, [playerApp, '--mode', 'serve', '--profile', playerProfile, '--out', out, '--enable-logging=stderr'], { stdio: ['pipe', 'pipe', 'pipe'], env: playerEnv() });
+  const line = JSON.stringify({ path: address.path, secret, ...launch });
+  const env = playerEnv();
+  if (isWin) env[LAUNCH_ENV] = line; // Electron's main process has no stdin on Windows
+  const child = spawn(playerExe, [playerApp, '--mode', 'serve', '--profile', playerProfile, '--out', out, '--enable-logging=stderr'], { stdio: ['pipe', 'pipe', 'pipe'], env });
   child.stdout.pipe(playerLog, { end: false });
   child.stderr.pipe(playerLog, { end: false });
-  child.stdin.end(`${JSON.stringify({ path: address.path, secret, ...launch })}\n`);
+  child.stdin.end(isWin ? '' : `${line}\n`);
   const exited = new Promise((r) => child.once('exit', (code) => r(code)));
   const peer = await Promise.race([peerReady, sleep(45_000).then(() => null), exited.then(() => null)]);
   if (!peer) throw new Error('player did not connect');
@@ -202,7 +205,7 @@ function trail(samples, from, to) {
 }
 
 /** Glue: the player follows the host's content area, by the host's window events. */
-function glue(host, peer, { useWillMove = false, onFocus = true } = {}) {
+function glue(host, peer, { useWillMove = false, onFocus = true, follow = false } = {}) {
   const acks = [];
   let seq = 0;
   const frameOffset = (() => {
@@ -218,15 +221,18 @@ function glue(host, peer, { useWillMove = false, onFocus = true } = {}) {
       .then((r) => acks.push({ seq: s, why, tSend, tGot: r.tGot, tApplied: r.tApplied, tAck: now() }))
       .catch(() => {});
   };
-  host.win.on('move', () => send('move'));
-  host.win.on('resize', () => send('resize'));
-  if (useWillMove)
+  // With follow, the player polls the host's rectangle itself; only visibility and z-order come over the channel.
+  if (!follow) host.win.on('move', () => send('move'));
+  if (!follow) host.win.on('resize', () => send('resize'));
+  if (useWillMove && !follow)
     host.win.on('will-move', (_e, b) => send('will-move', playerArea(host.win, { x: b.x + frameOffset.x, y: b.y + frameOffset.y, width: b.width + frameOffset.w, height: b.height + frameOffset.h })));
   host.win.on('minimize', () => send('minimize', undefined, false));
   host.win.on('restore', () => send('restore'));
   host.win.on('hide', () => send('hide', undefined, false));
   host.win.on('show', () => send('show'));
-  if (onFocus) host.win.on('focus', () => peer.request('above', { mediaSourceId: host.win.getMediaSourceId() }).catch(() => {}));
+  // Raise the player above the host when the host comes forward; again a moment later, once the activation has settled.
+  const above = () => peer.request('above', { mediaSourceId: host.win.getMediaSourceId() }).catch(() => {});
+  if (onFocus) host.win.on('focus', () => (above(), setTimeout(above, 150)));
   return {
     acks,
     send,
@@ -439,9 +445,10 @@ async function scenarioGlue(variant) {
   const p = await startPlayer();
   const opts = { style: 'glued', bounds: playerArea(host.win) };
   if (variant === 'panel') opts.panel = true;
-  if (variant === 'accessory' || variant === 'panel') opts.activation = 'accessory';
+  if (variant === 'panel-reset') opts.panel = 'reset';
+  if (['accessory', 'panel', 'panel-reset', 'follow'].includes(variant) && isMac) opts.activation = 'accessory';
   r.window = await p.peer.request('window', opts);
-  const g = glue(host, p.peer, { useWillMove: variant === 'will-move', onFocus: variant !== 'owned' });
+  const g = glue(host, p.peer, { useWillMove: variant === 'will-move', onFocus: variant !== 'owned', follow: variant === 'follow' });
   await p.peer.request('navigate', { local: PLAYING });
   await p.waitFor((m) => m.t === 'media' && m.paused === false, 30_000);
   await sleep(1000);
@@ -449,6 +456,7 @@ async function scenarioGlue(variant) {
   const hostHandle = handleOf(host.win.getNativeWindowHandle(), host.win.getMediaSourceId());
   const playerHandle = handleOf(Buffer.from(handles.native, 'hex'), handles.mediaSourceId);
   if (variant === 'owned' && w) r.setOwner = String(w.setOwner(playerHandle, hostHandle));
+  if (variant === 'follow') r.follow = await p.peer.request('follow', { handle: hostHandle, area: playerArea(host.win), koffiPath, intervalMs: 8 });
   r.state0 = await p.peer.request('state');
 
   // Wayland: the compositor places windows; neither the host nor the player can.
@@ -549,6 +557,7 @@ async function scenarioGlue(variant) {
   await sleep(500);
   r.fullscreen.backInPlace = JSON.stringify((await p.peer.request('state')).bounds) === JSON.stringify(playerArea(host.win));
 
+  if (variant === 'follow') r.followStats = await p.peer.request('follow-stats').catch((e) => e.message);
   r.hang = await hangTest(host, p, hostHandle);
   r.captures = { host: await captureHost(host, `glue-${variant}-host.png`), player: await p.peer.request('capture', { name: `glue-${variant}-player.png` }).catch((e) => e.message) };
   r.captures.composite = compose(`glue-${variant}-host.png`, `glue-${variant}-player.png`, 232, 8, `glue-${variant}-composite.png`, host.win.getContentBounds().width);
@@ -749,7 +758,7 @@ void main();
 async function main() {
 await app.whenReady();
 results.display = screen.getAllDisplays().map((d) => ({ bounds: d.bounds, scaleFactor: d.scaleFactor, refreshRate: d.displayFrequency }));
-const glueVariants = ['move', ...(isWin || isMac ? ['will-move'] : []), ...(isWin ? ['owned'] : []), ...(isMac ? ['accessory', 'panel'] : [])];
+const glueVariants = ['move', ...(isWin || isMac ? ['will-move', 'follow'] : []), ...(isWin ? ['owned'] : []), ...(isMac ? ['accessory', 'panel', 'panel-reset'] : [])];
 for (const name of scenarios) {
   const runs = name === 'glue' ? glueVariants.map((v) => [`glue:${v}`, () => scenarioGlue(v)]) : [[name, { channel: scenarioChannel, navlock: scenarioNavlock, frameless: scenarioFrameless, child: scenarioChild }[name]]];
   for (const [label, run] of runs) {

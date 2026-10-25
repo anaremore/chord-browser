@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeLock, testLock } from '../shared/allowlist.mjs';
+import { hostRectReader } from '../shared/follow.mjs';
 import { connect, now, readLaunchLine } from '../shared/channel.mjs';
 import { chromiumUserAgent } from '../shared/user-agent.mjs';
 
@@ -35,6 +36,8 @@ if (profile) app.setPath('userData', profile);
 mkdirSync(out, { recursive: true });
 deadline(Number(opt('timeout', '600000')), `player ${mode}`);
 const started = now();
+// Read (and removed from the environment) before Chromium starts any child process.
+const launchLine = mode === 'serve' ? readLaunchLine() : null;
 const log = (...a) => console.log(`[player ${mode}]`, ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const round = (n) => Math.round(n * 10) / 10;
@@ -307,7 +310,7 @@ function applyLock(ses, lock, handoff, blocked) {
 }
 
 async function serve() {
-  const launch = await readLaunchLine();
+  const launch = await launchLine;
   app.userAgentFallback = chromiumUserAgent(app.userAgentFallback, app.getName());
   await app.whenReady();
   const tReady = now();
@@ -374,6 +377,11 @@ async function serve() {
         webPreferences,
       });
       content = win.webContents;
+      // A panel shows on every Space and floats; take both back, keep the non-activating part.
+      if (panel === 'reset') {
+        win.setVisibleOnAllWorkspaces(false);
+        win.setAlwaysOnTop(false);
+      }
       win.showInactive();
     }
     content.on('before-input-event', (event, input) => {
@@ -422,6 +430,34 @@ async function serve() {
       }
     }
     return { seq, tGot, tApplied: now() };
+  });
+  // Glue by polling the host's rectangle from the OS (shared/follow.mjs), every intervalMs.
+  let follower = null;
+  peer.handle('follow', ({ handle, area, koffiPath, intervalMs = 8 }) => {
+    const read = hostRectReader(koffiPath, handle);
+    const first = read?.();
+    if (!first) return { ok: false };
+    const toDip = (r) => (process.platform === 'win32' ? screen.screenToDipRect(null, r) : r);
+    const r0 = toDip(first);
+    const d = { x: area.x - r0.x, y: area.y - r0.y, w: area.width - r0.width, h: area.height - r0.height };
+    let last = '';
+    let reads = 0;
+    let moves = 0;
+    clearInterval(follower);
+    follower = setInterval(() => {
+      if (fullScreen || !win.isVisible()) return;
+      const raw = read();
+      reads++;
+      if (!raw) return;
+      const key = `${raw.x},${raw.y},${raw.width},${raw.height}`;
+      if (key === last) return;
+      last = key;
+      const r = toDip(raw);
+      win.setBounds({ x: Math.round(r.x + d.x), y: Math.round(r.y + d.y), width: Math.round(r.width + d.w), height: Math.round(r.height + d.h) });
+      moves++;
+    }, intervalMs);
+    peer.handle('follow-stats', () => ({ reads, moves }));
+    return { ok: true, offset: d };
   });
   peer.handle('above', ({ mediaSourceId }) => {
     win.moveAbove(mediaSourceId);

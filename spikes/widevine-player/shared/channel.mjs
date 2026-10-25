@@ -216,8 +216,20 @@ export function connect(address, secret) {
   });
 }
 
-/** Reads the one line Chord writes to the player's stdin: {"path": …, "secret": …}. */
+/**
+ * The launch line: {"path": …, "secret": …}. On macOS and Linux Chord writes it to the
+ * player's stdin. On Windows an Electron app's main process gets no stdin (it's a GUI
+ * program), so it comes in the environment, and the player removes it from its own
+ * environment before any Chromium child process is started, so none inherits it.
+ */
+export const LAUNCH_ENV = 'CHORD_WV_LAUNCH';
+
 export function readLaunchLine(stream = process.stdin, timeout = 5000) {
+  const fromEnv = process.env[LAUNCH_ENV];
+  if (fromEnv) {
+    delete process.env[LAUNCH_ENV];
+    return Promise.resolve(JSON.parse(fromEnv));
+  }
   return new Promise((resolve, reject) => {
     let text = '';
     const timer = setTimeout(() => reject(new Error('no launch line on stdin')), timeout);

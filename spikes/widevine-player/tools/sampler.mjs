@@ -136,7 +136,7 @@ function linux() {
     };
     const r = [0], parent = [0], children = [null], n = [0];
     XQueryTree(dpy, root, r, parent, children, n);
-    const list = koffi.decode(children[0], koffi.array('unsigned long', n[0])).map(Number);
+    const list = Array.from(koffi.decode(children[0], koffi.array('unsigned long', n[0])), Number);
     const at = (win) => {
       const i = list.indexOf(topOf(win));
       return i < 0 ? null : n[0] - 1 - i;

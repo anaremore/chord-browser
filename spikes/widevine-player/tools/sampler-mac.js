@@ -91,8 +91,9 @@ function run(argv) {
   const result = { samples, events, readsPerSecond: Math.round((reads * 1000) / plan.durationMs), clock: 'systemUptime' };
   if (plan.zorder) {
     const all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(ON_SCREEN_ONLY, 0)));
-    const ids = all.filter((w) => w.kCGWindowLayer === 0).map((w) => w.kCGWindowNumber);
-    result.zorder = { host: ids.indexOf(plan.host), player: ids.indexOf(plan.player), note: 'index from the front, layer 0' };
+    const ids = all.map((w) => w.kCGWindowNumber);
+    const layer = (id) => (all.find((w) => w.kCGWindowNumber === id) || {}).kCGWindowLayer;
+    result.zorder = { host: ids.indexOf(plan.host), player: ids.indexOf(plan.player), hostLayer: layer(plan.host), playerLayer: layer(plan.player), note: 'index from the front, all layers; -1 = not on screen' };
   }
   return JSON.stringify(result);
 }
