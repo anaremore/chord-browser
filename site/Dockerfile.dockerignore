@@ -1,0 +1,5 @@
+# The site's image needs only site/: leave the rest of the repo out of the build context.
+*
+!site/nginx.conf
+!site/headers.inc
+!site/public/

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chord: tabs that play together</title>
+  <meta name="description" content="Chord is a calm, colorful, open-source browser built around a vertical sidebar. Your tabs live in chords, each with its own color. No account, no telemetry. For Windows, macOS and Linux.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#faf7ff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16111d" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="https://chordbrowser.com/">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://chordbrowser.com/">
+  <meta property="og:title" content="Chord: tabs that play together">
+  <meta property="og:description" content="A calm, colorful, open-source browser. Your tabs live in chords, each with its own color.">
+  <meta property="og:image" content="https://chordbrowser.com/images/card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="preload" href="/fonts/Onest-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css?v=1">
+  <script src="/site.js?v=1" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the content</a>
+
+  <header class="top">
+    <a class="brand" href="/" aria-label="Chord, home">
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect x="23" y="14" width="34" height="11" rx="5.5" fill="url(#m-lilac)"/>
+        <rect x="14.5" y="23.5" width="38" height="13" rx="6.5" fill="var(--paper-solid)"/>
+        <rect x="15.5" y="24.5" width="36" height="11" rx="5.5" fill="url(#m-rose)"/>
+        <rect x="6" y="34" width="35" height="13" rx="6.5" fill="var(--paper-solid)"/>
+        <rect x="7" y="35" width="33" height="11" rx="5.5" fill="url(#m-coral)"/>
+        <defs>
+          <linearGradient id="m-lilac" x1="0" x2="1"><stop offset="0" stop-color="#c3a2ff"/><stop offset="1" stop-color="#9476ec"/></linearGradient>
+          <linearGradient id="m-rose" x1="0" x2="1"><stop offset="0" stop-color="#ff92c0"/><stop offset="1" stop-color="#e85aa6"/></linearGradient>
+          <linearGradient id="m-coral" x1="0" x2="1"><stop offset="0" stop-color="#ffae78"/><stop offset="1" stop-color="#ff6f4c"/></linearGradient>
+        </defs>
+      </svg>
+      <span>Chord</span>
+    </a>
+    <nav aria-label="Site">
+      <a href="#features">Features</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/anaremore/chord-browser" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-text">
+        <p class="eyebrow"><span class="tag" data-version>Preview</span> Free and open source, for Windows, macOS and Linux</p>
+        <h1 id="hero-title">Tabs that play <span class="nowrap">together.</span></h1>
+        <p class="lede">Chord is a calm, colorful browser built around a vertical sidebar. Your tabs live in <em>chords</em>: sets of pinned and everyday tabs, each with its own color.</p>
+        <div class="cta">
+          <a class="button" href="#download" data-primary>
+            <span data-primary-label>Download Chord</span>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m0 0 4-4m-4 4-4-4M4 16h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <p class="cta-note"><span data-primary-note>Windows, macOS and Linux</span> · <a href="#download">Other downloads</a></p>
+        </div>
+      </div>
+
+      <div class="keys" role="radiogroup" aria-label="Pick a chord's color for this page">
+        <span class="keys-label" aria-hidden="true">Pick a chord:</span>
+        <button type="button" role="radio" aria-checked="true" data-hue="300">Personal</button>
+        <button type="button" role="radio" aria-checked="false" data-hue="235">Work</button>
+        <button type="button" role="radio" aria-checked="false" data-hue="165">Garden</button>
+        <button type="button" role="radio" aria-checked="false" data-hue="45">Weekend</button>
+      </div>
+
+      <figure class="window hero-window">
+        <picture>
+          <source srcset="/images/chord-dark.webp" media="(prefers-color-scheme: dark)" type="image/webp">
+          <img src="/images/chord-light.webp" width="1442" height="901" fetchpriority="high"
+               alt="Chord's window: a sidebar tinted in the chord's colors, with pinned tabs, a folder and today's tabs, beside a Wikipedia article about chords">
+        </picture>
+        <figcaption>Each chord has its own color. So does this page: pick one above.</figcaption>
+      </figure>
+    </section>
+
+    <section class="features" id="features" aria-labelledby="features-title">
+      <header class="section-head">
+        <span class="note note-lilac" aria-hidden="true"></span>
+        <h2 id="features-title">Everything in its place</h2>
+        <p>A sidebar for your tabs, a bar for everything else, and the page gets the rest of the window.</p>
+      </header>
+
+      <article class="feature">
+        <div class="feature-text">
+          <h3>Chords keep things apart</h3>
+          <p>Work, home, a trip you're planning: give each its own chord, with its own pinned tabs and its own color, and keep sign-ins separate if you like. Switch with <kbd>Ctrl</kbd>/<kbd>⌘</kbd>&nbsp;+&nbsp;<kbd>1</kbd>–<kbd>9</kbd>, or swipe with two fingers.</p>
+          <p>Today's tabs tidy themselves into the Archive after a while, so the sidebar stays short. Nothing is lost: it's all a search away.</p>
+        </div>
+        <figure class="window">
+          <img src="/images/themes.webp" width="1442" height="901" loading="lazy" decoding="async"
+               alt="Settings, Appearance: light or dark, and a library of color themes for the chord">
+        </figure>
+      </article>
+
+      <article class="feature feature-flip">
+        <div class="feature-text">
+          <h3>One bar reaches everything</h3>
+          <p>Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>&nbsp;+&nbsp;<kbd>T</kbd> and type. Open tabs, pinned tabs, history, the Archive and Chord's own actions come up together, and the page you're heading to starts connecting while you type.</p>
+        </div>
+        <figure class="window">
+          <img src="/images/command-bar.webp" width="1442" height="901" loading="lazy" decoding="async"
+               alt="The command bar over a page, showing open tabs, a site search and suggestions for “wiki”">
+        </figure>
+      </article>
+
+      <article class="feature">
+        <div class="feature-text">
+          <h3>Pages side by side</h3>
+          <p>Drag a tab onto the page to put it beside or below the one you're reading. Up to four fit, and they stay together as one row in the sidebar.</p>
+        </div>
+        <figure class="window">
+          <img src="/images/split-view.webp" width="1442" height="901" loading="lazy" decoding="async"
+               alt="Split view: a Wikipedia article and an MDN page side by side">
+        </figure>
+      </article>
+
+      <article class="feature feature-flip">
+        <div class="feature-text">
+          <h3>Duet, when you want a hand</h3>
+          <p>A side panel for quick questions about the page or your tabs, answered by your own Claude Code or Codex app and subscription. It shows what it read and links to where it found each answer.</p>
+          <p>It reads a page only when you let it, never sees your sign-ins, and disappears entirely if you turn it off.</p>
+        </div>
+        <figure class="window">
+          <img src="/images/duet.webp" width="1442" height="901" loading="lazy" decoding="async"
+               alt="Duet beside a Wikipedia article, answering from the page with a numbered citation">
+        </figure>
+      </article>
+
+      <ul class="more" aria-label="Also in Chord">
+        <li><h3>Ads and trackers blocked</h3><p>Built in, with EasyList and EasyPrivacy, checked on your computer. Turn it off for one site in a click.</p></li>
+        <li><h3>Bring your tabs along</h3><p>Import bookmarks, history and open tabs from Chrome, Edge, Brave, Firefox or Safari.</p></li>
+        <li><h3>Videos that follow you</h3><p>Now playing in the sidebar controls whatever's playing, and pops a video out into picture-in-picture.</p></li>
+        <li><h3>Screenshots built in</h3><p>An area, an element, the visible page or the whole page, copied or saved.</p></li>
+        <li><h3>Reader view</h3><p>Just the article, at a size and width that suit you, in Onest or your computer's reading serif.</p></li>
+        <li><h3>Chrome extensions</h3><p>Password managers and the rest, with their buttons on a shelf in the sidebar.</p></li>
+        <li><h3>Minimal when you need room</h3><p>Hide the sidebar and Chord shrinks to one slim bar. The sidebar peeks back at the window's edge.</p></li>
+        <li><h3>Forgiving</h3><p>Close or clear something by mistake and Undo brings it back. No “are you sure?” dialogs.</p></li>
+      </ul>
+    </section>
+
+    <section class="privacy" id="privacy" aria-labelledby="privacy-title">
+      <header class="section-head">
+        <span class="note note-rose" aria-hidden="true"></span>
+        <h2 id="privacy-title">Yours, and only yours</h2>
+      </header>
+      <ol class="promises">
+        <li class="promise promise-lilac"><h3>No account</h3><p>Nothing to sign up for. Your tabs, history and settings stay on your computer.</p></li>
+        <li class="promise promise-rose"><h3>No telemetry</h3><p>Chord doesn't report what you do or where you go. Blocking and Safe Browsing check pages on your computer.</p></li>
+        <li class="promise promise-coral"><h3>No lock-in</h3><p>Open source under the MIT license, built in the open, on the same Chromium engine as the browsers you know.</p></li>
+      </ol>
+    </section>
+
+    <section class="download" id="download" aria-labelledby="download-title">
+      <header class="section-head">
+        <span class="note note-coral" aria-hidden="true"></span>
+        <h2 id="download-title">Download Chord</h2>
+        <p><span data-release>The latest preview</span> is ready to try. Previews have rough edges: tell us about them on <a href="https://github.com/anaremore/chord-browser/issues" rel="noopener">GitHub</a>.</p>
+      </header>
+      <div class="platforms">
+        <article class="platform" data-os="windows">
+          <h3>Windows</h3>
+          <p class="platform-req">Windows 10 and 11</p>
+          <ul class="files">
+            <li><a href="https://github.com/anaremore/chord-browser/releases" data-asset="win-x64">Installer for Intel and AMD <span class="size" data-size></span></a></li>
+            <li><a href="https://github.com/anaremore/chord-browser/releases" data-asset="win-arm64">Installer for Arm <span class="size" data-size></span></a></li>
+          </ul>
+          <p class="platform-note">Installs for your account, without an admin prompt.</p>
+        </article>
+        <article class="platform" data-os="mac">
+          <h3>macOS</h3>
+          <p class="platform-req">Apple silicon and Intel</p>
+          <ul class="files">
+            <li><a href="https://github.com/anaremore/chord-browser/releases" data-asset="mac-arm64">Apple silicon <span class="size" data-size></span></a></li>
+            <li><a href="https://github.com/anaremore/chord-browser/releases" data-asset="mac-x64">Intel <span class="size" data-size></span></a></li>
+          </ul>
+          <p class="platform-note">Not signed for macOS yet, so it asks you to confirm the first time. <a href="https://github.com/anaremore/chord-browser#try-the-preview" rel="noopener">How to open it</a></p>
+        </article>
+        <article class="platform" data-os="linux">
+          <h3>Linux</h3>
+          <p class="platform-req">X11 and Wayland, x64 and Arm</p>
+          <ul class="files">
+            <li><a href="https://github.com/anaremore/chord-browser/releases" data-asset="deb-amd64">Debian and Ubuntu (.deb) <span class="size" data-size></span></a></li>
+            <li><a href="https://github.com/anaremore/chord-browser/releases" data-asset="rpm-x86_64">Fedora and RHEL (.rpm) <span class="size" data-size></span></a></li>
+            <li><a href="https://github.com/anaremore/chord-browser/releases" data-asset="appimage-x86_64">AppImage <span class="size" data-size></span></a></li>
+          </ul>
+          <p class="platform-note">Arm builds and install steps are on the <a href="https://github.com/anaremore/chord-browser/releases" data-release-link rel="noopener">release page</a>.</p>
+        </article>
+      </div>
+      <p class="checksums">Every release lists its files' SHA-256 checksums. <a href="https://github.com/anaremore/chord-browser/blob/main/RELEASE_NOTES.md" rel="noopener">What's new</a> · <a href="https://github.com/anaremore/chord-browser/blob/main/ROADMAP.md" rel="noopener">What's next</a></p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p class="foot-brand">
+      <svg class="mark mark-small" viewBox="0 0 64 64" aria-hidden="true"><rect x="23" y="14" width="34" height="11" rx="5.5" fill="#a98bf5"/><rect x="15.5" y="24.5" width="36" height="11" rx="5.5" fill="#f07ab0"/><rect x="7" y="35" width="33" height="11" rx="5.5" fill="#ff8a5c"/></svg>
+      Chord, a calm, colorful browser.
+    </p>
+    <p>Open source under the <a href="https://github.com/anaremore/chord-browser/blob/main/LICENSE" rel="noopener">MIT license</a> · <a href="https://github.com/anaremore/chord-browser" rel="noopener">GitHub</a> · Set in <a href="https://fonts.google.com/specimen/Onest" rel="noopener">Onest</a></p>
+  </footer>
+</body>
+</html>

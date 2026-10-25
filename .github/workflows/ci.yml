@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # The website (site/) is built and deployed by Clank; nothing in CI tests it.
+    paths-ignore: ['site/**']
   pull_request:
+    paths-ignore: ['site/**']
   # Run the whole matrix on any branch by hand (gh workflow run ci.yml --ref <branch>).
   workflow_dispatch:
     inputs:
