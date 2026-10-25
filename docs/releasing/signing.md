@@ -149,7 +149,7 @@ Chord Player (ARCHITECTURE.md §9, `apps/player`) runs on castLabs ECS. The stre
 **Turns on with:** the secrets `EVS_ACCOUNT_NAME` and `EVS_PASSWD` (your castLabs EVS account, S14 §5). They're set (2026-10-25) as **repository** secrets.
 - `.github/workflows/player.yml` VMP-signs the Windows and macOS builds when they're there and signing is asked for:
   - always for a `player-v*` tag (`player-release.yml`), which fails without them;
-  - when CI is started by hand (`gh workflow run ci.yml --ref <branch>`);
+  - when CI is started by hand (`gh workflow run ci.yml --ref <branch>`), unless with `-f vmp=false`, for a run that doesn't change the player;
   - never on ordinary pushes and pull requests.
 - **Linux has no VMP.**
 

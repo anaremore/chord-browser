@@ -6,6 +6,11 @@ on:
   pull_request:
   # Run the whole matrix on any branch by hand (gh workflow run ci.yml --ref <branch>).
   workflow_dispatch:
+    inputs:
+      vmp:
+        description: VMP-sign Chord Player's Windows and macOS builds through castLabs EVS (-f vmp=false skips it, so an unchanged player isn't signed again)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -37,7 +42,7 @@ jobs:
     name: Chord Player
     uses: ./.github/workflows/player.yml
     with:
-      vmp: ${{ github.event_name == 'workflow_dispatch' }}
+      vmp: ${{ github.event_name == 'workflow_dispatch' && inputs.vmp }}
     secrets: inherit
 
   e2e:
