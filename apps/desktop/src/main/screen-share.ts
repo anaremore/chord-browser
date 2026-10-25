@@ -306,8 +306,9 @@ export class ScreenShareBroker {
     if (pending.frame.isDestroyed()) return;
     // The tab picked may have closed meanwhile.
     if (chosen.source.kind === 'tab' && chosen.source.contents.isDestroyed()) return pending.answer(null);
-    pending.answer(chosen.streams);
+    // Shared first: a tab that isn't on screen is attached (Browser parks it) and painting before its stream starts.
     this.started(pending.nodeId, pending.frame, pending.host, chosen.source);
+    pending.answer(chosen.streams);
   }
 
   /** What the page gets for the source picked: only what was offered to it. */

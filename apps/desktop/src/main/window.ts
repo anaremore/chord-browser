@@ -428,13 +428,19 @@ export class AppWindow {
     const root = this.window.contentView;
     for (const view of this.parked) if (!views.includes(view) && !this.panes.includes(view) && root.children.includes(view)) root.removeChildView(view);
     this.parked = views.filter((view) => !view.webContents.isDestroyed());
+    const added: WebContentsView[] = [];
     for (const view of this.parked) {
       if (this.panes.includes(view)) continue;
       // Just above the shell, where the pages go.
-      if (!root.children.includes(view)) root.addChildView(view, this.shellRaised ? 0 : 1);
+      if (!root.children.includes(view)) {
+        root.addChildView(view, this.shellRaised ? 0 : 1);
+        added.push(view);
+      }
       view.setVisible(true);
     }
     this.layout();
+    // A page that was never on a window (opened in the background) has nothing painted yet: it paints now.
+    for (const view of added) view.webContents.invalidate();
   }
 
   /* ---------- Peek (DESIGN.md §7.9, §8.5) ---------- */
