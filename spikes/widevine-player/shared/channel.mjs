@@ -40,7 +40,6 @@ const same = (a, b) => typeof a === 'string' && a.length === b.length && timingS
 /** One end of the channel. Emits 'open' once authenticated, 'close' when gone. */
 export class Peer extends EventEmitter {
   #socket;
-  #role;
   #secret;
   #state;
   #nonce = randomBytes(16).toString('hex');
@@ -53,7 +52,6 @@ export class Peer extends EventEmitter {
   constructor(socket, role, secret) {
     super();
     this.#socket = socket;
-    this.#role = role;
     this.#secret = secret;
     this.#state = role === 'host' ? 'await-hello' : 'await-challenge';
     socket.setEncoding('utf8');

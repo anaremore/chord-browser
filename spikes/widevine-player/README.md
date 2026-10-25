@@ -35,7 +35,7 @@ It opens windows and, on Windows, moves the mouse, so it never runs on a desktop
   node spikes/widevine-player/run-linux.mjs --steps census       # the host census (stock Electron)
   ```
   Downloads are cached in the Docker volume `chord-wv-spike-cache`. Remove it afterwards with `docker volume rm chord-wv-spike-cache`.
-- **Windows and macOS, on GitHub's runners**: push to `agent/widevine-spike`. `.github/workflows/widevine-spike.yml` runs the same steps and uploads `results` as artifacts.
+- **Windows and macOS, on GitHub's runners**: push to `agent/widevine-spike`. `.github/workflows/widevine-spike.yml` runs the same steps on Windows, macOS and Linux and uploads `results` as artifacts. Put `[windows only]` in the commit message to run only the Windows job.
 - **By hand**, on a machine nobody is using:
   ```sh
   node tools/fetch.mjs --dest <new empty folder>

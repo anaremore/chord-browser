@@ -10,7 +10,7 @@ export function hostRectReader(koffiPath, handle) {
   if (process.platform === 'darwin') {
     const cf = koffi.load('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation');
     const cg = koffi.load('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics');
-    const CGRect = koffi.struct('CGRect', { x: 'double', y: 'double', w: 'double', h: 'double' });
+    koffi.struct('CGRect', { x: 'double', y: 'double', w: 'double', h: 'double' }); // named, for the prototypes below
     const copyInfo = cg.func('void *CGWindowListCopyWindowInfo(uint32 option, uint32 window)');
     const rectFrom = cg.func('bool CGRectMakeWithDictionaryRepresentation(void *dict, _Out_ CGRect *rect)');
     const count = cf.func('long CFArrayGetCount(void *array)');
@@ -35,7 +35,7 @@ export function hostRectReader(koffiPath, handle) {
   }
   if (process.platform === 'win32') {
     const user32 = koffi.load('user32.dll');
-    const RECT = koffi.struct('FOLLOW_RECT', { left: 'int32', top: 'int32', right: 'int32', bottom: 'int32' });
+    koffi.struct('FOLLOW_RECT', { left: 'int32', top: 'int32', right: 'int32', bottom: 'int32' });
     const getRect = user32.func('bool __stdcall GetWindowRect(uintptr_t hWnd, _Out_ FOLLOW_RECT *rect)');
     return () => {
       const r = {};

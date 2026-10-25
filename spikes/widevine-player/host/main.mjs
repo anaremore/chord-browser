@@ -677,7 +677,7 @@ async function scenarioChild() {
     r.after.ancestorIsHost = w.f.GetAncestor(playerHandle, 2) === hostHandle;
     r.after.hostChildren = w.children(hostHandle).map((c) => `${c.class} pid=${c.pid === process.pid ? 'host' : c.pid === handles.pid ? 'player' : c.pid}`);
     r.after.altTab = w.inAltTab(playerHandle);
-    const [ax, ay, aw, ah] = area();
+    const [, , aw, ah] = area();
     const wr = w.rect(hostHandle);
     const cr = w.rect(playerHandle);
     const off = [cr.left - wr.left, cr.top - wr.top];

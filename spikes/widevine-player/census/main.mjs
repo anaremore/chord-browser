@@ -113,7 +113,7 @@ async function survey(service) {
   const result = { name: service.name, steps: [] };
   const step = async (label, run) => {
     reset(rec);
-    let note = null;
+    let note;
     try {
       note = await run();
     } catch (error) {

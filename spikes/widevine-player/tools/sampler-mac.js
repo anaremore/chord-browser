@@ -3,9 +3,12 @@
 // permission for bounds and order), and input through CGEventPost, which the
 // system drops unless the calling process has Accessibility access.
 //   osascript -l JavaScript tools/sampler-mac.js '<plan json>'
+/* global ObjC, $ */
 ObjC.import('CoreGraphics');
 ObjC.import('Foundation');
 
+// osascript calls run() itself.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function run(argv) {
   const plan = JSON.parse(argv[0]);
   const uptime = () => $.NSProcessInfo.processInfo.systemUptime * 1000;

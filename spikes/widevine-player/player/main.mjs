@@ -498,7 +498,9 @@ async function serve() {
   peer.handle('navtest', ({ action }) => js(`window.navtest[${JSON.stringify(action)}]()`, true));
   peer.handle('hang', ({ ms }) => {
     const end = Date.now() + ms;
-    while (Date.now() < end) {}
+    while (Date.now() < end) {
+      // busy on purpose: a stuck main thread
+    }
     return true;
   });
   peer.handle('metrics', ({ seconds }) => measure(seconds ?? 5));

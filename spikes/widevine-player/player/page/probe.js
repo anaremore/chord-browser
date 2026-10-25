@@ -1,5 +1,6 @@
 // What the player's main process asks of the page: EME support, Widevine
 // playback through Shaka Player, picture-in-picture and fullscreen.
+/* global window, document, location, shaka, MediaMetadata */
 const LICENCE = 'https://cwip-shaka-proxy.appspot.com/no_auth';
 const video = document.querySelector('video');
 const label = document.getElementById('label');
@@ -87,7 +88,7 @@ window.probe = {
     net.registerRequestFilter((type, request) => {
       if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) request.__t = performance.now();
     });
-    net.registerResponseFilter((type, response, ctx) => {
+    net.registerResponseFilter((type, response) => {
       if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) licence.push({ status: response.status ?? null, bytes: response.data?.byteLength ?? null, uri: response.uri?.replace(/\?.*/, '') });
     });
     const t0 = performance.now();
@@ -122,7 +123,9 @@ window.probe = {
     let keyStatuses = null;
     try {
       keyStatuses = player.getKeyStatuses();
-    } catch {}
+    } catch {
+      // older Shaka builds have no getKeyStatuses
+    }
     const stats = player.getStats();
     return {
       ok: firstFrameMs !== null && video.currentTime - start > seconds * 0.5,

@@ -21,7 +21,7 @@ export function win32(koffiPath) {
     hwndCaret: 'uintptr_t',
     rcCaret: RECT,
   });
-  const EnumProc = koffi.proto('bool __stdcall EnumProc(uintptr_t hwnd, intptr_t lParam)');
+  koffi.proto('bool __stdcall EnumProc(uintptr_t hwnd, intptr_t lParam)'); // named, for EnumWindows below
 
   const f = {
     GetWindowRect: user32.func('bool __stdcall GetWindowRect(uintptr_t hWnd, _Out_ RECT *rect)'),
