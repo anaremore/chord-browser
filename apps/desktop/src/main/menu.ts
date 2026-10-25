@@ -257,6 +257,8 @@ export interface TabMenuActions {
   /** You muted it (the speaker on its row says so too). */
   muted: boolean;
   toggleMute(): void;
+  /** The page gives itself a count (or its site's is hidden): show it on the tab or not. Null otherwise, and in private windows. */
+  count: { shown: boolean; toggle(): void } | null;
   close(): void;
   /** Null when the page can't be a favorite (not a web page, or already one). */
   addFavorite: (() => void) | null;
@@ -310,6 +312,8 @@ export function buildTabMenu(a: TabMenuActions): Menu {
     { label: 'Duplicate', click: a.duplicate },
     // Kept with the tab: a muted page stays silent after sleeping and restarts.
     { label: a.muted ? 'Unmute tab' : 'Mute tab', accelerator: acceleratorFor('tab.mute'), enabled: web, click: a.toggleMute },
+    // For a site whose count isn't wanted (an inbox's unread mail): kept for the site, listed in Settings → General.
+    ...(a.count ? [{ label: 'Show count on tab', type: 'checkbox' as const, checked: a.count.shown, click: a.count.toggle }] : []),
     { type: 'separator' },
     { label: a.pinned ? 'Close (stays pinned)' : 'Close tab', accelerator: acceleratorFor('tab.close'), click: a.close },
   ]);

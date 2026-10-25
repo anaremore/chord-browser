@@ -178,6 +178,7 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('split.focus'), windowId: id, direction: z.union([z.literal(1), z.literal(-1)]) }),
   // Undo for a page's "Block ads on this site".
   z.object({ t: z.literal('adBlocking.site'), site: z.string().min(1).max(300), off: z.boolean(), chordId: id.optional() }),
+  z.object({ t: z.literal('tabCounts.site'), site: z.string().min(1).max(300), off: z.boolean() }),
   // An import's toast: Undo. (Main also takes its history back; import.add is main's alone.)
   z.object({ t: z.literal('import.undo'), importId: id }),
   // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
@@ -207,6 +208,13 @@ export const SettingsPatch = z.strictObject({
   // Settings → Privacy's switch, with the notice beside it (main ignores it in Google-free mode).
   safeBrowsing: z.boolean().optional(),
   // Settings → Privacy → Block ads and trackers, and the sites it's off for (core normalizes them).
+  tabCounts: z
+    .strictObject({
+      enabled: z.boolean(),
+      offSites: z.array(z.string().max(300)).max(500),
+    })
+    .partial()
+    .optional(),
   adBlocking: z
     .strictObject({ enabled: z.boolean(), offSites: z.array(z.string().max(300)).max(1000) })
     .partial()

@@ -29,10 +29,14 @@
  */
 import {
   children,
+  countText,
+  countWithin,
   isInternalUrl,
   sortedFavorites,
   splitMembers,
+  sumCounts,
   tabForFavorite,
+  unreadWords,
   uuidv7,
   type ChordId,
   type Favorite,
@@ -41,6 +45,7 @@ import {
   type SidebarNode,
   type SplitNode,
   type State,
+  type TabCount,
   type TabNode,
 } from '@chord/core';
 import { CollisionPriority } from '@dnd-kit/abstract';
@@ -530,6 +535,37 @@ function awayFromHome(tab: TabNode): boolean {
 const indent = (depth: number) => ({ '--depth': Math.min(depth, MAX_VISUAL_DEPTH) }) as CSSProperties;
 
 /** A tab's icon (Chord's own pages wear Chord's glyphs, DESIGN.md §7.3: a box for the archive) and title. */
+/**
+ * The count a page gives itself (DESIGN.md §7.2, counts on tabs), after the
+ * row's title: a number in a small pill ("99+" past 99), or a dot when it has
+ * no number. Screen readers hear it in the row's name ("Telegram, 3 unread").
+ */
+function Count({ unread }: { unread: TabCount }) {
+  if (unread === null) return null;
+  return unread === 'dot' ? (
+    <span className={styles.countDot} data-count aria-hidden />
+  ) : (
+    <span className={styles.count} data-count aria-hidden>
+      {countText(unread)}
+    </span>
+  );
+}
+
+/** The count's words, for screen readers: the row's description ("3 unread"), as its other states are. */
+function UnreadWords({ id, unread }: { id: string; unread: TabCount }) {
+  return unread === null ? null : (
+    <span id={`count-${id}`} hidden>
+      {unreadWords(unread)}
+    </span>
+  );
+}
+
+/** A row's description: its state (sound, picture-in-picture, sharing), then its count. */
+const describedBy = (state: string | undefined, id: string, unread: TabCount) => [state, unread === null ? undefined : `count-${id}`].filter(Boolean).join(' ') || undefined;
+
+/** A tile's name with its count's words: "Telegram, 3 unread" (a row's are in its text). */
+const withCount = (name: string, unread: TabCount) => (unread === null ? name : `${name}, ${unreadWords(unread)}`);
+
 function TabFace({ tab, live, appearance }: { tab: TabNode; live: LiveTab | undefined; appearance: Appearance }) {
   return (
     <>
@@ -628,6 +664,8 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
   const sharing = Boolean(live?.sharing);
   // It's making sound (muted, it still is, silently): the slot shows a speaker, unless one of those is there.
   const audible = Boolean(live?.audible) && !sharing && !popped;
+  // The count its page gives itself (unread messages); a sleeping tab has none.
+  const unread = live?.badge ?? null;
   const dispatch = api.state.dispatch;
   const close = () => void dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
   const shownDepth = isDragging && projected ? projected.depth : depth;
@@ -637,7 +675,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
       {...treeItem({ depth, pos, size: count }, pageTitle(tab) || tab.url)}
       aria-selected={isActive}
       aria-current={isActive ? 'page' : undefined}
-      aria-describedby={sharing ? `sharing-${tab.id}` : popped ? `pip-${tab.id}` : audible ? `audio-${tab.id}` : undefined}
+      aria-describedby={describedBy(sharing ? `sharing-${tab.id}` : popped ? `pip-${tab.id}` : audible ? `audio-${tab.id}` : undefined, tab.id, unread)}
       className={styles.item}
       style={indent(shownDepth)}
       data-row="tab"
@@ -671,6 +709,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
         onClick={() => void dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
       >
         <TabFace tab={tab} live={live} appearance={appearance} />
+        <Count unread={unread} />
         {duetRead && <DuetIcon className={styles.duetRead} size={12} strokeWidth={2} role="img" aria-label="Duet read this tab" />}
       </div>
       {sharing ? (
@@ -709,6 +748,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
         </span>
       )}
       {audible && <Speaker tab={tab} ctx={ctx} />}
+      <UnreadWords id={tab.id} unread={unread} />
       {away ? (
         <button
           type="button"
@@ -740,13 +780,15 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
 
 interface FolderRowProps extends RowBase {
   folder: FolderNode;
+  /** Closed, the counts of the tabs inside it, added up. */
+  unread: TabCount;
   index: number;
   moving: boolean;
   projected: Drop | null;
   renaming: boolean;
 }
 
-const FolderRow = memo(function FolderRow({ folder, index, depth, pos, size: count, moving, projected, renaming, ctx }: FolderRowProps) {
+const FolderRow = memo(function FolderRow({ folder, unread, index, depth, pos, size: count, moving, projected, renaming, ctx }: FolderRowProps) {
   const { element, handle, isDragging, isDropTarget, binder } = useRowSortable({ id: folder.id, index, group: 'pinned', type: 'folder' }, true);
   const { setRenaming } = ctx;
   // A folder being dragged travels closed.
@@ -763,6 +805,7 @@ const FolderRow = memo(function FolderRow({ folder, index, depth, pos, size: cou
       ref={element}
       {...treeItem({ depth, pos, size: count }, folder.title)}
       aria-expanded={open}
+      aria-describedby={describedBy(undefined, folder.id, open ? null : unread)}
       className={styles.item}
       style={indent(shownDepth)}
       data-row="folder"
@@ -782,7 +825,9 @@ const FolderRow = memo(function FolderRow({ folder, index, depth, pos, size: cou
         <ChevronRight className={styles.chevron} data-open={open || undefined} size={12} strokeWidth={2} aria-hidden />
         <Glyph className={styles.rowGlyph} size={16} strokeWidth={1.75} aria-hidden />
         <span className={styles.ellipsis}>{folder.title}</span>
+        {!open && <Count unread={unread} />}
       </div>
+      <UnreadWords id={folder.id} unread={open ? null : unread} />
       {renaming && (
         // Over the title, where the name is typed.
         <input
@@ -814,6 +859,8 @@ const FolderRow = memo(function FolderRow({ folder, index, depth, pos, size: cou
 
 interface SplitRowProps extends RowBase {
   split: SplitNode;
+  /** Its tabs' counts, added up (closed; opened, each tab shows its own). */
+  unread: TabCount;
   /** As TabRowProps.shows. */
   shows: boolean;
   /** Its tabs, left to right. */
@@ -833,7 +880,7 @@ interface SplitRowProps extends RowBase {
  * titles joined ("Docs + Figma"). Clicking shows the split, focused where it
  * was last; the chevron (or →) opens it to list its tabs.
  */
-const SplitRow = memo(function SplitRow({ split, panes, index, shows, section, depth, pos, size: count, isActive, open, moving, projected, ctx }: SplitRowProps) {
+const SplitRow = memo(function SplitRow({ split, unread, panes, index, shows, section, depth, pos, size: count, isActive, open, moving, projected, ctx }: SplitRowProps) {
   const { element, handle, isDragging, isDropTarget, binder } = useRowSortable({ id: split.id, index, group: section, type: 'split' }, shows);
   const { windowId, appearance, spring, toggleSplit } = ctx;
   const shownDepth = isDragging && projected ? projected.depth : depth;
@@ -849,6 +896,7 @@ const SplitRow = memo(function SplitRow({ split, panes, index, shows, section, d
       aria-expanded={open}
       aria-selected={isActive}
       aria-current={isActive ? 'page' : undefined}
+      aria-describedby={describedBy(undefined, split.id, open ? null : unread)}
       className={styles.item}
       style={indent(shownDepth)}
       data-row="split"
@@ -865,7 +913,9 @@ const SplitRow = memo(function SplitRow({ split, panes, index, shows, section, d
       {isActive && <motion.span layoutId={`active-pill-${split.chordId}`} className={styles.activePill} transition={spring('snappy', 'tabMoves')} />}
       <div ref={handle} className={`${styles.row} ${isActive ? styles.active : ''}`} data-activate onClick={show}>
         <SplitFace panes={panes} appearance={appearance} />
+        {!open && <Count unread={unread} />}
       </div>
+      <UnreadWords id={split.id} unread={open ? null : unread} />
       <button
         type="button"
         tabIndex={-1}
@@ -899,13 +949,14 @@ const SplitMemberRow = memo(function SplitMemberRow({ tab, live, depth, pos, siz
   const { windowId, appearance } = ctx;
   const close = () => void api.state.dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
   const audible = Boolean(live?.audible);
+  const unread = live?.badge ?? null;
   return (
     <li
       ref={ref}
       {...treeItem({ depth, pos, size: count }, pageTitle(tab) || tab.url)}
       aria-selected={focused}
       aria-current={focused ? 'true' : undefined}
-      aria-describedby={audible ? `audio-${tab.id}` : undefined}
+      aria-describedby={describedBy(audible ? `audio-${tab.id}` : undefined, tab.id, unread)}
       className={styles.item}
       style={indent(depth)}
       data-row="tab"
@@ -929,8 +980,10 @@ const SplitMemberRow = memo(function SplitMemberRow({ tab, live, depth, pos, siz
         onClick={() => void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
       >
         <TabFace tab={tab} live={live} appearance={appearance} />
+        <Count unread={unread} />
       </div>
       {audible && <Speaker tab={tab} ctx={ctx} />}
+      <UnreadWords id={tab.id} unread={unread} />
       <button type="button" tabIndex={-1} aria-hidden className={styles.close} aria-label={`Close ${tab.title || 'tab'}`} title={ctx.closeTitle.today} onClick={close}>
         <X size={14} strokeWidth={2} />
       </button>
@@ -1005,6 +1058,7 @@ function FavoriteTile({
   index,
   active,
   sound,
+  unread,
   appearance,
   windowId,
 }: {
@@ -1012,6 +1066,8 @@ function FavoriteTile({
   index: number;
   active: boolean;
   sound: TileSound;
+  /** Its tab's count (unread messages), on the tile's top corner. */
+  unread: TabCount;
   appearance: Appearance;
   windowId: string;
 }) {
@@ -1025,7 +1081,7 @@ function FavoriteTile({
         ref={handleRef}
         type="button"
         className={styles.favorite}
-        aria-label={sound ? `${label}, ${sound === 'muted' ? 'muted' : 'playing sound'}` : label}
+        aria-label={withCount(sound ? `${label}, ${sound === 'muted' ? 'muted' : 'playing sound'}` : label, unread)}
         aria-current={active ? 'page' : undefined}
         title={label}
         onClick={() => void api.state.dispatch({ t: 'favorite.open', windowId, favoriteId: favorite.id })}
@@ -1035,6 +1091,11 @@ function FavoriteTile({
         }}
       >
         <Favicon url={favorite.url} title={favorite.title} favicon={favorite.favicon} appearance={appearance} />
+        {unread !== null && (
+          <span className={unread === 'dot' ? styles.favoriteCountDot : styles.favoriteCount} data-count aria-hidden>
+            {countText(unread)}
+          </span>
+        )}
         {/* Its tab makes sound: a small speaker on the tile's corner (its row, in the list, mutes it). */}
         {sound && (
           <span className={styles.favoriteSound} aria-hidden>
@@ -1073,6 +1134,7 @@ export function FavoritesRow({ state, windowId, activeId, appearance }: { state:
       {favorites.map((favorite, index) => {
         const tab = chordId ? tabForFavorite(state, chordId, favorite.url) : undefined;
         const sound: TileSound = tab && state.live[tab.id]?.audible ? (tab.muted ? 'muted' : 'playing') : null;
+        const unread = (tab && state.live[tab.id]?.badge) ?? null;
         return (
           <FavoriteTile
             key={favorite.id}
@@ -1080,6 +1142,7 @@ export function FavoritesRow({ state, windowId, activeId, appearance }: { state:
             index={index}
             active={Boolean(activeId && tab?.id === activeId)}
             sound={sound}
+            unread={unread}
             appearance={appearance}
             windowId={windowId}
           />
@@ -1520,13 +1583,14 @@ export function SidebarTabs({
       case 'tab':
         return <TabRow key={e.id} tab={node} live={state.live[e.id]} index={e.index} shows={shows} section={section} isActive={e.id === activeId} duetRead={readTabs.has(e.id)} {...drag} {...base} />;
       case 'folder':
-        return <FolderRow key={e.id} folder={node} index={e.index} renaming={renaming === e.id} {...drag} {...base} />;
+        return <FolderRow key={e.id} folder={node} unread={node.collapsed ? countWithin(state, e.id) : null} index={e.index} renaming={renaming === e.id} {...drag} {...base} />;
       case 'split': {
         const panes = splitMembers(state, e.id);
         return (
           <SplitRow
             key={e.id}
             split={node}
+            unread={sumCounts(panes.map((p) => state.live[p.id]?.badge))}
             panes={panes}
             index={e.index}
             shows={shows}

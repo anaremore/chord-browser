@@ -38,6 +38,7 @@ import { routeKey } from './links';
 import { cleanReaderSettings } from './reader';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
+import { cleanCountSites } from './tab-counts';
 import type { Platform } from './shortcuts';
 import { settleSplits, shownWith } from './split';
 
@@ -209,6 +210,11 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   if (adBlocking && typeof adBlocking === 'object') {
     if (typeof adBlocking['enabled'] === 'boolean') settings.adBlocking.enabled = adBlocking['enabled'];
     if (Array.isArray(adBlocking['offSites'])) settings.adBlocking.offSites = cleanOffSites(adBlocking['offSites']);
+  }
+  const tabCounts = saved['tabCounts'] as Record<string, unknown> | undefined;
+  if (tabCounts && typeof tabCounts === 'object') {
+    if (typeof tabCounts['enabled'] === 'boolean') settings.tabCounts.enabled = tabCounts['enabled'];
+    if (Array.isArray(tabCounts['offSites'])) settings.tabCounts.offSites = cleanCountSites(tabCounts['offSites']);
   }
   const motion = saved['motion'];
   if (motion && typeof motion === 'object') {

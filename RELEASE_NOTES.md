@@ -39,6 +39,7 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 - **Passkeys on a security key** sign in on every OS. When the key holds more than one for a site, Chord asks which.
 - **Search by image:** paste or drop an image into the command bar to search Google Lens or Bing by it (your engine's own; Google Lens, clearly named, when yours can't search by image; Bing in Google-free mode).
   - Or ask Duet about it, with your words as the question.
+- **Counts on tabs:** a site that counts your unread messages (Telegram, WhatsApp, Slack) shows the number on its tab, on its Favorites tile, on a closed folder, and as a dot on its chord. Chord's icon adds them all up. Such tabs stay awake so the count stays current. Hide a site's from its tab's right-click menu, or all of them in Settings → General.
 - **Duet makes images with Codex:** ask for one and Codex makes it with its own image tool, within your plan's limits. It shows in the chat with Copy and Save, and is deleted with the chat, Codex's own copy too. Claude can't make images; when you ask it, the reply offers **Make it with Codex**. Settings → Duet → *Codex can make images* turns it off.
 - **Duet names tabs by their titles,** not "t1"; a tab it mentions is a button that takes you there.
 - **Duet sees images:** a screenshot's toast, and your recent screenshots, have Ask Duet, which puts the picture in Duet's chat. Up to four go with a message, kept with the chat and deleted with it.
