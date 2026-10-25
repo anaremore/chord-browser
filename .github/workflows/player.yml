@@ -1,0 +1,188 @@
+name: Chord Player
+
+# Chord Player (ARCHITECTURE.md §9, §15.1): packaged on castLabs ECS for each OS on its own runner
+# (apps/player/scripts/package.mjs), castLabs-VMP-signed through EVS when asked and the
+# EVS_ACCOUNT_NAME and EVS_PASSWD secrets exist, smoke-tested (it plays a Widevine test stream,
+# apps/player/scripts/smoke.mjs), and uploaded as artifacts. It never publishes anything:
+# player-release.yml drafts releases from `player-v*` tags.
+#
+# Called from ci.yml on every run (VMP signing only when CI is started by hand), from
+# player-release.yml for a tag (always VMP-signed), or by hand.
+#
+# Linux arm64 isn't built: no Widevine CDM there that spike S14 could test. Linux has no VMP.
+on:
+  workflow_call:
+    inputs:
+      vmp:
+        description: VMP-sign the Windows and macOS builds through castLabs EVS
+        type: boolean
+        default: false
+      release:
+        description: A release build, which must be VMP-signed
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      vmp:
+        description: VMP-sign the Windows and macOS builds through castLabs EVS (needs the EVS secrets)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Player · ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x64, os: windows-latest, target: win32-x64 }
+          - { name: macOS arm64, os: macos-26, target: darwin-arm64 }
+          - { name: macOS x64, os: macos-15-intel, target: darwin-x64 }
+          - { name: Linux x64, os: ubuntu-24.04, target: linux-x64 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # ECS's zip, as checked against apps/player/ecs.json (scripts/fetch-ecs.mjs checks it again from the cache).
+      - name: Cache castLabs ECS
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/chord-ecs
+          key: ecs-${{ matrix.target }}-${{ hashFiles('apps/player/ecs.json') }}
+
+      # Only whether the EVS secrets are set reaches this step, never their values.
+      - name: Choose how to VMP-sign
+        id: vmp
+        shell: bash
+        env:
+          WANT: ${{ inputs.vmp == true && matrix.target != 'linux-x64' }}
+          RELEASE: ${{ inputs.release == true }}
+          HAS_EVS: ${{ secrets.EVS_ACCOUNT_NAME != '' && secrets.EVS_PASSWD != '' }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [ "$TARGET" = "linux-x64" ]; then
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+            echo "Linux has no VMP: castLabs' Widevine CDM there doesn't check it."
+          elif [ "$WANT" = "true" ] && [ "$HAS_EVS" = "true" ]; then
+            echo "mode=production" >> "$GITHUB_OUTPUT"
+            echo "CHORD_PLAYER_VMP=production" >> "$GITHUB_ENV"
+          elif [ "$RELEASE" = "true" ]; then
+            echo "::error::A Chord Player release must be VMP-signed: the EVS_ACCOUNT_NAME and EVS_PASSWD secrets aren't set (docs/releasing/signing.md, Chord Player)."
+            exit 1
+          else
+            echo "mode=development" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not VMP-signed through EVS: this build keeps ECS's development signature, which only Widevine's test servers accept."
+          fi
+
+      - name: Python for castLabs EVS
+        if: steps.vmp.outputs.mode == 'production'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      # castlabs-evs pinned by its wheel's hash, in a venv of its own, run isolated (-I). Its token
+      # and signature caches live in the runner's temp folder, never in the workspace or an artifact.
+      - name: Install castLabs EVS
+        if: steps.vmp.outputs.mode == 'production'
+        shell: bash
+        run: |
+          python -I -m venv "$RUNNER_TEMP/evs-venv"
+          py="$RUNNER_TEMP/evs-venv/bin/python"
+          [ -x "$py" ] || py="$RUNNER_TEMP/evs-venv/Scripts/python.exe"
+          "$py" -I -m pip install --disable-pip-version-check --no-input --no-deps --require-hashes -r apps/player/build/evs-requirements.txt
+          "$py" -I -m pip install --disable-pip-version-check --no-input -r apps/player/build/evs-dependencies.txt
+          mkdir -p "$RUNNER_TEMP/evs"
+          chmod 700 "$RUNNER_TEMP/evs"
+          {
+            echo "CHORD_EVS_PYTHON=$py"
+            echo "EVS_CONFIG_FILE=$RUNNER_TEMP/evs/config.json"
+            echo "EVS_CACHE_FILE=$RUNNER_TEMP/evs/cache.json"
+            echo "EVS_NO_ASK=1"
+          } >> "$GITHUB_ENV"
+
+      # The only step that sees the account's name and password. Once, without retrying: an expired or
+      # wrong login fails here, and castLabs asks accounts not to repeat requests needlessly.
+      - name: Sign in to castLabs EVS
+        if: steps.vmp.outputs.mode == 'production'
+        shell: bash
+        env:
+          EVS_ACCOUNT_NAME: ${{ secrets.EVS_ACCOUNT_NAME }}
+          EVS_PASSWD: ${{ secrets.EVS_PASSWD }}
+        run: '"$CHORD_EVS_PYTHON" -I -m castlabs_evs.account --no-ask reauth'
+
+      # VMP signing happens in here, in castLabs' order: macOS before code signing (afterPack), Windows after it.
+      - name: Package
+        shell: bash
+        run: node apps/player/scripts/package.mjs --out "$GITHUB_WORKSPACE/apps/player/release"
+
+      - name: Forget the EVS tokens
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/evs"
+
+      - name: Check the signature (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          check="$RUNNER_TEMP/codesign-check"
+          rm -rf "$check" && mkdir -p "$check"
+          node -e "import('./packages/player-protocol/src/zip.ts').then(z => z.extractZip(process.argv[1], process.argv[2], { maxBytes: 2 ** 31 }))" apps/player/release/chord-player-*-${{ matrix.target }}.zip "$check/app"
+          codesign --verify --deep --strict --verbose=2 "$check/app/Chord Player.app"
+          codesign --display --verbose=2 "$check/app/Chord Player.app" 2>&1 | grep -E '^(Identifier|Format|Signature|TeamIdentifier)='
+          rm -rf "$check"
+
+      - name: Linux display and sandbox
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          if ! command -v Xvfb > /dev/null; then
+            sudo -E apt-get -o DPkg::Lock::Timeout=300 update
+            sudo -E apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends xvfb
+          fi
+          # The player is a per-user install with no AppArmor profile: allow the user namespaces its sandbox
+          # uses, as a user would have to on Ubuntu 23.10 and later (Chord doesn't offer it there otherwise).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo sysctl -w kernel.core_pattern=core
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          mkdir -p apps/player/release/smoke
+          zip="$(ls apps/player/release/chord-player-*-${{ matrix.target }}.zip)"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            ulimit -c 0
+            xvfb-run -a node apps/player/scripts/smoke.mjs --zip "$zip" --out apps/player/release/smoke
+          else
+            node apps/player/scripts/smoke.mjs --zip "$zip" --out apps/player/release/smoke
+          fi
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v7
+        with:
+          name: chord-player-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            apps/player/release/chord-player-*.zip
+            apps/player/release/chord-player-*.json
+
+      - name: Upload the smoke test's capture
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: player-smoke-${{ matrix.target }}
+          path: apps/player/release/smoke/
+          if-no-files-found: ignore

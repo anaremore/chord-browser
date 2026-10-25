@@ -219,6 +219,8 @@ export interface LiveTab {
   readable: boolean;
   /** The tab shows its article in reader view, over its page. */
   reader: boolean;
+  /** Its service plays in Chord Player instead (ARCHITECTURE.md §9): the frame says so, with a way back. */
+  player: boolean;
   /**
    * The count the page gave itself (the Badging API, as an app's icon shows unread messages):
    * a number, 'dot' for one without a number, or null. Null when counts are hidden for its site.
@@ -619,7 +621,7 @@ export const emptyState = (): State => ({
   sharedWindows: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, badge: null };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

@@ -213,6 +213,11 @@ export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
               control={null}
             />
             <Row label="Safe Browsing" description="Off: its lists come from Google. Chord doesn’t download them in this mode." control={null} />
+            <Row
+              label="Chord Player"
+              description="Not offered, and closed if it’s open: Widevine, which it plays Netflix and the like with, comes from Google. The notice on those sites offers other browsers instead."
+              control={null}
+            />
             <Row label="Chord updates" description="Still checked once a day, with GitHub, not Google." control={null} />
           </div>
         </>

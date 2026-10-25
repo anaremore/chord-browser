@@ -475,10 +475,14 @@ export interface NowPlaying {
   video: boolean;
   /** Its video is in picture-in-picture now, put there by Chord or by the site itself. */
   pip: boolean;
+  /** It plays in Chord Player, for this tab (ARCHITECTURE.md §9): the card goes back to the player, not the tab, and mutes the player. */
+  player?: boolean;
+  /** The player's own mute (a tab's is `TabNode.muted`). */
+  muted?: boolean;
 }
 
-/** What the Now playing card's buttons ask main to do (mute and Go to tab are commands). */
-export const MediaAction = z.enum(['play', 'pause', 'pictureInPicture']);
+/** What the Now playing card's buttons ask main to do (a tab's mute and Go to tab are commands; Chord Player's mute is `mute`/`unmute`). */
+export const MediaAction = z.enum(['play', 'pause', 'pictureInPicture', 'mute', 'unmute']);
 export type MediaAction = z.infer<typeof MediaAction>;
 
 /** Everything the popover shows: cards stack top-right over the page. */
@@ -545,10 +549,40 @@ export interface PopoverState {
 export const OTHER_BROWSERS = ['chrome', 'edge', 'firefox', 'safari', 'brave'] as const;
 export type OtherBrowserId = (typeof OTHER_BROWSERS)[number];
 
-/** The DRM notice: the service, and up to two other browsers on this computer to open its page in. */
+/** The DRM notice: the service, Chord Player when it's offered, and up to two other browsers on this computer to open its page in. */
 export interface DrmNotice {
   service: string;
   browsers: { id: OtherBrowserId; name: string }[];
+  /** Chord Player (ARCHITECTURE.md §9): null in Google-free mode, private windows, and where it can't run or no signed release is found. */
+  player: PlayerOffer | null;
+  /** Linux: some services refuse it or play it at lower quality (S14 §1). */
+  linux: boolean;
+}
+
+/**
+ * What the DRM notice offers of Chord Player (DESIGN.md §7.1, the notice's states): installing it
+ * (its download's size; `update` when the installed one is too old for this Chord), its progress,
+ * opening the page in it, or why installing failed (with Try again).
+ */
+export type PlayerOffer =
+  | { state: 'install'; size: number; update: boolean }
+  | { state: 'installing'; phase: 'downloading' | 'checking' | 'unpacking'; percent: number }
+  | { state: 'ready' }
+  | { state: 'opening' }
+  | { state: 'failed'; why: PlayerFailure };
+
+/** Why installing or starting Chord Player failed. */
+export type PlayerFailure = 'download' | 'verify' | 'unpack' | 'start' | 'widevine';
+
+/** Chord Player for Settings (General → Chord Player). */
+export interface PlayerStatus {
+  /** This computer can have it: a supported OS and architecture, not a Flatpak, and a build that can check its signature. */
+  available: boolean;
+  googleFree: boolean;
+  installed: { version: string; ecs: string; vmp: 'production' | 'development' | 'none' } | null;
+  /** A newer version downloaded, waiting to start the next time the player opens. */
+  pending: string | null;
+  running: boolean;
 }
 
 /**
@@ -1150,6 +1184,13 @@ export const invokeChannels = {
   /** The DRM notice's buttons: the window's page in another browser the notice offered, or not now (until Chord quits). */
   'drm:open': { roles: ['popover'], request: z.strictObject({ browser: z.enum(OTHER_BROWSERS) }), response: z.void() },
   'drm:dismiss': { roles: ['popover'], request: z.void(), response: z.void() },
+  /** The notice's Chord Player button, for the page the sender's window shows: install it (then open the page), open the page in it, or try again. */
+  'drm:player': { roles: ['popover'], request: z.strictObject({ action: z.enum(['install', 'open', 'retry']) }), response: z.void() },
+  /** A tab that plays in Chord Player: back to the player, or show the page here instead. */
+  'player:do': { roles: ['shell'], request: z.strictObject({ nodeId: id, action: z.enum(['show', 'release']) }), response: z.void() },
+  /** Settings → General → Chord Player: its state, and removing it (with its sign-ins). */
+  'settings:player': { roles: ['internal'], request: z.void(), response: z.custom<PlayerStatus>() },
+  'settings:removePlayer': { roles: ['internal'], request: z.void(), response: z.custom<PlayerStatus>() },
   /** A passkey chosen (one the prompt offered), or null to decline: the site then gets NotAllowedError, as after Cancel in Chrome. */
   'passkey:respond': { roles: ['popover'], request: z.strictObject({ id: z.number().int().min(1), credentialId: z.string().max(1024).nullable() }), response: z.void() },
   // A tab's reader view (chord://reader): its own tab's article, how it looks, its controls, and closing it.
@@ -1313,6 +1354,8 @@ export interface ShellApi {
   duet: { view(): Promise<DuetView>; act(action: DuetAction): Promise<void>; onState(listener: (view: DuetView) => void): () => void };
   /** Stop a tab's share (its sidebar row shows it's sharing), or the shares of a tab that's being shared. */
   share: { stop(nodeId: string): Promise<void> };
+  /** A tab that plays in Chord Player: back to the player, or show its page here instead. */
+  player: { act(nodeId: string, action: 'show' | 'release'): Promise<void> };
   /** The Now playing card: the window's media as main pushes it, and the card's own buttons. */
   media: {
     view(): Promise<NowPlaying[]>;
@@ -1404,6 +1447,9 @@ export interface SettingsApi {
     safeBrowsing(): Promise<SafeBrowsingStatus>;
     /** Settings → Privacy → Block ads and trackers: the lists on this computer. */
     adBlocking(): Promise<AdBlockingStatus>;
+    /** Settings → General → Chord Player. */
+    player(): Promise<PlayerStatus>;
+    removePlayer(): Promise<PlayerStatus>;
   };
   extensions: {
     install(input: string): Promise<InstallResult>;
@@ -1499,8 +1545,8 @@ export interface PopoverApi {
   passkey: { respond(id: number, credentialId: string | null): Promise<void> };
   /** The one-time offer: turn Safe Browsing on, or not now (either way it isn't offered again). */
   safeBrowsing: { choose(on: boolean): Promise<void> };
-  /** The DRM notice: open the page in another browser, or not now. */
-  drm: { open(browser: OtherBrowserId): Promise<void>; dismiss(): Promise<void> };
+  /** The DRM notice: open the page in another browser or Chord Player (installing it first), or not now. */
+  drm: { open(browser: OtherBrowserId): Promise<void>; dismiss(): Promise<void>; player(action: 'install' | 'open' | 'retry'): Promise<void> };
 }
 
 /** `window.chord` in the command bar overlay. */

@@ -1,0 +1,13 @@
+{
+  "name": "@chord/player-protocol",
+  "private": true,
+  "version": "0.0.0",
+  "description": "What Chord and Chord Player share: the services and their navigation lock, the control channel, release manifests and the zip format",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

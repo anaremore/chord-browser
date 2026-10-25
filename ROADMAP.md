@@ -327,6 +327,25 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   - what signing in feels like without Chord's extensions;
   - Google-free mode (its CDM comes from Google).
   - **Next: build it** (P2, started 2026-10-25). The maintainer's castLabs EVS account exists (2026-10-25). Production signing in CI needs two repository secrets the maintainer adds, `EVS_ACCOUNT_NAME` and `EVS_PASSWD`; code signing on Windows and macOS stays on the maintainer's track.
+  - **Built 2026-10-25: Chord Player** (ARCHITECTURE.md §9 and D4, DESIGN.md §7.14). What it does:
+    - It's `apps/player`, on castLabs ECS 44.9.3+wvcus, in a window of its own with a bar in the chord's colors. On Windows the window joins Chord's taskbar button.
+    - The DRM notice offers it first: *Install Chord Player (about N MB)*, its progress, then *Open in Chord Player*.
+    - Chord installs it per user from `player-v*` releases whose manifests Chord's update key signs, checks the zip's SHA-512, and unpacks it in a worker. Updates install beside the running version, and the previous one stays until the new one starts.
+    - It opens only the services and the hosts S14's census found; every other link opens in Chord, over a versioned local channel. The tab stays in Chord as *Playing in Chord Player*, and the player is on the Now playing card with *Back to the player*.
+    - It's hidden in Google-free mode and private windows.
+
+    How it's built and tested:
+    - `.github/workflows/player.yml` packages it for Windows x64, macOS x64 and arm64, and Linux x64 (no Linux arm64: no CDM S14 could test). It VMP-signs through EVS when the secrets exist, and smoke-tests each build by playing a Widevine test stream.
+    - `player-release.yml` drafts releases from `player-v*` tags. `ecs-bump.yml` opens a pull request for each newer stable `+wvcus` build, and never merges it.
+    - E2E: `player.spec.ts` drives the real player from Chord, in the Linux container and CI. Hand checks per service and OS, once production VMP is on: docs/testing/widevine-player.md.
+
+    **Left:**
+    - the maintainer's code-signing certificates (Windows, macOS);
+    - moving the EVS secrets into the `release` environment;
+    - Chord's update key, without which no build offers the player;
+    - the hand checks;
+    - Chord's shortcuts forwarded from the player;
+    - an icon of its own.
 - **P1 Now playing, second round.** **Built 2026-10-24** (DESIGN.md §7.10, ARCHITECTURE.md §9): the card offers media you left playing or played from it, not a background tab's own autoplay or what you paused before leaving; several at once stack (the newest in full, up to two more as one-line rows, then "and N more"), in an order that doesn't jump when one plays again. Play and Pause read and press the site's own button where its element isn't enough (Twitch, whose player pauses its element again; SoundCloud, whose player isn't in the page; Bandcamp); YouTube and YouTube Music follow their element. Hand checks: docs/testing/media-sites.md. Then (asked the same day): each video row has picture-in-picture, so you choose which video is out; another swaps them.
 - **P2 Pop out every video** (asked 2026-10-24). Chromium has one picture-in-picture window, so "pop them all out" needs Chord's own floating players.
   - **Design:** an always-on-top frameless window per video, holding the tab's own page. Its video fills the window through in-window fullscreen, so the site's own controls work. The windows stack in a corner, and each can be moved.

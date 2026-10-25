@@ -46,14 +46,18 @@ import {
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
 import type { ArchiveSnapshot, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot } from '@chord/ipc';
-import { size } from '@chord/tokens';
+import { THEME_VARS, type Theme } from '@chord/player-protocol';
+import { createChordTheme, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, webContents, type Session, type WebContents, type WebContentsView } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
-import { DrmNotices, findBrowsers, launchEnv } from './drm';
+import { DrmNotices, drmServiceFor, findBrowsers, launchEnv } from './drm';
+import { CHECK_WAIT_MS } from './player/install-state';
+import type { PlayerInstaller } from './player/installer';
+import { ChordPlayer, type ChordPlayerDeps } from './player/service';
 import { imageSearchRequest, type SearchImage } from './image-search';
 import { Extensions } from './extensions';
 import type { WebStore } from './extensions/webstore';
@@ -139,6 +143,13 @@ export interface BrowserOptions {
     profileOf(contents: WebContents): string | undefined;
     settled(): Promise<void>;
   };
+  /** Chord Player (ARCHITECTURE.md §9): its installer, how to start it, and what to do once it's gone. */
+  player: {
+    installer: PlayerInstaller;
+    host: ChordPlayerDeps['host'];
+    /** The player quit: with no windows left (Windows, Linux), Chord quits too. */
+    closed(): void;
+  };
   /** Chrome extensions (ARCHITECTURE.md §12). */
   extensions: {
     /** Where Web Store extensions are unpacked. */
@@ -177,6 +188,10 @@ export class Browser {
   /** Tabs playing media, for the Now playing cards (DESIGN.md §7.10), and what each window's card was last sent. */
   readonly media: MediaWatcher;
   private readonly drm: DrmNotices;
+  /** Chord Player: the DRM notice's first offer, the tab it plays for, its card entry (ARCHITECTURE.md §9). */
+  readonly player: ChordPlayer;
+  /** A popover refresh for when a young Chord Player check stops holding the DRM notice back. */
+  private playerWait: ReturnType<typeof setTimeout> | null = null;
   private readonly mediaSent = new Map<WindowId, string>();
   /** The sign-in box each window last gave the keyboard to, so a box takes it once. */
   private readonly authFocused = new Map<WindowId, string>();
@@ -299,7 +314,11 @@ export class Browser {
           // Scrolling, typing or a click changes what the saved history should bring back (scroll, form fields).
           if (input.type === 'mouseWheel' || input.type === 'keyDown' || input.type === 'mouseUp') this.histories.touch(nodeId);
         });
-        contents.on('did-navigate', () => this.histories.touch(nodeId, true));
+        contents.on('did-navigate', (_event, url) => {
+          this.histories.touch(nodeId, true);
+          // The tab left its service: it shows its own page again (the player plays on, still on the card).
+          if (nodeId === this.player.nodeId && !drmServiceFor(url)) this.player.release(nodeId);
+        });
         contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
           if (isMainFrame) this.histories.touch(nodeId, true);
         });
@@ -369,6 +388,20 @@ export class Browser {
       changed: () => this.syncMedia(),
     });
     this.drm = new DrmNotices({ browsers: () => findBrowsers(launchEnv(process.env, homedir())), changed: () => this.syncPopovers() });
+    this.player = new ChordPlayer({
+      installer: options.player.installer,
+      host: options.player.host,
+      // Widevine's CDM comes from Google's component updater: never in Google-free mode.
+      enabled: () => !this.store.state.settings.googleFree,
+      tabExists: (nodeId) => this.store.state.nodes[nodeId]?.kind === 'tab',
+      setTabInPlayer: (nodeId, inPlayer) => this.store.dispatch({ t: 'tab.live', nodeId, live: { player: inPlayer } }),
+      openLink: (url, nodeId) => this.openPlayerLink(url, nodeId),
+      back: (nodeId) => this.backFromPlayer(nodeId),
+      theme: (nodeId) => this.playerTheme(nodeId),
+      changed: () => this.syncPopovers(),
+      mediaChanged: () => this.syncMedia(),
+      closed: () => options.player.closed(),
+    });
     const sessionForChord = (chordId: string) => options.profileSession(this.store.state.chords[chordId]?.profileId ?? DEFAULT_PROFILE);
     this.peeks = new Peeks({
       state: () => this.store.state,
@@ -398,7 +431,10 @@ export class Browser {
       },
     });
     // Reader views follow the computer's appearance, accent and reduced motion, as Chord's other views do.
-    nativeTheme.on('updated', () => this.syncReaders(true));
+    nativeTheme.on('updated', () => {
+      this.syncReaders(true);
+      this.player.themeChanged();
+    });
     this.minis = new MiniWindows({
       state: () => this.store.state,
       tabs: this.tabs,
@@ -549,6 +585,9 @@ export class Browser {
       this.syncPopovers();
       // A playing tab moved, closed or changed chords: the cards that may show it change.
       if (change.patches.some((p) => p.path[0] === 'nodes' || p.path[0] === 'chords' || p.path[0] === 'windows')) this.syncMedia();
+      // Chord Player: the tab it plays for closed, or its chord's colors changed.
+      if (this.player.nodeId && !change.state.nodes[this.player.nodeId]) this.player.tabClosed(this.player.nodeId);
+      if (change.patches.some((p) => p.path[0] === 'chords' || (p.path[0] === 'nodes' && p.path[1] === this.player.nodeId) || (p.path[0] === 'settings' && p.path[1] === 'interface'))) this.player.themeChanged();
       this.extensions.sync();
       if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
       // Pictures of tabs that were closed, archived or unpinned go; turning previews off takes them all.
@@ -1103,8 +1142,26 @@ export class Browser {
       passkey: this.options.passkeys.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
-      drm: state.settings.onboarded || w.isPrivate ? this.drm.noticeFor(this.activeUrl(w.id)) : null,
+      // A tab whose service plays in Chord Player says so in its frame instead.
+      drm: state.settings.onboarded || w.isPrivate ? (this.tabInPlayer(w) ? null : this.drm.noticeFor(this.activeUrl(w.id), w.isPrivate ? null : this.playerOffer())) : null,
     };
+  }
+
+  private tabInPlayer(w: AppWindow): boolean {
+    const nodeId = activeTabId(this.store.state, w.id);
+    return Boolean(nodeId && this.store.state.live[nodeId]?.player);
+  }
+
+  /** What the notice offers of Chord Player; while Chord finds out, the card waits a moment, then shows without it. */
+  private playerOffer(): ReturnType<ChordPlayer['offer']> {
+    const offer = this.player.offer();
+    if (offer === 'pending' && !this.playerWait) {
+      this.playerWait = setTimeout(() => {
+        this.playerWait = null;
+        this.syncPopovers();
+      }, CHECK_WAIT_MS + 100);
+    }
+    return offer;
   }
 
   /**
@@ -1131,22 +1188,96 @@ export class Browser {
     return nodeId ? (this.tabs.ensure(nodeId)?.webContents ?? null) : null;
   }
 
-  /** The DRM notice's buttons, for the page the window shows. */
-  drmAction(sender: WebContents, action: { open: OtherBrowserId } | 'dismiss'): void {
+  /** The DRM notice's buttons, for the page the window shows: another browser, Chord Player (installing it first), or Not now. */
+  drmAction(sender: WebContents, action: { open: OtherBrowserId } | { player: 'install' | 'open' | 'retry' } | 'dismiss'): void {
     const w = this.windowFor(sender);
     if (!w) return;
-    if (action === 'dismiss') this.drm.dismiss(this.activeUrl(w.id));
-    else this.drm.open(this.activeUrl(w.id), action.open);
+    const url = this.activeUrl(w.id);
+    if (action === 'dismiss') this.drm.dismiss(url);
+    else if ('open' in action) this.drm.open(url, action.open);
+    else {
+      // Never from a private window or in Google-free mode, and only for a service's page.
+      const nodeId = activeTabId(this.store.state, w.id);
+      if (w.isPrivate || this.store.state.settings.googleFree || !nodeId || !drmServiceFor(url)) return;
+      void this.player.openFor(nodeId, url);
+    }
+  }
+
+  /** Chord Player's install state changed: the DRM notices show it. */
+  playerChanged(): void {
+    this.syncPopovers();
+  }
+
+  /** A link Chord Player handed back: a new tab beside the tab it plays for, in that window, which comes forward. */
+  private openPlayerLink(url: string, nodeId: NodeId | null): void {
+    const showing = nodeId ? this.windows.get(this.windowShowing(nodeId) ?? '') : undefined;
+    const w = showing && !showing.isPrivate ? showing : this.normalWindowForLinks();
+    if (!w) return;
+    this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+    if (w.window.isMinimized()) w.window.restore();
+    w.window.focus();
+  }
+
+  /** The player's Back to Chord: the tab it plays for comes forward in its window (a window comes back if none is open). */
+  private backFromPlayer(nodeId: NodeId | null): void {
+    if (this.windows.size === 0) this.start();
+    const showing = nodeId ? this.windows.get(this.windowShowing(nodeId) ?? '') : undefined;
+    const w = showing ?? this.lastNormalWindow();
+    if (!w) return;
+    if (nodeId && this.store.state.nodes[nodeId]) this.store.dispatch({ t: 'tab.activate', windowId: w.id, nodeId });
+    if (w.window.isMinimized()) w.window.restore();
+    // macOS doesn't let a background app take activation unless asked; this came from your click in the player.
+    if (process.platform === 'darwin') app.focus({ steal: true });
+    w.window.focus();
+  }
+
+  /** The chord's colors for the player's bar: the tab's chord, as a solid window draws it (DESIGN.md §5). */
+  private playerTheme(nodeId: NodeId): Theme | null {
+    const state = this.store.state;
+    const node = state.nodes[nodeId];
+    const chord = node ? state.chords[node.chordId] : undefined;
+    if (!chord) return null;
+    const info = systemInfo();
+    const accent = info.accentColor ? hexToRgb(info.accentColor) : null;
+    const theme = createChordTheme(chord.theme, {
+      systemAppearance: info.appearance,
+      material: 'solid',
+      contrast: state.settings.interface.contrast,
+      glass: state.settings.interface.glass,
+      focus: accent ? rgbToOklch(accent) : null,
+    });
+    const vars: Theme['vars'] = {};
+    for (const name of THEME_VARS) if (theme.vars[name]) vars[name] = theme.vars[name];
+    return { appearance: theme.appearance, vars };
+  }
+
+  /** A tab that plays in Chord Player: back to the player, or its page here instead. Only a tab the window's card or frame shows. */
+  async playerAction(w: AppWindow, nodeId: NodeId, action: 'show' | 'release'): Promise<void> {
+    if (nodeId !== this.player.nodeId || mediaVisibleTo(this.store.state, w.id, [{ nodeId }]).length === 0) return;
+    if (action === 'show') await this.player.focus();
+    else this.player.release(nodeId);
+  }
+
+  /** Everything that plays in a window's chords: Chord Player (for its tab) and the tabs themselves, newest first. */
+  private allMedia(): NowPlaying[] {
+    const player = this.player.nowPlaying();
+    const tabs = this.media.list();
+    return player ? [player, ...tabs.filter((m) => m.nodeId !== player.nodeId)] : tabs;
   }
 
   /** What a window's Now playing card may offer: tabs in its chords playing media, newest first. */
   nowPlaying(windowId: WindowId): NowPlaying[] {
-    return mediaVisibleTo(this.store.state, windowId, this.media.list());
+    return mediaVisibleTo(this.store.state, windowId, this.allMedia());
   }
 
-  /** The card's Play, Pause and picture-in-picture, for a tab the window's card offers. */
+  /** The card's Play, Pause and picture-in-picture, for a tab the window's card offers; and Mute for Chord Player. */
   async mediaAction(w: AppWindow, nodeId: NodeId, action: MediaAction): Promise<void> {
-    if (!this.media.has(nodeId) || mediaVisibleTo(this.store.state, w.id, [{ nodeId }]).length === 0) return;
+    if (mediaVisibleTo(this.store.state, w.id, [{ nodeId }]).length === 0) return;
+    if (nodeId === this.player.nodeId && this.player.nowPlaying()) {
+      if (action !== 'pictureInPicture') await this.player.act(action);
+      return;
+    }
+    if (!this.media.has(nodeId) || action === 'mute' || action === 'unmute') return;
     if (action === 'pictureInPicture') await this.autoPip.toggle(nodeId);
     else await this.media.act(nodeId, action);
   }
@@ -1156,10 +1287,10 @@ export class Browser {
    * the watcher's version and which tabs, so artwork isn't compared byte by byte.
    */
   private syncMedia(): void {
-    const playing = this.media.list();
+    const playing = this.allMedia();
     for (const w of this.windows.values()) {
       const shown = mediaVisibleTo(this.store.state, w.id, playing);
-      const key = `${this.media.version}:${shown.map((p) => p.nodeId).join(',')}`;
+      const key = `${this.media.version}:${this.player.version}:${shown.map((p) => p.nodeId).join(',')}`;
       if (this.mediaSent.get(w.id) === key) continue;
       this.mediaSent.set(w.id, key);
       send(w.shell.webContents, 'media:state', shown);
@@ -1192,7 +1323,7 @@ export class Browser {
     for (const nodeId of shownTabs(state, w.id)) {
       const live = state.live[nodeId];
       const contents = this.tabs.get(nodeId)?.webContents;
-      if (contents && (onboarding || live?.error || live?.crashed || live?.threat)) hidden.add(contents);
+      if (contents && (onboarding || live?.error || live?.crashed || live?.threat || live?.player)) hidden.add(contents);
     }
     w.setHiddenPanes(hidden);
     const popover = this.popoverState(w);

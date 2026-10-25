@@ -6,6 +6,11 @@ on:
   pull_request:
   # Run the whole matrix on any branch by hand (gh workflow run ci.yml --ref <branch>).
   workflow_dispatch:
+    inputs:
+      vmp:
+        description: VMP-sign Chord Player's Windows and macOS builds through castLabs EVS (-f vmp=false skips it, so an unchanged player isn't signed again)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -30,6 +35,15 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+
+  # Chord Player (apps/player): packaged on castLabs ECS per OS and smoke-tested. VMP-signed through
+  # castLabs EVS only when CI is started by hand (gh workflow run ci.yml --ref <branch>), not on every push.
+  player:
+    name: Chord Player
+    uses: ./.github/workflows/player.yml
+    with:
+      vmp: ${{ github.event_name == 'workflow_dispatch' && inputs.vmp }}
+    secrets: inherit
 
   e2e:
     name: E2E · ${{ matrix.name }}
@@ -56,6 +70,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+      # Chord Player's E2E test (player.spec.ts, Linux x64) packages the player on castLabs ECS: its checked zip, kept.
+      - name: Cache castLabs ECS
+        if: runner.os == 'Linux' && runner.arch == 'X64'
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/chord-ecs
+          key: ecs-linux-x64-${{ hashFiles('apps/player/ecs.json') }}
 
       # The packages below, kept between runs: the mirror has been slow enough to time the step out.
       - name: Cache display-server packages

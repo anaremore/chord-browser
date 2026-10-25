@@ -46,6 +46,7 @@
     "@chord/core": "workspace:*",
     "@chord/data": "workspace:*",
     "@chord/ipc": "workspace:*",
+    "@chord/player-protocol": "workspace:*",
     "@chord/tokens": "workspace:*",
     "@dnd-kit/abstract": "0.5.1",
     "@dnd-kit/dom": "0.5.1",

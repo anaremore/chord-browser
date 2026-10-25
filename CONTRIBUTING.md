@@ -50,6 +50,7 @@ What the container can't tell you is how Chord behaves on Windows or macOS. It r
 | `web.spec.ts` › screen sharing goes through Chord's picker | runs | skipped | Headless Weston has no screen to capture (also skipped on macOS, whose screens are picked in the system's picker) |
 | `sharing.spec.ts` › presenting mode's shortcut works from a page that doesn't use it | runs | skipped | Menu accelerators need an active window, and headless Weston has none (also skipped on macOS) |
 | `keyboard.spec.ts` | runs | partly | Which view has OS focus isn't checked: Weston never activates a window |
+| `player.spec.ts` (Chord Player) | runs | runs | Linux x64 only, and it needs the network: it packages the player on castLabs ECS (its checked zip is kept in the Electron volume), and the Widevine CDM, the test stream and its licence come from the internet. Windows and macOS builds are checked by the player's own smoke test (`.github/workflows/player.yml`) |
 
 Checks inside tests that only run on Windows: downloads carry the mark of the web (`Zone.Identifier`, in `launch.spec.ts`), and `perf.spec.ts` notes whether the session is locked. Anything about Windows itself (window materials and chrome, focus and activation, keys the OS delivers, updates, the installer) still needs a Windows run: locally, where it opens windows, or CI's Windows jobs on a branch, with `git push origin HEAD:<branch>` and then `gh workflow run ci.yml --ref <branch>`. Only the maintainer, or agents allowed to push, do that.
 

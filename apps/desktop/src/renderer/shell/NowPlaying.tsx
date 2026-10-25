@@ -12,6 +12,9 @@
  * window shows, whose own controls are on screen. It sits outside the
  * sidebar's trees, so its buttons are ordinary Tab stops, each named for what
  * it does.
+ *
+ * Chord Player (DESIGN.md §7.14) shows as the tab it plays for would, with
+ * *Back to the player* instead of *Go to tab*, and the player's own mute.
  */
 import { cardMedia, type State, type TabNode } from '@chord/core';
 import type { NowPlaying } from '@chord/ipc';
@@ -67,7 +70,7 @@ interface LineProps {
  * Play or Pause.
  */
 function Line({ media, tab, popped, windowId, appearance, muteTitle, onLeave }: LineProps) {
-  const muted = Boolean(tab.muted);
+  const muted = mutedOf(media, tab);
   const tabTitle = pageTitle(tab) || displayHost(tab.url) || 'New tab';
   const title = media.title || tabTitle;
   return (
@@ -75,14 +78,14 @@ function Line({ media, tab, popped, windowId, appearance, muteTitle, onLeave }: 
       <button
         type="button"
         className={styles.nowPlayingTab}
-        title={`Go to ${tabTitle}`}
+        title={media.player ? 'Back to the player' : `Go to ${tabTitle}`}
         onClick={() => {
-          void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id });
+          goTo(media, tab, windowId);
           onLeave();
         }}
       >
         <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} appearance={appearance} />
-        <span className="sr-only">Go to tab: </span>
+        <span className="sr-only">{media.player ? 'Back to the player: ' : 'Go to tab: '}</span>
         <span className={styles.ellipsis}>{title}</span>
       </button>
       {(media.video || popped) && (
@@ -101,8 +104,8 @@ function Line({ media, tab, popped, windowId, appearance, muteTitle, onLeave }: 
         type="button"
         className={styles.iconButton}
         aria-label={`${muted ? 'Unmute' : 'Mute'}: ${title}`}
-        title={muted ? muteTitle.unmute : muteTitle.mute}
-        onClick={() => void api.state.dispatch({ t: 'tab.mute', nodeId: tab.id, muted: !muted })}
+        title={muteLabel(media, muted, muteTitle)}
+        onClick={() => toggleMute(media, tab, muted)}
       >
         {muted ? <VolumeX {...ICON} /> : <Volume2 {...ICON} />}
       </button>
@@ -123,6 +126,24 @@ function Line({ media, tab, popped, windowId, appearance, muteTitle, onLeave }: 
 
 /** Rows shown under the newest before "and N more". */
 const LINES = 2;
+
+/** The mute button's tooltip: the tab's (with its shortcut), or Chord Player's own. */
+const muteLabel = (media: NowPlaying, muted: boolean, tab: { mute: string; unmute: string }) =>
+  media.player ? (muted ? 'Unmute Chord Player' : 'Mute Chord Player') : muted ? tab.unmute : tab.mute;
+
+/** Chord Player's mute is its own; a tab's is the tab's. */
+const mutedOf = (media: NowPlaying, tab: TabNode) => (media.player ? Boolean(media.muted) : Boolean(tab.muted));
+
+function toggleMute(media: NowPlaying, tab: TabNode, muted: boolean): void {
+  if (media.player) void api.media.act(tab.id, muted ? 'unmute' : 'mute');
+  else void api.state.dispatch({ t: 'tab.mute', nodeId: tab.id, muted: !muted });
+}
+
+/** The tab's line: to the tab, or for Chord Player, back to the player. */
+function goTo(media: NowPlaying, tab: TabNode, windowId: string): void {
+  if (media.player) void api.player.act(tab.id, 'show');
+  else void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id });
+}
 
 interface CardProps {
   media: NowPlaying;
@@ -148,7 +169,7 @@ function Card({ media, tab, popped, others, windowId, appearance, muteTitle, ent
     const el = card.current;
     return () => keepFocusFrom(el);
   }, []);
-  const muted = Boolean(tab.muted);
+  const muted = mutedOf(media, tab);
   const tabTitle = pageTitle(tab) || displayHost(tab.url) || 'New tab';
   const byline = [media.artist, media.album].filter(Boolean).join(' · ');
   const exit = enter === INSTANT ? INSTANT : { duration: durations.fadeFast / 1000 };
@@ -178,15 +199,15 @@ function Card({ media, tab, popped, others, windowId, appearance, muteTitle, ent
         <button
           type="button"
           className={styles.nowPlayingTab}
-          title={`Go to ${tabTitle}`}
+          title={media.player ? 'Back to the player' : `Go to ${tabTitle}`}
           onClick={() => {
-            void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id });
+            goTo(media, tab, windowId);
             keepFocusFrom(card.current);
           }}
         >
           <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} appearance={appearance} />
-          <span className="sr-only">Go to tab: </span>
-          <span className={styles.ellipsis}>{tabTitle}</span>
+          <span className="sr-only">{media.player ? 'Back to the player: ' : 'Go to tab: '}</span>
+          <span className={styles.ellipsis}>{media.player ? `${tabTitle} · Chord Player` : tabTitle}</span>
         </button>
         {(media.video || popped) && (
           <button
@@ -205,9 +226,9 @@ function Card({ media, tab, popped, others, windowId, appearance, muteTitle, ent
         <button
           type="button"
           className={styles.iconButton}
-          aria-label={muted ? 'Unmute tab' : 'Mute tab'}
-          title={muted ? muteTitle.unmute : muteTitle.mute}
-          onClick={() => void api.state.dispatch({ t: 'tab.mute', nodeId: tab.id, muted: !muted })}
+          aria-label={media.player ? (muted ? 'Unmute Chord Player' : 'Mute Chord Player') : muted ? 'Unmute tab' : 'Mute tab'}
+          title={muteLabel(media, muted, muteTitle)}
+          onClick={() => toggleMute(media, tab, muted)}
         >
           {muted ? <VolumeX {...ICON} /> : <Volume2 {...ICON} />}
         </button>

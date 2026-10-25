@@ -1,0 +1,4 @@
+# castLabs' EVS client, for VMP-signing Chord Player in CI (.github/workflows/player.yml),
+# pinned by the wheel's SHA-256 from PyPI. Installed with --no-deps --require-hashes;
+# its dependencies, pinned by version, are in evs-dependencies.txt.
+castlabs-evs==1.3.2 --hash=sha256:d3b074a5fb34881ac82e3ff0c3e88c9059c5864abdeb041b504b7f702b8f3e3c

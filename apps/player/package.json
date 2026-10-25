@@ -1,0 +1,27 @@
+{
+  "name": "@chord/player",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Chord Player: Netflix, Spotify and the other Widevine services, for Chord",
+  "homepage": "https://github.com/anaremore/chord-browser",
+  "author": {
+    "name": "Chord contributors"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "productName": "Chord Player",
+  "scripts": {
+    "build": "electron-vite build",
+    "package": "node scripts/package.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@chord/player-protocol": "workspace:*",
+    "@chord/tokens": "workspace:*",
+    "electron-builder": "26.18.0",
+    "electron-vite": "6.0.0",
+    "vite": "8.3.5"
+  }
+}

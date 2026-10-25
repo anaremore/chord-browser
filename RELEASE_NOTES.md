@@ -30,6 +30,14 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
   - What's shared is outlined in red: the shared tab's frame, or a window that's being shared. The shared tab's row has its own Stop.
 - **Duet reads whole pages** on sites it used to read only part of: Substack newsletters (just their footer before), MDN and BBC News among them, and a long page's top after you've scrolled down.
 - **Streaming services that need Widevine** (Netflix, Spotify, Disney+, Prime Video, HBO Max, Hulu, Apple Music and TV, Peacock, Paramount+, Tidal) say so when you open them, since Chord can't play them yet, with a button to open the page in Chrome, Edge, Firefox, Safari or Brave if you have one.
+- **Chord Player** plays them, in a window of its own, from that notice: *Install Chord Player* the first time (about 125–160 MB), then *Open in Chord Player*.
+  - It's a small companion app with Widevine, on castLabs' build of Electron. Chord itself stays on the standard engine, which gets security fixes first. The player shows only those services' pages, and every other link opens in Chord.
+  - Its bar wears your chord's colors, with Back to Chord. On Windows it shares Chord's taskbar button.
+  - The tab you came from stays, saying the page plays in Chord Player, with a way back. The Now playing card shows what plays and controls it, as it does for tabs.
+  - It installs for you alone (no admin prompt) and updates itself in the background. Chord checks every download against a signature before unpacking it, and keeps the previous version until the new one starts.
+  - Settings → General → Chord Player shows its version and removes it, with its sign-ins.
+  - It isn't offered in private windows, or in Google-free mode, since Widevine comes from Google. On Linux, some services play only in lower quality, or not at all.
+  - Sign in to each service once in the player: your password manager's browser extension doesn't run there, but its desktop app or a code by e-mail does.
 - **Signing in to Google works again**, where it said "This browser or app may not be secure". On Windows, the passkey dialog no longer pops up by itself each time you click a sign-in field; choose the site's passkey option when you want one.
 - **Passkeys on a security key** sign in on every OS. When the key holds more than one for a site, Chord asks which.
 - **Search by image:** paste or drop an image into the command bar to search Google Lens or Bing by it (your engine's own; Google Lens, clearly named, when yours can't search by image; Bing in Google-free mode).

@@ -58,6 +58,8 @@ export const size = {
   miniBar: 36,
   miniWidth: 900,
   miniHeight: 640,
+  /** Chord Player's bar (DESIGN.md §7.14): the service, Back to Chord, the window's controls. */
+  playerBar: 40,
   /** Settings window: section list, readable content column, and its controls. */
   settingsNav: 200,
   settingsContent: 600,

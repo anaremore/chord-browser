@@ -1,0 +1,76 @@
+name: Chord Player release
+
+# A `player-v<version>` tag (ARCHITECTURE.md §14.4, §9): every target built and VMP-signed by
+# player.yml (a release that isn't fails there), then the manifests signed with Chord's update key in
+# the protected `release` environment, and a draft prerelease made. A maintainer publishes it; Chord
+# offers a player only from a published release whose manifest that key signed.
+on:
+  push:
+    tags: ['player-v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: player-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/player.yml
+    with:
+      vmp: true
+      release: true
+    secrets: inherit
+
+  release:
+    name: Draft the Chord Player release
+    needs: build
+    runs-on: ubuntu-24.04
+    # Chord's update-signing key lives in this environment; protect it with required reviewers.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: The tag matches the player's version
+        run: |
+          version="$(node -p "require('./apps/player/package.json').version")"
+          if [ "player-v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match apps/player/package.json version $version"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: chord-player-*
+          path: dist
+          merge-multiple: true
+
+      - name: Sign the manifests
+        env:
+          CHORD_UPDATE_SIGNING_KEY: ${{ secrets.CHORD_UPDATE_SIGNING_KEY }}
+        run: node apps/player/scripts/sign-manifests.mjs dist
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ecs="$(node -p "require('./apps/player/ecs.json').version")"
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --prerelease \
+            --title "Chord Player ${GITHUB_REF_NAME#player-v}" \
+            --notes "Chord Player ${GITHUB_REF_NAME#player-v}, on castLabs ECS ${ecs}. Chord installs and updates it from the DRM notice on Netflix, Spotify and the other services that need Widevine; it isn't meant to be downloaded by hand. VMP-signed through castLabs EVS for Windows and macOS; Linux has no VMP. Check downloads against SHA256SUMS.txt."

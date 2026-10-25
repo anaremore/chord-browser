@@ -1,0 +1,60 @@
+name: ECS bump
+
+# Chord Player follows castLabs ECS (ARCHITECTURE.md §16 D4, §14.2): once a day, when castLabs has
+# published a newer stable `+wvcus` build than apps/player/ecs.json pins, this opens a pull request
+# moving the player to it (apps/player/scripts/ecs-bump.mjs, from scripts/dev/ecs-lag.mjs's list of
+# builds). It never merges one: a person reviews it once CI, the player's smoke test included, is green.
+on:
+  schedule:
+    # Off the hour: GitHub delays scheduled runs at the top of it.
+    - cron: '41 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecs-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Look for a newer ECS
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      # A pull request opened with GITHUB_TOKEN starts no workflows, so CI is started on its branch by hand.
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Newest stable +wvcus build
+        id: bump
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node apps/player/scripts/ecs-bump.mjs
+
+      - name: Open the pull request
+        if: steps.bump.outputs.bump == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ECS: ${{ steps.bump.outputs.ecs }}
+          PLAYER: ${{ steps.bump.outputs.player }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+        run: |
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')" != "0" ]; then
+            echo "A pull request from $BRANCH is open already."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add apps/player/ecs.json apps/player/package.json
+          git commit -m "chore(player): castLabs ECS $ECS, Chord Player $PLAYER"
+          git push --force origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" --title "Chord Player: castLabs ECS $ECS" --body-file "$RUNNER_TEMP/ecs-bump.md"
+          gh workflow run ci.yml --ref "$BRANCH"

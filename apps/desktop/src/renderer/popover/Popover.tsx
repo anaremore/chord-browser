@@ -4,7 +4,7 @@
  * these cards, so the rest of the page stays clickable.
  */
 import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
-import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type DrmNotice, type FindState, type PasskeyPrompt, type PermissionPrompt, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
+import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type DrmNotice, type FindState, type PasskeyPrompt, type PermissionPrompt, type PlayerFailure, type PlayerOffer, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
 import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, Fingerprint, KeyRound, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
@@ -416,14 +416,89 @@ function SafeBrowsingOffer() {
   );
 }
 
+/** Why installing or starting Chord Player failed, in a sentence. */
+const PLAYER_FAILURES: Record<PlayerFailure, string> = {
+  download: 'Chord Player didn’t download. Check your connection and try again.',
+  verify: 'The download didn’t match its signature, so Chord didn’t install it.',
+  unpack: 'Chord Player couldn’t be unpacked. Check there’s room on the disk and try again.',
+  start: 'Chord Player didn’t start.',
+  widevine: 'Chord Player couldn’t get Widevine from Google. Check your connection and try again.',
+};
+
+const PHASES = { downloading: 'Downloading Chord Player', checking: 'Checking the download', unpacking: 'Unpacking Chord Player' } as const;
+
+/** About this many megabytes, as file sizes are shown (decimal). */
+const megabytes = (bytes: number) => Math.max(1, Math.round(bytes / 1_000_000));
+
+/**
+ * Chord Player's part of the notice, first and full width (DESIGN.md §7.1):
+ * install it (its download's size), its progress, open the page in it, or
+ * why it failed with Try again.
+ */
+function PlayerAction({ offer }: { offer: PlayerOffer }) {
+  switch (offer.state) {
+    case 'install':
+      return (
+        <div className={styles.playerRow}>
+          <button type="button" className={`${styles.primary} ${styles.wide}`} onClick={() => void api.drm.player('install')}>
+            {offer.update ? 'Update' : 'Install'} Chord Player (about {megabytes(offer.size)} MB)
+          </button>
+        </div>
+      );
+    case 'installing': {
+      const label = offer.phase === 'downloading' ? `${PHASES.downloading} · ${offer.percent}%` : offer.phase === 'unpacking' ? `${PHASES.unpacking} · ${offer.percent}%` : PHASES.checking;
+      return (
+        <div className={styles.playerRow}>
+          <div className={styles.progressLabel} aria-hidden>
+            {label}
+          </div>
+          <div className={styles.progress} role="progressbar" aria-label="Installing Chord Player" aria-valuemin={0} aria-valuemax={100} aria-valuenow={offer.percent} aria-valuetext={label}>
+            <div className={styles.progressFill} style={{ inlineSize: `${offer.percent}%` }} />
+          </div>
+        </div>
+      );
+    }
+    case 'ready':
+      return (
+        <div className={styles.playerRow}>
+          <button type="button" className={`${styles.primary} ${styles.wide}`} onClick={() => void api.drm.player('open')}>
+            Open in Chord Player
+          </button>
+        </div>
+      );
+    case 'opening':
+      return (
+        <div className={styles.playerRow}>
+          <button type="button" className={`${styles.primary} ${styles.wide}`} disabled>
+            Opening in Chord Player…
+          </button>
+        </div>
+      );
+    case 'failed':
+      return (
+        <div className={styles.playerRow}>
+          <p className={styles.playerProblem} role="alert">
+            {PLAYER_FAILURES[offer.why]}
+          </p>
+          <button type="button" className={`${styles.primary} ${styles.wide}`} onClick={() => void api.drm.player('retry')}>
+            Try again
+          </button>
+        </div>
+      );
+  }
+}
+
 /**
  * On a service that needs Widevine (ARCHITECTURE.md §16, D4): it won't play
- * here yet, with up to two other browsers on this computer to open the page
- * in. Not now hides it for the service until Chord quits.
+ * here yet. Chord Player comes first when it's offered (never in Google-free
+ * mode or a private window), then up to two other browsers on this computer
+ * to open the page in. Not now hides it for the service until Chord quits.
  */
 function DrmNoticeCard({ notice }: { notice: DrmNotice }) {
   const id = useId();
   const [first, second] = notice.browsers;
+  const player = notice.player;
+  const others = player ? notice.browsers : second ? [second] : [];
   return (
     <div className={styles.card} role="dialog" aria-labelledby={`${id}-title`} aria-describedby={`${id}-notice`}>
       <div className={styles.permissionHead}>
@@ -436,21 +511,28 @@ function DrmNoticeCard({ notice }: { notice: DrmNotice }) {
         </button>
       </div>
       <p id={`${id}-notice`} className={styles.offerNotice}>
-        It needs Widevine, the copy protection streaming services use, which Chord doesn’t include yet.
-        {first ? '' : ' Another browser can play it for now.'}
+        {player
+          ? 'It needs Widevine, the copy protection streaming services use. Chord Player, a companion app with Widevine, plays it in a window of its own.'
+          : 'It needs Widevine, the copy protection streaming services use, which Chord doesn’t include yet.'}
+        {player && notice.linux ? ' On Linux, some services play only in lower quality, or not at all.' : ''}
+        {!player && !first ? ' Another browser can play it for now.' : ''}
       </p>
-      {first && (
+      {player && <PlayerAction offer={player} />}
+      {(others.length > 0 || (!player && first)) && (
         <div className={styles.actions}>
-          {second && (
-            <button type="button" className={styles.secondary} onClick={() => void api.drm.open(second.id)}>
-              Open in {second.name}
+          {others.map((b) => (
+            <button key={b.id} type="button" className={styles.secondary} onClick={() => void api.drm.open(b.id)}>
+              Open in {b.name}
+            </button>
+          ))}
+          {!player && first && (
+            <button type="button" className={styles.primary} onClick={() => void api.drm.open(first.id)}>
+              Open in {first.name}
             </button>
           )}
-          <button type="button" className={styles.primary} onClick={() => void api.drm.open(first.id)}>
-            Open in {first.name}
-          </button>
         </div>
       )}
+      {player && others.length === 0 && <div className={styles.actionsEnd} />}
     </div>
   );
 }
