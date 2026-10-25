@@ -52,6 +52,15 @@ describe('restoreState', () => {
     expect(state.settings).toEqual(DEFAULT_SETTINGS);
   });
 
+  it('auto picture-in-picture: off for a new profile; a profile from before is marked for its one-time switch-off; a choice made after stays', () => {
+    expect(restoreState(null, seed).settings).toMatchObject({ autoPip: false, autoPipDefaultOff: true });
+    const before: PersistedState = { chords: [], nodes: [], windows: [], settings: { autoPip: true } };
+    // Main sees the mark missing and switches it off once, through the store, so it's saved (index.ts).
+    expect(restoreState(before, seed).settings).toMatchObject({ autoPip: true, autoPipDefaultOff: false });
+    const after: PersistedState = { chords: [], nodes: [], windows: [], settings: { autoPip: true, autoPipDefaultOff: true } };
+    expect(restoreState(after, seed).settings).toMatchObject({ autoPip: true, autoPipDefaultOff: true });
+  });
+
   it('brings back chords, tabs, windows and settings as saved, with idle engine state', () => {
     const saved: PersistedState = {
       chords: [chord('c1', 'a0')],
@@ -82,7 +91,8 @@ describe('restoreState', () => {
     expect(state.nodes['child']!.parentId).toBeNull();
     // The active chord falls back to the first by rank; tabs from other chords don't stay active.
     expect(state.windows['w1']).toMatchObject({ activeChordId: 'c0', activeTab: { c1: null, c0: null } });
-    expect(state.settings).toEqual(DEFAULT_SETTINGS);
+    // A saved profile without the mark gets auto picture-in-picture's one-time switch-off (index.ts).
+    expect(state.settings).toEqual({ ...DEFAULT_SETTINGS, autoPipDefaultOff: false });
   });
 
   it('restores Google-free mode, and never with Google as its engine', () => {
