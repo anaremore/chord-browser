@@ -2,7 +2,7 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
-## 0.2.0 · preview (unreleased)
+## 0.2.0 · preview · 2026-10-25
 
 - **Ads and trackers blocked** by default, in every chord and in private windows, with EasyList and EasyPrivacy. The empty spaces ads leave behind are hidden too.
   - Pages are checked against the lists on your computer; nothing about the sites you visit is sent anywhere. Chord fetches fresh lists from easylist.to every few days, which sees your IP address when it does. Google-free mode doesn't change any of this: the lists aren't Google's.
@@ -30,7 +30,7 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
   - What's shared is outlined in red: the shared tab's frame, or a window that's being shared. The shared tab's row has its own Stop.
 - **Duet reads whole pages** on sites it used to read only part of: Substack newsletters (just their footer before), MDN and BBC News among them, and a long page's top after you've scrolled down.
 - **Streaming services that need Widevine** (Netflix, Spotify, Disney+, Prime Video, HBO Max, Hulu, Apple Music and TV, Peacock, Paramount+, Tidal) say so when you open them, since Chord can't play them yet, with a button to open the page in Chrome, Edge, Firefox, Safari or Brave if you have one.
-- **Chord Player** plays them, in a window of its own, from that notice: *Install Chord Player* the first time (about 125–160 MB), then *Open in Chord Player*.
+- **Chord Player** will play them, in a window of its own, from that notice: *Install Chord Player* the first time (about 125–160 MB), then *Open in Chord Player*. It comes in its own release, without another Chord update; until it's out, the notice offers your other browsers.
   - It's a small companion app with Widevine, on castLabs' build of Electron. Chord itself stays on the standard engine, which gets security fixes first. The player shows only those services' pages, and every other link opens in Chord.
   - Its bar wears your chord's colors, with Back to Chord. On Windows it shares Chord's taskbar button.
   - The tab you came from stays, saying the page plays in Chord Player, with a way back. The Now playing card shows what plays and controls it, as it does for tabs.
