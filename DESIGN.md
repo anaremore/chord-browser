@@ -93,7 +93,7 @@ macOS                                            Windows / Linux
 | Row | Height | Contents |
 |---|---|---|
 | Header | 40 | macOS: traffic lights (≈ 68 px reserved, `trafficLightPosition` centered in the row) then back/forward/reload. Windows/Linux: app menu ≡ (native menu) then back/forward/reload. |
-| URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L edits the address **in place**: the pill becomes a text field with the URL selected, and results drop down beneath it (§7.3). Hover reveals copy link · page actions. *(2026-10-24:)* On macOS with the sidebar docked, reader view's button (§7.11) sits just right of the pill while the page reads as an article; with a top strip (Windows, Linux) or the minimal bar, it's there instead. |
+| URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L edits the address **in place**: the pill becomes a text field with the URL selected, and results drop down beneath it (§7.3). Hover reveals copy link · page actions. *(2026-10-24:)* On macOS with the sidebar docked, reader view's button (§7.11) sits just right of the pill while the page reads as an article; with a top strip (Windows, Linux) or the minimal bar, it's there instead. *(2026-10-25:)* Effects' button (§7.15) sits after it while the site has Effects. |
 | Chord header | 28 | Chord icon (16) + name (`text-label`). Hover shows the ⋯ menu (Edit theme, Rename, Keep sign-ins separate, Delete). |
 | Pinned | 32 / row | Pinned tabs and folders, nestable; indent 12 px per level, visually capped at 4 levels. |
 | Favorites | 40 + 8 | *(As built, M1.2.)* Tiles every chord shares, in a wrapping grid, each a site's icon on an `item-hover` square (`radius-md`). The one for the tab you're on is raised. A tile switches to this chord's tab on that site, or opens it in Today. Drag a tab onto the row to add it; right-click to remove. *(2026-10-24:)* A tile whose tab makes sound wears a small speaker on its corner (`volume-x` while muted); its row mutes it. |
@@ -129,6 +129,7 @@ Windows / Linux
 | Speaker | *(Built 2026-10-24.)* Only while the tab on screen makes sound: the row's speaker (§7.2), which the hidden sidebar can't show. Click mutes or unmutes the tab. |
 | Presenting | *(Built 2026-10-24.)* Only while presenting mode is on: a chip that turns it off (§7.13), standing in for the sidebar's card. |
 | Reader view | *(Built 2026-10-24.)* Only while the page reads as an article, or shows in reader view: a book, pressed while it's open (§7.11). It sits right after the address, before the speaker; the Windows and Linux top strip has it there too with the sidebar docked. |
+| Effects | *(Built 2026-10-25.)* Only while the site has Effects: their button (§7.15), raised while they're wet. It sits after reader view's book. |
 | Drag region | Everything not interactive drags the window. Double-click follows the platform (maximize on Windows/Linux; the macOS title-bar preference). |
 | Downloads | Present only while a download is active or just finished. |
 | Extension actions | Only the puzzle piece, which lists every extension, so popups stay one click away while the header stays clean. With Settings → Extensions → "Show extension buttons: In the title bar", the pinned buttons sit here too: before ⋯ on Windows/Linux, and in the sidebar's header row on macOS (its title bar) while the sidebar is docked. |
@@ -482,10 +483,10 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 
 | Area | Components |
 |---|---|
-| Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ReaderButton` (§7.11), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
+| Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ReaderButton` (§7.11), `EffectsButton` (§7.15), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
 | Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `PresentingCard` (§7.13), `NowPlayingCard` (§7.10), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar`, `CaptureLayer` (§7.12) |
-| Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `ShareCard` (the share picker: a tab, a window or a screen, §7.13), `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
+| Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `ShareCard` (the share picker: a tab, a window or a screen, §7.13), `EffectsCard` (a site's Effects, §7.15), `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
 | Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer`, the `PasskeyCard` (when a security key holds several passkeys for a site: a fingerprint glyph, *Sign in to [site] with a passkey*, a button per account with the site's display name over its account name, the first one focused, and Cancel; Escape declines), the `DrmNotice` (on a service that needs Widevine: a screen-and-play glyph, *[Service] won’t play in Chord yet*, why in a line, Chord Player first when it's offered (§7.14: its own full-width row, primary), then *Open in [browser]* for up to two other browsers on the computer, the likeliest primary when Chord Player isn't offered; × is Not now, until Chord quits) and the `AuthCard` sign-in box (a site or proxy asking for a username and password: a key, *Sign in to* the origin, the site's realm as a quote, *That username and password didn't work* in `danger` after a failed try, a warning on plain HTTP, two fields, *Cancel* · **Sign in**; Escape cancels) |
 | Settings and help | `SettingRow` (label, control, and a ↺ reset button shown only when the value differs from its default), `ShortcutSheet` (the cheat sheet, generated from the shortcut registry) |
 | Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
@@ -769,6 +770,33 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Google-free mode:** *Off in Google-free mode, because Widevine, which it plays with, comes from Google.*
 - **Where it can't run** (a Flatpak, Linux arm64), nothing shows.
 - Settings → Privacy → Google-free mode lists it under *Also changed*.
+
+### 7.15 Effects
+
+*Built 2026-10-25* (ARCHITECTURE.md §9, D13). Your own styles for a site, in place of Arc's Boosts: your CSS, elements you hid, a few presets, and patches Duet writes when you ask. The **Dry/Wet** switch, named for the mix knob on an effects pedal, takes them all off at once (dry) and puts them back (wet), on one site or on every site. They stay on this computer.
+
+- **Where they are:**
+  - **Beside the address**, while the site in front has Effects: a button with Lucide's `blend` glyph (16 px, `iconButton`), right after reader view's book (§3.2, §3.3). Wet, it has the active row's raised surface (`item-active-bg`, `shadow-raised`); dry, it's plain, its glyph in `fg-subtle`. Its name says which, *Effects: wet* or *Effects: dry*, with the keys in its tooltip. A click opens the card. A site without Effects shows nothing: the page keeps the room.
+  - The page's right-click menu (*Effects for this site…*, *Hide an element…*), View on macOS and the ⋯ menu's *Effects* on Windows and Linux, the command bar (*Effects for this site*, *Make this site dry* or *wet*, *Make every site dry* or *wet*, *Hide an element on this page*), and Settings → Effects.
+  - **⌘⇧E / Ctrl+Shift+E** (page-first) makes the site in front dry or wet, with a toast that says which: *Dry: example.com shows as it comes*, *Wet: example.com shows your Effects*. On a site without Effects it opens the card.
+- **The card (`EffectsCard`)** sits in the popover at the frame's top-right, as the find bar does, so the page stays clickable and every change shows on it as you make it. `size-popover-card` plus `space-10`, `surface-raised`, `shadow-card`, `radius-md`; at most `size-popover-max` (520 px) tall, its head staying put while the rest scrolls inside.
+  - **Head:** the glyph in `accent`, *Effects on* **example.com**, then **Dry · Wet**, a segmented pair (the site's own switch, Wet first chosen), and ✕ (Esc).
+  - **Every site dry:** a line under the head, *Every site is dry.* in `fg-muted`, and **Make every site wet**, a quiet text button.
+  - **A private window:** *Changes here last until this window closes.* in `fg-muted`.
+  - **Presets:** three chips that turn on and off (`aria-pressed`; an on chip has the raised surface and a check): *Reading width*, *Dark*, *No sticky bars*. Each one's description is its tooltip: *Keeps lines of text to a comfortable length.*, *Dark colors, for a site that has none.*, *Headers scroll away, and cookie banners stay hidden.*
+  - **Hidden:** **Hide an element…** (`mouse-pointer-click`), a secondary pill. The card steps aside for the picker (below) and comes back when it's done. Under it, each element you hid, one row each: its name in the computer's monospace, `text-small` (*div#sidebar*), and **Show** (`eye`, an icon button), which shows it again, with Undo.
+  - **Your CSS:** a text field in the computer's monospace, `text-small`, six lines tall and growing to fourteen, on `item-hover`, placeholder *body { font-size: 18px }*. What you type applies after a 300 ms pause. When Chord left something out it says so under the field in `fg-muted`, `text-small`: *Left out url() on line 3. Effects never load files.* (or, for what Chord doesn't know, *Left out foo() on line 2, which Chord doesn't know.*).
+  - **Ask Duet**, only where Duet may read the page (set up, on in this chord, not a Never site, not a private window): a one-line field with Duet's icon, *Ask Duet to restyle this site*, Enter sends. While it writes, the field gives way to *Claude Code is writing… 8s* and **Stop**. Each patch Duet wrote is a row: its summary (your words when it gave none) and **Remove** (✕), with Undo. When a request gives nothing, why, in one sentence in `danger`, `text-small`; what Chord left out of a patch, in `fg-muted`.
+  - **Foot:** *Remove all Effects on this site*, a quiet text button, with Undo.
+- **Hiding an element** uses the screenshot picker's layer (§7.12) in its second mode: the page clear, the rest dimmed, the element under the pointer outlined with its name and size. A click hides it at once, and you can go on clicking. ↑ and ↓ step to the parent or child, Enter hides the outlined one, the wheel scrolls. The bar: *Click what to hide on example.com*, then *2 hidden* once there are any, and **Done** (Esc). Done shows one toast, *Hid 2 elements on example.com* · **Undo**. The element is found again on the site's other pages by a selector Chord makes from it (its id when that's unique, else a short chain of tags and classes).
+- **What's kept, and where:** by site (the host, without `www.`), shared by every chord. A private window uses what you saved; what you change there lasts until it closes. Ask Duet isn't offered there.
+- **Accessibility:** a dialog named *Effects on example.com*, which takes the keyboard when it opens; Esc closes it and the keyboard goes back to the page. Dry · Wet is a radio group, the presets toggle buttons, the hidden elements and Duet's patches lists with a button per row. The picker announces each element it hides, politely. With forced colors the card gets a `CanvasText` edge, the chosen chip and switch `Highlight`.
+- **Motion:** the card rises in like the other popover cards (`overlay`); nothing else of it moves.
+
+**Settings → Effects** (after Privacy):
+- **Every site:** *Wet · Dry*, a segmented choice, with *Dry shows every site as it comes, and keeps your Effects.*
+- **Sites**, newest change first: the site, what it has (*Your CSS · 2 hidden · Dark · 1 from Duet*), a switch named *Wet* for its own Dry/Wet, and **Remove**, which asks once more in place for 5 seconds (*Remove?* **Remove** · Cancel).
+- **No sites yet:** *Sites you restyle show up here. Open a site's Effects from the page's right-click menu or the command bar.*
 
 ---
 
@@ -1094,6 +1122,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 | Presenting mode, on or off (§7.13; 2026-10-24) | ⌘⇧P | Ctrl+Shift+P | P |
 | Find in page | ⌘F | Ctrl+F | P |
 | Show / hide reader view (§7.11) | ⌘⌥R | F9 | P |
+| Effects on this site: dry or wet (§7.15; 2026-10-25) | ⌘⇧E | Ctrl+Shift+E | P |
 | Find next / previous | ⌘G · ⌘⇧G | F3 · Shift+F3 | P |
 | Zoom in / out / actual size | ⌘= · ⌘− · ⌘0 | Ctrl+= · Ctrl+− · Ctrl+0 | P |
 | Full screen | ⌃⌘F | F11 | R |
