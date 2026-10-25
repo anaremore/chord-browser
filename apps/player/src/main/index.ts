@@ -74,11 +74,55 @@ class Player {
   private focusRequests = 0;
   private readonly allowHandoff = rateLimiter(3, 10_000);
   private quitting = false;
+  /** Resolves once the window and everything else is in place. */
+  private readonly ready: Promise<void>;
+  private markReady: () => void = () => {};
 
   constructor(
     private readonly peer: Peer,
     private readonly launch: Launch,
   ) {
+    // Chord's requests are handled from the first moment: on macOS, making the window can run the event
+    // loop, and a request that arrives then must find its handler (which waits for the window).
+    this.ready = new Promise((resolve) => (this.markReady = resolve));
+    const later =
+      <T>(fn: (m: Record<string, unknown>) => T) =>
+      async (m: Record<string, unknown>) => {
+        await this.ready;
+        return fn(m);
+      };
+    peer.on('close', () => this.quit('chord'));
+    peer.handle('open', later((m) => this.open(m['url'])));
+    peer.handle('focus', later(() => this.focus()));
+    peer.handle(
+      'play',
+      later(async () => {
+        await this.media.play();
+        return { playing: this.media.current?.playing ?? false };
+      }),
+    );
+    peer.handle(
+      'pause',
+      later(async () => {
+        await this.media.pause();
+        return { playing: this.media.current?.playing ?? false };
+      }),
+    );
+    peer.handle('mute', later(async (m) => ({ muted: await this.media.mute(m['muted'] === true) })));
+    peer.handle(
+      'theme',
+      later((m) => {
+        const theme = parseTheme(m);
+        if (theme) this.window.setTheme(theme);
+      }),
+    );
+    peer.handle('close', () => {
+      setTimeout(() => this.quit('chord'), 20);
+      return true;
+    });
+    peer.handle('debug', later(() => this.debug()));
+    peer.handle('test', later((m) => this.test(m)));
+
     this.lock = makeLock(undefined, { allowHttp: Boolean(launch.test) });
     const ses = session.fromPartition('persist:player');
     // No spellcheck dictionaries from Google's CDN (ECS downloads one on first use otherwise).
@@ -103,29 +147,7 @@ class Player {
       artwork: (data) => peer.send('artwork', { data }),
     });
     this.cdm = this.installCdm();
-
-    peer.on('close', () => this.quit('chord'));
-    peer.handle('open', async (m) => this.open(m['url']));
-    peer.handle('focus', () => this.focus());
-    peer.handle('play', async () => {
-      await this.media.play();
-      return { playing: this.media.current?.playing ?? false };
-    });
-    peer.handle('pause', async () => {
-      await this.media.pause();
-      return { playing: this.media.current?.playing ?? false };
-    });
-    peer.handle('mute', async (m) => ({ muted: await this.media.mute(m['muted'] === true) }));
-    peer.handle('theme', (m) => {
-      const theme = parseTheme(m);
-      if (theme) this.window.setTheme(theme);
-    });
-    peer.handle('close', () => {
-      setTimeout(() => this.quit('chord'), 20);
-      return true;
-    });
-    peer.handle('debug', () => this.debug());
-    peer.handle('test', (m) => this.test(m));
+    this.markReady();
   }
 
   /** Widevine: the component updater installs the CDM from Google on first use, then checks for updates. */
@@ -181,7 +203,7 @@ class Player {
   private quit(why: 'closed' | 'chord'): void {
     if (this.quitting) return;
     this.quitting = true;
-    this.media.stop();
+    this.media?.stop();
     if (why === 'closed') this.peer.send('bye', { why });
     // A moment for the goodbye to leave, then out.
     setTimeout(() => app.quit(), why === 'closed' ? 50 : 0);

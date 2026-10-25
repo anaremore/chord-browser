@@ -137,4 +137,6 @@ try {
   process.exitCode = 1;
 } finally {
   cleanup();
+  // Whatever is still open (the servers after a failure) mustn't keep the test waiting.
+  setTimeout(() => process.exit(process.exitCode ?? 0), 500).unref();
 }
