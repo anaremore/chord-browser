@@ -48,7 +48,7 @@ Project **Chord site**, service **site**:
 - **Port:** 8080.
 - **Health check:** `/health`.
 
-Clank builds and deploys on every push to `main`, which it hears about through its GitHub App. **That app must have access to this repo** (GitHub → Settings → Applications → Installed GitHub Apps → Clank's → Configure → Repository access). Without it, nothing deploys by itself. *Site downloads* then fails its check that the site serves the new version, so a missed deploy shows up as a failed run, not as an out-of-date site. To deploy by hand: `clank deploy <service-id>`.
+Clank builds and deploys on every push to `main`, which it hears about through its GitHub App. **That app must have access to this repo** (GitHub → Settings → Applications → Installed GitHub Apps → Clank's → Configure → Repository access). Without it, nothing deploys by itself. *Site downloads* then fails its check that the site serves the new version, so a missed deploy shows up as a failed run, not as an out-of-date site. To deploy by hand: `clank deploy bc3faaf3-d723-4380-b65f-0df74c5db25d` (project *Chord site*, service *site*). The app has had access since 2026-10-25.
 
 The domains are `chordbrowser.com` (primary) and `www.chordbrowser.com`. A Cloudflare redirect rule sends `www` to the bare domain, and nginx does the same if a request gets through.
 
