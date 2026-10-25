@@ -48,12 +48,20 @@ function DevtoolsEdge({ side, pane, size, rect, onLive }: { side: DevtoolsSide; 
         if (e.button !== 0) return;
         e.preventDefault();
         const el = e.currentTarget;
-        el.setPointerCapture(e.pointerId);
+        const pointer = e.pointerId;
+        // Capture keeps the drag on the edge where it's given. Windows can take it straight back (seen on
+        // CI), so the drag is carried by the window's own listeners, which hear it either way.
+        try {
+          el.setPointerCapture(pointer);
+        } catch {
+          // The window's listeners carry it.
+        }
         el.dataset['active'] = '';
         const start = right ? e.clientX : e.clientY;
         let next = size;
         let frame = 0;
         const move = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointer) return;
           next = dragDevtools(pane, side, size, (right ? ev.clientX : ev.clientY) - start);
           onLive(next);
           // Main moves the views at most once a frame (ARCHITECTURE.md §5: edge drags resize live).
@@ -62,17 +70,18 @@ function DevtoolsEdge({ side, pane, size, rect, onLive }: { side: DevtoolsSide; 
             void api.devtools.act({ do: 'resize', size: next, done: false });
           });
         };
-        const end = () => {
-          el.removeEventListener('pointermove', move);
-          el.removeEventListener('pointerup', end);
-          el.removeEventListener('pointercancel', end);
+        const end = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointer) return;
+          window.removeEventListener('pointermove', move, true);
+          window.removeEventListener('pointerup', end, true);
+          window.removeEventListener('pointercancel', end, true);
           delete el.dataset['active'];
           cancelAnimationFrame(frame);
           void save(next).then(() => onLive(null));
         };
-        el.addEventListener('pointermove', move);
-        el.addEventListener('pointerup', end);
-        el.addEventListener('pointercancel', end);
+        window.addEventListener('pointermove', move, true);
+        window.addEventListener('pointerup', end, true);
+        window.addEventListener('pointercancel', end, true);
       }}
       onDoubleClick={() => void save(right ? DEFAULT_DEVTOOLS.width : DEFAULT_DEVTOOLS.height)}
       onKeyDown={(e) => {

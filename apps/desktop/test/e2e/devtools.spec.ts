@@ -200,7 +200,7 @@ test('DevTools dock beside the page, resize, move, pop out and back, stay with t
     await shell.evaluate(() => {
       const w = window as unknown as { edgeEvents: string[] };
       w.edgeEvents = [];
-      for (const type of ['pointerdown', 'gotpointercapture', 'pointermove', 'pointerup', 'lostpointercapture']) {
+      for (const type of ['pointerdown', 'gotpointercapture', 'pointermove', 'pointerup', 'pointercancel', 'lostpointercapture']) {
         document.addEventListener(type, (e) => w.edgeEvents.push(`${type} on ${(e.target as Element).getAttribute('aria-label') ?? (e.target as Element).tagName}`), true);
       }
       window.addEventListener('error', (e) => w.edgeEvents.push(`error: ${e.message}`));
