@@ -31,11 +31,19 @@ export const EXTRACT_SCRIPT = String.raw`(() => {
   const out = [];
   let total = 0;
   const focused = document.activeElement;
+  // Hidden is what CSS hides, not what's off screen: a section that skips rendering until it's scrolled to,
+  // and a long page's top once you've scrolled past it, are still the page's text.
   const visible = (el) => {
-    if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) return false;
     if (el.hidden) return false;
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
+      // display: contents has no box of its own, so it never counts as visible; its children do (Substack wraps whole pages in one).
+      return getComputedStyle(el).display === 'contents';
+    }
     const r = el.getBoundingClientRect();
-    return !(r.right < -500 || r.bottom < -5000);
+    if (r.right >= -500 && r.bottom >= -5000) return true;
+    // Far off to the left or top: hidden only if it was put there (text moved off screen), not scrolled there.
+    const position = getComputedStyle(el).position;
+    return position !== 'absolute' && position !== 'fixed';
   };
   const walk = (node) => {
     for (const child of Array.from(node.childNodes)) {

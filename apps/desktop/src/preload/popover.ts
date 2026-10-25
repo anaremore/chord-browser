@@ -18,6 +18,7 @@ const api: PopoverApi = {
   share: { respond: (id, sourceId, audio) => invoke('share:respond', { id, sourceId, audio }) },
   auth: { respond: (id, credentials) => invoke('auth:respond', { id, credentials }) },
   safeBrowsing: { choose: (on) => invoke('safeBrowsing:choose', { on }) },
+  drm: { open: (browser) => invoke('drm:open', { browser }), dismiss: () => invoke('drm:dismiss') },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

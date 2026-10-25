@@ -49,10 +49,14 @@ export function mediaPage({ title, track, video = false, autoplay = true, second
   );
 }
 
-/** A video whose sound is its own (one element, as on most sites): a looping tone in a 640 × 360 player. */
-export function talkPage(): string {
+/**
+ * A video whose sound is its own (one element, as on most sites): a looping
+ * tone in a 640 × 360 player. `muted`: the page mutes it itself, as a player
+ * you muted does (Twitch remembers it), so the tab makes no sound.
+ */
+export function talkPage({ title = 'Talk', muted = false } = {}): string {
   return (
-    `<title>Talk</title><video id="v" width="640" height="360" loop></video><script>{` +
+    `<title>${title}</title><video id="v" width="640" height="360" loop${muted ? ' muted' : ''}></video><script>{` +
     `const rate = 8000, n = rate * 2, buf = new ArrayBuffer(44 + n * 2), d = new DataView(buf);` +
     `const w = (o, s) => { for (let i = 0; i < s.length; i++) d.setUint8(o + i, s.charCodeAt(i)); };` +
     `w(0, 'RIFF'); d.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); d.setUint32(16, 16, true); d.setUint16(20, 1, true);` +

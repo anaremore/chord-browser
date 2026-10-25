@@ -507,6 +507,17 @@ export interface PopoverState {
   auth: AuthPrompt | null;
   /** The one-time offer to turn Safe Browsing on, with its notice (profiles from before it existed). */
   safeBrowsingOffer: boolean;
+  /** The page is on a service that needs Widevine, which Chord doesn't include yet (D4). */
+  drm: DrmNotice | null;
+}
+
+export const OTHER_BROWSERS = ['chrome', 'edge', 'firefox', 'safari', 'brave'] as const;
+export type OtherBrowserId = (typeof OTHER_BROWSERS)[number];
+
+/** The DRM notice: the service, and up to two other browsers on this computer to open its page in. */
+export interface DrmNotice {
+  service: string;
+  browsers: { id: OtherBrowserId; name: string }[];
 }
 
 /**
@@ -972,6 +983,9 @@ export const invokeChannels = {
     }),
     response: z.void(),
   },
+  /** The DRM notice's buttons: the window's page in another browser the notice offered, or not now (until Chord quits). */
+  'drm:open': { roles: ['popover'], request: z.strictObject({ browser: z.enum(OTHER_BROWSERS) }), response: z.void() },
+  'drm:dismiss': { roles: ['popover'], request: z.void(), response: z.void() },
   /** Open a web link from Settings (About, help) in a new tab of the last-used window. */
   'settings:openUrl': { roles: ['internal'], request: z.strictObject({ url: z.url({ protocol: /^https$/ }) }), response: z.void() },
 } as const satisfies Record<string, { roles: readonly Role[]; request: z.ZodType; response: z.ZodType }>;
@@ -1289,6 +1303,8 @@ export interface PopoverApi {
   auth: { respond(id: number, credentials: { username: string; password: string } | null): Promise<void> };
   /** The one-time offer: turn Safe Browsing on, or not now (either way it isn't offered again). */
   safeBrowsing: { choose(on: boolean): Promise<void> };
+  /** The DRM notice: open the page in another browser, or not now. */
+  drm: { open(browser: OtherBrowserId): Promise<void>; dismiss(): Promise<void> };
 }
 
 /** `window.chord` in the command bar overlay. */

@@ -20,6 +20,8 @@
     "test/packaged",
     "test/run-temp.ts",
     "src/renderer/env.d.ts",
+    "src/main/duet/extract.ts",
+    "src/main/page-call.ts",
     "src/main/safe-browsing/database.ts",
     "src/main/safe-browsing/proto.ts",
     "src/main/safe-browsing/rice.ts",

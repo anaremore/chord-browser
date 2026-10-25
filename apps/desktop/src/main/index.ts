@@ -338,6 +338,8 @@ function registerIpc(): void {
   handle('media:view', (_request, sender) => browser!.nowPlaying(senderWindow(sender).id));
   handle('media:do', ({ nodeId, action }, sender) => browser!.mediaAction(senderWindow(sender), nodeId, action));
   handle('auth:respond', ({ id, credentials }) => httpAuth.respond(id, credentials));
+  handle('drm:open', ({ browser: other }, sender) => browser!.drmAction(sender, { open: other }));
+  handle('drm:dismiss', (_request, sender) => browser!.drmAction(sender, 'dismiss'));
   handle('settings:sitePermission', ({ origin, permission, decision }) =>
     browser!.store.dispatch({ t: 'permission.set', origin, permissions: [permission], decision }),
   );

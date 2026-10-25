@@ -200,13 +200,14 @@ const saveFrame = (shell: Page, name: string) => shell.screenshot({ path: join(f
 
 /**
  * Runs `act` and, once the pictures start gliding, saves a few frames of the
- * shell mid-glide (Chord's own view only): `<name>-1.png` and on. A machine
+ * shell mid-glide (Chord's own view only): `<name>-1.png` and on, unless
+ * `frames` is false (a test timing what happens next). A machine
  * too slow to picture the pages, or to show the pictures, inside
  * PREPARE_TIMEOUT_MS (CI's slower Macs, now and then) gets no glide: the frame
  * changes at once, as designed, and there's nothing here to check, so the test
  * is skipped as inconclusive. No glide for any other reason fails.
  */
-async function glide(app: ElectronApplication, shell: Page, name: string, act: () => Promise<unknown>): Promise<void> {
+async function glide(app: ElectronApplication, shell: Page, name: string, act: () => Promise<unknown>, { frames = true } = {}): Promise<void> {
   const gliding = shell.waitForFunction(() => [...document.querySelectorAll('canvas')].some((c) => c.style.transform !== ''), undefined, { polling: 'raf', timeout: 5000 });
   await act();
   const began = await gliding.then(() => true, (error: unknown) => error);
@@ -218,7 +219,7 @@ async function glide(app: ElectronApplication, shell: Page, name: string, act: (
     );
     throw began;
   }
-  for (let i = 1; i <= 3 && (await picturesNow(shell)) > 0; i++) await saveFrame(shell, `${name}-${i}`);
+  for (let i = 1; frames && i <= 3 && (await picturesNow(shell)) > 0; i++) await saveFrame(shell, `${name}-${i}`);
 }
 
 async function ready(app: ElectronApplication, home = 'Colored page'): Promise<{ shell: Page; overlay: Page }> {
@@ -408,9 +409,7 @@ test('peeking the sidebar while the page glides brings the page back at once, un
     await shell.evaluate(() => document.documentElement.style.setProperty('--spring-smooth-duration', '3000ms'));
     await watch(app);
     await shell.mouse.move(300, 300);
-    const gliding = shell.waitForFunction(() => [...document.querySelectorAll('canvas')].some((c) => c.style.transform !== ''), undefined, { polling: 'raf' });
-    await runAction(shell, 'view.toggleSidebar');
-    await gliding;
+    await glide(app, shell, 'peek', () => runAction(shell, 'view.toggleSidebar'), { frames: false });
 
     // The pointer reaches the window's left edge: the sidebar slides in over the page, which is back in place.
     // Two steps, not a stroll: each is a round trip on a slow machine, and main's own fallback brings
@@ -541,7 +540,7 @@ test("a private window's pictures stay in memory: nothing new reaches the disk",
     const before = images();
     await watch(app, 'private');
     await recordPictures(privateShell);
-    await runAction(privateShell, 'view.toggleSidebar');
+    await glide(app, privateShell, 'private-collapse', () => runAction(privateShell, 'view.toggleSidebar'));
     await expect.poll(async () => (await pages(app, 'private')).views[0]!.x).toBe(4);
     await expect.poll(() => picturesNow(privateShell)).toBe(0);
     // It was pictured, and glided…

@@ -11,6 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { DUET_WORLD, EXTRACT_SCRIPT } from '../../src/main/duet/extract';
 import { buildPdf, SAMPLE_PDF_PAGES } from '../fixtures/pdf';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
@@ -33,6 +34,17 @@ test.beforeAll(async () => {
       '<title>Form</title><h1>Account settings</h1><p>Visible words here.</p>' +
       '<input value="hunter2-secret"><input type="password" value="pw-very-secret"><textarea>my-draft-note</textarea>' +
       '<select><option>card-4242-selected</option></select><input autocomplete="one-time-code" value="otp-123456">',
+    // Layouts that hid real text from Duet: a page wrapped in display: contents (Substack's), a section
+    // that skips rendering off screen, and a long page's top once you've scrolled down. Then what stays hidden.
+    '/layouts':
+      '<title>Layouts</title><p>Top of a long page.</p>' +
+      '<div style="display: contents"><article><h1>Wrapped</h1><p>Inside a display-contents wrapper.</p></article></div>' +
+      '<div style="height: 9000px"></div>' +
+      '<section style="content-visibility: auto; contain-intrinsic-size: auto 400px"><p>A section that renders only on screen.</p></section>' +
+      '<div style="height: 9000px"></div><p>Bottom of the page.</p>' +
+      '<p hidden>hidden-attribute</p><p style="display: none">display-none</p><p style="visibility: hidden">visibility-hidden</p>' +
+      '<p style="opacity: 0">opacity-zero</p><div style="position: absolute; left: -9999px">moved-off-screen</div>' +
+      '<div style="display: contents" hidden><p>hidden-contents-wrapper</p></div>',
   };
   const server = createServer((req, res) => {
     // A PDF behind a sign-in: /login sets the cookie and goes on to it; without the cookie it's 403.
@@ -219,6 +231,26 @@ test('Duet: a lost session continues from a summary; after the idle window a fre
     await panel.getByRole('menuitem', { name: 'Delete this chat' }).click();
     await expect(panel.getByText('Here is the gist.')).toHaveCount(0);
     await expect.poll(() => sessionFiles(setup).length).toBe(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('Duet reads text in display: contents wrappers, off-screen sections and a scrolled page’s top, and still not hidden text', async () => {
+  const app = await launch(fresh(), '/layouts');
+  try {
+    await shellOf(app);
+    const url = `${site.origin}/layouts`;
+    await expect.poll(() => app.windows().some((p) => p.url() === url), { timeout: 20_000 }).toBe(true);
+    const page = app.windows().find((p) => p.url() === url)!;
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(15_000);
+    const read = (await app.evaluate(
+      ({ webContents }, { url, world, code }) => webContents.getAllWebContents().find((w) => w.getURL() === url)!.executeJavaScriptInIsolatedWorld(world, [{ code }]),
+      { url, world: DUET_WORLD, code: EXTRACT_SCRIPT },
+    )) as { text: string };
+    for (const shown of ['Top of a long page.', '# Wrapped', 'Inside a display-contents wrapper.', 'A section that renders only on screen.', 'Bottom of the page.']) expect(read.text).toContain(shown);
+    for (const hidden of ['hidden-attribute', 'display-none', 'visibility-hidden', 'opacity-zero', 'moved-off-screen', 'hidden-contents-wrapper']) expect(read.text).not.toContain(hidden);
   } finally {
     await app.close();
   }
