@@ -14,7 +14,8 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 - **Videos stay in their tab** when you switch away: popping out by themselves is now off, and turned off once for everyone. Pop one out from Now playing in the sidebar, or turn it back on in Settings → General → *Pop out playing videos when you switch away*.
 
-- **Smaller updates** on Windows and with the AppImage, once in-app updates are on: Chord downloads only what changed, often well under 1 MB instead of the whole 130 MB installer. The installer you download from the release page is about 11 MB larger for it.
+- **Updates install themselves** on Windows and with the AppImage, from the next version on. Chord downloads a new version in the background, checks that it's signed by Chord's update key, and offers *Restart to update*; it also installs when you quit. This is the last version you install by hand there. On macOS, and with the `.deb` and `.rpm`, Chord still says when a new version is out.
+  - **Smaller downloads:** only what changed, often well under 1 MB instead of the whole 130 MB installer. The installer you download from the release page is about 11 MB larger for it.
 
 - **Counts on tabs** also come from a site's background worker, so a message that arrives while the tab sleeps can show when it wakes. A site open in two tabs counts once on Chord's icon.
 

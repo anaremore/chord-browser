@@ -1111,7 +1111,7 @@ To pull a bad release we ship a higher version (electron-updater has no rollback
   - It uploads `<manifest>.sig` beside each manifest: the base64 signature of the file's exact bytes.
   - Each Windows architecture builds on its own runner and electron-builder names both manifests `latest.yml`, so the workflow renames them.
   - Making the key is in [docs/releasing/patch-runbook.md](docs/releasing/patch-runbook.md#update-signing-key).
-- **Verifying:** the public key is baked into the app (`src/main/update-key.ts`; empty until the key exists, which keeps every copy notify-only).
+- **Verifying:** the public key is baked into the app (`src/main/update-key.ts`). It has been there since 0.2.1, made 2026-10-25, fingerprint `0376333e86170a62`. Copies older than 0.2.1 have none, so they stay notify-only and get to 0.2.1 by hand once.
   - A custom electron-updater provider (`provider: 'custom'` ✅) fetches the manifest and its `.sig` from the release that Chord's own check chose, and refuses it unless the signature verifies (`src/main/update-signing.ts`, unit-tested).
   - It doesn't wrap the GitHub provider, because that one picks the release itself, by GitHub's pre-release flag rather than §14.4's SemVer rule.
   - electron-updater then checks the download against the signed manifest's sha512, so the installer is covered too.
