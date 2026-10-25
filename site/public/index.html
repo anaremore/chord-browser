@@ -21,35 +21,11 @@
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="preload" href="/fonts/Onest-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="/styles.css?v=2">
-  <script src="/site.js?v=2" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=3">
+  <script src="/site.js?v=3" defer></script>
 </head>
 <body>
-  <a class="skip" href="#main">Skip to the content</a>
-
-  <header class="top">
-    <a class="brand" href="/" aria-label="Chord, home">
-      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
-        <rect x="23" y="14" width="34" height="11" rx="5.5" fill="url(#m-lilac)"/>
-        <rect x="14.5" y="23.5" width="38" height="13" rx="6.5" fill="var(--paper-solid)"/>
-        <rect x="15.5" y="24.5" width="36" height="11" rx="5.5" fill="url(#m-rose)"/>
-        <rect x="6" y="34" width="35" height="13" rx="6.5" fill="var(--paper-solid)"/>
-        <rect x="7" y="35" width="33" height="11" rx="5.5" fill="url(#m-coral)"/>
-        <defs>
-          <linearGradient id="m-lilac" x1="0" x2="1"><stop offset="0" stop-color="#c3a2ff"/><stop offset="1" stop-color="#9476ec"/></linearGradient>
-          <linearGradient id="m-rose" x1="0" x2="1"><stop offset="0" stop-color="#ff92c0"/><stop offset="1" stop-color="#e85aa6"/></linearGradient>
-          <linearGradient id="m-coral" x1="0" x2="1"><stop offset="0" stop-color="#ffae78"/><stop offset="1" stop-color="#ff6f4c"/></linearGradient>
-        </defs>
-      </svg>
-      <span>Chord</span>
-    </a>
-    <nav aria-label="Site">
-      <a href="#features">Features</a>
-      <a href="#privacy">Privacy</a>
-      <a href="#download">Download</a>
-      <a href="https://github.com/anaremore/chord-browser" rel="noopener">GitHub</a>
-    </nav>
-  </header>
+  <!--# include virtual="/partials/header.html" -->
 
   <main id="main">
     <section class="hero" aria-labelledby="hero-title">
@@ -157,8 +133,9 @@
       <ol class="promises">
         <li class="promise promise-lilac"><h3>No account</h3><p>Nothing to sign up for. Your tabs, history and settings stay on your computer.</p></li>
         <li class="promise promise-rose"><h3>No telemetry</h3><p>Chord doesn't report what you do or where you go. Blocking and Safe Browsing check pages on your computer.</p></li>
-        <li class="promise promise-coral"><h3>No lock-in</h3><p>Open source under the MIT license, built in the open, on the same Chromium engine as the browsers you know.</p></li>
+        <li class="promise promise-coral"><h3>No lock-in</h3><p>Open source and built in the open, on the same Chromium engine as the browsers you know. Bring your tabs and bookmarks in from the browser you use now.</p></li>
       </ol>
+      <p class="section-more"><a href="/privacy">Everything Chord contacts, and why</a></p>
     </section>
 
     <section class="download" id="download" aria-labelledby="download-title">
@@ -197,16 +174,10 @@
           <p class="platform-note">The AppImage keeps itself up to date. Arm builds and install steps are on the <a href="/download">release page</a>.</p>
         </article>
       </div>
-      <p class="checksums">Every release lists its files' SHA-256 checksums. <a href="https://github.com/anaremore/chord-browser/blob/main/RELEASE_NOTES.md" rel="noopener">What's new</a> · <a href="https://github.com/anaremore/chord-browser/blob/main/ROADMAP.md" rel="noopener">What's next</a></p>
+      <p class="checksums"><a href="/install">Install steps for each system</a>, including what to expect the first time you open it. Every release lists its files' SHA-256 checksums. <a href="https://github.com/anaremore/chord-browser/blob/main/RELEASE_NOTES.md" rel="noopener">What's new</a> · <a href="https://github.com/anaremore/chord-browser/blob/main/ROADMAP.md" rel="noopener">What's next</a></p>
     </section>
   </main>
 
-  <footer class="foot">
-    <p class="foot-brand">
-      <svg class="mark mark-small" viewBox="0 0 64 64" aria-hidden="true"><rect x="23" y="14" width="34" height="11" rx="5.5" fill="#a98bf5"/><rect x="15.5" y="24.5" width="36" height="11" rx="5.5" fill="#f07ab0"/><rect x="7" y="35" width="33" height="11" rx="5.5" fill="#ff8a5c"/></svg>
-      Chord, a calm, colorful browser.
-    </p>
-    <p>Open source under the <a href="https://github.com/anaremore/chord-browser/blob/main/LICENSE" rel="noopener">MIT license</a> · <a href="https://github.com/anaremore/chord-browser" rel="noopener">GitHub</a> · Set in <a href="https://fonts.google.com/specimen/Onest" rel="noopener">Onest</a></p>
-  </footer>
+  <!--# include virtual="/partials/footer.html" -->
 </body>
 </html>

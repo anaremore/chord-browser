@@ -1,8 +1,9 @@
 # chordbrowser.com
 
-Chord's website: one static page, served by nginx, on Clank.
+Chord's website: a few static pages, served by nginx, on Clank.
 
-- `public/`: the page (`index.html`, `styles.css`, `site.js`), Onest (OFL), the images and the 404 page.
+- `public/`: the home page (`index.html`, `styles.css`, `site.js`), `install.html`, `privacy.html`, the 404 page, Onest (OFL) and the images. Pages are served without `.html`: `/install`, `/privacy`.
+- `public/partials/`: the header and footer every page shares. nginx puts them in (`<!--# include virtual="/partials/header.html" -->`), and doesn't serve them on their own. A new page includes both, and goes in `sitemap.xml`.
 - `nginx.conf` and `headers.inc`: files, a strict content security policy, `/health` for Clank, and `www.` redirecting to the bare domain.
 - `downloads.conf` and `public/latest.json`: the download links, written by `tools/latest.mjs` (below). Don't edit them by hand.
 - `Dockerfile`: the image, built from the repo's root. `Dockerfile.dockerignore` keeps the build context to `site/`.
@@ -38,7 +39,7 @@ docker build -f site/Dockerfile -t chord-site:dev .
 docker run --rm -p 8089:8080 chord-site:dev
 ```
 
-Then open http://localhost:8089. `/health` answers `ok`.
+Then open http://localhost:8089. `/health` answers `ok`. Opened as files, the pages have no header or footer, since nginx puts those in.
 
 ## On Clank
 

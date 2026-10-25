@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy · Chord</title>
+  <meta name="description" content="Chord has no account and sends no telemetry. Everything it contacts on its own, why, what each one sees, and how to turn it off.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://chordbrowser.com/privacy">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon.png" type="image/png" sizes="32x32">
+  <link rel="preload" href="/fonts/Onest-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css?v=3">
+</head>
+<body>
+  <!--# include virtual="/partials/header.html" -->
+
+  <main id="main" class="doc">
+    <header class="doc-head">
+      <span class="note note-rose" aria-hidden="true"></span>
+      <h1>Privacy</h1>
+      <p class="lede">Chord has no account and sends no telemetry: it never reports what you do or where you go. This page lists everything it contacts on its own, why, and how to turn each one off. The sites you visit see your visits, as in any browser.</p>
+    </header>
+
+    <section aria-labelledby="local">
+      <h2 id="local">What stays on your computer</h2>
+      <p>Your tabs, history, Archive, settings, screenshots and Duet chats are kept only on your computer (<a href="/install#data">where</a>). There’s no Chord server, and nothing is synced anywhere.</p>
+      <p>Importing from another browser reads that browser’s files on your computer. It never copies passwords, cookies or extensions.</p>
+      <p>A private window keeps no history, cookies or site data once it closes, and Duet never reads it.</p>
+    </section>
+
+    <section aria-labelledby="contacts">
+      <h2 id="contacts">What Chord contacts, and why</h2>
+      <dl class="contacts">
+        <div>
+          <dt>GitHub</dt>
+          <dd>Chord asks GitHub whether there’s a new version, 30 seconds after it starts and then once a day, and downloads updates from there. GitHub sees your IP address. Turn the check off in Settings → About.</dd>
+        </div>
+        <div>
+          <dt>easylist.to</dt>
+          <dd>Every few days, Chord refreshes the lists it blocks ads and trackers with. Pages are checked against them on your computer, so easylist.to sees only your IP address, never what you visit.</dd>
+        </div>
+        <div>
+          <dt>Google Safe Browsing</dt>
+          <dd>Chord keeps Google’s lists of dangerous sites, as short hashes, and checks addresses against them on your computer. Only when an address’s 4-byte hash prefix is in a list does Chord ask Google about that prefix, never the address. Off in Google-free mode.</dd>
+        </div>
+        <div>
+          <dt>Your search engine</dt>
+          <dd>Your searches, and, as you type one, what you’ve typed so far, for suggestions. Addresses you type are never sent. Turn suggestions off in Settings → General.</dd>
+        </div>
+        <div>
+          <dt>The site you’re about to open</dt>
+          <dd>While you type an address in the command bar, Chord opens a connection to that site a moment early, so it loads sooner. Nothing is asked for until you open it.</dd>
+        </div>
+        <div>
+          <dt>Google’s dictionary server</dt>
+          <dd>On Windows and Linux, a spelling dictionary the first time you use a language. macOS uses its own spellchecker. Not in Google-free mode.</dd>
+        </div>
+        <div>
+          <dt>Chrome Web Store</dt>
+          <dd>Extensions you choose to install, and checks for their updates. Google-free mode stops the checks.</dd>
+        </div>
+        <div>
+          <dt>Google Lens or Bing</dt>
+          <dd>Only when you search with an image, and only the image you chose.</dd>
+        </div>
+        <div>
+          <dt>Your Claude Code or Codex</dt>
+          <dd>Only if you set up Duet, which uses your own app and account: what you ask, and what Duet reads, goes to Anthropic or OpenAI under your account. You choose what Duet can read in Settings → Duet, down to nothing at all. Chord never sees your sign-in.</dd>
+        </div>
+        <div>
+          <dt>Chord Player</dt>
+          <dd>Only if you install it, for streaming services that need Widevine. It checks GitHub for its own updates, and its Widevine module comes from Google, so it isn’t offered in Google-free mode.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section aria-labelledby="google-free">
+      <h2 id="google-free">Google-free mode</h2>
+      <p>One switch in Settings → Privacy stops Chord contacting Google on its own: no Safe Browsing, no dictionary downloads, no extension update checks, no Google search or Lens, and no Chord Player. Sites you visit can still load things from Google, and signing in to Google still works.</p>
+    </section>
+
+    <section aria-labelledby="site">
+      <h2 id="site">This website</h2>
+      <p>chordbrowser.com sets no cookies and runs no analytics or third-party scripts. Cloudflare passes it to you and sees your IP address, as any web host would. Downloads come from GitHub.</p>
+    </section>
+
+    <section aria-labelledby="questions">
+      <h2 id="questions">Questions</h2>
+      <p>Ask, or point out anything this page gets wrong, on <a href="https://github.com/anaremore/chord-browser/issues" rel="noopener">GitHub</a>. For a security problem, please follow the <a href="https://github.com/anaremore/chord-browser/blob/main/SECURITY.md" rel="noopener">security policy</a> instead. Chord’s code is open, so all of this can be checked.</p>
+    </section>
+  </main>
+
+  <!--# include virtual="/partials/footer.html" -->
+</body>
+</html>

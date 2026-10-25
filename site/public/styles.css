@@ -232,7 +232,7 @@ kbd {
 }
 
 @media (max-width: 640px) {
-  .top nav a:not([href="#download"]) {
+  .top nav a:not([href="/#download"]) {
     display: none;
   }
 }
@@ -733,6 +733,172 @@ kbd {
   font-size: 0.92rem;
 }
 
+/* ---------- Pages of reading: Install and Privacy ---------- */
+
+.doc {
+  width: min(760px, 100% - 48px);
+  margin: 0 auto;
+  padding-top: clamp(32px, 6vw, 80px);
+}
+
+.doc-head {
+  display: grid;
+  gap: 16px;
+  margin-bottom: clamp(32px, 5vw, 56px);
+}
+
+.doc-head h1 {
+  font-size: clamp(2.6rem, 6vw, 4.2rem);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.doc-head .lede {
+  margin-top: 0;
+}
+
+.doc section {
+  padding-top: clamp(28px, 4vw, 44px);
+  border-top: 1px solid var(--line);
+  margin-top: clamp(28px, 4vw, 44px);
+}
+
+.doc h2 {
+  margin-bottom: 14px;
+  font-size: clamp(1.6rem, 3vw, 2.1rem);
+  letter-spacing: -0.03em;
+}
+
+.doc h3 {
+  margin: 24px 0 10px;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+}
+
+.doc p,
+.doc li,
+.doc dd {
+  color: var(--ink-2);
+}
+
+.doc p + p,
+.doc ol + p,
+.doc ul + p,
+.doc pre + p,
+.doc dl + p {
+  margin-top: 12px;
+}
+
+.doc strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.doc ol,
+.doc ul:not(.files) {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding-left: 1.3em;
+}
+
+.doc ol ul {
+  margin-top: 8px;
+}
+
+.doc .files {
+  max-width: 420px;
+}
+
+.doc-req {
+  margin-top: -8px;
+  font-size: 0.95rem;
+}
+
+code {
+  padding: 0.08em 0.35em;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.86em;
+}
+
+pre {
+  margin: 12px 0 0;
+  padding: 14px 18px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--raised);
+}
+
+pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+.doc-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 10px 24px;
+  margin: 12px 0 0;
+}
+
+.doc-list dt {
+  font-weight: 600;
+}
+
+.doc-list dd {
+  margin: 0;
+}
+
+/* Each thing Chord contacts: who, then why, what they see and how to turn it off. */
+.contacts {
+  display: grid;
+  gap: 2px;
+  margin: 16px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+
+.contacts > div {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.38fr) 1fr;
+  gap: 6px 24px;
+  padding: 18px 22px;
+  background: var(--raised);
+}
+
+.contacts dt {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.contacts dd {
+  margin: 0;
+  font-size: 0.96rem;
+}
+
+@media (max-width: 640px) {
+  .contacts > div,
+  .doc-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+.section-more {
+  margin-top: 24px;
+  font-weight: 500;
+}
+
+.section-more a::after {
+  content: " →";
+}
+
 /* ---------- Footer ---------- */
 
 .foot {
@@ -751,6 +917,25 @@ kbd {
 .foot-brand {
   color: var(--ink);
   font-weight: 500;
+}
+
+.foot-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  flex-basis: 100%;
+  order: -1;
+  margin-bottom: 8px;
+}
+
+.foot-links a {
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.foot-links a:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 /* ---------- Arrival: the notes land like the app's first run, then the rest follows ---------- */

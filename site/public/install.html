@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install Chord</title>
+  <meta name="description" content="How to install Chord on Windows, macOS and Linux, what to expect the first time you open it, how it updates, and where your data lives.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://chordbrowser.com/install">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon.png" type="image/png" sizes="32x32">
+  <link rel="preload" href="/fonts/Onest-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css?v=3">
+  <script src="/site.js?v=3" defer></script>
+</head>
+<body>
+  <!--# include virtual="/partials/header.html" -->
+
+  <main id="main" class="doc">
+    <header class="doc-head">
+      <span class="note note-coral" aria-hidden="true"></span>
+      <h1>Install Chord</h1>
+      <p class="lede">Chord is a free, open-source preview for Windows, macOS and Linux. Here’s how to install it on each, what to expect the first time you open it, and how it updates.</p>
+    </header>
+
+    <section aria-labelledby="windows">
+      <h2 id="windows">Windows</h2>
+      <p class="doc-req">Windows 10 and 11, on Intel and AMD or Arm.</p>
+      <ul class="files">
+        <li><a href="/download/win-x64" data-asset="win-x64">Installer for Intel and AMD <span class="size" data-size></span></a></li>
+        <li><a href="/download/win-arm64" data-asset="win-arm64">Installer for Arm <span class="size" data-size></span></a></li>
+      </ul>
+      <ol>
+        <li>Run the installer. It installs Chord for your account only, with no admin prompt, and opens it.</li>
+        <li>If SmartScreen says <em>Windows protected your PC</em>, click <strong>More info</strong>, then <strong>Run anyway</strong>. The installer is signed, but SmartScreen can still warn about a new publisher’s first releases.</li>
+      </ol>
+      <p><strong>Updates:</strong> Chord downloads each new version in the background, only the parts that changed, and installs it when you restart. Settings → About shows when one is ready.</p>
+    </section>
+
+    <section aria-labelledby="macos">
+      <h2 id="macos">macOS</h2>
+      <p class="doc-req">Apple silicon and Intel Macs.</p>
+      <ul class="files">
+        <li><a href="/download/mac-arm64" data-asset="mac-arm64">Apple silicon <span class="size" data-size></span></a></li>
+        <li><a href="/download/mac-x64" data-asset="mac-x64">Intel <span class="size" data-size></span></a></li>
+      </ul>
+      <ol>
+        <li>Open the <code>.dmg</code> and drag Chord to Applications.</li>
+        <li>Chord isn’t signed for macOS yet, so the first time you open it, macOS says it can’t verify it. Click <strong>Done</strong>, then:
+          <ul>
+            <li><strong>macOS 15 and later:</strong> open System Settings → Privacy &amp; Security, scroll to <em>Security</em>, click <strong>Open Anyway</strong> next to Chord, and confirm with your password.</li>
+            <li><strong>macOS 14 and earlier:</strong> Control-click Chord in Applications, choose <strong>Open</strong>, then <strong>Open</strong> again.</li>
+          </ul>
+        </li>
+      </ol>
+      <p><strong>Updates:</strong> Chord tells you when a new version is out. Download it and drag it over the old one; your tabs and settings stay. Afterwards macOS may ask whether Chord can use <em>Chord Safe Storage</em> in your keychain (it encrypts your cookies): click <strong>Always Allow</strong>. Until you answer, pages stay blank, so look for the question behind Chord’s window.</p>
+    </section>
+
+    <section aria-labelledby="linux">
+      <h2 id="linux">Linux</h2>
+      <p class="doc-req">x64 and Arm, on X11 and Wayland.</p>
+      <h3>Debian and Ubuntu</h3>
+      <ul class="files">
+        <li><a href="/download/deb-amd64" data-asset="deb-amd64">.deb for x64 <span class="size" data-size></span></a></li>
+        <li><a href="/download/deb-arm64" data-asset="deb-arm64">.deb for Arm <span class="size" data-size></span></a></li>
+      </ul>
+      <pre><code>sudo apt install ./Chord-*.deb</code></pre>
+      <p>The package sets up the browser’s sandbox, including on Ubuntu 23.10 and later.</p>
+      <h3>Fedora and RHEL</h3>
+      <ul class="files">
+        <li><a href="/download/rpm-x86_64" data-asset="rpm-x86_64">.rpm for x64 <span class="size" data-size></span></a></li>
+        <li><a href="/download/rpm-aarch64" data-asset="rpm-aarch64">.rpm for Arm <span class="size" data-size></span></a></li>
+      </ul>
+      <pre><code>sudo dnf install ./Chord-*.rpm</code></pre>
+      <h3>AppImage</h3>
+      <ul class="files">
+        <li><a href="/download/appimage-x86_64" data-asset="appimage-x86_64">AppImage for x64 <span class="size" data-size></span></a></li>
+        <li><a href="/download/appimage-arm64" data-asset="appimage-arm64">AppImage for Arm <span class="size" data-size></span></a></li>
+      </ul>
+      <pre><code>chmod +x Chord-*.AppImage
+./Chord-*.AppImage</code></pre>
+      <p>Chord never runs without its sandbox, which needs unprivileged user namespaces. Ubuntu 23.10 and later block them for apps without an AppArmor profile, so use the <code>.deb</code> there.</p>
+      <p><strong>Updates:</strong> the AppImage downloads each new version and installs it when you restart. With the <code>.deb</code> or <code>.rpm</code>, Chord tells you when a new version is out; install it the same way, over the old one. Package repositories, so <code>apt</code> and <code>dnf</code> keep Chord up to date, are coming, and so is Flathub.</p>
+    </section>
+
+    <section aria-labelledby="check">
+      <h2 id="check">Check your download</h2>
+      <p>Every release lists its files’ SHA-256 checksums in <a href="/download/checksums">SHA256SUMS.txt</a>. Compare yours with the line for its file:</p>
+      <pre><code>Get-FileHash .\Chord-*-setup.exe        # Windows, in PowerShell
+shasum -a 256 Chord-*                    # macOS and Linux</code></pre>
+      <p>On Windows you can also right-click the installer, choose <strong>Properties → Digital Signatures</strong>, and see it’s signed by <strong>Austin Naremore</strong>. Chord installs updates only when they’re signed the same way.</p>
+    </section>
+
+    <section aria-labelledby="data">
+      <h2 id="data">Your data</h2>
+      <p>Your tabs, history, Archive, settings and Duet chats stay on your computer, in one folder:</p>
+      <dl class="doc-list">
+        <dt>Windows</dt><dd><code>%LOCALAPPDATA%\Chord\User Data</code></dd>
+        <dt>macOS</dt><dd><code>~/Library/Application Support/Chord</code></dd>
+        <dt>Linux</dt><dd><code>~/.config/Chord</code></dd>
+      </dl>
+      <p>Uninstalling keeps it, so reinstalling picks up where you left off. Delete the folder to remove it too. <a href="/privacy">What Chord contacts, and why</a>.</p>
+    </section>
+
+    <section aria-labelledby="uninstall">
+      <h2 id="uninstall">Uninstall</h2>
+      <dl class="doc-list">
+        <dt>Windows</dt><dd>Settings → Apps → Installed apps → Chord → Uninstall.</dd>
+        <dt>macOS</dt><dd>Drag Chord from Applications to the Trash.</dd>
+        <dt>Linux</dt><dd><code>sudo apt remove chord</code>, <code>sudo dnf remove chord</code>, or delete the AppImage.</dd>
+      </dl>
+    </section>
+  </main>
+
+  <!--# include virtual="/partials/footer.html" -->
+</body>
+</html>
