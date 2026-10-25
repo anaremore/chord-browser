@@ -482,9 +482,9 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 |---|---|
 | Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ReaderButton` (§7.11), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
 | Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `NowPlayingCard` (§7.10), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
-| Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar` |
+| Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar`, `CaptureLayer` (§7.12) |
 | Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
-| Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer`, the `DrmNotice` (on a service that needs Widevine: a screen-and-play glyph, *[Service] won’t play in Chord yet*, why in a line, *Open in [browser]* for up to two other browsers on the computer, the likeliest primary; × is Not now, until Chord quits) and the `AuthCard` sign-in box (a site or proxy asking for a username and password: a key, *Sign in to* the origin, the site's realm as a quote, *That username and password didn't work* in `danger` after a failed try, a warning on plain HTTP, two fields, *Cancel* · **Sign in**; Escape cancels) |
+| Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer`, the `PasskeyCard` (when a security key holds several passkeys for a site: a fingerprint glyph, *Sign in to [site] with a passkey*, a button per account with the site's display name over its account name, the first one focused, and Cancel; Escape declines), the `DrmNotice` (on a service that needs Widevine: a screen-and-play glyph, *[Service] won’t play in Chord yet*, why in a line, *Open in [browser]* for up to two other browsers on the computer, the likeliest primary; × is Not now, until Chord quits) and the `AuthCard` sign-in box (a site or proxy asking for a username and password: a key, *Sign in to* the origin, the site's realm as a quote, *That username and password didn't work* in `danger` after a failed try, a warning on plain HTTP, two fields, *Cancel* · **Sign in**; Escape cancels) |
 | Settings and help | `SettingRow` (label, control, and a ↺ reset button shown only when the value differs from its default), `ShortcutSheet` (the cheat sheet, generated from the shortcut registry) |
 | Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
 | Duet | `DuetPanel`, `ThreadHeader` (title, provider/model chip, thread menu), `MessageList`, `AssistantMessage` (with `CitationPill`), `ToolActivityRow`, `ApprovalCard`, `Composer` (`ContextChips`, input, send), `DuetSetup` |
@@ -676,6 +676,21 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Private windows:** the same, in the window's graphite colors with the Chord theme; images come through the window's own sign-ins, and nothing of the article is kept.
 
 ---
+
+### 7.12 `CaptureLayer`: screenshots
+
+*Built 2026-10-24.* The maintainer's Screenboard extension, built in: an element, an area, what's on screen or the whole page, straight to the clipboard.
+
+- **Starting:** ⌘⇧2 / Ctrl+Shift+2 (reserved; Arc's key, clear of macOS's own ⌘⇧3/4/5), *Take a screenshot* in the ⋯ menu, the page's right-click menu and the command bar (and File on macOS). It takes the page in front: the focused pane of a split, Peek's page while it's open, the whole window in fullscreen. With no page there (an error or crash page, a new tab), a toast says so.
+- **One mode.** The overlay covers the window; the page stays clear and the rest dims (`scrim`). The pointer over the page is a crosshair.
+  - **Hover** outlines the element under it (`focus-ring` width, `accent`, a 12% `accent` fill) with a label above: what it is and its size, "div#box · 200 × 120". **Click** takes the whole element, even where it runs past the screen.
+  - **Drag** draws an area (a dashed hairline, 8% fill) with its size; let go to take it. A drag under 4 px is a click.
+  - **The bar**, a pill centered at the page's top (`surface-raised`, `shadow-popover`): *Click an element or drag an area* in `fg-muted`, **Visible** (V), **Full page** (F), and ✕ (Esc).
+  - **Keys:** ↑ and ↓ step to the element's parent or child, Enter takes it, V and F as above, Esc cancels. The wheel still scrolls the page. A click outside the page cancels.
+- **After:** it's on the clipboard at once, as a PNG, and a toast says *Screenshot copied* with **Save**, which puts it in Downloads as "Screenshot 2026-10-24 at 18.32.10.png" and lists it there. ⌘Z never presses Save. Next: **Ask Duet**, which attaches it to Duet's chat.
+- **Recent screenshots:** the downloads panel lists them under its downloads, newest first: a thumbnail, the page's title, when and how big, then Copy, Save and Delete, and Clear for all. Up to 50, within 256 MB. Settings → Privacy → *Keep recent screenshots* (on) turns this off, deleting them. A private window's are in memory only, listed only in that window, and gone with it.
+- **What can't be pictured:** video under DRM comes out black, as in every browser.
+- **Accessibility:** a dialog named *Take a screenshot*, described by its hint, with the keyboard in it; the bar's buttons are ordinary Tab stops; the element under the pointer is announced politely ("div#box, 200 by 120"). Forced colors draw the outline and label in `Highlight`.
 
 ## 8. Key flows
 
@@ -1002,6 +1017,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 | Full screen | ⌃⌘F | F11 | R |
 | Move focus: sidebar → page → address (→ Duet) | F6 · ⇧F6 | F6 · Shift+F6 | R |
 | Print | ⌘P | Ctrl+P | P |
+| Take a screenshot (§7.12) | ⌘⇧2 | Ctrl+Shift+2 | R |
 | Save page as | ⌘⇧S | Ctrl+Shift+S | P |
 
 **Chord's own pages and tools**

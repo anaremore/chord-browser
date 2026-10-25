@@ -42,6 +42,7 @@ function runAction(toast: Toast): void {
   const action = toast.action;
   if (!action) return;
   if ('update' in action) void api.updates.restart();
+  else if ('screenshot' in action) void api.screenshots.act(action.screenshot.id, action.screenshot.do);
   else void api.state.dispatch(action.command);
 }
 
@@ -193,7 +194,8 @@ export function Toasts({ store, transition, compact, undoKeys, mac }: { store: T
   const height = shown.length ? front + (shown.length - 1) * DECK_OFFSET : 0;
 
   // ⌘Z / Ctrl+Z undoes what the newest toast offers to undo (DESIGN.md §7.5), unless a text field wants the key.
-  const newest = toasts.find((t) => t.action && !('update' in t.action));
+  // Only an Undo: never "Restart to update" or a screenshot's Save.
+  const newest = toasts.find((t) => t.action && 'command' in t.action);
   useEffect(() => {
     if (!newest || !undoKeys) return;
     const onKey = (event: KeyboardEvent) => {

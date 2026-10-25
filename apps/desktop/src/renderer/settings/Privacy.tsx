@@ -229,6 +229,13 @@ export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
           onReset={() => void api.settings.set({ pagePreviews: DEFAULT_SETTINGS.pagePreviews })}
           control={<Switch label="Show page previews" checked={snapshot.settings.pagePreviews} onChange={(pagePreviews) => void api.settings.set({ pagePreviews })} />}
         />
+        <Row
+          label="Keep recent screenshots"
+          description="Your last screenshots are listed in Downloads, to copy or save again. They're kept on this computer (a private window's only until it closes); turning this off deletes them."
+          changed={snapshot.settings.keepScreenshots !== DEFAULT_SETTINGS.keepScreenshots}
+          onReset={() => void api.settings.set({ keepScreenshots: DEFAULT_SETTINGS.keepScreenshots })}
+          control={<Switch label="Keep recent screenshots" checked={snapshot.settings.keepScreenshots} onChange={(keepScreenshots) => void api.settings.set({ keepScreenshots })} />}
+        />
       </div>
     </>
   );

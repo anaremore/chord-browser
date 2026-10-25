@@ -17,6 +17,7 @@ const api: PopoverApi = {
   permission: { respond: (id, decision) => invoke('permission:respond', { id, decision }) },
   share: { respond: (id, sourceId, audio) => invoke('share:respond', { id, sourceId, audio }) },
   auth: { respond: (id, credentials) => invoke('auth:respond', { id, credentials }) },
+  passkey: { respond: (id, credentialId) => invoke('passkey:respond', { id, credentialId }) },
   safeBrowsing: { choose: (on) => invoke('safeBrowsing:choose', { on }) },
   drm: { open: (browser) => invoke('drm:open', { browser }), dismiss: () => invoke('drm:dismiss') },
 };

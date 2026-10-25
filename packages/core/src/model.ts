@@ -353,6 +353,8 @@ export interface Settings {
   autoPip: boolean;
   /** Hovering a pinned tab or folder shows a preview; pinned pages are kept as small pictures in `<userData>/Captures/` (DESIGN.md §7.6). */
   pagePreviews: boolean;
+  /** Recent screenshots are kept in `<userData>/Screenshots/` for the downloads panel's list (DESIGN.md §7.12); off deletes them. */
+  keepScreenshots: boolean;
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
   shortcuts: ShortcutOverrides;
   spellcheck: SpellcheckSettings;
@@ -446,6 +448,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sleepTabs: true,
   autoPip: true,
   pagePreviews: true,
+  keepScreenshots: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
   googleFree: false,
@@ -496,6 +499,7 @@ export interface SettingsPatch {
   sleepTabs?: boolean;
   autoPip?: boolean;
   pagePreviews?: boolean;
+  keepScreenshots?: boolean;
   spellcheck?: Partial<SpellcheckSettings>;
   externalLinks?: ExternalLinks;
   miniWindowSize?: { width: number; height: number } | null;

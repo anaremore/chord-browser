@@ -49,6 +49,7 @@ const api: ShellApi = {
   gestures: { onPhase: (listener) => subscribe('gesture:phase', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
   updates: { restart: () => invoke('update:restart') },
+  screenshots: { act: (id, action) => invoke('screenshots:do', { id, do: action }) },
   extensions: {
     state: () => invoke('extensions:state'),
     onState: (listener) => subscribe('extensions:state', listener),

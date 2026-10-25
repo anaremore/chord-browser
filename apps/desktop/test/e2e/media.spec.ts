@@ -436,6 +436,16 @@ test('the card shows a page without Media Session by its tab, and pops a video o
     await card(shell).getByRole('button', { name: 'Back to the tab' }).click();
     await expect.poll(pip).toBeNull();
     await expect(row(shell, 'Movie')).toHaveAttribute('aria-current', 'page');
+
+    // The site pops it out again; you go elsewhere, then back to its tab: it comes back in, playing on.
+    await movie.click('#site-pip');
+    await expect.poll(pip).toBe('v');
+    await row(shell, 'Second page').click();
+    await expect(row(shell, 'Second page')).toHaveAttribute('aria-current', 'page');
+    expect(await pip()).toBe('v');
+    await row(shell, 'Movie').click();
+    await expect.poll(pip).toBeNull();
+    expect(await movie.evaluate(() => document.querySelector('video')!.paused)).toBe(false);
   } finally {
     await app.close();
   }

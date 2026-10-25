@@ -132,6 +132,47 @@
   color: var(--color-accent);
 }
 
+/* Choosing a passkey: each account a row-sized button. */
+.passkeyList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-3) 0 0;
+  padding: 0 var(--space-3);
+  list-style: none;
+}
+
+.passkeyAccount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  inline-size: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  text-align: start;
+}
+
+.passkeyAccount:hover {
+  background: var(--color-item-active-bg);
+}
+
+.passkeyAccount:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-hairline);
+}
+
+.passkeyName {
+  font: var(--text-label);
+}
+
+.passkeyDetail {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
 /* Safe Browsing's one-time offer: its notice, in full, before it's on. */
 .offerIcon {
   flex: none;

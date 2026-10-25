@@ -226,6 +226,13 @@ for (const mode of APPEARANCES) {
         await expect(overlay.getByRole('dialog', { name: 'Downloads' })).toBeVisible();
         findings.push(...(await audit(overlay, 'downloads', { appearance: mode })));
         await overlay.keyboard.press('Escape');
+        // Taking a screenshot: the capture bar over the page.
+        await runAction(shell, 'page.screenshot');
+        const capture = overlay.getByRole('dialog', { name: 'Take a screenshot' });
+        await expect(capture).toBeVisible();
+        findings.push(...(await audit(overlay, 'screenshot capture', { appearance: mode })));
+        await overlay.keyboard.press('Escape');
+        await expect(capture).toHaveCount(0);
         await expect(shell.locator('[data-placement="sidebar"]')).toBeVisible({ timeout: 20_000 });
         await shell.locator('[data-placement="sidebar"]').getByRole('button', { name: 'Extensions' }).click();
         await expect(overlay.getByRole('dialog', { name: 'Extensions' })).toBeVisible();

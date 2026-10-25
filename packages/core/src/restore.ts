@@ -189,6 +189,7 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   if (saved['externalLinks'] === 'mini' || saved['externalLinks'] === 'tab') settings.externalLinks = saved['externalLinks'];
   settings.miniWindowSize = restoreMiniSize(saved['miniWindowSize']);
   if (typeof saved['pagePreviews'] === 'boolean') settings.pagePreviews = saved['pagePreviews'];
+  if (typeof saved['keepScreenshots'] === 'boolean') settings.keepScreenshots = saved['keepScreenshots'];
   if (isUiScale(saved['uiScale'])) settings.uiScale = saved['uiScale'];
   const spellcheck = saved['spellcheck'] as Record<string, unknown> | undefined;
   if (spellcheck && typeof spellcheck === 'object') {

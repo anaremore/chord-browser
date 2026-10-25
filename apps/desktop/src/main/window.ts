@@ -202,7 +202,7 @@ export class AppWindow {
   /** Toasts wait for the shell to load: one sent earlier (an update found at launch) would be lost. */
   private shellLoaded = false;
   private pendingToasts: Toast[] = [];
-  private pendingOpen: { mode: OverlayOpenEvent['mode']; url: string; anchor: Rect | null; requestedAt: number } | null = null;
+  private pendingOpen: { mode: OverlayOpenEvent['mode']; url: string; anchor: Rect | null; requestedAt: number; capture?: OverlayOpenEvent['capture'] } | null = null;
   /** The shell has painted its first frame: the window's launch is over. */
   private shellPainted = false;
   readonly isPrivate: boolean;
@@ -554,6 +554,22 @@ export class AppWindow {
     return { x: card.x, y: card.y + size.header, width: card.width, height: Math.max(0, card.height - size.header) };
   }
 
+  /**
+   * The page a screenshot takes (DESIGN.md §7.12), and where it is in UI
+   * units: Peek's page while it's open, else the focused pane (the whole
+   * window in fullscreen). None while the frame shows an explanation instead
+   * of the page (an error, a crash) or there's no page.
+   */
+  captureTarget(): { contents: WebContents; rect: Rect } | null {
+    if (this.window.isDestroyed()) return null;
+    if (this.peek && this.peekView) return { contents: this.peekView.webContents, rect: this.peekPageRect() };
+    const view = this.tabView;
+    if (!view || this.hiddenPanes.has(view) || view.webContents.isDestroyed()) return null;
+    if (this.pageFullScreen) return { contents: view.webContents, rect: { x: 0, y: 0, ...this.contentSize() } };
+    const frame = this.frameRect();
+    return { contents: view.webContents, rect: this.paneRectsIn(frame)[this.focusedPane] ?? frame };
+  }
+
   /** Every page shown in the frame: a split's panes, or the one tab. */
   get paneContents(): WebContents[] {
     return this.panes.map((v) => v.webContents);
@@ -727,19 +743,19 @@ export class AppWindow {
    * click outside) gives the focus back there (DESIGN.md §10). `requestedAt` is
    * when the opening was asked for: the command bar's open budget counts from it.
    */
-  openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null, from: 'shell' | 'page' = 'page', requestedAt = epochNow()): void {
+  openOverlay(mode: OverlayOpenEvent['mode'], url: string, anchor: Rect | null = null, from: 'shell' | 'page' = 'page', requestedAt = epochNow(), capture?: OverlayOpenEvent['capture']): void {
     this.closeFloating();
     this.hidePreview();
     this.overlayFrom = from;
     if (!this.overlayReady) {
       // A brand-new window: the command bar opens as soon as it's listening.
-      this.pendingOpen = { mode, url, anchor, requestedAt };
+      this.pendingOpen = { mode, url, anchor, requestedAt, ...(capture ? { capture } : {}) };
       return;
     }
     this.overlayVisible = true;
     this.overlay.setVisible(true);
     this.overlay.webContents.focus();
-    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq, requestedAt });
+    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq, requestedAt, ...(capture ? { capture } : {}) });
   }
 
   /** The command bar has started and listens for openings (it says so after every load). */
@@ -747,7 +763,7 @@ export class AppWindow {
     this.overlayReady = true;
     const pending = this.pendingOpen;
     this.pendingOpen = null;
-    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, this.overlayFrom, pending.requestedAt);
+    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, this.overlayFrom, pending.requestedAt, pending.capture);
     else if (this.shellPainted) send(this.overlay.webContents, 'overlay:warm', null);
   }
 

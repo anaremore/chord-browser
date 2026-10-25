@@ -4,6 +4,7 @@
  * it, newest first. Clicking outside or Escape closes it.
  */
 import {
+  ago,
   describeDownload,
   describeHeldDownload,
   downloadsFor,
@@ -14,10 +15,10 @@ import {
   type State,
   type ThreatKind,
 } from '@chord/core';
-import type { Rect } from '@chord/ipc';
-import { File, FolderOpen, Pause, Play, RotateCcw, ShieldAlert, X } from 'lucide-react';
+import type { Rect, ScreenshotItem } from '@chord/ipc';
+import { Copy, Download as SaveIcon, File, FolderOpen, Pause, Play, RotateCcw, ShieldAlert, Trash2, X } from 'lucide-react';
 import { motion, type Transition } from 'motion/react';
-import { useEffect, useId, useRef, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 
@@ -129,6 +130,36 @@ function Row({ download }: { download: Download }) {
   );
 }
 
+/** One of the recent screenshots (DESIGN.md §7.12): its picture, its page, when and how big; Copy, Save, Delete. */
+function ShotRow({ shot, onChange }: { shot: ScreenshotItem; onChange(): void }) {
+  const name = shot.title || shot.url || 'Screenshot';
+  const act = (action: 'copy' | 'save' | 'delete') => void api.screenshots.act(shot.id, action).then(() => action === 'delete' && onChange());
+  return (
+    <li className={styles.download}>
+      <div className={styles.downloadMain}>
+        {shot.thumb ? <img className={styles.shotThumb} src={shot.thumb} alt="" /> : <span className={styles.shotThumb} />}
+        <span className={styles.downloadText}>
+          <span className={styles.downloadName}>{name}</span>
+          <span className={styles.downloadStatus}>
+            {ago(shot.createdAt, Date.now())} · {shot.width} × {shot.height}
+          </span>
+        </span>
+      </div>
+      <div className={styles.downloadActions}>
+        <button type="button" className={styles.smallButton} aria-label={`Copy screenshot of ${name}`} title="Copy" onClick={() => act('copy')}>
+          <Copy {...ICON} />
+        </button>
+        <button type="button" className={styles.smallButton} aria-label={`Save screenshot of ${name}`} title="Save to Downloads" onClick={() => act('save')}>
+          <SaveIcon {...ICON} />
+        </button>
+        <button type="button" className={styles.smallButton} aria-label={`Delete screenshot of ${name}`} title="Delete" onClick={() => act('delete')}>
+          <Trash2 {...ICON} />
+        </button>
+      </div>
+    </li>
+  );
+}
+
 export function DownloadsPanel({
   state,
   windowId,
@@ -153,6 +184,11 @@ export function DownloadsPanel({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // The window's recent screenshots (a private window's own), when Chord keeps them.
+  const [shots, setShots] = useState<ScreenshotItem[]>([]);
+  const loadShots = useCallback(() => void api.screenshots.list().then(setShots, () => setShots([])), []);
+  useEffect(loadShots, [loadShots]);
 
   // A private window lists only its own downloads, and no other window lists them.
   const downloads = downloadsFor(state, windowId).sort((a, b) => b.startedAt - a.startedAt);
@@ -199,6 +235,21 @@ export function DownloadsPanel({
             Clear finished
           </button>
         </footer>
+      )}
+      {shots.length > 0 && (
+        <section aria-label="Screenshots" className={styles.shots}>
+          <header className={styles.downloadsHeader}>
+            <span className={styles.downloadsTitle}>Screenshots</span>
+            <button type="button" className={styles.textButton} onClick={() => void api.screenshots.clear().then(loadShots)}>
+              Clear
+            </button>
+          </header>
+          <ul className={styles.downloadList}>
+            {shots.map((shot) => (
+              <ShotRow key={shot.id} shot={shot} onChange={loadShots} />
+            ))}
+          </ul>
+        </section>
       )}
     </motion.div>
   );

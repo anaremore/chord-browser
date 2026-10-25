@@ -7,13 +7,23 @@ import { expect, test, type ElectronApplication } from '@playwright/test';
 
 const MAIN_ERROR = /\[chord\] (Uncaught exception|Unhandled rejection) in main/;
 const mainErrors: string[] = [];
+/** Launch timelines main printed because its first page was slow (src/main/launch-timeline.ts): shown beside a failure. */
+const slowLaunches: string[] = [];
+const SLOW_LAUNCH = /\[chord\] slow launch:[\s\S]*?\[chord\] end of slow launch/;
 /** Apps a test ended on purpose with kill(): their exit isn't a crash. */
 const killed = new WeakSet<ElectronApplication>();
 
 /** Watch a launched app's stderr for errors main caught. */
 export function watchForMainErrors(app: ElectronApplication): ElectronApplication {
   let log = '';
+  let slow = '';
   app.process().stderr?.on('data', (chunk: Buffer) => {
+    slow = (slow + chunk.toString()).slice(-8000);
+    const timeline = SLOW_LAUNCH.exec(slow);
+    if (timeline) {
+      slowLaunches.push(timeline[0]);
+      slow = '';
+    }
     log += chunk.toString();
     const at = log.search(MAIN_ERROR);
     if (at < 0) {
@@ -34,6 +44,9 @@ export function watchForMainErrors(app: ElectronApplication): ElectronApplicatio
 /** Call once per spec file: each test fails if its run logged an error in main. */
 export function failOnMainErrors(): void {
   test.afterEach(() => {
+    const slow = slowLaunches.splice(0);
+    const info = test.info();
+    if (slow.length > 0 && info.status !== info.expectedStatus) console.log(slow.join('\n'));
     const errors = mainErrors.splice(0);
     expect(errors, errors.join('\n---\n')).toEqual([]);
   });

@@ -136,6 +136,7 @@ const ACTIONS: { action: ActionId; title: string; words: string; when?: (state: 
   { action: 'view.zoomReset', title: 'Actual size', words: 'zoom reset actual size 100' },
   { action: 'view.fullscreen', title: 'Full screen', words: 'full screen fullscreen' },
   { action: 'view.find', title: 'Find in page', words: 'find search in page text' },
+  { action: 'page.screenshot', title: 'Take a screenshot', words: 'screenshot capture screen grab snip picture image copy element area page' },
   { action: 'view.reader', title: 'Show reader view', words: 'reader view mode read article text clean distraction', when: inReader(false) },
   { action: 'view.reader', title: 'Leave reader view', words: 'reader view leave exit close article page', when: inReader(true) },
   { action: 'page.print', title: 'Print', words: 'print pdf' },
