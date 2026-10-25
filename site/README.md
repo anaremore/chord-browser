@@ -4,12 +4,18 @@ Chord's website: one static page, served by nginx, on Clank.
 
 - `public/`: the page (`index.html`, `styles.css`, `site.js`), Onest (OFL), the images and the 404 page.
 - `nginx.conf` and `headers.inc`: files, a strict content security policy, `/health` for Clank, and `www.` redirecting to the bare domain.
+- `downloads.conf` and `public/latest.json`: the download links, written by `tools/latest.mjs` (below). Don't edit them by hand.
 - `Dockerfile`: the image, built from the repo's root. `Dockerfile.dockerignore` keeps the build context to `site/`.
 - `tools/assets.py`: the images, made from the repo's own (below).
+- `test/`: unit tests for `tools/latest.mjs`, run with the repo's `pnpm test`.
 
 ## What the page does
 
-- **The download links** come from GitHub's API in the visitor's browser: the newest release that isn't a draft, previews included (`site.js`). The hero's button picks the file for the visitor's computer. Without the script, or if GitHub can't be reached, every link goes to the releases page. This is the page's only request to anywhere else.
+- **The download links** are addresses on the site, `/download/<file>`, that nginx redirects to that file in the newest release. The newest release is the highest version that isn't a draft, previews included.
+  - **Addresses:** `win-x64`, `win-arm64`, `mac-arm64`, `mac-x64`, `deb-amd64`, `deb-arm64`, `rpm-x86_64`, `rpm-aarch64`, `appimage-x86_64`, `appimage-arm64` and `checksums`. Plain `/download` goes to the release's page.
+  - **Updating them:** `.github/workflows/site-downloads.yml` runs `tools/latest.mjs` whenever a release is published or deleted, and commits the new `downloads.conf` and `public/latest.json` to `main`. Clank then redeploys the site.
+  - **Refreshing by hand:** run that workflow (*Actions → Site downloads → Run workflow*), or `node site/tools/latest.mjs` locally, then commit the two files.
+  - **The page itself** reads `latest.json` for the version and the sizes, and picks the hero's file for the visitor's computer. It sends no request anywhere but this site, and every link works without the script.
 - **The chord chips** change the page's `--hue`, the way a chord tints Chord's sidebar. No inline styles anywhere: the content security policy allows none.
 - **Light and dark** follow the visitor's system.
 

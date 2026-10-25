@@ -43,6 +43,15 @@ export default defineConfig([
     },
   },
   {
+    // chordbrowser.com: the page's script runs in browsers, its tools in Node (the site's workflow).
+    files: ['site/public/**/*.js'],
+    languageOptions: { globals: globals.browser },
+  },
+  {
+    files: ['site/tools/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
+  {
     // The test extension runs in Chrome's extension environment.
     files: ['apps/desktop/test/fixtures/extension/**/*.js'],
     languageOptions: { globals: { ...globals.browser, chrome: 'readonly' } },

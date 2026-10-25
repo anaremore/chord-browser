@@ -2,4 +2,5 @@
 *
 !site/nginx.conf
 !site/headers.inc
+!site/downloads.conf
 !site/public/

@@ -4,3 +4,5 @@ release/
 test-results/
 playwright-report/
 coverage/
+# The website (site/) is its own small design, outside the app's token rules.
+site/
