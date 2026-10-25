@@ -72,6 +72,21 @@ describe('IPC contract', () => {
     expect(set.safeParse({ searchEngine: 'kagi' }).success).toBe(false);
   });
 
+  it("gives developer tools' controls to the shell and their window's bar only, with sane sizes", () => {
+    expect(invokeChannels['devtools:do'].roles).toEqual(['shell', 'devtools']);
+    expect(invokeChannels['devtools:bar'].roles).toEqual(['devtools']);
+    // Their window's bar can't reach the store, tabs, settings or other actions.
+    for (const channel of ['cmd:dispatch', 'state:snapshot', 'settings:set', 'nav:command', 'action:run', 'focus:move'] as const) expect(invokeChannels[channel].roles).not.toContain('devtools');
+    const act = invokeChannels['devtools:do'].request;
+    expect(act.safeParse({ do: 'close', nodeId: 'n' }).success).toBe(true);
+    expect(act.safeParse({ do: 'side', side: 'bottom' }).success).toBe(true);
+    expect(act.safeParse({ do: 'resize', size: 480, done: false }).success).toBe(true);
+    expect(act.safeParse({ do: 'side', side: 'left' }).success).toBe(false);
+    expect(act.safeParse({ do: 'resize', size: -1, done: true }).success).toBe(false);
+    expect(act.safeParse({ do: 'resize', size: 480 }).success).toBe(false);
+    expect(act.safeParse({ do: 'open', nodeId: 'n' }).success).toBe(false);
+  });
+
   it('validates system info', () => {
     const ok = SystemInfo.safeParse({
       platform: 'win32',

@@ -1648,6 +1648,71 @@ kbd {
 }
 
 /*
+ * Developer tools docked beside the page (DESIGN.md §7.15): the page and
+ * DevTools are frames of their own, 8 px apart, with split view's edge
+ * between them. DevTools' frame starts with Chord's 32 px header; the
+ * DevTools view sits under it.
+ */
+.frame[data-devtools] {
+  display: block;
+  background: none;
+  box-shadow: none;
+}
+
+.devtools {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--radius-frame);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-frame);
+}
+
+.devtoolsHeader {
+  box-sizing: border-box;
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-row);
+  padding-inline: var(--space-3) var(--space-1);
+  border-block-end: var(--size-hairline) solid var(--color-divider);
+  background: var(--color-surface);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.devtoolsIcon {
+  flex: none;
+  color: var(--color-fg-subtle);
+}
+
+.devtoolsTitle {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.devtoolsButton {
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+}
+
+/* A picture of docked DevTools while the frame changes size: their header (a copy), then the picture. */
+.snapshotDevtools {
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.snapshotPicture {
+  position: absolute;
+  inset-inline: 0;
+}
+
+/*
  * While a tab is dragged the shell is lifted over the page so the drop zones
  * show: what it draws over the frame steps aside, and the page shows through.
  */
@@ -1904,6 +1969,12 @@ kbd {
 
   .paneDivider:focus-visible::after {
     background: Highlight;
+  }
+
+  /* Docked developer tools' frame, edged as floating surfaces are. */
+  .devtools {
+    outline: var(--size-hairline) solid CanvasText;
+    outline-offset: calc(var(--size-hairline) * -1);
   }
 
   .dropZone,

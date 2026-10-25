@@ -35,9 +35,41 @@ export function transformFor(from: Rect, to: Rect): string {
   return `translate(${to.x - from.x}px, ${to.y - from.y}px) scale(${sx}, ${sy})`;
 }
 
+/**
+ * One picture as the frame's card: a canvas; or for docked developer tools,
+ * their frame with a copy of their header (DESIGN.md §7.15) and the picture under it.
+ */
+function card(pane: DrawablePane | SnapshotPane): HTMLElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = pane.width;
+  canvas.height = pane.height;
+  if ('bitmap' in pane) canvas.getContext('bitmaprenderer')?.transferFromImageBitmap(pane.bitmap);
+  else canvas.getContext('2d', { alpha: false })?.putImageData(imageData(bgraToRgba(pane.pixels), pane.width, pane.height), 0, 0);
+  const place = { left: `${pane.rect.x}px`, top: `${pane.rect.y}px`, width: `${pane.rect.width}px`, height: `${pane.rect.height}px` };
+  if (!pane.header) {
+    canvas.className = styles.snapshot!;
+    Object.assign(canvas.style, place);
+    return canvas;
+  }
+  const frame = document.createElement('div');
+  frame.className = `${styles.snapshot} ${styles.snapshotDevtools}`;
+  Object.assign(frame.style, place);
+  // The real header is hidden with the frame while pictures show: a copy, inert, goes with the picture.
+  const header = document.querySelector(`[data-devtools-header="${CSS.escape(pane.header.tab)}"]`)?.cloneNode(true);
+  if (header instanceof HTMLElement) {
+    header.removeAttribute('data-devtools-header');
+    header.inert = true;
+    frame.append(header);
+  }
+  canvas.className = styles.snapshotPicture!;
+  Object.assign(canvas.style, { top: `${pane.header.height}px`, width: '100%', height: `${Math.max(0, pane.rect.height - pane.header.height)}px` });
+  frame.append(canvas);
+  return frame;
+}
+
 interface Showing {
   seq: number;
-  canvases: HTMLCanvasElement[];
+  canvases: HTMLElement[];
   from: Rect[];
   /** Where each picture was last sent (its transform). */
   to: string[];
@@ -59,16 +91,7 @@ function attach(host: HTMLElement): () => void {
   // sent until the worker has its port.
   const show = (panes: readonly (DrawablePane | SnapshotPane)[], seq: number) => {
     clear();
-    const canvases = panes.map((pane) => {
-      const canvas = document.createElement('canvas');
-      canvas.className = styles.snapshot!;
-      canvas.width = pane.width;
-      canvas.height = pane.height;
-      Object.assign(canvas.style, { left: `${pane.rect.x}px`, top: `${pane.rect.y}px`, width: `${pane.rect.width}px`, height: `${pane.rect.height}px` });
-      if ('bitmap' in pane) canvas.getContext('bitmaprenderer')?.transferFromImageBitmap(pane.bitmap);
-      else canvas.getContext('2d', { alpha: false })?.putImageData(imageData(bgraToRgba(pane.pixels), pane.width, pane.height), 0, 0);
-      return canvas;
-    });
+    const canvases = panes.map(card);
     host.replaceChildren(...canvases);
     root.dataset['frameSnapshot'] = '';
     const mine: Showing = { seq, canvases, from: panes.map((p) => p.rect), to: canvases.map(() => ''), arrived: false };

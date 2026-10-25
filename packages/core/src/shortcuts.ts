@@ -71,6 +71,8 @@ export type ActionId =
   | 'app.downloads'
   | 'app.shortcuts'
   | 'app.devtools'
+  | 'app.devtoolsSide'
+  | 'app.devtoolsWindow'
   | 'app.quit';
 
 export interface Shortcut {
@@ -162,6 +164,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('app.downloads', 'Downloads', 'page-first', ['Mod+Shift+J'], ['Mod+J']),
   s('app.shortcuts', 'Keyboard shortcuts', 'page-first', ['Mod+Alt+/']),
   s('app.devtools', 'Developer tools', 'reserved', ['Mod+Alt+I'], ['F12', 'Mod+Shift+I']),
+  // No keys (DESIGN.md §7.15): their header's buttons, the command bar, and ⌘⇧D / Ctrl+Shift+D inside DevTools, as in Chrome.
+  s('app.devtoolsSide', 'Dock developer tools on the other side', 'page-first', []),
+  s('app.devtoolsWindow', 'Pop out developer tools, or dock them', 'page-first', []),
   s('app.quit', 'Quit Chord', 'reserved', ['Mod+Q'], ['Mod+Shift+Q'], ['darwin', 'linux']),
 ];
 

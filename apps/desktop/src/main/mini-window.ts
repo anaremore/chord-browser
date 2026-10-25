@@ -303,6 +303,11 @@ export class MiniWindows {
       case 'page.print':
         page.print();
         return true;
+      case 'app.devtools':
+        // The page's own developer tools, popped out in a window of Electron's own (DESIGN.md §7.15).
+        if (page.isDevToolsOpened()) page.closeDevTools();
+        else page.openDevTools({ mode: 'detach' });
+        return true;
       default:
         return false;
     }

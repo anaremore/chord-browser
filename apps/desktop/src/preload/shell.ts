@@ -67,6 +67,7 @@ const api: ShellApi = {
   },
   preview: { hover: (target) => invoke('preview:hover', target) },
   focus: { onRegion: (listener) => subscribe('focus:region', listener), move: (to) => invoke('focus:move', { to }) },
+  devtools: { act: (action) => invoke('devtools:do', action) },
   perf: { shell: (milestone) => invoke('perf:shell', { milestone }) },
   safeBrowsing: {
     status: () => invoke('safeBrowsing:status'),

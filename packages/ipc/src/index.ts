@@ -47,9 +47,10 @@ import { z } from 'zod';
 
 /**
  * `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs); `preview` draws hover
- * previews; `mini` is a mini window's bar; `reader` is a tab's reader view (it sees that tab's article and nothing else).
+ * previews; `mini` is a mini window's bar; `reader` is a tab's reader view (it sees that tab's article and nothing else);
+ * `devtools` is the bar of a tab's developer tools in a window of their own (it sees that tab's site, and docks them).
  */
-export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive' | 'preview' | 'mini' | 'reader';
+export type Role = 'shell' | 'overlay' | 'popover' | 'internal' | 'archive' | 'preview' | 'mini' | 'reader' | 'devtools';
 
 export const Platform = z.enum(['darwin', 'win32', 'linux']);
 export type Platform = z.infer<typeof Platform>;
@@ -329,6 +330,28 @@ export interface MiniState {
   /** The chord "Open in" moves the page to; null when there's none it can go to. */
   target: { id: string; name: string; icon: string } | null;
 }
+
+/** What the bar of a tab's developer tools in a window of their own shows (DESIGN.md §7.15): the tab's site, and the side they'd dock on. */
+export interface DevtoolsBar {
+  host: string;
+  title: string;
+  side: 'right' | 'bottom';
+}
+
+/**
+ * Developer tools' controls (DESIGN.md §7.15): close a tab's, pop them out
+ * into a window, dock them back, put docked ones on the other side, and the
+ * edge being dragged (`done` once it's let go, which saves the size). From
+ * the shell, `nodeId` is a tab its window shows; the bar acts on its own tab.
+ */
+export const DevtoolsAction = z.discriminatedUnion('do', [
+  z.strictObject({ do: z.literal('close'), nodeId: id.optional() }),
+  z.strictObject({ do: z.literal('window'), nodeId: id.optional() }),
+  z.strictObject({ do: z.literal('dock'), nodeId: id.optional() }),
+  z.strictObject({ do: z.literal('side'), side: z.enum(['right', 'bottom']) }),
+  z.strictObject({ do: z.literal('resize'), size: z.number().min(0).max(10_000), done: z.boolean() }),
+]);
+export type DevtoolsAction = z.infer<typeof DevtoolsAction>;
 
 /** What Peek's chrome shows (DESIGN.md §7.9, §8.5). */
 export interface PeekState {
@@ -968,7 +991,7 @@ export const invokeChannels = {
     request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }), z.object({ do: z.literal('clearAll') })]),
     response: z.custom<DuetProviderInfo[]>(),
   },
-  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview', 'mini', 'reader'], request: z.void(), response: SystemInfo },
+  'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview', 'mini', 'reader', 'devtools'], request: z.void(), response: SystemInfo },
   'preview:hover': { roles: ['shell'], request: PreviewTarget, response: z.void() },
   'preview:size': { roles: ['preview'], request: z.object({ width: z.number().min(0).max(2000), height: z.number().min(0).max(2000) }), response: z.void() },
   'state:snapshot': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<StateSnapshot>() },
@@ -978,7 +1001,7 @@ export const invokeChannels = {
   /** `dismissed`: Esc or a click outside, rather than a pick (the keyboard goes back where it came from). */
   'overlay:close': { roles: ['overlay'], request: z.object({ seq: z.number().int(), dismissed: z.boolean().optional() }), response: z.void() },
   /** F6 (DESIGN.md §10): the shell moves the keyboard to the page, the find bar or permission prompt, or itself. */
-  'focus:move': { roles: ['shell'], request: z.strictObject({ to: z.enum(['page', 'popover', 'shell']) }), response: z.void() },
+  'focus:move': { roles: ['shell'], request: z.strictObject({ to: z.enum(['page', 'devtools', 'popover', 'shell']) }), response: z.void() },
   /** The command bar has started and listens for openings (a new window opens it as soon as it is). */
   'overlay:ready': { roles: ['overlay'], request: z.void(), response: z.void() },
   /** The shell reports where the URL pill / address field sits, for anchored ⌘L. */
@@ -1141,6 +1164,9 @@ export const invokeChannels = {
   'settings:forgetSite': { roles: ['internal'], request: z.strictObject({ origin: siteOrigin }), response: z.void() },
   /** Settings → General → Link routes: send a site's links to a chord, or (null) stop. */
   'settings:linkRoute': { roles: ['internal'], request: z.strictObject({ host: z.string().min(1).max(1000), chordId: id.nullable() }), response: z.void() },
+  // Developer tools in the window (DESIGN.md §7.15): their header in the shell, and the bar of ones in a window of their own.
+  'devtools:do': { roles: ['shell', 'devtools'], request: DevtoolsAction, response: z.void() },
+  'devtools:bar': { roles: ['devtools'], request: z.void(), response: z.custom<DevtoolsBar>() },
   // A mini window's bar (DESIGN.md §7.9): links from other apps open there.
   'mini:state': { roles: ['mini'], request: z.void(), response: z.custom<MiniState>() },
   /** Move the page into its "Open in" chord, as a tab with its history. */
@@ -1235,6 +1261,7 @@ export interface EventPayloads {
   'archive:changed': null;
   'archive:snapshot': ArchiveSnapshot;
   'mini:state': MiniState;
+  'devtools:bar': DevtoolsBar;
   /** Main closed this opening of the overlay itself (Peek, by Esc in its page, ⌘W, or Open in Today). */
   'overlay:dismiss': { seq: number };
   /** The window is up (its shell painted): the command bar may warm itself for its first opening now. */
@@ -1262,6 +1289,11 @@ export interface SnapshotPane {
   width: number;
   height: number;
   pixels: Uint8Array;
+  /**
+   * Docked developer tools (DESIGN.md §7.15): `rect` is their whole frame, and
+   * the picture fills it below the header Chord draws for that tab, `height` tall.
+   */
+  header?: { tab: string; height: number };
 }
 
 /**
@@ -1369,8 +1401,10 @@ export interface ShellApi {
   /** F6's regions (DESIGN.md §10): main says where the keyboard is; the shell picks the next region. */
   focus: {
     onRegion(listener: (event: FocusRegionEvent) => void): () => void;
-    move(to: 'page' | 'popover' | 'shell'): Promise<void>;
+    move(to: 'page' | 'devtools' | 'popover' | 'shell'): Promise<void>;
   };
+  /** Developer tools docked in the frame: their header's buttons and the edge between them and the page. */
+  devtools: { act(action: DevtoolsAction): Promise<void> };
   /** Safe Browsing: first run's step, and the warning's two ways out. */
   safeBrowsing: {
     status(): Promise<SafeBrowsingStatus>;
@@ -1397,8 +1431,10 @@ export interface ImportApi {
 /** F6 or ⇧F6: which way, where the keyboard is now, and whether a find bar or prompt shows over the page. */
 export interface FocusRegionEvent {
   direction: 1 | -1;
-  from: 'shell' | 'popover' | 'page';
+  from: 'shell' | 'popover' | 'page' | 'devtools';
   popover: boolean;
+  /** The focused pane's tab has developer tools docked beside it (a region of their own, after the page). */
+  devtools: boolean;
 }
 
 interface DownloadsApi {
@@ -1473,6 +1509,20 @@ export interface MiniApi {
     promote(): Promise<void>;
     chooseChord(anchor: Rect): Promise<void>;
     copyLink(): Promise<void>;
+  };
+}
+
+/** `window.chord` in the bar of a tab's developer tools in a window of their own (DESIGN.md §7.15). */
+export interface DevtoolsBarApi {
+  system: {
+    info(): Promise<SystemInfo>;
+    onChange(listener: (info: SystemInfo) => void): () => void;
+  };
+  devtools: {
+    bar(): Promise<DevtoolsBar>;
+    onBar(listener: (bar: DevtoolsBar) => void): () => void;
+    /** Put them back in the window, beside the tab's page. */
+    dock(): Promise<void>;
   };
 }
 

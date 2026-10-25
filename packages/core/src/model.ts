@@ -4,6 +4,7 @@
  * and chord-data persists everything except `live` and `closed` (the archive
  * keeps closed tabs in its own table).
  */
+import { DEFAULT_DEVTOOLS, type DevtoolsPlace, type DevtoolsSettings } from './devtools';
 import type { DuetKeep, DuetProvider, DuetScope } from './duet';
 import type { ImportRecord } from './import';
 import { DEFAULT_READER, type ReaderSettings } from './reader';
@@ -226,6 +227,8 @@ export interface LiveTab {
    * a number, 'dot' for one without a number, or null. Null when counts are hidden for its site.
    */
   badge: number | 'dot' | null;
+  /** The tab's developer tools are open: docked beside its page, or in a window of their own (DESIGN.md §7.15). */
+  devtools: DevtoolsPlace | null;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -395,6 +398,8 @@ export interface Settings {
   miniWindowSize: { width: number; height: number } | null;
   /** Reader view's text size, line width, colors and font, the same on every page (DESIGN.md §7.11). */
   reader: ReaderSettings;
+  /** Developer tools: the side and size docked ones take, and whether new ones open in a window (DESIGN.md §7.15). */
+  devtools: DevtoolsSettings;
 }
 
 export type ExternalLinks = 'mini' | 'tab';
@@ -483,6 +488,7 @@ export const DEFAULT_SETTINGS: Settings = {
   externalLinks: 'mini',
   miniWindowSize: null,
   reader: DEFAULT_READER,
+  devtools: DEFAULT_DEVTOOLS,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -497,6 +503,7 @@ export const defaultSettings = (): Settings => ({
   tabCounts: { ...DEFAULT_SETTINGS.tabCounts, offSites: [] },
   duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
   reader: { ...DEFAULT_SETTINGS.reader },
+  devtools: { ...DEFAULT_SETTINGS.devtools },
 });
 
 /**
@@ -540,6 +547,8 @@ export interface SettingsPatch {
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
   duet?: Partial<DuetSettings>;
   reader?: Partial<ReaderSettings>;
+  /** Sizes are clamped to their side's minimum and DEVTOOLS.max. */
+  devtools?: Partial<DevtoolsSettings>;
 }
 
 /**
@@ -621,7 +630,7 @@ export const emptyState = (): State => ({
   sharedWindows: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null, devtools: null };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

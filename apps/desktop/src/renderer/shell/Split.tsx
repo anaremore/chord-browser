@@ -3,10 +3,11 @@
  * pages out; the shell draws what's around and behind them with the same
  * math (core `paneRects`): each pane's rounded frame, the focus ring in the
  * gap around the focused one, a shared tab's tinted edge, and the dividers in
- * the gaps between them.
+ * the gaps between them. A pane whose tab has its developer tools docked
+ * draws them inside it, beside its page (Devtools.tsx).
  */
-import { equalSizes, paneRects, resizeSizes, SPLIT, splitMembers, type LiveTab, type SplitNode, type State, type TabNode } from '@chord/core';
-import { useEffect, useState, type ReactNode, type RefObject } from 'react';
+import { equalSizes, paneRects, resizeSizes, SPLIT, splitMembers, type LiveTab, type PaneRect, type SplitNode, type State, type TabNode } from '@chord/core';
+import { Fragment, useEffect, useState, type ReactNode, type RefObject } from 'react';
 import { api } from './api';
 import styles from './App.module.css';
 
@@ -120,6 +121,7 @@ export function SplitPanes({
   activeId,
   size,
   pageState,
+  devtools,
 }: {
   state: State;
   windowId: string;
@@ -127,6 +129,8 @@ export function SplitPanes({
   activeId: string | null;
   size: Size;
   pageState(tab: TabNode, live: LiveTab | undefined): ReactNode;
+  /** A pane whose tab has its developer tools docked draws them beside its page (DESIGN.md §7.15). */
+  devtools(tab: TabNode, pane: PaneRect, focused: boolean, page: ReactNode): ReactNode | null;
 }) {
   const panes = splitMembers(state, split.id);
   const [live, setLive] = useState<number[] | null>(null);
@@ -139,6 +143,9 @@ export function SplitPanes({
       {panes.map((tab, i) => {
         const r = rects[i]!;
         const focused = tab.id === activeId;
+        const page = pageState(tab, state.live[tab.id]);
+        const docked = devtools(tab, r, focused, page);
+        if (docked) return <Fragment key={tab.id}>{docked}</Fragment>;
         return (
           <div
             key={tab.id}
@@ -152,7 +159,7 @@ export function SplitPanes({
               if (!focused) void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id });
             }}
           >
-            {pageState(tab, state.live[tab.id])}
+            {page}
           </div>
         );
       })}
