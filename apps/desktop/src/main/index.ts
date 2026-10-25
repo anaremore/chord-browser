@@ -44,6 +44,7 @@ import { seedForPerformance } from './perf-seed';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveDuetImages, serveReaderImages } from './protocol';
+import { appBadgeShown, watchAppBadge } from './app-badge';
 import { SAFE_BROWSING_KEY } from './safe-browsing/key';
 import { listsFile, SafeBrowsing, safeBrowsingEndpoint } from './safe-browsing/service';
 import { configureUiSession, hardenAllWebContents } from './security';
@@ -615,6 +616,8 @@ if (!app.requestSingleInstanceLock()) {
       if (app.isPackaged || !forcedAppearance) nativeTheme.themeSource = browser!.store.state.settings.colorScheme;
     };
     followScheme();
+    // Chord's icon shows its tabs' counts added up.
+    watchAppBadge(browser.store);
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'colorScheme')) followScheme();
       // Spelling settings (and where dictionaries come from) apply to every profile's session at once,
@@ -624,6 +627,8 @@ if (!app.requestSingleInstanceLock()) {
       }
       // Safe Browsing starts or stops with its switch, and with Google-free mode (which keeps it off).
       if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'safeBrowsing' || p.path[1] === 'googleFree'))) safeBrowsing.sync();
+      // Counts on tabs follow their switch and the sites they're hidden for.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'tabCounts')) browser!.tabs.refreshCounts();
       // Ad blocking follows its switch and the sites it's off for (a private window's own list lives on its chord).
       if (change.patches.some((p) => (p.path[0] === 'settings' && p.path[1] === 'adBlocking') || (p.path[0] === 'chords' && p.path[2] === 'blockingOff'))) adBlocking.sync();
     });
@@ -657,6 +662,8 @@ if (!app.requestSingleInstanceLock()) {
       observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
         launch: () => launchTimings(),
+        /** What Chord's icon shows: its tabs' counts added up. */
+        appBadge: () => appBadgeShown(),
         /** Why each window's last frame change that wanted pictures happened at once (null: it glided). */
         snapshotFallbacks: () => browser!.snapshotFallbacks(),
         /** Safe Browsing's state, and how long its checks took (ms). */

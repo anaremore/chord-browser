@@ -788,6 +788,33 @@ kbd {
   color: var(--color-fg);
 }
 
+/* Its tab's count, on the tile's top corner, raised like the speaker so it reads over any icon. */
+.favoriteCount,
+.favoriteCountDot {
+  position: absolute;
+  inset-block-start: var(--space-1);
+  inset-inline-end: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  box-shadow: var(--shadow-raised);
+}
+
+.favoriteCount {
+  display: grid;
+  place-items: center;
+  min-inline-size: var(--space-4);
+  block-size: var(--space-4);
+  padding-inline: var(--space-1);
+  color: var(--color-accent-fg);
+  font: var(--text-glyph);
+  font-variant-numeric: tabular-nums;
+}
+
+.favoriteCountDot {
+  inline-size: var(--space-2);
+  block-size: var(--space-2);
+}
+
 /* The sidebar's edge: drag to resize (DESIGN.md §3.1). */
 .resizeHandle {
   position: absolute;
@@ -859,6 +886,31 @@ kbd {
 
 .speaker:hover {
   color: var(--color-fg);
+}
+
+/* A page's count (DESIGN.md §7.2): the number it gives itself, as an app's icon shows unread messages, after the title. */
+.count {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-inline-size: var(--space-4);
+  block-size: var(--space-4);
+  padding-inline: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font: var(--text-glyph);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A count with no number. */
+.countDot {
+  flex: none;
+  inline-size: var(--space-2);
+  block-size: var(--space-2);
+  margin-inline: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
 }
 
 /* ---------- Footer ---------- */
@@ -1360,6 +1412,17 @@ kbd {
   line-height: 1;
 }
 
+/* Another chord has a tab showing a count: a dot on its icon's corner, in its own accent (the button's color). */
+.chordUnread {
+  position: absolute;
+  inset-block-start: var(--space-0);
+  inset-inline-end: var(--space-0);
+  inline-size: var(--space-2);
+  block-size: var(--space-2);
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
 /* ---------- Top bar (Windows/Linux, and everywhere when collapsed) and the macOS drag gap ---------- */
 
 .bar {
@@ -1755,6 +1818,17 @@ kbd {
 
   .item[aria-selected='true'] > .row * {
     color: inherit;
+  }
+
+  /* Counts keep a shape the system's colors can't hide. */
+  .count,
+  .countDot,
+  .favoriteCount,
+  .favoriteCountDot,
+  .chordUnread {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
   }
 
   /* Focus sits just outside the row, so it never lands on the selection's own color. */

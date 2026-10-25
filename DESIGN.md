@@ -495,7 +495,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 
 ### 7.2 `TabRow`
 
-**Anatomy:** `[favicon 16] [title, one line, ellipsis] [audio 16?] [close × or ↩ on hover]`. Height 32, padding 0 `space-2`, radius `radius-sm`, gap `space-2`.
+**Anatomy:** `[favicon 16] [title, one line, ellipsis] [count?] [audio 16?] [close × or ↩ on hover]`. Height 32, padding 0 `space-2`, radius `radius-sm`, gap `space-2`.
 
 | State | Treatment |
 |---|---|
@@ -509,12 +509,15 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Unloaded (pinned, not opened yet) | Normal favicon; title `fg-muted` |
 | Navigated away (pinned) | Shows the current page's title. Hover shows ↩ *Back to pinned page* in place of ×; ⌘-click on ↩ opens the current page as a Today tab. |
 | Sleeping | Favicon at 70% opacity |
+| Count (*built 2026-10-25*) | The number the page gives itself (unread messages, the web's app badge), after the title: a 16 px `accent` pill, `text-glyph` in `accent-fg`, "99+" past 99; a 8 px `accent` dot when it gives no number. Screen readers hear it as the row's description ("3 unread"). |
 | Crashed | Favicon replaced by `circle-alert` in `warning` |
 | Sharing | *(2026-10-24)* Stop sharing (`screen-share` in `danger`) in the slot before ×; click ends the share |
 | Being shared | *(2026-10-24)* Stop sharing this tab, the same button, which ends the shares of it; on screen, its frame's edge is tinted (§7.13) |
 | Dragging | Scale 1.03, `shadow-lift`, cursor `grabbing` |
 
 **Close on a pinned tab** unloads it; it stays pinned. Tooltip: "Close (stays pinned)".
+
+*As built (2026-10-25), counts:* a page that counts something for you (Telegram, WhatsApp, Slack: the number an installed web app puts on its icon) shows it on its row. A closed folder or split shows its tabs' counts added up, a Favorites tile shows its tab's on its top corner, and the chord switcher puts a dot in a chord's own color on any other chord with one. Chord's own icon (Dock, taskbar, launcher) shows them all added up. A tab showing a count doesn't sleep or go to the archive, so it stays current. Its right-click menu's *Show count on tab* hides a site's (an inbox's unread mail), listed in Settings → General → *Show counts on tabs*, which turns them all off. In Windows High Contrast the pill and dots are in `Highlight`.
 
 *As built (2026-10-24), audible and muted:* the speaker (Lucide `volume-2`, `volume-x` while muted, 14 px in a 24 px hit area) sits in the slot just before × in `fg-muted`, and shows whenever the tab makes sound, muted or not: Chromium goes on reporting a muted tab's sound, so a muted tab that plays shows the crossed-out speaker, and one that stops loses it. Click mutes or unmutes the tab; the keyboard has the row's menu (*Mute tab* / *Unmute tab*), the command bar's actions and Ctrl+M (⌃M on macOS, where ⌘M minimizes; Firefox and Edge use these keys). The row's description says *Playing sound* or *Muted*. Muting is kept with the tab, through sleep and restarts, until you unmute it; in a private window it works and is never saved. A split's tabs, listed under its row, show it too. A popped-out video's PiP glyph, and Stop sharing, take the slot first.
 

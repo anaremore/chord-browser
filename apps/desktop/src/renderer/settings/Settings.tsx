@@ -5,7 +5,7 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, keycapFor, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Check, EyeOff, FolderInput, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Check, EyeOff, FolderInput, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { ChordMark } from '../shared/ChordMark';
 import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
@@ -138,6 +138,40 @@ function SignIns({ snapshot }: { snapshot: SettingsSnapshot }) {
   );
 }
 
+/**
+ * Counts on tabs (DESIGN.md §7.2): the number a site gives itself, as an
+ * installed app's icon shows unread messages. Sites whose counts are hidden
+ * (from a tab's right-click menu) are listed, to show again.
+ */
+function TabCounts({ snapshot }: { snapshot: SettingsSnapshot }) {
+  const { enabled, offSites } = snapshot.settings.tabCounts;
+  const set = (patch: Partial<typeof snapshot.settings.tabCounts>) => void api.settings.set({ tabCounts: patch });
+  return (
+    <>
+      <Row
+        label="Show counts on tabs"
+        description="Sites like Telegram and WhatsApp count your unread messages, as an app's icon does. The count shows on the tab, and Chord's icon adds them up; such tabs don't sleep. A tab's right-click menu hides its site's."
+        changed={enabled !== DEFAULT_SETTINGS.tabCounts.enabled}
+        onReset={() => set({ enabled: DEFAULT_SETTINGS.tabCounts.enabled })}
+        control={<Switch label="Show counts on tabs" checked={enabled} onChange={(on) => set({ enabled: on })} />}
+      />
+      {enabled &&
+        offSites.map((s) => (
+          <Row
+            key={s}
+            label={s}
+            description="Count hidden"
+            control={
+              <button type="button" className={styles.reset} data-visible aria-label={`Show the count from ${s} again`} onClick={() => set({ offSites: offSites.filter((x) => x !== s) })}>
+                <X size={13} strokeWidth={2} />
+              </button>
+            }
+          />
+        ))}
+    </>
+  );
+}
+
 function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
   const engine = snapshot.settings.searchEngine;
   const googleFree = snapshot.settings.googleFree;
@@ -186,7 +220,7 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
       <div className={styles.group}>
         <Row
           label="Archive Today tabs after"
-          description="Tabs you haven't looked at in this long move to the archive. Pinned tabs, and tabs playing or sharing, stay."
+          description="Tabs you haven't looked at in this long move to the archive. Pinned tabs, and tabs playing, sharing or showing a count, stay."
           changed={snapshot.settings.archiveAfter !== DEFAULT_SETTINGS.archiveAfter}
           onReset={() => void api.settings.set({ archiveAfter: DEFAULT_SETTINGS.archiveAfter })}
           control={
@@ -216,6 +250,7 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
             <Switch label="Pop out playing videos when you switch away" checked={snapshot.settings.autoPip} onChange={(autoPip) => void api.settings.set({ autoPip })} />
           }
         />
+        <TabCounts snapshot={snapshot} />
       </div>
 
       <h2 className={styles.groupTitle}>Sharing</h2>

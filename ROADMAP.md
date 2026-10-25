@@ -395,6 +395,7 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   3. **Engine and main:** Chromium and Node can't be swapped while running, so these still need a restart, made nearly invisible. The update downloads in the background and Chord restarts at a quiet moment: nothing playing, sharing or typed but unsent. Tabs come back with their history, scroll and form fields (0.1.x's crash resilience did this groundwork), and Chord says what changed afterwards.
 - **Translation.** Needs its own decision: an on-device engine, or Google's, which Google-free mode rules out.
 - **Search the text of pages you've read**, kept on your computer.
+- **Counts on tabs** (asked 2026-10-25). **Built 2026-10-25** (ARCHITECTURE.md §9, DESIGN.md §7.2): the Badging API's count on the tab, its tile, a closed folder and the chord switcher, the total on Chord's icon; a site's hidden from the tab's menu. Next: a service worker's count (service-worker preloads), and a hand check of the Dock and taskbar.
 - **Duet makes images** (asked 2026-10-25). **Built 2026-10-25** with Codex's own image tool (ARCHITECTURE.md §11.5); Claude can't make images and offers Codex. A real image needs a hand check on the maintainer's plan.
 - **Duet tidying your tabs.** It conflicts with D8 ("Duet reads, it doesn't rearrange"), so it waits for you to ask again.
 

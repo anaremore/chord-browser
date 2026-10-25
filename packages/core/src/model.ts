@@ -219,6 +219,11 @@ export interface LiveTab {
   readable: boolean;
   /** The tab shows its article in reader view, over its page. */
   reader: boolean;
+  /**
+   * The count the page gave itself (the Badging API, as an app's icon shows unread messages):
+   * a number, 'dot' for one without a number, or null. Null when counts are hidden for its site.
+   */
+  badge: number | 'dot' | null;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -379,6 +384,7 @@ export interface Settings {
   safeBrowsingAsked: boolean;
   /** Ad and tracker blocking (ARCHITECTURE.md §9, decision D5): on by default, in every chord and private window. */
   adBlocking: AdBlockingSettings;
+  tabCounts: TabCountsSettings;
   /** Duet, the chat panel (ARCHITECTURE.md §11). */
   duet: DuetSettings;
   /** Where links from other apps open (Chord as the default browser): a mini window, or a new tab. */
@@ -407,6 +413,13 @@ export interface LinkRoute {
 export const GOOGLE_FREE_ENGINE: SearchEngineId = 'duckduckgo';
 
 /** Settings → Privacy → Block ads and trackers, and the sites it's off for. */
+/** Counts on tabs: the number a page shows on an installed web app's icon (ARCHITECTURE.md §9). */
+export interface TabCountsSettings {
+  enabled: boolean;
+  /** Hosts whose counts don't show (`mail.google.com`), subdomains included. */
+  offSites: string[];
+}
+
 export interface AdBlockingSettings {
   enabled: boolean;
   /** Sites (registrable domains, `nytimes.com`) where nothing is blocked, subdomains included. */
@@ -463,6 +476,7 @@ export const DEFAULT_SETTINGS: Settings = {
   safeBrowsing: false,
   safeBrowsingAsked: false,
   adBlocking: { enabled: true, offSites: [] },
+  tabCounts: { enabled: true, offSites: [] },
   duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [], codexImages: true },
   externalLinks: 'mini',
   miniWindowSize: null,
@@ -478,6 +492,7 @@ export const defaultSettings = (): Settings => ({
   spellcheck: { ...DEFAULT_SETTINGS.spellcheck },
   shortcuts: {},
   adBlocking: { ...DEFAULT_SETTINGS.adBlocking, offSites: [] },
+  tabCounts: { ...DEFAULT_SETTINGS.tabCounts, offSites: [] },
   duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
   reader: { ...DEFAULT_SETTINGS.reader },
 });
@@ -517,6 +532,8 @@ export interface SettingsPatch {
   safeBrowsingAsked?: boolean;
   /** `offSites` is the whole new list; entries that aren't sites are dropped. */
   adBlocking?: Partial<AdBlockingSettings>;
+  /** `offSites` is the whole new list; entries that aren't hosts are dropped. */
+  tabCounts?: Partial<TabCountsSettings>;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
   duet?: Partial<DuetSettings>;
@@ -602,7 +619,7 @@ export const emptyState = (): State => ({
   sharedWindows: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, badge: null };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

@@ -7,6 +7,7 @@
 import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
 import { blockingSite, cleanOffSites } from './ad-blocking';
+import { cleanCountSites, countSite } from './tab-counts';
 import { cleanKeys } from './bindings';
 import { isInternalUrl, visibleTabs } from './idle';
 import {
@@ -193,6 +194,8 @@ export type Command =
    * lasts only as long as the window; turning it on changes Settings' list too.
    */
   | { t: 'adBlocking.site'; site: string; off: boolean; chordId?: ChordId }
+  /** A tab's "Show count": the count its site (`site`, an address or a host) gives itself hidden, or shown again. */
+  | { t: 'tabCounts.site'; site: string; off: boolean }
   /**
    * Split view (DESIGN.md §8.4): show `nodeId` (or a new tab for `url`) as a
    * pane beside `withId`, at pane `index` (the end when absent). `withId`'s
@@ -1057,7 +1060,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
           const threat = value as LiveTab['threat'];
           if (live.threat?.kind !== threat?.kind || live.threat?.url !== threat?.url || live.threat?.frameUrl !== threat?.frameUrl) live.threat = threat;
         } else if (live[key] !== value) {
-          live[key] = value as boolean;
+          // The rest are flags, and the page's count (a number, 'dot' or null).
+          (live as Record<keyof LiveTab, unknown>)[key] = value;
         }
       }
       return;
@@ -1161,6 +1165,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (safeBrowsing && !draft.settings.safeBrowsingAsked) draft.settings.safeBrowsingAsked = true;
       }
       if (draft.settings.googleFree && draft.settings.safeBrowsing) draft.settings.safeBrowsing = false;
+      if (cmd.settings.tabCounts) {
+        const { enabled, offSites } = cmd.settings.tabCounts;
+        const current = draft.settings.tabCounts;
+        if (enabled !== undefined && current.enabled !== enabled) current.enabled = enabled;
+        if (offSites) {
+          const clean = cleanCountSites(offSites);
+          if (clean.join('\n') !== current.offSites.join('\n')) current.offSites = clean;
+        }
+      }
       if (cmd.settings.adBlocking) {
         const { enabled, offSites } = cmd.settings.adBlocking;
         const current = draft.settings.adBlocking;
@@ -1452,6 +1465,14 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       // Chromium's zoom steps aren't exact; anything this close to 100% is 100%.
       if (Math.abs(factor - 1) < 0.001) delete draft.siteZoom[cmd.host];
       else if (draft.siteZoom[cmd.host] !== factor) draft.siteZoom[cmd.host] = factor;
+      return;
+    }
+
+    case 'tabCounts.site': {
+      const site = countSite(cmd.site);
+      const saved = draft.settings.tabCounts;
+      if (!site || saved.offSites.includes(site) === cmd.off) return;
+      saved.offSites = cmd.off ? cleanCountSites([...saved.offSites, site]) : saved.offSites.filter((s) => s !== site);
       return;
     }
 

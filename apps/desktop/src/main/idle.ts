@@ -74,7 +74,8 @@ export class IdleKeeper {
         const out = new Set(busy);
         for (const id of Object.keys(state().nodes)) {
           const live = state().live[id];
-          if (live?.audible || live?.pip || live?.sharing || live?.shared || tabs.isPlaying(id) || isCapturing(id)) out.add(id);
+          // A tab showing a count (unread messages) stays awake, or its count would go stale.
+          if (live?.audible || live?.pip || live?.sharing || live?.shared || live?.badge != null || tabs.isPlaying(id) || isCapturing(id)) out.add(id);
         }
         return out;
       };
