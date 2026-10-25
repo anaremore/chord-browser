@@ -416,6 +416,7 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
 - **P1 Duet fills forms** (D16, decided 2026-10-24): "fill only, you submit". Only when you ask, on the tab on screen; a review card of each field's value, then Chord fills them, with Undo; never submits, never passwords, cards, one-time codes or hidden fields. After Effects, sharing its safety review of writing into pages.
 
 ### 0.4 · Your data · right after Effects (moved up 2026-10-25)
+- **Design, for review:** [docs/decisions/S15-your-data.md](docs/decisions/S15-your-data.md) (2026-10-25): one record format for export and sync, encryption, merging, import, the sync folder, and the build order.
 - **P1 Export everything:** chords, tabs, folders, Favorites, themes, settings, routes, Effects, history and Duet chats, in the format sync uses.
 - **P1 Sync** through a folder you already sync, end-to-end encrypted with your passphrase (D14). Setup only in its first version: no history, no open tabs. One log per device, merged on every device.
 

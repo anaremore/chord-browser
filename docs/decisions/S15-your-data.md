@@ -1,0 +1,497 @@
+# S15: Your data — export, import and sync
+
+*2026-10-25 · ROADMAP.md 0.4 · decision D14 (ARCHITECTURE.md §16) · a design for review: nothing is built*
+
+**In short.** Export and sync use one record format. Export ships first, then import, then sync.
+
+- **A file is a header line, then one record per line (JSON Lines).** A record names one thing, the fields it sets, and a stamp: `{"type":"chord","id":"…","at":[…],"set":{"name":"Work"}}`. A deletion is a record that sets `deleted`.
+- **Merging is per field: the newest stamp wins.** Stamps come from a hybrid logical clock (wall-clock milliseconds, a counter, the device). A change made after seeing another always beats it, even on a computer whose clock is behind.
+- **An export is a snapshot. A sync log is the same records appended over time,** and compacting a log writes a snapshot. That's what makes them one format.
+- **The plain export is readable text:** about 3.8 MB for a profile with 50,000 visits. *Encrypt with a passphrase* deflates and encrypts the same lines, to about 1.4 MB.
+- **Encryption is scrypt and AES-256-GCM,** both built into Electron 45's Node. Argon2id isn't there, and ChaCha20-Poly1305 is there only as an experimental Web Crypto algorithm (checked: Electron's Node uses BoringSSL). Each file has its own key, and every chunk is authenticated, in order, with the end of the file marked.
+- **Import adds what's missing and updates what's older. It never deletes,** and one Undo takes it all back. Tabs arrive unloaded, Effects go through the sanitizer, Duet chats send nothing anywhere, and a file can't give a site your camera.
+- **Sync gives each computer its own folder inside a `Chord sync` folder you pick.** The computer appends its log there, in segments. Nothing else writes in that folder, so sync apps never make conflicted copies. A half-written file is read up to its last whole chunk.
+- **Nothing heavy runs on main.** Export and import run in a short-lived utility process, like browser import. Sync runs beside chord-data. An export of 50,000 visits reads the database through its own read-only connection, so it never holds chord-data up.
+
+---
+
+## 1. Records
+
+### What a record is
+
+```json
+{"type":"tab","id":"019a3c2e-…","at":[1764511391204,0,"9f2c4e1a7b3d5c60"],"set":{"title":"Inbox","customTitle":"Mail"}}
+```
+
+- `type` and `id` name one thing. The ids are the model's own (§4).
+- `set` holds the fields this record changes. Fields it doesn't list keep their values.
+- `at` is the stamp of every field in `set`: `[milliseconds, counter, device]` (§4). After merging, one thing's fields can carry different stamps. A snapshot then writes it as one record per stamp, so most things are one line and a few are several.
+- A deletion is `"set":{"deleted":true}`: a tombstone. Deleting is just another field under the same rule. A later edit made elsewhere doesn't bring the thing back; only `"deleted":false` does (Undo, or an import that restores it, §5).
+- History, Duet chats and icons are facts, not setup. They're never synced, and an import only adds what's missing, so their records have no `at`.
+
+### The record types
+
+`pos` is one field: `{chord, section, parent, rank}`. A move sets all four at once, so a merge can't leave a tab half-moved (§4).
+
+| Type | Id | Fields | From | Export | Sync |
+|---|---|---|---|---|---|
+| `chord` | UUIDv7 | `name`, `icon`, `theme` (stops, grain, appearance, themeId), `rank`, `profile` (`default`, or the id of its own sign-ins), `created` | `chord`, `Chord` | ✓ | ✓ |
+| `folder` | UUIDv7 | `pos`, `title`, `collapsed`, `created` | `node` + `folder` | ✓ | ✓ |
+| `tab` | UUIDv7 | `pos`, `url`, `pinnedUrl`, `title`, `customTitle`, `icon`, `muted`, `created` | `node` + `tab`, `TabNode` | Pinned and Today | Pinned only, without `url` |
+| `split` | UUIDv7 | `pos`, `direction`, `sizes`, `created`. Its panes are the tabs whose `pos.parent` is the split. | `node` + `split` | ✓ | Pinned only |
+| `favorite` | UUIDv7 | `url`, `title`, `icon`, `rank`, `created` | `favorite` | ✓ | ✓ |
+| `theme` | UUIDv7 | `name`, `stops`, `grain` | `settings.themes` | ✓ | ✓ |
+| `settings` | `settings` | one field per setting, with dotted names (`adBlocking.offSites`) | `setting` | the portable ones | the portable ones |
+| `route` | the route key (`github.com/acme`) | `chord`, `created` | `link_route` | ✓ | ✓ |
+| `effects` | the site (`nytimes.com`) | `wet`, `css`, `hidden` (`[{selector, label}]`), `presets`, `duet` (`[{ask, summary, css}]`) | `effect` | ✓ | ✓ |
+| `icon` | `sha256-` and the hex of its bytes | `mime`, `data` (base64) | `favicon`, but only icons used by a record above | ✓ | ✓ |
+| `zoom` | host | `factor` | `site_zoom` | ✓ | — |
+| `permission` | origin | one field per permission: `allow` or `block` | `site_permission` | ✓ | — |
+| `page` | its address | `title`, `visits` (ms, oldest first), `typed` (a count) | `history_url` + `history_visit` | ✓, a switch | — |
+| `thread` | UUIDv7 | `chord`, `title`, `provider`, `model`, `scope`, `created`, `updated`, `lastUsed` | `duet_thread` | ✓, a switch | — |
+| `message` | UUIDv7 | `thread`, `created`, `body` (as stored, without a citation's `tabId`) | `duet_message` | ✓ | — |
+| `image` | its id (24 hex characters) | `mime`, `width`, `height`, `data`, `thumb`, `prompt` | `<userData>/duet/images/` | ✓ | — |
+| `device` | device id | `name`, `os`, `app`, `removed` | — | — | ✓ (§6) |
+
+- **A pinned tab syncs its home, not where you've browsed to.** Sync leaves out `url`. A new copy on another computer opens at `pinnedUrl`, and `title` and `icon` are written only while the tab is on its pinned address. Browsing in a pinned tab is activity, not setup (D14).
+- **Leaving Pinned counts as a deletion for sync.** If you unpin a tab, sync writes its tombstone. On another computer the tab leaves Pinned too: an open copy moves to that computer's Today, and an unloaded one goes. Pinning it again writes the whole record, with `deleted: false`.
+- **Effects:** `EffectsRecord` in `core/effects.ts` already anticipates this, and it changes a little now, before any file exists. Its fields become the `effects` record's fields, its `version: 1` moves to the file header, and its `updatedAt` becomes the stamp. Every record read is still checked by `effectsFromRecord` and then the sanitizer worker.
+- **Unused columns aren't exported:** `chord.duet_enabled` (Duet's off chords are in settings) and `tab.zoom` (zoom is per site).
+
+### Which settings travel
+
+| | Settings |
+|---|---|
+| Exported and synced | search engine and suggestions; color scheme; interface contrast and tint; motion; extension buttons; whether new chords get their own sign-ins; archive and sleep timing; auto picture-in-picture; page previews; presenting; sidebar peek; keep screenshots; spelling; Google-free mode; Safe Browsing and whether its notice was answered; ad blocking and its sites; tab counts and their sites; Duet's on/off, keep, scope, reads-nothing, never sites, off chords and Codex images; where links from other apps open; reader view; Effects' Dry/Wet everywhere |
+| Keyboard shortcuts | per OS family. A Mac writes `shortcuts.mac`, and Windows and Linux write `shortcuts.other`; each computer uses only its own family's. |
+| Neither, because they're about this computer | interface size (it depends on the display), mini window size, DevTools' side and size, update checks (they depend on how Chord was installed), Duet's app and model (which CLI is installed here) |
+| Neither, because they're one-time flags | first run done; the one-time switch-off of auto picture-in-picture |
+| Moved out | custom themes become `theme` records, so two computers that each add a theme keep both |
+
+- **Safe Browsing travels with its notice answer.** The notice is shown to you, not to a computer. Restore's rules still hold: it's on only once the notice was answered, and off in Google-free mode.
+- **A list is one field.** If two computers change the same list at once (say, the sites ad blocking is off for), only the later list is kept. That's accepted: the window is narrow, and the edits are rare.
+
+### Left out, and why
+
+| Left out | Why |
+|---|---|
+| Passwords | They're your password manager's job (D12), and Chord holds none. |
+| Cookies and site storage (your sign-ins) | Chromium keeps them in its own encrypted stores, tied to this computer, and a copy of them is a copy of your sign-ins. Whether a chord keeps its own sign-ins is exported; the sign-ins themselves aren't. |
+| Site permissions. **Decided: exported, imported as blocks only, never synced.** | Your decisions are your data, so the export has them. But an `allow` from a file would let a site use your camera or location without asking, while a `block` is safe to take. Sites you'd allowed ask again, once. |
+| Downloads | The list points at files on this computer, and the files aren't in the export. |
+| Private windows | They're never saved, so they're never exported. |
+| The archive. **Decided: left out.** | It holds Today tabs for 30 days. Every page in it is in history, which is exported. Its entries carry Chromium's back/forward state, which can hold what you typed into forms. And an imported entry older than 30 days would be swept at the next launch anyway. |
+| Open tabs' back/forward history (`nav_state`) | It's Chromium's own `pageState`, form contents included, and it's tied to Chromium's version. Tabs come back at their address. |
+| Windows, their sizes, which tab each shows | That's live layout for this computer's screens. A restore opens one window on the first chord. |
+| Live state | Loading, sound, sharing, presenting, crashed (ARCHITECTURE.md §6.2). |
+| Extensions | Installing one runs code from the web and needs your click, and each extension keeps its own data and sync (1Password, Bitwarden). Maybe later: the Web Store ones as a list, offered on import as *Install* buttons. |
+| Learned command bar picks | They come from use, and they rebuild within days. Frecency is recomputed from the imported visits. |
+| Hover-preview pictures, screenshots, favicons nothing exported uses | These are caches and files, and they come back as you browse. |
+| Duet's provider sessions | They're the CLI's own cache. Chord's transcript is the chat (ARCHITECTURE.md §11.5), and an imported chat starts a new session when you write in it. |
+
+## 2. The file
+
+### Plain
+
+The file is UTF-8 JSON Lines with `\n` line endings and no byte-order mark. The first line is the header:
+
+```json
+{"chord":"data","format":1,"kind":"export","app":"0.4.0","device":"9f2c4e1a7b3d5c60","created":"2026-11-30T14:03:11.204Z","includes":["setup","today","history","duet"],"about":"https://github.com/anaremore/chord-browser/blob/main/docs/data-format.md"}
+```
+
+- **Order:** setup, then Today tabs, icons, history and Duet, so a reader that only wants setup can stop early.
+- **The last line, `{"end":<records>}`,** tells a file that was cut off from a whole one.
+- **`docs/data-format.md` ships with export.** It lists every type and field and says how to decrypt a file, so nothing about the file depends on Chord.
+
+### Encrypted
+
+```
+chord-encrypted 1\n                                       a line a person who opens the file can read
+{"format":1,"kind":"export",…,"kdf":{…},"salt":"…","check":"…"}\n   the header: readable, and authenticated
+[frame][frame]…[last frame]
+```
+
+A frame is a 4-byte length, a 12-byte nonce, the ciphertext and a 16-byte tag. Its plaintext is about 256 KB of whole lines, deflated. §3 covers the keys.
+
+### Versions
+
+- **`format` is 1. Every later Chord reads every earlier format, forever.** A format-1 file must open in every Chord to come; that's the promise.
+- **Within format 1, changes are additions only:** new types, new fields, new values. A missing field means "not set". It never means a default that overwrites what's there.
+- **An older Chord with a newer format-1 file reads what it knows.**
+  - Import skips the rest and says how much: *12 items from a newer Chord were skipped.*
+  - Sync keeps the rest as it came, merges it under the same rules, and writes it back when it compacts. An older computer never strips what a newer one wrote.
+- **A name never changes meaning.** A new meaning gets a new name.
+- **`format` goes to 2 only when an older Chord would misread the file,** for example after a new cipher or a new envelope. An older Chord then refuses: *This file is from a newer Chord. Update Chord to import it.* Sync pauses the same way.
+
+### Sizes
+
+The realistic profile: 12 chords, 260 pinned tabs in 40 folders, 60 Today tabs, 24 Favorites, 30 link routes, Effects on 40 sites, 200 distinct icons, 50,000 visits on 15,000 pages, and 200 Duet messages in 20 chats. The numbers below were measured on generated data of that shape (Node 24, deflate at level 6). ⚠ Real titles and addresses will compress differently.
+
+| Part | Records | Plain | Deflated (as inside an encrypted file) |
+|---|---|---|---|
+| Setup | 607 | 480 KB, two-thirds of it icons | 270 KB |
+| Today tabs | 60 | 26 KB | 7 KB |
+| History | 14,985 pages | 3.0 MB | 1.0 MB |
+| Duet, without images | 220 | 250 KB | 90 KB |
+| **All of it** | | **3.8 MB** | **1.4 MB** |
+
+- **Duet images go in as they are,** base64 in a plain file. Deflating them gains nothing.
+- **A sync folder holds about 270 KB per computer** (setup only). An everyday change adds a frame of well under 1 KB.
+- **Time for the whole file on this Windows development machine:** serializing the history took 12 ms, deflating everything 82 ms, and AES-GCM 1 ms (8 MiB took 8 ms). scrypt takes about 0.5 s. ⚠ SQLite reading the 50,000 visits isn't measured yet.
+
+### Extension and MIME type
+
+- **Plain:** `Chord data 2026-11-30.jsonl`, with the type `application/jsonl`. That's the common name for JSON Lines; ⚠ it isn't registered with IANA, and Chord doesn't need it to be. Any editor, `jq` or DuckDB reads the file.
+- **Encrypted:** `Chord data 2026-11-30.chorddata`, with the type `application/vnd.chord-browser.data`. ⚠ It's unregistered; only file pickers' filters use it.
+- **Sync segments:** `.chordlog`, and only inside the sync folder.
+- **Not `.chord`:** ChordPro song files sometimes use it. Chord registers no file type with the OS. Import… goes by the file's first line, not its extension.
+
+## 3. Encryption
+
+### What Electron 45 has
+
+Checked 2026-10-25 by running Electron 45.0.0's own Node (24.22.0, through `ELECTRON_RUN_AS_NODE`) on Windows. Its crypto is BoringSSL, not OpenSSL (`process.versions.openssl` is `0.0.0`), and it lacks some of what Node's docs list:
+
+| | Result |
+|---|---|
+| AES-256-GCM (`createCipheriv`) | Works. 8 MiB took 8 ms. |
+| ChaCha20-Poly1305 (`createCipheriv`) | *Unknown cipher*. It exists only as an experimental Web Crypto algorithm, and Node warns when it's used. |
+| XChaCha20-Poly1305 | Not there. |
+| Argon2id: `crypto.argon2Sync` (added in Node 24.7) | The function exists but throws *Argon2 algorithm not supported*. Web Crypto says *Unrecognized algorithm name*. |
+| scrypt | Works. N=2¹⁷, r=8, p=1 took 516 and 531 ms. Node's default `maxmem` (32 MiB) refuses those parameters, so Chord sets `maxmem`. |
+| HKDF (`hkdfSync`, Web Crypto) | Works. |
+| zlib: deflate, brotli, zstd | All there. zstd is experimental in Node 24 (Stability 1). |
+
+### The choices
+
+- **KDF: scrypt, with N=2¹⁷, r=8, p=1.** That's 128 MiB and about 0.5 s here, and it's OWASP's minimum for scrypt. Argon2id would be the first choice, but here it would need a WebAssembly build (⚠ not evaluated), slower than native code, for one derivation per export, per import and per computer. The header names the KDF and its parameters, so a later Chord can move to Argon2id once BoringSSL has it, or raise N, and still open old files.
+- **The passphrase is normalized to NFC.** *Suggest one* offers five random words. There's a minimum length (open question 9), and there's no recovery (D14).
+- **Cipher: AES-256-GCM.** It's the only AEAD that Electron's Node ships as a cipher. It's fast on CPUs with AES instructions, which covers nearly all of Chord's targets. ⚠ Some arm64 boards lack them (the Raspberry Pi 4, for one), but even software AES is quick at a few MB.
+- **Keys:**
+  - The root key is scrypt of the passphrase and the KDF salt.
+  - Each file (an export, or one sync segment) has a random 32-byte salt. Its key is HKDF-SHA256(root, file salt, `chord file 1`).
+  - Each frame gets a random 96-bit nonce. With a key per file, each key seals only a few frames, far below GCM's limit for random nonces (2³² messages per key).
+- **The key check:** the header's `check` is the word `chord`, encrypted with HKDF(root, KDF salt, `chord check 1`). It tells *wrong passphrase* from *damaged file* before any data is read.
+- **What's authenticated:** each frame, with the SHA-256 of the header line, the frame's index and a last-frame flag as associated data.
+  - So nobody can edit the header, reorder frames, drop one from the middle or move one to another file.
+  - An export that was cut short is caught, because its last frame is missing.
+  - A sync segment is open-ended, so a missing tail reads as "not arrived yet" (§6).
+- **What isn't hidden:** file sizes, when files change, how many computers sync, and the header (KDF parameters, salts, a random device id). Device names and everything else are inside the encryption.
+- **Readable without Chord:** scrypt, HKDF, AES-GCM and raw deflate are all in common libraries, for example Python's `hashlib.scrypt` and `zlib` plus the `cryptography` package. ⚠ Not tried. `docs/data-format.md` spells out the steps.
+
+### Plain or encrypted
+
+**I agree with plain by default.** Readable JSON is what "no lock-in" means. For a backup, a forgotten passphrase is a worse failure than a file someone else might read.
+
+- *Encrypt with a passphrase* is a switch on the same card, and Chord remembers it for next time.
+- When a plain export includes history or Duet chats, a line under the switch says *Anyone with the file can read it.*
+- **Sync is always encrypted.** The folder has no plain mode: it sits in someone else's cloud and changes every day.
+
+### The key on each computer
+
+- **Sync runs without asking each time,** so each computer keeps the derived root key, never the passphrase.
+- **It's stored with `safeStorage`'s async API** (the sync API is deprecated, and Electron 46 removes it). That means the Keychain on macOS, DPAPI on Windows, and the secret service on Linux.
+- **Linux with no secret store:** `safeStorage` falls back to `basic_text`, which protects nothing. Chord then keeps no key and asks for the passphrase after each launch, in Settings and in a quiet card (open question 6).
+- **`safeStorage` works only in main,** so main reads the key once, after the first page, and hands it to sync.
+
+## 4. Ids and merging
+
+### Ids
+
+Today's ids are global enough.
+
+- **Chords, sidebar nodes, Favorites, custom themes, Duet threads and messages use UUIDv7** from `crypto.getRandomValues` (`core/ids.ts`): 48 bits of time and 74 random bits. Two computers won't collide.
+- **Natural keys where two computers should agree:** link routes by route key, Effects by site, zoom by host, permissions by origin, history pages by address, icons by content hash, plus `settings` and the `default` profile. Two computers adding a route for the same site end up with one route.
+- **Duet images have 96 random bits.** Effects' Duet patches already get new ids when they're read from a record (`effectsFromRecord`), so their ids aren't in the record.
+- **Device ids are 64 random bits,** made the first time export or sync needs one and kept in chord-data. They're never exported as data.
+
+The one trap is first run: every computer starts with its own "Personal" chord. Joining sync deals with it (§6).
+
+### The clock
+
+A **hybrid logical clock**: `[wall ms, counter, device]`, compared in that order.
+
+- **A new stamp** takes the wall clock if it's past the last stamp seen. Otherwise it takes the last stamp's milliseconds and adds one to the counter.
+- **Reading another computer's stamp moves the clock up to it.** The last stamp is saved, so a clock that was set back at restart doesn't go backwards.
+- **So a change made after seeing another always wins over it,** whatever either clock says. With the wall clock and a device tiebreak alone, a computer whose clock is an hour slow would lose, for an hour, to changes it had already seen.
+- **A clock far ahead still wins races** against changes that hadn't seen its stamps, until real time catches up. That can't be corrected when reading, or computers would disagree: the merge must give the same answer everywhere, whenever it runs. Instead Chord says so. Stamps more than five minutes ahead of this computer's clock show in Settings → Sync, naming the computer that made them: *Austin's MacBook's clock is 2 hours ahead. Its changes may win over newer ones.*
+
+### Merging
+
+- **Per field, the higher stamp wins.** The merge is commutative, associative and idempotent, so neither the order files arrive in nor reading one twice changes the result.
+- **Merged values go through the checks a restore uses** (`restoreSettings`, `restoreRoutes`, `settleSplits`, `validTheme`, `cleanSiteEffects`). A combination no single computer wrote still makes sense: Google-free mode and Google search can't both win.
+- **Changes from another computer never go into this computer's log; only your own commands do.** Otherwise a value that two Chord versions tidy differently could bounce between computers forever.
+
+### Order in the sidebar
+
+- **Ranks merge as they are, through `pos`.** They're already fractional-index strings with the id as a tiebreak (`core/nodes.ts`), and `rankBetween` already copes with equal neighbors.
+- **The later move wins,** and every computer sorts the same way.
+- **Two computers inserting at the same spot** may make equal ranks; the ids order them.
+
+### When two computers move the same tab
+
+- **The later move wins whole,** since `pos` is one field. The tab ends up where it was last moved, never half in one place and half in another.
+- **Into a folder another computer deleted:** it shows at the root of that chord's Pinned, by restore's existing repair.
+- **Into a chord another computer deleted:** it goes with the chord, as that delete meant. Undoing the delete there brings both back.
+- **Folder A into B on one computer, B into A on the other:** that's a cycle, and every computer breaks it the same way. The folder whose `pos` is newest goes to its section's root. Nothing is written for it: it's simply how the merged state is read.
+- **Edits to different fields both stay.** One computer renames a chord, the other recolors it, and you get both.
+- **Edit against delete: the delete stays,** since only `deleted: false` restores a thing. The edit is kept in the record, so undoing the delete brings back the edited version.
+
+### Tombstones
+
+Tombstones are kept forever in v1. Each is about 90 bytes, and setup is deleted rarely. Dropping them safely needs every computer to have seen them; that waits until sizes call for it.
+
+## 5. Import and restore
+
+### What it does
+
+- **Into a new profile,** everything in the file comes in: it's a restore. A profile that has only its first-run chord counts as new, and that chord makes way.
+- **Into a profile with data, import adds what's missing and updates what's older. It never deletes.**
+  - **Things compare field by field:** the file's stamp against this computer's. With sync on, this computer's stamps are sync's own (§7). Without sync, they're the rows' `updated_at`. Migration 15 adds `updated_at` to `setting`, `favorite` and `link_route`, which lack it, so an old export can't overwrite yesterday's edit.
+  - **With sync on, what an import brings keeps the file's stamps,** so it can't overrule a newer change another computer made. Only something brought back from deletion gets a new stamp.
+  - **Tombstones in a file are ignored,** though exports have none anyway.
+  - **Something you deleted here comes back** if the file has it: importing it is the choice.
+  - **Matches merge instead of doubling:** a Favorite with the same address, a route for the same site, Effects for the same site.
+  - **History:** visits are matched by address and time, so importing the same file twice adds nothing. Typed counts take the larger of the two.
+  - **Duet:** threads and messages are added by id. A thread whose chord isn't here goes to the chord you're in.
+- **One Undo takes it all back,** history included, from the window's toast or from Settings, for the rest of the session, like browser import. It reuses `import.undo`'s parts and `undoImport`'s history bookkeeping. Updated things go back to their earlier values.
+
+### Nothing runs or loads until you open it
+
+- **Tabs arrive unloaded,** and load when you open them (as `import.add` does).
+- **Effects:** `effectsFromRecord` checks each one, then the sanitizer worker writes out only known rules and nothing that fetches, exactly as for Effects you write (D13). They apply, as stylesheets only, on the next visit to the site. A file from someone else could still restyle a site to mislead you, for example by hiding a warning. So the preview lists the sites, and Effects can be left out.
+- **Duet chats send nothing.**
+  - They keep no provider session, so writing in one later starts a new session.
+  - For an imported chat, the earlier turns go to the CLI as untrusted, quoted data, the way page text does (ARCHITECTURE.md §11.4). They don't go in the instructions, where `transcriptSummary` puts a summary today.
+  - Their text renders as it does now: as React elements, never HTML (`dangerouslySetInnerHTML` appears nowhere in the renderers).
+  - Links in citations and attachments must be http(s), or they're dropped.
+  - Images must be PNG, JPEG or WebP by their bytes (`imageInfo`), within a size cap.
+- **Permissions:** only `block` decisions come in.
+- **Settings:** the preview names each one that would change. They come in by default for a new profile. For a profile with data they're off until you turn them on (open question 2), since a file could turn off ad blocking or Safe Browsing.
+- **Everything else is checked the way a restore checks saved data,** before it reaches the store: types, lengths, addresses, allowed values, references. Lines over 32 MB and files over 2 GB are refused.
+
+## 6. Sync's folder protocol
+
+```
+<the folder you pick>/Chord sync/
+  sync-1.json                          KDF, salt and key check, written once
+  1/9f2c4e1a7b3d5c60/000001.chordlog   this computer's log, in segments
+  1/9f2c4e1a7b3d5c60/000002.chordlog
+  1/03be7d1c55a2e9f4/000001.chordlog   another computer's log
+```
+
+`1` is the passphrase generation (see *Changing the passphrase*). A computer writes only in its own folder.
+
+**Writing.**
+- Your changes to synced things are stamped in chord-data as they're saved (§7).
+- Chord writes them about 3 seconds after the last change, and on quit, as one frame appended to the newest segment, then flushed.
+- A segment closes at 1 MB and is never touched again, so a sync app uploads each closed segment once.
+- Each segment starts with a `device` record: the computer's name, OS and Chord version.
+
+**Reading.**
+- Chord watches the folder where the OS allows it. It also looks every five minutes and whenever Chord comes to the front. ⚠ Watching cloud and network folders isn't reliable.
+- For each other computer, Chord remembers how far it has read each segment.
+- **A frame that's cut short, or that fails its check at the end,** means the sync app hasn't delivered all of it yet. Chord stops there and tries again at the next change.
+- **A segment that got shorter** (a sync app delivered an older copy) is read again from the start. Merging twice changes nothing.
+- **Names that aren't `NNNNNN.chordlog` are ignored.** That covers temp files and the *conflicted copy* files sync apps make.
+- **Files a sync app keeps online only** are downloaded when Chord reads them. ⚠ This covers OneDrive and Dropbox on demand, and iCloud's optimized storage; older macOS uses `.icloud` placeholder files, which Chord would have to ask for. Setup suggests keeping the folder on the computer.
+
+**Compaction.**
+- **When it happens:** at most daily, once a computer's own segments pass twice the size of a snapshot, or 500 frames.
+- **What it writes:** a new segment holding everything that computer knows: every live thing and every tombstone, each field with its stamp, from its own changes and other computers' alike.
+- **Then:** the new segment is marked as a snapshot that replaces the computer's earlier segments, and the computer deletes them. So any one computer's log is enough to start from.
+- **Out-of-order delivery is safe.** A reader that sees the deletions before the new segment arrives has lost nothing: it merged the old segments already.
+
+**A new computer joins.**
+1. In Settings → Your data → Sync, *Turn on sync…*, then pick the folder. Chord finds `Chord sync` and asks for the passphrase; the key check catches a wrong one.
+2. Chord reads each computer's newest snapshot and what came after it, and merges them.
+3. If this computer has only its first-run setup, the synced setup replaces it. If it has its own chords, pinned tabs or Favorites, Chord asks:
+   - *Use the synced setup:* this computer's chords go, with Undo, and its Today tabs move to the first synced chord.
+   - *Keep both:* everything stays, side by side. This computer's things are stamped with their rows' `updated_at`, not with the time of joining, so its settings don't overrule the synced ones just because it joined last.
+4. The computer writes its first segment: a snapshot, plus its `device` record.
+
+The first computer writes `sync-1.json`. If two computers set up the same empty folder at once, the second finds two of them (one as a conflicted copy) and stops: *Set up sync on one computer first, then join from the others.*
+
+**Removing a computer.**
+- In Settings → Sync, on that computer's row, *Remove*. This writes `removed: true` to its `device` record.
+- The next time the removed computer syncs, it stops, keeps its own data, and says *This computer was removed from sync on Nov 30.*
+- Its changes up to then still count everywhere, so every computer ends up the same whatever order they hear things in.
+- Once it's removed, any computer that has compacted since may delete its folder.
+- Removing doesn't take the key away from a lost laptop; changing the passphrase does, and the *Remove* line says so.
+
+**Turning sync off** on a computer removes it, from itself. Its data stays.
+
+**Changing the passphrase** starts generation 2: a new `sync-2.json`, and this computer's snapshot under `2/`.
+- The other computers find a generation they can't open, and pause: *The passphrase was changed on Austin's MacBook. Enter the new one to keep syncing.*
+- Each deletes its own `1/` folder once it has moved, and the computer that changed the passphrase deletes `sync-1.json` after 30 days.
+- **A lost passphrase** works the same way, through *Start over*. The synced copy is gone; each computer's data isn't (D14).
+
+**Two computers with the same id** (a profile folder copied to a new computer): before appending, a computer checks that its newest segment ends where it left it. If it doesn't, another computer is writing under the same id, so this one takes a new id and joins again.
+
+**A newer Chord on another computer** (a higher `format`, or a cipher this one doesn't know): this computer pauses with *Another computer has a newer Chord. Update this one to keep syncing.*
+
+## 7. Where the work runs
+
+Main only routes, as performance rule 1 asks.
+
+**Export runs in a short-lived utility process,** like browser import.
+- Main flushes pending writes and shows the OS's save dialog (async). It then starts *Chord Export* with the database path, the Duet images folder, the target, the options and the passphrase, if there is one. Main never holds the data.
+- **The process opens `chord.db` itself, read-only** (`node:sqlite`'s `readOnly` option), in one read transaction. WAL gives it a steady snapshot while chord-data goes on writing. ⚠ A second, read-only connection from another process is standard SQLite, but Chord hasn't tried it yet.
+- It streams rows (`StatementSync.iterate()`) through core's record functions into frames, writes to `<name>.part`, and renames that when done.
+- It sends progress at most 10 times a second, then exits and gives its memory back.
+- chord-data's thread does nothing for it, so command bar searches keep their 16 ms.
+
+**Import runs in the same kind of process,** since a file from elsewhere is untrusted work, like another browser's files.
+- It reads, decrypts and checks every line, and makes the preview's counts.
+- **Setup:** on *Import*, it asks chord-data, over a port, for this computer's stamps for the ids in the file, and decides what wins. It sends main the setup in parts of 200 things, as `data.merge` commands: like `import.add`, plus updates, with what they replaced kept for Undo.
+- **History and Duet** go straight to chord-data over a port, in batches, never through main, as browser import's history does.
+- **Effects** go to main's Effects service, which sends each through its sanitizer worker.
+
+**Sync runs beside chord-data.**
+- **The folder work** (watching, reading, writing, scrypt, AES) runs in a worker thread in chord-data's process. A slow cloud folder or a big snapshot never touches the thread that answers searches, and nothing runs while sync is off. ⚠ Worker threads inside a utility process are untried in Chord. The fallback is a utility process of its own with a port to chord-data, as import has.
+- **chord-data's own thread owns the sync tables.** It stamps your changes in `write()`, in the same transaction, and merges what the worker read in slices of a few milliseconds.
+- **Things whose winning value changed go to main as one push.** Main applies them as a `sync.apply` command: no Undo toast, and nothing written to the log. A quiet toast appears only when something you're looking at goes away, such as the chord on screen.
+
+**The change to packages/data is moderate, and additive.**
+- **Migration 15 (with export):** `updated_at` on `setting`, `favorite` and `link_route`, set on every write, plus a small `meta` table for the device id.
+- **`export.ts`:** turns rows into records over a read-only connection, for the export process.
+- **Import:** `importHistory` learns to skip visits it already has. A new `duet.import` op adds threads, messages and images, with Undo bookkeeping like `import_page`'s.
+- **Migration 16 (with sync):**
+  - `sync_record` (type, id, fields JSON, stamps JSON): the merged copy;
+  - `sync_outbox`;
+  - `sync_cursor`: how far each segment has been read;
+  - the clock, folder and generation in `meta`.
+- **A hook in `write()` for synced kinds:** it diffs against `sync_record`, stamps what changed, and queues it. Without sync it's off and costs nothing.
+- **Core gets the pure parts:** the record codecs for each type, the clock, the field merge and the settle step. They're table-tested without Electron.
+
+**Performance checks** go into `perf.spec.ts`:
+- the 50,000-visit export while typing in the command bar: the keystroke budget holds, and main's event-loop delay is unchanged;
+- the export's wall time;
+- with sync on, the cost of one change (stamp to frame), and memory with the sync worker on and off.
+
+## 8. UI sketch
+
+Settings → **Your data**, in place of today's Import, which moves in as a group (open question 5). Copy is in italics.
+
+**Export**
+- The row: *Export your data*, with *Everything in Chord in one file you can keep, read, or bring to another computer.* and **Export…**
+- **Export…** opens a card under the row, not a dialog:
+  - *What goes in:* *6 chords · 214 pinned tabs in 18 folders · 31 Today tabs · 24 Favorites · 3 themes · 12 link routes · Effects for 9 sites · your settings.*
+  - Switches, both on: *History* (*15,002 pages*) and *Duet chats* (*20 chats, 4 images*).
+  - A switch: *Encrypt with a passphrase*. On, it shows two fields and *Suggest one*, with *Chord can't open the file without it, and can't get it back for you.*
+  - Off, with history or chats included: *Anyone with the file can read it.*
+  - **Choose where to save…** opens the OS's save dialog at *Chord data 2026-11-30.jsonl* (or `.chorddata`).
+  - While Chord writes: a 4 px accent bar and *Writing history: 8,000 of 15,002 pages*. Then *Saved Chord data 2026-11-30.jsonl, 3.8 MB* and *Show in folder*.
+  - If it can't save: *Chord couldn't save there. Choose another place.* **Choose where to save…**
+
+**Import**
+- A row: *From a Chord file*, with *Bring back an export, here or on another computer. Nothing here is removed.* and **Choose a file…**
+- A row: *From another browser*: today's panel, unchanged (DESIGN.md §8.7).
+- After you choose a file:
+  - *Reading Chord data 2026-11-30.chorddata…*
+  - If it's encrypted: *This file is encrypted. Enter its passphrase.*, a field and **Open**. A wrong one: *That passphrase doesn't open this file.*
+  - The preview: *From Austin's ThinkPad, exported Nov 30.* Then *New: 2 chords, 40 pinned tabs, 3 Favorites, Effects for 2 sites. Newer than yours: 5 tabs, 1 theme. Everything else is here already.*
+  - Switches:
+    - *History* (*3,000 new pages*);
+    - *Duet chats* (*20 chats*);
+    - *Effects*, which lists the sites;
+    - *Settings from the file*, which names each change: *Search engine: DuckDuckGo → Google*.
+  - Under them, small: *Tabs stay unloaded until you open them. Sites you'd allowed to use your camera, microphone or location ask again.*
+  - **Import**. Then *Imported 2 chords, 40 tabs, 3 Favorites and 3,000 pages of history.* The window's toast says the same with **Undo**, and Settings has **Undo** too.
+- Problems, each in a soft card with one button:
+  - *Part of this file is damaged. Chord can bring in what it read: 6 chords and 200 tabs.* **Import what's readable**
+  - *This file is from a newer Chord. Update Chord to import it.* **Check for updates**
+  - *That isn't a Chord file.*
+
+**Sync (later)**
+- Off: *Sync your setup*, with *Chords, pinned tabs, Favorites, themes, settings, link routes and Effects, the same on each of your computers, through a folder you already sync: iCloud Drive, Dropbox, OneDrive or Syncthing. History and Today tabs stay on each computer.* and **Turn on sync…**
+- The steps, in the card:
+  1. **Choose a folder…** with *Pick a folder your sync app keeps on every computer. Chord adds a "Chord sync" folder inside.*
+  2. For a new folder: *Choose a passphrase. Everything Chord puts in the folder is encrypted with it, and you'll type it once on each computer. Lose it and the synced copy can't be opened; what's on each computer stays.* Two fields, *Suggest one*, and **Start syncing**.
+     To join: *This folder syncs 2 computers: Austin's MacBook and Austin's Desktop. Enter your passphrase.* and **Join**.
+  3. Only if this computer has its own setup: *This computer has its own chords.* Then *Use the synced setup* (*This computer's 3 chords go. You can undo this.*) or *Keep both*, and **Continue**.
+- On: *On · Dropbox › Chord sync · Up to date*, or *Last change from Austin's MacBook, 2 minutes ago*.
+  - A list of the computers, each with its name (this one's can be edited), its system and when it last synced, and *Remove* on the others.
+  - *Pause* · *Change passphrase…* · *Turn off*.
+- Problems, one card at a time:
+  - *Sync is paused. Enter your passphrase.* **Unlock**
+  - *The passphrase was changed on Austin's MacBook. Enter the new one to keep syncing.* **Unlock**
+  - *Chord can't find the sync folder. Is your sync app running?* **Choose folder…**
+  - *Another computer has a newer Chord. Update this one to keep syncing.* **Check for updates**
+  - *This computer was removed from sync on Nov 30.* **Turn on again**
+- *Remove* and *Turn off* take effect when their toast's Undo runs out (6 s), so Undo has nothing to write.
+- Sync shows nothing in the sidebar. Only a problem that needs you gets a toast, once.
+
+## 9. Build order and tests
+
+As the maintainer prefers: a few journey E2Es, which run in the Linux container and CI, never on the desktop, plus table-driven unit tests. ⚠ The durations are estimates.
+
+**1. Export** (about a week)
+- **What's built:**
+  - in core: the record codecs, the clock (for stamps from rows) and the encrypted container;
+  - migration 15, `export.ts` and the export process;
+  - Settings' card and `docs/data-format.md`.
+- **Unit tables:**
+  - model → record → model for every type, including the fields that must never appear: back/forward state, live state, private chords;
+  - the container: the right and a wrong passphrase, a flipped byte in the header or in a frame, frames swapped, dropped or cut short, a newer `format`, an unknown KDF.
+- **The journey:** a seeded profile exports plain and encrypted. The plain file's lines parse and hold what was seeded, and the encrypted file opens with the passphrase only.
+- **Performance:** the 50,000-visit export while typing in the command bar.
+
+**2. Import** (about a week)
+- **What's built:** `data.merge` and its Undo, history dedupe, `duet.import`, the import process and the preview.
+- **Unit tables:**
+  - the merge planner: a new profile, a profile with data, older and newer stamps, something deleted here, tombstones in a file, duplicate Favorites, settings on and off, and `allow` permissions dropped;
+  - hostile files: the Effects sanitizer's table of hostile stylesheets (reused), `javascript:` links in Duet citations, something that isn't an image in an image record, a huge line, unknown types.
+- **The journeys:**
+  - Export, then import into a new profile. Check the sidebar, Favorites, a site's Effects applied, history in the command bar and a Duet chat. Then Undo removes it all.
+  - Once more, into a profile with data.
+
+**3. Sync** (two to three weeks)
+- **What's built:** migration 16, the stamping hook, the worker, the folder protocol, and Settings.
+- **Unit tables:**
+  - the clock: behind, ahead, equal, the counter;
+  - the field merge: concurrent edits, edit against delete, bringing a thing back, the same tab moved twice, a cycle, equal ranks, settings that conflict, unknown types kept and written back;
+  - a property test that merging any set of logs, in any order and any number of times, gives the same result;
+  - the folder protocol against an in-memory filesystem: a half-written frame, a shorter file, conflicted copies, compaction mid-read, a removed computer, a copied id, a newer format, a changed passphrase.
+- **The journey (Linux container):** two Chords with separate profiles share one temp folder. Set up sync on one, join on the other, edit on both, and check they agree. Then try a wrong passphrase, and remove one.
+- **By hand:** real iCloud Drive, Dropbox, OneDrive and Syncthing, between Windows, macOS and Linux, from a checklist in `docs/testing/sync.md`.
+
+## 10. Open questions
+
+1. **Plain export by default?** You proposed it, and **I agree** (§3). The only addition is the *Anyone with the file can read it* line when history or chats are included.
+2. **Settings from a file, into a profile with data: off until you turn them on, or on like the rest?** **I recommend off,** with each change named: a file can turn off ad blocking, Safe Browsing or Google-free mode.
+3. **Site permissions: export them and import only blocks, or leave them out entirely?** **I recommend export, with blocks only on import.**
+4. **Which settings sync?** The table in §1 is my call. The doubtful ones:
+   - interface size, which stays per computer;
+   - motion and tab sleeping;
+   - *keep screenshots* and *page previews*, which sync, so turning either off on one computer deletes those pictures on the others too;
+   - Safe Browsing with its notice answer.
+
+   **I recommend the table as it is.**
+5. **One Settings page: fold today's Settings → Import into *Your data*** (Export; Import from a file or from another browser; Sync)? **I recommend yes:** one place for your data, in and out.
+6. **Linux without a keyring: ask for the passphrase after every launch, or offer *Remember on this computer anyway*,** which stores the key where any program you run could read it? **I recommend asking,** with that option behind a plain warning.
+7. **KDF: scrypt now (built in), or Argon2id through WebAssembly from the start?** **I recommend scrypt** at N=2¹⁷. The header lets a later Chord move on.
+8. **Duet images in exports:** **I recommend including them,** counted on the switch, since they can be most of the file.
+9. **Passphrase length:** **I recommend at least 12 characters,** with *Suggest one*.
+10. **Tombstones forever in v1, and extensions left out of v1:** **I recommend both.**
+
+## What was checked, and what wasn't
+
+**Checked:**
+- Electron 45.0.0's own Node (24.22.0), run on Windows: its crypto is BoringSSL. AES-256-GCM works. ChaCha20-Poly1305 and XChaCha20 aren't ciphers there. `argon2Sync` throws, and Web Crypto has no Argon2id. scrypt and HKDF work. Timings are as given above.
+- Node 24's docs: zstd is experimental; `node:sqlite` has `readOnly`, `timeout` and `iterate()`; `crypto.argon2` arrived in 24.7.
+- Electron's docs: `safeStorage` is main-only; its sync API goes in Electron 46; `basic_text` on Linux protects nothing.
+- OWASP: N=2¹⁷, r=8, p=1 is its minimum for scrypt.
+- The model, tables and functions named here, in the code as of `cd27baf`.
+
+**Not checked (⚠ above):**
+- the sizes, which come from generated data;
+- SQLite's time to read 50,000 visits;
+- a read-only second connection to the live database from another process;
+- worker threads (with `node:sqlite`) inside a utility process;
+- how each sync app uploads, holds online-only files and delivers half-written ones;
+- folder watching on cloud folders;
+- `application/jsonl`'s registration status (from secondary sources);
+- decrypting a file with Python;
+- AES speed on arm64 boards without AES instructions;
+- the build estimates.
