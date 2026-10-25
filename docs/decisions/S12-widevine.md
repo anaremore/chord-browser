@@ -55,4 +55,6 @@ A browser shows untrusted pages all day, so a Chromium fix weeks late is a real 
 | C | ECS for everyone, with the 72-hour rule | same day, by turning DRM off | off weeks at a time, unpredictably |
 | D | ECS for everyone, accepting the lag | weeks behind, for every user | always |
 
-**Recommendation: A, and re-run the script every quarter.** B is the fallback if many people ask: it doubles the release matrix (builds, signing, E2E per OS), and it trails the way D does, only for people who chose it.
+**Decided 2026-10-24: A.** Re-run the script before revisiting. The path to these services is spike S14, a Widevine player: an optional companion app on ECS that opens only them, so ECS's lag stays off the open web.
+
+**The original recommendation: A, and re-run the script every quarter.** B is the fallback if many people ask: it doubles the release matrix (builds, signing, E2E per OS), and it trails the way D does, only for people who chose it.
