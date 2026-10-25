@@ -60,6 +60,18 @@ describe('IPC contract', () => {
     expect(invokeChannels['cmd:dispatch'].roles).not.toContain('internal');
   });
 
+  it("gives reader views their own channels, and only the reader's controls to change", () => {
+    for (const channel of ['reader:page', 'reader:look', 'reader:ready', 'reader:set', 'reader:close'] as const) expect(invokeChannels[channel].roles).toEqual(['reader']);
+    // A reader view can't reach the store, other tabs or settings.
+    for (const channel of ['cmd:dispatch', 'state:snapshot', 'settings:set', 'nav:command', 'action:run'] as const) expect(invokeChannels[channel].roles).not.toContain('reader');
+    const set = invokeChannels['reader:set'].request;
+    expect(set.safeParse({ size: 3, theme: 'sepia' }).success).toBe(true);
+    expect(set.safeParse({ size: 6 }).success).toBe(false);
+    expect(set.safeParse({ size: 1.5 }).success).toBe(false);
+    expect(set.safeParse({ theme: 'neon' }).success).toBe(false);
+    expect(set.safeParse({ searchEngine: 'kagi' }).success).toBe(false);
+  });
+
   it('validates system info', () => {
     const ok = SystemInfo.safeParse({
       platform: 'win32',

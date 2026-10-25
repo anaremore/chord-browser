@@ -142,6 +142,7 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
         label: 'View',
         submenu: [
           item('Toggle Sidebar', 'view.toggleSidebar'),
+          item('Toggle Reader View', 'view.reader'),
           { type: 'separator' },
           item('Reload', 'nav.reload'),
           item('Reload, Skipping Cache', 'nav.hardReload'),
@@ -184,6 +185,7 @@ export function buildAppMenu(run: (action: ActionId) => void): Menu {
       submenu: [item('Zoom in', 'view.zoomIn'), item('Zoom out', 'view.zoomOut'), item('Actual size', 'view.zoomReset')],
     },
     item('Find in page…', 'view.find'),
+    item('Reader view', 'view.reader'),
     item('Full screen', 'view.fullscreen'),
     item('Print…', 'page.print'),
     { type: 'separator' },
@@ -270,6 +272,9 @@ export interface TabMenuActions {
    */
   stopSharing: (() => void) | null;
   backToPinned: (() => void) | null;
+  /** Reader view: offered while the page reads as an article (`on` while it shows in reader view), else null. */
+  reader: { on: boolean } | null;
+  toggleReader(): void;
 }
 
 /** Right-click on a tab row in the sidebar. */
@@ -299,6 +304,7 @@ export function buildTabMenu(a: TabMenuActions): Menu {
       : { label: 'Open in split', enabled: a.openInSplit !== null, click: () => a.openInSplit?.() },
     { type: 'separator' },
     { label: 'Reload', click: a.reload },
+    ...(a.reader ? [{ label: a.reader.on ? 'Leave reader view' : 'Show in reader view', accelerator: acceleratorFor('view.reader'), click: a.toggleReader }] : []),
     { label: 'Duplicate', click: a.duplicate },
     // Kept with the tab: a muted page stays silent after sleeping and restarts.
     { label: a.muted ? 'Unmute tab' : 'Mute tab', accelerator: acceleratorFor('tab.mute'), enabled: web, click: a.toggleMute },

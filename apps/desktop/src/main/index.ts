@@ -43,7 +43,7 @@ import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo } from './platform';
-import { handleChordProtocol, registerSchemes } from './protocol';
+import { handleChordProtocol, registerSchemes, serveReaderImages } from './protocol';
 import { SAFE_BROWSING_KEY } from './safe-browsing/key';
 import { listsFile, SafeBrowsing, safeBrowsingEndpoint } from './safe-browsing/service';
 import { configureUiSession, hardenAllWebContents } from './security';
@@ -194,7 +194,8 @@ function registerIpc(): void {
     browser!.store.dispatch(scopeToWindow(command, w.id));
   });
   handle('nav:command', ({ action }, sender) => {
-    const contents = senderWindow(sender).activeTabContents;
+    // The page itself, behind its reader view if it has one open.
+    const contents = browser!.pageIn(senderWindow(sender));
     if (!contents) return;
     const history = contents.navigationHistory;
     if (action === 'back' && history.canGoBack()) history.goBack();
@@ -330,6 +331,16 @@ function registerIpc(): void {
   );
   handle('settings:forgetSite', ({ origin }) => browser!.store.dispatch({ t: 'permission.forget', origin }));
   handle('settings:linkRoute', ({ host, chordId }) => browser!.setLinkRoute(host, chordId));
+  // A reader view: only its own tab's article and look; closing it brings the page back.
+  handle('reader:page', (_request, sender) => {
+    const page = browser!.readers.pageFor(sender);
+    if (!page) throw new Error('No reader view for this sender');
+    return page;
+  });
+  handle('reader:look', (_request, sender) => browser!.readerLook(sender));
+  handle('reader:ready', (_request, sender) => browser!.readers.ready(sender));
+  handle('reader:set', (reader) => browser!.store.dispatch({ t: 'settings.set', settings: { reader } }));
+  handle('reader:close', (_request, sender) => browser!.readers.close(sender));
   handle('archive:snapshot', (_request, sender) => browser!.archiveSnapshot(sender));
   handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
   handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
@@ -548,6 +559,7 @@ if (!app.requestSingleInstanceLock()) {
       },
     });
     browser.applyAppMenu();
+    serveReaderImages((url) => browser!.readers.image(url));
     // Settings → Appearance → Color scheme is Chromium's own theme source, so web pages'
     // prefers-color-scheme follows it, as in Chrome. Development's CHORD_APPEARANCE wins.
     const followScheme = () => {

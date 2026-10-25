@@ -34,12 +34,13 @@ export default defineConfig({
     // release workflow passes the `release` environment's secret. Without it Safe Browsing is unavailable.
     define: { __CHORD_SAFE_BROWSING_KEY__: JSON.stringify(process.env['CHORD_SAFE_BROWSING_KEY'] ?? '') },
     // Bundle everything (workspace packages are TypeScript sources); only
-    // electron and Node built-ins stay external. Five entries: main itself,
+    // electron and Node built-ins stay external. The entries: main itself,
     // chord-data's utility process (ARCHITECTURE.md §4), the PDF reader
     // Duet starts for each PDF it reads (§11.4; pdf.js stays out of main),
     // Safe Browsing's worker thread (§14.5), ad blocking's (§9; the engine
-    // stays out of main), and the process that reads other browsers' files
-    // for an import (§9).
+    // stays out of main), the process that reads other browsers' files
+    // for an import (§9), and the worker that cleans reader view's
+    // articles (§9).
     plugins: [filterLists()],
     build: {
       externalizeDeps: false,
@@ -51,6 +52,7 @@ export default defineConfig({
           'safe-browsing': src('main/safe-browsing/worker.ts'),
           'ad-blocking': src('main/ad-blocking/worker.ts'),
           import: src('import/worker.ts'),
+          reader: src('main/reader/worker.ts'),
         },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },
@@ -72,6 +74,7 @@ export default defineConfig({
           internal: src('preload/internal.ts'),
           archive: src('preload/archive.ts'),
           mini: src('preload/mini.ts'),
+          reader: src('preload/reader.ts'),
           // The extension library's preload (GPL-3.0, packages/chrome-extensions): extension
           // pages and workers, and every page of a profile that has extensions (ARCHITECTURE.md §12).
           extensions: resolve(import.meta.dirname, '../../packages/chrome-extensions/src/preload.ts'),
@@ -97,6 +100,7 @@ export default defineConfig({
           settings: src('renderer/settings/index.html'),
           archive: src('renderer/archive/index.html'),
           mini: src('renderer/mini/index.html'),
+          reader: src('renderer/reader/index.html'),
         },
       },
     },
