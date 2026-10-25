@@ -217,6 +217,8 @@ export interface LiveTab {
   readable: boolean;
   /** The tab shows its article in reader view, over its page. */
   reader: boolean;
+  /** Its service plays in Chord Player instead (ARCHITECTURE.md §9): the frame says so, with a way back. */
+  player: boolean;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -581,7 +583,7 @@ export const emptyState = (): State => ({
   imports: {},
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, threat: null, readable: false, reader: false };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, threat: null, readable: false, reader: false, player: false };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

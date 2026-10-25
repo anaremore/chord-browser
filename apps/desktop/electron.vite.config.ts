@@ -39,8 +39,8 @@ export default defineConfig({
     // Duet starts for each PDF it reads (§11.4; pdf.js stays out of main),
     // Safe Browsing's worker thread (§14.5), ad blocking's (§9; the engine
     // stays out of main), the process that reads other browsers' files
-    // for an import (§9), and the worker that cleans reader view's
-    // articles (§9).
+    // for an import (§9), the worker that cleans reader view's
+    // articles (§9), and the one that installs Chord Player (§9).
     plugins: [filterLists()],
     build: {
       externalizeDeps: false,
@@ -51,6 +51,8 @@ export default defineConfig({
           pdf: src('pdf/worker.ts'),
           'safe-browsing': src('main/safe-browsing/worker.ts'),
           'ad-blocking': src('main/ad-blocking/worker.ts'),
+          // Installing Chord Player: hashing and unpacking its zip (ARCHITECTURE.md §9).
+          'player-unpack': src('main/player/unpack-worker.ts'),
           import: src('import/worker.ts'),
           reader: src('main/reader/worker.ts'),
         },

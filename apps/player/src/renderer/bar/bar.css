@@ -1,0 +1,95 @@
+/*
+ * Chord Player's bar (DESIGN.md §7.13), in the colors of the chord the service came from.
+ * Tokens only (DESIGN.md §4.1): bar.ts sets Chord's token variables and the chord's colors.
+ */
+
+@font-face {
+  font-family: Onest;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url("../../../../desktop/src/renderer/assets/fonts/Onest-latin.woff2") format("woff2");
+}
+
+html,
+body {
+  block-size: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background-color: var(--color-base);
+  background-image: var(--color-tint);
+  color: var(--color-fg);
+  font: var(--text-body);
+  user-select: none;
+}
+
+.bar {
+  box-sizing: border-box;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  block-size: var(--size-player-bar);
+  padding-inline: var(--controls-left) var(--controls-right);
+  app-region: drag;
+}
+
+.mark {
+  flex: none;
+  inline-size: var(--size-icon);
+  block-size: var(--size-icon);
+  border-radius: var(--radius-xs);
+  background: var(--color-accent);
+}
+
+.title {
+  display: flex;
+  flex: 1;
+  gap: var(--space-2);
+  align-items: baseline;
+  min-inline-size: 0;
+  margin: 0;
+  overflow: hidden;
+  font: var(--text-label);
+  white-space: nowrap;
+}
+
+.status {
+  overflow: hidden;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  text-overflow: ellipsis;
+}
+
+.back {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-label);
+  app-region: no-drag;
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.back:hover {
+  background: var(--color-item-active-bg);
+}
+
+.back:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-focus-ring);
+}
+
+@media (forced-colors: active) {
+  .back {
+    border: var(--size-hairline) solid ButtonText;
+  }
+}

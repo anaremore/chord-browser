@@ -78,7 +78,7 @@ describe('DrmNotices', () => {
   const setUp = (browsers = [CHROME, FIREFOX, SAFARI]) => {
     const changed = vi.fn();
     const find = vi.fn(async () => browsers);
-    const notices = new DrmNotices({ browsers: find, changed });
+    const notices = new DrmNotices({ browsers: find, changed, platform: 'win32' });
     return { notices, changed, find };
   };
 
@@ -94,6 +94,8 @@ describe('DrmNotices', () => {
         { id: 'chrome', name: 'Chrome' },
         { id: 'firefox', name: 'Firefox' },
       ],
+      player: null,
+      linux: false,
     });
     // Looked for once.
     notices.noticeFor('https://www.hulu.com/');
@@ -119,6 +121,19 @@ describe('DrmNotices', () => {
     const { notices, changed } = setUp([]);
     notices.noticeFor('https://open.spotify.com/');
     await vi.waitFor(() => expect(changed).toHaveBeenCalled());
-    expect(notices.noticeFor('https://open.spotify.com/')).toEqual({ service: 'Spotify', browsers: [] });
+    expect(notices.noticeFor('https://open.spotify.com/')).toEqual({ service: 'Spotify', browsers: [], player: null, linux: false });
+  });
+
+  it('offers Chord Player once Chord knows what it can offer, and waits for it so the card arrives whole', async () => {
+    const { notices, changed } = setUp([CHROME]);
+    notices.noticeFor('https://www.netflix.com/');
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+    expect(notices.noticeFor('https://www.netflix.com/', 'pending')).toBeNull();
+    expect(notices.noticeFor('https://www.netflix.com/', { state: 'install', size: 160_000_000, update: false })).toMatchObject({
+      service: 'Netflix',
+      player: { state: 'install', size: 160_000_000 },
+      browsers: [{ id: 'chrome', name: 'Chrome' }],
+    });
+    expect(notices.noticeFor('https://www.netflix.com/', { state: 'ready' })?.player).toEqual({ state: 'ready' });
   });
 });

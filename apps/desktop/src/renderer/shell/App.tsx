@@ -71,9 +71,33 @@ function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadErro
   );
 }
 
-/** What the frame shows instead of a page that crashed, didn't load, or may be unsafe (nothing while the page is fine). */
+/**
+ * A tab whose service plays in Chord Player (DESIGN.md §7.13): the tab stays,
+ * and its frame says where it plays, with the way back to the player and a
+ * way to see the page here instead (to manage the account, say).
+ */
+function PlayerState({ tab }: { tab: TabNode }) {
+  const host = displayHost(tab.url) || 'This page';
+  return (
+    <div className={styles.empty} role="status" data-page-state>
+      <p className={styles.emptyTitle}>Playing in Chord Player</p>
+      <p className={styles.emptyBody}>{host} plays in Chord Player, in a window of its own. This tab stays here.</p>
+      <div className={styles.emptyActions}>
+        <button type="button" className={styles.emptySecondary} onClick={() => void api.player.act(tab.id, 'release')}>
+          Show the page here
+        </button>
+        <button type="button" className={styles.emptyButton} onClick={() => void api.player.act(tab.id, 'show')}>
+          Back to the player
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** What the frame shows instead of a page that crashed, didn't load, may be unsafe, or plays in Chord Player (nothing while the page is fine). */
 function PageState({ tab, live, windowId }: { tab: TabNode; live: LiveTab | undefined; windowId: string }) {
   if (live?.threat) return <SafeBrowsingWarning threat={live.threat} nodeId={tab.id} windowId={windowId} />;
+  if (live?.player) return <PlayerState tab={tab} />;
   if (live?.crashed) {
     return (
       <div className={styles.empty} role="alert" data-page-state>

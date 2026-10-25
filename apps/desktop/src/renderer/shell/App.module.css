@@ -1595,6 +1595,33 @@ kbd {
   transform: scale(0.97);
 }
 
+/* Two ways out, side by side: "Playing in Chord Player" (DESIGN.md §7.13). */
+.emptyActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+.emptySecondary {
+  block-size: var(--size-row);
+  padding-inline: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-label);
+  transition: transform var(--spring-press-duration) var(--spring-press);
+}
+
+.emptySecondary:hover {
+  background: var(--color-item-active-bg);
+}
+
+.emptySecondary:active {
+  transform: scale(0.97);
+}
+
 /* The ERR_ code under a load error, for people who want it. */
 .errorCode {
   margin: var(--space-2) 0 0;

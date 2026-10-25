@@ -23,6 +23,7 @@ import { ImportSection } from './Import';
 import { PrivacySection } from './Privacy';
 import styles from './Settings.module.css';
 import { Links } from './Links';
+import { PlayerSettings } from './Player';
 import { SitesSection, Spelling } from './Sites';
 
 const SECTIONS = [
@@ -221,6 +222,7 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
       <Links snapshot={snapshot} />
       <SignIns snapshot={snapshot} />
       <Spelling snapshot={snapshot} info={info} />
+      <PlayerSettings />
       <DefaultBrowser platform={info.platform} />
     </>
   );

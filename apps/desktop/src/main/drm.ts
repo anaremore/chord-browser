@@ -1,52 +1,23 @@
 /**
  * The DRM notice (ARCHITECTURE.md §16, D4). Chord's stock Electron has no
  * Widevine, so the top services that need it don't play. On their pages the
- * popover says so, with *Open in…* up to two other browsers on this computer.
- * Services are recognized by address: catching a page's own request for DRM
- * would need a script in every page. Opening the page "externally" isn't
- * enough: with Chord the default browser, it would come straight back.
+ * popover says so. It offers Chord Player first, once it can (installing it
+ * if it isn't yet: main/player/), then *Open in…* up to two other browsers on
+ * this computer. Services are recognized by address, from the list Chord
+ * Player's navigation lock shares (@chord/player-protocol): catching a page's
+ * own request for DRM would need a script in every page. Opening the page
+ * "externally" isn't enough: with Chord the default browser, it would come
+ * straight back.
  */
 import { spawn } from 'node:child_process';
 import { access, constants } from 'node:fs/promises';
 import { posix, win32 } from 'node:path';
-import { hostOf } from '@chord/core';
-import type { DrmNotice, OtherBrowserId } from '@chord/ipc';
+import { servicePlaying } from '@chord/player-protocol';
+import type { DrmNotice, OtherBrowserId, PlayerOffer } from '@chord/ipc';
 
-interface Service {
-  name: string;
-  /** Its hosts, subdomains included. */
-  hosts: string[];
-  /** Only these paths on them (Prime Video on Amazon's own sites). */
-  paths?: string[];
-}
-
-const AMAZON = ['amazon.com', 'amazon.co.uk', 'amazon.de', 'amazon.fr', 'amazon.it', 'amazon.es', 'amazon.ca', 'amazon.com.au', 'amazon.co.jp', 'amazon.in', 'amazon.com.br', 'amazon.com.mx'];
-
-/** The services, by the addresses that play: Spotify's and Tidal's players, not their stores and blogs. */
-const SERVICES: Service[] = [
-  { name: 'Netflix', hosts: ['netflix.com'] },
-  { name: 'Spotify', hosts: ['open.spotify.com'] },
-  { name: 'Disney+', hosts: ['disneyplus.com'] },
-  { name: 'Prime Video', hosts: ['primevideo.com'] },
-  { name: 'Prime Video', hosts: AMAZON, paths: ['/gp/video'] },
-  { name: 'HBO Max', hosts: ['hbomax.com', 'max.com'] },
-  { name: 'Hulu', hosts: ['hulu.com'] },
-  { name: 'Apple Music', hosts: ['music.apple.com'] },
-  { name: 'Apple TV', hosts: ['tv.apple.com'] },
-  { name: 'Peacock', hosts: ['peacocktv.com'] },
-  { name: 'Paramount+', hosts: ['paramountplus.com'] },
-  { name: 'Tidal', hosts: ['listen.tidal.com'] },
-];
-
-/** The service a page is on, by its address, if it's one that needs Widevine. */
+/** The service a page is on, by its address, if it's one that needs Widevine: the pages that play (Spotify's player, not its store). */
 export function drmServiceFor(url: string): string | null {
-  const host = hostOf(url);
-  if (!host) return null;
-  const path = new URL(url).pathname;
-  const service = SERVICES.find(
-    (s) => s.hosts.some((h) => host === h || host.endsWith(`.${h}`)) && (!s.paths || s.paths.some((p) => path === p || path.startsWith(`${p}/`))),
-  );
-  return service?.name ?? null;
+  return servicePlaying(url)?.name ?? null;
 }
 
 const NAMES: Record<OtherBrowserId, string> = { chrome: 'Chrome', edge: 'Edge', firefox: 'Firefox', safari: 'Safari', brave: 'Brave' };
@@ -137,6 +108,7 @@ export interface DrmDeps {
   browsers(): Promise<Launcher[]>;
   /** What the popover would show changed (the browsers were found, or a notice dismissed). */
   changed(): void;
+  platform?: NodeJS.Platform;
 }
 
 export class DrmNotices {
@@ -148,15 +120,21 @@ export class DrmNotices {
 
   constructor(private readonly deps: DrmDeps) {}
 
-  /** The notice for the page a window shows, if it needs one. Null until the other browsers are found, so the card arrives whole. */
-  noticeFor(url: string): DrmNotice | null {
+  /**
+   * The notice for the page a window shows, if it needs one, with what it
+   * offers of Chord Player (`pending` while Chord is still finding out). Null
+   * until the other browsers are found and Chord Player is known, so the card
+   * arrives whole.
+   */
+  noticeFor(url: string, player: PlayerOffer | null | 'pending' = null): DrmNotice | null {
     const service = drmServiceFor(url);
     if (!service || this.dismissed.has(service)) return null;
     if (!this.browsers) {
       void this.find();
       return null;
     }
-    return { service, browsers: this.browsers.slice(0, 2).map((b) => ({ id: b.id, name: NAMES[b.id] })) };
+    if (player === 'pending') return null;
+    return { service, browsers: this.browsers.slice(0, 2).map((b) => ({ id: b.id, name: NAMES[b.id] })), player, linux: (this.deps.platform ?? process.platform) === 'linux' };
   }
 
   dismiss(url: string): void {

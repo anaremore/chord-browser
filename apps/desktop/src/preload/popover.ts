@@ -19,7 +19,7 @@ const api: PopoverApi = {
   auth: { respond: (id, credentials) => invoke('auth:respond', { id, credentials }) },
   passkey: { respond: (id, credentialId) => invoke('passkey:respond', { id, credentialId }) },
   safeBrowsing: { choose: (on) => invoke('safeBrowsing:choose', { on }) },
-  drm: { open: (browser) => invoke('drm:open', { browser }), dismiss: () => invoke('drm:dismiss') },
+  drm: { open: (browser) => invoke('drm:open', { browser }), dismiss: () => invoke('drm:dismiss'), player: (action) => invoke('drm:player', { action }) },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

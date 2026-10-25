@@ -229,6 +229,60 @@
   opacity: 0.45;
 }
 
+/* ---------- The DRM notice's Chord Player row ---------- */
+
+.playerRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) 0;
+}
+
+.wide {
+  inline-size: 100%;
+}
+
+.progressLabel {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.progress {
+  overflow: hidden;
+  block-size: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--color-item-hover);
+}
+
+.progressFill {
+  block-size: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: inline-size var(--duration-fade-fast) var(--ease-standard);
+}
+
+.playerProblem {
+  margin: 0;
+  color: var(--color-danger);
+  font: var(--text-small);
+}
+
+/* The card's bottom edge when the player row is its last row. */
+.actionsEnd {
+  block-size: var(--space-4);
+}
+
+@media (forced-colors: active) {
+  .progress {
+    border: var(--size-hairline) solid CanvasText;
+  }
+
+  .progressFill {
+    background: Highlight;
+  }
+}
+
 /* ---------- Sign-in box (HTTP auth) ---------- */
 
 .authNotes {

@@ -28,7 +28,7 @@ import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { DuetService } from './duet/service';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
-import { configureAppIdentity } from './identity';
+import { APP_ID, configureAppIdentity, inFlatpak } from './identity';
 import { Importer } from './import';
 import { handle, send } from './ipc';
 import { DownloadManager } from './downloads';
@@ -55,6 +55,12 @@ import { Screenshots } from './screenshots/service';
 import { DiskShots } from './screenshots/store';
 import { mark, watchLaunch } from './launch-timeline';
 import { chromiumUserAgent } from './user-agent';
+import { targetFor } from '@chord/player-protocol';
+import { readFileSync } from 'node:fs';
+import { PlayerInstaller } from './player/installer';
+import { playerRoot } from './player/paths';
+import { UPDATE_PUBLIC_KEY } from './update-key';
+import { RELEASE_DOWNLOADS } from './update-signing';
 
 // A bug in main must never put up Electron's "JavaScript error" box (a native dialog that
 // beeps on Windows). Log it and keep going, as Electron does after that box is closed.
@@ -142,6 +148,41 @@ const updates = new UpdateChecker({
   onReady: (release) => browser?.announceUpdateReady(`update:${release.version}`, `${release.name} is ready`),
   installer: new UpdateInstaller(),
 });
+/**
+ * Chord Player (ARCHITECTURE.md §9): where it's installed, where its releases
+ * come from, and how its manifests are checked (Chord's update key). Release
+ * builds read GitHub; development builds only a test server
+ * (CHORD_PLAYER_FEED, CHORD_PLAYER_DOWNLOADS and CHORD_PLAYER_PUBLIC_KEY,
+ * ignored when packaged), so they never install from the network on their own.
+ * Not offered in a Flatpak (it can't start another engine outside its
+ * sandbox), on Linux arm64 and Windows arm64 (not built), or on Linux where
+ * AppArmor keeps unprivileged user namespaces from an app it doesn't know
+ * (Ubuntu 23.10 and later): the player's sandbox couldn't start there.
+ */
+function playerUsable(): boolean {
+  if (inFlatpak) return false;
+  if (process.platform !== 'linux') return true;
+  try {
+    return readFileSync('/proc/sys/kernel/apparmor_restrict_unprivileged_userns', 'utf8').trim() !== '1';
+  } catch {
+    return true;
+  }
+}
+const devEnv = (name: string) => (app.isPackaged ? undefined : process.env[name] || undefined);
+const playerRootDir = playerRoot({ platform: process.platform, home: app.getPath('home'), env: process.env, packaged: app.isPackaged });
+let playerFetchSession: Session | null = null;
+const playerInstaller = new PlayerInstaller({
+  root: playerRootDir,
+  target: playerUsable() ? targetFor(process.platform, process.arch) : null,
+  feed: app.isPackaged ? 'https://api.github.com/repos/anaremore/chord-browser/releases?per_page=30' : (devEnv('CHORD_PLAYER_FEED') ?? null),
+  downloads: app.isPackaged ? RELEASE_DOWNLOADS : (devEnv('CHORD_PLAYER_DOWNLOADS') ?? null),
+  publicKey: app.isPackaged ? UPDATE_PUBLIC_KEY : (devEnv('CHORD_PLAYER_PUBLIC_KEY') ?? ''),
+  // Its own in-memory session: no cookies sent, nothing kept.
+  fetch: (url, init) => (playerFetchSession ??= session.fromPartition('chord-player-updates', { cache: false })).fetch(url, init),
+  workerPath: join(import.meta.dirname, 'player-unpack.js'),
+  changed: () => browser?.playerChanged(),
+});
+
 const suggestions = new Suggestions({
   // Google-free mode never searches with Google (core enforces it); this is the backstop.
   enabled: () => (browser?.store.state.settings.searchSuggestions ?? false) && !(browser?.store.state.settings.googleFree && browser.store.state.settings.searchEngine === 'google'),
@@ -340,6 +381,10 @@ function registerIpc(): void {
   handle('passkey:respond', ({ id, credentialId }) => passkeys.respond(id, credentialId));
   handle('drm:open', ({ browser: other }, sender) => browser!.drmAction(sender, { open: other }));
   handle('drm:dismiss', (_request, sender) => browser!.drmAction(sender, 'dismiss'));
+  handle('drm:player', ({ action }, sender) => browser!.drmAction(sender, { player: action }));
+  handle('player:do', ({ nodeId, action }, sender) => browser!.playerAction(senderWindow(sender), nodeId, action));
+  handle('settings:player', () => browser!.player.status());
+  handle('settings:removePlayer', () => browser!.player.remove());
   handle('settings:sitePermission', ({ origin, permission, decision }) =>
     browser!.store.dispatch({ t: 'permission.set', origin, permissions: [permission], decision }),
   );
@@ -428,7 +473,8 @@ if (!app.requestSingleInstanceLock()) {
     const imports = Promise.race([importer?.quit().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
     // Duet first: replies in flight are kept as interrupted, and provider processes end. Ad blocking
     // finishes a change under way (no control page may be open as Electron tears down) and ends its workers.
-    void Promise.all([duet?.quit(), adBlocking.stop()])
+    browser?.player.stopUpdates();
+    void Promise.all([duet?.quit(), adBlocking.stop(), browser?.player.close()])
       .catch(() => undefined)
       .then(() => imports)
       .then(() => persistence!.close())
@@ -577,6 +623,28 @@ if (!app.requestSingleInstanceLock()) {
           return Boolean(safeBrowsing.available && s && !s.safeBrowsing && !s.safeBrowsingAsked && !s.googleFree);
         },
       },
+      player: {
+        installer: playerInstaller,
+        host: {
+          root: playerRootDir,
+          platform: process.platform,
+          ...(process.platform === 'win32' ? { appUserModelId: APP_ID } : {}),
+          // Tests only (development builds): a local server standing in for a service, with Chord's own host rules.
+          ...(devEnv('CHORD_PLAYER_TEST') === '1'
+            ? {
+                test: {
+                  hostResolverRules: app.commandLine.getSwitchValue('host-resolver-rules') || undefined,
+                  secureOrigins: (devEnv('CHORD_PLAYER_SECURE_ORIGINS') ?? '').split(',').filter(Boolean),
+                },
+              }
+            : {}),
+          verbose: !app.isPackaged,
+        },
+        // Kept running for the player with every window closed (below): once it's gone, Chord goes too.
+        closed: () => {
+          if (process.platform !== 'darwin' && browser?.windowCount === 0) app.quit();
+        },
+      },
       extensions: {
         root: join(app.getPath('userData'), 'Extensions'),
         preloadPath: join(import.meta.dirname, '../preload/extensions.cjs'),
@@ -605,6 +673,8 @@ if (!app.requestSingleInstanceLock()) {
       }
       // Safe Browsing starts or stops with its switch, and with Google-free mode (which keeps it off).
       if (change.patches.some((p) => p.path[0] === 'settings' && (p.path[1] === 'safeBrowsing' || p.path[1] === 'googleFree'))) safeBrowsing.sync();
+      // Google-free mode closes Chord Player: its CDM comes from Google, and the component updater asks Google again within a minute.
+      if (change.state.settings.googleFree && change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'googleFree')) void browser!.player.close();
       // Ad blocking follows its switch and the sites it's off for (a private window's own list lives on its chord).
       if (change.patches.some((p) => (p.path[0] === 'settings' && p.path[1] === 'adBlocking') || (p.path[0] === 'chords' && p.path[2] === 'blockingOff'))) adBlocking.sync();
     });
@@ -648,6 +718,10 @@ if (!app.requestSingleInstanceLock()) {
         contextMenu: (contentsId: number) => contextMenus.get(contentsId)?.map((item) => item.label) ?? null,
         /** Choose an item in a page's last right-click menu, as clicking it would. */
         chooseContextMenuItem: (contentsId: number, label: string) => contextMenus.get(contentsId)?.find((item) => item.label === label)?.choose(),
+        /** Chord Player: where it stands, what the running player says of itself, and its test-only actions. */
+        player: () => browser!.player.inspect(),
+        playerDebug: () => browser!.player.host.request('debug', {}, 5000),
+        playerTest: (body: Record<string, unknown>) => browser!.player.host.request('test', body, 20_000),
         extensionMenuLabels: (contentsId: number, params: Partial<ContextMenuParams>) => {
           const contents = webContents.fromId(contentsId);
           return contents ? browser!.extensions.contextMenuItems(contents, params as ContextMenuParams).map((item) => item.label) : [];
@@ -666,9 +740,11 @@ if (!app.requestSingleInstanceLock()) {
     else browser.start();
     mark('windows opened');
     updates.start();
+    browser.player.startUpdates();
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+    // Chord Player runs on Chord's channel: Chord stays (without windows) until the player closes too.
+    if (process.platform !== 'darwin' && !browser?.player.running) app.quit();
   });
 }
