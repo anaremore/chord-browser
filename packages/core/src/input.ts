@@ -76,6 +76,19 @@ export function searchUrl(query: string, engine: SearchEngineId = 'google'): str
   return `${searchEngine(engine).prefix}${encodeURIComponent(query)}`;
 }
 
+/** Engines that search by an image (Chromium's own definitions: only Google's Lens and Bing's Visual Search, of Chord's). */
+export type ImageSearchEngine = 'google' | 'bing';
+
+/**
+ * Where a pasted image is searched (DESIGN.md §7.3): your engine, if it can
+ * search by image; else Google Lens, named on its row so sending the image
+ * there is your choice; in Google-free mode, never Google, Bing instead.
+ */
+export function imageSearchFor(engine: SearchEngineId, googleFree: boolean): { engine: ImageSearchEngine; label: string } {
+  if (engine === 'bing' || googleFree) return { engine: 'bing', label: 'Bing' };
+  return { engine: 'google', label: 'Google Lens' };
+}
+
 /** How many suggestions the command bar shows. */
 export const MAX_SUGGESTIONS = 5;
 

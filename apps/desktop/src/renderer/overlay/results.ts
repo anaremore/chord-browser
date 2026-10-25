@@ -34,6 +34,7 @@ import { type DuetHit,
   type SiteKeyword,
   type State,
   type TabNode,
+  type ImageSearchEngine,
 } from '@chord/core';
 import type { HistorySearch } from '@chord/ipc';
 import { displayHost, pageTitle } from '../shared/site';
@@ -53,7 +54,9 @@ export type Result =
   | { kind: 'action'; key: string; title: string; action: ActionId }
   | { kind: 'chord'; key: string; title: string; chord: Chord }
   /** A way to narrow the bar: search a site, or show one kind of result. */
-  | { kind: 'scope'; key: string; title: string; detail: string; scope: Scope };
+  | { kind: 'scope'; key: string; title: string; detail: string; scope: Scope }
+  /** A pasted or dropped image (DESIGN.md §7.3): search the web by it. */
+  | { kind: 'imageSearch'; key: string; title: string; engine: ImageSearchEngine };
 
 /** The narrowing filters (DESIGN.md §7.3), in the order `@` lists them. */
 export const FILTERS: readonly { id: Filter; token: string; name: string; placeholder: string }[] = [
@@ -185,6 +188,8 @@ export function shortUrl(url: string): string {
 /** Where a row leads, as learned picks remember it: a page's place, a chord, an action. Searches and scopes aren't remembered. */
 export function destinationOf(result: Result): string | null {
   switch (result.kind) {
+    case 'imageSearch':
+      return null;
     case 'open':
       return result.search ? null : placeKey(result.url);
     case 'tab':

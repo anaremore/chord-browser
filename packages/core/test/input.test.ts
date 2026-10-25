@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SEARCH_ENGINES, SITE_KEYWORDS, keywordFor, keywordSearchUrl, parseInput, parseSuggestions, resolveInput, searchUrl, suggestUrl } from '../src';
+import { SEARCH_ENGINES, SITE_KEYWORDS, imageSearchFor, keywordFor, keywordSearchUrl, parseInput, parseSuggestions, resolveInput, searchUrl, suggestUrl } from '../src';
 
 describe('parseInput', () => {
   it.each([
@@ -85,5 +85,22 @@ describe('site keywords', () => {
   it('keywords are unique', () => {
     const words = SITE_KEYWORDS.map((k) => k.keyword);
     expect(new Set(words).size).toBe(words.length);
+  });
+});
+
+describe('imageSearchFor', () => {
+  it.each([
+    ['google', false, 'google', 'Google Lens'],
+    ['bing', false, 'bing', 'Bing'],
+    // Engines without image search: Google Lens, named on its row.
+    ['duckduckgo', false, 'google', 'Google Lens'],
+    ['brave', false, 'google', 'Google Lens'],
+    ['kagi', false, 'google', 'Google Lens'],
+    ['ecosia', false, 'google', 'Google Lens'],
+    // Google-free mode never sends it to Google.
+    ['google', true, 'bing', 'Bing'],
+    ['duckduckgo', true, 'bing', 'Bing'],
+  ] as const)('%s (Google-free %s) → %s', (engine, googleFree, expected, label) => {
+    expect(imageSearchFor(engine, googleFree)).toEqual({ engine: expected, label });
   });
 });

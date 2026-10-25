@@ -529,6 +529,10 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 - **Selection** is the accent at 14% alpha (light) or 22% (dark). The highlight glides between rows (`snappy`) for arrow keys and jumps instantly while typing.
 - **Inline autocomplete:** the completed suffix is selected in the input; Tab accepts it.
 - **Where a result opens** is chosen by the Enter key: ↵ here · ⌘↵ new background tab · ⇧↵ new window · ⌥↵ split (Phase 2).
+- **Search by image** (*built 2026-10-25*): paste an image (a copied screenshot, an image file) or drop one on the field. It shows as a thumbnail chip before the text, with ✕ (Backspace on the empty field also takes it out), the placeholder becomes *Press Enter to search by this image*, and the rows become the image's:
+  - **Search [engine] for this image** (`scan-search` icon): your engine's own image search, Google Lens or Bing. An engine that has none (DuckDuckGo, Brave, Kagi, Ecosia) gets Google Lens, named on the row so sending the image there is a choice; Google-free mode gets Bing. ↵ opens it in a new tab (here, when editing an address), ⌘↵ behind.
+  - Next: **Ask Duet about this image**, with any words you typed as the question.
+  Nothing leaves Chord before a row is chosen.
 - **Narrowing:** `@tabs`, `@pinned`, `@history`, `@archive`, `@chords`, `@actions` filter the results. A site keyword such as `yt` or `gh` followed by Tab switches to searching that site.
 - **Ranking** follows Crest's tested scoring (MPL-2.0; ported in M1.4): match position, recency, frecency, open/pinned bonuses, top-hit rules, and learning which result you pick for the same text.
 - **`HintBar`:** "↵ Open · ⌘↵ New tab · Tab Complete · Esc Close". It fades out for good after the user has used each hint 3 times, so beginners get guidance and experts get quiet.
