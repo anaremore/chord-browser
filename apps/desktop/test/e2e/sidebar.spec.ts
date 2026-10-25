@@ -47,6 +47,7 @@ async function pageWhere(app: ElectronApplication, match: (url: string) => boole
 
 const isShell = (url: string) => url.startsWith('chord://shell') || url.includes('/shell/index.html');
 const isOverlay = (url: string) => url.startsWith('chord://overlay') || url.includes('/overlay/index.html');
+const isSettings = (url: string) => url.startsWith('chord://settings') || url.includes('/settings/index.html');
 
 const runAction = (shell: Page, action: string) =>
   shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
@@ -280,6 +281,37 @@ test('Favorites: added by action or by dragging, shared by chords, and a favorit
     await shell.getByRole('button', { name: 'New chord' }).click();
     await shell.getByRole('textbox', { name: 'Chord name' }).press('Enter');
     await expect(favorites.getByRole('listitem')).toHaveCount(2);
+  } finally {
+    await app.close();
+  }
+});
+
+test('the active highlight glides to the tab you switch to, from Pinned into Today too, and just appears with tab moves off', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const { shell, today, pinned } = await setUp(app, ['/second', '/third']);
+    // The pill on the row on screen: whether it's gliding there (a running animation of its own).
+    const gliding = () =>
+      shell.evaluate(() => {
+        const pill = document.querySelector('[role="treeitem"][aria-current="page"] [data-pill]');
+        return pill ? pill.getAnimations().some((a) => a.playState === 'running') : null;
+      });
+    const quick = { intervals: [16, 16, 16, 32, 64, 100] };
+    await today.getByRole('treeitem', { name: 'First page', exact: true }).click();
+    await expect.poll(gliding, quick).toBe(true);
+    // From Pinned to Today: another list, read where they both are now.
+    await runAction(shell, 'tab.pin');
+    await expect(pinned.getByRole('treeitem', { name: 'First page', exact: true })).toBeVisible();
+    await today.getByRole('treeitem', { name: 'Third page', exact: true }).click();
+    await expect.poll(gliding, quick).toBe(true);
+    // "Animate tab moves" off: it's just there.
+    await runAction(shell, 'app.settings');
+    await (await pageWhere(app, isSettings)).evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ motion: { tabMoves: false } }));
+    await shell.bringToFront();
+    await today.getByRole('treeitem', { name: 'Second page', exact: true }).click();
+    await expect(today.getByRole('treeitem', { name: 'Second page', exact: true })).toHaveAttribute('aria-current', 'page');
+    await shell.waitForTimeout(50);
+    expect(await gliding()).toBe(false);
   } finally {
     await app.close();
   }

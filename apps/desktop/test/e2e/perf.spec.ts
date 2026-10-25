@@ -366,20 +366,19 @@ async function interaction(s: Session, name: string, steps: Step[], traced?: (ev
   const tasks: { renderer: string; ms: number; calls: { name: string; ms: number }[] }[] = [];
   const intervals: number[] = [];
   const selfTime = new Map<string, number>();
+  const layoutReads = new Map<string, number>();
   let locked: boolean | null = null;
   for (const step of steps) {
     await step.setup?.();
     locked = screenLocked() || locked;
-    const events = await trace(s.cdp, async () => {
-      if (!PROFILE) {
-        intervals.push(...(await frameIntervals(s.shell, step.act)));
-        return;
-      }
-      const self = await profile(s.cdp, async () => {
-        intervals.push(...(await frameIntervals(s.shell, step.act)));
-      });
+    const act = () => trace(s.cdp, async () => void intervals.push(...(await frameIntervals(s.shell, step.act))));
+    // The profiler starts and stops outside the trace: starting it blocks the renderer for tens of milliseconds,
+    // which would count as a frame of the interaction's own (it read as a 40 ms frame of Undo Clear Today).
+    let events: TraceEvent[] = [];
+    if (PROFILE) {
+      const self = await profile(s.cdp, async () => void (events = await act()), layoutReads);
       for (const [fn, ms] of self) selfTime.set(fn, (selfTime.get(fn) ?? 0) + ms);
-    });
+    } else events = await act();
     for (const { pid, name: renderer } of s.renderers) {
       frames.push(...framesOf(events, pid).map((f) => ({ ...f, renderer })));
       tasks.push({ renderer, ...longestTask(events, pid) });
@@ -426,6 +425,11 @@ async function interaction(s: Session, name: string, steps: Step[], traced?: (ev
           .sort((a, b) => b[1] - a[1])
           .slice(0, 15)
           .map(([fn, ms]) => `${fn} ${round(ms)} ms`),
+        // Where the forced layouts came from: each layout-reading DOM call by its callers.
+        layoutReads: [...layoutReads]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+          .map(([key, ms]) => `${key} ${round(ms)} ms`),
       }),
     },
   });
