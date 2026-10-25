@@ -131,7 +131,14 @@ async function pointerDrag(app: ElectronApplication, shell: Page, from: Locator,
   const pointer = await systemPointer(app);
   try {
     // `to` is in the window's pixels (pageViews); the row's box is in the shell's, which the interface size zooms.
-    const a = (await from.boundingBox())!;
+    // The row's box once the list has settled: a real pointer presses where it is, not where it's gliding to.
+    let a = (await from.boundingBox())!;
+    for (let settled = false; !settled; ) {
+      await shell.waitForTimeout(100);
+      const again = (await from.boundingBox())!;
+      settled = again.x === a.x && again.y === a.y;
+      a = again;
+    }
     const start = { x: (a.x + a.width / 2) * uiScale, y: (a.y + a.height / 2) * uiScale };
     await pointer.move(start.x, start.y);
     await shell.waitForTimeout(100);
@@ -148,17 +155,14 @@ async function pointerDrag(app: ElectronApplication, shell: Page, from: Locator,
     await pointer.move(to.x + 1, to.y);
     await shell.waitForTimeout(50);
     const zone = await shell.evaluate(() => document.querySelector('[data-testid="split-drop"]')?.getAttribute('data-zone') ?? null);
-    console.log(`[pointer drag] feedback: ${JSON.stringify(await shell.evaluate(() => {
+    // The dragged row is drawn as a row, under the pointer, and lets it through to what's below (dnd-kit.css).
+    const row = await shell.evaluate(() => {
       const el = document.querySelector('[data-dnd-dragging]');
-      const styles = [...document.head.querySelectorAll('style')].filter((s) => s.textContent?.includes('dnd'));
-      return {
-        position: el ? getComputedStyle(el).position : null,
-        pointerEvents: el ? getComputedStyle(el).pointerEvents : null,
-        rect: el?.getBoundingClientRect(),
-        dndStyles: styles.length,
-        applied: styles.map((s) => s.sheet !== null),
-      };
-    }))}`);
+      return el ? { pointerEvents: getComputedStyle(el).pointerEvents, rect: el.getBoundingClientRect().toJSON() as DOMRect } : null;
+    });
+    expect(row?.pointerEvents, 'the dragged row lets the pointer through').toBe('none');
+    const p = { x: (to.x + 1) / uiScale, y: to.y / uiScale };
+    expect(row!.rect.left <= p.x + 1 && p.x - 1 <= row!.rect.right && row!.rect.top <= p.y + 1 && p.y - 1 <= row!.rect.bottom, `the dragged row ${JSON.stringify(row!.rect)} is under the pointer ${JSON.stringify(p)}`).toBe(true);
     if (zone === null) {
       // What the shell drew and where things were, to see why there was no zone.
       const seen = await shell.evaluate(() => {

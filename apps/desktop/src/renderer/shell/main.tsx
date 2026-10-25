@@ -1,6 +1,8 @@
 import { StrictMode, useLayoutEffect, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
+// dnd-kit's rules for dragged rows first: they declare its cascade layer before any other stylesheet.
+import './dnd-kit.css';
 import '../assets/fonts/fonts.css';
 import '../shared/global.css';
 import { batchFrames, nextFrame } from '../shared/frames';

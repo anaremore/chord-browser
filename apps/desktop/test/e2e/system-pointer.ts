@@ -6,8 +6,9 @@
  * say).
  *
  * - Linux, X11: xdotool (the E2E container and CI install it).
- * - Windows: user32's SetCursorPos and mouse_event, through one PowerShell
- *   kept open for the test.
+ * - Windows x64: user32's SetCursorPos and mouse_event, through one
+ *   PowerShell kept open for the test. Not on Arm: CI's windows-11-arm runner
+ *   takes no injected mouse input (a drag there never starts).
  * - Elsewhere (macOS needs an accessibility grant; Wayland lets no client move
  *   the pointer): none, and the test skips.
  *
@@ -27,7 +28,7 @@ export interface SystemPointer {
 const onX11 = process.platform === 'linux' && Boolean(process.env['DISPLAY']) && !process.env['WAYLAND_DISPLAY'];
 
 /** Whether this machine has a system pointer a test can move. */
-export const systemPointerAvailable = (onX11 && spawnSync('xdotool', ['version']).status === 0) || process.platform === 'win32';
+export const systemPointerAvailable = (onX11 && spawnSync('xdotool', ['version']).status === 0) || (process.platform === 'win32' && process.arch === 'x64');
 
 const WINDOWS_DRIVER = String.raw`
 Add-Type -TypeDefinition @'
