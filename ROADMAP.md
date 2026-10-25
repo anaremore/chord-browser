@@ -62,22 +62,19 @@ A milestone is done when all of these hold:
 | | 0.3 · Effects | next, after the performance plan (moved up 2026-10-25); Effects built 2026-10-25 | restyle a site by hand or by asking Duet, with a Dry/Wet switch; then Duet fills forms |
 | | 0.4 · Your data | right after Effects (moved up 2026-10-25) | export everything, and sync your setup through a folder you already sync, end-to-end encrypted |
 
-## Where we are (updated 2026-10-23)
+## Where we are (updated 2026-10-25)
 
-Phase 1 and most of Phase 2 are on `main`, well ahead of the dates above. Every item marked done has unit and E2E tests, and the six release targets build and pass their smoke tests.
+Released: **0.1.0** (2026-10-24) and **0.2.1** (2026-10-25), both previews; 0.2.0 was tagged but never published. 0.2.1 is the first build signed on Windows and the first that updates itself (Windows and the AppImage). chordbrowser.com's download links follow each published release. Every item marked done has unit and E2E tests, and the six release targets build and pass their smoke tests.
 
-| Milestone | Done | In progress | Left |
+| Area | Done | In progress | Left |
 |---|---|---|---|
-| M1.0 Foundations | all | | |
-| M1.1 Browsing shell | tabs, find, downloads, permission prompts, error and crash pages, sign-in popups, session restore, keyboard routing (S8) | | |
-| M1.2 Sidebar | Pinned/Today, folders, Favorites, drag and drop, resize, Clear Today, keyboard navigation, minimal bar with peek, the archive arc, a windowed Today past 150 rows | | |
-| M1.3 Chords | chords, icons, themes and the theme library, color wheel and *Surprise me*, separate sign-ins, moving tabs across chords, trackpad swipe | | trackpad swipe checked by hand on a Mac |
-| M1.4 Command bar + archive | ranking with learned picks, history, completion, suggestions, site keywords, `@` filters, archive, sleeping tabs, ⌘⇧T | | |
-| M1.5 Extensions + essentials | Chrome extensions (sidebar shelf), auto picture-in-picture, default browser, several windows, private windows, PDFs, spelling, screen sharing, site permissions, zoom per site, **editable shortcuts** | | real password-manager sign-in checks (by hand) |
-| M1.6 First run + preview | first run, unsigned packaging for six targets, install notes, update check, macOS hands-on (2026-10-22 report), accessibility pass (automated), performance budgets (launch, command bar, history) the 200-tab sidebar inside the 16 ms task budget | CI green on every OS | the 8 ms frame budget on 120 Hz+ displays (Duet, drag, chord switch, Clear Today run 10–17 ms), the rest of the design QA sweep, macOS re-run, the 0.1 release |
-| Phase 2 | Duet, split view, mini window, Peek, hover previews | Codex's live-turn checks (S5, after its usage limit resets Nov 16) | Electron 46 (stable 2027-01-05) |
-| Phase 3 | link routes, in-app updates (Ed25519-signed manifests; needs your signing key), Google-free mode, a Flatpak built from source, the apt/dnf upload workflow (off until Cloudsmith is set up), `.rpm` builds (x64 and arm64, smoke-tested in Fedora), the 72-hour runbook (rehearsed up to publishing), **D7 Safe Browsing** (v5 Local List Mode; its key is in the release workflow) | | yours: the Flathub app ID and submission, the Cloudsmith repository and key, Safe Browsing checked by hand with the real key |
-| Phase 4 | signing and notarization in the release workflow, off until your certificates exist; a Microsoft Store draft | | your certificates ([docs/releasing/signing.md](docs/releasing/signing.md)), Mac in-app updates, Electron 47, compact density |
+| Phase 1 (M1.0–M1.6) | all of it | | by hand: the trackpad swipe on a Mac, password-manager sign-ins, screen readers |
+| Phase 2 | Duet, split view, mini window, Peek, hover previews | | Duet's slide-in; Codex's live-turn checks (S5, after its usage limit resets Nov 16); Electron 46 (2027-01-05) |
+| Phase 3 | link routes, in-app updates (live since 0.2.1), Google-free mode, D7 Safe Browsing, a Flatpak built from source, the apt/dnf upload workflow (off until Cloudsmith is set up), the 72-hour runbook | | yours: the Flathub manifest and submission, the Cloudsmith repository and key, Safe Browsing checked by hand |
+| Phase 4 | Windows signing (live since 0.2.1); macOS signing and notarization, built and off | | yours: an Apple Developer account, then Mac in-app updates; a Store submission; Electron 47 |
+| After 0.1 | 0.1.x's gaps, 0.2's cleaner pages, Effects, Chord Player (waiting on its secrets and hand checks), DevTools in the window, counts on tabs, battery | the P0 performance pass: CI checks for launch time and memory, a lighter launch | Clear Today's slow frames; the back/forward cache (Electron upstream); Duet fills forms; Your data |
+
+**Next, in order:** finish the performance pass, then release 0.3 (tagged when you say), then Duet fills forms, then Your data (export, then sync). Electron 46 comes first whenever it lands, on the 72-hour clock.
 
 ---
 
