@@ -348,11 +348,15 @@ test('paused, then another chord: the card still plays it', async () => {
   }
 });
 
-test('two videos with auto picture-in-picture on (the default): the first left pops out, the next stays in, and you choose which is out', async () => {
+test('two videos with auto picture-in-picture on: the first left pops out, the next stays in, and you choose which is out', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/second` });
   try {
     const shell = await pageWhere(app, isShell);
     await expect(row(shell, 'Second page')).toBeVisible();
+    // Off by default: turned on, as in Settings → General.
+    await runAction(shell, 'app.settings');
+    await (await pageWhere(app, isSettings)).evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ autoPip: true }));
+    await shell.bringToFront();
     const pipOf = async (path: string) => (await pageWhere(app, (url) => url === `${site.origin}${path}`)).evaluate(() => document.pictureInPictureElement?.id ?? null);
     const playing = async (path: string) => (await pageWhere(app, (url) => url === `${site.origin}${path}`)).evaluate(() => !document.querySelector('video')!.paused);
 
@@ -400,11 +404,7 @@ test('the card shows a page without Media Session by its tab, and pops a video o
   try {
     const shell = await pageWhere(app, isShell);
     await expect(row(shell, 'Second page')).toBeVisible();
-    // Auto picture-in-picture off (Settings → General), or leaving the video would pop it out before the card could.
-    await runAction(shell, 'app.settings');
-    const settings = await pageWhere(app, isSettings);
-    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ autoPip: false }));
-    await row(shell, 'Second page').click();
+    // Auto picture-in-picture is off (the default), so leaving a video leaves it in its tab for the card.
     await leavePlaying(app, shell, `${site.origin}/plain`);
     await expect(card(shell).getByRole('button', { name: 'Go to tab: Plain audio' })).toBeVisible();
     await expect(card(shell).getByRole('button', { name: 'Pause', exact: true })).toBeVisible();

@@ -310,6 +310,7 @@ function registerIpc(): void {
   handle('mini:chooseChord', (anchor, sender) => browser!.minis.chooseChord(sender, anchor));
   handle('mini:copyLink', (_request, sender) => browser!.minis.copyLink(sender));
   handle('overlay:ready', (_request, sender) => senderWindow(sender).markOverlayReady());
+  handle('overlay:preconnect', ({ url }, sender) => browser!.preconnect(senderWindow(sender), url));
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('perf:shell', ({ milestone }, sender) => {
     markLaunch(milestone === 'ready' ? 'shellReady' : 'shellPainted');
@@ -739,6 +740,9 @@ if (!app.requestSingleInstanceLock()) {
       save: async (filename, bytes, mime) => void (await downloads.addFile(filename, bytes, mime, '', null)),
     });
     browser.duet = duet;
+    // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
+    // from before gets it switched off once, through the store, so it's saved like any other change.
+    if (!browser.store.state.settings.autoPipDefaultOff) browser.store.dispatch({ t: 'settings.set', settings: { autoPip: false, autoPipDefaultOff: true } });
     // Effects' Ask Duet: Duet's own reading rules, one request at a time, nothing kept.
     browser.effects.duet = {
       available: (windowId, url) => duet!.effectsProvider(windowId, url),

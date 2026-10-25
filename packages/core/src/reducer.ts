@@ -1195,6 +1195,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const { autoPip, pagePreviews, keepScreenshots, uiScale } = cmd.settings;
       if (isUiScale(uiScale) && draft.settings.uiScale !== uiScale) draft.settings.uiScale = uiScale;
       if (autoPip !== undefined && draft.settings.autoPip !== autoPip) draft.settings.autoPip = autoPip;
+      const { autoPipDefaultOff } = cmd.settings;
+      if (autoPipDefaultOff !== undefined && draft.settings.autoPipDefaultOff !== autoPipDefaultOff) draft.settings.autoPipDefaultOff = autoPipDefaultOff;
       if (pagePreviews !== undefined && draft.settings.pagePreviews !== pagePreviews) draft.settings.pagePreviews = pagePreviews;
       const { presentingHidesSidebar } = cmd.settings;
       if (presentingHidesSidebar !== undefined && draft.settings.presentingHidesSidebar !== presentingHidesSidebar) {

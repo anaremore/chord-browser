@@ -40,6 +40,12 @@ export interface Frame {
   script: number;
   /** The longest JS calls in the frame (DevTools' FunctionCall), for finding who did the work. */
   calls: { name: string; ms: number }[];
+  /**
+   * With CHORD_PERF_PROFILE=1 (which traces V8's compiling and garbage collection too): the
+   * frame's heaviest kinds of event by total time, nested ones counted inside their parents,
+   * for work that no FunctionCall explains (a first-time compile, a collection, an IPC message).
+   */
+  kinds?: { name: string; ms: number }[];
 }
 
 /** A renderer's main-thread events, in order. */
@@ -106,7 +112,20 @@ export function framesOf(events: readonly TraceEvent[], pid: number): Frame[] {
       .map((e) => ({ name: callName(e), ms: e.dur! / 1000 }))
       .sort((a, b) => b.ms - a.ms)
       .slice(0, 3);
-    return { at: (begin - origin) / 1000, work, span: (end - begin) / 1000, styleLayout, paint, script: Math.max(0, work - styleLayout - paint), calls };
+    const byKind = new Map<string, number>();
+    if (DETAIL) {
+      for (const e of timed) {
+        if (e.ts < begin || e.ts >= end || e.name === 'ThreadControllerImpl::RunTask' || e.name === 'AnimationFrame') continue;
+        byKind.set(e.name, (byKind.get(e.name) ?? 0) + overlap(e.ts, e.ts + e.dur!, begin, end) / 1000);
+      }
+    }
+    const kinds = DETAIL
+      ? [...byKind]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 8)
+          .map(([name, ms]) => ({ name, ms }))
+      : undefined;
+    return { at: (begin - origin) / 1000, work, span: (end - begin) / 1000, styleLayout, paint, script: Math.max(0, work - styleLayout - paint), calls, ...(kinds ? { kinds } : {}) };
   });
 }
 
@@ -121,6 +140,8 @@ export function layoutsOf(events: readonly TraceEvent[], pid: number): { count: 
 }
 
 const STYLE_LAYOUT = new Set(['UpdateLayoutTree', 'Layout']);
+/** CHORD_PERF_PROFILE=1: trace V8's compiling and collections too, and list each frame's kinds of work (`Frame.kinds`). */
+const DETAIL = process.env['CHORD_PERF_PROFILE'] === '1';
 const PAINT = new Set(['PrePaint', 'Paint', 'Layerize', 'Commit']);
 
 const overlap = (a0: number, a1: number, b0: number, b1: number) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
@@ -140,7 +161,7 @@ export async function trace(cdp: CDPSession, run: () => Promise<void>): Promise<
   const complete = new Promise<void>((done) => cdp.once('Tracing.tracingComplete', () => done()));
   await cdp.send('Tracing.start', {
     transferMode: 'ReportEvents',
-    traceConfig: { recordMode: 'recordAsMuchAsPossible', includedCategories: ['devtools.timeline', 'toplevel'] },
+    traceConfig: { recordMode: 'recordAsMuchAsPossible', includedCategories: ['devtools.timeline', 'toplevel', ...(DETAIL ? ['v8', 'v8.execute', 'disabled-by-default-v8.compile', 'disabled-by-default-v8.gc', 'ipc', 'mojom'] : [])] },
   });
   try {
     await run();

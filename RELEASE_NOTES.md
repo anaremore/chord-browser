@@ -6,6 +6,10 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.2.0; it gets its version when it's released.
 
+- **Pages open sooner from the command bar:** while you type, Chord connects to the site you're about to open, so it starts loading the moment you press Enter.
+
+- **Videos stay in their tab** when you switch away: popping out by themselves is now off, and turned off once for everyone. Pop one out from Now playing in the sidebar, or turn it back on in Settings → General → *Pop out playing videos when you switch away*.
+
 - **Effects:** restyle a site your way, in place of Arc's Boosts. Open them from the page's right-click menu (*Effects for this site…*) or the command bar, then:
   - write your own CSS, which applies as you type;
   - hide an element: click it on the page, and it stays hidden on the site's other pages too;

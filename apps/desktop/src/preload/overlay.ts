@@ -12,6 +12,7 @@ const api: OverlayApi = {
     onWarm: (listener) => subscribe('overlay:warm', () => listener()),
     close: (seq, dismissed) => invoke('overlay:close', dismissed === true ? { seq, dismissed: true } : { seq }),
     ready: () => invoke('overlay:ready'),
+    preconnect: (url) => invoke('overlay:preconnect', { url }),
   },
   action: { run: (action) => invoke('action:run', { action }) },
   downloads: downloadsApi,

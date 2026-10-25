@@ -417,6 +417,7 @@ async function interaction(s: Session, name: string, steps: Step[], traced?: (ev
         styleLayout: round(worst.styleLayout),
         paint: round(worst.paint),
         calls: worst.calls.map((c) => `${c.name} ${round(c.ms)} ms`),
+        ...(worst.kinds && { kinds: worst.kinds.map((k) => `${k.name} ${round(k.ms)} ms`) }),
       },
       medianFrameIntervalMs: round(median(intervals)),
       // CHORD_PERF_PROFILE=1: the shell's functions with the most self time, over every step.
