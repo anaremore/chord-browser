@@ -126,9 +126,18 @@ export interface ImportBatch {
 export type ImportBatchReply = { ok: true; added: number } | { ok: false; error: string };
 
 /** chord-data → main. */
+/** How `open` spent its time, for the launch timeline (ms): the data process's own start, then each step. */
+export interface OpenTiming {
+  /** From the data process starting to it reading the request. */
+  up: number;
+  open: number;
+  prune: number;
+  read: number;
+}
+
 export type DataResponse =
   /** `navs`, from `open`: open tabs' saved back/forward histories, by node id. */
-  | { id: number; ok: true; saved?: PersistedState | null; navs?: Record<string, NavState>; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult }
+  | { id: number; ok: true; saved?: PersistedState | null; navs?: Record<string, NavState>; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult; timing?: OpenTiming }
   | { id: number; ok: false; error: string };
 
 /** The part of an Immer patch this needs. */

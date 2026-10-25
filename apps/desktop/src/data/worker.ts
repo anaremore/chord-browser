@@ -14,12 +14,26 @@ process.parentPort.on('message', (event) => {
   const request = event.data as DataRequest;
   try {
     switch (request.type) {
-      case 'open':
+      case 'open': {
+        // How long each step took, for the launch timeline when a launch is slow (launch-timeline.ts).
+        const up = Math.round(process.uptime() * 1000);
+        let at = performance.now();
+        const lap = () => {
+          const now = performance.now();
+          const ms = Math.round(now - at);
+          at = now;
+          return ms;
+        };
         db?.close();
         db = new ChordDatabase(request.file);
+        const open = lap();
         if (request.prune) db.pruneProfiles();
-        reply({ id: request.id, ok: true, saved: db.load(), navs: db.loadNavs() });
+        const prune = lap();
+        const saved = db.load();
+        const navs = db.loadNavs();
+        reply({ id: request.id, ok: true, saved, navs, timing: { up, open, prune, read: lap() } });
         break;
+      }
       case 'write':
         if (!db) throw new Error('chord-data: write before open');
         db.write(request.ops, Date.now(), request.events);

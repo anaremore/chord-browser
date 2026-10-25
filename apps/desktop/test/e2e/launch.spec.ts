@@ -56,12 +56,12 @@ function startSite(): Promise<{ server: Server; origin: string }> {
       res.end(JSON.stringify([q, [`${q} progressions`, `${q} finder`]]));
       return;
     }
-    // GitHub Releases (CHORD_UPDATE_FEED): one release newer than this build (0.1.0).
+    // GitHub Releases (CHORD_UPDATE_FEED): one release newer than this build.
     if (req.url === '/releases') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
         JSON.stringify([
-          { tag_name: 'v0.2.0', name: 'Chord 0.2.0', html_url: 'https://github.com/anaremore/chord-browser/releases/tag/v0.2.0', draft: false, prerelease: false },
+          { tag_name: `v${NEWER}`, name: `Chord ${NEWER}`, html_url: `https://github.com/anaremore/chord-browser/releases/tag/v${NEWER}`, draft: false, prerelease: false },
           { tag_name: 'v9.0.0', name: 'Draft', html_url: 'https://github.com/anaremore/chord-browser/releases/tag/v9.0.0', draft: true, prerelease: false },
         ]),
       );
@@ -108,6 +108,12 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
 }
 
 failOnMainErrors();
+
+/** A release newer than this build, whatever its version (the next minor one), for the update check. */
+const NEWER = (() => {
+  const [major, minor] = (JSON.parse(readFileSync(resolve(import.meta.dirname, '../../package.json'), 'utf8')) as { version: string }).version.split('.').map(Number);
+  return `${major}.${minor! + 1}.0`;
+})();
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
   await expect.poll(() => app.windows().some((p) => match(p.url())), { timeout: 20_000 }).toBe(true);
@@ -1795,13 +1801,13 @@ test('a newer release is announced once, in a toast, and in Settings → About',
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_UPDATE_FEED: `${site.origin}/releases` });
   try {
     const shell = await pageWhere(app, isShell);
-    // The draft (9.0.0) never counts; 0.2.0 is newer than this build (0.1.0).
-    await expect(shell.getByRole('group').filter({ hasText: 'Chord 0.2.0 is out' })).toBeVisible({ timeout: 10_000 });
+    // The draft (9.0.0) never counts; the next minor version is newer than this build.
+    await expect(shell.getByRole('group').filter({ hasText: `Chord ${NEWER} is out` })).toBeVisible({ timeout: 10_000 });
     await expect(shell.getByRole('button', { name: 'What’s new' })).toBeVisible();
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
     await settings.getByRole('button', { name: 'About' }).click();
-    await expect(settings.getByText('Chord 0.2.0 is out')).toBeVisible();
+    await expect(settings.getByText(`Chord ${NEWER} is out`)).toBeVisible();
     await expect(settings.getByRole('button', { name: 'See what’s new' })).toBeVisible();
     await expect(settings.getByRole('switch', { name: 'Check for updates automatically' })).toHaveAttribute('aria-checked', 'true');
   } finally {
