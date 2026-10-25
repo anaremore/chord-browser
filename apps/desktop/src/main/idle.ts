@@ -70,7 +70,8 @@ export class IdleKeeper {
       const busy = new Set<NodeId>();
       for (const id of Object.keys(state().nodes)) {
         const live = state().live[id];
-        if (live?.audible || live?.pip || live?.sharing || tabs.isPlaying(id) || isCapturing(id)) busy.add(id);
+        // A tab showing a count (unread messages) stays awake, or its count would go stale.
+        if (live?.audible || live?.pip || live?.sharing || live?.badge != null || tabs.isPlaying(id) || isCapturing(id)) busy.add(id);
       }
       // Picture-in-picture means asking the page, so only for tabs that would otherwise go.
       const settings = state().settings;

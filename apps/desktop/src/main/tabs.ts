@@ -4,7 +4,7 @@
  * sleep: its page closes, and its back/forward history (scroll position
  * included) comes back when it's shown again.
  */
-import { isCrossSite, isInternalUrl, placeKey, usableDataIcon, type Command, type LiveTab, type NodeId, type State, type TabNode, type WindowId } from '@chord/core';
+import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
 import type { NavState } from '@chord/data';
 import { frameRadius } from '@chord/tokens';
 import { WebContentsView, type BrowserWindow, type HandlerDetails, type Session, type WebContents, type WindowOpenHandlerResponse } from 'electron';
@@ -55,6 +55,8 @@ export class TabManager {
   private readonly internal = new Set<NodeId>();
   /** Pages that aren't tabs yet, by the id they'll have as one. */
   private readonly floating = new Map<NodeId, FloatingPage>();
+  /** The count each tab's page gave itself (the Badging API), shown or not: Settings can hide it, then show it again. */
+  private readonly badges = new Map<NodeId, Exclude<TabCount, null>>();
 
   constructor(private readonly deps: TabManagerDeps) {}
 
@@ -216,6 +218,25 @@ export class TabManager {
     if (contents && !contents.isDestroyed()) contents.setAudioMuted(muted);
   }
 
+  /** A tab's count as it shows: hidden when counts are off, or off for its site. */
+  private shownBadge(nodeId: NodeId, url: string): TabCount {
+    const badge = this.badges.get(nodeId) ?? null;
+    return badge !== null && countShows(url, this.deps.state().settings.tabCounts) ? badge : null;
+  }
+
+  /** Whether the tab's page gave itself a count (its menu offers to hide or show it). */
+  hasBadge(nodeId: NodeId): boolean {
+    return this.badges.has(nodeId);
+  }
+
+  /** Counts were turned on or off, or hidden for a site: every tab shows its own as Settings now says. */
+  refreshCounts(): void {
+    for (const nodeId of this.badges.keys()) {
+      const contents = this.views.get(nodeId)?.webContents;
+      if (contents && !contents.isDestroyed()) this.deps.dispatch({ t: 'tab.live', nodeId, live: { badge: this.shownBadge(nodeId, contents.getURL()) } });
+    }
+  }
+
   /** Close the tab's page, keeping its history to load when it's shown again. */
   sleep(nodeId: NodeId): void {
     const nav = this.history(nodeId);
@@ -228,6 +249,7 @@ export class TabManager {
     this.views.delete(nodeId);
     this.crashReloads.delete(nodeId);
     this.playing.delete(nodeId);
+    this.badges.delete(nodeId);
     this.pendingHistory.delete(nodeId);
     this.internal.delete(nodeId);
     // removeChildView alone keeps the renderer alive; close() frees it (ARCHITECTURE.md §5).
@@ -277,6 +299,8 @@ export class TabManager {
       this.deps.onVisit(url, '', nodeId);
     };
     contents.on('did-navigate', (_event, url, code) => {
+      // A new page: the last one's count goes with it.
+      if (this.badges.delete(nodeId)) live({ badge: null });
       dispatch({ t: 'tab.updated', nodeId, url });
       live(history());
       visited = null;
@@ -304,6 +328,14 @@ export class TabManager {
     });
     contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons));
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));
+    // The count the page gives itself (counts on tabs, ARCHITECTURE.md §9), from Chord's page preload: its top frame's only.
+    contents.ipc.on('page:badge', (event, raw: unknown) => {
+      const badge = pageBadge(raw);
+      if (badge === undefined || event.senderFrame?.parent || !current()) return;
+      if (badge === null) this.badges.delete(nodeId);
+      else this.badges.set(nodeId, badge);
+      live({ badge: this.shownBadge(nodeId, contents.getURL()) });
+    });
     // Playing tabs are never slept or archived, even muted (ARCHITECTURE.md §9).
     contents.on('media-started-playing', () => {
       if (current()) this.playing.add(nodeId);
@@ -322,6 +354,7 @@ export class TabManager {
       } else {
         live({ crashed: true, loading: false });
       }
+      if (this.badges.delete(nodeId)) live({ badge: null });
     });
 
     contents.setWindowOpenHandler((details) => this.openFrom(nodeId, details));

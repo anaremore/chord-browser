@@ -11,6 +11,7 @@ import {
   blockingSite,
   children,
   chordsFor,
+  countShows,
   DEFAULT_PROFILE,
   DEFAULT_READER,
   hostOf,
@@ -848,6 +849,18 @@ export class Browser {
     }
   }
 
+  /**
+   * A tab's "Show count on tab": offered when its page gives itself a count, or its site's is
+   * hidden, so it can come back. Not in private windows (the list is saved), nor with counts off.
+   */
+  private countMenu(tab: TabNode): { shown: boolean; toggle(): void } | null {
+    const settings = this.store.state.settings.tabCounts;
+    if (!settings.enabled || isPrivateChord(this.store.state, tab.chordId)) return null;
+    const shown = countShows(tab.url, settings);
+    if (shown && !this.tabs.hasBadge(tab.id)) return null;
+    return { shown, toggle: () => this.store.dispatch({ t: 'tabCounts.site', site: tab.url, off: shown }) };
+  }
+
   /** A page's "Block ads on this site": whether blocking is on there, and turning it off (or on again) with Undo. */
   private blockingMenu(contents: WebContents): { on(url: string): boolean | null; set(url: string, on: boolean): void } {
     const scope = () => {
@@ -1331,6 +1344,7 @@ export class Browser {
         duplicate: () => this.store.dispatch({ t: 'tab.open', windowId: w.id, url: tab.url }),
         muted: Boolean(tab.muted),
         toggleMute: () => this.store.dispatch({ t: 'tab.mute', nodeId, muted: !tab.muted }),
+        count: this.countMenu(tab),
         close: () => this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId }),
         addFavorite: this.canFavorite(tab) ? () => this.store.dispatch({ t: 'favorite.add', favoriteId: uuidv7(), nodeId }) : null,
         newFolder: () => this.createFolder(w, tab.chordId, nodeId),

@@ -3,7 +3,7 @@
  * rename and the icon picker, the switcher in the footer, and the color
  * crossfade behind it all.
  */
-import { DEFAULT_PROFILE, chordsFor, firstGrapheme, keycapFor, type ActionId, type Chord, type ChordThemeSpec, type ShortcutOverrides, type State } from '@chord/core';
+import { DEFAULT_PROFILE, chordsFor, chordsWithCounts, firstGrapheme, keycapFor, type ActionId, type Chord, type ChordThemeSpec, type ShortcutOverrides, type State } from '@chord/core';
 import type { SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
 import { useDroppable } from '@dnd-kit/react';
@@ -288,7 +288,7 @@ export function ChordHeader({
 }
 
 /** A chord in the switcher. Dropping a tab on another chord moves the tab there. */
-function ChordButton({ chord, selected, keys, info, pill, windowId }: { chord: Chord; selected: boolean; keys: string; info: SystemInfo; pill: Transition; windowId: string }) {
+function ChordButton({ chord, selected, unread, keys, info, pill, windowId }: { chord: Chord; selected: boolean; unread: boolean; keys: string; info: SystemInfo; pill: Transition; windowId: string }) {
   // Tabs never cross into or out of a private window's chord.
   const { ref, isDropTarget } = useDroppable({ id: CHORD_DROP + chord.id, type: 'chord', accept: 'tab', disabled: selected || Boolean(chord.private) });
   // Each chord's icon wears its own accent, so the switcher previews every chord's color.
@@ -299,7 +299,7 @@ function ChordButton({ chord, selected, keys, info, pill, windowId }: { chord: C
       type="button"
       role="tab"
       aria-selected={selected}
-      aria-label={chord.name}
+      aria-label={unread && !selected ? `${chord.name}, unread` : chord.name}
       title={keys ? `${chord.name}  ${keys}` : chord.name}
       className={styles.chordButton}
       data-drop-target={isDropTarget || undefined}
@@ -312,6 +312,8 @@ function ChordButton({ chord, selected, keys, info, pill, windowId }: { chord: C
     >
       {selected && <motion.span layoutId="chord-pill" className={styles.chordPill} transition={pill} />}
       {chord.private ? <EyeOff className={styles.chordGlyph} size={14} strokeWidth={2} aria-hidden /> : <span className={styles.chordGlyph} aria-hidden>{chord.icon}</span>}
+      {/* A tab in another chord shows a count (unread messages): a dot in that chord's own color. */}
+      {unread && !selected && <span className={styles.chordUnread} data-count aria-hidden />}
     </button>
   );
 }
@@ -336,6 +338,7 @@ export function ChordSwitcher({
   // A private window shows only its own chord; no other window ever shows that one.
   const chords = chordsFor(state, windowId);
   const current = state.windows[windowId]?.activeChordId;
+  const unread = chordsWithCounts(state);
   const strip = useRef<HTMLDivElement>(null);
   // More chords than fit: the strip scrolls sideways (no scrollbar), fading at whichever edge hides some.
   const [fade, setFade] = useState<'none' | 'start' | 'end' | 'both'>('none');
@@ -389,7 +392,7 @@ export function ChordSwitcher({
         }}
       >
         {chords.map((chord, index) => (
-          <ChordButton key={chord.id} chord={chord} selected={chord.id === current} keys={gotoKeys(index, info, state.settings.shortcuts)} info={info} pill={pill} windowId={windowId} />
+          <ChordButton key={chord.id} chord={chord} selected={chord.id === current} unread={unread.has(chord.id)} keys={gotoKeys(index, info, state.settings.shortcuts)} info={info} pill={pill} windowId={windowId} />
         ))}
       </div>
       {onCreate ? (

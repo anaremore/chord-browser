@@ -15,11 +15,15 @@
  *   every time (Windows Security, on Windows). Chord says autofill isn't
  *   available, and such a request just waits, as Chrome's does until you pick
  *   a passkey. A passkey you ask for (the site's "Use a passkey") works as before.
+ * - The app badge (`navigator.setAppBadge`), which Electron puts on Chord's
+ *   own icon, one page's over another's. The tab's page reports it to Chord
+ *   instead, which shows it on the tab and adds them up for its icon
+ *   (ARCHITECTURE.md §9, counts on tabs). A frame inside a page has none.
  *
  * Changed functions keep reading as built-in, wrapped in a Proxy (or bound),
  * so a site that checks for tampered APIs sees Chromium's.
  */
-import { contextBridge } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
 
 /** The page's globals this touches (the preload's project has no DOM types; this runs in the page's own world). */
 interface Signal {
@@ -32,11 +36,19 @@ interface PageGlobals {
   PublicKeyCredential?: Record<string, unknown>;
   CredentialsContainer?: { prototype: object };
   DOMException: new (message: string, name: string) => unknown;
+  Navigator?: { prototype: object };
+  TypeError: new (message: string) => Error;
+  top: unknown;
   setTimeout(handler: () => void, ms: number): unknown;
 }
 
-function compatibility(): void {
+/** A page's badge, for its tab: a number, 'dot' (none given), or null (cleared). */
+type Badge = number | 'dot' | null;
+
+function compatibility(report: (badge: Badge) => void): void {
   const page = globalThis as unknown as PageGlobals;
+  // The tab's own page, not a frame inside it (a sandboxed preload can't tell; the page's world can).
+  const top = page.top === globalThis;
   // ----- window.chrome.app, as Chromium has it on a page that isn't an installed app -----
   const chromeObject = page.chrome;
   if (chromeObject && !('app' in chromeObject)) {
@@ -88,8 +100,29 @@ function compatibility(): void {
       });
     }
   }
+
+  // ----- The app badge: the tab's, not Chord's icon -----
+  const navigator = page.Navigator?.prototype;
+  if (navigator) {
+    // As the Badging API takes it: no number is a dot, 0 clears, anything that isn't a whole number ≥ 0 is refused.
+    wrap(navigator, 'setAppBadge', (_target, _self, args) => {
+      const value = args[0];
+      const n = value === undefined ? null : Math.trunc(Number(value));
+      if (n !== null && !(Number.isSafeInteger(n) && n >= 0)) return Promise.reject(new page.TypeError(`Failed to execute 'setAppBadge' on 'Navigator': Value is outside the 'unsigned long long' value range.`));
+      if (top) report(n === null ? 'dot' : n === 0 ? null : n);
+      return Promise.resolve();
+    });
+    wrap(navigator, 'clearAppBadge', () => {
+      if (top) report(null);
+      return Promise.resolve();
+    });
+  }
 }
 
 // Web pages only: not an extension's pages, which share the session, nor a blank frame's.
 const { protocol } = (globalThis as unknown as { location: { protocol: string } }).location;
-if (protocol === 'https:' || protocol === 'http:') contextBridge.executeInMainWorld({ func: compatibility });
+if (protocol === 'https:' || protocol === 'http:') {
+  // The page calls this through the bridge: only the value crosses, and main takes only the top frame's.
+  const report = (badge: Badge) => ipcRenderer.send('page:badge', badge);
+  contextBridge.executeInMainWorld({ func: compatibility, args: [report] });
+}
