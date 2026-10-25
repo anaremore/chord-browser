@@ -15,7 +15,7 @@
  */
 import { isInternalUrl, type Command, type NodeId, type State } from '@chord/core';
 import type { WebContents, WebFrameMain } from 'electron';
-import { pageCall } from './page-call';
+import { PAGE_CALL_MS, pageCall } from './page-call';
 
 /** Chord's isolated world for this: same DOM as the page, none of its scripts. */
 const WORLD = 1007;
@@ -212,7 +212,7 @@ export class AutoPip {
 
   private async watch(popped: Popped): Promise<void> {
     // Pending until the video leaves PiP; rejects if the page goes away (closed, navigated, slept).
-    const outcome = await this.run(popped.contents, popped.frame, WATCH, false);
+    const outcome = await this.run(popped.contents, popped.frame, WATCH, false, null);
     if (this.popped !== popped) return;
     this.popped = null;
     this.setLive(popped.nodeId, false);
@@ -244,9 +244,14 @@ export class AutoPip {
    * are asked through their own main world (Electron has no isolated world
    * for subframes); a page could only fool itself there.
    */
-  private run(contents: WebContents, frame: WebFrameMain, code: string, userGesture: boolean): Promise<unknown> {
+  /**
+   * `ms`: how long the page has to answer (`pageCall`); null for WATCH, which answers only
+   * when the video leaves picture-in-picture, however long that takes (a time limit made
+   * Chord forget, two seconds in, which video it had popped out).
+   */
+  private run(contents: WebContents, frame: WebFrameMain, code: string, userGesture: boolean, ms: number | null = PAGE_CALL_MS): Promise<unknown> {
     if (contents.isDestroyed() || frame.isDestroyed()) return Promise.resolve(null);
     const done = frame === contents.mainFrame ? contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code }], userGesture) : frame.executeJavaScript(code, userGesture);
-    return pageCall<unknown>(done, null);
+    return ms === null ? done.catch(() => null) : pageCall<unknown>(done, null, ms);
   }
 }
