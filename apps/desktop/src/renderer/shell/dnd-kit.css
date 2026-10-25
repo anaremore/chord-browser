@@ -1,0 +1,70 @@
+/*
+ * dnd-kit's own rules for a dragged row (@dnd-kit/dom 0.5.1, its Feedback
+ * plugin's CSS_RULES), as a stylesheet of Chord's own. dnd-kit puts them in
+ * a <style> element it adds to the page, which Chord's content security
+ * policy (style-src 'self', protocol.ts) refuses. Without them a dragged row
+ * is a bare popover: centered in the window, as wide as its whole title, and
+ * in the way of the pointer. test/unit/dnd-kit-css.test.ts checks this copy
+ * against the installed dnd-kit, so an upgrade that changes them fails there.
+ */
+/* stylelint-disable length-zero-no-unit, unit-disallowed-list -- dnd-kit's rules as written, `0px` and all */
+:is(:root, :host) [data-dnd-dragging] {
+  position: fixed !important;
+  pointer-events: none !important;
+  touch-action: none;
+  z-index: calc(infinity);
+  will-change: translate;
+  top: var(--dnd-top, 0px) !important;
+  left: var(--dnd-left, 0px) !important;
+  right: unset !important;
+  bottom: unset !important;
+  width: var(--dnd-width, auto);
+  max-width: var(--dnd-width, auto);
+  height: var(--dnd-height, auto);
+  max-height: var(--dnd-height, auto);
+  transform: var(--dnd-transform, none) !important;
+  transition: var(--dnd-transition) !important;
+}
+
+:is(:root, :host) [data-dnd-placeholder] {
+  transition: none;
+}
+
+:is(:root, :host) [data-dnd-placeholder='hidden'] {
+  visibility: hidden;
+}
+
+[data-dnd-dragging] * {
+  pointer-events: none !important;
+}
+
+[data-dnd-dragging]:not([data-dnd-dropping]) {
+  translate: var(--dnd-translate) !important;
+}
+
+[data-dnd-dragging][style*='--dnd-scale'] {
+  scale: var(--dnd-scale) !important;
+  transform-origin: var(--dnd-transform-origin) !important;
+}
+
+@layer dnd-kit {
+  :where([data-dnd-dragging][popover]) {
+    overflow: visible;
+    background: unset;
+    border: unset;
+    margin: unset;
+    padding: unset;
+    color: inherit;
+
+    &:is(input, button) {
+      border: revert;
+      background: revert;
+    }
+  }
+}
+
+[data-dnd-dragging]::backdrop,
+[data-dnd-overlay]:not([data-dnd-dragging]) {
+  display: none;
+  visibility: hidden;
+}

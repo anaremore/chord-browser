@@ -122,19 +122,29 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
  */
 function anchorRef(el: HTMLElement | null) {
   if (!el) return;
+  // Sent only when it moved: main needs no word otherwise.
+  let last = '';
   const report = () => {
     const r = el.getBoundingClientRect();
+    const key = `${r.x} ${r.y} ${r.width} ${r.height}`;
+    if (key === last) return;
+    last = key;
     void api.layout.anchor({ x: r.x, y: r.y, width: r.width, height: r.height });
+  };
+  // Only the end of a transition that moves the address (the sidebar's slide), not every row's hover fade in the
+  // shell: each one read the layout, often mid-change, and messaged main (5.6 ms of every tab switch, measured).
+  const settled = (event: TransitionEvent) => {
+    if (event.target instanceof Node && event.target.contains(el)) report();
   };
   report();
   const observer = new ResizeObserver(report);
   observer.observe(el);
   window.addEventListener('resize', report);
-  window.addEventListener('transitionend', report);
+  window.addEventListener('transitionend', settled);
   return () => {
     observer.disconnect();
     window.removeEventListener('resize', report);
-    window.removeEventListener('transitionend', report);
+    window.removeEventListener('transitionend', settled);
   };
 }
 

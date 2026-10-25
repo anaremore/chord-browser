@@ -11,8 +11,10 @@ import { EyeOff, KeyRound, Plus } from 'lucide-react';
 import { motion, useIsPresent, type MotionValue, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { useRestoreFocus, useRoving } from '../shared/a11y';
+import { INSTANT } from '../shared/motion';
 import { api } from './api';
 import styles from './App.module.css';
+import { SlidingPill } from './SlidingPill';
 import { CHORD_DROP } from './tree';
 import type { PaneMotion } from './useChordSwipe';
 
@@ -310,7 +312,7 @@ function ChordButton({ chord, selected, unread, keys, info, pill, windowId }: { 
         void api.menu.chord(chord.id, { x: e.clientX, y: e.clientY });
       }}
     >
-      {selected && <motion.span layoutId="chord-pill" className={styles.chordPill} transition={pill} />}
+      {selected && <SlidingPill group="chord-pill" className={styles.chordPill} glide={pill !== INSTANT} />}
       {chord.private ? <EyeOff className={styles.chordGlyph} size={14} strokeWidth={2} aria-hidden /> : <span className={styles.chordGlyph} aria-hidden>{chord.icon}</span>}
       {/* A tab in another chord shows a count (unread messages): a dot in that chord's own color. */}
       {unread && !selected && <span className={styles.chordUnread} data-count aria-hidden />}

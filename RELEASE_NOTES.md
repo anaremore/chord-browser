@@ -6,6 +6,10 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.2.0; it gets its version when it's released.
 
+- **Fixed: dragging a tab onto the page to split it.** In 0.2.0 a dragged tab showed as a strip across the middle of the window. Letting go over that strip could show the tab you were dragging instead of splitting, and then there was nothing to split it with. A dragged tab now stays a row under your pointer.
+
+- **Tab and chord switches are smoother:** the highlight slides to the new tab without making the sidebar measure itself mid-switch.
+
 - **Pages open sooner from the command bar:** while you type, Chord connects to the site you're about to open, so it starts loading the moment you press Enter.
 
 - **Videos stay in their tab** when you switch away: popping out by themselves is now off, and turned off once for everyone. Pop one out from Now playing in the sidebar, or turn it back on in Settings → General → *Pop out playing videos when you switch away*.
