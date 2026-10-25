@@ -255,6 +255,15 @@ for (const mode of APPEARANCES) {
         await expect(popover.getByRole('alertdialog')).toBeVisible();
         findings.push(...(await audit(popover, 'permission prompt', { appearance: mode })));
         await popover.getByRole('alertdialog').getByRole('button', { name: 'Block' }).click();
+        // The Effects card (DESIGN.md §7.15), with a preset on and your CSS in it.
+        await runAction(shell, 'effects.open');
+        const effects = popover.getByRole('dialog', { name: /^Effects on / });
+        await expect(effects).toBeVisible();
+        await effects.getByRole('button', { name: 'Reading width' }).click();
+        await effects.getByLabel('Your CSS').fill('h1 { letter-spacing: 0.01em }');
+        await expect(effects.getByRole('button', { name: 'Remove all Effects on this site' })).toBeVisible();
+        findings.push(...(await audit(popover, 'Effects card', { appearance: mode })));
+        await effects.getByRole('button', { name: 'Close Effects' }).click();
       } finally {
         await app.close();
       }
@@ -278,7 +287,7 @@ for (const mode of APPEARANCES) {
         await runAction(shell, 'app.settings');
         const settings = await pageWhere(app, isSettings);
         const nav = settings.getByRole('navigation', { name: 'Settings sections' });
-        for (const name of ['General', 'Appearance', 'Motion', 'Privacy', 'Site permissions', 'Extensions', 'Import', 'Duet', 'Keyboard shortcuts', 'About']) {
+        for (const name of ['General', 'Appearance', 'Motion', 'Privacy', 'Effects', 'Site permissions', 'Extensions', 'Import', 'Duet', 'Keyboard shortcuts', 'About']) {
           await nav.getByRole('button', { name }).click();
           await expect(settings.getByRole('heading', { level: 1 }).first()).toBeVisible();
           await settings.waitForTimeout(250);

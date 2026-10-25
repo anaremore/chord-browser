@@ -7,6 +7,7 @@ import { existsSync, rmSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
   addDecay,
+  cleanSiteEffects,
   ARCHIVE_KEEP_MS,
   dayOf,
   decayOfVisits,
@@ -32,6 +33,7 @@ import {
   type FolderNode,
   type SplitNode,
   type PersistedState,
+  type SavedEffects,
   type SidebarNode,
   type SitePermissions,
   type TabNode,
@@ -320,6 +322,7 @@ export class ChordDatabase {
         else if (op.k === 'extension') this.writeExtension(op.id, op.value);
         else if (op.k === 'siteZoom') this.writeSiteZoom(op.id, op.value, now);
         else if (op.k === 'linkRoute') this.writeLinkRoute(op.id, op.value);
+        else if (op.k === 'effect') this.writeEffect(op.id, op.value);
         else if (op.k === 'nav') continue;
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
         else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
@@ -721,6 +724,53 @@ export class ChordDatabase {
       this.sql(
         'INSERT INTO link_route (host, chord_id, created_at) VALUES (?, ?, ?) ON CONFLICT(host) DO UPDATE SET chord_id = excluded.chord_id',
       ).run(host, route.chordId, route.createdAt);
+  }
+
+  private writeEffect(host: string, site: SavedEffects | null): void {
+    if (!site) {
+      this.sql('DELETE FROM effect WHERE host = ?').run(host);
+      return;
+    }
+    this.sql(
+      `INSERT INTO effect (host, wet, css, hidden, presets, duet, compiled, sanitizer, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(host) DO UPDATE SET wet = excluded.wet, css = excluded.css, hidden = excluded.hidden, presets = excluded.presets,
+         duet = excluded.duet, compiled = excluded.compiled, sanitizer = excluded.sanitizer, updated_at = excluded.updated_at`,
+    ).run(
+      host,
+      site.wet ? 1 : 0,
+      site.css,
+      JSON.stringify(site.hidden),
+      JSON.stringify(site.presets),
+      JSON.stringify(site.duet),
+      site.compiled,
+      site.sanitizer,
+      site.createdAt,
+      site.updatedAt,
+    );
+  }
+
+  /**
+   * Every site's Effects, checked as an import would be. A row whose stylesheet
+   * isn't what its sanitizer made can't be told from here: main makes it again
+   * when the sanitizer's version differs, and trusts nothing else it can't check.
+   */
+  loadEffects(): SavedEffects[] {
+    const out: SavedEffects[] = [];
+    for (const r of this.sql('SELECT * FROM effect ORDER BY updated_at').all() as Row[]) {
+      const site = cleanSiteEffects({
+        host: r['host'],
+        wet: num(r['wet']) !== 0,
+        css: r['css'],
+        hidden: parseJson<unknown>(r['hidden'], []),
+        presets: parseJson<unknown>(r['presets'], []),
+        duet: parseJson<unknown>(r['duet'], []),
+        createdAt: num(r['created_at']),
+        updatedAt: num(r['updated_at']),
+      });
+      if (site) out.push({ ...site, compiled: str(r['compiled']), sanitizer: num(r['sanitizer']) });
+    }
+    return out;
   }
 
   private writeSiteZoom(host: string, factor: number | null, now: number): void {

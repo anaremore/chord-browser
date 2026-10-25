@@ -2,6 +2,19 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## Next · preview (unreleased)
+
+What's built since 0.2.1; it gets its version when it's released.
+
+- **Effects:** restyle a site your way, in place of Arc's Boosts. Open them from the page's right-click menu (*Effects for this site…*) or the command bar, then:
+  - write your own CSS, which applies as you type;
+  - hide an element: click it on the page, and it stays hidden on the site's other pages too;
+  - turn on a preset: *Reading width*, *Dark* for a site that has no dark mode, or *No sticky bars*, which lets headers scroll away and hides cookie banners;
+  - or ask Duet: your Claude Code or Codex app writes the styles from an outline of the page. It never sees a private window, a site you said Duet may never read, or what's typed in a form.
+  - **Dry/Wet** takes a site's Effects off at once and puts them back (Ctrl+Shift+E, ⌘⇧E on macOS), and Settings → Effects does it for every site. A site with Effects shows a button beside its address.
+  - Effects never load anything: whatever in a stylesheet would fetch a file is left out before it's used, and Chord says what it left out. They're styles only, never scripts, and they stay on this computer. In a private window, what you change lasts until the window closes.
+  - The CSS parser Effects use is MIT-licensed; its notice ships with every build.
+
 ## 0.2.1 · preview · 2026-10-25
 
 - **Signed for Windows:** the installer and Chord itself are signed by Austin Naremore, through Microsoft's Artifact Signing, so Windows shows who made them. SmartScreen may still warn about the first few signed releases until it knows the publisher. Once you're on this version, Chord installs only updates signed by the same name. Mac builds aren't signed yet.

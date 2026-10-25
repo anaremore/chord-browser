@@ -17,9 +17,11 @@ import {
   hostOf,
   isBlockingOff,
   isCrossSite,
+  effectsHost,
   isInternalUrl,
   isPrivateChord,
   isPrivateProfile,
+  privateWindowOf,
   keycapFor,
   markdownLink,
   mediaVisibleTo,
@@ -39,6 +41,8 @@ import {
   type ActionId,
   type ArchiveReason,
   type Effect,
+  type LiveTab,
+  type SavedEffects,
   type NodeId,
   type State,
   type TabNode,
@@ -55,6 +59,7 @@ import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
 import { DrmNotices, drmServiceFor, findBrowsers, launchEnv } from './drm';
+import { Effects } from './effects/service';
 import { CHECK_WAIT_MS } from './player/install-state';
 import type { PlayerInstaller } from './player/installer';
 import { ChordPlayer, type ChordPlayerDeps } from './player/service';
@@ -152,6 +157,12 @@ export interface BrowserOptions {
     /** The player quit: with no windows left (Windows, Linux), Chord quits too. */
     closed(): void;
   };
+  /** Effects (ARCHITECTURE.md §9): every saved site, how to save one, and the sanitizer's worker as built. */
+  effects: {
+    saved: readonly SavedEffects[];
+    persist(host: string, site: SavedEffects | null): void;
+    workerPath: string;
+  };
   /** Chrome extensions (ARCHITECTURE.md §12). */
   extensions: {
     /** Where Web Store extensions are unpacked. */
@@ -220,6 +231,8 @@ export class Browser {
   private readonly autoPip: AutoPip;
   /** Hover previews for pinned tabs and folders, and the pictures behind them (DESIGN.md §7.6). */
   private readonly previews: Previews;
+  /** Effects (DESIGN.md §7.15): per-site styles, the card, the picker, and Ask Duet. */
+  readonly effects: Effects;
   private readonly siteZoom: SiteZoom;
   private readonly archivedHistory = new Map<string, NavState | null>();
   /** Archive entries being restored, so a double click brings a tab back once. */
@@ -270,6 +283,43 @@ export class Browser {
         if (windowId) this.store.dispatch({ t: 'tab.close', windowId, nodeId });
       },
     });
+    this.effects = new Effects({
+      workerPath: options.effects.workerPath,
+      saved: options.effects.saved,
+      persist: (host, site) => options.effects.persist(host, site),
+      everywhere: () => this.store.state.settings.effects.wet,
+      setEverywhere: (wet) => this.store.dispatch({ t: 'settings.set', settings: { effects: { wet } } }),
+      // A private window's session is its own profile (`private-<window id>`).
+      privateWindowOf: (contents) => {
+        const profileId = options.adBlocking.profileOf(contents);
+        return profileId && isPrivateProfile(profileId) ? privateWindowOf(profileId) : null;
+      },
+      nodeFor: (contents) => this.tabs.nodeFor(contents),
+      setLive: (nodeId, effects) => this.setEffectsLive(nodeId, effects),
+      windows: () => this.windows.values(),
+      front: (windowId) => {
+        const nodeId = activeTabId(this.store.state, windowId);
+        const contents = nodeId ? this.tabs.get(nodeId)?.webContents : undefined;
+        return nodeId && contents && !contents.isDestroyed() ? { nodeId, contents, url: contents.getURL() } : null;
+      },
+      popoverChanged: (windowId) => {
+        const w = this.windows.get(windowId);
+        if (w) this.syncPopover(w);
+      },
+      sendView: (windowId, view) => {
+        const w = this.windows.get(windowId);
+        if (w) send(w.popover.webContents, 'effects:state', view);
+      },
+      startPicker: (windowId, host) => {
+        const w = this.windows.get(windowId);
+        return w ? this.options.screenshots.start(w, { host }) : false;
+      },
+      pickerPage: (windowId) => {
+        const w = this.windows.get(windowId);
+        return w ? this.options.screenshots.pickerPage(w) : null;
+      },
+      settingsChanged: () => this.settingsWindow?.update(this.settingsSnapshot()),
+    });
     // Before any window: Chord's own views open at the interface size (DESIGN.md §10).
     setUiScale(this.store.state.settings.uiScale);
     this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action), this.store.state.presenting !== null);
@@ -296,6 +346,7 @@ export class Browser {
         this.siteZoom.attach(contents);
         this.readers.attach(contents, nodeId);
         options.adBlocking.attachPage(contents);
+        this.effects.attachPage(contents);
         contents.on('did-stop-loading', () => this.previews.loaded(nodeId));
         // Whatever a page asked for is denied once it's gone or replaced by another page; a share ends.
         contents.on('did-start-navigation', (details) => {
@@ -359,6 +410,18 @@ export class Browser {
             const w = this.windowFor(contents);
             if (w) this.options.screenshots.start(w);
           },
+          // Effects act on the tab in front, so only its own page offers them.
+          effects: {
+            available: () => this.windowFor(contents)?.activeTabContents === contents && effectsHost(contents.getURL()) !== null,
+            open: () => {
+              const w = this.windowFor(contents);
+              if (w) this.effects.open(w);
+            },
+            hide: () => {
+              const w = this.windowFor(contents);
+              if (w) this.effects.startPick(w);
+            },
+          },
         });
       },
       onPeek: (openerNodeId, url, origin) => {
@@ -371,6 +434,7 @@ export class Browser {
       onPopupCreated: (contents, openerNodeId) => {
         this.safeBrowsing.attachPopup(contents, openerNodeId);
         options.adBlocking.attachPage(contents);
+        this.effects.attachPage(contents);
         attachContextMenu(contents, {
           surface: 'web',
           inspect: true,
@@ -601,6 +665,8 @@ export class Browser {
         this.previews.sync();
         if (!change.state.settings.pagePreviews) for (const w of this.windows.values()) w.hidePreview();
       }
+      // Dry or wet everywhere: every page's Effects follow.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'effects')) this.effects.everywhereChanged();
       // Presenting mode started or ended: what it hides, and the sidebars it collapses (after this change is out).
       if (change.patches.some((p) => p.path[0] === 'presenting')) {
         const presenting = change.state.presenting !== null;
@@ -773,6 +839,7 @@ export class Browser {
     w.window.on('closed', () => {
       this.duet?.forgetWindow(windowId);
       this.options.screenshots.windowClosed(windowId);
+      this.effects.forgetWindow(windowId);
       this.windows.delete(windowId);
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
@@ -1175,7 +1242,14 @@ export class Browser {
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
       // A tab whose service plays in Chord Player says so in its frame instead.
       drm: state.settings.onboarded || w.isPrivate ? (this.tabInPlayer(w) ? null : this.drm.noticeFor(this.activeUrl(w.id), w.isPrivate ? null : this.playerOffer())) : null,
+      effects: this.effects.cardFor(w.id),
     };
+  }
+
+  /** A tab's Effects state for the button beside its address, sent only when it changes. */
+  private setEffectsLive(nodeId: NodeId, effects: LiveTab['effects']): void {
+    const live = this.store.state.live[nodeId];
+    if (this.store.state.nodes[nodeId]?.kind === 'tab' && (live?.effects ?? null) !== effects) this.store.dispatch({ t: 'tab.live', nodeId, live: { effects } });
   }
 
   private tabInPlayer(w: AppWindow): boolean {
@@ -1426,6 +1500,7 @@ export class Browser {
       sitePermissions: state.sitePermissions,
       spellcheckLanguages: spellcheckLanguages(),
       linkRoutes: Object.values(state.linkRoutes).sort((a, b) => a.host.localeCompare(b.host)),
+      effects: this.effects.sites(),
     };
   }
 
@@ -1562,8 +1637,9 @@ export class Browser {
     if (!w) return;
     if (w.peekOverlaySeq === seq) this.peeks.close(w);
     else w.closeOverlay(seq, dismissed);
-    // Capture mode closed without taking anything (a no-op otherwise).
+    // Capture mode closed without taking anything (a no-op otherwise); picking for Effects says what it hid.
     this.options.screenshots.cancel(w);
+    this.effects.pickDone(w.id);
   }
 
   /** Peek's "Open in Today", from its header. */
@@ -2098,6 +2174,22 @@ export class Browser {
         return true;
       case 'page.screenshot':
         this.options.screenshots.start(w);
+        return true;
+      // Effects act on the tab in front; Peek's page isn't a tab.
+      case 'effects.open':
+        this.peeks.close(w);
+        this.effects.open(w);
+        return true;
+      case 'effects.site':
+        this.peeks.close(w);
+        this.effects.toggleSite(w);
+        return true;
+      case 'effects.everywhere':
+        this.effects.toggleEverywhere(w);
+        return true;
+      case 'effects.hide':
+        this.peeks.close(w);
+        this.effects.startPick(w);
         return true;
       case 'page.print':
         activeContents?.print();

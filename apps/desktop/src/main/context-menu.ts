@@ -30,6 +30,8 @@ export interface ContextMenuDeps {
   adBlocking?: { on(url: string): boolean | null; set(url: string, on: boolean): void };
   /** "Take a screenshot" (DESIGN.md §7.12), for a page a window shows. */
   screenshot?(): void;
+  /** Effects (DESIGN.md §7.15), for the tab in front: the card, and the picker that hides an element. */
+  effects?: { available(): boolean; open(): void; hide(): void };
 }
 
 type Item = MenuItemConstructorOptions | MenuItem;
@@ -104,6 +106,7 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
 
   if (web && !isWebLink && params.mediaType === 'none' && !params.isEditable && !params.selectionText.trim()) {
     const blocking = deps.adBlocking?.on(params.pageURL) ?? null;
+    const effects = deps.effects?.available() ? deps.effects : null;
     section(
       { label: 'Back', enabled: history.canGoBack(), click: () => history.goBack() },
       { label: 'Forward', enabled: history.canGoForward(), click: () => history.goForward() },
@@ -112,6 +115,13 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
       { label: 'Print…', accelerator: accel('page.print'), click: () => contents.print() },
       ...(deps.screenshot ? [{ label: 'Take a screenshot', accelerator: accel('page.screenshot'), click: () => deps.screenshot?.() }] : []),
       { label: 'View page source', accelerator: accel('page.viewSource'), click: () => deps.openTab(`view-source:${params.pageURL}`, false) },
+      ...(effects
+        ? [
+            { type: 'separator' as const },
+            { label: 'Effects for this site…', accelerator: accel('effects.open'), click: () => effects.open() },
+            { label: 'Hide an element…', accelerator: accel('effects.hide'), click: () => effects.hide() },
+          ]
+        : []),
       ...(blocking === null
         ? []
         : [{ type: 'separator' as const }, { label: 'Block ads on this site', type: 'checkbox' as const, checked: blocking, click: () => deps.adBlocking!.set(params.pageURL, !blocking) }]),

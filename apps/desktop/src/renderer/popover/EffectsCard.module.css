@@ -1,0 +1,264 @@
+/* The Effects card (DESIGN.md §7.15). Tokens only. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  inline-size: calc(var(--size-popover-card) + var(--space-10));
+  max-block-size: var(--size-popover-max);
+  outline: none;
+}
+
+.head {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3) var(--space-2) var(--space-2) var(--space-4);
+}
+
+.glyph {
+  flex: none;
+  color: var(--color-accent);
+}
+
+.title {
+  flex: 1;
+  min-inline-size: 0;
+  margin: 0;
+  overflow: hidden;
+  font: var(--text-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dry · Wet: a segmented pair, as the share picker's kinds are. */
+.mix {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+}
+
+.mixOption {
+  min-inline-size: var(--space-10);
+  block-size: var(--size-hit-min);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.mixOption[aria-checked='true'] {
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-fg);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-block-size: 0;
+  padding: 0 var(--space-4) var(--space-4);
+  overflow-y: auto;
+}
+
+.note {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.problem {
+  margin: 0;
+  color: var(--color-danger);
+  font: var(--text-small);
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-accent);
+  font: var(--text-small);
+  text-decoration: underline;
+}
+
+.mixOption:focus-visible,
+.link:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-hairline);
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chip {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.chip:hover {
+  background: var(--color-item-active-bg);
+}
+
+.chip[aria-pressed='true'] {
+  background: var(--color-item-active-bg);
+  box-shadow: var(--shadow-raised);
+}
+
+.chip:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-hairline);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pill {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  align-self: flex-start;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-block-size: var(--size-icon-button);
+  padding-inline: var(--space-2) 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+}
+
+.code {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  font: var(--text-small);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patch {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  font: var(--text-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted {
+  flex: none;
+  color: var(--color-fg-muted);
+}
+
+.label {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.css {
+  box-sizing: border-box;
+  inline-size: 100%;
+  min-block-size: calc(var(--size-row) * 4);
+  max-block-size: calc(var(--size-row) * 9);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+  font-family: var(--font-mono);
+  resize: vertical;
+  user-select: text;
+  field-sizing: content;
+}
+
+.ask {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  block-size: var(--size-row);
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  color: var(--color-fg-muted);
+}
+
+.css:focus-visible,
+.ask:focus-within {
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+}
+
+.ask input {
+  flex: 1;
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-fg);
+  font: var(--text-small);
+  user-select: text;
+}
+
+.working {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.foot {
+  display: flex;
+  justify-content: flex-start;
+}
+
+@media (forced-colors: active) {
+  .card {
+    border: var(--size-hairline) solid CanvasText;
+  }
+
+  .mixOption[aria-checked='true'],
+  .chip[aria-pressed='true'] {
+    background: Highlight;
+    color: HighlightText;
+  }
+}

@@ -5,7 +5,7 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, keycapFor, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Check, EyeOff, FolderInput, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { Blend, Check, EyeOff, FolderInput, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { ChordMark } from '../shared/ChordMark';
 import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
@@ -21,6 +21,7 @@ import { RadioGroup, ResetButton, Row, SectionHeader, Segmented, Switch } from '
 import { ExtensionsSection } from './Extensions';
 import { ImportSection } from './Import';
 import { PrivacySection } from './Privacy';
+import { EffectsSection } from './Effects';
 import styles from './Settings.module.css';
 import { Links } from './Links';
 import { PlayerSettings } from './Player';
@@ -31,6 +32,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'motion', label: 'Motion', icon: Sparkles },
   { id: 'privacy', label: 'Privacy', icon: EyeOff },
+  { id: 'effects', label: 'Effects', icon: Blend },
   { id: 'sites', label: 'Site permissions', icon: ShieldCheck },
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
   { id: 'import', label: 'Import', icon: FolderInput },
@@ -521,6 +523,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} editColors={editColors} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
               {section === 'privacy' && <PrivacySection snapshot={snapshot} />}
+              {section === 'effects' && <EffectsSection snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'import' && <ImportSection snapshot={snapshot} info={info} />}

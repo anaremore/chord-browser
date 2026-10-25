@@ -44,6 +44,7 @@ const api: OverlayApi = {
     step: (to) => invoke('capture:step', { to }),
     take: (choice) => invoke('capture:take', choice),
     scroll: (x, y, deltaX, deltaY) => invoke('capture:scroll', { x, y, deltaX, deltaY }),
+    hide: () => invoke('capture:hide'),
   },
   screenshots: {
     list: () => invoke('screenshots:list'),

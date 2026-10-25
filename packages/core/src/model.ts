@@ -226,6 +226,11 @@ export interface LiveTab {
    * a number, 'dot' for one without a number, or null. Null when counts are hidden for its site.
    */
   badge: number | 'dot' | null;
+  /**
+   * Effects on its page's site (ARCHITECTURE.md §9): applied (`wet`), kept but
+   * not applied (`dry`, the site's switch or the one for everywhere), or none.
+   */
+  effects: 'wet' | 'dry' | null;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -397,6 +402,13 @@ export interface Settings {
   miniWindowSize: { width: number; height: number } | null;
   /** Reader view's text size, line width, colors and font, the same on every page (DESIGN.md §7.11). */
   reader: ReaderSettings;
+  /** Effects (ARCHITECTURE.md §9): the Dry/Wet switch for every site at once. */
+  effects: EffectsSettings;
+}
+
+/** Settings → Effects: dry everywhere keeps every site's Effects and applies none; each site keeps its own switch too. */
+export interface EffectsSettings {
+  wet: boolean;
 }
 
 export type ExternalLinks = 'mini' | 'tab';
@@ -486,6 +498,7 @@ export const DEFAULT_SETTINGS: Settings = {
   externalLinks: 'mini',
   miniWindowSize: null,
   reader: DEFAULT_READER,
+  effects: { wet: true },
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -500,6 +513,7 @@ export const defaultSettings = (): Settings => ({
   tabCounts: { ...DEFAULT_SETTINGS.tabCounts, offSites: [] },
   duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
   reader: { ...DEFAULT_SETTINGS.reader },
+  effects: { ...DEFAULT_SETTINGS.effects },
 });
 
 /**
@@ -544,6 +558,7 @@ export interface SettingsPatch {
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
   duet?: Partial<DuetSettings>;
   reader?: Partial<ReaderSettings>;
+  effects?: Partial<EffectsSettings>;
 }
 
 /**
@@ -625,7 +640,7 @@ export const emptyState = (): State => ({
   sharedWindows: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null, effects: null };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

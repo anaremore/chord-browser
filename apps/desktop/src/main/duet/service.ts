@@ -48,6 +48,7 @@ import {
   type DuetScope,
   type DuetThread,
   type DuetToolName,
+  type DuetToolSpec,
   type NodeId,
   type TabNode,
   type WindowId,
@@ -503,6 +504,94 @@ export class DuetService {
   canAskAbout(windowId: WindowId, url: string): boolean {
     const chordId = this.chordOf(windowId);
     return Boolean(this.settings.enabled && this.settings.provider && chordId && !this.isPrivateChord(chordId) && !this.settings.offChords.includes(chordId) && !isNeverReadable(url, this.settings.neverSites));
+  }
+
+  /**
+   * Effects' Ask Duet (main/effects): whether Duet may read this page from this
+   * window (canAskAbout's rules) with a provider that's installed, and its name.
+   */
+  effectsProvider(windowId: WindowId, url: string): { provider: string } | null {
+    const provider = this.settings.provider;
+    if (!provider || !this.canAskAbout(windowId, url)) return null;
+    const status = this.statuses[provider];
+    if (status && (!status.installed || status.signedIn === false)) return null;
+    return { provider: provider === 'claude' ? 'Claude Code' : 'Codex' };
+  }
+
+  /**
+   * One request with no chat (Effects' patches): the user's own CLI with
+   * Duet's browse-mode flags, Effects' instructions and one read-only tool, in
+   * a session of its own that's closed when the answer is in. Nothing is kept:
+   * not a thread, not the instructions file, and the provider's own copy of the
+   * session is deleted after, as Delete does for a chat.
+   */
+  async oneShot(request: {
+    instructions: string;
+    text: string;
+    tool: DuetToolSpec;
+    onTool(): Promise<string>;
+    signal: AbortSignal;
+    timeoutMs: number;
+  }): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+    const provider = this.settings.provider;
+    if (!provider) return { ok: false, error: 'Set up Duet first, in Settings → Duet.' };
+    const name = provider === 'claude' ? 'Claude Code' : 'Codex';
+    if (!this.statuses[provider]) await this.refreshProviders('never');
+    if (!this.statuses[provider]?.installed && this.wslLookup) await this.wslLookup;
+    const launch = this.launches[provider];
+    if (!this.statuses[provider]?.installed || !launch) return { ok: false, error: `${name} isn't installed. Settings → Duet shows how to set it up.` };
+    if (request.signal.aborted) return { ok: false, error: 'Stopped.' };
+    const id = randomUUID();
+    const instructionsFile = join(this.root, 'instructions', `effects-${id}.md`);
+    await mkdir(join(this.root, 'instructions'), { recursive: true });
+    await writeFile(instructionsFile, request.instructions, { encoding: 'utf8', mode: 0o600 });
+    return new Promise((resolve) => {
+      let text = '';
+      let sessionId: string | null = null;
+      let settled = false;
+      let session: DuetSession | null = null;
+      const finish = (outcome: { ok: true; text: string } | { ok: false; error: string }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        request.signal.removeEventListener('abort', stop);
+        session?.close();
+        void rm(instructionsFile, { force: true }).catch(() => undefined);
+        if (sessionId) void this.deleteProviderCopy({ provider, providerSessionId: sessionId } as DuetThread).catch(() => undefined);
+        resolve(outcome);
+      };
+      const stop = () => finish({ ok: false, error: 'Stopped.' });
+      const timer = setTimeout(() => finish({ ok: false, error: `${name} took too long to answer. Try again.` }), request.timeoutMs);
+      timer.unref?.();
+      request.signal.addEventListener('abort', stop);
+      const options = {
+        launch,
+        cwd: join(this.root, 'empty'),
+        model: this.settings.model,
+        instructions: request.instructions,
+        instructionsFile,
+        resumeId: null,
+        newSessionId: id,
+        tools: [request.tool],
+        images: false,
+      };
+      const events = {
+        onSessionId: (sid: string) => {
+          sessionId = sid;
+        },
+        onText: (delta: string) => {
+          text += delta;
+          if (text.length > 100_000) finish({ ok: false, error: `${name}'s answer was too long.` });
+        },
+        onTool: async (tool: string): Promise<ToolOutput> =>
+          tool === request.tool.name ? { text: await request.onTool() } : { text: toolResult({ error: `Unknown tool ${tool}` }, false), isError: true },
+        onTurnEnd: (outcome: { status: 'done' | 'interrupted' | 'error'; error?: ProviderError }) =>
+          finish(outcome.status === 'done' ? { ok: true, text } : { ok: false, error: outcome.error?.message ?? 'Stopped.' }),
+        onExit: (error: ProviderError | null) => finish({ ok: false, error: error?.message ?? `${name} stopped before it answered.` }),
+      };
+      session = provider === 'claude' ? new ClaudeSession(options, events) : new CodexSession(options, events);
+      session.send(request.text);
+    });
   }
 
   /** Put an image in the window's composer, for the next message, and open the panel. */

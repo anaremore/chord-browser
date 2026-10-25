@@ -230,6 +230,42 @@ describe('chord-data', () => {
     db.close();
   });
 
+  it('keeps Effects per site across a restart, checks them as it reads them, and forgets a removed site', () => {
+    let db = new ChordDatabase(file);
+    const site = {
+      host: 'news.test',
+      wet: false,
+      css: 'h1 { color: red }',
+      hidden: [{ selector: '#ad', label: 'div#ad', at: 2 }],
+      presets: ['dark' as const],
+      duet: [{ id: 'd1', ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }', at: 3 }],
+      createdAt: 1,
+      updatedAt: 4,
+    };
+    db.write([
+      { k: 'effect', id: 'news.test', value: { ...site, compiled: 'h1 {\n  color: red !important;\n}', sanitizer: 1 } },
+      { k: 'effect', id: 'other.test:8080', value: { ...site, host: 'other.test:8080', css: '', hidden: [], presets: ['reading-width'], duet: [], compiled: 'x', sanitizer: 1 } },
+    ]);
+    db.close();
+    db = new ChordDatabase(file);
+    const loaded = db.loadEffects();
+    expect(loaded.map((e) => e.host).sort()).toEqual(['news.test', 'other.test:8080']);
+    expect(loaded.find((e) => e.host === 'news.test')).toEqual({ ...site, compiled: 'h1 {\n  color: red !important;\n}', sanitizer: 1 });
+    db.write([{ k: 'effect', id: 'other.test:8080', value: null }]);
+    // A row changed by hand: what doesn't check out is dropped as it's read (an unknown preset, a selector too long).
+    const raw = new DatabaseSync(file);
+    raw.prepare(`UPDATE effect SET presets = '["dark","neon"]', hidden = ? WHERE host = 'news.test'`).run(JSON.stringify([{ selector: 'x'.repeat(2000), label: 'big' }, { selector: '#ok', label: 'ok' }]));
+    raw.close();
+    db.close();
+    db = new ChordDatabase(file);
+    const [only] = db.loadEffects();
+    expect(db.loadEffects()).toHaveLength(1);
+    expect(only!.presets).toEqual(['dark']);
+    expect(only!.hidden.map((h) => h.selector)).toEqual(['#ok']);
+    db.close();
+    expect(count('effect')).toBe(1);
+  });
+
   it('keeps a muted tab muted across a restart, until it’s unmuted', () => {
     let db = new ChordDatabase(file);
     let state = seed();

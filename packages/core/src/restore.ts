@@ -239,6 +239,8 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
     if (typeof duet['codexImages'] === 'boolean') settings.duet.codexImages = duet['codexImages'];
   }
   settings.reader = cleanReaderSettings(settings.reader, saved['reader']);
+  const effects = saved['effects'] as Record<string, unknown> | undefined;
+  if (effects && typeof effects === 'object' && typeof effects['wet'] === 'boolean') settings.effects.wet = effects['wet'];
   return settings;
 }
 

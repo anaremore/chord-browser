@@ -56,6 +56,12 @@ importers:
       '@chord/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
+      '@csstools/css-parser-algorithms':
+        specifier: 4.0.2
+        version: 4.0.2(@csstools/css-tokenizer@4.0.2)
+      '@csstools/css-tokenizer':
+        specifier: 4.0.2
+        version: 4.0.2
       '@dnd-kit/abstract':
         specifier: 0.5.1
         version: 0.5.1

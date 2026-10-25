@@ -3,13 +3,13 @@
  * these variables (enforced by stylelint), never raw values.
  */
 import { durations, easing, springs, springToCss } from './motion';
-import { fontFamily, frameRadius, radius, shadow, size, space, type, zIndex, type Platform } from './scale';
+import { fontFamily, fontMono, frameRadius, radius, shadow, size, space, type, zIndex, type Platform } from './scale';
 
 const kebab = (s: string) => s.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
 const px = (n: number) => `${n}px`;
 
 function rootVars(): Record<string, string> {
-  const root: Record<string, string> = { '--font-family': fontFamily };
+  const root: Record<string, string> = { '--font-family': fontFamily, '--font-mono': fontMono };
   for (const [k, v] of Object.entries(space)) root[`--space-${k}`] = px(v);
   for (const [k, v] of Object.entries(size)) root[`--size-${kebab(k)}`] = px(v);
   for (const [k, v] of Object.entries(radius)) root[`--radius-${k}`] = px(v);

@@ -34,6 +34,7 @@ const api: SettingsApi = {
     adBlocking: () => invoke('adBlocking:status'),
     player: () => invoke('settings:player'),
     removePlayer: () => invoke('settings:removePlayer'),
+    effects: (change) => invoke('settings:effects', change),
   },
   extensions: {
     install: (input) => invoke('extensions:install', { input }),

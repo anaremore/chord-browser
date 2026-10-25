@@ -15,7 +15,7 @@ import {
 } from '@chord/core';
 import type { ChordEdit, DuetView, SystemInfo } from '@chord/ipc';
 import { durations } from '@chord/tokens';
-import { Archive, ArrowLeft, ArrowRight, BookOpenText, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
+import { Archive, ArrowLeft, ArrowRight, Blend, BookOpenText, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
 import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
@@ -182,6 +182,29 @@ function ReaderButton({ live, info }: { live: LiveTab | undefined; info: SystemI
       onClick={() => void api.action.run('view.reader')}
     >
       <BookOpenText {...ICON} />
+    </button>
+  );
+}
+
+/**
+ * Effects (DESIGN.md §7.15): beside the address while the site has them,
+ * raised while they're wet. A click opens the card; the keys make the site dry or wet.
+ */
+function EffectsButton({ live, info }: { live: LiveTab | undefined; info: SystemInfo }) {
+  const { keycap } = useKeys(info);
+  if (!live?.effects) return null;
+  const label = live.effects === 'wet' ? 'Effects: wet' : 'Effects: dry';
+  const keys = keycap('effects.site');
+  return (
+    <button
+      type="button"
+      className={styles.iconButton}
+      data-effects={live.effects}
+      aria-label={label}
+      title={keys ? `${label}  ·  ${keys} makes it ${live.effects === 'wet' ? 'dry' : 'wet'}` : label}
+      onClick={() => void api.action.run('effects.open')}
+    >
+      <Blend {...ICON} />
     </button>
   );
 }
@@ -566,6 +589,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
               </button>
               {/* Beside the address when there's no bar to hold it (macOS, docked). */}
               {!overlayChrome && !collapsed && <ReaderButton live={live} info={info} />}
+              {!overlayChrome && !collapsed && <EffectsButton live={live} info={info} />}
             </div>
 
             {/* One drag space: tabs move between lists, onto Favorites, and onto chords in the switcher. */}
@@ -680,6 +704,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                 )}
               </button>
               <ReaderButton live={live} info={info} />
+              <EffectsButton live={live} info={info} />
               {/* The tab on screen makes sound: its speaker, as on its row (hidden in the sidebar now). */}
               {collapsed && active && live?.audible && (
                 <button

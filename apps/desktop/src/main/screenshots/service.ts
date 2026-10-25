@@ -13,7 +13,7 @@
  * panel: on disk for a normal window, in memory for a private one, and not
  * at all with "Keep recent screenshots" off.
  */
-import { captureScale, intersectRect, MIN_AREA, pageToUi, screenshotFilename, uiToPage, type ScreenshotEntry, type ScreenshotKind, type ShotRect } from '@chord/core';
+import { captureScale, effectsHost, intersectRect, MIN_AREA, pageToUi, screenshotFilename, uiToPage, type ScreenshotEntry, type ScreenshotKind, type ShotRect } from '@chord/core';
 import type { CaptureHit, ScreenshotChoice, ScreenshotItem } from '@chord/ipc';
 import { clipboard, ClipboardItem, type WebContents } from 'electron';
 import { pageCall } from '../page-call';
@@ -54,6 +54,8 @@ interface Capturing {
   contents: WebContents;
   /** Where the page is, in UI units. */
   pane: ShotRect;
+  /** Picking elements to hide for Effects (main/effects) instead: nothing is taken. */
+  hide: boolean;
 }
 
 interface Metrics {
@@ -87,15 +89,26 @@ export class Screenshots {
 
   constructor(private readonly deps: ScreenshotDeps) {}
 
-  /** ⌘⇧2: capture mode over the page the window shows, or a word that there's nothing to take. */
-  start(w: AppWindow): void {
+  /**
+   * ⌘⇧2: capture mode over the page the window shows, or a word that there's
+   * nothing to take. With `hide`, the same picker for Effects (DESIGN.md §7.15):
+   * clicks hide elements on that site instead, so only a page on it will do.
+   */
+  start(w: AppWindow, hide?: { host: string }): boolean {
     const target = w.captureTarget();
-    if (!target) {
-      w.toast({ id: 'screenshot', whilePresenting: true, message: 'There’s no page here to take a screenshot of' });
-      return;
+    if (!target || (hide && effectsHost(target.contents.getURL()) !== hide.host)) {
+      if (!hide) w.toast({ id: 'screenshot', whilePresenting: true, message: 'There’s no page here to take a screenshot of' });
+      return false;
     }
-    this.capturing.set(w.id, { contents: target.contents, pane: target.rect });
-    w.openOverlay('capture', '', null, 'page', undefined, { pane: target.rect });
+    this.capturing.set(w.id, { contents: target.contents, pane: target.rect, hide: Boolean(hide) });
+    w.openOverlay('capture', '', null, 'page', undefined, { pane: target.rect, ...(hide ? { hide } : {}) });
+    return true;
+  }
+
+  /** The page the picker is over, while it picks elements to hide. */
+  pickerPage(w: AppWindow): WebContents | null {
+    const c = this.live(w);
+    return c?.hide ? c.contents : null;
   }
 
   /** Capture mode closed without taking anything. */
@@ -132,6 +145,8 @@ export class Screenshots {
   /** Take it: the overlay closes at once, the picture goes to the clipboard, and a toast offers Save. */
   async take(w: AppWindow, choice: ScreenshotChoice): Promise<void> {
     const c = this.live(w);
+    // Picking for Effects takes nothing.
+    if (c?.hide) return;
     this.capturing.delete(w.id);
     w.closeOverlay();
     if (!c) return;

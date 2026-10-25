@@ -230,6 +230,11 @@ export type Command =
    * the innermost first; main repeats it until the import is gone.
    */
   | { t: 'import.undo'; importId: string; limit?: number }
+  /**
+   * Undo a change to a site's Effects (a toast's button): main takes it over
+   * (main/effects), since Effects live outside the store (ARCHITECTURE.md §9).
+   */
+  | { t: 'effects.undo'; token: string }
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -1236,6 +1241,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (current.theme !== next.theme) current.theme = next.theme;
         if (current.font !== next.font) current.font = next.font;
       }
+      if (cmd.settings.effects?.wet !== undefined && draft.settings.effects.wet !== cmd.settings.effects.wet) draft.settings.effects.wet = cmd.settings.effects.wet;
       const { spellcheck } = cmd.settings;
       if (spellcheck?.enabled !== undefined && draft.settings.spellcheck.enabled !== spellcheck.enabled) draft.settings.spellcheck.enabled = spellcheck.enabled;
       if (spellcheck?.language !== undefined && draft.settings.spellcheck.language !== spellcheck.language) draft.settings.spellcheck.language = spellcheck.language;
@@ -1739,5 +1745,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       delete draft.imports[cmd.importId];
       return;
     }
+
+    case 'effects.undo':
+      // Main's: the store holds no Effects.
+      return;
   }
 }

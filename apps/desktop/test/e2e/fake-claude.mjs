@@ -109,6 +109,17 @@ async function turn(text, images = []) {
     const sizes = images.map((i) => `${i.source.media_type} ${jpegSize(i.source.data)}`).join(', ');
     return finish(await say(`I see ${images.length === 1 ? 'one image' : `${images.length} images`}: ${sizes}. You asked: ${text.split('\n')[0]}`));
   }
+  // An Effects request (main/effects): it reads the page's outline through Chord's one tool, keeps what it got
+  // where the test can see it, and answers in Effects' fixed shape. Its patch tries a fetch too
+  // (FAKE_CLAUDE_EVIL: a server that counts requests), which Chord has to take out.
+  if (/^Restyle /.test(text)) {
+    const result = toolText(await callTool('read_page_outline', {}));
+    writeFileSync(join(config, 'effects-outline.json'), result);
+    if (/nothing/i.test(text)) return finish(await say(JSON.stringify({ css: '', summary: "CSS can't do that." })));
+    const evil = process.env.FAKE_CLAUDE_EVIL ?? 'https://evil.invalid';
+    const css = `main h1 { color: rgb(0, 128, 0) } body { background-image: url(${evil}/duet.png) }`;
+    return finish(await say(`Here it is:\n\`\`\`json\n${JSON.stringify({ css, summary: 'Green headline' })}\n\`\`\``));
+  }
   // Asked for an image, it says it can't and leaves the mark for Codex's button, as Duet's instructions ask.
   if (/draw|cartoon/i.test(text)) return finish(await say("Claude can't make images.\n\n[[make-image]]"));
   // Writes a tab's handle in its own words, as Duet is asked not to.

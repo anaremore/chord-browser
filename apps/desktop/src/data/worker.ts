@@ -31,7 +31,8 @@ process.parentPort.on('message', (event) => {
         const prune = lap();
         const saved = db.load();
         const navs = db.loadNavs();
-        reply({ id: request.id, ok: true, saved, navs, timing: { up, open, prune, read: lap() } });
+        const effects = db.loadEffects();
+        reply({ id: request.id, ok: true, saved, navs, effects, timing: { up, open, prune, read: lap() } });
         break;
       }
       case 'write':
