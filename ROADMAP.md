@@ -59,7 +59,7 @@ A milestone is done when all of these hold:
 | **4 · Deeper** | — | Mar 2027 + | install signed builds that update themselves on every OS |
 | **After 0.1** | 0.1.x | Nov 2026 | sign in to sites that ask for a password in a box, and trust that a force-quit loses nothing |
 | | 0.2 · Cleaner pages | Dec 2026 | browse without ads or trackers, and bring your bookmarks and history from Chrome, Edge, Brave, Firefox or Safari |
-| | 0.3 · Effects | next, after the performance plan (moved up 2026-10-25) | restyle a site by hand or by asking Duet, with a Dry/Wet switch; then Duet fills forms |
+| | 0.3 · Effects | next, after the performance plan (moved up 2026-10-25); Effects built 2026-10-25 | restyle a site by hand or by asking Duet, with a Dry/Wet switch; then Duet fills forms |
 | | 0.4 · Your data | right after Effects (moved up 2026-10-25) | export everything, and sync your setup through a folder you already sync, end-to-end encrypted |
 
 ## Where we are (updated 2026-10-23)
@@ -405,6 +405,8 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
   - By hand: your own CSS, hiding an element, a few presets.
   - *Ask Duet*: your Claude Code or Codex app writes a patch from a stripped outline of the page; same reading rules as Duet.
   - Every patch is parsed and stripped of anything that fetches before it's applied, and re-applied on each navigation.
+  - **Built 2026-10-25** (ARCHITECTURE.md §9, DESIGN.md §7.15). The page's right-click menu, the command bar, the View or ⋯ menu and a button beside the address (while a site has Effects) open the Effects card in the popover, over the page, which shows each change as you make it: Dry · Wet, three presets (*Reading width*, *Dark*, *No sticky bars*), *Hide an element…* (the screenshot picker, clicking to hide), your CSS, Ask Duet, and Undo for what's removed. ⌘⇧E / Ctrl+Shift+E makes the site dry or wet; Settings → Effects lists the sites, and has Dry/Wet for every site. Kept by host (`www.` folded) in chord-data (migration 13), shared by every chord; a private window keeps its changes in memory. Each site's stylesheet is checked in a worker by a sanitizer built on the CSS Syntax spec's own parser, which writes out only known rules and functions and leaves out anything that fetches, then inserted once per navigation, as a stylesheet only. Ask Duet sends your words and, through one read-only tool, an outline of the page (never form values), and deletes the provider's copy after. Tests: `effects.spec.ts` (the whole journey, and what applying costs on a heavy page) and the sanitizer's table of hostile stylesheets.
+  - *Not yet:* moving a Duet patch into your CSS to edit it; one set of Effects for a site and all its subdomains; a back/forward cache will need the stylesheet put back on a restored page.
 
 - **P1 Duet fills forms** (D16, decided 2026-10-24): "fill only, you submit". Only when you ask, on the tab on screen; a review card of each field's value, then Chord fills them, with Undo; never submits, never passwords, cards, one-time codes or hidden fields. After Effects, sharing its safety review of writing into pages.
 
