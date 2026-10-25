@@ -4,6 +4,7 @@ Chord's website: a few static pages, served by nginx, on Clank.
 
 - `public/`: the home page (`index.html`, `styles.css`, `site.js`), `install.html`, `privacy.html`, the 404 page, Onest (OFL) and the images. Pages are served without `.html`: `/install`, `/privacy`.
 - `public/partials/`: the header and footer every page shares. nginx puts them in (`<!--# include virtual="/partials/header.html" -->`), and doesn't serve them on their own. A new page includes both, and goes in `sitemap.xml`.
+- The header has one way to get Chord, Download; the install steps are linked from the download section and the footer. Once there's a second help page (setting up Duet, shortcuts), the header gets Docs at `/docs`, with Install as its first page and `/install` redirecting there.
 - `nginx.conf` and `headers.inc`: files, a strict content security policy, `/health` for Clank, and `www.` redirecting to the bare domain.
 - `downloads.conf` and `public/latest.json`: the download links, written by `tools/latest.mjs` (below). Don't edit them by hand.
 - `Dockerfile`: the image, built from the repo's root. `Dockerfile.dockerignore` keeps the build context to `site/`.
