@@ -288,24 +288,36 @@ function macApps(pids) {
   return info;
 }
 
-function taskbar() {
-  if (!isWin) return null;
-  const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(here, '../tools/taskbar.ps1')], { encoding: 'utf8' });
-  try {
-    return JSON.parse(r.stdout);
-  } catch {
-    return { error: (r.stdout + r.stderr).slice(0, 400) };
-  }
+/**
+ * PowerShell, without blocking the host's main thread. Run 40154449747 hung here: PrintWindow
+ * asks the window to draw itself, and the window's thread was the one waiting in spawnSync.
+ */
+function powershell(args) {
+  return new Promise((resolve) => {
+    const child = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let text = '';
+    child.stdout.on('data', (d) => (text += d));
+    child.stderr.on('data', (d) => (text += d));
+    const timer = setTimeout(() => child.kill(), 30_000);
+    child.on('exit', () => {
+      clearTimeout(timer);
+      try {
+        resolve(JSON.parse(text.trim().split('\n').at(-1)));
+      } catch {
+        resolve({ error: text.slice(0, 400) });
+      }
+    });
+  });
 }
 
-function printWindow(hwnd, name, points = []) {
+function taskbar() {
   if (!isWin) return null;
-  const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(here, '../tools/printwindow.ps1'), '-Hwnd', String(hwnd), '-Out', join(out, name), '-Points', points.map((p) => p.join(',')).join(';')], { encoding: 'utf8' });
-  try {
-    return { file: name, ...JSON.parse(r.stdout) };
-  } catch {
-    return { error: (r.stdout + r.stderr).slice(0, 400) };
-  }
+  return powershell(['-File', join(here, '../tools/taskbar.ps1')]);
+}
+
+async function printWindow(hwnd, name, points = []) {
+  if (!isWin) return null;
+  return { file: name, ...(await powershell(['-File', join(here, '../tools/printwindow.ps1'), '-Hwnd', String(hwnd), '-Out', join(out, name), '-Points', points.map((p) => p.join(',')).join(';')])) };
 }
 
 /**
@@ -456,6 +468,15 @@ async function scenarioGlue(variant) {
   const hostHandle = handleOf(host.win.getNativeWindowHandle(), host.win.getMediaSourceId());
   const playerHandle = handleOf(Buffer.from(handles.native, 'hex'), handles.mediaSourceId);
   if (variant === 'owned' && w) r.setOwner = String(w.setOwner(playerHandle, hostHandle));
+  // X11's version of an owner: WM_TRANSIENT_FOR, which window managers keep above its parent.
+  if (variant === 'transient' && koffiPath) {
+    const { createRequire } = await import('node:module');
+    const koffi = createRequire(import.meta.url)(koffiPath);
+    const lib = koffi.load('libX11.so.6');
+    const dpy = lib.func('void *XOpenDisplay(const char *name)')(null);
+    r.setTransient = lib.func('int XSetTransientForHint(void *dpy, unsigned long w, unsigned long parent)')(dpy, playerHandle, hostHandle);
+    lib.func('int XFlush(void *dpy)')(dpy);
+  }
   if (variant === 'follow') r.follow = await p.peer.request('follow', { handle: hostHandle, area: playerArea(host.win), koffiPath, intervalMs: 8 });
   r.state0 = await p.peer.request('state');
 
@@ -481,7 +502,7 @@ async function scenarioGlue(variant) {
     for (let i = 1; i <= 60; i++) actions.push({ at: 800 + i * 8, do: 'moveBy', d: [-4, -2] });
     actions.push({ at: 1350, do: 'release' });
   }
-  const samplerRun = sample(`glue-${variant}`, { host: hostHandle, player: playerHandle, durationMs: 6200, actions });
+  const samplerRun = sample(`glue-${variant}`, { host: hostHandle, player: playerHandle, durationMs: 6200, actions, ...(isWin ? { dragFullWindows: true } : {}) });
   await sleep(1800);
   const tProg = now();
   await programmaticDrag(host.win);
@@ -497,6 +518,7 @@ async function scenarioGlue(variant) {
   r.programmaticDrag = { ...(s?.samples ? trail(s.samples, tProg, tProgEnd + 200) : {}), glue: g.summary(tProg, tProgEnd + 200) };
   r.programmaticResize = { ...(s?.samples ? trail(s.samples, tResize, tResizeEnd + 200) : {}), glue: g.summary(tResize, tResizeEnd + 200) };
   r.samplerError = s?.error ?? null;
+  r.dragFullWindowsBefore = s?.dragFullWindowsBefore ?? null;
   r.clockCheck = { hostAtSamplerSpawn: round(start), firstSample: s?.samples?.[0]?.[0] ?? null, firstEvent: s?.events?.[0]?.[0] ?? null };
   r.samplerReadsPerSecond = s?.readsPerSecond ?? (s?.samples ? null : undefined);
 
@@ -538,7 +560,7 @@ async function scenarioGlue(variant) {
 
   // Taskbar, Alt+Tab, Cmd+Tab.
   if (w) r.altTab = { player: w.inAltTab(playerHandle), host: w.inAltTab(hostHandle) };
-  if (isWin) r.taskbar = taskbar();
+  if (isWin) r.taskbar = await taskbar();
   r.apps = macApps({ host: process.pid, player: handles.pid });
 
   // Fullscreen from the page.
@@ -577,7 +599,7 @@ async function scenarioFrameless() {
   r.capture = await p.peer.request('capture', { name: 'frameless.png' });
   const handles = await p.peer.request('handles');
   if (w) r.altTab = w.inAltTab(handleOf(Buffer.from(handles.native, 'hex')));
-  if (isWin) r.taskbar = taskbar();
+  if (isWin) r.taskbar = await taskbar();
   r.apps = macApps({ player: handles.pid });
   r.close = await p.stop();
   if (isWin) {
@@ -586,7 +608,7 @@ async function scenarioFrameless() {
     const p2 = await startPlayer();
     await p2.peer.request('window', { style: 'frameless', bounds: { x: 120, y: 100, width: 700, height: 420 }, appUserModelId: 'com.chord.spike.host' });
     await sleep(1500);
-    r.sharedAppUserModelId = { taskbar: taskbar() };
+    r.sharedAppUserModelId = { taskbar: await taskbar() };
     r.sharedAppUserModelId.close = await p2.stop();
     host.win.destroy();
   }
@@ -660,7 +682,7 @@ async function scenarioChild() {
     const cr = w.rect(playerHandle);
     const off = [cr.left - wr.left, cr.top - wr.top];
     const mid = [off[0] + Math.round(aw / 2), off[1] + Math.round(ah / 2)];
-    r.composite = printWindow(hostHandle, 'child-composite.png', [mid, [off[0] - 100, mid[1]]]);
+    r.composite = await printWindow(hostHandle, 'child-composite.png', [mid, [off[0] - 100, mid[1]]]);
     // A Chord popover over the player: does the host's own view draw above a foreign child window?
     const overlay = new WebContentsView();
     overlay.setBackgroundColor('#ff0000');
@@ -669,7 +691,7 @@ async function scenarioChild() {
     await sleep(600);
     const origin = screen.dipToScreenPoint({ x: host.win.getContentBounds().x, y: host.win.getContentBounds().y });
     const overlayMid = [origin.x - wr.left + Math.round((232 + 60 + 110) * scale), origin.y - wr.top + Math.round((60 + 70) * scale)];
-    r.overlay = { ...printWindow(hostHandle, 'child-overlay.png', [overlayMid]), note: 'red at the point means the host view is drawn above the player' };
+    r.overlay = { ...(await printWindow(hostHandle, 'child-overlay.png', [overlayMid])), note: 'red at the point means the host view is drawn above the player' };
     host.win.contentView.removeChildView(overlay);
   }
   r.captureHostFrame = await captureHost(host, 'child-host-frame.png');
@@ -682,7 +704,7 @@ async function scenarioChild() {
     for (let i = 1; i <= 60; i++) samplerActions.push({ at: 800 + i * 8, do: 'moveBy', d: [-4, -2] });
     samplerActions.push({ at: 1350, do: 'release' });
   }
-  const samplerRun = sample('child', { host: hostHandle, player: playerHandle, durationMs: 6200, actions: samplerActions });
+  const samplerRun = sample('child', { host: hostHandle, player: playerHandle, durationMs: 6200, actions: samplerActions, ...(isWin ? { dragFullWindows: true } : {}) });
   await sleep(1800);
   const tProg = now();
   await programmaticDrag(host.win);
@@ -734,7 +756,7 @@ async function scenarioChild() {
   if (isWin) {
     r.fullscreen.childRect = w.rect(playerHandle);
     r.fullscreen.hostRect = w.rect(hostHandle);
-    r.fullscreen.composite = printWindow(hostHandle, 'child-fullscreen.png');
+    r.fullscreen.composite = await printWindow(hostHandle, 'child-fullscreen.png');
   }
   await p.peer.request('fullscreen', { on: false }).catch(() => {});
   await sleep(1200);
@@ -758,7 +780,7 @@ void main();
 async function main() {
 await app.whenReady();
 results.display = screen.getAllDisplays().map((d) => ({ bounds: d.bounds, scaleFactor: d.scaleFactor, refreshRate: d.displayFrequency }));
-const glueVariants = ['move', ...(isWin || isMac ? ['will-move', 'follow'] : []), ...(isWin ? ['owned'] : []), ...(isMac ? ['accessory', 'panel', 'panel-reset'] : [])];
+const glueVariants = ['move', ...(isWin || isMac ? ['will-move', 'follow'] : []), ...(isWin ? ['owned'] : []), ...(isMac ? ['accessory', 'panel', 'panel-reset'] : []), ...(isLinux && !wayland ? ['transient'] : [])];
 for (const name of scenarios) {
   const runs = name === 'glue' ? glueVariants.map((v) => [`glue:${v}`, () => scenarioGlue(v)]) : [[name, { channel: scenarioChannel, navlock: scenarioNavlock, frameless: scenarioFrameless, child: scenarioChild }[name]]];
   for (const [label, run] of runs) {

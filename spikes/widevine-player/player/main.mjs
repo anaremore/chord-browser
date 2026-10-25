@@ -445,6 +445,7 @@ async function serve() {
     let moves = 0;
     clearInterval(follower);
     follower = setInterval(() => {
+      if (win.isDestroyed()) return clearInterval(follower);
       if (fullScreen || !win.isVisible()) return;
       const raw = read();
       reads++;

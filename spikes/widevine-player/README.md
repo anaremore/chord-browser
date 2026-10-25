@@ -14,12 +14,15 @@ Throwaway prototypes for [docs/decisions/S14-widevine-player.md](../../docs/deci
 - **`shared/`** holds what the host and the player share:
   - `channel.mjs`: the control channel. NDJSON over a named pipe or a Unix socket, with an HMAC handshake on a per-launch secret.
   - `allowlist.mjs`: the navigation lock.
+  - `follow.mjs`: glue by polling the host's rectangle from the OS.
   - `win32.mjs`: koffi bindings.
 - **`tools/`**:
-  - `fetch.mjs`: downloads and checks the runtimes.
+  - `fetch.mjs`: downloads and checks the runtimes (ECS, Electron, koffi).
   - `sampler.mjs` (and `sampler-mac.js`): watches both windows from outside, and drives real input.
   - `printwindow.ps1` and `taskbar.ps1`: Windows checks.
   - `channel-test.mjs`: a plain-Node check of the channel.
+  - `check-lock.mjs <census.json>`: the lock against what the census saw.
+  - `summarize.mjs <results folder>…`: the numbers the decision record quotes.
 
 ## Running it
 

@@ -20,6 +20,10 @@ jobs:
     name: S14 · ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    # "[windows only]" in the pushed commit's message skips the other jobs' steps, to keep reruns short.
+    # (A job-level if can't read the matrix.)
+    env:
+      RUN: ${{ !contains(github.event.head_commit.message, '[windows only]') || matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,14 +33,16 @@ jobs:
           - { name: Linux x64 · X11, os: ubuntu-24.04 }
     steps:
       - uses: actions/checkout@v7
+        if: env.RUN == 'true'
         with:
           sparse-checkout: spikes/widevine-player
       - uses: actions/setup-node@v7
+        if: env.RUN == 'true'
         with:
           node-version: 24
 
       - name: Linux display and sandbox
-        if: runner.os == 'Linux'
+        if: env.RUN == 'true' && runner.os == 'Linux'
         timeout-minutes: 10
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -49,16 +55,17 @@ jobs:
 
       # ECS, stock Electron and koffi, each checked against its release's SHA-256, in a folder of their own.
       - name: Fetch the runtimes
+        if: env.RUN == 'true'
         shell: bash
         run: node spikes/widevine-player/tools/fetch.mjs --dest "$RUNNER_TEMP/wv-runtime"
 
       - name: Run (Windows, macOS)
-        if: runner.os != 'Linux'
+        if: env.RUN == 'true' && runner.os != 'Linux'
         shell: bash
         run: node spikes/widevine-player/run.mjs --runtime "$RUNNER_TEMP/wv-runtime" --out "$RUNNER_TEMP/wv-results" --work "$RUNNER_TEMP/wv-work"
 
       - name: Run (Linux, Xvfb with openbox)
-        if: runner.os == 'Linux'
+        if: env.RUN == 'true' && runner.os == 'Linux'
         run: |
           ulimit -c 0
           xvfb-run -a -s "-screen 0 1920x1080x24" sh -c '
@@ -69,7 +76,7 @@ jobs:
           '
 
       - name: Upload results
-        if: always()
+        if: always() && env.RUN == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: s14-${{ matrix.os }}

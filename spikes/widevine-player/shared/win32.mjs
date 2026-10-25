@@ -47,6 +47,8 @@ export function win32(koffiPath) {
     keybd_event: user32.func('void __stdcall keybd_event(uint8 vk, uint8 scan, uint32 flags, uintptr_t extra)'),
     GetSystemMetrics: user32.func('int __stdcall GetSystemMetrics(int index)'),
     SetProcessDpiAwarenessContext: user32.func('bool __stdcall SetProcessDpiAwarenessContext(intptr_t value)'),
+    SystemParametersGet: user32.func('bool __stdcall SystemParametersInfoW(uint32 action, uint32 param, _Out_ int32 *value, uint32 ini)'),
+    SystemParametersSet: user32.func('bool __stdcall SystemParametersInfoW(uint32 action, uint32 param, void *value, uint32 ini)'),
     DwmGetWindowAttribute: dwmapi.func('int __stdcall DwmGetWindowAttribute(uintptr_t hWnd, uint32 attr, _Out_ uint32 *value, uint32 size)'),
   };
 

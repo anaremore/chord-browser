@@ -91,7 +91,17 @@ function windows() {
         throw new Error(`unknown action ${a.do}`);
     }
   };
+  // "Show window contents while dragging": off on the Server runners (run 40154449747 dragged an
+  // outline), on by default on desktop Windows. plan.dragFullWindows turns it on for the run.
+  let dragFullWindowsBefore = null;
+  if (plan.dragFullWindows !== undefined) {
+    const value = [0];
+    w.f.SystemParametersGet(0x26 /* SPI_GETDRAGFULLWINDOWS */, 0, value, 0);
+    dragFullWindowsBefore = value[0];
+    w.f.SystemParametersSet(0x25 /* SPI_SETDRAGFULLWINDOWS */, plan.dragFullWindows ? 1 : 0, null, 2 /* SPIF_SENDCHANGE */);
+  }
   const result = loop(rectOf, act);
+  result.dragFullWindowsBefore = dragFullWindowsBefore;
   if (plan.zorder) {
     const order = w.topLevel();
     result.zorder = { host: order.indexOf(plan.host), player: order.indexOf(plan.player) };
