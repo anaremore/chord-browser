@@ -20,11 +20,15 @@ failOnMainErrors();
 
 const appDir = resolve(import.meta.dirname, '../..');
 
+/** A title like a news headline or a post's: wider than any window the tests open. */
+const LONG_TITLE = 'A page whose title runs on far longer than the sidebar has room for, the way headlines and posts do: a developer hid a key on a server left unpatched and dared anyone to take it, and many hours later nobody has, which goes well past the width of the whole window';
+
 function startSite(): Promise<{ server: Server; origin: string }> {
   const pages: Record<string, string> = {
     '/': '<title>First page</title><p>First</p>',
     '/second': '<title>Second page</title><p>Second</p>',
     '/third': '<title>Third page</title><p>Third</p>',
+    '/long': `<title>${LONG_TITLE}</title><p>Long</p>`,
   };
   const server = createServer((req, res) => {
     const body = pages[req.url ?? '/'];
@@ -144,6 +148,17 @@ async function pointerDrag(app: ElectronApplication, shell: Page, from: Locator,
     await pointer.move(to.x + 1, to.y);
     await shell.waitForTimeout(50);
     const zone = await shell.evaluate(() => document.querySelector('[data-testid="split-drop"]')?.getAttribute('data-zone') ?? null);
+    console.log(`[pointer drag] feedback: ${JSON.stringify(await shell.evaluate(() => {
+      const el = document.querySelector('[data-dnd-dragging]');
+      const styles = [...document.head.querySelectorAll('style')].filter((s) => s.textContent?.includes('dnd'));
+      return {
+        position: el ? getComputedStyle(el).position : null,
+        pointerEvents: el ? getComputedStyle(el).pointerEvents : null,
+        rect: el?.getBoundingClientRect(),
+        dndStyles: styles.length,
+        applied: styles.map((s) => s.sheet !== null),
+      };
+    }))}`);
     if (zone === null) {
       // What the shell drew and where things were, to see why there was no zone.
       const seen = await shell.evaluate(() => {
@@ -290,7 +305,8 @@ for (const uiScale of [1, 1.25]) test(`a tab dragged onto the page with the syst
   test.skip(!systemPointerAvailable, 'needs a pointer a test can move: X11 with xdotool, or Windows');
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
-    const { shell, today } = await setUp(app, ['/second']);
+    // The dragged tab has a long title: while it's dragged, its row must stay a row's size, under the pointer.
+    const { shell, today } = await setUp(app, ['/long', '/second']);
     if (uiScale !== 1) {
       const before = await shell.evaluate(() => devicePixelRatio);
       // Through Settings, as a person would (the shell may only finish onboarding with settings.set).
@@ -308,17 +324,19 @@ for (const uiScale of [1, 1.25]) test(`a tab dragged onto the page with the syst
       await shell.waitForTimeout(300);
     }
     const [frame] = await pageViews(app);
-    const beside = await pointerDrag(app, shell, today.getByRole('treeitem').filter({ hasText: 'First page' }), { x: frame!.x + frame!.width - 60, y: frame!.y + frame!.height / 2 }, uiScale);
+    const beside = await pointerDrag(app, shell, today.getByRole('treeitem').filter({ hasText: 'A page whose title' }), { x: frame!.x + frame!.width - 60, y: frame!.y + frame!.height / 2 }, uiScale);
     // The shell showed where it would go (so it had the pointer over the page), then the drop made the split.
     expect(beside, 'the drop zone shown just before letting go').not.toBeNull();
-    await expect.poll(async () => (await splitState(shell)).panes).toEqual(['Second page', 'First page']);
+    await expect.poll(async () => (await splitState(shell)).panes).toEqual(['Second page', LONG_TITLE]);
     expect((await splitState(shell)).direction).toBe('row');
 
     // Separate, then the bottom edge: one above the other.
     await runAction(shell, 'split.separate');
     await expect.poll(async () => (await splitState(shell)).splits).toBe(0);
     const [whole] = await pageViews(app);
-    const below = await pointerDrag(app, shell, today.getByRole('treeitem').filter({ hasText: 'Second page' }), { x: whole!.x + whole!.width / 2, y: whole!.y + whole!.height - 30 }, uiScale);
+    // Whichever of the two isn't shown now goes below the one that is.
+    const other = (await splitState(shell)).active === 'Second page' ? 'A page whose title' : 'Second page';
+    const below = await pointerDrag(app, shell, today.getByRole('treeitem').filter({ hasText: other }), { x: whole!.x + whole!.width / 2, y: whole!.y + whole!.height - 30 }, uiScale);
     expect(below, 'the drop zone shown just before letting go').not.toBeNull();
     await expect.poll(async () => (await splitState(shell)).splits).toBe(1);
     expect((await splitState(shell)).direction).toBe('column');
