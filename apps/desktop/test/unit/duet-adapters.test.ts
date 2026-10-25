@@ -3,14 +3,14 @@
  * (Claude's stream-json with the control channel, Codex's app-server), so CI
  * never needs the real CLIs or the network.
  */
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DUET_TOOLS, type DuetContextUsage } from '@chord/core';
 import { describe, expect, it } from 'vitest';
-import type { ProviderError, SessionEvents, SessionOptions, ToolOutput } from '../../src/main/duet/adapter';
+import type { MadeImage, ProviderError, SessionEvents, SessionOptions, ToolOutput } from '../../src/main/duet/adapter';
 import { ClaudeSession, claudeArgs, claudeContextUsage, claudeError } from '../../src/main/duet/claude';
-import { CodexSession, codexArgs, codexContextUsage, codexError } from '../../src/main/duet/codex';
+import { CodexSession, codexArgs, codexContextUsage, codexError, imageLimitError } from '../../src/main/duet/codex';
 
 const fakeClaude = resolve(import.meta.dirname, '../e2e/fake-claude.mjs');
 const fakeCodex = resolve(import.meta.dirname, 'fixtures/fake-codex.mjs');
@@ -20,7 +20,7 @@ function options(script: string, extra: Partial<SessionOptions> = {}): SessionOp
   const instructionsFile = join(dir, 'instructions.md');
   writeFileSync(instructionsFile, 'Duet test instructions');
   return {
-    launch: { command: process.execPath, prefix: [script], env: { ...process.env, CLAUDE_CONFIG_DIR: dir } },
+    launch: { command: process.execPath, prefix: [script], env: { ...process.env, CLAUDE_CONFIG_DIR: dir, CODEX_HOME: dir } },
     cwd: dir,
     model: null,
     instructions: 'Duet test instructions',
@@ -40,6 +40,8 @@ function recorder(tool: (name: string, args: Record<string, unknown>) => ToolOut
     exits: [] as (ProviderError | null)[],
     session: '',
     usage: [] as DuetContextUsage[],
+    images: [] as (MadeImage | null)[],
+    imageStarts: 0,
   };
   let ended: () => void = () => undefined;
   const turnEnded = () => new Promise<void>((done) => (ended = done));
@@ -55,6 +57,8 @@ function recorder(tool: (name: string, args: Record<string, unknown>) => ToolOut
       ended();
     },
     onUsage: (usage) => seen.usage.push(usage),
+    onImageStart: () => seen.imageStarts++,
+    onImage: (_callId, image) => seen.images.push(image),
     onExit: (error) => {
       seen.exits.push(error);
       ended();
@@ -161,8 +165,50 @@ describe('Claude Code adapter', () => {
 describe('Codex adapter', () => {
   it('turns off every model-callable feature it can and disables web search', () => {
     const args = codexArgs();
-    for (const feature of ['shell_tool', 'unified_exec', 'browser_use', 'computer_use']) expect(args.join(' ')).toContain(`--disable ${feature}`);
+    for (const feature of ['shell_tool', 'unified_exec', 'browser_use', 'computer_use', 'image_generation']) expect(args.join(' ')).toContain(`--disable ${feature}`);
     expect(args).toContain('web_search="disabled"');
+    // Making images allowed: only the image tool stays on.
+    const withImages = codexArgs(true).join(' ');
+    expect(withImages).not.toContain('image_generation');
+    expect(withImages).toContain('--disable shell_tool');
+  });
+
+  it('makes an image when allowed: Duet gets its bytes, what it was made from, and where Codex saved its copy', async () => {
+    const { seen, events, turnEnded } = recorder();
+    const opts = options(fakeCodex, { images: true });
+    const session = new CodexSession(opts, events);
+    const ended = turnEnded();
+    session.send('draw a cartoon of this');
+    await ended;
+    expect(seen.ends).toEqual([{ status: 'done' }]);
+    expect(seen.imageStarts).toBe(1);
+    const image = seen.images[0]!;
+    expect(Buffer.from(image.data, 'base64').subarray(1, 4).toString()).toBe('PNG');
+    expect(image.prompt).toBe('A cartoon of the page');
+    expect(image.savedPath && existsSync(image.savedPath)).toBe(true);
+    expect(seen.text).toBe('Here it is.');
+    session.close();
+  });
+
+  it('keeps the image tool off, and its item a tripwire, unless allowed; a plan’s image limit is the turn’s error', async () => {
+    let { seen, events, turnEnded } = recorder();
+    let session = new CodexSession(options(fakeCodex), events);
+    let ended = turnEnded();
+    session.send('draw a cartoon of this');
+    await ended;
+    expect(seen.text).toBe('images:off');
+    expect(seen.images).toEqual([]);
+    session.close();
+
+    ({ seen, events, turnEnded } = recorder());
+    session = new CodexSession(options(fakeCodex, { images: true }), events);
+    ended = turnEnded();
+    session.send('draw one past the limit');
+    await ended;
+    expect(seen.images).toEqual([null]);
+    expect(seen.ends[0]).toMatchObject({ status: 'error', error: { kind: 'usage-limit', message: expect.stringMatching(/^Codex has reached your plan's limit for making images\. It resets /) } });
+    expect(imageLimitError(null).message).toBe("Codex has reached your plan's limit for making images.");
+    session.close();
   });
 
   it('calls Chord’s dynamic tools and declines file changes without asking', async () => {

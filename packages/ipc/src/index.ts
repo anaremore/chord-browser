@@ -240,6 +240,7 @@ export const SettingsPatch = z.strictObject({
       scope: z.enum(['ask', 'chord', 'all']),
       neverSites: z.array(z.string().max(300)).max(500),
       offChords: z.array(z.string().max(64)).max(500),
+      codexImages: z.boolean(),
     })
     .partial()
     .optional(),
@@ -752,6 +753,10 @@ export const DuetAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('reuseImages'), messageId: id }),
   z.object({ do: z.literal('draft'), text: z.string().max(20_000) }),
   z.object({ do: z.literal('citation'), messageId: id, n: z.number().int().min(1).max(500) }),
+  /** An image in the chat: copy it, or save it to Downloads. */
+  z.object({ do: z.literal('image'), id: z.string().regex(/^[0-9a-f]{24}$/), what: z.enum(['copy', 'save']) }),
+  /** Claude said it can't make the image asked for: go on with Codex, asking it again. */
+  z.object({ do: z.literal('makeWithCodex') }),
   /** A tab a reply mentions: switch to it, or open its page if it's gone. */
   z.object({ do: z.literal('showTab'), ref: z.string().regex(/^t[0-9]{1,4}$/) }),
   z.object({ do: z.literal('export') }),
@@ -801,6 +806,8 @@ export interface DuetView {
    * once (all of them when it asks for the whole view), so a streaming reply doesn't resend them.
    */
   imageThumbs: Record<string, string>;
+  /** Codex can make images (allowed, installed, signed in): Claude's "can't" offers it. */
+  codexImages: boolean;
   /** The chat's tabs by handle ("t1"), so a reply that mentions one shows its name. */
   tabNames: Record<string, DuetTabName>;
   /** Providers Setup is still looking for inside WSL (Windows). */

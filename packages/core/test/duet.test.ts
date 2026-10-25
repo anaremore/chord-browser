@@ -6,6 +6,8 @@ import {
   contextPercent,
   DUET_READ_MAX,
   DUET_TOOLS,
+  duetInstructions,
+  MAKE_IMAGE_MARK,
   isNeverReadable,
   nameTabs,
   pageResult,
@@ -14,6 +16,7 @@ import {
   pdfText,
   readNeedsApproval,
   splitCitations,
+  stripCitations,
   textFragmentUrl,
   threadTitle,
   threadToShow,
@@ -148,6 +151,19 @@ describe('Duet: context meter', () => {
     expect(contextLabel('codex', { used: 1, window: 100 })).toMatch(/^1% of context used\. When it fills up, Codex compacts/);
     // A first answer against a 1,000,000-token window (Claude Code 2.1.309's own report): some used, rounds to 0.
     expect(contextLabel('claude', { used: 3984, window: 1_000_000 })).toMatch(/^Under 1% of context used\. /);
+  });
+});
+
+describe('Duet and images', () => {
+  it('tells each provider what it can do: Codex makes them, Claude leaves the mark for Codex, Codex with it off says where to turn it on', () => {
+    expect(duetInstructions(undefined, 'codex')).toContain('make it with your image generation tool');
+    expect(duetInstructions(undefined, 'claude')).toContain(`end your reply with ${MAKE_IMAGE_MARK}`);
+    expect(duetInstructions(undefined, 'codex-off')).toContain('Settings → Duet');
+    for (const making of ['codex', 'claude', 'codex-off'] as const) expect(duetInstructions(undefined, making)).not.toContain('No images.');
+  });
+
+  it('keeps the mark out of exports, search and summaries', () => {
+    expect(stripCitations(`Claude can't make images.\n\n${MAKE_IMAGE_MARK}`)).toBe("Claude can't make images.");
   });
 });
 

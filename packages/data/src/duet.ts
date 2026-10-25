@@ -57,7 +57,7 @@ function imagesIn(sql: Sql, where: string, ...params: (string | number)[]): Duet
   return rows.flatMap((r) => {
     try {
       const body = JSON.parse(str(r['body'])) as DuetMessageBody;
-      return body.role === 'user' ? (body.images ?? []) : [];
+      return body.role === 'user' || body.role === 'assistant' ? (body.images ?? []) : [];
     } catch {
       return [];
     }

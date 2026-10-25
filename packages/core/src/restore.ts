@@ -227,6 +227,7 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
     const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length <= 300).slice(0, 500) : []);
     settings.duet.neverSites = strings(duet['neverSites']);
     settings.duet.offChords = strings(duet['offChords']);
+    if (typeof duet['codexImages'] === 'boolean') settings.duet.codexImages = duet['codexImages'];
   }
   settings.reader = cleanReaderSettings(settings.reader, saved['reader']);
   return settings;

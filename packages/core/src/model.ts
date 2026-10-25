@@ -430,6 +430,8 @@ export interface DuetSettings {
   neverSites: string[];
   /** Chords where Duet is off. */
   offChords: string[];
+  /** Codex may make images when asked (its own image tool, on the user's plan). */
+  codexImages: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -456,7 +458,7 @@ export const DEFAULT_SETTINGS: Settings = {
   safeBrowsing: false,
   safeBrowsingAsked: false,
   adBlocking: { enabled: true, offSites: [] },
-  duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [] },
+  duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [], codexImages: true },
   externalLinks: 'mini',
   miniWindowSize: null,
   reader: DEFAULT_READER,
