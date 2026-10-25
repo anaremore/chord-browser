@@ -173,8 +173,16 @@ export class Peer extends EventEmitter {
       const m = message as Record<string, unknown>;
       const valid = typeof m['t'] === 'string' || (this.open && Number.isInteger(m['re']));
       if (!valid) return void this.#socket.destroy();
+      const wasOpen = this.open;
       this.#message(m);
       if (this.#socket.destroyed) return;
+      // Just authenticated: what came in the same chunk waits a turn, so the code that awaited the
+      // handshake installs its handlers first. (Measured on macOS: a request read in the same chunk
+      // as `welcome` found no handler, and was answered `unknown`.)
+      if (!wasOpen && this.open && this.#buffer.length > 0) {
+        setImmediate(() => this.#data(''));
+        return;
+      }
     }
   }
 

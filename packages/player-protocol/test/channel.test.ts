@@ -118,6 +118,41 @@ describe('the control channel', () => {
     await until(() => h.peers.length === 2);
   });
 
+  it('a request in the same chunk as the welcome waits for the handlers the player installs once connected', async () => {
+    const secret = newSecret();
+    const address = newAddress();
+    const answers: Record<string, unknown>[] = [];
+    const server = net.createServer((socket) => {
+      const n = 'b'.repeat(32);
+      let buffer = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk: string) => {
+        buffer += chunk;
+        let at;
+        while ((at = buffer.indexOf('\n')) >= 0) {
+          const m = JSON.parse(buffer.slice(0, at));
+          buffer = buffer.slice(at + 1);
+          if (m.t === 'hello') {
+            const mac = createHmac('sha256', Buffer.from(secret, 'hex')).update(['host', m.n, n, '1'].join('\0')).digest('hex');
+            // The welcome and a request in one write, as a busy player may read them.
+            socket.write(`${JSON.stringify({ t: 'welcome', v: 1, mac })}\n${JSON.stringify({ t: 'ping', id: 1 })}\n`);
+          } else answers.push(m);
+        }
+      });
+      socket.write(`${JSON.stringify({ t: 'challenge', n, v: [1, 1] })}\n`);
+    });
+    await new Promise<void>((done) => server.listen(address.path, done));
+    cleanups.push(() => {
+      server.close();
+      address.cleanup();
+    });
+    const player = await connect(address, secret, HELLO);
+    cleanups.push(() => player.destroy());
+    player.handle('ping', () => 'pong');
+    await until(() => answers.length === 1);
+    expect(answers[0]).toEqual({ re: 1, ok: true, value: 'pong' });
+  });
+
   it('a newer Chord takes an older player, and both know which version they speak', async () => {
     const secret = newSecret();
     const h = await host(secret, [1, 2]);
