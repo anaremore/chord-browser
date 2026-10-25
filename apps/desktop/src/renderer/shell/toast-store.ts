@@ -14,6 +14,8 @@ export interface ToastStore {
   get(): Toast[];
   subscribe(listener: () => void): () => void;
   dismiss(id: string): void;
+  /** Take away every toast but those `keep` says stay (presenting mode starting, say). */
+  dismissAll(keep: (toast: Toast) => boolean): void;
 }
 
 export function createToastStore(onShow: (listener: (toast: Toast) => void) => () => void): ToastStore {
@@ -32,6 +34,9 @@ export function createToastStore(onShow: (listener: (toast: Toast) => void) => (
       return () => listeners.delete(listener);
     },
     dismiss: (id) => set(toasts.filter((t) => t.id !== id)),
+    dismissAll: (keep) => {
+      if (toasts.some((t) => !keep(t))) set(toasts.filter(keep));
+    },
   };
 }
 

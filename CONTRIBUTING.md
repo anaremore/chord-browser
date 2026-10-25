@@ -47,7 +47,8 @@ What the container can't tell you is how Chord behaves on Windows or macOS. It r
 | `updates.spec.ts`, both tests | skipped | skipped | Windows only: the dev build downloads through the installer path |
 | `duet.spec.ts` › Claude Code inside WSL is offered in Setup | skipped | skipped | Windows only, and only with `CHORD_E2E_WSL=1` (it needs WSL with Node in the default distro) |
 | `launch.spec.ts` › page-first keys reach Chord only when the page passes; a changed page-first shortcut reaches Chord through the rebuilt menu | runs | skipped | Menu accelerators need an active window, and headless Weston has none (also skipped on macOS) |
-| `web.spec.ts` › screen sharing goes through Chord's picker | runs | skipped | Headless Weston has no screen to capture (also skipped on macOS) |
+| `web.spec.ts` › screen sharing goes through Chord's picker | runs | skipped | Headless Weston has no screen to capture (also skipped on macOS, whose screens are picked in the system's picker) |
+| `sharing.spec.ts` › presenting mode's shortcut works from a page that doesn't use it | runs | skipped | Menu accelerators need an active window, and headless Weston has none (also skipped on macOS) |
 | `keyboard.spec.ts` | runs | partly | Which view has OS focus isn't checked: Weston never activates a window |
 
 Checks inside tests that only run on Windows: downloads carry the mark of the web (`Zone.Identifier`, in `launch.spec.ts`), and `perf.spec.ts` notes whether the session is locked. Anything about Windows itself (window materials and chrome, focus and activation, keys the OS delivers, updates, the installer) still needs a Windows run: locally, where it opens windows, or CI's Windows jobs on a branch, with `git push origin HEAD:<branch>` and then `gh workflow run ci.yml --ref <branch>`. Only the maintainer, or agents allowed to push, do that.

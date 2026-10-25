@@ -38,6 +38,7 @@ import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extension
 import { FrameSnapshots } from './FrameSnapshot';
 import { NowPlayingCard } from './NowPlaying';
 import { Onboarding } from './Onboarding';
+import { PresentingCard, PresentingChip } from './Presenting';
 import { SafeBrowsingWarning } from './SafeBrowsingWarning';
 import { SplitPanes, useElementSize } from './Split';
 import { FavoritesRow, SidebarDnd, SidebarTabs } from './Tabs';
@@ -301,6 +302,12 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
   // Keycaps follow your shortcut changes; App provides them to everything below.
   const keycap = (id: ActionId) => keycapFor(id, info.platform, state.settings.shortcuts);
+  // Presenting mode (ARCHITECTURE.md §9): its indicator, and the toasts it takes away when it starts.
+  const presenting = state.presenting;
+  const presentingKeys = keycap('view.presenting');
+  useEffect(() => {
+    if (presenting) toasts.dismissAll((t) => Boolean(t.whilePresenting));
+  }, [presenting, toasts]);
   const muteKeys = keycap('tab.mute');
   const muteTitle = useMemo(() => ({ mute: `Mute tab  ${muteKeys}`.trim(), unmute: `Unmute tab  ${muteKeys}`.trim() }), [muteKeys]);
 
@@ -433,7 +440,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   });
   const paneMotion: PaneMotion = swipe.paneMotion ?? { kind: 'slide', dir: slide };
   // Hover previews of pinned tabs and folders (DESIGN.md §7.6): only with the sidebar docked and still.
-  usePreviewHover(rootRef, !collapsed && liveWidth === null && swipe.paneMotion === null && state.settings.pagePreviews && state.settings.onboarded);
+  usePreviewHover(rootRef, !collapsed && liveWidth === null && swipe.paneMotion === null && state.settings.pagePreviews && state.settings.onboarded && !presenting);
   const tintOf = (chordId: string) => String(chordStyle(state.chords[chordId], info, state.settings.interface).style['--color-tint' as keyof CSSProperties] ?? '');
 
   const toggleSidebar = () => void api.action.run('view.toggleSidebar');
@@ -453,6 +460,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
           data-peek={peeking || undefined}
           data-lifted={lifted || undefined}
           data-resizing={liveWidth !== null || undefined}
+          // A page is sharing this window (as a window, or on a shared screen): its edge is tinted.
+          data-shared-window={state.sharedWindows.includes(windowId) || undefined}
           style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px`, '--duet-space': duetOpen ? 'calc(var(--size-duet-width) + var(--space-2))' : 'var(--space-0)' } as CSSProperties}
         >
           <div className={styles.backdrop} aria-hidden>
@@ -577,6 +586,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
 
               {(!collapsed || peeking) && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} undoKeys={!collapsed} mac={info.platform === 'darwin'} />}
 
+              {/* Presenting mode is on, and how to turn it off (DESIGN.md §7.13). */}
+              <PresentingCard presenting={presenting} keys={presentingKeys} enter={spring('overlay', 'sidebar')} />
+
               {/* Media playing in a tab you aren't looking at (DESIGN.md §7.10). */}
               <NowPlayingCard state={state} windowId={windowId} appearance={appearance} muteTitle={muteTitle} enter={spring('overlay', 'sidebar')} />
 
@@ -647,6 +659,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                 </button>
               )}
               <span className={styles.flex} />
+              {collapsed && presenting && <PresentingChip keys={presentingKeys} />}
               {(inTitleBar || collapsed) && <ExtensionButtons bar={extensionsBar} puzzleOnly={!inTitleBar} />}
               {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
               {collapsed && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact undoKeys mac={info.platform === 'darwin'} />}
@@ -672,7 +685,14 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
           )}
           {!overlayChrome && !collapsed && <div className={styles.topDrag} />}
 
-          <div ref={frameRef} className={styles.frame} data-split={split ? split.direction : undefined} data-region="page">
+          <div
+            ref={frameRef}
+            className={styles.frame}
+            data-split={split ? split.direction : undefined}
+            // A page is sharing the tab on screen: the frame's edge is tinted (a split's pane says it itself).
+            data-shared={(!split && live?.shared) || undefined}
+            data-region="page"
+          >
             {!state.settings.onboarded && chord && !isPrivate ? (
               <Onboarding chord={chord} chords={sortedChords(state)} windowId={windowId} info={info} spring={spring} />
             ) : (

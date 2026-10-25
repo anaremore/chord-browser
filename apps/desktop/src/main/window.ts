@@ -31,6 +31,8 @@ export interface AppWindowOptions {
   /** A private window: always dark, and titled so in the taskbar and window switcher. */
   private?: boolean;
   onBounds(bounds: Bounds): void;
+  /** Presenting mode is on: Chord's toasts aren't shown, except about the share itself. */
+  presenting(): boolean;
 }
 
 interface FrameOrigin {
@@ -46,6 +48,8 @@ function frameOrigin(sidebar: SidebarMode, sidebarWidth: number): FrameOrigin {
 
 const FRAME_SPRING = springCurve(springs.smooth);
 const FRAME_TICK_MS = 1000 / 60;
+/** How long a parked tab stays a pixel taller to repaint (`repaintParked`): long enough for two separate relayouts. */
+const NUDGE_MS = 250;
 /** The hover preview glides between rows on `snappy` (DESIGN.md §7.6). */
 const PREVIEW_SPRING = springCurve(springs.snappy);
 /** The preview page pads its card so the whole shadow shows (more below); the card's own edge sits this far in. */
@@ -190,6 +194,10 @@ export class AppWindow {
   private paneLayout: PaneLayout | null = null;
   /** Pages hidden while the frame shows why they didn't load (or that they crashed). */
   private hiddenPanes = new Set<WebContentsView>();
+  /** Shared tabs this window keeps out of sight while they aren't on screen, so they keep painting (`park`). */
+  private parked: WebContentsView[] = [];
+  /** Parked tabs a pixel taller for a moment, so they paint (`repaintParked`). */
+  private readonly nudged = new Set<WebContentsView>();
   private popoverSize = { width: 0, height: 0 };
   private focusPopoverWhenShown = false;
   private anchor: Rect | null = null;
@@ -206,6 +214,7 @@ export class AppWindow {
   /** The shell has painted its first frame: the window's launch is over. */
   private shellPainted = false;
   readonly isPrivate: boolean;
+  private readonly presenting: () => boolean;
   private origin: FrameOrigin;
   /** The frame changes size by its pages' snapshot (ARCHITECTURE.md §5), never by moving them every frame. */
   private readonly snapshots: FrameSnapshots;
@@ -228,9 +237,10 @@ export class AppWindow {
   /** Duet's openings and closings waiting for their frame change, oldest first. */
   private readonly duetChanges: { width: number; publish(): void }[] = [];
 
-  constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds }: AppWindowOptions) {
+  constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds, presenting }: AppWindowOptions) {
     this.id = id;
     this.isPrivate = isPrivate;
+    this.presenting = presenting;
     this.origin = frameOrigin(sidebar, sidebarWidth);
     const forced = isPrivate ? 'dark' : null;
     this.window = new BaseWindow({
@@ -347,8 +357,9 @@ export class AppWindow {
     });
   }
 
-  /** A toast in this window's sidebar (or minimal bar), once its shell can show it. */
+  /** A toast in this window's sidebar (or minimal bar), once its shell can show it. In presenting mode, only one about the share. */
   toast(toast: Toast): void {
+    if (this.presenting() && !toast.whilePresenting) return;
     if (this.shellLoaded) send(this.shell.webContents, 'toast:show', toast);
     // The same toast again replaces the one waiting, as it would on screen.
     else this.pendingToasts = [...this.pendingToasts.filter((t) => t.id !== toast.id), toast];
@@ -387,7 +398,8 @@ export class AppWindow {
       if (this.pageFullScreen) this.leavePageFullScreen();
     }
     const root = this.window.contentView;
-    for (const view of this.panes) if (!next.includes(view)) root.removeChildView(view);
+    // A shared tab leaving the screen stays attached, out of sight (park).
+    for (const view of this.panes) if (!next.includes(view) && !this.parked.includes(view)) root.removeChildView(view);
     for (const view of next) {
       view.setVisible(!this.hiddenPanes.has(view));
       // Just above the shell; or, while the shell is raised over the pages, just below it. Panes never overlap.
@@ -402,6 +414,49 @@ export class AppWindow {
 
   get activeTabContents() {
     return this.tabView?.webContents ?? null;
+  }
+
+  /** Whether this window has the view: one of its panes, or a shared tab it keeps out of sight. */
+  holds(view: WebContentsView): boolean {
+    return this.panes.includes(view) || this.parked.includes(view);
+  }
+
+  /**
+   * Keep these shared tabs attached while they aren't on screen (ARCHITECTURE.md
+   * §9), out of sight the way the frame snapshot keeps its pages (`offscreen`):
+   * a view taken off its window has no compositor, and the page sharing it
+   * would get a frozen picture. Each waits at the frame's size, so what's
+   * shared doesn't change shape. Ones not listed any more are let go, unless
+   * they're on screen here.
+   */
+  park(views: readonly WebContentsView[]): void {
+    if (this.window.isDestroyed()) return;
+    const root = this.window.contentView;
+    for (const view of this.parked) if (!views.includes(view) && !this.panes.includes(view) && root.children.includes(view)) root.removeChildView(view);
+    this.parked = views.filter((view) => !view.webContents.isDestroyed());
+    for (const view of this.parked) {
+      if (this.panes.includes(view)) continue;
+      // Just above the shell, where the pages go.
+      if (!root.children.includes(view)) root.addChildView(view, this.shellRaised ? 0 : 1);
+      view.setVisible(true);
+    }
+    this.layout();
+  }
+
+  /**
+   * A parked tab paints a fresh frame: a still page sends the page sharing it
+   * nothing new otherwise, and a stream that started after its last frame
+   * would stay empty. It grows a pixel, out of sight, and back a moment later:
+   * each a relayout the page paints. Nothing for a page on screen.
+   */
+  repaintParked(view: WebContentsView): void {
+    if (!this.parked.includes(view) || this.panes.includes(view) || this.nudged.has(view)) return;
+    this.nudged.add(view);
+    this.layout();
+    setTimeout(() => {
+      this.nudged.delete(view);
+      this.layout();
+    }, NUDGE_MS);
   }
 
   /* ---------- Peek (DESIGN.md §7.9, §8.5) ---------- */
@@ -970,6 +1025,11 @@ export class AppWindow {
       if (this.pageFullScreen && view === this.tabView) place(view, whole);
       else place(view, away ? offscreen(at, whole) : at);
     });
+    const parkedAt = offscreen(toWindowRect(frame), whole);
+    for (const view of this.parked) {
+      if (this.panes.includes(view) || view.webContents.isDestroyed()) continue;
+      place(view, this.nudged.has(view) ? { ...parkedAt, height: parkedAt.height + 1 } : parkedAt);
+    }
     this.showPopover();
     const { width: pw, height: ph } = this.popoverSize;
     // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.

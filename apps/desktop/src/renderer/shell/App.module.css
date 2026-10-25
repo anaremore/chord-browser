@@ -1168,6 +1168,102 @@ kbd {
   transform: scale(0.94);
 }
 
+/* ---------- Presenting mode (DESIGN.md §7.11) ---------- */
+
+/*
+ * Above Now playing: presenting mode is on, and Turn off. The same soft square
+ * as Now playing's; the icon is in the color that says "live", like Stop sharing.
+ */
+.presenting {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  margin-block-end: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.presentingIcon {
+  flex: none;
+  color: var(--color-danger);
+}
+
+.presentingText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
+.presentingTitle {
+  font: var(--text-label);
+}
+
+.presentingDetail {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.presentingOff {
+  flex: none;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg);
+  font: var(--text-small);
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.presentingOff:hover {
+  background: var(--color-item-hover);
+}
+
+/* In the minimal bar, where the sidebar's card is folded away: a chip that turns it off. */
+.presentingChip {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.presentingChip:hover {
+  background: var(--color-item-active-bg);
+}
+
+/*
+ * What's shared, shown (ARCHITECTURE.md §9): a tinted edge, in the color
+ * that says "live", just outside a shared tab's frame (or split pane), where
+ * the page's view doesn't reach; and around a whole window a page is sharing.
+ */
+.frame[data-shared],
+.pane[data-shared] {
+  box-shadow:
+    0 0 0 var(--size-focus-ring) var(--color-danger),
+    var(--shadow-frame);
+}
+
+.window[data-shared-window]::after {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-modal);
+  box-shadow: inset 0 0 0 var(--size-focus-ring) var(--color-danger);
+  content: '';
+  pointer-events: none;
+}
+
 /* ---------- Downloads button ---------- */
 
 .downloadsButton {
@@ -1744,8 +1840,20 @@ kbd {
   .toast,
   .iconPicker,
   .nowPlaying,
+  .presenting,
+  .presentingChip,
   .window[data-sidebar='collapsed'][data-peek] .sidebar {
     border: var(--size-hairline) solid CanvasText;
+  }
+
+  /* Shadows are gone in forced colors: the shared edges become lines in the system's highlight. */
+  .frame[data-shared] {
+    outline: var(--size-focus-ring) solid Highlight;
+    outline-offset: 0;
+  }
+
+  .window[data-shared-window]::after {
+    border: var(--size-focus-ring) solid Highlight;
   }
 
   /* Split view: the focused pane's ring, the dividers, and where a dragged tab would go. */
@@ -1755,6 +1863,11 @@ kbd {
 
   .pane[data-focused] {
     outline-style: solid;
+    outline-color: Highlight;
+  }
+
+  .pane[data-shared] {
+    outline-style: dashed;
     outline-color: Highlight;
   }
 
