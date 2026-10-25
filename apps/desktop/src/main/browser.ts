@@ -122,6 +122,8 @@ export interface BrowserOptions {
   idle: IdleTiming;
   /** The computer is low on memory: tabs sleep sooner (idle.ts). */
   memoryLow(): boolean;
+  /** The computer is on battery: tabs sleep sooner (idle.ts) and Now playing reads less often (media.ts). */
+  onBattery(): boolean;
   /** Answers getDisplayMedia with Chord's picker; connected here once the store exists. */
   screenShare: ScreenShareBroker;
   /** Answers sites and proxies that ask for a username and password; connected here once the store exists. */
@@ -466,6 +468,7 @@ export class Browser {
     this.media = new MediaWatcher({
       isTab: (contents, nodeId) => this.tabs.get(nodeId)?.webContents === contents,
       changed: () => this.syncMedia(),
+      onBattery: options.onBattery,
     });
     this.drm = new DrmNotices({ browsers: () => findBrowsers(launchEnv(process.env, homedir())), changed: () => this.syncPopovers() });
     this.player = new ChordPlayer({
@@ -693,6 +696,7 @@ export class Browser {
         tabs: this.tabs,
         isCapturing: (nodeId) => options.permissions.isCapturing(nodeId),
         memoryLow: options.memoryLow,
+        onBattery: options.onBattery,
       },
       options.idle,
     );

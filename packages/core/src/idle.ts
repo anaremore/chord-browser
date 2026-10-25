@@ -25,6 +25,9 @@ export const SLEEP_AFTER_MS = HOUR_MS;
 /** How often main looks for tabs to archive or put to sleep (and on wake from system sleep). */
 export const IDLE_CHECK_MS = 5 * 60_000;
 
+/** On battery, background tabs hidden this long go to sleep instead. */
+export const BATTERY_SLEEP_AFTER_MS = 15 * 60_000;
+
 /** When the computer is low on memory, background tabs hidden this long go to sleep instead. */
 export const PRESSURE_SLEEP_AFTER_MS = 5 * 60_000;
 

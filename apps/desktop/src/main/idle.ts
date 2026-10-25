@@ -1,9 +1,9 @@
 /**
  * Tidying up (ARCHITECTURE.md §7, §9): every few minutes, and when the
  * computer wakes, Today tabs unused for longer than Settings allows go to the
- * archive, and background tabs unused for an hour go to sleep. When the
- * computer runs low on memory (checked every 30 seconds), background tabs go
- * to sleep after 5 minutes instead. Tabs that are playing, using the camera or
+ * archive, and background tabs unused for an hour go to sleep. On battery
+ * they go to sleep after 15 minutes, and when the computer runs low on memory
+ * (checked every 30 seconds) after 5. Tabs that are playing, using the camera or
  * microphone, sharing the screen or being shared, or in picture-in-picture
  * are left alone.
  */
@@ -17,6 +17,8 @@ export interface IdleTiming {
   /** How long a Today tab may sit unused for each setting (null: never archive). */
   archiveAfterMs(setting: ArchiveAfter): number | null;
   sleepAfterMs: number;
+  /** How long a background tab may sit hidden on battery. */
+  batterySleepAfterMs: number;
   /** How long a background tab may sit hidden while memory is low. */
   pressureSleepAfterMs: number;
   /** How often to ask whether memory is low. */
@@ -31,13 +33,16 @@ export interface IdleDeps {
   isCapturing(nodeId: NodeId): boolean;
   /** The computer is low on memory (memory.ts). */
   memoryLow(): boolean;
+  /** The computer is running on its battery. */
+  onBattery(): boolean;
 }
 
 export class IdleKeeper {
   private timer: ReturnType<typeof setInterval> | undefined;
   private memoryTimer: ReturnType<typeof setInterval> | undefined;
   private checking = false;
-  private readonly onResume = () => void this.check();
+  /** Waking up, or unplugged (hidden tabs may now be past the shorter wait): look now. */
+  private readonly lookNow = () => void this.check();
 
   constructor(
     private readonly deps: IdleDeps,
@@ -51,7 +56,8 @@ export class IdleKeeper {
     this.memoryTimer = setInterval(() => {
       if (this.deps.memoryLow()) void this.check();
     }, this.timing.memoryCheckMs);
-    powerMonitor.on('resume', this.onResume);
+    powerMonitor.on('resume', this.lookNow);
+    powerMonitor.on('on-battery', this.lookNow);
   }
 
   stop(): void {
@@ -59,7 +65,8 @@ export class IdleKeeper {
     clearInterval(this.memoryTimer);
     this.timer = undefined;
     this.memoryTimer = undefined;
-    powerMonitor.off('resume', this.onResume);
+    powerMonitor.off('resume', this.lookNow);
+    powerMonitor.off('on-battery', this.lookNow);
   }
 
   /** Archive and put to sleep whatever has been idle long enough. */
@@ -91,7 +98,11 @@ export class IdleKeeper {
       const archived = archive.filter((id) => stillIdle.has(id));
       if (archived.length > 0) dispatch({ t: 'tab.archive', nodeIds: archived, reason: 'auto' });
       if (!state().settings.sleepTabs) return;
-      const sleepAfterMs = this.deps.memoryLow() ? Math.min(this.timing.sleepAfterMs, this.timing.pressureSleepAfterMs) : this.timing.sleepAfterMs;
+      const sleepAfterMs = Math.min(
+        this.timing.sleepAfterMs,
+        this.deps.onBattery() ? this.timing.batterySleepAfterMs : Infinity,
+        this.deps.memoryLow() ? this.timing.pressureSleepAfterMs : Infinity,
+      );
       const toSleep = () => sleepCandidates(state(), now, sleepAfterMs, tabs.loaded(), busyNow());
       const sleep = await this.withoutPictureInPicture(toSleep(), busy);
       const stillHidden = new Set(toSleep());

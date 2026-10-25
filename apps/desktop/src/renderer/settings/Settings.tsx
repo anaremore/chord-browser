@@ -237,7 +237,7 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
         />
         <Row
           label="Sleep tabs you're not using"
-          description="Tabs hidden for an hour free their memory, and pick up where you left off when you come back."
+          description="Tabs hidden for an hour, or 15 minutes on battery, free their memory, and pick up where you left off when you come back."
           changed={snapshot.settings.sleepTabs !== DEFAULT_SETTINGS.sleepTabs}
           onReset={() => void api.settings.set({ sleepTabs: DEFAULT_SETTINGS.sleepTabs })}
           control={

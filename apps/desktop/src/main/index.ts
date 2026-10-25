@@ -4,6 +4,7 @@ import {
   ARCHIVE_AFTER_MS,
   blockingOffSites,
   DEFAULT_SETTINGS,
+  BATTERY_SLEEP_AFTER_MS,
   IDLE_CHECK_MS,
   MEMORY_CHECK_MS,
   PRESSURE_SLEEP_AFTER_MS,
@@ -20,7 +21,7 @@ import {
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { delimiter, join } from 'node:path';
-import { app, clipboard, nativeTheme, net, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
+import { app, clipboard, nativeTheme, net, powerMonitor, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import type { ImportEnv } from '../import/detect';
 import { AdBlocking } from './ad-blocking/service';
 import { FILTER_LISTS } from './ad-blocking/lists';
@@ -679,11 +680,14 @@ if (!app.requestSingleInstanceLock()) {
         checkMs: devNumber('CHORD_IDLE_CHECK_MS') ?? IDLE_CHECK_MS,
         archiveAfterMs: (setting) => (setting === 'never' ? null : (devNumber('CHORD_ARCHIVE_AFTER_MS') ?? ARCHIVE_AFTER_MS[setting])),
         sleepAfterMs: devNumber('CHORD_SLEEP_AFTER_MS') ?? SLEEP_AFTER_MS,
+        batterySleepAfterMs: devNumber('CHORD_BATTERY_SLEEP_AFTER_MS') ?? BATTERY_SLEEP_AFTER_MS,
         pressureSleepAfterMs: devNumber('CHORD_PRESSURE_SLEEP_AFTER_MS') ?? PRESSURE_SLEEP_AFTER_MS,
         memoryCheckMs: devNumber('CHORD_MEMORY_CHECK_MS') ?? MEMORY_CHECK_MS,
       },
       // CHORD_MEMORY_LOW=1 (development and tests only) acts as if memory were always low.
       memoryLow: () => (!app.isPackaged && process.env['CHORD_MEMORY_LOW'] === '1') || memoryLow(process.getSystemMemoryInfo(), process.platform),
+      // CHORD_ON_BATTERY=1 (development and tests only) acts as if the computer were on battery.
+      onBattery: () => (!app.isPackaged && process.env['CHORD_ON_BATTERY'] === '1') || powerMonitor.isOnBatteryPower(),
       onChange: (change) => store.record(change.patches, change.state),
       releaseProfile,
       devtoolsSession,

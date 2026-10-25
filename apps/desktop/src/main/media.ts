@@ -13,7 +13,8 @@
  *
  * A read is one round trip to the page's renderer. It happens when Electron
  * reports a change, and while something plays every few seconds (a playlist
- * can move on without telling Electron). With nothing playing, nothing runs.
+ * can move on without telling Electron), less often on battery. With nothing
+ * playing, nothing runs.
  * A tab that pauses stays a minute, so it can be played again from the card.
  */
 import { isArtworkType, pickArtwork, usableDataIcon, type MediaImage, type NodeId } from '@chord/core';
@@ -26,6 +27,8 @@ import { pageCall } from './page-call';
 const WORLD = 1008;
 /** While a tab plays, how often its page is read again. */
 export const POLL_MS = 5000;
+/** The same on battery: Electron's own reports still bring most changes at once. */
+export const BATTERY_POLL_MS = 15_000;
 /** A paused tab stays on the card this long. */
 export const LINGER_MS = 60_000;
 /** Electron's reports come in bursts (a pause, the sound stopping, a new title): one read once they settle. */
@@ -130,6 +133,8 @@ export interface MediaDeps {
   isTab(contents: WebContents, nodeId: NodeId): boolean;
   /** What the cards offer changed. */
   changed(): void;
+  /** The computer is on battery. */
+  onBattery(): boolean;
 }
 
 export class MediaWatcher {
@@ -141,7 +146,7 @@ export class MediaWatcher {
    * is still what you left playing.
    */
   private readonly wanted = new Set<NodeId>();
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   /** Goes up whenever what the cards would show changes, so windows compare a number, not the list. */
   version = 0;
 
@@ -301,14 +306,22 @@ export class MediaWatcher {
   /** Reads playing tabs every few seconds while any plays; with none playing, the timer stops. */
   private poll(): void {
     const playing = [...this.sessions.values()].some((s) => s.playing);
-    if (playing && !this.timer) {
-      this.timer = setInterval(() => {
-        for (const [nodeId, s] of this.sessions) if (s.playing) void this.read(nodeId);
-      }, POLL_MS);
-    } else if (!playing && this.timer) {
-      clearInterval(this.timer);
+    if (playing && !this.timer) this.next();
+    else if (!playing && this.timer) {
+      clearTimeout(this.timer);
       this.timer = null;
     }
+  }
+
+  /** The next read, its wait chosen each time, so unplugging or plugging in takes effect from then. */
+  private next(): void {
+    this.timer = setTimeout(
+      () => {
+        for (const [nodeId, s] of this.sessions) if (s.playing) void this.read(nodeId);
+        this.next();
+      },
+      this.deps.onBattery() ? BATTERY_POLL_MS : POLL_MS,
+    );
   }
 
   private async loadArtwork(nodeId: NodeId, s: Session): Promise<void> {

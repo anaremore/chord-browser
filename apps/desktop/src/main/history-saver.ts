@@ -2,9 +2,10 @@
  * Open tabs' back/forward history, saved so a restart or a crash brings each
  * tab back where it was: the same page, its history, its scroll position and
  * form fields (ARCHITECTURE.md §6.2). A tab is saved about two seconds after
- * it navigates, at the next 30-second save while you scroll or type in it,
- * when it falls asleep, and on quit. Only what changed is written. A private
- * window's tabs are never saved. No Electron imports, so it's unit-testable.
+ * it navigates, within 30 seconds while you scroll or type in it, when it
+ * falls asleep, and on quit. Only what changed is written, and with nothing
+ * to write no timer runs. A private window's tabs are never saved. No
+ * Electron imports, so it's unit-testable.
  */
 import { createHash } from 'node:crypto';
 import type { NodeId } from '@chord/core';
@@ -28,30 +29,30 @@ export class HistorySaver {
   private readonly dirty = new Set<NodeId>();
   private readonly saved = new Map<NodeId, string>();
   private soon: ReturnType<typeof setTimeout> | undefined;
-  private readonly every: ReturnType<typeof setInterval>;
+  private later: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly deps: HistorySaverDeps,
     private readonly timing = { soonMs: SAVE_SOON_MS, everyMs: SAVE_EVERY_MS },
-  ) {
-    this.every = setInterval(() => this.flush(), timing.everyMs);
-    this.every.unref?.();
-  }
+  ) {}
 
-  /** Something changed in a tab: `soon` after a navigation, otherwise at the next regular save. */
+  /** Something changed in a tab: saved `soon` after a navigation, otherwise within the regular wait. */
   touch(nodeId: NodeId, soon = false): void {
     this.dirty.add(nodeId);
-    if (soon && !this.soon) {
-      this.soon = setTimeout(() => {
-        this.soon = undefined;
-        this.flush();
-      }, this.timing.soonMs);
-      this.soon.unref?.();
-    }
+    if (soon) this.soon ??= this.flushIn(this.timing.soonMs);
+    else this.later ??= this.flushIn(this.timing.everyMs);
+  }
+
+  private flushIn(ms: number): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => this.flush(), ms);
+    timer.unref?.();
+    return timer;
   }
 
   /** Write every changed tab's history now (on quit, and before views are torn down). */
   flush(): void {
+    // All of it is written now, so neither timer needs to fire.
+    this.stop();
     for (const nodeId of this.dirty) {
       this.dirty.delete(nodeId);
       if (!this.deps.savable(nodeId)) {
@@ -78,8 +79,8 @@ export class HistorySaver {
   }
 
   stop(): void {
-    clearInterval(this.every);
-    if (this.soon) clearTimeout(this.soon);
-    this.soon = undefined;
+    clearTimeout(this.soon);
+    clearTimeout(this.later);
+    this.soon = this.later = undefined;
   }
 }

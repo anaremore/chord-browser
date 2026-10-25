@@ -2,10 +2,11 @@ import { apply, emptyState, type Command, type NodeId, type State } from '@chord
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ powerMonitor: { on: vi.fn(), off: vi.fn() } }));
+const { powerMonitor } = await import('electron');
 const { IdleKeeper } = await import('../../src/main/idle');
 
-/** A window on one tab, with a second tab in the background that's been hidden long enough to sleep. */
-function setup() {
+/** A window on one tab, with a second tab in the background, hidden since time 0. */
+function setup({ onBattery = false, memoryLow = false, sleepAfterMs = 1000 } = {}) {
   let state: State = emptyState();
   const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' as const };
   state.chords['c1'] = { id: 'c1', profileId: 'default', name: 'Personal', icon: '✦', theme, rank: 'a0', createdAt: 0 };
@@ -27,9 +28,10 @@ function setup() {
         inPictureInPicture: () => new Promise<boolean>((resolve) => (answerPip = resolve)),
       },
       isCapturing: () => false,
-      memoryLow: () => false,
+      memoryLow: () => memoryLow,
+      onBattery: () => onBattery,
     },
-    { checkMs: 1000, archiveAfterMs: () => null, sleepAfterMs: 1000, pressureSleepAfterMs: 1000, memoryCheckMs: 1000 },
+    { checkMs: 1000, archiveAfterMs: () => null, sleepAfterMs, batterySleepAfterMs: Math.min(sleepAfterMs, 15_000), pressureSleepAfterMs: Math.min(sleepAfterMs, 5_000), memoryCheckMs: 1000 },
   );
   /** Answer the picture-in-picture question, once the check has asked it. */
   const answer = async (inPip: boolean) => {
@@ -64,5 +66,35 @@ describe('the idle check', () => {
     t.run({ t: 'tab.live', nodeId: 't1', live: { devtools: place } });
     await t.keeper.check(10_000);
     expect(t.dispatched).toEqual([]);
+  });
+});
+
+describe('how long a hidden tab waits to sleep', () => {
+  // The usual wait is a minute here; on battery 15 seconds, low on memory 5. The shortest that applies wins.
+  it.each([
+    { onBattery: false, memoryLow: false, hiddenMs: 20_000, sleeps: false },
+    { onBattery: false, memoryLow: false, hiddenMs: 70_000, sleeps: true },
+    { onBattery: true, memoryLow: false, hiddenMs: 10_000, sleeps: false },
+    { onBattery: true, memoryLow: false, hiddenMs: 20_000, sleeps: true },
+    { onBattery: false, memoryLow: true, hiddenMs: 10_000, sleeps: true },
+    { onBattery: true, memoryLow: true, hiddenMs: 10_000, sleeps: true },
+  ])('on battery $onBattery, low on memory $memoryLow, hidden $hiddenMs ms: sleeps $sleeps', async ({ hiddenMs, sleeps, ...power }) => {
+    const t = setup({ ...power, sleepAfterMs: 60_000 });
+    const checked = t.keeper.check(hiddenMs);
+    if (sleeps) await t.answer(false);
+    await checked;
+    expect(t.dispatched).toEqual(sleeps ? [{ t: 'tab.sleep', nodeId: 't1' }] : []);
+  });
+
+  it('looks again as soon as the computer goes on battery', async () => {
+    const t = setup({ onBattery: true });
+    t.keeper.start();
+    // powerMonitor.on's overloads type only its last event, so the calls are read as plain pairs.
+    const [, unplugged] = (vi.mocked(powerMonitor.on).mock.calls as unknown as [string, () => void][]).find(([event]) => event === 'on-battery')!;
+    unplugged();
+    await t.answer(false);
+    await vi.waitFor(() => expect(t.dispatched).toEqual([{ t: 'tab.sleep', nodeId: 't1' }]));
+    t.keeper.stop();
+    expect(powerMonitor.off).toHaveBeenCalledWith('on-battery', unplugged);
   });
 });

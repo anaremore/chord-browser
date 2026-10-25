@@ -364,7 +364,7 @@ export interface Settings {
   onboarded: boolean;
   /** Today tabs unused this long go to the archive. */
   archiveAfter: ArchiveAfter;
-  /** Background tabs unused for an hour free their memory, and wake when shown again. */
+  /** Background tabs unused for an hour (sooner on battery or low memory) free their memory, and wake when shown again. */
   sleepTabs: boolean;
   /** A playing video pops out into a floating window when you switch away from its tab (ARCHITECTURE.md §9). Off by default. */
   autoPip: boolean;

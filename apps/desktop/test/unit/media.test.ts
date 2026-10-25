@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { WebContents } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LINGER_MS, MediaWatcher, POLL_MS } from '../../src/main/media';
+import { BATTERY_POLL_MS, LINGER_MS, MediaWatcher, POLL_MS } from '../../src/main/media';
 
 /** What the isolated world's read answers. */
 interface Page {
@@ -59,7 +59,8 @@ class FakePage extends EventEmitter {
 function setUp() {
   const changed = vi.fn();
   const tabs = new Map<string, FakePage>();
-  const media = new MediaWatcher({ isTab: (contents, nodeId) => tabs.get(nodeId) === (contents as unknown as FakePage), changed });
+  const power = { onBattery: false };
+  const media = new MediaWatcher({ isTab: (contents, nodeId) => tabs.get(nodeId) === (contents as unknown as FakePage), changed, onBattery: () => power.onBattery });
   /** A tab's page; unless `left` is false, one you left playing (the cards offer only those) as it first plays. */
   const open = (nodeId: string, left = true) => {
     const page = new FakePage();
@@ -68,7 +69,7 @@ function setUp() {
     if (left) page.once('audio-state-changed', () => media.left(nodeId as never));
     return page;
   };
-  return { media, changed, tabs, open };
+  return { media, changed, tabs, open, power };
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -107,6 +108,23 @@ describe('MediaWatcher', () => {
     const paused = page.reads;
     await vi.advanceTimersByTimeAsync(POLL_MS * 4);
     expect(page.reads).toBe(paused);
+    media.stop();
+  });
+
+  it('reads less often on battery, from the next read after unplugging until plugged in again', async () => {
+    const { media, open, power } = setUp();
+    const page = open('t1');
+    page.sound(true);
+    await vi.advanceTimersByTimeAsync(200);
+    power.onBattery = true;
+    // The read already waiting comes on time; the ones after it wait longer.
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    const unplugged = page.reads;
+    await vi.advanceTimersByTimeAsync(BATTERY_POLL_MS * 2);
+    expect(page.reads).toBe(unplugged + 2);
+    power.onBattery = false;
+    await vi.advanceTimersByTimeAsync(BATTERY_POLL_MS + POLL_MS * 2);
+    expect(page.reads).toBe(unplugged + 5);
     media.stop();
   });
 
