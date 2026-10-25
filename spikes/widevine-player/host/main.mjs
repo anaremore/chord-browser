@@ -231,7 +231,7 @@ function glue(host, peer, { useWillMove = false, onFocus = true, follow = false 
   host.win.on('hide', () => send('hide', undefined, false));
   host.win.on('show', () => send('show'));
   // Raise the player above the host when the host comes forward; again a moment later, once the activation has settled.
-  const above = () => peer.request('above', { mediaSourceId: host.win.getMediaSourceId() }).catch(() => {});
+  const above = () => !host.win.isDestroyed() && peer.open && peer.request('above', { mediaSourceId: host.win.getMediaSourceId() }).catch(() => {});
   if (onFocus) host.win.on('focus', () => (above(), setTimeout(above, 150)));
   return {
     acks,

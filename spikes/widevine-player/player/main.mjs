@@ -460,7 +460,9 @@ async function serve() {
     return { ok: true, offset: d };
   });
   peer.handle('above', ({ mediaSourceId }) => {
-    win.moveAbove(mediaSourceId);
+    // macOS: ordering relative to another app's window didn't take (run 40154169106), so order front regardless.
+    if (process.platform === 'darwin') win.moveTop();
+    else win.moveAbove(mediaSourceId);
     return true;
   });
   peer.handle('handles', () => ({ native: win.getNativeWindowHandle().toString('hex'), mediaSourceId: win.getMediaSourceId(), pid: process.pid }));

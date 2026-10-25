@@ -20,7 +20,7 @@ export const IDENTITY = {
 /** Frames sign-in and checkout pages embed: captchas, bot checks and card fields. */
 export const FRAMES = [
   'www.google.com/recaptcha', 'recaptcha.google.com/recaptcha', 'www.recaptcha.net', 'challenges.cloudflare.com',
-  'hcaptcha.com', 'arkoselabs.com', 'funcaptcha.com',
+  'hcaptcha.com', 'arkoselabs.com', 'funcaptcha.com', 'captcha-delivery.com',
   // Disney's account frame (MyDisney), on Disney+ and Hulu sign-in.
   'login.disney.com', 'registerdisney.go.com',
 ];
@@ -41,7 +41,7 @@ export const SERVICES = [
   { name: 'Apple TV', start: 'https://tv.apple.com/', pages: ['tv.apple.com', 'idmsa.apple.com', 'appleid.apple.com'], identity: [] },
   { name: 'Peacock', start: 'https://www.peacocktv.com/', pages: ['peacocktv.com'], identity: [] },
   { name: 'Paramount+', start: 'https://www.paramountplus.com/', pages: ['paramountplus.com'], identity: [] },
-  { name: 'Tidal', start: 'https://listen.tidal.com/', pages: ['listen.tidal.com', 'login.tidal.com', 'auth.tidal.com', 'account.tidal.com'], identity: ['google', 'apple', 'facebook'] },
+  { name: 'Tidal', start: 'https://listen.tidal.com/', pages: ['tidal.com'], identity: ['google', 'apple', 'facebook'] },
 ];
 
 const matches = (host, list) => list.some((h) => host === h || host.endsWith(`.${h}`));
@@ -74,9 +74,11 @@ export function makeLock(services = SERVICES, frames = FRAMES) {
     const u = parse(url);
     return Boolean(u && matches(u.hostname, identity));
   };
+  // Frames: a service's own pages and the shared frames above. Not the other sign-ins, which are
+  // popups; on a service's page their hosts are tracking pixels (the census saw facebook.com on Netflix and Hulu).
   const frame = (url) => {
     if (url === 'about:blank' || url.startsWith('about:srcdoc') || url.startsWith('blob:') || url.startsWith('data:')) return true;
-    if (page(url)) return true;
+    if (serviceFor(url, services)) return true;
     const u = parse(url);
     if (!u) return false;
     return frames.some((f) => {
