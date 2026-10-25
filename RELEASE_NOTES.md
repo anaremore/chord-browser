@@ -2,6 +2,10 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## Next · preview (unreleased)
+
+What's built since 0.2.0; it gets its version when it's released.
+
 ## 0.2.0 · preview · 2026-10-25
 
 - **Ads and trackers blocked** by default, in every chord and in private windows, with EasyList and EasyPrivacy. The empty spaces ads leave behind are hidden too.
