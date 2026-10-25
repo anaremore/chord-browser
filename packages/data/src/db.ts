@@ -139,11 +139,20 @@ export class ChordDatabase {
       if (existsSync(backup)) rmSync(backup);
       this.db.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
     }
-    for (let v = from; v < MIGRATIONS.length; v++) {
-      this.transaction(() => {
-        this.db.exec(MIGRATIONS[v]!);
-        this.db.exec(`PRAGMA user_version = ${v + 1}`);
-      });
+    // Foreign keys are off while the schema changes, as SQLite documents for making a table again (migration 14):
+    // dropping the old one mustn't cascade into the rows that point at it. Each migration is checked before it commits.
+    this.db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      for (let v = from; v < MIGRATIONS.length; v++) {
+        this.transaction(() => {
+          this.db.exec(MIGRATIONS[v]!);
+          const broken = this.db.prepare('PRAGMA foreign_key_check').all();
+          if (broken.length > 0) throw new Error(`Migration ${v + 1} left ${broken.length} rows pointing at nothing`);
+          this.db.exec(`PRAGMA user_version = ${v + 1}`);
+        });
+      }
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON');
     }
   }
 

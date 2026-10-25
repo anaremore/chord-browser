@@ -1213,6 +1213,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (duet.model !== undefined && current.model !== duet.model) current.model = duet.model;
         if (duet.keep !== undefined && current.keep !== duet.keep) current.keep = duet.keep;
         if (duet.scope !== undefined && current.scope !== duet.scope) current.scope = duet.scope;
+        if (duet.readsNothing !== undefined && current.readsNothing !== duet.readsNothing) current.readsNothing = duet.readsNothing;
         if (duet.neverSites) current.neverSites = [...new Set(duet.neverSites)];
         if (duet.offChords) current.offChords = [...new Set(duet.offChords)];
         if (duet.codexImages !== undefined && current.codexImages !== duet.codexImages) current.codexImages = duet.codexImages;

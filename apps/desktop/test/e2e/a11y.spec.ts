@@ -646,7 +646,8 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
       - button "Chats" [expanded=false]
       - button "Close Duet"
       - radiogroup "What Duet can read":
-        - radio "Ask first" [checked]
+        - radio "Ask"
+        - radio "This tab" [checked]
         - radio "This chord"
         - radio "All tabs"
       - textbox "Message Duet"

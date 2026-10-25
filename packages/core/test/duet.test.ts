@@ -6,7 +6,10 @@ import {
   contextPercent,
   DUET_READ_MAX,
   DUET_TOOLS,
+  attachesTabOnScreen,
+  DUET_SCOPES,
   duetInstructions,
+  isDuetScope,
   MAKE_IMAGE_MARK,
   isNeverReadable,
   nameTabs,
@@ -73,6 +76,27 @@ describe('Duet: what can be read', () => {
     expect(readNeedsApproval({ ...base, scope: 'chord', sameChord: false })).toBe(true);
     expect(readNeedsApproval({ ...base, scope: 'all', sameChord: false })).toBe(false);
     expect(readNeedsApproval({ ...base, scope: 'ask', tool: 'list_tabs' })).toBe(true);
+    // "Ask every time" asks as "the tab you're on" does; what differs is what's attached for you (below).
+    expect(readNeedsApproval({ ...base, scope: 'every' })).toBe(true);
+    expect(readNeedsApproval({ ...base, scope: 'every', attached: true })).toBe(false);
+  });
+
+  it('has its scopes in order, least to most, and attaches the tab on screen for all but "Ask every time"', () => {
+    expect(DUET_SCOPES).toEqual(['every', 'ask', 'chord', 'all']);
+    expect(DUET_SCOPES.map(attachesTabOnScreen)).toEqual([false, true, true, true]);
+    expect(DUET_SCOPES.every(isDuetScope)).toBe(true);
+    for (const other of ['nothing', 'Ask', '', null, 3]) expect(isDuetScope(other)).toBe(false);
+  });
+
+  it('tells a session that reads nothing that it has no tools, and never mentions them', () => {
+    for (const making of ['codex', 'claude', 'codex-off'] as const) {
+      const text = duetInstructions(undefined, making, false);
+      expect(text).toContain('set Duet to read nothing');
+      expect(text).toContain('Settings → Duet');
+      for (const tool of ['read_tab', 'list_tabs', 'chord tools', 'Attached:', '[[t3']) expect(text).not.toContain(tool);
+    }
+    expect(duetInstructions('An earlier summary.', 'claude', false)).toContain('An earlier summary.');
+    expect(duetInstructions(undefined, 'claude')).toContain('read_tab');
   });
 });
 

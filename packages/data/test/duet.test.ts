@@ -48,6 +48,9 @@ describe('Duet store (migration 9)', () => {
     const loaded = db.duet({ op: 'thread', threadId: 'b' });
     expect(loaded.thread?.scope).toBe('chord');
     expect(loaded.messages?.map((m) => m.id)).toEqual(['m1', 'm2']);
+    // Every scope a chat can have comes back as it was saved.
+    db.duet({ op: 'saveThread', thread: { ...thread('e', 4, 'third'), scope: 'every' } });
+    expect(db.duet({ op: 'thread', threadId: 'e' }).thread?.scope).toBe('every');
   });
 
   it('finds messages by their words for @duet, and forgets them when the thread goes', () => {

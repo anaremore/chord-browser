@@ -395,6 +395,33 @@ describe('chord-data', () => {
     backup.close();
   });
 
+  it('upgrades a version-13 profile to 14: Duet chats keep their messages, and a chat can be set to ask every time', () => {
+    const v13 = new DatabaseSync(file);
+    for (const migration of MIGRATIONS.slice(0, 13)) v13.exec(migration);
+    v13.exec('PRAGMA user_version = 13');
+    v13.exec('PRAGMA foreign_keys = ON');
+    v13.prepare(
+      `INSERT INTO duet_thread (id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at)
+       VALUES ('t1', 'c1', 'Laptops', 'claude', NULL, 's1', 'chord', 1, 2, 3)`,
+    ).run();
+    v13.prepare(`INSERT INTO duet_message (id, thread_id, role, text, body, created_at) VALUES ('m1', 't1', 'user', 'Compare these laptops', '{"role":"user","text":"Compare these laptops","attachments":[]}', 4)`).run();
+    v13.close();
+
+    const db = new ChordDatabase(file);
+    expect(db.version).toBe(MIGRATIONS.length);
+    const kept = db.duet({ op: 'thread', threadId: 't1' });
+    expect(kept.thread).toMatchObject({ title: 'Laptops', scope: 'chord', providerSessionId: 's1', lastUsedAt: 3 });
+    expect(kept.messages?.map((m) => m.id)).toEqual(['m1']);
+    // Search still finds it, and the new scope is allowed.
+    expect(db.duet({ op: 'search', query: 'laptops', limit: 10 }).hits?.map((h) => h.messageId)).toEqual(['m1']);
+    db.duet({ op: 'saveThread', thread: { ...kept.thread!, scope: 'every' } });
+    expect(db.duet({ op: 'thread', threadId: 't1' }).thread?.scope).toBe('every');
+    // And deleting the chat still takes its messages with it: foreign keys are back on.
+    db.duet({ op: 'deleteThread', threadId: 't1' });
+    expect(db.duet({ op: 'search', query: 'laptops', limit: 10 }).hits).toEqual([]);
+    db.close();
+  });
+
   it('backs up the previous version before migrating', () => {
     const old = new DatabaseSync(file);
     old.exec(MIGRATIONS[0]!);

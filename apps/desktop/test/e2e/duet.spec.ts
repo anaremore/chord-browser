@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { DUET_WORLD, EXTRACT_SCRIPT } from '../../src/main/duet/extract';
 import { buildPdf, SAMPLE_PDF_PAGES } from '../fixtures/pdf';
-import { isOverlay, isSettings, pageWhere } from './a11y-kit';
+import { isOverlay, isPopover, isSettings, pageWhere } from './a11y-kit';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -131,6 +131,76 @@ const sessionFiles = (setup: Setup) => {
   return readdirSync(projects).flatMap((dir) => readdirSync(join(projects, dir)).filter((f) => f.endsWith('.jsonl')).map((f) => join(projects, dir, f)));
 };
 
+test('what Duet can read: "Ask every time" attaches nothing for you; "Nothing", set in Settings, gives Claude no tools and no page, and no chat can change it', async () => {
+  const setup = fresh();
+  const app = await launch(setup, '/article');
+  try {
+    const shell = await shellOf(app);
+    const panel = await openDuet(shell);
+    await setUp(panel);
+    const reads = panel.getByRole('radiogroup', { name: 'What Duet can read' });
+    // The ladder a chat can choose from, with the tab you're on attached by default.
+    await expect(reads.getByRole('radio')).toHaveText(['Ask', 'This tab', 'This chord', 'All tabs']);
+    await expect(reads.getByRole('radio', { name: 'This tab' })).toHaveAttribute('aria-checked', 'true');
+    const chip = panel.getByText(/^Reading 127\.0\.0\.1/);
+    await expect(chip).toBeVisible();
+    // Ask every time: nothing goes with a message unless you attach it.
+    await reads.getByRole('radio', { name: 'Ask' }).click();
+    await expect(reads.getByRole('radio', { name: 'Ask' })).toHaveAttribute('aria-checked', 'true');
+    await expect(chip).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: 'Attach a tab' })).toBeVisible();
+
+    // Nothing, in Settings → Duet.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Duet' }).click();
+    const choice = settings.getByRole('radiogroup', { name: 'What Duet can read' });
+    await expect(choice.getByRole('radio')).toHaveCount(5);
+    await choice.getByRole('radio', { name: /^Nothing/ }).click();
+    await expect(choice.getByRole('radio', { name: /^Nothing/ })).toHaveAttribute('aria-checked', 'true');
+    mkdirSync(capturesDir, { recursive: true });
+    await settings.screenshot({ path: join(capturesDir, 'settings-duet-reading.png') });
+
+    // The panel says so, with no choice per chat, nothing attached and no way to attach.
+    await expect(reads).toHaveCount(0);
+    await expect(panel.getByText('Nothing', { exact: true })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Change in Settings' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Attach a tab' })).toHaveCount(0);
+    await expect(chip).toHaveCount(0);
+    await panel.screenshot({ path: join(capturesDir, 'duet-reads-nothing.png') });
+
+    // Claude gets no tools and no page; a read it tries anyway is refused, and it's told why.
+    await send(panel, 'What can you see?');
+    await expect(panel.getByText('I have no tools.')).toBeVisible();
+    const seen = JSON.parse(readFileSync(join(setup.config, 'seen.json'), 'utf8')) as { tools: string[]; text: string; images: number; tried: string; instructions: string };
+    expect(seen.tools).toEqual([]);
+    expect(seen.text).not.toContain('Attached:');
+    expect(seen.images).toBe(0);
+    expect(seen.tried).toContain('read nothing');
+    expect(seen.tried).not.toContain('Chords are three notes');
+    expect(seen.instructions).toContain('set Duet to read nothing');
+    expect(seen.instructions).not.toContain('read_tab');
+
+    // Effects' "Ask Duet" reads the page's outline: it isn't offered either.
+    await runAction(shell, 'effects.open');
+    const popover = await pageWhere(app, isPopover);
+    const card = popover.getByRole('dialog', { name: /^Effects on / });
+    await expect(card).toBeVisible();
+    await expect(card.getByRole('textbox', { name: 'Ask Duet to restyle this site' })).toHaveCount(0);
+
+    // "Change in Settings" opens Duet's section, and choosing a scope there reads again.
+    await popover.keyboard.press('Escape');
+    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'General' }).click();
+    await expect(choice).toHaveCount(0);
+    await panel.getByRole('button', { name: 'Change in Settings' }).click();
+    await expect(choice).toBeVisible();
+    await choice.getByRole('radio', { name: /^The tab you’re on/ }).click();
+    await expect(reads.getByRole('radio', { name: 'This tab' })).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
 test('Duet: set up, ask about the page with a citation, gate reads, stop, and resume after a relaunch', async () => {
   const setup = fresh();
   let app = await launch(setup, '/article');
@@ -141,7 +211,7 @@ test('Duet: set up, ask about the page with a citation, gate reads, stop, and re
     await setUp(panel);
 
     // The current tab is attached; reading it needs no card; the reply cites it.
-    await expect(panel.getByText(/This tab · 127\.0\.0\.1/)).toBeVisible();
+    await expect(panel.getByText(/Reading 127\.0\.0\.1/)).toBeVisible();
     await send(panel, 'Summarize this page');
     await expect(panel.getByText('Here is the gist.')).toBeVisible();
     await expect(panel.getByRole('button', { name: /^Source 1: “/ })).toBeVisible();
@@ -170,7 +240,7 @@ test('Duet: set up, ask about the page with a citation, gate reads, stop, and re
     await named.getByRole('button', { name: 'Tab: Article' }).click();
     await expect.poll(activeTitle).toBe('Article');
 
-    // Ask first: listing tabs asks; "Allow for this chat" stops it asking again.
+    // The tab you're on (the default): listing tabs asks; "Allow for this chat" stops it asking again.
     await send(panel, 'list my tabs');
     await panel.getByRole('group', { name: 'Duet is asking' }).getByRole('button', { name: 'Allow for this chat' }).click();
     await expect(panel.getByText(/I can see \d+ tabs\./)).toBeVisible();
@@ -300,7 +370,7 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     await add.fill('127.0.0.1');
     await add.press('Enter');
     await panel.getByRole('radiogroup', { name: 'What Duet can read' }).getByRole('radio', { name: 'All tabs' }).click();
-    await expect(panel.getByText(/This tab · 127\.0\.0\.1/)).toHaveCount(0);
+    await expect(panel.getByText(/Reading 127\.0\.0\.1/)).toHaveCount(0);
     await send(panel, 'list my tabs');
     await expect(panel.getByText('I can see 0 tabs.')).toBeVisible();
 

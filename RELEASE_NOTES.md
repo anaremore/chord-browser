@@ -6,6 +6,12 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.2.1; it gets its version when it's released.
 
+- **Choose what Duet can read**, in Settings → Duet, from least to most:
+  - **Nothing:** Duet only sees what you type. It gets no way to read your tabs, pages, history or Archive, nothing can be attached, and no chat can change that.
+  - **Ask every time:** nothing goes with your messages unless you attach it, and Duet asks before reading any page.
+  - **The tab you're on** (the default, which was called *Ask first*): the tab on screen goes with each message, as *Reading example.com*. Remove it and Duet asks first.
+  - **Tabs in this chord** and **All your tabs**, as before. Each chat can pick these from the top of Duet's panel; *Nothing* is only set in Settings.
+
 - **Fixed: tabs losing their site's icon.** A tab could drop to the letter tile when a page named no icon, its icon failed to load, or a navigation never arrived (a download, a cancelled link): sites that update their pages in place, like YouTube, did it most. A tab now keeps its site's icon. On a site Chord already has an icon for, it shows at once.
 
 - **Effects:** restyle a site your way, in place of Arc's Boosts. Open them from the page's right-click menu (*Effects for this site…*) or the command bar, then:

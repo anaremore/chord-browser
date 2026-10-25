@@ -16,13 +16,31 @@ export const DUET_PROVIDER_NAMES: Record<DuetProvider, string> = { claude: 'Clau
 
 /**
  * What Duet may read without asking (Settings → Duet, and per thread from the
- * panel header). Attached context is always readable; beyond it, "ask" shows a
- * card for each read, "chord" reads any tab in the current chord plus history
- * and the archive, "all" every chord. Never-readable pages stay refused at
- * every scope (isNeverReadable).
+ * panel header), least to most. Attached tabs are always readable; beyond
+ * them, "every" and "ask" show a card for each read, "chord" reads any tab in
+ * the current chord plus history and the archive, "all" every chord. "every"
+ * attaches nothing for you; the others attach the tab on screen to each
+ * message (attachesTabOnScreen). Never-readable pages stay refused at every
+ * scope (isNeverReadable), and Settings' "Nothing" (DuetSettings.readsNothing)
+ * overrides them all.
  */
-export type DuetScope = 'ask' | 'chord' | 'all';
-export const DUET_SCOPE_NAMES: Record<DuetScope, string> = { ask: 'Ask first', chord: 'Tabs in this chord', all: 'All my tabs' };
+export type DuetScope = 'every' | 'ask' | 'chord' | 'all';
+export const DUET_SCOPES = ['every', 'ask', 'chord', 'all'] as const satisfies readonly DuetScope[];
+export const isDuetScope = (value: unknown): value is DuetScope => DUET_SCOPES.includes(value as DuetScope);
+/** Settings' names, and the panel's shorter ones. */
+export const DUET_SCOPE_NAMES: Record<DuetScope, string> = { every: 'Ask every time', ask: 'The tab you’re on', chord: 'Tabs in this chord', all: 'All your tabs' };
+export const DUET_SCOPE_SHORT: Record<DuetScope, string> = { every: 'Ask', ask: 'This tab', chord: 'This chord', all: 'All tabs' };
+/** What each choice lets Duet read: Settings' descriptions and the panel's tooltips. */
+export const DUET_SCOPE_HINTS: Record<DuetScope, string> = {
+  every: 'Nothing goes with your messages unless you attach it. Duet asks before reading any page, even the one you’re on.',
+  ask: 'The tab on screen goes with each message. Duet asks before reading anything else.',
+  chord: 'Duet reads this chord’s tabs, history and Archive without asking.',
+  all: 'Duet reads every chord’s tabs, history and Archive without asking.',
+};
+/** Settings → Duet's strictest choice (DuetSettings.readsNothing): its name and what it means. */
+export const DUET_READS_NOTHING = { name: 'Nothing', hint: 'Only what you type. Duet gets no way to read your tabs, pages, history or Archive, and nothing can be attached.' };
+/** Whether the tab on screen goes with each message (unless it's removed from the composer). */
+export const attachesTabOnScreen = (scope: DuetScope): boolean => scope !== 'every';
 
 /** How long Duet chats are kept (Settings → Duet). */
 export type DuetKeep = 'forever' | '90d' | '30d';
@@ -207,8 +225,9 @@ export function isNeverReadable(url: string, neverSites: readonly string[]): boo
 
 /**
  * Whether a context read needs the user's yes first. Attached tabs never do;
- * beyond them, "ask" always asks, "chord" reads its own chord (and history
- * and the archive), "all" reads everything. A grant for this chat counts as yes.
+ * beyond them, "every" and "ask" always ask, "chord" reads its own chord (and
+ * history and the archive), "all" reads everything. A grant for this chat
+ * counts as yes. (With Settings' "Nothing", there are no reads to ask about.)
  */
 export function readNeedsApproval(input: { scope: DuetScope; attached: boolean; sameChord: boolean; tool: DuetToolName; granted: boolean }): boolean {
   if (input.attached || input.granted) return false;
@@ -518,8 +537,30 @@ const IMAGE_LINES: Record<DuetImageMaking, string> = {
 };
 
 /** Duet's browse-mode instructions, appended to the provider's own system prompt. */
-export function duetInstructions(summary?: string, images: DuetImageMaking = 'claude'): string {
-  const base = [
+/**
+ * Duet's instructions for a session. `readsPages` false is Settings' "Nothing":
+ * the session has no tools at all, and is told so, so it says why it can't see
+ * a page instead of guessing.
+ */
+export function duetInstructions(summary?: string, images: DuetImageMaking = 'claude', readsPages = true): string {
+  const base = readsPages ? browsingLines(images) : readingNothingLines(images);
+  return summary ? `${base}\n\nThis conversation continues an earlier one. A summary of it, oldest first:\n${summary}` : base;
+}
+
+function readingNothingLines(images: DuetImageMaking): string {
+  return [
+    "You are Duet, an assistant inside the Chord web browser, chatting with the browser's user.",
+    '',
+    'How to work:',
+    "- You can't see the browser in this chat: the user set Duet to read nothing, so you have no tools and no access to their tabs, pages, history or screenshots. Answer from what they write.",
+    "- If they ask about a page, say you can't see it, and that they can paste the text, or change what Duet can read in Settings → Duet.",
+    "- You can't open, close or move tabs; if the user wants that, tell them how to do it in Chord.",
+    IMAGE_LINES[images],
+  ].join('\n');
+}
+
+function browsingLines(images: DuetImageMaking): string {
+  return [
     "You are Duet, an assistant inside the Chord web browser, chatting with the browser's user about their tabs and the web.",
     '',
     'How to work:',
@@ -531,5 +572,4 @@ export function duetInstructions(summary?: string, images: DuetImageMaking = 'cl
     "- You can only read. You can't open, close or move tabs; if the user wants that, tell them how to do it in Chord.",
     IMAGE_LINES[images],
   ].join('\n');
-  return summary ? `${base}\n\nThis conversation continues an earlier one. A summary of it, oldest first:\n${summary}` : base;
 }

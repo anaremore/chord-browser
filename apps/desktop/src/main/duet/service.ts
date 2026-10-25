@@ -27,6 +27,7 @@ import {
   pdfText,
   screenshotFilename,
   readNeedsApproval,
+  attachesTabOnScreen,
   splitCitations,
   stripCitations,
   textFragmentUrl,
@@ -195,6 +196,11 @@ export class DuetService {
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'duet' && p.path[2] === 'codexImages')) {
         for (const [threadId, live] of [...this.live]) if (live.session.provider === 'codex' && !live.session.busy) this.drop(threadId);
       }
+      // "Nothing" turned on or off: every session starts again with its tools (or none) and instructions,
+      // busy ones too, so a reply already under way can't read on with the tools it started with.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'duet' && p.path[2] === 'readsNothing')) {
+        for (const threadId of [...this.live.keys()]) this.drop(threadId);
+      }
     });
     void this.init();
   }
@@ -341,12 +347,24 @@ export class DuetService {
     return !this.isPrivateChord(node.chordId) && !this.settings.offChords.includes(node.chordId) && !isNeverReadable(node.url, this.settings.neverSites);
   }
 
-  /** The chips above the composer: the current tab (unless removed), then anything added. */
+  /** What the window's panel shows: its chord's chat's scope, or a new chat's. */
+  private scopeFor(windowId: WindowId): DuetScope {
+    const chordId = this.chordOf(windowId);
+    const key = chordId ? this.showing.get(chordId) : undefined;
+    return (key ? this.threads.get(key)?.thread?.scope : undefined) ?? this.settings.scope;
+  }
+
+  /**
+   * The chips above the composer: the tab on screen (unless removed, or the
+   * chat's scope attaches nothing for you), then anything added. None at all
+   * when Duet reads nothing.
+   */
   private attachments(windowId: WindowId): TabNode[] {
+    if (this.settings.readsNothing) return [];
     const panel = this.panel(windowId);
     const out: TabNode[] = [];
     const current = this.activeTab(windowId);
-    if (current && panel.removedCurrent !== current.id && this.readable(current)) out.push(current);
+    if (current && attachesTabOnScreen(this.scopeFor(windowId)) && panel.removedCurrent !== current.id && this.readable(current)) out.push(current);
     for (const id of panel.extra) {
       const node = this.browser.store.state.nodes[id];
       if (node?.kind === 'tab' && !out.includes(node) && this.readable(node)) out.push(node);
@@ -364,6 +382,7 @@ export class DuetService {
       provider: settings.provider,
       providers: DUET_PROVIDERS.map((p) => this.statuses[p] ?? notInstalled(p)),
       chordOff: chordId ? settings.offChords.includes(chordId) : false,
+      readsNothing: settings.readsNothing,
       codexImages: this.codexMakesImages(),
       firstUse: !this.firstUseSeen,
       lookingInWsl: this.lookingInWsl,
@@ -372,7 +391,9 @@ export class DuetService {
       return { ...base, thread: null, continueFrom: null, threads: [], messages: [], busy: false, startedAt: null, queue: [], attachments: [], attachable: [], readTabIds: [], error: null, draft: '', context: null, pendingImages: [], imageThumbs: {}, tabNames: {} };
     const state = await this.stateFor(chordId);
     const nodes = this.browser.store.state.nodes;
-    const attachable = children(this.browser.store.state, chordId, 'pinned', null)
+    const attachable = settings.readsNothing
+      ? []
+      : children(this.browser.store.state, chordId, 'pinned', null)
       .concat(children(this.browser.store.state, chordId, 'today', null))
       .filter((n): n is TabNode => n.kind === 'tab' && this.readable(n))
       .map((n) => ({ nodeId: n.id, title: n.title || n.url, url: n.url }));
@@ -503,7 +524,15 @@ export class DuetService {
   /** Whether a picture of this page may go to Duet from this window: set up, on in its chord, and a page Duet may read. */
   canAskAbout(windowId: WindowId, url: string): boolean {
     const chordId = this.chordOf(windowId);
-    return Boolean(this.settings.enabled && this.settings.provider && chordId && !this.isPrivateChord(chordId) && !this.settings.offChords.includes(chordId) && !isNeverReadable(url, this.settings.neverSites));
+    return Boolean(
+      this.settings.enabled &&
+        !this.settings.readsNothing &&
+        this.settings.provider &&
+        chordId &&
+        !this.isPrivateChord(chordId) &&
+        !this.settings.offChords.includes(chordId) &&
+        !isNeverReadable(url, this.settings.neverSites),
+    );
   }
 
   /**
@@ -535,6 +564,7 @@ export class DuetService {
   }): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
     const provider = this.settings.provider;
     if (!provider) return { ok: false, error: 'Set up Duet first, in Settings → Duet.' };
+    if (this.settings.readsNothing) return { ok: false, error: 'Duet is set to read nothing, in Settings → Duet.' };
     const name = provider === 'claude' ? 'Claude Code' : 'Codex';
     if (!this.statuses[provider]) await this.refreshProviders('never');
     if (!this.statuses[provider]?.installed && this.wslLookup) await this.wslLookup;
@@ -597,7 +627,7 @@ export class DuetService {
   /** Put an image in the window's composer, for the next message, and open the panel. */
   attachImage(windowId: WindowId, image: ImageInput): void {
     const w = this.browser.allWindows.find((x) => x.id === windowId);
-    if (!w || w.isPrivate) return;
+    if (!w || w.isPrivate || this.settings.readsNothing) return;
     const list = this.pending.get(windowId) ?? [];
     if (list.length >= DUET_MAX_IMAGES) list.shift();
     list.push({ image: { id: newImageId(), mime: image.mime, width: image.width, height: image.height }, bytes: Buffer.from(image.bytes), thumb: Buffer.from(image.thumb) });
@@ -751,6 +781,7 @@ export class DuetService {
       case 'model':
         return this.setModel(state, action.provider, action.model);
       case 'attach':
+        if (this.settings.readsNothing) return;
         if (!panel.extra.includes(action.nodeId)) panel.extra.push(action.nodeId);
         if (panel.removedCurrent === action.nodeId) panel.removedCurrent = null;
         return;
@@ -785,6 +816,8 @@ export class DuetService {
       }
       case 'export':
         return this.exportThread(state);
+      case 'settings':
+        return this.browser.openSettings('duet');
     }
   }
 
@@ -847,7 +880,8 @@ export class DuetService {
     state.windowId = windowId;
     state.lastError = null;
 
-    const attachments: DuetAttachment[] = reuse ?? this.attachments(windowId).map((node) => ({ ref: this.refFor(state, node.id), url: node.url, title: node.title || node.url }));
+    const nothing = this.settings.readsNothing;
+    const attachments: DuetAttachment[] = nothing ? [] : (reuse ?? this.attachments(windowId).map((node) => ({ ref: this.refFor(state, node.id), url: node.url, title: node.title || node.url })));
     for (const a of attachments) {
       const node = state.refs.get(a.ref);
       if (node) state.attached.add(node);
@@ -858,10 +892,10 @@ export class DuetService {
       state.pendingDivider = null;
     }
     // The composer's images go with this message, kept with the chat; a retry sends its own again.
-    const pending = reuseImages ? [] : (this.pending.get(windowId) ?? []);
+    const pending = reuseImages || nothing ? [] : (this.pending.get(windowId) ?? []);
     this.pending.delete(windowId);
     for (const p of pending) await this.images.save(p.image, p.bytes, p.thumb);
-    const images = reuseImages ?? pending.map((p) => p.image);
+    const images = nothing ? [] : (reuseImages ?? pending.map((p) => p.image));
     await this.addMessage(state, images.length > 0 ? { role: 'user', text: trimmed, attachments, images: [...images] } : { role: 'user', text: trimmed, attachments });
     delete this.drafts[thread.id];
     thread.lastUsedAt = now;
@@ -920,7 +954,9 @@ export class DuetService {
     }
     const images = thread.provider === 'codex' && this.settings.codexImages;
     const making: DuetImageMaking = thread.provider === 'codex' ? (images ? 'codex' : 'codex-off') : 'claude';
-    const instructions = duetInstructions(summary, making);
+    // Settings' "Nothing": no tools at all, so the model has no way to ask for a page (ARCHITECTURE.md §11.3).
+    const readsPages = !this.settings.readsNothing;
+    const instructions = duetInstructions(summary, making, readsPages);
     const instructionsFile = join(this.root, 'instructions', `${thread.id}.md`);
     await writeFile(instructionsFile, instructions, { encoding: 'utf8', mode: 0o600 });
     const resumeId = summary ? null : thread.providerSessionId;
@@ -932,7 +968,7 @@ export class DuetService {
       instructionsFile,
       resumeId,
       newSessionId: randomUUID(),
-      tools: DUET_TOOLS,
+      tools: readsPages ? DUET_TOOLS : [],
       images,
     };
     let resumeFailed = false;
@@ -1121,6 +1157,7 @@ export class DuetService {
   private async runTool(state: ThreadState, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
     const spec = duetTool(name);
     if (!spec || !state.thread) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
+    if (this.settings.readsNothing) return { text: toolResult({ refused: 'Duet is set to read nothing, in Settings → Duet.' }, false), isError: true };
     try {
       return await this.readTool(state, spec.name, args);
     } catch (error) {

@@ -325,6 +325,13 @@
   color: var(--color-fg);
 }
 
+/* Settings' "Nothing": set there, not per chat, so it's a word rather than a choice. */
+.scopeFixed {
+  flex: 1;
+  color: var(--color-fg);
+  font: var(--text-label);
+}
+
 .empty {
   display: flex;
   flex: 1;

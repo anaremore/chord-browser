@@ -3,13 +3,19 @@
  * your own CLIs it uses, what it may read without asking, sites it never
  * reads, and how long chats are kept.
  */
-import { DEFAULT_SETTINGS, DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, type DuetKeep, type DuetScope } from '@chord/core';
+import { DEFAULT_SETTINGS, DUET_PROVIDER_NAMES, DUET_READS_NOTHING, DUET_SCOPE_HINTS, DUET_SCOPE_NAMES, DUET_SCOPES, type DuetKeep, type DuetScope } from '@chord/core';
 import type { DuetProviderInfo, SettingsSnapshot } from '@chord/ipc';
-import { X } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import { Row, SectionHeader, Segmented, Switch } from './controls';
+import { RadioGroup, ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import styles from './Settings.module.css';
+
+/** What Duet can read, least to most: Settings' "Nothing", then the scopes a chat can also choose. */
+const READING: { key: 'nothing' | DuetScope; name: string; hint: string }[] = [
+  { key: 'nothing', ...DUET_READS_NOTHING },
+  ...DUET_SCOPES.map((s) => ({ key: s, name: DUET_SCOPE_NAMES[s], hint: DUET_SCOPE_HINTS[s] })),
+];
 
 export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
   const duet = snapshot.settings.duet;
@@ -79,22 +85,39 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
         />
       </div>
 
-      <h2 className={styles.groupTitle}>Reading</h2>
-      <div className={styles.group}>
-        <Row
-          label="Duet can read without asking"
-          description="What you attach is always readable. Beyond it, Duet asks first, or reads what you allow here. Each chat can change this."
-          changed={duet.scope !== DEFAULT_SETTINGS.duet.scope}
-          onReset={() => set({ scope: DEFAULT_SETTINGS.duet.scope })}
-          control={
-            <Segmented<DuetScope>
-              label="Duet can read without asking"
-              value={duet.scope}
-              options={(['ask', 'chord', 'all'] as const).map((s) => ({ value: s, label: DUET_SCOPE_NAMES[s] }))}
-              onChange={(scope) => set({ scope })}
-            />
-          }
+      <h2 className={styles.groupTitle}>
+        What Duet can read
+        <ResetButton
+          label="Reset What Duet can read to default"
+          visible={duet.readsNothing !== DEFAULT_SETTINGS.duet.readsNothing || duet.scope !== DEFAULT_SETTINGS.duet.scope}
+          onReset={() => set({ readsNothing: DEFAULT_SETTINGS.duet.readsNothing, scope: DEFAULT_SETTINGS.duet.scope })}
         />
+      </h2>
+      <RadioGroup className={styles.group} label="What Duet can read">
+        {READING.map((r) => {
+          const chosen = r.key === 'nothing' ? duet.readsNothing : !duet.readsNothing && duet.scope === r.key;
+          return (
+            <button
+              key={r.key}
+              type="button"
+              role="radio"
+              aria-checked={chosen}
+              className={styles.choice}
+              onClick={() => set(r.key === 'nothing' ? { readsNothing: true } : { readsNothing: false, scope: r.key })}
+            >
+              <span className={styles.rowText}>
+                <span className={styles.rowLabel}>{r.name}</span>
+                <span className={styles.rowDescription}>{r.hint}</span>
+              </span>
+              {chosen && <Check className={styles.check} size={16} strokeWidth={2.25} aria-hidden />}
+            </button>
+          );
+        })}
+      </RadioGroup>
+      <p className={styles.groupNote}>
+        Each chat can choose for itself from Duet’s panel, except Nothing, which only changes here. Whatever you choose, Duet only reads, and never sees private windows, form fields, or the sites below.
+      </p>
+      <div className={`${styles.group} ${styles.groupAfter}`}>
         <Row
           label="Never read"
           description="Sites Duet can't read or have attached, whatever a chat allows. Private windows, Chord's pages and form fields are never read."

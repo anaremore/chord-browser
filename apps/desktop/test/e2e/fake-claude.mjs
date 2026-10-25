@@ -59,12 +59,14 @@ const waiting = new Map();
 let interrupted = false;
 let inited = false;
 
-const callTool = (name, input) =>
+/** A request to Chord's MCP server, over the control channel as Claude Code sends them. */
+const mcp = (method, params) =>
   new Promise((resolve) => {
     const id = `fake-${++next}`;
     waiting.set(id, resolve);
-    write({ type: 'control_request', request_id: id, request: { subtype: 'mcp_message', server_name: 'chord', message: { jsonrpc: '2.0', id: next, method: 'tools/call', params: { name, arguments: input } } } });
+    write({ type: 'control_request', request_id: id, request: { subtype: 'mcp_message', server_name: 'chord', message: { jsonrpc: '2.0', id: next, method, params } } });
   });
+const callTool = (name, input) => mcp('tools/call', { name, arguments: input });
 const toolText = (response) => response?.mcp_response?.result?.content?.[0]?.text ?? '';
 const say = async (text, slow = false) => {
   for (const word of text.split(/(?<= )/)) {
@@ -119,6 +121,14 @@ async function turn(text, images = []) {
     const evil = process.env.FAKE_CLAUDE_EVIL ?? 'https://evil.invalid';
     const css = `main h1 { color: rgb(0, 128, 0) } body { background-image: url(${evil}/duet.png) }`;
     return finish(await say(`Here it is:\n\`\`\`json\n${JSON.stringify({ css, summary: 'Green headline' })}\n\`\`\``));
+  }
+  // What it was given (Duet set to read nothing): the tools Chord lists, the words it was sent, a read it tries
+  // anyway (as a page's injected instructions might make it), and its instructions; kept where the test can see them.
+  if (/what can you see/i.test(text)) {
+    const tools = (await mcp('tools/list', {}))?.mcp_response?.result?.tools ?? [];
+    const tried = toolText(await callTool('read_tab', { tab_id: 't1' }));
+    writeFileSync(join(config, 'seen.json'), JSON.stringify({ tools: tools.map((t) => t.name), text, images: images.length, tried, instructions: instructions ? readFileSync(instructions, 'utf8') : '' }));
+    return finish(await say(tools.length ? `I have ${tools.length} tools.` : 'I have no tools.'));
   }
   // Asked for an image, it says it can't and leaves the mark for Codex's button, as Duet's instructions ask.
   if (/draw|cartoon/i.test(text)) return finish(await say("Claude can't make images.\n\n[[make-image]]"));

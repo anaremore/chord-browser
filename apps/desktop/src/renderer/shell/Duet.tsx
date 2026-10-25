@@ -10,7 +10,22 @@
  * Nothing here loads anything remote: no images, no link previews, and links
  * show their full address and open only when clicked (research §6, rule 5).
  */
-import { citationIsQuoted, contextLabel, contextPercent, DUET_PROVIDER_NAMES, DUET_SCOPE_NAMES, nameTabs, splitCitations, stripCitations, type DuetContextUsage, type DuetImage, type DuetMessage, type DuetProvider, type DuetScope } from '@chord/core';
+import {
+  citationIsQuoted,
+  contextLabel,
+  contextPercent,
+  DUET_PROVIDER_NAMES,
+  DUET_SCOPE_HINTS,
+  DUET_SCOPE_SHORT,
+  DUET_SCOPES,
+  nameTabs,
+  splitCitations,
+  stripCitations,
+  type DuetContextUsage,
+  type DuetImage,
+  type DuetMessage,
+  type DuetProvider,
+} from '@chord/core';
 import type { DuetAction, DuetView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Download, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
@@ -19,9 +34,6 @@ import { useMenu, useRoving } from '../shared/a11y';
 import { announce } from './announce';
 import { api } from './api';
 import styles from './Duet.module.css';
-
-/** The scope switch's own labels: short enough for three to sit side by side in the panel. */
-const DUET_SCOPE_SHORT: Record<DuetScope, string> = { ask: 'Ask first', chord: 'This chord', all: 'All tabs' };
 
 const act = (action: DuetAction) => void api.duet.act(action);
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
@@ -532,7 +544,7 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
       act({ do: 'stop' });
     }
   };
-  const chipNote = `Duet reads this tab only when you send, through your own ${providerName} account.`;
+  const chipNote = `Duet reads this tab when you send, through your own ${providerName} account. Remove it, and Duet asks before reading it.`;
   return (
     <div className={styles.composer}>
       {view.queue.length > 0 && (
@@ -564,26 +576,28 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
         ))}
         {view.attachments.map((a) => (
           <span key={a.nodeId} className={styles.chip} title={chipNote}>
-            <span className={styles.ellipsis}>{a.current ? `This tab · ${host(a.url)}` : a.title}</span>
+            <span className={styles.ellipsis}>{a.current ? `Reading ${host(a.url)}` : a.title}</span>
             <button type="button" className={styles.chipX} aria-label={`Don't attach ${a.title}`} onClick={() => act({ do: 'detach', nodeId: a.nodeId })}>
               <X size={11} strokeWidth={2.25} />
             </button>
           </span>
         ))}
-        <button
-          type="button"
-          className={styles.addChip}
-          aria-label="Attach a tab"
-          aria-haspopup="menu"
-          aria-expanded={picking}
-          aria-controls={picking ? 'duet-attach' : undefined}
-          title="Attach a tab"
-          onClick={() => setPicking(!picking)}
-        >
-          <AtSign size={13} strokeWidth={2} />
-        </button>
+        {!view.readsNothing && (
+          <button
+            type="button"
+            className={styles.addChip}
+            aria-label="Attach a tab"
+            aria-haspopup="menu"
+            aria-expanded={picking}
+            aria-controls={picking ? 'duet-attach' : undefined}
+            title="Attach a tab"
+            onClick={() => setPicking(!picking)}
+          >
+            <AtSign size={13} strokeWidth={2} />
+          </button>
+        )}
       </div>
-      {picking && (
+      {picking && !view.readsNothing && (
         <ul ref={picker.ref} id="duet-attach" className={styles.picker} role="menu" aria-label="Attach a tab" onKeyDown={picker.onKeyDown}>
           {view.attachable.filter((t) => !view.attachments.some((a) => a.nodeId === t.nodeId)).length === 0 && (
             <li role="none">
@@ -1018,7 +1032,9 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
           {view.firstUse && (
             <div className={styles.firstUse} role="note">
               <p>
-                What you attach goes to {providerName} through your own account. Duet reads only what’s attached to your message, unless you let it see more. It never sees what you type into forms.
+                {view.readsNothing
+                  ? `What you type goes to ${providerName} through your own account. Duet is set to read nothing, so it can’t see your tabs.`
+                  : `What you attach goes to ${providerName} through your own account. Duet reads only what’s attached to your message, unless you let it see more. It never sees what you type into forms.`}
               </p>
               <button type="button" className={styles.secondary} data-autofocus onClick={() => act({ do: 'dismissFirstUse' })}>
                 Got it
@@ -1027,27 +1043,41 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
           )}
           <div className={styles.scopeRow}>
             <span className={styles.muted}>Reads</span>
-            <div ref={scopeGroup.ref} className={styles.scope} role="radiogroup" aria-label="What Duet can read" onKeyDown={scopeGroup.onKeyDown}>
-              {(['ask', 'chord', 'all'] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  role="radio"
-                  aria-checked={(thread?.scope ?? 'ask') === s}
-                  className={styles.scopeOption}
-                  title={s === 'ask' ? 'What you attach, and asks before reading more' : DUET_SCOPE_NAMES[s]}
-                  onClick={() => act({ do: 'scope', scope: s satisfies DuetScope })}
-                >
-                  {DUET_SCOPE_SHORT[s]}
+            {view.readsNothing ? (
+              <>
+                <span className={styles.scopeFixed}>Nothing</span>
+                <button type="button" className={styles.quiet} onClick={() => act({ do: 'settings' })}>
+                  Change in Settings
                 </button>
-              ))}
-            </div>
+              </>
+            ) : (
+              <div ref={scopeGroup.ref} className={styles.scope} role="radiogroup" aria-label="What Duet can read" onKeyDown={scopeGroup.onKeyDown}>
+                {DUET_SCOPES.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    role="radio"
+                    aria-checked={(thread?.scope ?? 'ask') === s}
+                    className={styles.scopeOption}
+                    title={DUET_SCOPE_HINTS[s]}
+                    onClick={() => act({ do: 'scope', scope: s })}
+                  >
+                    {DUET_SCOPE_SHORT[s]}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           {empty ? (
             <div className={styles.empty}>
-              <p className={styles.emptyTitle}>Ask about this page, your tabs, or anything you’re working on.</p>
+              <p className={styles.emptyTitle}>
+                {view.readsNothing ? 'Ask anything. Duet can’t see your tabs: paste in what you’d like it to read.' : 'Ask about this page, your tabs, or anything you’re working on.'}
+              </p>
               <div className={styles.suggestions}>
-                {['Summarize this page', 'What should I know before I decide?', 'Compare with my other tabs'].map((s) => (
+                {(view.readsNothing
+                  ? ['Explain this simply', 'Help me write a reply', 'What should I know before I decide?']
+                  : ['Summarize this page', 'What should I know before I decide?', 'Compare with my other tabs']
+                ).map((s) => (
                   <button key={s} type="button" className={styles.suggestion} onClick={() => act({ do: 'send', text: s })}>
                     {s}
                   </button>

@@ -14,6 +14,7 @@ import {
   SEARCH_ENGINES,
   SHORTCUTS,
   UI_SCALES,
+  DUET_SCOPES,
   type ActionId as CoreActionId,
   type ArchiveAfter,
   type ArchivedTab,
@@ -100,6 +101,8 @@ export const CustomThemeSchema = z.strictObject({
   grain: z.number().min(0).max(1),
 });
 /** An emoji, a symbol, or a letter: one or two grapheme clusters at most. */
+/** What a Duet chat may read without asking (core's DUET_SCOPES). */
+const duetScope = z.enum(DUET_SCOPES);
 const chordIcon = z.string().min(1).max(16);
 const chordName = z.string().max(64);
 
@@ -256,7 +259,8 @@ export const SettingsPatch = z.strictObject({
       provider: z.enum(['claude', 'codex']).nullable(),
       model: z.string().max(100).nullable(),
       keep: z.enum(['forever', '90d', '30d']),
-      scope: z.enum(['ask', 'chord', 'all']),
+      scope: duetScope,
+      readsNothing: z.boolean(),
       neverSites: z.array(z.string().max(300)).max(500),
       offChords: z.array(z.string().max(64)).max(500),
       codexImages: z.boolean(),
@@ -894,11 +898,12 @@ export interface StatePatchEvent {
 /* ---------- Duet (ARCHITECTURE.md §11) ---------- */
 
 export const DuetProviderSchema = z.enum(['claude', 'codex']);
-const duetScope = z.enum(['ask', 'chord', 'all']);
 
 /** What the panel asks main to do. Everything is checked again in main (scope, private, never-sites). */
 export const DuetAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('toggle'), open: z.boolean().optional() }),
+  /** Settings → Duet, from the panel (what it can read). */
+  z.object({ do: z.literal('settings') }),
   z.object({ do: z.literal('dismissFirstUse') }),
   z.object({ do: z.literal('setup'), provider: DuetProviderSchema }),
   /** Duet off (or back on) in the window's current chord. */
@@ -954,6 +959,8 @@ export interface DuetView {
   provider: DuetProvider | null;
   providers: DuetProviderInfo[];
   chordOff: boolean;
+  /** Settings → Duet's "Nothing": no tabs, pages or images, and no scope to choose per chat. */
+  readsNothing: boolean;
   /** The transparency card hasn't been dismissed yet. */
   firstUse: boolean;
   thread: { id: string | null; title: string; scope: DuetScope; provider: DuetProvider; model: string | null } | null;

@@ -912,7 +912,21 @@ All tools are **read-only** and named in snake_case (the Claude API's and Codex'
 | `tab_screenshot {tab_id}` | A PNG at most 1280 px wide |
 | `search_history {query}` · `search_archive {query}` | Matching pages |
 
-**Reading scope** (Settings → Duet, and per chat from the panel): **Ask first** (default), **Tabs in this chord**, **All my tabs**. Tabs attached to the message are always readable. Anything else follows the scope, and *Ask first* shows an inline card: **Allow once · Allow for this chat · No** (Esc says no, ⌘↵/Ctrl+↵ allows once). Listing tabs and searching history or the archive also ask under *Ask first*.
+**Reading scope** (Settings → Duet, and per chat from the panel; core's `DUET_SCOPES`, least to most):
+- **Ask every time** (`every`): nothing is attached for you.
+- **The tab you're on** (`ask`, the default; *Ask first* before 2026-10-25): the tab on screen is attached to each message.
+- **Tabs in this chord** (`chord`).
+- **All your tabs** (`all`).
+
+Tabs attached to the message are always readable. Anything else follows the scope. Under *Ask every time* and *The tab you're on*, Duet shows an inline card: **Allow once · Allow for this chat · No** (Esc says no, ⌘↵/Ctrl+↵ allows once). Listing tabs and searching history or the archive also ask under those two.
+
+**Nothing** (Settings → Duet only, `settings.duet.readsNothing`; *built 2026-10-25*) overrides every chat's scope, and is enforced in main, not by asking the model:
+- **No tools:** sessions start with no tools at all (`tools: []`), so neither CLI has a way to ask for a page. A tool call that arrives anyway is refused.
+- **Nothing goes with a message:** no tabs (retried messages included) and no images. Attaching is refused.
+- **No other way to read:** Effects' *Ask Duet* (`oneShot`) and every *Ask Duet about this image* (the shared `canAskAbout` gate, and the command bar's own check) are off.
+- **Duet knows:** its instructions say it can't see the browser and that Settings → Duet changes that.
+- **Turning it on or off** restarts every live session, busy ones too, so a reply can't read on with the tools it started with.
+- *Test:* duet.spec's journey has the stand-in Claude list Chord's tools (none), try a read anyway (refused), and record what it was sent (no tab, no image).
 
 **Never readable**, whatever the scope: private windows, chords where Duet is off, sites on the *Never* list (and their subdomains), `chord://`, `chrome-extension://` and other non-web pages, and form field values. History and archive results leave out the same sites and chords.
 

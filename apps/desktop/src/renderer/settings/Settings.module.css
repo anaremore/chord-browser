@@ -305,8 +305,11 @@
   display: flex;
   gap: var(--space-3);
   align-items: center;
+  box-sizing: border-box;
   min-block-size: var(--size-setting-row);
-  padding-inline: var(--space-4);
+
+  /* As a row's: a choice with a description under its name (Duet's reading) has room above and below. */
+  padding: var(--space-2) var(--space-4);
   border: 0;
   background: transparent;
   color: var(--color-fg);

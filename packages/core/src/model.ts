@@ -464,6 +464,11 @@ export interface DuetSettings {
   keep: DuetKeep;
   /** What new threads may read without asking. */
   scope: DuetScope;
+  /**
+   * Settings' "Nothing": Duet reads no pages at all, whatever a chat's scope.
+   * Its sessions get no tools, and nothing can be attached (ARCHITECTURE.md §11.3).
+   */
+  readsNothing: boolean;
   /** Sites Duet may never read or have attached (origins). */
   neverSites: string[];
   /** Chords where Duet is off. */
@@ -499,7 +504,7 @@ export const DEFAULT_SETTINGS: Settings = {
   safeBrowsingAsked: false,
   adBlocking: { enabled: true, offSites: [] },
   tabCounts: { enabled: true, offSites: [] },
-  duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', neverSites: [], offChords: [], codexImages: true },
+  duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', readsNothing: false, neverSites: [], offChords: [], codexImages: true },
   externalLinks: 'mini',
   miniWindowSize: null,
   reader: DEFAULT_READER,

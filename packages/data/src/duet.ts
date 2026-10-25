@@ -4,7 +4,7 @@
  * is the source of truth; `provider_session_id` only caches the provider's
  * side, so losing it costs a summary, never the conversation.
  */
-import { duetMessageText, type DuetHit, type DuetImage, type DuetMessage, type DuetMessageBody, type DuetProvider, type DuetThread } from '@chord/core';
+import { duetMessageText, isDuetScope, type DuetHit, type DuetImage, type DuetMessage, type DuetMessageBody, type DuetProvider, type DuetThread } from '@chord/core';
 import type { StatementSync } from 'node:sqlite';
 
 export type DuetOp =
@@ -45,7 +45,7 @@ const threadOf = (r: Row): DuetThread => ({
   provider: str(r['provider']) as DuetProvider,
   model: typeof r['model'] === 'string' ? r['model'] : null,
   providerSessionId: typeof r['provider_session_id'] === 'string' ? r['provider_session_id'] : null,
-  scope: r['scope'] === 'chord' || r['scope'] === 'all' ? r['scope'] : 'ask',
+  scope: isDuetScope(r['scope']) ? r['scope'] : 'ask',
   createdAt: num(r['created_at']),
   updatedAt: num(r['updated_at']),
   lastUsedAt: num(r['last_used_at']),

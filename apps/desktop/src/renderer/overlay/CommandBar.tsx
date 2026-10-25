@@ -341,8 +341,8 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     [session, query, state, windowId, history, scope, suggestions, duetHits, presenting],
   );
   const imageEngine = imageSearchFor(state.settings.searchEngine, state.settings.googleFree);
-  // Duet, where it can be asked: set up, this chord not turned off for it, and not a private window.
-  const duetReady = Boolean(win && !win.private && state.settings.duet.enabled && state.settings.duet.provider && !state.settings.duet.offChords.includes(win.activeChordId));
+  // Duet, where it can be asked: set up, reading pages (an image is one), this chord not turned off for it, and not a private window.
+  const duetReady = Boolean(win && !win.private && state.settings.duet.enabled && !state.settings.duet.readsNothing && state.settings.duet.provider && !state.settings.duet.offChords.includes(win.activeChordId));
   const results = useMemo<Result[]>(() => {
     if (!image) return textResults;
     const search: Result = { kind: 'imageSearch', key: 'image-search', title: `Search ${imageEngine.label} for this image`, engine: imageEngine.engine };

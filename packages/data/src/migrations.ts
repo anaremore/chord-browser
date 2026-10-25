@@ -243,4 +243,20 @@ export const MIGRATIONS: readonly string[] = [
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   ) STRICT;
   `,
+  // 14: a Duet chat's scope can be 'every' (Ask every time: nothing attached for you). SQLite can't change a CHECK,
+  // so the table is made again, as SQLite documents: a copy with the new rule, the old one dropped, the copy renamed.
+  // Foreign keys are off while migrations run (db.ts), so dropping it doesn't take its messages with it.
+  `
+  CREATE TABLE duet_thread_next (
+    id TEXT PRIMARY KEY, chord_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL CHECK (provider IN ('claude','codex')), model TEXT, provider_session_id TEXT,
+    scope TEXT NOT NULL DEFAULT 'ask' CHECK (scope IN ('every','ask','chord','all')),
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL
+  ) STRICT;
+  INSERT INTO duet_thread_next (id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at)
+    SELECT id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at FROM duet_thread;
+  DROP TABLE duet_thread;
+  ALTER TABLE duet_thread_next RENAME TO duet_thread;
+  CREATE INDEX duet_thread_chord ON duet_thread(chord_id, last_used_at DESC);
+  `,
 ];
