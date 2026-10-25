@@ -123,6 +123,16 @@ const effectsAre = (now: 'wet' | 'dry') => (state: State, windowId: string) => {
   return (active ? state.live[active]?.effects : null) === now;
 };
 
+/** The tab on screen's developer tools (DESIGN.md §7.16): where they are (null: closed), and with `side`, docked on it. */
+const devtoolsAre =
+  (place: 'docked' | 'window' | null, side?: 'right' | 'bottom') =>
+  (state: State, windowId: string): boolean => {
+    const active = activeTabId(state, windowId);
+    if (!active) return false;
+    const now = state.live[active]?.devtools ?? null;
+    return now === place && (side === undefined || state.settings.devtools.side === side);
+  };
+
 /**
  * Every action the keyboard needs is here (DESIGN.md §14.1 rule 4). `when`:
  * shown only where it does something (Separate split tabs, in a split).
@@ -168,7 +178,13 @@ const ACTIONS: { action: ActionId; title: string; words: string; when?: (state: 
   { action: 'effects.hide', title: 'Hide an element on this page', words: 'hide element zap remove block banner sidebar effects', when: onWebsite },
   { action: 'page.print', title: 'Print', words: 'print pdf' },
   { action: 'page.viewSource', title: 'View page source', words: 'view source html code' },
-  { action: 'app.devtools', title: 'Developer tools', words: 'developer tools devtools inspect console' },
+  // Developer tools for the tab on screen: open or close them; docked, the other side or a window; in one, back in.
+  { action: 'app.devtools', title: 'Developer tools', words: 'developer tools devtools inspect console', when: (s, w) => !devtoolsAre('docked')(s, w) && !devtoolsAre('window')(s, w) },
+  { action: 'app.devtools', title: 'Close developer tools', words: 'close developer tools devtools inspect console', when: (s, w) => devtoolsAre('docked')(s, w) || devtoolsAre('window')(s, w) },
+  { action: 'app.devtoolsSide', title: 'Dock developer tools at the bottom', words: 'dock developer tools devtools bottom below side move', when: devtoolsAre('docked', 'right') },
+  { action: 'app.devtoolsSide', title: 'Dock developer tools on the right', words: 'dock developer tools devtools right side move', when: devtoolsAre('docked', 'bottom') },
+  { action: 'app.devtoolsWindow', title: 'Pop out developer tools', words: 'pop out undock developer tools devtools window separate', when: devtoolsAre('docked') },
+  { action: 'app.devtoolsWindow', title: 'Dock developer tools in the window', words: 'dock developer tools devtools back in window attach', when: devtoolsAre('window') },
   { action: 'chord.delete', title: 'Delete this chord', words: 'delete remove chord space' },
   { action: 'chord.separateSignIns', title: 'Keep sign-ins separate for this chord', words: 'sign ins separate accounts cookies profile login' },
   { action: 'app.settings', title: 'Settings', words: 'settings preferences options' },

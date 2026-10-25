@@ -80,6 +80,7 @@ export default defineConfig({
           archive: src('preload/archive.ts'),
           mini: src('preload/mini.ts'),
           reader: src('preload/reader.ts'),
+          devtools: src('preload/devtools.ts'),
           // Every web page's: Chromium's chrome.app, and no passkey autofill dialog (ARCHITECTURE.md §9).
           page: src('preload/page.ts'),
           // Every web page's service worker's: its app badge goes to its tabs, not Chord's icon (ARCHITECTURE.md §9).
@@ -110,6 +111,7 @@ export default defineConfig({
           archive: src('renderer/archive/index.html'),
           mini: src('renderer/mini/index.html'),
           reader: src('renderer/reader/index.html'),
+          devtools: src('renderer/devtools/index.html'),
         },
       },
     },

@@ -49,7 +49,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot } from '@chord/ipc';
+import type { ArchiveSnapshot, DevtoolsAction, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot } from '@chord/ipc';
 import { THEME_VARS, type Theme } from '@chord/player-protocol';
 import { createChordTheme, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
@@ -58,6 +58,7 @@ import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, w
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
+import { DevTools } from './devtools';
 import { DrmNotices, drmServiceFor, findBrowsers, launchEnv } from './drm';
 import { Effects } from './effects/service';
 import { CHECK_WAIT_MS } from './player/install-state';
@@ -137,6 +138,12 @@ export interface BrowserOptions {
   saveHistory(nodeId: NodeId, nav: NavState | null): void;
   /** A private window closed: drop its session (cookies, storage, cache) and anything kept for it. */
   releaseProfile(profileId: string): void;
+  /**
+   * The session developer tools load in (DESIGN.md §7.16): Chord's own,
+   * persistent one, or for a private window's tab (its profile id) an
+   * in-memory one of that window's. Never a profile's.
+   */
+  devtoolsSession(privateProfileId: string | null): Session;
   /** Safe Browsing (ARCHITECTURE.md §14.5): checks pages while it's on, and whether to offer turning it on. */
   safeBrowsing: {
     enabled(): boolean;
@@ -246,6 +253,8 @@ export class Browser {
   readonly peeks: Peeks;
   /** Tabs' reader views (DESIGN.md §7.11), and what each was last told about how it looks. */
   readonly readers: Readers;
+  /** Tabs' developer tools, docked beside their page or in a window of their own (DESIGN.md §7.16). */
+  readonly devtools: DevTools;
   private readonly readerSent = new Map<number, string>();
   readonly minis: MiniWindows;
   /** How often a site's pages went to each chord this session, for offering a link route (never silently). */
@@ -382,7 +391,10 @@ export class Browser {
         contents.on('leave-html-full-screen', () => this.windowFor(contents)?.setPageFullScreen(false));
         attachContextMenu(contents, {
           surface: 'web',
-          inspect: true,
+          // Every web page; the archive (Chord's own page) only in development builds, as Chord's other views.
+          inspect: !app.isPackaged || this.store.state.nodes[nodeId]?.kind !== 'tab' || !isInternalUrl((this.store.state.nodes[nodeId] as TabNode).url),
+          // A tab's page opens its developer tools where they live (docked, or their window); Peek's and a mini window's, popped out.
+          inspectElement: (x, y) => this.inspectAt(contents, nodeId, x, y),
           searchEngine: () => this.store.state.settings.searchEngine,
           openTab: (url, background) => {
             // A mini window's links open in mini windows of their own.
@@ -496,6 +508,43 @@ export class Browser {
       failed: (nodeId) => {
         const windowId = this.windowShowing(nodeId);
         this.windows.get(windowId ?? '')?.toast({ id: `reader:${nodeId}`, message: 'Chord couldn’t find an article on this page.' });
+      },
+    });
+    this.devtools = new DevTools({
+      page: (nodeId) => this.tabs.get(nodeId)?.webContents,
+      sessionFor: (nodeId) => {
+        const node = this.store.state.nodes[nodeId];
+        const profileId = node ? this.store.state.chords[node.chordId]?.profileId : undefined;
+        return options.devtoolsSession(profileId && isPrivateProfile(profileId) ? profileId : null);
+      },
+      uiSession: options.uiSession,
+      settings: () => this.store.state.settings.devtools,
+      remember: (patch) => this.store.dispatch({ t: 'settings.set', settings: { devtools: patch } }),
+      changed: (nodeId, place) => {
+        // A sleeping tab has no live entry; reporting would wake it in the sidebar.
+        const live = this.store.state.live[nodeId];
+        if (live && live.devtools !== place) this.store.dispatch({ t: 'tab.live', nodeId, live: { devtools: place } });
+        for (const w of this.windows.values()) if (shownTabs(this.store.state, w.id).includes(nodeId)) this.showPanes(w);
+      },
+      nearBounds: (nodeId) => this.windows.get(this.windowShowing(nodeId) ?? '')?.window.getBounds(),
+      wire: (contents, nodeId) => {
+        attachShortcuts(contents, this.keyboard);
+        // Into a split's pane's DevTools, that pane is the focused one, as clicking into its page makes it.
+        contents.on('focus', () => this.paneFocused(nodeId));
+        contents.on('input-event', (_event, input) => {
+          if (input.type === 'mouseDown') this.paneFocused(nodeId);
+        });
+      },
+      openUrl: (nodeId, url) => {
+        const windowId = this.windowShowing(nodeId);
+        if (windowId && /^https?:/i.test(url)) this.store.dispatch({ t: 'tab.open', windowId, url });
+      },
+      reveal: (nodeId) => {
+        const w = this.windows.get(this.windowShowing(nodeId) ?? '');
+        if (!w) return;
+        if (!shownTabs(this.store.state, w.id).includes(nodeId)) this.store.dispatch({ t: 'tab.activate', windowId: w.id, nodeId });
+        if (w.window.isMinimized()) w.window.restore();
+        w.window.focus();
       },
     });
     // Reader views follow the computer's appearance, accent and reduced motion, as Chord's other views do.
@@ -682,6 +731,11 @@ export class Browser {
         this.applyAppMenu();
       }
       setUiScale(change.state.settings.uiScale);
+      // Developer tools' side and size: docked ones move in every window, and DevTools windows' bars say where docking puts them.
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'devtools')) {
+        for (const w of this.windows.values()) w.setDevtoolsSettings(change.state.settings.devtools);
+        this.devtools.settingsChanged();
+      }
       if (this.settingsWindow && change.patches.some((p) => ['settings', 'chords', 'windows', 'extensions', 'sitePermissions', 'linkRoutes'].includes(String(p.path[0])))) {
         this.settingsWindow.update(this.settingsSnapshot());
       }
@@ -798,6 +852,7 @@ export class Browser {
       private: Boolean(model.private),
       onBounds: (bounds) => this.store.dispatch({ t: 'window.bounds', windowId, bounds }),
       presenting: () => this.store.state.presenting !== null,
+      devtools: this.store.state.settings.devtools,
     });
     this.windows.set(windowId, w);
     this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));
@@ -1085,6 +1140,11 @@ export class Browser {
       shown.map((p) => this.readers.viewFor(p.nodeId) ?? p.view),
       Math.max(0, shown.findIndex((p) => p.nodeId === active)),
       split ? { direction: split.direction, sizes: split.sizes } : null,
+      // Each pane's docked developer tools, beside its page (or its reader view: they're the page's).
+      shown.map((p) => {
+        const view = this.devtools.dockedView(p.nodeId);
+        return view ? { view, tab: p.nodeId } : null;
+      }),
     );
     for (const { nodeId, view } of shown) if (!before.includes(view.webContents)) this.previews.shown(nodeId);
     this.extensions.tabShown(w);
@@ -1445,6 +1505,9 @@ export class Browser {
 
   /** Run an action for the window that owns this contents (keys, the shell's buttons, the command bar). */
   run(action: ActionId, contents: WebContents): boolean {
+    // A key in a tab's developer tools (or their window's bar) acts for that tab.
+    const devtoolsOf = this.devtools.nodeOf(contents);
+    if (devtoolsOf) return this.runInDevtools(action, devtoolsOf, contents);
     const own = this.windowFor(contents);
     if (own) return this.runAction(action, own, contents);
     const w = contents === this.settingsWindow?.view.webContents ? this.lastWindow() : undefined;
@@ -1459,6 +1522,92 @@ export class Browser {
       return true;
     }
     return false;
+  }
+
+  /**
+   * A reserved key pressed in a tab's developer tools, as Chrome has them:
+   * F12 closes them, reloading reloads their page. Docked, the rest act in
+   * their window as from the page beside them (it's the focused pane by
+   * then). In their own window, closing it (⌘W) closes them; other keys are
+   * DevTools' own.
+   */
+  private runInDevtools(action: ActionId, nodeId: NodeId, contents: WebContents): boolean {
+    const page = this.tabs.get(nodeId)?.webContents;
+    switch (action) {
+      case 'app.devtools':
+        this.devtools.close(nodeId);
+        return true;
+      case 'app.devtoolsWindow':
+        this.devtools.toggleWindow(nodeId, true);
+        return true;
+      case 'nav.reload':
+        page?.reload();
+        return true;
+      case 'nav.hardReload':
+        page?.reloadIgnoringCache();
+        return true;
+      case 'app.quit':
+        app.quit();
+        return true;
+    }
+    if (this.devtools.placeOf(nodeId) === 'docked') {
+      const w = this.windows.get(this.windowShowing(nodeId) ?? '');
+      return w ? this.runAction(action, w, contents) : false;
+    }
+    if (action === 'tab.close' || action === 'window.close') {
+      this.devtools.close(nodeId);
+      return true;
+    }
+    return false;
+  }
+
+  /** Inspect, from a page's right-click menu: a tab's developer tools where they live; Peek's or a mini window's, popped out. */
+  private inspectAt(contents: WebContents, nodeId: NodeId, x: number, y: number): void {
+    if (this.tabs.get(nodeId)?.webContents === contents) {
+      this.devtools.inspect(nodeId, x, y);
+      return;
+    }
+    if (!contents.isDevToolsOpened()) contents.openDevTools({ mode: 'detach' });
+    contents.inspectElement(x, y);
+    contents.devToolsWebContents?.focus();
+  }
+
+  /**
+   * Developer tools' header in the shell (a tab its window shows), or the bar
+   * of their window (its own tab): close, pop out, dock, the other side, and
+   * the edge between them and the page, dragged live and saved when let go.
+   */
+  devtoolsAction(sender: WebContents, action: DevtoolsAction): void {
+    const barOf = this.devtools.nodeOfBar(sender);
+    if (barOf) {
+      if (action.do === 'dock') this.devtools.dock(barOf, true);
+      else if (action.do === 'close') this.devtools.close(barOf);
+      return;
+    }
+    const w = this.windowFor(sender);
+    if (!w) return;
+    const settings = this.store.state.settings.devtools;
+    switch (action.do) {
+      case 'resize':
+        if (!action.done) return w.dragDevtools(action.size);
+        this.store.dispatch({ t: 'settings.set', settings: { devtools: settings.side === 'right' ? { width: action.size } : { height: action.size } } });
+        w.dragDevtools(null);
+        return;
+      case 'side':
+        this.store.dispatch({ t: 'settings.set', settings: { devtools: { side: action.side } } });
+        return;
+    }
+    const nodeId = action.nodeId;
+    if (!nodeId || !shownTabs(this.store.state, w.id).includes(nodeId)) return;
+    if (action.do === 'close') this.devtools.close(nodeId);
+    else if (action.do === 'window') this.devtools.popOut(nodeId);
+    else this.devtools.dock(nodeId);
+  }
+
+  /** Whether a tab's developer tools may open: any web page; Chord's own pages only in development builds, as Inspect Chord UI. */
+  private devtoolsAllowed(nodeId: NodeId): boolean {
+    const node = this.store.state.nodes[nodeId];
+    return node?.kind === 'tab' && (!app.isPackaged || !isInternalUrl(node.url));
   }
 
   /** Menu items act on the focused Chord window, or the last one used (when Settings has focus). */
@@ -2107,7 +2256,7 @@ export class Browser {
         // The command bar and Peek are modal: F6 stays out of them.
         const at = w.focusSource(source);
         if (at === 'overlay' || peek) return true;
-        send(w.shell.webContents, 'focus:region', { direction: action === 'view.focusNextRegion' ? 1 : -1, from: at, popover: w.popoverShown });
+        send(w.shell.webContents, 'focus:region', { direction: action === 'view.focusNextRegion' ? 1 : -1, from: at, popover: w.popoverShown, devtools: w.devtoolsShown });
         return true;
       }
       case 'tab.close':
@@ -2254,7 +2403,19 @@ export class Browser {
         this.openSettings('shortcuts');
         return true;
       case 'app.devtools':
-        pageContents?.toggleDevTools();
+        // Peek's page: popped out, in a window of Electron's own (DESIGN.md §7.16). A tab's: docked, or in their window.
+        if (peek) {
+          if (peek.isDevToolsOpened()) peek.closeDevTools();
+          else peek.openDevTools({ mode: 'detach' });
+        } else if (active && this.devtoolsAllowed(active)) this.devtools.toggle(active);
+        return true;
+      case 'app.devtoolsSide':
+        if (active && this.devtools.placeOf(active) === 'docked') {
+          this.store.dispatch({ t: 'settings.set', settings: { devtools: { side: this.store.state.settings.devtools.side === 'right' ? 'bottom' : 'right' } } });
+        }
+        return true;
+      case 'app.devtoolsWindow':
+        if (active) this.devtools.toggleWindow(active, true);
         return true;
       case 'window.close':
         w.window.close();

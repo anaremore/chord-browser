@@ -2,7 +2,8 @@
  * The snapshot technique (ARCHITECTURE.md §5; DESIGN.md §6.1 rule 4): how
  * the content frame changes size without moving web content every frame.
  *
- * 1. Picture each page in the frame (`capturePage`; every pane of a split).
+ * 1. Picture each page in the frame (`capturePage`; every pane of a split,
+ *    and docked developer tools).
  * 2. The shell, which draws the frame behind the pages, paints the pictures
  *    exactly where the pages are, and says so.
  * 3. The pages move out of sight, past the window's right edge, already at
@@ -39,8 +40,11 @@ const MOVE_TIMEOUT_MS = springCurve(springs.smooth).durationMs + 300;
 export interface FrameHost {
   /** Tell the shell (frame:snapshot). */
   tell(event: FrameSnapshotEvent): void;
-  /** The pages in the frame, in order, and where each is now. */
-  panes(): { view: WebContentsView; rect: Rect }[];
+  /**
+   * The pages in the frame, in order, and where each is now; docked developer
+   * tools too, as their whole frame with the header the shell draws over its top.
+   */
+  panes(): { view: WebContentsView; rect: Rect; header?: SnapshotPane['header'] }[];
   /** Whether the frame's pages can be pictured now. */
   canSnapshot(): boolean;
   /** Where the pages go: the frame's pane rects as things stand. */
@@ -230,7 +234,7 @@ export class FrameSnapshots {
       return null;
     }
     const shown = this.reply(seq, 'shown');
-    this.tell({ seq, phase: 'show', panes: panes.map((p, i) => ({ rect: p.rect, ...pictures[i]! })) });
+    this.tell({ seq, phase: 'show', panes: panes.map((p, i) => ({ rect: p.rect, ...(p.header ? { header: p.header } : {}), ...pictures[i]! })) });
     const onTime = (await within(shown, deadline - Date.now())) !== null;
     const ready = onTime && this.unchanged(panes) && this.host.canSnapshot();
     this.replies.delete(`${seq}:shown`);

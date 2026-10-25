@@ -58,4 +58,11 @@ describe('the idle check', () => {
     await checked;
     expect(t.dispatched).toEqual([]);
   });
+
+  it.each(['docked', 'window'] as const)('keeps a tab awake while its developer tools are open (%s), as Chrome does', async (place) => {
+    const t = setup();
+    t.run({ t: 'tab.live', nodeId: 't1', live: { devtools: place } });
+    await t.keeper.check(10_000);
+    expect(t.dispatched).toEqual([]);
+  });
 });

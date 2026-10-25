@@ -9,7 +9,7 @@
  */
 import { imageSearchFor, keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
 import type { CaptureStart, HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
-import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, PanelLeft, Pin, Presentation, Printer, RotateCcw, RotateCw, ScanSearch, Search, Settings, SquareTerminal, TextSearch, Trash2, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, PanelBottom, PanelLeft, Pin, Presentation, Printer, RotateCcw, RotateCw, ScanSearch, Search, Settings, SquareTerminal, TextSearch, Trash2, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
@@ -100,6 +100,8 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'page.print': Printer,
   'page.viewSource': Code,
   'app.devtools': SquareTerminal,
+  'app.devtoolsSide': PanelBottom,
+  'app.devtoolsWindow': AppWindow,
   'app.settings': Settings,
   'chord.delete': Trash2,
   'split.with': Columns2,

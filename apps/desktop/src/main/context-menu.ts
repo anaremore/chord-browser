@@ -13,6 +13,12 @@ export interface ContextMenuDeps {
   surface: 'web' | 'ui' | 'reader';
   /** Offer Inspect (always for pages; development builds only for Chord's UI). */
   inspect: boolean;
+  /**
+   * How Inspect opens developer tools on the element at a point: a tab's page
+   * opens Chord's own, docked or in their window (DESIGN.md §7.16). Without
+   * it, Electron's own open popped out (Chord's UI, popups).
+   */
+  inspectElement?(x: number, y: number): void;
   /** The engine for "Search … for" on selected text. */
   searchEngine(): SearchEngineId;
   openTab(url: string, background: boolean): void;
@@ -136,6 +142,7 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
       label: web ? 'Inspect' : 'Inspect Chord UI',
       ...(web ? { accelerator: accel('app.devtools') } : {}),
       click: () => {
+        if (deps.inspectElement) return deps.inspectElement(params.x, params.y);
         // Chord's UI views fill the window, so docked devtools would have nowhere to go.
         if (!web && !contents.isDevToolsOpened()) contents.openDevTools({ mode: 'detach' });
         contents.inspectElement(params.x, params.y);

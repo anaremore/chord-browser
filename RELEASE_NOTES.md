@@ -15,6 +15,11 @@ What's built since 0.2.1; it gets its version when it's released.
   - Effects never load anything: whatever in a stylesheet would fetch a file is left out before it's used, and Chord says what it left out. They're styles only, never scripts, and they stay on this computer. In a private window, what you change lasts until the window closes.
   - The CSS parser Effects use is MIT-licensed; its notice ships with every build.
 
+- **Developer tools in the window:** F12 (⌥⌘I on macOS) now opens a tab's developer tools beside the page, on the right, as Chrome does, instead of in a separate window.
+  - Drag the edge between the page and the developer tools to resize them. Their header moves them to the bottom (and back), pops them out into a window of their own, or closes them. In that window, *Dock in the window* puts them back. Ctrl+Shift+D (⌘⇧D) inside them does both.
+  - Chord remembers the side and the size, and whether you like them in a window.
+  - Each tab keeps its own: switch tabs and you see that tab's, or none. Closing the tab closes them, and a tab with them open doesn't go to sleep.
+
 ## 0.2.1 · preview · 2026-10-25
 
 - **Signed for Windows:** the installer and Chord itself are signed by Austin Naremore, through Microsoft's Artifact Signing, so Windows shows who made them. SmartScreen may still warn about the first few signed releases until it knows the publisher. Once you're on this version, Chord installs only updates signed by the same name. Mac builds aren't signed yet.

@@ -4,6 +4,7 @@
  * and chord-data persists everything except `live` and `closed` (the archive
  * keeps closed tabs in its own table).
  */
+import { DEFAULT_DEVTOOLS, type DevtoolsPlace, type DevtoolsSettings } from './devtools';
 import type { DuetKeep, DuetProvider, DuetScope } from './duet';
 import type { ImportRecord } from './import';
 import { DEFAULT_READER, type ReaderSettings } from './reader';
@@ -231,6 +232,8 @@ export interface LiveTab {
    * not applied (`dry`, the site's switch or the one for everywhere), or none.
    */
   effects: 'wet' | 'dry' | null;
+  /** The tab's developer tools are open: docked beside its page, or in a window of their own (DESIGN.md §7.16). */
+  devtools: DevtoolsPlace | null;
 }
 
 export type DownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
@@ -404,6 +407,8 @@ export interface Settings {
   reader: ReaderSettings;
   /** Effects (ARCHITECTURE.md §9): the Dry/Wet switch for every site at once. */
   effects: EffectsSettings;
+  /** Developer tools: the side and size docked ones take, and whether new ones open in a window (DESIGN.md §7.16). */
+  devtools: DevtoolsSettings;
 }
 
 /** Settings → Effects: dry everywhere keeps every site's Effects and applies none; each site keeps its own switch too. */
@@ -499,6 +504,7 @@ export const DEFAULT_SETTINGS: Settings = {
   miniWindowSize: null,
   reader: DEFAULT_READER,
   effects: { wet: true },
+  devtools: DEFAULT_DEVTOOLS,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -514,6 +520,7 @@ export const defaultSettings = (): Settings => ({
   duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
   reader: { ...DEFAULT_SETTINGS.reader },
   effects: { ...DEFAULT_SETTINGS.effects },
+  devtools: { ...DEFAULT_SETTINGS.devtools },
 });
 
 /**
@@ -559,6 +566,8 @@ export interface SettingsPatch {
   duet?: Partial<DuetSettings>;
   reader?: Partial<ReaderSettings>;
   effects?: Partial<EffectsSettings>;
+  /** Sizes are clamped to their side's minimum and DEVTOOLS.max. */
+  devtools?: Partial<DevtoolsSettings>;
 }
 
 /**
@@ -640,7 +649,7 @@ export const emptyState = (): State => ({
   sharedWindows: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null, effects: null };
+export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null, effects: null, devtools: null };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

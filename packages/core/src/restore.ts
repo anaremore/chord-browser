@@ -32,6 +32,7 @@ import {
 } from './model';
 import { cleanOffSites } from './ad-blocking';
 import { cleanOverrides } from './bindings';
+import { cleanDevtoolsSettings } from './devtools';
 import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
 import { routeKey } from './links';
@@ -191,6 +192,8 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   settings.autoPipDefaultOff = saved['autoPipDefaultOff'] === true;
   if (saved['externalLinks'] === 'mini' || saved['externalLinks'] === 'tab') settings.externalLinks = saved['externalLinks'];
   settings.miniWindowSize = restoreMiniSize(saved['miniWindowSize']);
+  const devtools = saved['devtools'];
+  if (devtools && typeof devtools === 'object') settings.devtools = cleanDevtoolsSettings(settings.devtools, devtools as Record<string, unknown>);
   if (typeof saved['pagePreviews'] === 'boolean') settings.pagePreviews = saved['pagePreviews'];
   if (typeof saved['presentingHidesSidebar'] === 'boolean') settings.presentingHidesSidebar = saved['presentingHidesSidebar'];
   if (typeof saved['keepScreenshots'] === 'boolean') settings.keepScreenshots = saved['keepScreenshots'];

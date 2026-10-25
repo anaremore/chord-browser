@@ -17,10 +17,11 @@ const scope = globalThis as unknown as {
 async function drawable(event: FrameSnapshotEvent): Promise<[DrawableSnapshotEvent, Transferable[]]> {
   if (event.phase !== 'show') return [event, []];
   const panes = await Promise.all(
-    event.panes.map(async ({ rect, width, height, pixels }) => ({
+    event.panes.map(async ({ rect, width, height, pixels, header }) => ({
       rect,
       width,
       height,
+      ...(header ? { header } : {}),
       bitmap: await createImageBitmap(imageData(bgraToRgba(pixels), width, height), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' }),
     })),
   );

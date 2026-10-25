@@ -1,7 +1,8 @@
 /**
  * One Chord window (ARCHITECTURE.md §5). Views, bottom to top:
  *   shell    Chord's UI, full window, transparent
- *   tabs     the active tab, or 2–4 split panes, inset and rounded (from index 1)
+ *   tabs     the active tab, or 2–4 split panes, inset and rounded (from index 1);
+ *            a pane's docked developer tools beside its page (DESIGN.md §7.16)
  *   popover  find bar and permission prompts: sized to its cards, at the frame's top-right
  *   preview  a pinned tab's or folder's hover preview, beside the sidebar (DESIGN.md §7.6)
  *   floating an extension's popup, under its button (at most one)
@@ -9,7 +10,7 @@
  *   peek     Peek's page, in the card the overlay draws (DESIGN.md §7.9)
  */
 import { join } from 'node:path';
-import { paneRects, type Bounds, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
+import { DEFAULT_DEVTOOLS, devtoolsLayout, devtoolsSize, paneRects, type Bounds, type DevtoolsLayout, type DevtoolsSettings, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
 import { BaseWindow, MessageChannelMain, WebContentsView, nativeTheme, type Menu, type MessagePortMain, type Session, type WebContents } from 'electron';
@@ -33,6 +34,8 @@ export interface AppWindowOptions {
   onBounds(bounds: Bounds): void;
   /** Presenting mode is on: Chord's toasts aren't shown, except about the share itself. */
   presenting(): boolean;
+  /** Where docked developer tools go, and how big they are (Settings' one setting). */
+  devtools?: DevtoolsSettings;
 }
 
 interface FrameOrigin {
@@ -73,7 +76,13 @@ export interface PaneLayout {
   sizes: number[];
 }
 
-export type UiSurface = 'shell' | 'overlay' | 'popover' | 'preview' | 'settings' | 'archive' | 'mini' | 'reader';
+export type UiSurface = 'shell' | 'overlay' | 'popover' | 'preview' | 'settings' | 'archive' | 'mini' | 'reader' | 'devtools';
+
+/** A pane's developer tools, docked beside its page (DESIGN.md §7.16): their view, and the tab they inspect. */
+export interface DockedDevtools {
+  view: WebContentsView;
+  tab: string;
+}
 
 /** A view that floats over the page until something else happens (an extension's popup). */
 export interface FloatingView {
@@ -95,6 +104,7 @@ const SURFACES: Record<UiSurface, { preload: string; role: Role }> = {
   archive: { preload: 'archive', role: 'archive' },
   mini: { preload: 'mini', role: 'mini' },
   reader: { preload: 'reader', role: 'reader' },
+  devtools: { preload: 'devtools', role: 'devtools' },
 };
 
 /**
@@ -192,6 +202,11 @@ export class AppWindow {
   private panes: WebContentsView[] = [];
   private focusedPane = 0;
   private paneLayout: PaneLayout | null = null;
+  /** Each pane's docked developer tools, in pane order; null where its tab has none open here. */
+  private devtools: (DockedDevtools | null)[] = [];
+  private devtoolsSettings: Pick<DevtoolsSettings, 'side' | 'width' | 'height'> = DEFAULT_DEVTOOLS;
+  /** The edge between a page and its developer tools is being dragged: their size until it's let go. */
+  private devtoolsDrag: number | null = null;
   /** Pages hidden while the frame shows why they didn't load (or that they crashed). */
   private hiddenPanes = new Set<WebContentsView>();
   /** Shared tabs this window keeps out of sight while they aren't on screen, so they keep painting (`park`). */
@@ -237,8 +252,9 @@ export class AppWindow {
   /** Duet's openings and closings waiting for their frame change, oldest first. */
   private readonly duetChanges: { width: number; publish(): void }[] = [];
 
-  constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds, presenting }: AppWindowOptions) {
+  constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds, presenting, devtools }: AppWindowOptions) {
     this.id = id;
+    if (devtools) this.devtoolsSettings = devtools;
     this.isPrivate = isPrivate;
     this.presenting = presenting;
     this.origin = frameOrigin(sidebar, sidebarWidth);
@@ -273,13 +289,9 @@ export class AppWindow {
         if (this.snapshotPort) this.snapshotPort.postMessage(event);
         else send(this.shell.webContents, 'frame:snapshot', event);
       },
-      panes: () => {
-        const frame = this.frameRect();
-        const rects = this.paneRectsIn(frame);
-        return this.panes.map((view, i) => ({ view, rect: rects[i] ?? frame }));
-      },
+      panes: () => this.framePictures(),
       canSnapshot: () => this.canSnapshot(),
-      targets: () => this.paneRectsIn(this.frameRect()),
+      targets: () => this.framePictures().map((p) => p.rect),
       layout: () => this.layout(),
     });
     this.layout();
@@ -378,9 +390,10 @@ export class AppWindow {
   /**
    * Show tabs' views in the content frame: one, or a split's panes laid out
    * by `layout`, with `focused` the one that takes the keyboard. None: the
-   * shell's empty state shows through.
+   * shell's empty state shows through. `devtools`: each pane's docked
+   * developer tools, beside its page (DESIGN.md §7.16).
    */
-  showTabs(views: readonly WebContentsView[], focused: number, layout: PaneLayout | null): void {
+  showTabs(views: readonly WebContentsView[], focused: number, layout: PaneLayout | null, devtools: readonly (DockedDevtools | null)[] = []): void {
     // Pages coming or going while a frame snapshot moves: the pictures are of the old ones, so they're done.
     this.snapshots.finish();
     const next = views.slice(0, 4);
@@ -388,6 +401,7 @@ export class AppWindow {
     const focusChanged = focus !== this.tabView;
     const same = next.length === this.panes.length && next.every((v, i) => v === this.panes[i]);
     this.paneLayout = next.length > 1 ? layout : null;
+    this.showDevtools(next.map((_, i) => devtools[i] ?? null));
     if (same && !focusChanged) {
       this.layout();
       return;
@@ -414,6 +428,76 @@ export class AppWindow {
 
   get activeTabContents() {
     return this.tabView?.webContents ?? null;
+  }
+
+  /**
+   * Put the panes' docked developer tools in the window, beside their pages
+   * (just above the shell, where the pages are; they never overlap), and take
+   * away the ones no pane shows now. Taken away, they stay open: their tab's.
+   */
+  private showDevtools(next: (DockedDevtools | null)[]): void {
+    const root = this.window.contentView;
+    const views = next.flatMap((d) => (d ? [d.view] : []));
+    for (const d of this.devtools) if (d && !views.includes(d.view) && root.children.includes(d.view)) root.removeChildView(d.view);
+    for (const view of views) if (!root.children.includes(view)) root.addChildView(view, this.shellRaised ? 0 : 1);
+    this.devtools = next;
+  }
+
+  /** Settings changed where docked developer tools go, or how big they are: they move now. */
+  setDevtoolsSettings(settings: Pick<DevtoolsSettings, 'side' | 'width' | 'height'>): void {
+    const was = this.devtoolsSettings;
+    if (was.side === settings.side && was.width === settings.width && was.height === settings.height) return;
+    this.devtoolsSettings = { side: settings.side, width: settings.width, height: settings.height };
+    if (!this.devtools.some(Boolean) || this.window.isDestroyed()) return;
+    this.snapshots.finish();
+    this.layout();
+  }
+
+  /**
+   * The edge between a page and its developer tools, dragged: they're `size`
+   * px until it's let go (null), when Settings has the size. The pages follow
+   * live, as split view's dividers do.
+   */
+  dragDevtools(size: number | null): void {
+    if (this.devtoolsDrag === size || this.window.isDestroyed()) return;
+    this.devtoolsDrag = size;
+    this.snapshots.finish();
+    this.layout();
+  }
+
+  /** Whether the focused pane's tab has its developer tools docked here (one of F6's regions). */
+  get devtoolsShown(): boolean {
+    return !this.window.isDestroyed() && Boolean(this.devtools[this.focusedPane]);
+  }
+
+  /** Docked developer tools' page, edge and frame in a pane: at the edge being dragged, or the setting for their side. */
+  private devtoolsLayoutIn(pane: Rect): DevtoolsLayout {
+    return devtoolsLayout(pane, this.devtoolsSettings.side, this.devtoolsDrag ?? devtoolsSize(this.devtoolsSettings));
+  }
+
+  /** Each pane's page in the frame: its pane, less its docked developer tools. */
+  private pageRectsIn(frame: Rect): Rect[] {
+    return this.paneRectsIn(frame).map((pane, i) => (this.devtools[i] ? this.devtoolsLayoutIn(pane).page : pane));
+  }
+
+  /**
+   * What the frame snapshot pictures, in the layout's units: each page, and
+   * each pane's docked developer tools as their whole frame, the picture
+   * under the header the shell draws for them.
+   */
+  private framePictures(): { view: WebContentsView; rect: Rect; header?: { tab: string; height: number } }[] {
+    const frame = this.frameRect();
+    const rects = this.paneRectsIn(frame);
+    return this.panes.flatMap((view, i) => {
+      const pane = rects[i] ?? frame;
+      const tools = this.devtools[i];
+      if (!tools) return [{ view, rect: pane }];
+      const d = this.devtoolsLayoutIn(pane);
+      return [
+        { view, rect: d.page },
+        { view: tools.view, rect: d.card, header: { tab: tools.tab, height: d.view.y - d.card.y } },
+      ];
+    });
   }
 
   /** Whether this window has the view: one of its panes, or a shared tab it keeps out of sight. */
@@ -594,10 +678,10 @@ export class AppWindow {
     return this.paneLayout && this.panes.length > 1 ? paneRects(frame, this.paneLayout.direction, this.paneLayout.sizes) : [frame];
   }
 
-  /** Peek's card floats over the focused pane. */
+  /** Peek's card floats over the focused pane's page. */
   private peekCard(): Rect {
     const whole = this.frameRect();
-    const frame = this.paneRectsIn(whole)[this.focusedPane] ?? whole;
+    const frame = this.pageRectsIn(whole)[this.focusedPane] ?? whole;
     const width = Math.round(Math.min(frame.width * PEEK_SHARE, PEEK_MAX.width));
     const height = Math.round(Math.min(frame.height * PEEK_SHARE, PEEK_MAX.height));
     return { x: Math.round(frame.x + (frame.width - width) / 2), y: Math.round(frame.y + (frame.height - height) / 2), width, height };
@@ -622,7 +706,7 @@ export class AppWindow {
     if (!view || this.hiddenPanes.has(view) || view.webContents.isDestroyed()) return null;
     if (this.pageFullScreen) return { contents: view.webContents, rect: { x: 0, y: 0, ...this.contentSize() } };
     const frame = this.frameRect();
-    return { contents: view.webContents, rect: this.paneRectsIn(frame)[this.focusedPane] ?? frame };
+    return { contents: view.webContents, rect: this.pageRectsIn(frame)[this.focusedPane] ?? frame };
   }
 
   /** Every page shown in the frame: a split's panes, or the one tab. */
@@ -853,9 +937,11 @@ export class AppWindow {
    * the keyboard to go to the page, the popover (find, a permission prompt)
    * or back to itself.
    */
-  focusRegion(to: 'page' | 'popover' | 'shell'): void {
+  focusRegion(to: 'page' | 'devtools' | 'popover' | 'shell'): void {
     if (this.window.isDestroyed()) return;
+    const tools = this.devtools[this.focusedPane];
     if (to === 'popover' && this.popover.getVisible()) this.popover.webContents.focus();
+    else if (to === 'devtools' && tools && !tools.view.webContents.isDestroyed()) tools.view.webContents.focus();
     else if (to === 'page' && this.tabView?.getVisible()) this.tabView.webContents.focus();
     else this.shell.webContents.focus();
   }
@@ -866,10 +952,11 @@ export class AppWindow {
   }
 
   /** Which of the window's views has the keyboard, as F6 counts regions. */
-  focusSource(contents: WebContents | null): 'shell' | 'popover' | 'overlay' | 'page' {
+  focusSource(contents: WebContents | null): 'shell' | 'popover' | 'overlay' | 'page' | 'devtools' {
     if (contents === this.shell.webContents) return 'shell';
     if (contents === this.popover.webContents) return 'popover';
     if (contents === this.overlay.webContents) return 'overlay';
+    if (contents && this.devtools.some((d) => d?.view.webContents === contents)) return 'devtools';
     return 'page';
   }
 
@@ -1020,10 +1107,17 @@ export class AppWindow {
     // While a frame snapshot's pictures move, the pages wait out of sight at the size they're going to be.
     const away = this.snapshots.active;
     this.panes.forEach((view, i) => {
-      // The pane's rect in window pixels: the one place a page's rect leaves the layout's units (the shell's CSS pixels).
-      const at = toWindowRect(rects[i] ?? frame);
+      const pane = rects[i] ?? frame;
+      // Docked developer tools share the pane with the page (DESIGN.md §7.16), with the shell's edge between them.
+      const tools = this.devtools[i];
+      const docked = tools ? this.devtoolsLayoutIn(pane) : null;
+      // The page's rect in window pixels: the one place a page's rect leaves the layout's units (the shell's CSS pixels).
+      const at = toWindowRect(docked?.page ?? pane);
       if (this.pageFullScreen && view === this.tabView) place(view, whole);
       else place(view, away ? offscreen(at, whole) : at);
+      if (!tools || !docked) return;
+      const toolsAt = toWindowRect(docked.view);
+      place(tools.view, away ? offscreen(toolsAt, whole) : toolsAt);
     });
     const parkedAt = offscreen(toWindowRect(frame), whole);
     for (const view of this.parked) {
@@ -1040,8 +1134,8 @@ export class AppWindow {
       send(this.overlay.webContents, 'peek:state', this.peekState());
       return;
     }
-    // The popover (find, permission prompts) hangs from the focused pane's top-right corner; its cards carry their own margin.
-    const pane = rects[this.focusedPane] ?? frame;
+    // The popover (find, permission prompts) hangs from the focused page's top-right corner; its cards carry their own margin.
+    const pane = this.pageRectsIn(frame)[this.focusedPane] ?? frame;
     place(this.popover, toWindowRect({ x: Math.max(pane.x, pane.x + pane.width - pw), y: pane.y, width: pw, height: ph }));
   }
 

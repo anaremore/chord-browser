@@ -326,6 +326,9 @@ function registerIpc(): void {
   handle('layout:lift', ({ lifted }, sender) => browser!.setLifted(sender, lifted));
   handle('layout:snapshot', ({ seq, phase }, sender) => senderWindow(sender).ackSnapshot(seq, phase));
   handle('layout:snapshotPort', (_request, sender) => senderWindow(sender).connectSnapshots());
+  // Developer tools (DESIGN.md §7.16): their header in the shell, and the bar of ones in a window of their own.
+  handle('devtools:do', (action, sender) => browser!.devtoolsAction(sender, action));
+  handle('devtools:bar', (_request, sender) => browser!.devtools.barFor(sender));
   handle('menu:chord', ({ chordId, x, y }, sender) => browser!.openChordMenu(sender, chordId, { x, y }));
   handle('action:run', async ({ action }, sender) => {
     browser!.run(action, sender);
@@ -564,10 +567,35 @@ if (!app.requestSingleInstanceLock()) {
       }
       return ses;
     };
+    /**
+     * Developer tools' sessions (DESIGN.md §7.16): Chord's own persistent one,
+     * and an in-memory one per private window, so what DevTools fetch for a
+     * private page (source maps) never reaches the disk. Never a profile's:
+     * DevTools are Chord's, not a site's. They ask for nothing and spell-check nothing.
+     */
+    const devtoolsSessions = new Map<string, Session>();
+    const devtoolsSession = (privateProfileId: string | null) => {
+      const partition = privateProfileId ? `chord-devtools-${privateProfileId}` : 'persist:chord-devtools';
+      let ses = devtoolsSessions.get(partition);
+      if (!ses) {
+        ses = session.fromPartition(partition);
+        configureUiSession(ses);
+        devtoolsSessions.set(partition, ses);
+      }
+      return ses;
+    };
     /** A private window closed: its in-memory session is emptied now, not just at exit. */
     const releaseProfile = (profileId: string) => {
       const ses = profiles.get(profileId);
       if (!isPrivateProfile(profileId)) return;
+      const tools = devtoolsSessions.get(`chord-devtools-${profileId}`);
+      if (tools) {
+        devtoolsSessions.delete(`chord-devtools-${profileId}`);
+        void tools
+          .clearStorageData()
+          .then(() => tools.clearCache())
+          .catch(() => {});
+      }
       permissions.forgetScope(profileId);
       adBlocking.detach(profileId);
       if (!ses) return;
@@ -658,6 +686,7 @@ if (!app.requestSingleInstanceLock()) {
       memoryLow: () => (!app.isPackaged && process.env['CHORD_MEMORY_LOW'] === '1') || memoryLow(process.getSystemMemoryInfo(), process.platform),
       onChange: (change) => store.record(change.patches, change.state),
       releaseProfile,
+      devtoolsSession,
       adBlocking: {
         attachPage: (contents) => adBlocking.attachPage(contents),
         profileOf: (contents) => adBlocking.profileOf(contents),

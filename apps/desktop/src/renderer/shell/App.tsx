@@ -31,6 +31,7 @@ import styles from './App.module.css';
 import { ArchiveButton, ArchiveFlights } from './ArchiveArc';
 import { ChordHeader, ChordPane, ChordSwitcher, GhostPane, newChordLook, Tint } from './Chords';
 import { ShortcutsProvider, useKeys } from './keys';
+import { DockedPane } from './Devtools';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
 import { DuetPanel } from './Duet';
 import { DuetReadTabs } from './duet-context';
@@ -335,6 +336,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const split = activeId ? splitOf(state, activeId) : null;
   const frameRef = useRef<HTMLDivElement>(null);
   const frameSize = useElementSize(frameRef);
+  // Developer tools docked beside the page (DESIGN.md §7.16): their size while their edge is dragged.
+  const [devtoolsLive, setDevtoolsLive] = useState<number | null>(null);
+  const docked = !split && live?.devtools === 'docked';
   // Where split view's drop zones go, and whether the shell is lifted over the page to show them.
   const [dropHost, setDropHost] = useState<HTMLDivElement | null>(null);
   const [lifted, setLifted] = useState(false);
@@ -748,8 +752,10 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
             ref={frameRef}
             className={styles.frame}
             data-split={split ? split.direction : undefined}
-            // A page is sharing the tab on screen: the frame's edge is tinted (a split's pane says it itself).
-            data-shared={(!split && live?.shared) || undefined}
+            // The page and its docked developer tools are frames of their own; the frame itself isn't drawn.
+            data-devtools={docked || undefined}
+            // A page is sharing the tab on screen: the frame's edge is tinted (a split's pane, or the page beside its DevTools, says it itself).
+            data-shared={(!split && !docked && live?.shared) || undefined}
             data-region="page"
           >
             {!state.settings.onboarded && chord && !isPrivate ? (
@@ -764,7 +770,38 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                     activeId={activeId}
                     size={frameSize}
                     pageState={(tab, paneLive) => <PageState tab={tab} live={paneLive} windowId={windowId} />}
+                    devtools={(tab, pane, focused, page) =>
+                      state.live[tab.id]?.devtools === 'docked' ? (
+                        <DockedPane
+                          tabId={tab.id}
+                          pane={pane}
+                          settings={state.settings.devtools}
+                          live={devtoolsLive}
+                          onLive={setDevtoolsLive}
+                          info={info}
+                          focused={focused}
+                          shared={Boolean(state.live[tab.id]?.shared)}
+                          onPagePointerDown={() => {
+                            if (!focused) void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id });
+                          }}
+                        >
+                          {page}
+                        </DockedPane>
+                      ) : null
+                    }
                   />
+                ) : docked && active ? (
+                  <DockedPane
+                    tabId={active.id}
+                    pane={{ x: 0, y: 0, ...frameSize }}
+                    settings={state.settings.devtools}
+                    live={devtoolsLive}
+                    onLive={setDevtoolsLive}
+                    info={info}
+                    shared={Boolean(live?.shared)}
+                  >
+                    <PageState tab={active} live={live} windowId={windowId} />
+                  </DockedPane>
                 ) : (
                   active && <PageState tab={active} live={live} windowId={windowId} />
                 )}

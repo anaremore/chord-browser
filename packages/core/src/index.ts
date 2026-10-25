@@ -5,6 +5,7 @@ export * from './effects';
 export * from './ids';
 export * from './import';
 export * from './bindings';
+export * from './devtools';
 export * from './input';
 export * from './keywords';
 export * from './links';

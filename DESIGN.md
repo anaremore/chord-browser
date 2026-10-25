@@ -483,7 +483,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 
 | Area | Components |
 |---|---|
-| Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ReaderButton` (§7.11), `EffectsButton` (§7.15), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
+| Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ReaderButton` (§7.11), `EffectsButton` (§7.15), `ContentFrame` (placeholder + shadow + loading bar), `DevtoolsFrame` (header, edge; §7.16), `DuetFrame` |
 | Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `PresentingCard` (§7.13), `NowPlayingCard` (§7.10), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar`, `CaptureLayer` (§7.12) |
 | Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `ShareCard` (the share picker: a tab, a window or a screen, §7.13), `EffectsCard` (a site's Effects, §7.15), `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
@@ -798,6 +798,35 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Sites**, newest change first: the site, what it has (*Your CSS · 2 hidden · Dark · 1 from Duet*), a switch named *Wet* for its own Dry/Wet, and **Remove**, which asks once more in place for 5 seconds (*Remove?* **Remove** · Cancel).
 - **No sites yet:** *Sites you restyle show up here. Open a site's Effects from the page's right-click menu or the command bar.*
 
+### 7.16 Developer tools
+
+*Built 2026-10-25* (ARCHITECTURE.md §9). F12 or Ctrl+Shift+I (⌘⌥I on macOS) opens a tab's DevTools beside its page, as Chrome docks them, and closes them again.
+
+```
+╭────────────────────────╮ ╭──────────────────────────╮
+│                        │ │ ⌨ Developer tools  ⬓ ⧉ ✕ │ ← Chord's 32 px header
+│        web page        ┆ ├──────────────────────────┤
+│                        ┆ │ Elements  Console  …     │ ← DevTools' own toolbar
+│                        │ │                          │
+╰────────────────────────╯ ╰──────────────────────────╯
+                          ↑ the edge: drag to resize
+```
+
+- **Docked:** on the right of the page (to start with) or at the bottom, inside the page's frame, or its split pane. The page and DevTools are frames of their own (`radius-frame`, `shadow-frame`), 8 px apart. DevTools start 440 px wide on the right or 320 px tall at the bottom, and get no narrower than 280 px or shorter than 160 px; the page keeps at least 200 px. A pane too small for both shares what it has in that proportion.
+- **The edge** between them is split view's divider: invisible until hovered, then the 4 × 32 px pill, with a resize cursor. Drag it and the page and DevTools follow live; the arrow keys move it 16 px (64 with Shift); double-click puts the size back to the default. It's a separator named *Resize developer tools*.
+- **The header**, 32 px (`size-row`) on `surface`, with a hairline under it: `square-terminal` and *Developer tools* in `text-small`, `fg-muted`, then three 24 px icon buttons: **Dock to the bottom** (`panel-bottom`) or **Dock to the right** (`panel-right`), **Pop out into a window** (`app-window`), and **Close developer tools** (✕, with F12 in its tooltip). DevTools' own toolbar is under it; Chord can't add buttons to that, so its own dock-side menu isn't shown.
+- **One setting**, as in Chrome: the side, the width on the right and the height at the bottom apply to every tab's DevTools, and are kept across launches. Whether they're open is each tab's own: switching tabs shows that tab's DevTools, or none.
+- **In a window of their own:** *Pop out* moves them, as they are (nothing reloads), into a window with the mini window's 36 px bar: `square-terminal`, *Developer tools* and the site in `fg-muted`, then **Dock in the window** (the side's icon, on an `item-hover` pill), which puts them back beside the page and brings the tab forward. The OS's caption controls close the window, and the DevTools with it. New DevTools open the way you last chose: docked, or in a window. Inside DevTools, ⌘⇧D / Ctrl+Shift+D pops them out and docks them, as in Chrome.
+- **Also:** the command bar has *Developer tools* or *Close developer tools*, *Dock developer tools at the bottom* or *on the right*, and *Pop out developer tools* or *Dock developer tools in the window*, for the tab on screen. The page's right-click **Inspect** opens them where they were and picks the element.
+- **Split view:** each pane's tab can have its DevTools docked inside its own pane. The focused pane's ring goes round the page's frame.
+- **Peek and mini windows:** their page's DevTools open popped out, in a plain window, as before. **Inspect Chord UI** (development builds) stays popped out too.
+- **Reader view:** DevTools are the page's (behind the article), as reload and back are; docked, they sit beside the reader view.
+- **Fullscreen:** a page in fullscreen covers them, and they're back when it leaves. Chord's own full screen (F11) keeps them docked.
+- **Keys and focus:** opening them puts the keyboard in them. F6 counts docked DevTools as a region of their own, after the page. In DevTools, F12 closes them, reload keys reload their page, and Chord's other reserved keys work as from the page beside them; in their own window, ⌘W closes them.
+- **Lifetime:** closing the tab closes its DevTools, and so does its page going (a pinned tab unloaded, a move to other sign-ins). A tab with DevTools open doesn't fall asleep, as in Chrome.
+- **Motion:** when the frame changes size (the sidebar, Duet), docked DevTools glide as a picture beside the page's, their header included (ARCHITECTURE.md §5).
+- **Accessibility:** DevTools' frame is a region named *Developer tools*, and its buttons are ordinary Tab stops in the shell. Windows High Contrast gives the frame a `CanvasText` edge.
+
 ---
 
 ## 8. Key flows
@@ -982,7 +1011,7 @@ Empty states get a small abstract illustration in the chord's own colors (three 
 
 *As built (M1.6, the accessibility pass):*
 
-- **F6 / ⇧F6** go sidebar → page → (find bar or permission prompt) → Duet → top strip. Main knows which view has the keyboard; the shell picks the next region it shows and asks main to focus the page, the popover or itself (`focus:region`, `focus:move`). Coming back to a region lands where you left it; the first time, on the tab on screen, Duet's message field, or the address. The command bar and Peek are modal: F6 stays out.
+- **F6 / ⇧F6** go sidebar → page → (its docked developer tools, §7.16) → (find bar or permission prompt) → Duet → top strip. Main knows which view has the keyboard; the shell picks the next region it shows and asks main to focus the page, the popover or itself (`focus:region`, `focus:move`). Coming back to a region lands where you left it; the first time, on the tab on screen, Duet's message field, or the address. The command bar and Peek are modal: F6 stays out.
 - **The sidebar** is two ARIA trees, Pinned and Today. Each row is a `treeitem` named by its title, with level, position and size (rows are drawn flat, indented by depth). Each tree is one Tab stop: the row last focused, else the tab on screen. Arrows, Home and End move; → / ← open, enter and close folders and splits; ↵ opens; Space picks a row up; Delete or ⌘⌫ closes. Picking up, moving and dropping are announced. A row's own buttons (×, ↩, Stop sharing, the speaker, a split's chevron) are for the pointer; the keyboard has Delete and the row's menu (Shift+F10 or the menu key), which now also offers Stop sharing (*Stop sharing this tab* on a shared tab's row), Back to pinned page and Mute tab. A row's description says when its tab is playing sound or muted.
 - **Now playing** (§7.10) is a group outside the trees, with ordinary buttons: one Tab stop each, named for what they do. So is presenting mode's card (§7.13), *Presenting mode*, with Turn off.
 - **Composite widgets share one pattern** (`shared/a11y.ts`): radio groups, the chord switcher (tabs: ← → switch chords) and Duet's scope are one Tab stop, and arrow keys move and choose. Menus (Duet's model and Chats menus, Attach a tab) open on their first item, take ↑ ↓ Home End, and close on Esc or Tab with the keyboard back on their button. Popovers, pickers and in-place editors give the keyboard back to where it came from when they close.
@@ -1164,6 +1193,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
   - ⇧⌫ / Shift+Delete removes the selected history suggestion (Chrome's key).
   - ⌘C / Ctrl+C with no text selected copies the selected result's address.
   - Esc closes; in ⌘L mode it also restores the address.
+- **Developer tools** (§7.16): ⌘⇧D / Ctrl+Shift+D pops them out or docks them; F12 (⌘⌥I) closes them; ⌘R / Ctrl+R reloads their page.
 - **Sidebar** (focused via F6 or a click):
   - ↑ ↓ move; ← → fold and unfold folders.
   - ↵ opens; F2 renames; ⌘⌫ / Delete closes.

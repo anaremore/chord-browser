@@ -9,6 +9,7 @@ import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer
 import { blockingSite, cleanOffSites } from './ad-blocking';
 import { cleanCountSites, countSite } from './tab-counts';
 import { cleanKeys } from './bindings';
+import { cleanDevtoolsSettings } from './devtools';
 import { isInternalUrl, visibleTabs } from './idle';
 import {
   DEFAULT_PROFILE,
@@ -1242,6 +1243,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (current.font !== next.font) current.font = next.font;
       }
       if (cmd.settings.effects?.wet !== undefined && draft.settings.effects.wet !== cmd.settings.effects.wet) draft.settings.effects.wet = cmd.settings.effects.wet;
+      // Developer tools: a side Chord has, and sizes in range.
+      if (cmd.settings.devtools) {
+        const next = cleanDevtoolsSettings(draft.settings.devtools, cmd.settings.devtools);
+        const current = draft.settings.devtools;
+        if (current.side !== next.side) current.side = next.side;
+        if (current.width !== next.width) current.width = next.width;
+        if (current.height !== next.height) current.height = next.height;
+        if (current.window !== next.window) current.window = next.window;
+      }
       const { spellcheck } = cmd.settings;
       if (spellcheck?.enabled !== undefined && draft.settings.spellcheck.enabled !== spellcheck.enabled) draft.settings.spellcheck.enabled = spellcheck.enabled;
       if (spellcheck?.language !== undefined && draft.settings.spellcheck.language !== spellcheck.language) draft.settings.spellcheck.language = spellcheck.language;

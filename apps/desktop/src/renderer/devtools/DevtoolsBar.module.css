@@ -1,0 +1,90 @@
+/* The bar of developer tools in a window of their own (DESIGN.md §7.16): 36 px, neutral tint, room for the OS's caption controls. Tokens only. */
+
+.bar {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding-inline: calc(var(--chrome-reserved-left) + var(--space-2)) calc(var(--chrome-reserved-right) + var(--space-2));
+  background: var(--color-base);
+  color: var(--color-fg);
+  -webkit-app-region: drag;
+}
+
+/* macOS: the traffic lights sit in the bar at a smaller inset than a full window's. */
+.bar[data-platform='darwin'] {
+  padding-inline-start: calc(var(--size-mini-bar) * 2);
+}
+
+.tint {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--color-tint);
+  pointer-events: none;
+}
+
+.title {
+  display: flex;
+  flex: 1;
+  gap: var(--space-1);
+  align-items: center;
+  min-inline-size: 0;
+  padding-inline: var(--space-1);
+}
+
+.icon {
+  flex: none;
+  color: var(--color-fg-subtle);
+}
+
+.name {
+  flex: none;
+  font: var(--text-label);
+}
+
+.host {
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host::before {
+  content: '· ';
+}
+
+.dock {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-label);
+  -webkit-app-region: no-drag;
+  transition: background var(--duration-fade-fast) var(--ease-standard);
+}
+
+.dock:hover {
+  background: var(--color-item-active-bg);
+}
+
+.dock:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-focus-ring);
+}
+
+@media (forced-colors: active) {
+  .dock {
+    border: var(--size-hairline) solid CanvasText;
+  }
+}
