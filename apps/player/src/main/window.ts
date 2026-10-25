@@ -129,6 +129,8 @@ export class PlayerWindow {
 
   update(change: Partial<Pick<BarState, 'service' | 'status'>>): void {
     this.state = { ...this.state, ...change };
+    // The taskbar, Alt+Tab and the Dock's window list name it by its service.
+    if (change.service && !this.window.isDestroyed()) this.window.setTitle(`${change.service} · Chord Player`);
     this.push();
   }
 
