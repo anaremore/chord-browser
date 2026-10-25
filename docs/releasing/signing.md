@@ -2,7 +2,7 @@
 
 **Status (2026-10-23): built, and off until the certificates exist.** Releases stay unsigned until the secrets below are in the `release` environment. After that, the next `v*` tag signs, notarizes and checks itself, with no code change. Design: [ARCHITECTURE.md §15.2](../../ARCHITECTURE.md#152-code-signing).
 
-✅ = checked against electron-builder 26.18's source or the vendor's docs on 2026-10-23. ⚠ = unverified until the first signed release.
+✅ = checked against electron-builder 26.18's source or the vendor's docs on 2026-10-23 (Artifact Signing's identity steps on 2026-10-25, against [Microsoft's quickstart](https://learn.microsoft.com/azure/artifact-signing/quickstart)). ⚠ = unverified until the first signed release.
 
 ---
 
@@ -95,15 +95,27 @@ Artifact Signing is Microsoft's managed signing, formerly called Trusted Signing
 - **Eligibility:** individuals must be in the US or Canada; organizations can be in more countries.
 - **Validation:** identity validation takes 1–20 business days.
 
+**Decide first:** sign as an individual or as an organization. The certificate names whichever you validate, and installed copies pin that name (step 5), so pick the one you'll keep.
+- **Individual:** the certificate shows your legal name, city, state and country, but not your street or email ✅. You need a photo ID and a phone with Microsoft Authenticator.
+- **Organization:** needs a registered business. You give its legal name, website, business identifier and address, plus a monitored email on the business's own domain ✅.
+
 1. **An Azure subscription** (pay-as-you-go) in your name or your organization's.
+   - **As an individual:** its billing account must have the account type **Individual**. Its legal name and sold-to address must match your government ID ✅. Validation reads them from the billing account and you can't edit them in the form, so fix them under *Cost Management + Billing* first.
 2. **Register the provider:** *Subscriptions → your subscription → Resource providers* → `Microsoft.CodeSigning` → **Register**.
-3. **Create the account:** search the portal for *Artifact Signing* (or *Trusted Signing*) → **Create**.
+3. **Create the account:** search the portal for *Artifact Signing Accounts* → **Create**.
    - Pick a resource group, a name (e.g. `chord-signing`), the **Basic** tier and a region.
    - The region fixes the endpoint. East US is `https://eus.codesigning.azure.net/`, and the account's *Overview* shows yours.
    - The account name is `AZURE_SIGNING_ACCOUNT`; the endpoint is `AZURE_SIGNING_ENDPOINT`.
 4. **Validate your identity:**
    1. On the account's *Access control (IAM)*, give yourself the **Artifact Signing Identity Verifier** role (older portals: *Trusted Signing Identity Verifier*).
-   2. Under *Identity validation*, choose **New → Public**, as an individual or an organization, and submit. Wait for *Completed*.
+   2. Under *Identity validations*, choose **Individual** or **Organization** in the drop-down, then **New identity → Public**.
+      - As an individual, pick the billing account; the form fills itself from it.
+      - Check *Certificate subject preview*, then **Create**.
+   3. When the status says **Action Required**, click your name and open the verification link. Sign in with the same email.
+      - An ID-check partner (AU10TIX) checks your photo ID through your phone's camera.
+      - Microsoft Authenticator then stores the result as a Verified ID, which you share with Artifact Signing ✅.
+      - An organization does this step too, as the person it named, and may be asked for documents ✅.
+   4. Wait for **Completed**. Microsoft quotes 1–20 business days ✅. Filing a second request while one is in progress doesn't speed it up.
 5. **Make a certificate profile:** *Certificate profiles → Create → Public Trust*, with the validated identity. Name it, e.g. `chord-public`; that's `AZURE_SIGNING_PROFILE`.
    - The profile shows its **Subject name**. The value after `CN=` is `WIN_PUBLISHER_NAME`, exactly, including capitals and punctuation.
    - Installed copies pin it, and the certificates behind the profile renew daily with the same subject. Changing it later means signed copies refuse updates and fall back to "a new version is out", so keep one identity forever.
