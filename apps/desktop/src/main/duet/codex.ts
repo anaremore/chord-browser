@@ -10,7 +10,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { DuetContextUsage } from '@chord/core';
-import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionOptions } from './adapter';
+import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionImage, type SessionOptions } from './adapter';
 import { cliPath, spawnSpec } from './launch';
 
 /** Default-on features that add tools (research §3.3). Unknown names are ignored by older versions. */
@@ -103,12 +103,13 @@ export class CodexSession implements DuetSession {
     return !this.ended;
   }
 
-  send(text: string): void {
+  send(text: string, images: readonly SessionImage[] = []): void {
     this.turnRunning = true;
     this.turnError = null;
     void this.ready.then((ok) => {
       if (!ok || !this.threadId) return this.endTurn('error', { kind: 'other', message: errorCopy('codex', 'other') });
-      void this.call('turn/start', { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }] }).then((r) => {
+      const pictures = images.map((image) => ({ type: 'image', url: `data:${image.mime};base64,${image.data}` }));
+      void this.call('turn/start', { threadId: this.threadId, input: [...pictures, { type: 'text', text, text_elements: [] }] }).then((r) => {
         if (r.error) this.endTurn('error', codexError('', r.error.message ?? ''));
         else this.turnId = ((r.result?.['turn'] as { id?: string } | undefined)?.id ?? this.turnId) || null;
       });

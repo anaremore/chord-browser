@@ -51,12 +51,19 @@ export interface SessionOptions {
   tools: readonly DuetToolSpec[];
 }
 
+/** An image with a message: its type and its bytes, base64-encoded. */
+export interface SessionImage {
+  mime: string;
+  data: string;
+}
+
 export interface DuetSession {
   readonly provider: DuetProvider;
   /** A turn is running. */
   readonly busy: boolean;
   readonly alive: boolean;
-  send(text: string): void;
+  /** A message, with any images you gave it (sent before the text, as the model reads them best). */
+  send(text: string, images?: readonly SessionImage[]): void;
   /** Stop the current turn; the session stays for the next message. */
   stop(): void;
   /** End the process (idle, quit, thread deleted). */

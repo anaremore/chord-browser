@@ -23,6 +23,7 @@ import {
   type Command,
   type DownloadAction,
   type DuetContextUsage,
+  type DuetTabName,
   type DuetHit,
   type DuetMessage,
   type DuetProvider,
@@ -611,11 +612,16 @@ export interface ArchiveSnapshot {
 /** A trackpad scroll gesture starting, ending, or ending in a fling (momentum follows). */
 export type GesturePhase = 'begin' | 'end' | 'fling';
 
+/** What a toast's button does: a command in the shell's store (Undo), "Restart to update", or a screenshot's Save or Ask Duet. */
+export type ToastAction = { label: string; command: RendererCommand } | { label: string; update: 'restart' } | { label: string; screenshot: { id: string; do: 'save' | 'duet' } };
+
 export interface Toast {
   id: string;
   message: string;
   /** Most run a command in the shell's store (Undo); "Restart to update" asks main to install. */
-  action?: { label: string; command: RendererCommand } | { label: string; update: 'restart' } | { label: string; screenshot: { id: string; do: 'save' } };
+  action?: ToastAction;
+  /** A second button, before the first (a screenshot's Ask Duet beside its Save). */
+  secondary?: ToastAction;
   /** A second line with its own action, about the same thing ("Always open linear.app here?" under "Moved to Work"). */
   also?: { message: string; action: { label: string; command: RendererCommand } };
 }
@@ -645,6 +651,8 @@ export type ScreenshotChoice = z.infer<typeof ScreenshotChoice>;
 /** One of the recent screenshots, with its thumbnail as a data URL (JPEG). */
 export interface ScreenshotItem extends ScreenshotEntry {
   thumb: string | null;
+  /** Duet may be asked about it here (it's set up, and may read the page it's of). */
+  duet: boolean;
 }
 
 export interface ChordEdit {
@@ -739,8 +747,13 @@ export const DuetAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('model'), provider: DuetProviderSchema, model: z.string().max(100).nullable() }),
   z.object({ do: z.literal('attach'), nodeId: id }),
   z.object({ do: z.literal('detach'), nodeId: id }),
+  z.object({ do: z.literal('unattachImage'), id: z.string().regex(/^[0-9a-f]{24}$/) }),
+  /** Edit and send again: that message's images go back in the composer. */
+  z.object({ do: z.literal('reuseImages'), messageId: id }),
   z.object({ do: z.literal('draft'), text: z.string().max(20_000) }),
   z.object({ do: z.literal('citation'), messageId: id, n: z.number().int().min(1).max(500) }),
+  /** A tab a reply mentions: switch to it, or open its page if it's gone. */
+  z.object({ do: z.literal('showTab'), ref: z.string().regex(/^t[0-9]{1,4}$/) }),
   z.object({ do: z.literal('export') }),
 ]);
 export type DuetAction = z.infer<typeof DuetAction>;
@@ -781,6 +794,15 @@ export interface DuetView {
   draft: string;
   /** How full the chat's context is, when the provider's CLI reports it (null hides the meter). */
   context: DuetContextUsage | null;
+  /** Images waiting in the composer, to go with the next message (a pasted image, a screenshot). */
+  pendingImages: { id: string }[];
+  /**
+   * Thumbnails (JPEG data URLs) of images in the chat or the composer, by id: each sent to a window
+   * once (all of them when it asks for the whole view), so a streaming reply doesn't resend them.
+   */
+  imageThumbs: Record<string, string>;
+  /** The chat's tabs by handle ("t1"), so a reply that mentions one shows its name. */
+  tabNames: Record<string, DuetTabName>;
   /** Providers Setup is still looking for inside WSL (Windows). */
   lookingInWsl: DuetProvider[];
 }
@@ -916,12 +938,26 @@ export const invokeChannels = {
   'capture:scroll': { roles: ['overlay'], request: z.strictObject({ x: z.number(), y: z.number(), deltaX: z.number(), deltaY: z.number() }), response: z.void() },
   // The recent screenshots, in the downloads panel (the window's own, for a private window), and the toast's Save.
   'screenshots:list': { roles: ['overlay'], request: z.void(), response: z.custom<ScreenshotItem[]>() },
-  'screenshots:do': { roles: ['overlay', 'shell'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{24}$/), do: z.enum(['copy', 'save', 'delete']) }), response: z.void() },
+  'screenshots:do': { roles: ['overlay', 'shell'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{24}$/), do: z.enum(['copy', 'save', 'delete', 'duet']) }), response: z.void() },
   'screenshots:clear': { roles: ['overlay'], request: z.void(), response: z.void() },
   /** The command bar's history and learned picks for what was typed (in the window's chord). */
   'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
   /** Search suggestions while typing, from the chosen engine (or a keyword's engine); empty when they're off. */
   /** "Search … for this image" in the command bar: the window opens the engine's upload (main/image-search.ts). */
+  /** "Ask Duet about this image" in the command bar: Duet opens with the image and the words typed (main/duet/service.ts). */
+  'duet:ask': {
+    roles: ['overlay'],
+    request: z.strictObject({
+      text: z.string().max(50_000),
+      image: z.strictObject({
+        bytes: z.instanceof(Uint8Array).refine((b) => b.byteLength > 0 && b.byteLength <= 4_000_000),
+        thumb: z.instanceof(Uint8Array).refine((b) => b.byteLength > 0 && b.byteLength <= 500_000),
+        width: z.number().int().positive().max(4096),
+        height: z.number().int().positive().max(4096),
+      }),
+    }),
+    response: z.void(),
+  },
   'search:image': {
     roles: ['overlay'],
     request: z.strictObject({
@@ -1220,8 +1256,8 @@ export interface ShellApi {
   action: { run(action: CoreActionId): Promise<void> };
   /** "Restart to update" from a toast. */
   updates: { restart(): Promise<void> };
-  /** A screenshot toast's Save. */
-  screenshots: { act(id: string, action: 'save'): Promise<void> };
+  /** A screenshot toast's Save and Ask Duet. */
+  screenshots: { act(id: string, action: 'save' | 'duet'): Promise<void> };
   extensions: {
     state(): Promise<ExtensionsBarState>;
     onState(listener: (state: ExtensionsBarState) => void): () => void;
@@ -1466,8 +1502,12 @@ export interface OverlayApi {
     onState(listener: (state: PeekState) => void): () => void;
     expand(): Promise<void>;
   };
-  /** @duet: Duet chats by their words, and opening one. */
-  duet: { search(query: string): Promise<DuetHit[]>; open(chordId: string, threadId: string): Promise<void> };
+  /** @duet: Duet chats by their words, and opening one; and asking about a pasted image. */
+  duet: {
+    search(query: string): Promise<DuetHit[]>;
+    open(chordId: string, threadId: string): Promise<void>;
+    ask(text: string, image: { bytes: Uint8Array<ArrayBuffer>; thumb: Uint8Array<ArrayBuffer>; width: number; height: number }): Promise<void>;
+  };
   /** Taking a screenshot (capture mode). */
   capture: {
     hover(x: number, y: number): Promise<CaptureHit | null>;
@@ -1478,7 +1518,7 @@ export interface OverlayApi {
   /** The recent screenshots, in the downloads panel. */
   screenshots: {
     list(): Promise<ScreenshotItem[]>;
-    act(id: string, action: 'copy' | 'save' | 'delete'): Promise<void>;
+    act(id: string, action: 'copy' | 'save' | 'delete' | 'duet'): Promise<void>;
     clear(): Promise<void>;
   };
 }

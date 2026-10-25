@@ -65,6 +65,15 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       const turnId = `turn_${++turn}`;
       interrupted = false;
       write({ id: m.id, result: { turn: { id: turnId, status: 'inProgress' } } });
+      const pictures = m.params.input.filter((i) => i.type === 'image');
+      if (pictures.length) {
+        // An image goes as a data URL, before the words.
+        const said = `images:${pictures.map((i) => i.url.slice(0, i.url.indexOf(';'))).join(',')} first:${m.params.input[0].type}`;
+        write({ method: 'turn/started', params: { threadId: thread, turn: { id: turnId } } });
+        write({ method: 'item/agentMessage/delta', params: { threadId: thread, turnId, itemId: 'm1', delta: said } });
+        write({ method: 'turn/completed', params: { threadId: thread, turn: { id: turnId, status: 'completed' } } });
+        return;
+      }
       void runTurn(m.params.input.map((i) => i.text).join(''), turnId);
       return;
     }

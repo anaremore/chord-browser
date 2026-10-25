@@ -318,7 +318,8 @@ function registerIpc(): void {
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
-  handle('duet:view', (_request, sender) => duet!.view(senderWindow(sender).id));
+  handle('duet:view', (_request, sender) => duet!.view(senderWindow(sender).id, true));
+  handle('duet:ask', ({ text, image }, sender) => duet!.askAboutImage(senderWindow(sender).id, text, { mime: 'image/jpeg', ...image }));
   handle('duet:do', (action, sender) => duet!.act(senderWindow(sender).id, action));
   handle('duet:search', ({ query }, sender) => (fromPrivateWindow(sender) ? [] : duet!.search(query)));
   handle('duet:openHit', ({ chordId, threadId }, sender) => duet!.openHit(senderWindow(sender).id, chordId, threadId));
@@ -540,6 +541,8 @@ if (!app.requestSingleInstanceLock()) {
       keep: () => browser?.store.state.settings.keepScreenshots ?? true,
       disk: shots,
       saveFile: async (filename, bytes, url, privateWindow) => void (await downloads.addFile(filename, bytes, 'image/png', url, privateWindow)),
+      duetReady: (w, url) => Boolean(duet?.canAskAbout(w.id, url)),
+      askDuet: (windowId, image) => duet?.attachImage(windowId, image),
     });
     browser = new Browser({
       initial,

@@ -18,6 +18,7 @@ const api: OverlayApi = {
   duet: {
     search: (query) => invoke('duet:search', { query }),
     open: (chordId, threadId) => invoke('duet:openHit', { chordId, threadId }),
+    ask: (text, image) => invoke('duet:ask', { text, image }),
   },
   history: {
     search: (query) => invoke('history:search', { query }),

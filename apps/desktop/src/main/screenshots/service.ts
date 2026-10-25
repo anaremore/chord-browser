@@ -23,6 +23,8 @@ import { MemoryShots, newShotId, type ShotStore } from './store';
 
 /** The thumbnail's width in the downloads panel's list, in image pixels. */
 const THUMB_WIDTH = 240;
+/** The longest side of the picture Duet is sent: what Claude reads best (larger is scaled down anyway). */
+const ASK_SIDE = 1568;
 /** How long a hover's answer may take: a hung page just shows no highlight. */
 const HIT_MS = 500;
 /** How long a capture may take before it's given up on (a whole long page takes a moment). */
@@ -68,6 +70,10 @@ export interface ScreenshotDeps {
   disk: ShotStore;
   /** Into Downloads, listed as a finished download (a private window's only there). */
   saveFile(filename: string, bytes: Uint8Array, url: string, privateWindow: string | null): Promise<void>;
+  /** Whether Duet may be asked about a screenshot of this page in this window (set up, may read the page). */
+  duetReady(w: AppWindow, url: string): boolean;
+  /** Put the picture in the window's Duet composer, and open the panel. */
+  askDuet(windowId: string, image: { mime: 'image/jpeg'; width: number; height: number; bytes: Uint8Array; thumb: Uint8Array }): void;
 }
 
 export class Screenshots {
@@ -75,7 +81,7 @@ export class Screenshots {
   /** Private windows' recent screenshots, gone with the window. */
   private readonly memory = new Map<string, MemoryShots>();
   /** Each window's last screenshot, so its toast's Save works even when none are kept. */
-  private readonly last = new Map<string, { entry: ScreenshotEntry; png: Buffer }>();
+  private readonly last = new Map<string, { entry: ScreenshotEntry; png: Buffer; thumb: Buffer; ask: Buffer | null }>();
 
   constructor(private readonly deps: ScreenshotDeps) {}
 
@@ -127,7 +133,7 @@ export class Screenshots {
     this.capturing.delete(w.id);
     w.closeOverlay();
     if (!c) return;
-    let shot: { png: Buffer; thumb: Buffer; width: number; height: number } | null = null;
+    let shot: { png: Buffer; thumb: Buffer; ask: Buffer | null; width: number; height: number } | null = null;
     try {
       shot = await this.capture(c, choice);
     } catch (error) {
@@ -144,15 +150,20 @@ export class Screenshots {
       createdAt: Date.now(),
       width: shot.width,
       height: shot.height,
-      bytes: shot.png.byteLength,
+      bytes: shot.png.byteLength + shot.thumb.byteLength + (shot.ask?.byteLength ?? 0),
       title: c.contents.getTitle().slice(0, 300),
       url: c.contents.getURL().slice(0, 2048),
     };
     const copied = await copyPng(shot.png);
-    this.last.set(w.id, { entry, png: shot.png });
-    if (this.deps.keep()) await this.store(w).add(entry, shot.png, shot.thumb);
+    this.last.set(w.id, { entry, png: shot.png, thumb: shot.thumb, ask: shot.ask });
+    if (this.deps.keep()) await this.store(w).add(entry, shot.png, shot.thumb, shot.ask ?? undefined);
     // Saved either way: if the clipboard said no, Save is how to keep it.
-    w.toast({ id: 'screenshot', message: copied ? 'Screenshot copied' : 'Screenshot taken, but couldn’t be copied', action: { label: 'Save', screenshot: { id: entry.id, do: 'save' } } });
+    w.toast({
+      id: 'screenshot',
+      message: copied ? 'Screenshot copied' : 'Screenshot taken, but couldn’t be copied',
+      action: { label: 'Save', screenshot: { id: entry.id, do: 'save' } },
+      ...(shot.ask && this.deps.duetReady(w, entry.url) ? { secondary: { label: 'Ask Duet', screenshot: { id: entry.id, do: 'duet' as const } } } : {}),
+    });
   }
 
   /** The window's recent screenshots, newest first, with thumbnails. */
@@ -162,13 +173,13 @@ export class Screenshots {
     return Promise.all(
       (await store.list()).map(async (entry) => {
         const thumb = await store.thumb(entry.id);
-        return { ...entry, thumb: thumb ? `data:image/jpeg;base64,${thumb.toString('base64')}` : null };
+        return { ...entry, thumb: thumb ? `data:image/jpeg;base64,${thumb.toString('base64')}` : null, duet: this.deps.duetReady(w, entry.url) };
       }),
     );
   }
 
   /** Copy, save or delete one: the window's own (a private window never reaches a normal one's, nor the other way). */
-  async act(w: AppWindow, id: string, action: 'copy' | 'save' | 'delete'): Promise<void> {
+  async act(w: AppWindow, id: string, action: 'copy' | 'save' | 'delete' | 'duet'): Promise<void> {
     const store = this.store(w);
     if (action === 'delete') {
       await store.remove(id);
@@ -178,6 +189,14 @@ export class Screenshots {
     const entry = last?.entry.id === id ? last.entry : (await store.list()).find((e) => e.id === id);
     const png = last?.entry.id === id ? last.png : await store.png(id);
     if (!entry || !png) return;
+    if (action === 'duet') {
+      const ask = last?.entry.id === id ? last.ask : await store.ask(id);
+      const thumb = last?.entry.id === id ? last.thumb : await store.thumb(id);
+      if (!ask || !thumb || !this.deps.duetReady(w, entry.url)) return;
+      const k = Math.min(1, ASK_SIDE / Math.max(entry.width, entry.height));
+      this.deps.askDuet(w.id, { mime: 'image/jpeg', width: Math.round(entry.width * k), height: Math.round(entry.height * k), bytes: ask, thumb });
+      return;
+    }
     if (action === 'copy') {
       w.toast({ id: 'screenshot', message: (await copyPng(png)) ? 'Screenshot copied' : 'Couldn’t copy the screenshot' });
       return;
@@ -249,7 +268,7 @@ export class Screenshots {
     }
   }
 
-  private async capture(c: Capturing, choice: ScreenshotChoice): Promise<{ png: Buffer; thumb: Buffer; width: number; height: number } | null> {
+  private async capture(c: Capturing, choice: ScreenshotChoice): Promise<{ png: Buffer; thumb: Buffer; ask: Buffer | null; width: number; height: number } | null> {
     const debug = c.contents.debugger;
     const mine = !debug.isAttached();
     if (mine) debug.attach('1.3');
@@ -272,7 +291,9 @@ export class Screenshots {
       // The thumbnail: its top, at most 16:10, small and as a JPEG, made by Chromium too.
       const top = { ...clip, height: Math.min(clip.height, clip.width * 0.625) };
       const small = await send<{ data: string }>('Page.captureScreenshot', { format: 'jpeg', quality: 70, captureBeyondViewport: true, clip: { ...top, scale: Math.min(1, THUMB_WIDTH / (clip.width * screen)) } });
-      return { png, thumb: Buffer.from(small?.data ?? '', 'base64'), width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+      // What Duet is sent, if you ask it: the whole picture, at most 1,568 px a side.
+      const sized = await send<{ data: string }>('Page.captureScreenshot', { format: 'jpeg', quality: 80, captureBeyondViewport: true, clip: { ...clip, scale: Math.min(scale, ASK_SIDE / (Math.max(clip.width, clip.height) * screen)) } });
+      return { png, thumb: Buffer.from(small?.data ?? '', 'base64'), ask: sized?.data ? Buffer.from(sized.data, 'base64') : null, width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
     } finally {
       if (mine && debug.isAttached()) debug.detach();
     }

@@ -19,6 +19,7 @@ import type { Rect, ScreenshotItem } from '@chord/ipc';
 import { Copy, Download as SaveIcon, File, FolderOpen, Pause, Play, RotateCcw, ShieldAlert, Trash2, X } from 'lucide-react';
 import { motion, type Transition } from 'motion/react';
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { DuetIcon } from '../shared/icons';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 
@@ -131,9 +132,10 @@ function Row({ download }: { download: Download }) {
 }
 
 /** One of the recent screenshots (DESIGN.md §7.12): its picture, its page, when and how big; Copy, Save, Delete. */
-function ShotRow({ shot, onChange }: { shot: ScreenshotItem; onChange(): void }) {
+/** `onAsk`: it went to Duet's composer, so the panel steps aside for Duet's. */
+function ShotRow({ shot, onChange, onAsk }: { shot: ScreenshotItem; onChange(): void; onAsk(): void }) {
   const name = shot.title || shot.url || 'Screenshot';
-  const act = (action: 'copy' | 'save' | 'delete') => void api.screenshots.act(shot.id, action).then(() => action === 'delete' && onChange());
+  const act = (action: 'copy' | 'save' | 'delete' | 'duet') => void api.screenshots.act(shot.id, action).then(() => action === 'delete' && onChange());
   return (
     <li className={styles.download}>
       <div className={styles.downloadMain}>
@@ -146,6 +148,21 @@ function ShotRow({ shot, onChange }: { shot: ScreenshotItem; onChange(): void })
         </span>
       </div>
       <div className={styles.downloadActions}>
+        {/* Only where Duet may see that page, in this window's chord. */}
+        {shot.duet && (
+          <button
+            type="button"
+            className={styles.smallButton}
+            aria-label={`Ask Duet about the screenshot of ${name}`}
+            title="Ask Duet"
+            onClick={() => {
+              act('duet');
+              onAsk();
+            }}
+          >
+            <DuetIcon {...ICON} />
+          </button>
+        )}
         <button type="button" className={styles.smallButton} aria-label={`Copy screenshot of ${name}`} title="Copy" onClick={() => act('copy')}>
           <Copy {...ICON} />
         </button>
@@ -246,7 +263,7 @@ export function DownloadsPanel({
           </header>
           <ul className={styles.downloadList}>
             {shots.map((shot) => (
-              <ShotRow key={shot.id} shot={shot} onChange={loadShots} />
+              <ShotRow key={shot.id} shot={shot} onChange={loadShots} onAsk={() => onClose()} />
             ))}
           </ul>
         </section>

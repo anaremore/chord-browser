@@ -56,7 +56,9 @@ export type Result =
   /** A way to narrow the bar: search a site, or show one kind of result. */
   | { kind: 'scope'; key: string; title: string; detail: string; scope: Scope }
   /** A pasted or dropped image (DESIGN.md §7.3): search the web by it. */
-  | { kind: 'imageSearch'; key: string; title: string; engine: ImageSearchEngine };
+  | { kind: 'imageSearch'; key: string; title: string; engine: ImageSearchEngine }
+  /** A pasted or dropped image: ask Duet about it, with the words typed. */
+  | { kind: 'imageDuet'; key: string; title: string };
 
 /** The narrowing filters (DESIGN.md §7.3), in the order `@` lists them. */
 export const FILTERS: readonly { id: Filter; token: string; name: string; placeholder: string }[] = [
@@ -189,6 +191,7 @@ export function shortUrl(url: string): string {
 export function destinationOf(result: Result): string | null {
   switch (result.kind) {
     case 'imageSearch':
+    case 'imageDuet':
       return null;
     case 'open':
       return result.search ? null : placeKey(result.url);
