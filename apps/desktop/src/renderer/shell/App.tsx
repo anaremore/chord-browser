@@ -582,7 +582,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
 
               {(!collapsed || peeking) && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} undoKeys={!collapsed} mac={info.platform === 'darwin'} />}
 
-              {/* Presenting mode is on, and how to turn it off (DESIGN.md §7.12). */}
+              {/* Presenting mode is on, and how to turn it off (DESIGN.md §7.13). */}
               <PresentingCard presenting={presenting} keys={presentingKeys} enter={spring('overlay', 'sidebar')} />
 
               {/* Media playing in a tab you aren't looking at (DESIGN.md §7.10). */}

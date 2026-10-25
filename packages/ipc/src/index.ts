@@ -32,6 +32,7 @@ import {
   type ImportOverview,
   type ImportTarget,
   type ReaderArticle,
+  type ScreenshotEntry,
   type ReaderSettings,
   type SearchEngineId,
   type Settings,
@@ -198,6 +199,7 @@ export const SettingsPatch = z.strictObject({
   autoPip: z.boolean().optional(),
   pagePreviews: z.boolean().optional(),
   presentingHidesSidebar: z.boolean().optional(),
+  keepScreenshots: z.boolean().optional(),
   uiScale: z.literal(UI_SCALES).optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),
   extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
@@ -385,6 +387,15 @@ export interface AuthPrompt {
   retry: boolean;
 }
 
+/** Choosing which passkey signs you in, when the authenticator holds several for the site. */
+export interface PasskeyPrompt {
+  id: number;
+  /** The site asking (its relying party ID, a domain). */
+  site: string;
+  /** The site's own names for each account. */
+  accounts: { credentialId: string; name: string; displayName: string }[];
+}
+
 export interface FindState {
   text: string;
   matches: number;
@@ -514,6 +525,7 @@ export interface PopoverState {
   permission: PermissionPrompt | null;
   share: SharePrompt | null;
   auth: AuthPrompt | null;
+  passkey: PasskeyPrompt | null;
   /** The one-time offer to turn Safe Browsing on, with its notice (profiles from before it existed). */
   safeBrowsingOffer: boolean;
   /** The page is on a service that needs Widevine, which Chord doesn't include yet (D4). */
@@ -627,11 +639,38 @@ export interface Toast {
   id: string;
   message: string;
   /** Most run a command in the shell's store (Undo); "Restart to update" asks main to install. */
-  action?: { label: string; command: RendererCommand } | { label: string; update: 'restart' };
+  action?: { label: string; command: RendererCommand } | { label: string; update: 'restart' } | { label: string; screenshot: { id: string; do: 'save' } };
   /** A second line with its own action, about the same thing ("Always open linear.app here?" under "Moved to Work"). */
   also?: { message: string; action: { label: string; command: RendererCommand } };
   /** Shown even in presenting mode, which hides Chord's other toasts: it's about the share itself. */
   whilePresenting?: boolean;
+}
+
+/** Taking a screenshot (DESIGN.md §7.12): where the page is, in UI units (the overlay's CSS pixels). */
+export interface CaptureStart {
+  pane: Rect;
+}
+
+/** The element under the pointer: where it shows (UI units, cut to the pane), what it is, and its size in the page. */
+export interface CaptureHit {
+  rect: Rect;
+  label: string;
+  width: number;
+  height: number;
+}
+
+/** What to take: the picked element, a dragged area (UI units), what's on screen, or the whole page. */
+export const ScreenshotChoice = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('element') }),
+  z.strictObject({ kind: z.literal('area'), rect: z.strictObject({ x: z.number(), y: z.number(), width: z.number().positive().max(100_000), height: z.number().positive().max(100_000) }) }),
+  z.strictObject({ kind: z.literal('visible') }),
+  z.strictObject({ kind: z.literal('page') }),
+]);
+export type ScreenshotChoice = z.infer<typeof ScreenshotChoice>;
+
+/** One of the recent screenshots, with its thumbnail as a data URL (JPEG). */
+export interface ScreenshotItem extends ScreenshotEntry {
+  thumb: string | null;
 }
 
 export interface ChordEdit {
@@ -668,7 +707,7 @@ export interface OverlayOpenEvent {
    * `peek`: Peek's chrome around a link from a pinned tab (main opens it; the shell can't).
    * `split`: the command bar for "Split with…": what you pick opens beside the current tab.
    */
-  mode: 'new' | 'edit' | 'downloads' | 'extensions' | 'split' | 'peek';
+  mode: 'new' | 'edit' | 'downloads' | 'extensions' | 'split' | 'peek' | 'capture';
   /** Where the address sits, for the anchored placement (window coordinates). */
   anchor: Rect | null;
   /** The current tab's address, prefilled in edit mode. */
@@ -677,6 +716,8 @@ export interface OverlayOpenEvent {
   seq: number;
   /** Peek's page and card, in peek mode. */
   peek?: PeekState;
+  /** Taking a screenshot: the page's pane, in capture mode. */
+  capture?: CaptureStart;
   /**
    * When main got the request to open (the shortcut, or the shell's button), in
    * epoch ms (`performance.timeOrigin + performance.now()`). The command bar
@@ -893,6 +934,16 @@ export const invokeChannels = {
   /** Ad and tracker blocking's lists (ARCHITECTURE.md §9), for Settings → Privacy. */
   'adBlocking:status': { roles: ['internal'], request: z.void(), response: z.custom<AdBlockingStatus>() },
   'downloads:openFolder': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
+  // Taking a screenshot (DESIGN.md §7.12), from the overlay's capture mode: the element under the pointer (UI units),
+  // its parent or child, what to take, and the wheel passed on to the page.
+  'capture:hover': { roles: ['overlay'], request: z.strictObject({ x: z.number(), y: z.number() }), response: z.custom<CaptureHit | null>() },
+  'capture:step': { roles: ['overlay'], request: z.strictObject({ to: z.enum(['parent', 'child']) }), response: z.custom<CaptureHit | null>() },
+  'capture:take': { roles: ['overlay'], request: ScreenshotChoice, response: z.void() },
+  'capture:scroll': { roles: ['overlay'], request: z.strictObject({ x: z.number(), y: z.number(), deltaX: z.number(), deltaY: z.number() }), response: z.void() },
+  // The recent screenshots, in the downloads panel (the window's own, for a private window), and the toast's Save.
+  'screenshots:list': { roles: ['overlay'], request: z.void(), response: z.custom<ScreenshotItem[]>() },
+  'screenshots:do': { roles: ['overlay', 'shell'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{24}$/), do: z.enum(['copy', 'save', 'delete']) }), response: z.void() },
+  'screenshots:clear': { roles: ['overlay'], request: z.void(), response: z.void() },
   /** The command bar's history and learned picks for what was typed (in the window's chord). */
   'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
   /** Search suggestions while typing, from the chosen engine (or a keyword's engine); empty when they're off. */
@@ -1032,6 +1083,8 @@ export const invokeChannels = {
   /** The DRM notice's buttons: the window's page in another browser the notice offered, or not now (until Chord quits). */
   'drm:open': { roles: ['popover'], request: z.strictObject({ browser: z.enum(OTHER_BROWSERS) }), response: z.void() },
   'drm:dismiss': { roles: ['popover'], request: z.void(), response: z.void() },
+  /** A passkey chosen (one the prompt offered), or null to decline: the site then gets NotAllowedError, as after Cancel in Chrome. */
+  'passkey:respond': { roles: ['popover'], request: z.strictObject({ id: z.number().int().min(1), credentialId: z.string().max(1024).nullable() }), response: z.void() },
   // A tab's reader view (chord://reader): its own tab's article, how it looks, its controls, and closing it.
   'reader:page': { roles: ['reader'], request: z.void(), response: z.custom<ReaderPage>() },
   'reader:look': { roles: ['reader'], request: z.void(), response: z.custom<ReaderLook>() },
@@ -1178,6 +1231,8 @@ export interface ShellApi {
   action: { run(action: CoreActionId): Promise<void> };
   /** "Restart to update" from a toast. */
   updates: { restart(): Promise<void> };
+  /** A screenshot toast's Save. */
+  screenshots: { act(id: string, action: 'save'): Promise<void> };
   extensions: {
     state(): Promise<ExtensionsBarState>;
     onState(listener: (state: ExtensionsBarState) => void): () => void;
@@ -1373,6 +1428,8 @@ export interface PopoverApi {
   share: { respond(id: number, sourceId: string | null, audio: boolean): Promise<void> };
   /** A sign-in box: a username and password, or null to cancel. */
   auth: { respond(id: number, credentials: { username: string; password: string } | null): Promise<void> };
+  /** Choosing a passkey: one the prompt offered, or null to decline. */
+  passkey: { respond(id: number, credentialId: string | null): Promise<void> };
   /** The one-time offer: turn Safe Browsing on, or not now (either way it isn't offered again). */
   safeBrowsing: { choose(on: boolean): Promise<void> };
   /** The DRM notice: open the page in another browser, or not now. */
@@ -1420,4 +1477,17 @@ export interface OverlayApi {
   };
   /** @duet: Duet chats by their words, and opening one. */
   duet: { search(query: string): Promise<DuetHit[]>; open(chordId: string, threadId: string): Promise<void> };
+  /** Taking a screenshot (capture mode). */
+  capture: {
+    hover(x: number, y: number): Promise<CaptureHit | null>;
+    step(to: 'parent' | 'child'): Promise<CaptureHit | null>;
+    take(choice: ScreenshotChoice): Promise<void>;
+    scroll(x: number, y: number, deltaX: number, deltaY: number): Promise<void>;
+  };
+  /** The recent screenshots, in the downloads panel. */
+  screenshots: {
+    list(): Promise<ScreenshotItem[]>;
+    act(id: string, action: 'copy' | 'save' | 'delete'): Promise<void>;
+    clear(): Promise<void>;
+  };
 }

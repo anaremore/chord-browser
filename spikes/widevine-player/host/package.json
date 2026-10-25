@@ -1,0 +1,7 @@
+{
+  "name": "chord-standin-host",
+  "productName": "Chord stand-in",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs"
+}

@@ -63,6 +63,7 @@ export type ActionId =
   | 'view.focusPreviousRegion'
   | 'view.reader'
   | 'page.print'
+  | 'page.screenshot'
   | 'page.save'
   | 'page.viewSource'
   | 'app.settings'
@@ -151,6 +152,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // Ctrl+Alt+R is AltGr+R on Windows, which types a letter on some layouts; F9 is Firefox's and Edge's there.
   s('view.reader', 'Show or hide reader view', 'page-first', ['Mod+Alt+R'], ['F9']),
   s('page.print', 'Print', 'page-first', ['Mod+P']),
+  // Screenshots (DESIGN.md §7.12): Arc's key, clear of macOS's own ⌘⇧3/4/5. Chord's before the page's: sites rarely use it.
+  s('page.screenshot', 'Take a screenshot', 'reserved', ['Mod+Shift+2']),
   s('page.save', 'Save page as', 'page-first', ['Mod+Shift+S']),
   s('page.viewSource', 'View page source', 'page-first', ['Mod+Alt+U'], ['Mod+U']),
   // Chord's own pages and tools

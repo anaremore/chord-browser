@@ -163,6 +163,26 @@ export class AutoPip {
     void this.run(popped.contents, popped.frame, EXIT, false);
   }
 
+  /**
+   * You came back to a tab that wasn't on screen: a video in picture-in-picture
+   * comes back into it, whoever popped it out (the site's own button, too), as
+   * Chord's own does. Only a page that has made sound is asked: a video you
+   * were watching. Each of its frames is asked, as an embedded player's video
+   * is in a frame of its own.
+   */
+  cameBack(nodeId: NodeId): void {
+    if (this.popped?.nodeId === nodeId) return;
+    const contents = this.deps.contents(nodeId);
+    if (!contents || contents.isDestroyed() || contents.isCrashed() || !this.heard.has(nodeId)) return;
+    let frames: WebFrameMain[];
+    try {
+      frames = contents.mainFrame.framesInSubtree;
+    } catch {
+      return;
+    }
+    for (const frame of frames.slice(0, 16)) void this.run(contents, frame, EXIT, false);
+  }
+
   private async popOut(nodeId: NodeId, contents: WebContents, heard = this.heard.has(nodeId)): Promise<void> {
     // Most pages have one frame; an embedded player (a video in an article) is in a frame of its own.
     // Its renderer can go away at any moment (a crash, a reload): then there's nothing to pop out.

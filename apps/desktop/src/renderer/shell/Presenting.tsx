@@ -1,5 +1,5 @@
 /**
- * Presenting mode's indicator (DESIGN.md §7.12): while it's on, a card at the
+ * Presenting mode's indicator (DESIGN.md §7.13): while it's on, a card at the
  * bottom of the sidebar (above Now playing) and a chip in the minimal bar say
  * so, and turn it off. Main hides what the mode hides; these only show it.
  */

@@ -28,6 +28,8 @@ export interface ContextMenuDeps {
    * page), and turning it off or on again.
    */
   adBlocking?: { on(url: string): boolean | null; set(url: string, on: boolean): void };
+  /** "Take a screenshot" (DESIGN.md §7.12), for a page a window shows. */
+  screenshot?(): void;
 }
 
 type Item = MenuItemConstructorOptions | MenuItem;
@@ -108,6 +110,7 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
       { label: 'Reload', accelerator: accel('nav.reload'), click: () => contents.reload() },
       { type: 'separator' },
       { label: 'Print…', accelerator: accel('page.print'), click: () => contents.print() },
+      ...(deps.screenshot ? [{ label: 'Take a screenshot', accelerator: accel('page.screenshot'), click: () => deps.screenshot?.() }] : []),
       { label: 'View page source', accelerator: accel('page.viewSource'), click: () => deps.openTab(`view-source:${params.pageURL}`, false) },
       ...(blocking === null
         ? []

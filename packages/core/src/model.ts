@@ -357,6 +357,8 @@ export interface Settings {
   pagePreviews: boolean;
   /** Presenting mode collapses each window's sidebar, and docks it again when it ends (ARCHITECTURE.md §9). */
   presentingHidesSidebar: boolean;
+  /** Recent screenshots are kept in `<userData>/Screenshots/` for the downloads panel's list (DESIGN.md §7.12); off deletes them. */
+  keepScreenshots: boolean;
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
   shortcuts: ShortcutOverrides;
   spellcheck: SpellcheckSettings;
@@ -451,6 +453,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoPip: true,
   pagePreviews: true,
   presentingHidesSidebar: false,
+  keepScreenshots: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
   googleFree: false,
@@ -502,6 +505,7 @@ export interface SettingsPatch {
   autoPip?: boolean;
   pagePreviews?: boolean;
   presentingHidesSidebar?: boolean;
+  keepScreenshots?: boolean;
   spellcheck?: Partial<SpellcheckSettings>;
   externalLinks?: ExternalLinks;
   miniWindowSize?: { width: number; height: number } | null;

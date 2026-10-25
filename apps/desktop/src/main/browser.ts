@@ -70,6 +70,8 @@ import type { Verdict } from './safe-browsing/database';
 import { SafeBrowsingGuard } from './safe-browsing/guard';
 import type { ScreenShareBroker } from './screen-share';
 import type { AuthBroker } from './http-auth';
+import type { PasskeyBroker } from './passkeys';
+import type { Screenshots } from './screenshots/service';
 import { HistorySaver } from './history-saver';
 import { SiteZoom } from './site-zoom';
 import { spellcheckLanguages } from './spellcheck';
@@ -109,6 +111,10 @@ export interface BrowserOptions {
   screenShare: ScreenShareBroker;
   /** Answers sites and proxies that ask for a username and password; connected here once the store exists. */
   httpAuth: AuthBroker;
+  /** Screenshots (DESIGN.md §7.12): capture mode, the clipboard, Save and the recent list. */
+  screenshots: Screenshots;
+  /** Chooses a passkey when an authenticator holds several for a site; connected here once the store exists. */
+  passkeys: PasskeyBroker;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
   /** Open tabs' back/forward histories as chord-data saved them, by node id. */
@@ -157,6 +163,10 @@ export class Browser {
   readonly extensions: Extensions;
   /** Safe Browsing's warnings: which pages show one, "Back to safety" and "Visit anyway". */
   readonly safeBrowsing: SafeBrowsingGuard;
+
+  get screenshots(): Screenshots {
+    return this.options.screenshots;
+  }
   private readonly windows = new Map<WindowId, AppWindow>();
   private readonly finders = new Map<WindowId, FindInPage>();
   /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
@@ -166,7 +176,7 @@ export class Browser {
   private readonly drm: DrmNotices;
   private readonly mediaSent = new Map<WindowId, string>();
   /** The sign-in box each window last gave the keyboard to, so a box takes it once. */
-  private readonly authFocused = new Map<WindowId, number>();
+  private readonly authFocused = new Map<WindowId, string>();
   /** The browser window used most recently: menus, Settings and links from Settings act on it. */
   private lastWindowId: WindowId | null = null;
   private settingsWindow: SettingsWindow | null = null;
@@ -271,6 +281,8 @@ export class Browser {
           options.permissions.forgetTab(nodeId);
           options.screenShare.forgetTab(nodeId);
           options.httpAuth.forgetTab(nodeId);
+          options.passkeys.forgetTab(nodeId);
+          options.passkeys.forgetTab(nodeId);
         });
         contents.once('destroyed', () => {
           options.permissions.forgetTab(nodeId);
@@ -317,6 +329,10 @@ export class Browser {
           },
           extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
           adBlocking: this.blockingMenu(contents),
+          screenshot: () => {
+            const w = this.windowFor(contents);
+            if (w) this.options.screenshots.start(w);
+          },
         });
       },
       onPeek: (openerNodeId, url, origin) => {
@@ -487,6 +503,14 @@ export class Browser {
       },
       onChange: () => this.syncPopovers(),
     });
+    // Choosing a passkey, over the same tab or Peek a sign-in box would show over.
+    options.passkeys.connect({
+      nodeFor: (contents) => {
+        const floating = this.tabs.floatingNodeFor(contents);
+        return this.tabs.nodeFor(contents) ?? (floating && this.peeks.windowOf(floating) ? floating : undefined);
+      },
+      onChange: () => this.syncPopovers(),
+    });
     options.screenShare.connect({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
@@ -525,6 +549,8 @@ export class Browser {
       this.extensions.sync();
       if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
       // Pictures of tabs that were closed, archived or unpinned go; turning previews off takes them all.
+      // "Keep recent screenshots" turned off: the kept ones go.
+      if (!change.state.settings.keepScreenshots && change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'keepScreenshots')) void this.options.screenshots.forgetAll();
       if (change.patches.some((p) => p.path[0] === 'nodes' || p.path[0] === 'chords' || (p.path[0] === 'settings' && p.path[1] === 'pagePreviews'))) {
         this.previews.sync();
         if (!change.state.settings.pagePreviews) for (const w of this.windows.values()) w.hidePreview();
@@ -700,6 +726,7 @@ export class Browser {
     }
     w.window.on('closed', () => {
       this.duet?.forgetWindow(windowId);
+      this.options.screenshots.windowClosed(windowId);
       this.windows.delete(windowId);
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
@@ -916,7 +943,10 @@ export class Browser {
       const nodeId = this.tabs.nodeFor(contents);
       if (nodeId) this.media.left(nodeId);
     }
-    for (const { nodeId } of shown) this.autoPip.returned(nodeId);
+    for (const { nodeId, view } of shown) {
+      this.autoPip.returned(nodeId);
+      if (!before.includes(view.webContents)) this.autoPip.cameBack(nodeId);
+    }
     this.syncPopover(w);
   }
 
@@ -1055,6 +1085,7 @@ export class Browser {
       share: this.options.screenShare.promptFor(activeTabId(state, w.id)),
       // Peek's page is in front while it's open: its sign-in box first.
       auth: this.options.httpAuth.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
+      passkey: this.options.passkeys.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
       drm: state.settings.onboarded || w.isPrivate ? this.drm.noticeFor(this.activeUrl(w.id)) : null,
@@ -1131,8 +1162,10 @@ export class Browser {
     this.popoverSent.set(w.id, json);
     send(w.popover.webContents, 'popover:state', popover);
     // A new sign-in box takes the keyboard, ready to type the username.
-    if (popover.auth && this.authFocused.get(w.id) !== popover.auth.id) w.focusPopover();
-    this.authFocused.set(w.id, popover.auth?.id ?? 0);
+    // A new sign-in box or passkey choice takes the keyboard, ready to answer.
+    const asking = popover.auth ? `auth:${popover.auth.id}` : popover.passkey ? `passkey:${popover.passkey.id}` : '';
+    if (asking && this.authFocused.get(w.id) !== asking) w.focusPopover();
+    this.authFocused.set(w.id, asking);
   }
 
   /** Run an action for the window that owns this contents (keys, the shell's buttons, the command bar). */
@@ -1328,6 +1361,8 @@ export class Browser {
     if (!w) return;
     if (w.peekOverlaySeq === seq) this.peeks.close(w);
     else w.closeOverlay(seq, dismissed);
+    // Capture mode closed without taking anything (a no-op otherwise).
+    this.options.screenshots.cancel(w);
   }
 
   /** Peek's "Open in Today", from its header. */
@@ -1858,6 +1893,9 @@ export class Browser {
       case 'view.reader':
         // For the tab on screen; Peek's page isn't a tab.
         if (!peek && active) void this.readers.toggle(active);
+        return true;
+      case 'page.screenshot':
+        this.options.screenshots.start(w);
         return true;
       case 'page.print':
         activeContents?.print();

@@ -1,0 +1,8 @@
+{
+  "name": "chord-widevine-player",
+  "productName": "Chord Widevine Player",
+  "private": true,
+  "version": "0.0.0-spike",
+  "type": "module",
+  "main": "main.mjs"
+}

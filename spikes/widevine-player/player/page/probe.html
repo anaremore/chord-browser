@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Widevine probe</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ddd; font: 13px system-ui, sans-serif; overflow: hidden; }
+  video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+  #label { position: fixed; left: 12px; bottom: 10px; padding: 4px 8px; border-radius: 6px; background: rgb(0 0 0 / 0.6); }
+</style>
+<!-- Shaka Player 5.3.2, pinned by its hash. -->
+<script src="https://cdn.jsdelivr.net/npm/shaka-player@5.3.2/dist/shaka-player.compiled.js" integrity="sha384-cNMtf7EC3JIqrwIpsr1hDQDbBR9rnVVLHCbjUgZPo9m72/iIz0wcktRKKc6OIsEE" crossorigin="anonymous"></script>
+</head>
+<body>
+<video playsinline></video>
+<div id="label"></div>
+<script src="probe.js"></script>
+</body>
+</html>

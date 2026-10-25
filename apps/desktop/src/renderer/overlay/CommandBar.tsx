@@ -8,7 +8,7 @@
  * engine's suggestions slot in under the local rows when they arrive.
  */
 import { keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
-import type { HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
+import type { CaptureStart, HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
 import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, PanelLeft, Pin, Presentation, Printer, RotateCcw, RotateCw, Search, Settings, SquareTerminal, TextSearch, Trash2, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
@@ -22,6 +22,7 @@ import { afterNextPaint, fromEpoch, measureSince } from '../shared/perf';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import styles from './CommandBar.module.css';
+import { CaptureLayer } from './Capture';
 import { DownloadsPanel } from './DownloadsPanel';
 import { ExtensionsPanel } from './ExtensionsPanel';
 import { PeekChrome } from './Peek';
@@ -40,6 +41,8 @@ interface Session {
   seq: number;
   /** Peek's page and card, when the overlay is Peek's chrome. */
   peek?: PeekState;
+  /** Taking a screenshot: the page's pane. */
+  capture?: CaptureStart;
   /** Not an opening: the unseen warm-up render while the overlay is still hidden (see below). */
   warm?: boolean;
 }
@@ -168,6 +171,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
         initial: event.mode === 'edit' ? event.url : '',
         seq: event.seq,
         ...(event.peek ? { peek: event.peek } : {}),
+        ...(event.capture ? { capture: event.capture } : {}),
       });
       setQuery(event.mode === 'edit' ? event.url : '');
       setSelected(0);
@@ -481,6 +485,15 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
           />
         </div>
       </MotionConfig>
+    );
+  }
+
+  // Taking a screenshot: main closes the overlay itself once it's taken.
+  if (session.mode === 'capture' && session.capture) {
+    return (
+      <div style={style}>
+        <CaptureLayer key={session.openedAt} capture={session.capture} onClose={dismiss} onTaken={() => setSession(null)} />
+      </div>
     );
   }
 

@@ -1,5 +1,5 @@
 /**
- * Sharing (ARCHITECTURE.md §9; DESIGN.md §7.1, §7.12): a tab shared from
+ * Sharing (ARCHITECTURE.md §9; DESIGN.md §7.1, §7.13): a tab shared from
  * Chord's own picker, whose frames and sound reach the page asking while it
  * goes on playing here, and which keeps painting off screen and never
  * sleeps; presenting mode, started by a share or by its switch and shortcut,

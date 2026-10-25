@@ -101,7 +101,7 @@ macOS                                            Windows / Linux
 | New tab | 32 | "+ New tab", muted. Same as ⌘T. |
 | Today | 32 / row | New tabs arrive at the top. |
 | (flex) | — | Toasts stack here, above the footer. |
-| Presenting | 44 | *(Built 2026-10-24, §7.12.)* Only while presenting mode is on, with Turn off. |
+| Presenting | 44 | *(Built 2026-10-24, §7.13.)* Only while presenting mode is on, with Turn off. |
 | Now playing | 36 or 84, + 28 a row | *(Built 2026-10-24, §7.10.)* Only for media you left playing (or played from the card) in a tab the window isn't showing, or paused there in the last minute. More than one: a row each for up to two more. |
 | Extensions shelf | 32 | Only when the chord's profile has extensions: pinned extensions' buttons (16 px icons in 28 px hit areas, with badges and tooltips), then the puzzle piece, which lists every extension with a pin toggle. A popup opens beside its button. Hidden when Settings puts extension buttons in the title bar. Right-click a button: the extension's items, Options, Unpin, Remove (with Undo), Manage in Settings. |
 | Footer | 44 | Archive · Downloads on the left; chord switcher in the center (icons 20 px; active one in a pill; scrolls with fade edges past ~6); + New chord on the right. |
@@ -127,7 +127,7 @@ Windows / Linux
 | Back · Forward · Reload | As in the sidebar header. Unavailable buttons sit at 40% opacity rather than disappearing, so nothing shifts. |
 | Address field | `domain / title`: domain in `fg`, the slash and title in `fg-muted`, one line, truncated at the end. Click or ⌘L and the field *grows into* the command bar in place (shared-element morph), with the URL selected. Hover shows the site-info icon. |
 | Speaker | *(Built 2026-10-24.)* Only while the tab on screen makes sound: the row's speaker (§7.2), which the hidden sidebar can't show. Click mutes or unmutes the tab. |
-| Presenting | *(Built 2026-10-24.)* Only while presenting mode is on: a chip that turns it off (§7.12), standing in for the sidebar's card. |
+| Presenting | *(Built 2026-10-24.)* Only while presenting mode is on: a chip that turns it off (§7.13), standing in for the sidebar's card. |
 | Reader view | *(Built 2026-10-24.)* Only while the page reads as an article, or shows in reader view: a book, pressed while it's open (§7.11). It sits right after the address, before the speaker; the Windows and Linux top strip has it there too with the sidebar docked. |
 | Drag region | Everything not interactive drags the window. Double-click follows the platform (maximize on Windows/Linux; the macOS title-bar preference). |
 | Downloads | Present only while a download is active or just finished. |
@@ -483,10 +483,10 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Area | Components |
 |---|---|
 | Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ReaderButton` (§7.11), `ContentFrame` (placeholder + shadow + loading bar), `DuetFrame` |
-| Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `PresentingCard` (§7.12), `NowPlayingCard` (§7.10), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
-| Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar` |
-| Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `ShareCard` (the share picker: a tab, a window or a screen, §7.12), `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
-| Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer`, the `DrmNotice` (on a service that needs Widevine: a screen-and-play glyph, *[Service] won’t play in Chord yet*, why in a line, *Open in [browser]* for up to two other browsers on the computer, the likeliest primary; × is Not now, until Chord quits) and the `AuthCard` sign-in box (a site or proxy asking for a username and password: a key, *Sign in to* the origin, the site's realm as a quote, *That username and password didn't work* in `danger` after a failed try, a warning on plain HTTP, two fields, *Cancel* · **Sign in**; Escape cancels) |
+| Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `PresentingCard` (§7.13), `NowPlayingCard` (§7.10), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
+| Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar`, `CaptureLayer` (§7.12) |
+| Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `ShareCard` (the share picker: a tab, a window or a screen, §7.13), `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
+| Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer`, the `PasskeyCard` (when a security key holds several passkeys for a site: a fingerprint glyph, *Sign in to [site] with a passkey*, a button per account with the site's display name over its account name, the first one focused, and Cancel; Escape declines), the `DrmNotice` (on a service that needs Widevine: a screen-and-play glyph, *[Service] won’t play in Chord yet*, why in a line, *Open in [browser]* for up to two other browsers on the computer, the likeliest primary; × is Not now, until Chord quits) and the `AuthCard` sign-in box (a site or proxy asking for a username and password: a key, *Sign in to* the origin, the site's realm as a quote, *That username and password didn't work* in `danger` after a failed try, a warning on plain HTTP, two fields, *Cancel* · **Sign in**; Escape cancels) |
 | Settings and help | `SettingRow` (label, control, and a ↺ reset button shown only when the value differs from its default), `ShortcutSheet` (the cheat sheet, generated from the shortcut registry) |
 | Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
 | Duet | `DuetPanel`, `ThreadHeader` (title, provider/model chip, thread menu), `MessageList`, `AssistantMessage` (with `CitationPill`), `ToolActivityRow`, `ApprovalCard`, `Composer` (`ContextChips`, input, send), `DuetSetup` |
@@ -511,7 +511,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | Sleeping | Favicon at 70% opacity |
 | Crashed | Favicon replaced by `circle-alert` in `warning` |
 | Sharing | *(2026-10-24)* Stop sharing (`screen-share` in `danger`) in the slot before ×; click ends the share |
-| Being shared | *(2026-10-24)* Stop sharing this tab, the same button, which ends the shares of it; on screen, its frame's edge is tinted (§7.12) |
+| Being shared | *(2026-10-24)* Stop sharing this tab, the same button, which ends the shares of it; on screen, its frame's edge is tinted (§7.13) |
 | Dragging | Scale 1.03, `shadow-lift`, cursor `grabbing` |
 
 **Close on a pinned tab** unloads it; it stays pinned. Tooltip: "Close (stays pinned)".
@@ -679,7 +679,22 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
 - **Accessibility:** the bar is the page's banner and the article its main landmark, with one h1, the title. Space, Page Down and the arrows scroll it as it opens (it takes the keyboard); F6 counts it as the page. The card's choices are radio groups (one Tab stop each, arrows choose); Esc closes the card, then reader view. An image without a description is decoration (empty `alt`), and a link with nothing to name it isn't one. Printing prints the article alone. Windows High Contrast: the card gets a `CanvasText` edge, a chosen option `Highlight`.
 - **Private windows:** the same, in the window's graphite colors with the Chord theme; images come through the window's own sign-ins, and nothing of the article is kept.
 
-### 7.12 Sharing: the picker, presenting mode, and what's shared
+### 7.12 `CaptureLayer`: screenshots
+
+*Built 2026-10-24.* The maintainer's Screenboard extension, built in: an element, an area, what's on screen or the whole page, straight to the clipboard.
+
+- **Starting:** ⌘⇧2 / Ctrl+Shift+2 (reserved; Arc's key, clear of macOS's own ⌘⇧3/4/5), *Take a screenshot* in the ⋯ menu, the page's right-click menu and the command bar (and File on macOS). It takes the page in front: the focused pane of a split, Peek's page while it's open, the whole window in fullscreen. With no page there (an error or crash page, a new tab), a toast says so.
+- **One mode.** The overlay covers the window; the page stays clear and the rest dims (`scrim`). The pointer over the page is a crosshair.
+  - **Hover** outlines the element under it (`focus-ring` width, `accent`, a 12% `accent` fill) with a label above: what it is and its size, "div#box · 200 × 120". **Click** takes the whole element, even where it runs past the screen.
+  - **Drag** draws an area (a dashed hairline, 8% fill) with its size; let go to take it. A drag under 4 px is a click.
+  - **The bar**, a pill centered at the page's top (`surface-raised`, `shadow-popover`): *Click an element or drag an area* in `fg-muted`, **Visible** (V), **Full page** (F), and ✕ (Esc).
+  - **Keys:** ↑ and ↓ step to the element's parent or child, Enter takes it, V and F as above, Esc cancels. The wheel still scrolls the page. A click outside the page cancels.
+- **After:** it's on the clipboard at once, as a PNG, and a toast says *Screenshot copied* with **Save**, which puts it in Downloads as "Screenshot 2026-10-24 at 18.32.10.png" and lists it there. ⌘Z never presses Save. Next: **Ask Duet**, which attaches it to Duet's chat.
+- **Recent screenshots:** the downloads panel lists them under its downloads, newest first: a thumbnail, the page's title, when and how big, then Copy, Save and Delete, and Clear for all. Up to 50, within 256 MB. Settings → Privacy → *Keep recent screenshots* (on) turns this off, deleting them. A private window's are in memory only, listed only in that window, and gone with it.
+- **What can't be pictured:** video under DRM comes out black, as in every browser.
+- **Accessibility:** a dialog named *Take a screenshot*, described by its hint, with the keyboard in it; the bar's buttons are ordinary Tab stops; the element under the pointer is announced politely ("div#box, 200 by 120"). Forced colors draw the outline and label in `Highlight`.
+
+### 7.13 Sharing: the picker, presenting mode, and what's shared
 
 *Built 2026-10-24* (ARCHITECTURE.md §9, *Screen sharing* and *Presenting mode*).
 
@@ -848,7 +863,7 @@ With no other browser on the computer, first run leaves the step out, and Settin
 - "Deleted 'Work' chord · Undo"
 - "Moved to Personal (sign-ins differ, so it reloaded) · Undo"
 - "Not blocking ads on nytimes.com · Undo" · "Blocking ads on nytimes.com again · Undo"
-- "Moved to Work (sign-ins differ, so it reloaded and is no longer shared) · Undo" · "Stopped sharing “Slides”: it moved to other sign-ins, so it loaded again" (these two show in presenting mode too, §7.12)
+- "Moved to Work (sign-ins differ, so it reloaded and is no longer shared) · Undo" · "Stopped sharing “Slides”: it moved to other sign-ins, so it loaded again" (these two show in presenting mode too, §7.13)
 
 Empty states get a small abstract illustration in the chord's own colors (three soft shapes echoing the mark), animated once with `gentle`. They never look like stock art.
 
@@ -879,7 +894,7 @@ Empty states get a small abstract illustration in the chord's own colors (three 
 
 - **F6 / ⇧F6** go sidebar → page → (find bar or permission prompt) → Duet → top strip. Main knows which view has the keyboard; the shell picks the next region it shows and asks main to focus the page, the popover or itself (`focus:region`, `focus:move`). Coming back to a region lands where you left it; the first time, on the tab on screen, Duet's message field, or the address. The command bar and Peek are modal: F6 stays out.
 - **The sidebar** is two ARIA trees, Pinned and Today. Each row is a `treeitem` named by its title, with level, position and size (rows are drawn flat, indented by depth). Each tree is one Tab stop: the row last focused, else the tab on screen. Arrows, Home and End move; → / ← open, enter and close folders and splits; ↵ opens; Space picks a row up; Delete or ⌘⌫ closes. Picking up, moving and dropping are announced. A row's own buttons (×, ↩, Stop sharing, the speaker, a split's chevron) are for the pointer; the keyboard has Delete and the row's menu (Shift+F10 or the menu key), which now also offers Stop sharing (*Stop sharing this tab* on a shared tab's row), Back to pinned page and Mute tab. A row's description says when its tab is playing sound or muted.
-- **Now playing** (§7.10) is a group outside the trees, with ordinary buttons: one Tab stop each, named for what they do. So is presenting mode's card (§7.12), *Presenting mode*, with Turn off.
+- **Now playing** (§7.10) is a group outside the trees, with ordinary buttons: one Tab stop each, named for what they do. So is presenting mode's card (§7.13), *Presenting mode*, with Turn off.
 - **Composite widgets share one pattern** (`shared/a11y.ts`): radio groups, the chord switcher (tabs: ← → switch chords) and Duet's scope are one Tab stop, and arrow keys move and choose. Menus (Duet's model and Chats menus, Attach a tab) open on their first item, take ↑ ↓ Home End, and close on Esc or Tab with the keyboard back on their button. Popovers, pickers and in-place editors give the keyboard back to where it came from when they close.
 - **The command bar** is a modal dialog: a `combobox` (expanded while it has results) owning the `listbox` "Results", with the active option followed by `aria-activedescendant`. Esc gives the keyboard back where it came from (the sidebar row, or the page). Split with…, Separate split tabs and the pane moves are among its actions. The downloads and extensions panels take the keyboard when they open.
 - **Settings:** every row's description is read with its control; every ↺ is named for its setting ("Reset Search suggestions to default") and, once used, hands the keyboard to the setting it reset.
@@ -1014,7 +1029,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 | New private window | ⌘⇧N | Ctrl+Shift+N | R |
 | Close window | ⌘⇧W | Ctrl+Shift+W | R |
 | Show / hide the sidebar (minimal mode) | ⌘S | Ctrl+S | P |
-| Presenting mode, on or off (§7.12; 2026-10-24) | ⌘⇧P | Ctrl+Shift+P | P |
+| Presenting mode, on or off (§7.13; 2026-10-24) | ⌘⇧P | Ctrl+Shift+P | P |
 | Find in page | ⌘F | Ctrl+F | P |
 | Show / hide reader view (§7.11) | ⌘⌥R | F9 | P |
 | Find next / previous | ⌘G · ⌘⇧G | F3 · Shift+F3 | P |
@@ -1022,6 +1037,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
 | Full screen | ⌃⌘F | F11 | R |
 | Move focus: sidebar → page → address (→ Duet) | F6 · ⇧F6 | F6 · Shift+F6 | R |
 | Print | ⌘P | Ctrl+P | P |
+| Take a screenshot (§7.12) | ⌘⇧2 | Ctrl+Shift+2 | R |
 | Save page as | ⌘⇧S | Ctrl+Shift+S | P |
 
 **Chord's own pages and tools**

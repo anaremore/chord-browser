@@ -1174,7 +1174,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (sleepTabs !== undefined && draft.settings.sleepTabs !== sleepTabs) draft.settings.sleepTabs = sleepTabs;
       if (searchSuggestions !== undefined && draft.settings.searchSuggestions !== searchSuggestions) draft.settings.searchSuggestions = searchSuggestions;
       if (checkForUpdates !== undefined && draft.settings.checkForUpdates !== checkForUpdates) draft.settings.checkForUpdates = checkForUpdates;
-      const { autoPip, pagePreviews, uiScale } = cmd.settings;
+      const { autoPip, pagePreviews, keepScreenshots, uiScale } = cmd.settings;
       if (isUiScale(uiScale) && draft.settings.uiScale !== uiScale) draft.settings.uiScale = uiScale;
       if (autoPip !== undefined && draft.settings.autoPip !== autoPip) draft.settings.autoPip = autoPip;
       if (pagePreviews !== undefined && draft.settings.pagePreviews !== pagePreviews) draft.settings.pagePreviews = pagePreviews;
@@ -1182,6 +1182,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (presentingHidesSidebar !== undefined && draft.settings.presentingHidesSidebar !== presentingHidesSidebar) {
         draft.settings.presentingHidesSidebar = presentingHidesSidebar;
       }
+      if (keepScreenshots !== undefined && draft.settings.keepScreenshots !== keepScreenshots) draft.settings.keepScreenshots = keepScreenshots;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
       if (cmd.settings.duet) {
         const duet = cmd.settings.duet;

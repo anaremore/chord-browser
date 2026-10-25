@@ -15,6 +15,7 @@ export * from './reader';
 export * from './reducer';
 export * from './restore';
 export * from './safe-browsing';
+export * from './screenshot';
 export * from './seed';
 export * from './select';
 export * from './sharing';

@@ -75,13 +75,18 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
+/** How long ago, in a few words: "just now", "2 min ago", "3 h ago", "yesterday", "4 days ago". */
+export function ago(at: number, now: number): string {
+  const elapsed = Math.max(0, now - at);
+  if (elapsed < MINUTE) return 'just now';
+  if (elapsed < HOUR) return `${Math.floor(elapsed / MINUTE)} min ago`;
+  if (elapsed < DAY) return `${Math.floor(elapsed / HOUR)} h ago`;
+  if (elapsed < 2 * DAY) return 'yesterday';
+  if (elapsed < 30 * DAY) return `${Math.floor(elapsed / DAY)} days ago`;
+  return 'over a month ago';
+}
+
 /** When a tab was last opened, for its hover preview (DESIGN.md §7.6): "Opened 2 h ago". */
 export function openedAgo(at: number, now: number): string {
-  const elapsed = Math.max(0, now - at);
-  if (elapsed < MINUTE) return 'Opened just now';
-  if (elapsed < HOUR) return `Opened ${Math.floor(elapsed / MINUTE)} min ago`;
-  if (elapsed < DAY) return `Opened ${Math.floor(elapsed / HOUR)} h ago`;
-  if (elapsed < 2 * DAY) return 'Opened yesterday';
-  if (elapsed < 30 * DAY) return `Opened ${Math.floor(elapsed / DAY)} days ago`;
-  return 'Opened over a month ago';
+  return `Opened ${ago(at, now)}`;
 }

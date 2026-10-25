@@ -1,0 +1,132 @@
+/* Taking a screenshot (DESIGN.md §7.12): the overlay over the window, the page left clear. */
+.root {
+  position: fixed;
+  inset: 0;
+  color: var(--color-fg);
+  outline: none;
+  cursor: default;
+}
+
+/* The page being captured: clear, with the window around it dimmed. */
+.pane {
+  position: absolute;
+  box-shadow: 0 0 0 100vmax var(--color-scrim);
+  cursor: crosshair;
+  pointer-events: none;
+}
+
+.highlight,
+.area {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+/* The element under the pointer: what a click takes. */
+.highlight {
+  border: var(--size-focus-ring) solid var(--color-accent);
+  border-radius: var(--radius-xs);
+  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+}
+
+/* A dragged area. */
+.area {
+  border: var(--size-hairline) dashed var(--color-accent);
+  background: color-mix(in oklab, var(--color-accent) 8%, transparent);
+}
+
+/* What it is and how big, just above its top edge. */
+.label {
+  position: absolute;
+  inset-block-start: calc(-1 * var(--size-icon-button) + var(--size-focus-ring));
+  inset-inline-start: calc(-1 * var(--size-focus-ring));
+  max-inline-size: var(--size-popover-card);
+  overflow: hidden;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bar {
+  position: absolute;
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-1);
+  padding-inline-start: var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-popover);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.hint {
+  padding-inline-end: var(--space-2);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.button {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+}
+
+.button:hover {
+  background: var(--color-item-active-bg);
+}
+
+.key {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-raised);
+  color: var(--color-fg-muted);
+  font: var(--text-micro);
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  inline-size: var(--size-icon-button);
+  block-size: var(--size-icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-fg-muted);
+}
+
+.close:hover {
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+}
+
+.button:focus-visible,
+.close:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-hairline);
+}
+
+@media (forced-colors: active) {
+  .highlight,
+  .area {
+    border-color: Highlight;
+  }
+
+  .label {
+    background: Highlight;
+    color: HighlightText;
+  }
+}

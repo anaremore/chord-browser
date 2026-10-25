@@ -13,7 +13,7 @@
  * held one still undecided when Chord quits is deleted.
  */
 import { existsSync } from 'node:fs';
-import { rename, rm } from 'node:fs/promises';
+import { rename, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Command, Download, DownloadAction, State, ThreatKind, WindowId } from '@chord/core';
 import { app, shell, type DownloadItem, type Session } from 'electron';
@@ -90,6 +90,25 @@ export class DownloadManager {
       );
       this.report(id);
     });
+  }
+
+  /**
+   * A file Chord makes itself (a screenshot you save, DESIGN.md §7.12): into
+   * the Downloads folder under a name that overwrites nothing, and in the list
+   * as a finished download, a private window's only there. Returns its path.
+   */
+  async addFile(filename: string, bytes: Uint8Array, mime: string, url: string, privateWindow: WindowId | null): Promise<string> {
+    const path = uniquePath(downloadsDir(), safeFilename(filename), (p) => existsSync(p) || this.reserved.has(p));
+    this.reserved.add(path);
+    try {
+      await writeFile(path, bytes);
+    } finally {
+      this.reserved.delete(path);
+    }
+    const now = Date.now();
+    const download: Download = { id: this.deps.newId(), url, filename: basename(path), path, mime, state: 'completed', received: bytes.byteLength, total: bytes.byteLength, speed: 0, startedAt: now, endedAt: now };
+    this.deps.dispatch({ t: 'download.update', download: privateWindow ? { ...download, privateWindow } : download });
+    return path;
   }
 
   private report(id: string): void {

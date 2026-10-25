@@ -1,0 +1,6 @@
+{
+  "name": "widevine-player-census",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs"
+}

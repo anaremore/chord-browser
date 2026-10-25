@@ -4,9 +4,9 @@
  * these cards, so the rest of the page stays clickable.
  */
 import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
-import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type DrmNotice, type FindState, type PermissionPrompt, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
+import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type DrmNotice, type FindState, type PasskeyPrompt, type PermissionPrompt, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
-import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, KeyRound, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, Fingerprint, KeyRound, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { useLive, type Live } from '../shared/live';
@@ -331,6 +331,62 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
 }
 
 /**
+ * Choosing a passkey (ARCHITECTURE.md §9, Passkeys): the authenticator holds
+ * more than one for the site. Each account is a button, named as the site
+ * named it; Cancel or Escape declines, and the site hears it was cancelled.
+ */
+function PasskeyCard({ prompt }: { prompt: PasskeyPrompt }) {
+  const ids = useId();
+  const first = useRef<HTMLButtonElement>(null);
+  const [sent, setSent] = useState(false);
+  // The first account has the keyboard when the card appears (main focuses the popover too).
+  useEffect(() => first.current?.focus(), []);
+  const respond = (credentialId: string | null) => {
+    if (sent) return;
+    setSent(true);
+    void api.passkey.respond(prompt.id, credentialId);
+  };
+  return (
+    <div
+      className={styles.card}
+      role="alertdialog"
+      aria-labelledby={`${ids}-title`}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          respond(null);
+        }
+      }}
+    >
+      <div className={styles.permissionHead}>
+        <Fingerprint className={styles.offerIcon} {...ICON} aria-hidden />
+        <p id={`${ids}-title`} className={styles.permissionTitle}>
+          Sign in to <span className={styles.host}>{prompt.site}</span> with a passkey
+        </p>
+        <button type="button" className={styles.iconButton} aria-label="Cancel" title="Cancel" onClick={() => respond(null)}>
+          <X {...ICON} />
+        </button>
+      </div>
+      <ul className={styles.passkeyList}>
+        {prompt.accounts.map((account, i) => (
+          <li key={account.credentialId}>
+            <button ref={i === 0 ? first : undefined} type="button" className={styles.passkeyAccount} disabled={sent} onClick={() => respond(account.credentialId)}>
+              <span className={styles.passkeyName}>{account.displayName || account.name || 'Unnamed account'}</span>
+              {account.name && account.name !== account.displayName && <span className={styles.passkeyDetail}>{account.name}</span>}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className={styles.actions}>
+        <button type="button" className={styles.secondary} onClick={() => respond(null)}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Safe Browsing's one-time offer (ARCHITECTURE.md §14.5), for a profile from
  * before it existed: its notice in full, then on or not now. Either answer
  * is final; Settings → Privacy can change it later.
@@ -403,7 +459,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
   const info = useLive(infoSource);
   const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
-  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.safeBrowsingOffer || state.drm);
+  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.passkey || state.safeBrowsingOffer || state.drm);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -426,6 +482,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}
       {state.share && <ShareCard key={state.share.id} prompt={state.share} appearance={appearance} platform={info.platform} />}
       {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}
+      {state.passkey && <PasskeyCard key={state.passkey.id} prompt={state.passkey} />}
       {state.safeBrowsingOffer && <SafeBrowsingOffer />}
       {state.drm && <DrmNoticeCard key={state.drm.service} notice={state.drm} />}
     </div>

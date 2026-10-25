@@ -42,7 +42,7 @@ import { applySpellcheck, setDictionarySource } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { Persistence, removeUnusedPartitions } from './persistence';
-import { platform, systemInfo } from './platform';
+import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveReaderImages } from './protocol';
 import { SAFE_BROWSING_KEY } from './safe-browsing/key';
 import { listsFile, SafeBrowsing, safeBrowsingEndpoint } from './safe-browsing/service';
@@ -50,6 +50,10 @@ import { configureUiSession, hardenAllWebContents } from './security';
 import { Suggestions } from './suggestions';
 import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
+import { PasskeyBroker } from './passkeys';
+import { Screenshots } from './screenshots/service';
+import { DiskShots } from './screenshots/store';
+import { mark, watchLaunch } from './launch-timeline';
 import { chromiumUserAgent } from './user-agent';
 
 // A bug in main must never put up Electron's "JavaScript error" box (a native dialog that
@@ -80,6 +84,7 @@ let importer: Importer | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
+const passkeys = new PasskeyBroker();
 
 /**
  * Safe Browsing (ARCHITECTURE.md §14.5): Google's v5 API in Local List Mode.
@@ -235,6 +240,14 @@ function registerIpc(): void {
   });
   handle('downloads:openFolder', () => downloads.openFolder());
   handle('overlay:close', ({ seq, dismissed }, sender) => browser!.closeOverlay(sender, seq, dismissed));
+  // Screenshots (DESIGN.md §7.12): capture mode in the overlay, and the recent list (each window its own).
+  handle('capture:hover', ({ x, y }, sender) => browser!.screenshots.hover(senderWindow(sender), x, y));
+  handle('capture:step', ({ to }, sender) => browser!.screenshots.step(senderWindow(sender), to));
+  handle('capture:take', (choice, sender) => browser!.screenshots.take(senderWindow(sender), choice));
+  handle('capture:scroll', ({ x, y, deltaX, deltaY }, sender) => browser!.screenshots.scroll(senderWindow(sender), x, y, deltaX, deltaY));
+  handle('screenshots:list', (_request, sender) => browser!.screenshots.list(senderWindow(sender)));
+  handle('screenshots:do', ({ id, do: action }, sender) => browser!.screenshots.act(senderWindow(sender), id, action));
+  handle('screenshots:clear', (_request, sender) => browser!.screenshots.clear(senderWindow(sender)));
   handle('focus:move', ({ to }, sender) => senderWindow(sender).focusRegion(to));
   handle('peek:expand', (_request, sender) => browser!.expandPeek(sender));
   // A mini window's bar (DESIGN.md §7.9): each acts on the mini window it's in.
@@ -339,6 +352,7 @@ function registerIpc(): void {
   handle('media:view', (_request, sender) => browser!.nowPlaying(senderWindow(sender).id));
   handle('media:do', ({ nodeId, action }, sender) => browser!.mediaAction(senderWindow(sender), nodeId, action));
   handle('auth:respond', ({ id, credentials }) => httpAuth.respond(id, credentials));
+  handle('passkey:respond', ({ id, credentialId }) => passkeys.respond(id, credentialId));
   handle('drm:open', ({ browser: other }, sender) => browser!.drmAction(sender, { open: other }));
   handle('drm:dismiss', (_request, sender) => browser!.drmAction(sender, 'dismiss'));
   handle('settings:sitePermission', ({ origin, permission, decision }) =>
@@ -436,7 +450,9 @@ if (!app.requestSingleInstanceLock()) {
       .finally(() => app.quit());
   });
 
+  watchLaunch();
   void app.whenReady().then(async () => {
+    mark('app ready');
     markLaunch('ready');
     showDevelopmentDockIcon();
     // Development only: force an appearance for design QA captures.
@@ -467,6 +483,7 @@ if (!app.requestSingleInstanceLock()) {
         permissions.attach(ses, priv ? profileId : null);
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
         screenShare.attach(ses);
+        passkeys.attach(ses);
         // A chord's session gets the blocker extension; a private window's, its request dispatcher.
         adBlocking.attach(profileId, ses, priv);
         // Before any page's own scripts: what Electron lacks and every Chromium browser has (preload/page.ts).
@@ -493,6 +510,7 @@ if (!app.requestSingleInstanceLock()) {
 
     // Session restore: what chord-data saved, repaired; or a first chord in the OS accent color.
     const opened = await Persistence.open(join(app.getPath('userData'), 'chord.db'));
+    mark('database open');
     markLaunch('restored');
     persistence = opened.persistence;
     const accent = systemInfo().accentColor;
@@ -529,6 +547,14 @@ if (!app.requestSingleInstanceLock()) {
     // and unpacked extension folders to load, like Chrome's --load-extension.
     const dev = (name: string) => (app.isPackaged ? undefined : process.env[name] || undefined);
     const publisherKeyHash = dev('CHORD_WEBSTORE_PUBLISHER_KEY_HASH');
+    // Recent screenshots on disk, read when first needed (taking one, or the downloads panel's list).
+    const shots = new DiskShots(join(app.getPath('userData'), 'Screenshots'));
+    const screenshots = new Screenshots({
+      uiScale,
+      keep: () => browser?.store.state.settings.keepScreenshots ?? true,
+      disk: shots,
+      saveFile: async (filename, bytes, url, privateWindow) => void (await downloads.addFile(filename, bytes, 'image/png', url, privateWindow)),
+    });
     browser = new Browser({
       initial,
       uiSession: ui,
@@ -536,6 +562,8 @@ if (!app.requestSingleInstanceLock()) {
       permissions,
       screenShare,
       httpAuth,
+      passkeys,
+      screenshots,
       histories: opened.navs,
       saveHistory: (nodeId, nav) => persistence?.nav(nodeId, nav),
       history: (event) => store.history(event),
@@ -643,10 +671,15 @@ if (!app.requestSingleInstanceLock()) {
     }
     // Extensions load before any page does, so their content scripts reach restored tabs; Chord's blocker
     // too, so its rules cover their first requests and no page starts loading while it's being added.
-    await Promise.all([browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean)), adBlocking.loaded()]);
+    mark('extensions and ad blocking loading');
+    await Promise.all([
+      browser.extensions.start((dev('CHORD_LOAD_EXTENSION') ?? '').split(delimiter).filter(Boolean)).then(() => mark('extensions loaded')),
+      adBlocking.loaded().then(() => mark('ad blocking loaded (or its 3 s cap)')),
+    ]);
     // Launched to open a link: just its mini window, quickly; your windows come back when you want them.
     if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
     else browser.start();
+    mark('windows opened');
     updates.start();
   });
 

@@ -36,6 +36,17 @@ const api: OverlayApi = {
     onState: (listener) => subscribe('peek:state', listener),
     expand: () => invoke('peek:expand'),
   },
+  capture: {
+    hover: (x, y) => invoke('capture:hover', { x, y }),
+    step: (to) => invoke('capture:step', { to }),
+    take: (choice) => invoke('capture:take', choice),
+    scroll: (x, y, deltaX, deltaY) => invoke('capture:scroll', { x, y, deltaX, deltaY }),
+  },
+  screenshots: {
+    list: () => invoke('screenshots:list'),
+    act: (id, action) => invoke('screenshots:do', { id, do: action }),
+    clear: () => invoke('screenshots:clear'),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));
