@@ -82,6 +82,8 @@ export class Screenshots {
   private readonly memory = new Map<string, MemoryShots>();
   /** Each window's last screenshot, so its toast's Save works even when none are kept. */
   private readonly last = new Map<string, { entry: ScreenshotEntry; png: Buffer; thumb: Buffer; ask: Buffer | null }>();
+  /** A screenshot still being written, per window: the recent list waits for it, so the one just taken is in it. */
+  private readonly saving = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: ScreenshotDeps) {}
 
@@ -156,7 +158,11 @@ export class Screenshots {
     };
     const copied = await copyPng(shot.png);
     this.last.set(w.id, { entry, png: shot.png, thumb: shot.thumb, ask: shot.ask });
-    if (this.deps.keep()) await this.store(w).add(entry, shot.png, shot.thumb, shot.ask ?? undefined);
+    if (this.deps.keep()) {
+      const saving = this.store(w).add(entry, shot.png, shot.thumb, shot.ask ?? undefined);
+      this.saving.set(w.id, saving);
+      await saving.finally(() => this.saving.get(w.id) === saving && this.saving.delete(w.id));
+    }
     // Saved either way: if the clipboard said no, Save is how to keep it.
     w.toast({
       id: 'screenshot',
@@ -169,6 +175,7 @@ export class Screenshots {
   /** The window's recent screenshots, newest first, with thumbnails. */
   async list(w: AppWindow): Promise<ScreenshotItem[]> {
     if (!this.deps.keep()) return [];
+    await this.saving.get(w.id)?.catch(() => undefined);
     const store = this.store(w);
     return Promise.all(
       (await store.list()).map(async (entry) => {
