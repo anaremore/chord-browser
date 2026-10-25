@@ -38,6 +38,8 @@ export interface ScreenShareDeps {
   onChange(): void;
   /** A share started or ended: presenting mode, the tinted edges and where shared tabs wait follow it. */
   sharingChanged(): void;
+  /** A shared tab that isn't on screen paints a fresh frame (`AppWindow.repaintParked`). */
+  repaint(nodeId: NodeId): void;
   /** Stop couldn't reach the share (the page never used it where Chord can see): say so. */
   cantStop(nodeId: NodeId, host: string): void;
 }
@@ -73,6 +75,8 @@ const CHECK_MS = 2000;
 const THUMBNAIL = { width: 240, height: 135 };
 /** Listing screens and windows without pictures: their names, at once. */
 const NO_THUMBNAIL = { width: 0, height: 0 };
+/** When a shared tab paints afresh after its share starts (`repaintSoon`). */
+const REPAINT_MS = [300, 1200, 3000];
 /** Capturing the computer's sound works on Windows only. */
 const SYSTEM_AUDIO = process.platform === 'win32';
 
@@ -306,9 +310,22 @@ export class ScreenShareBroker {
     if (pending.frame.isDestroyed()) return;
     // The tab picked may have closed meanwhile.
     if (chosen.source.kind === 'tab' && chosen.source.contents.isDestroyed()) return pending.answer(null);
-    // Shared first: a tab that isn't on screen is attached (Browser parks it) and painting before its stream starts.
-    this.started(pending.nodeId, pending.frame, pending.host, chosen.source);
     pending.answer(chosen.streams);
+    this.started(pending.nodeId, pending.frame, pending.host, chosen.source);
+    if (chosen.source.kind === 'tab') this.repaintSoon(chosen.source.nodeId);
+  }
+
+  /**
+   * A shared tab paints afresh a few times as its stream gets going: a still
+   * page (slides, a document) sends nothing new by itself, and the first
+   * frames can come before the page sharing it listens.
+   */
+  private repaintSoon(nodeId: NodeId): void {
+    for (const ms of REPAINT_MS) {
+      setTimeout(() => {
+        if (this.shared.has(nodeId)) this.deps?.repaint(nodeId);
+      }, ms);
+    }
   }
 
   /** What the page gets for the source picked: only what was offered to it. */

@@ -66,7 +66,7 @@ function setup(picker: 'mac' | 'portal' | null = null) {
   state.nodes['meet'] = tab('meet', 'https://meet.test/', 'Meeting');
   state.nodes['slides'] = tab('slides', 'https://slides.test/', 'Slides');
   const dispatched: Command[] = [];
-  const changes = { popover: 0, sharing: 0 };
+  const changes = { popover: 0, sharing: 0, repaints: [] as string[] };
   const broker = new ScreenShareBroker(picker);
   broker.connect({
     state: () => state,
@@ -77,6 +77,7 @@ function setup(picker: 'mac' | 'portal' | null = null) {
     shareableTabs: () => [state.nodes['meet'] as TabNode, state.nodes['slides'] as TabNode],
     onChange: () => changes.popover++,
     sharingChanged: () => changes.sharing++,
+    repaint: (nodeId) => changes.repaints.push(nodeId),
     cantStop: () => {},
   });
   let handler: ((request: { frame: WebFrameMain; audioRequested: boolean }, callback: (streams: Streams | null) => void) => void) | undefined;
@@ -157,6 +158,19 @@ describe('the share picker', () => {
     expect(t.slides.throttled).toBe(true);
     expect(t.dispatched).toContainEqual({ t: 'tab.live', nodeId: 'slides', live: { shared: false } });
     expect(t.broker.count).toBe(0);
+  });
+
+  it('a shared tab paints afresh a few times as its stream gets going, and not once the share is over', async () => {
+    vi.useFakeTimers();
+    electron.getSources.mockResolvedValue([]);
+    const t = setup();
+    void t.ask();
+    await t.broker.respond(t.broker.promptFor('meet')!.id, 'tab:slides', false);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(t.changes.repaints).toEqual(['slides', 'slides']);
+    t.broker.forgetTab('meet');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(t.changes.repaints).toEqual(['slides', 'slides']);
   });
 
   it('without its sound when you say so, and refuses a tab it didn’t offer', async () => {

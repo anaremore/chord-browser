@@ -496,6 +496,10 @@ export class Browser {
       shareableTabs: (nodeId) => shareableTabs(this.store.state, nodeId, this.tabs.loaded()),
       onChange: () => this.syncPopovers(),
       sharingChanged: () => this.syncSharing(),
+      repaint: (nodeId) => {
+        const view = this.tabs.get(nodeId);
+        if (view) for (const w of this.windows.values()) w.repaintParked(view);
+      },
       cantStop: (nodeId, host) => {
         const windowId = this.windowShowing(nodeId);
         const w = windowId ? this.windows.get(windowId) : undefined;

@@ -37,6 +37,8 @@ const capturer = (title: string) =>
   `const [r, gr, b] = g.getImageData(c.width >> 1, c.height >> 1, 1, 1).data; let level = 0;` +
   `if (analyser) { const d = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(d); for (const x of d) level = Math.max(level, Math.abs(x)); }` +
   `return { r, g: gr, b, level, audio: stream.getAudioTracks().length, surface: stream.getVideoTracks()[0].getSettings().displaySurface }; };` +
+  // Each track's kind and state ("muted" while no frames come), and the video's ready state, for a failure to say.
+  `window.tracks = () => ({ tracks: stream ? stream.getTracks().map((t) => t.kind + ' ' + t.readyState + (t.muted ? ' muted' : '')) : [], video: document.getElementById('v').readyState });` +
   `}</script>`;
 
 /** A page in one solid color (`paint` changes it) that plays a tone. */
@@ -130,7 +132,9 @@ async function expectPicture(app: ElectronApplication, page: Page, color: 'red' 
         const c = webContents.getAllWebContents().find((w) => w.getURL() === u);
         return c ? { loading: c.isLoading(), audible: c.isCurrentlyAudible(), throttled: c.getBackgroundThrottling() } : null;
       }, url);
+      const capturing = await page.evaluate(() => ({ share: document.documentElement.dataset['share'], ...(window as unknown as { tracks(): object }).tracks() }));
       throw new Error(`${error.message}
+The page sharing it: ${JSON.stringify(capturing)}
 The shared page: ${JSON.stringify(shared)}
 Its view: ${JSON.stringify(await viewOf(app, url))}`);
     });

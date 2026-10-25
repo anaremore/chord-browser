@@ -48,6 +48,8 @@ function frameOrigin(sidebar: SidebarMode, sidebarWidth: number): FrameOrigin {
 
 const FRAME_SPRING = springCurve(springs.smooth);
 const FRAME_TICK_MS = 1000 / 60;
+/** How long a parked tab stays a pixel taller to repaint (`repaintParked`): long enough for two separate relayouts. */
+const NUDGE_MS = 250;
 /** The hover preview glides between rows on `snappy` (DESIGN.md §7.6). */
 const PREVIEW_SPRING = springCurve(springs.snappy);
 /** The preview page pads its card so the whole shadow shows (more below); the card's own edge sits this far in. */
@@ -194,6 +196,8 @@ export class AppWindow {
   private hiddenPanes = new Set<WebContentsView>();
   /** Shared tabs this window keeps out of sight while they aren't on screen, so they keep painting (`park`). */
   private parked: WebContentsView[] = [];
+  /** Parked tabs a pixel taller for a moment, so they paint (`repaintParked`). */
+  private readonly nudged = new Set<WebContentsView>();
   private popoverSize = { width: 0, height: 0 };
   private focusPopoverWhenShown = false;
   private anchor: Rect | null = null;
@@ -430,19 +434,29 @@ export class AppWindow {
     const root = this.window.contentView;
     for (const view of this.parked) if (!views.includes(view) && !this.panes.includes(view) && root.children.includes(view)) root.removeChildView(view);
     this.parked = views.filter((view) => !view.webContents.isDestroyed());
-    const added: WebContentsView[] = [];
     for (const view of this.parked) {
       if (this.panes.includes(view)) continue;
       // Just above the shell, where the pages go.
-      if (!root.children.includes(view)) {
-        root.addChildView(view, this.shellRaised ? 0 : 1);
-        added.push(view);
-      }
+      if (!root.children.includes(view)) root.addChildView(view, this.shellRaised ? 0 : 1);
       view.setVisible(true);
     }
     this.layout();
-    // A page that was never on a window (opened in the background) has nothing painted yet: it paints now.
-    for (const view of added) view.webContents.invalidate();
+  }
+
+  /**
+   * A parked tab paints a fresh frame: a still page sends the page sharing it
+   * nothing new otherwise, and a stream that started after its last frame
+   * would stay empty. It grows a pixel, out of sight, and back a moment later:
+   * each a relayout the page paints. Nothing for a page on screen.
+   */
+  repaintParked(view: WebContentsView): void {
+    if (!this.parked.includes(view) || this.panes.includes(view) || this.nudged.has(view)) return;
+    this.nudged.add(view);
+    this.layout();
+    setTimeout(() => {
+      this.nudged.delete(view);
+      this.layout();
+    }, NUDGE_MS);
   }
 
   /* ---------- Peek (DESIGN.md §7.9, §8.5) ---------- */
@@ -996,7 +1010,10 @@ export class AppWindow {
       else place(view, away ? offscreen(at, whole) : at);
     });
     const parkedAt = offscreen(toWindowRect(frame), whole);
-    for (const view of this.parked) if (!this.panes.includes(view) && !view.webContents.isDestroyed()) place(view, parkedAt);
+    for (const view of this.parked) {
+      if (this.panes.includes(view) || view.webContents.isDestroyed()) continue;
+      place(view, this.nudged.has(view) ? { ...parkedAt, height: parkedAt.height + 1 } : parkedAt);
+    }
     this.showPopover();
     const { width: pw, height: ph } = this.popoverSize;
     // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.
