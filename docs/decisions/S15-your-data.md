@@ -1,6 +1,6 @@
 # S15: Your data — export, import and sync
 
-*2026-10-25 · ROADMAP.md 0.4 · decision D14 (ARCHITECTURE.md §16) · a design for review: nothing is built*
+*2026-10-25 · ROADMAP.md 0.4 · decision D14 (ARCHITECTURE.md §16) · **reviewed and decided 2026-10-25:** the maintainer took all ten recommendations in §10. Nothing is built yet.*
 
 **In short.** Export and sync use one record format. Export ships first, then import, then sync.
 
@@ -457,6 +457,8 @@ As the maintainer prefers: a few journey E2Es, which run in the Linux container 
 - **By hand:** real iCloud Drive, Dropbox, OneDrive and Syncthing, between Windows, macOS and Linux, from a checklist in `docs/testing/sync.md`.
 
 ## 10. Open questions
+
+**Decided 2026-10-25: all ten as recommended.**
 
 1. **Plain export by default?** You proposed it, and **I agree** (§3). The only addition is the *Anyone with the file can read it* line when history or chats are included.
 2. **Settings from a file, into a profile with data: off until you turn them on, or on like the rest?** **I recommend off,** with each change named: a file can turn off ad blocking, Safe Browsing or Google-free mode.
