@@ -99,7 +99,7 @@ Artifact Signing is Microsoft's managed signing, formerly called Trusted Signing
 - **Individual:** the certificate shows your legal name, city, state and country, but not your street or email ✅. You need a photo ID and a phone with Microsoft Authenticator.
 - **Organization:** needs a registered business. You give its legal name, website, business identifier and address, plus a monitored email on the business's own domain ✅.
 
-1. **An Azure subscription** (pay-as-you-go) in your name or your organization's.
+1. **An Azure subscription** (pay-as-you-go) in your name or your organization's. Not the free trial: Artifact Signing refuses free, trial and sponsored subscriptions ✅ ([FAQ](https://learn.microsoft.com/azure/artifact-signing/faq)). In the portal: *Subscriptions → + Add → Pay-As-You-Go*.
    - **As an individual:** its billing account must have the account type **Individual**. Its legal name and sold-to address must match your government ID ✅. Validation reads them from the billing account and you can't edit them in the form, so fix them under *Cost Management + Billing* first.
 2. **Register the provider:** *Subscriptions → your subscription → Resource providers* → `Microsoft.CodeSigning` → **Register**.
 3. **Create the account:** search the portal for *Artifact Signing Accounts* → **Create**.
