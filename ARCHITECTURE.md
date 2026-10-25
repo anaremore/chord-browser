@@ -665,7 +665,10 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
 
 **Packaging and signing** (`apps/player/scripts/package.mjs`, `.github/workflows/player.yml`; §15.1).
 - **The steps:** check ECS's zip (`fetch-ecs.mjs`), build the bundles, let electron-builder put the app into ECS (`--dir`, `electronDist` = the checked zip), VMP-sign when asked, zip the folder with the shared writer, and write the manifest.
-- **Fuses:** Chord's (§14.1), flipped in `afterPack`, since castLabs' VMP signature must cover the final binary.
+- **Fuses:** flipped in `afterPack`, since castLabs' VMP signature must cover the final binary.
+  - EVS signs only binaries it recognizes: ECS's own, or ECS with exactly one other set of fuses (castLabs' FAQ; electron-releases#152).
+  - That set is Chord's hardening (§14.1) except `GrantFileProtocolExtraPrivileges`, which stays on. The bar loads over a scheme of its own (`chord-player://`, `bar-protocol.ts`) rather than `file://`, so it doesn't rely on it.
+  - Measured in CI: Chord's own set (that fuse off) made EVS answer *Binary signature denied* on Windows and macOS.
 - **castLabs VMP signing** (EVS) runs in CI only when the `EVS_ACCOUNT_NAME` and `EVS_PASSWD` secrets exist, non-interactively (`--no-ask`, `EVS_NO_ASK`).
   - One step signs in (`account reauth`) and alone sees the password. EVS's token and signature caches live in the runner's temp folder, never in the workspace or an artifact, and go after the step.
   - The order is castLabs': on macOS before code signing (`afterPack`, before electron-builder's ad-hoc signature), on Windows after it (once electron-builder, which code-signs when it has a certificate, is done). Then `verify-pkg` checks it.

@@ -271,6 +271,7 @@ export async function extractZip(file: string, dest: string, options: ExtractOpt
         const root = resolve(dest);
         if (resolved !== root && !resolved.startsWith(root + sep)) throw new Error(`${entry.name}: refusing the symlink out of the folder`);
         links.push({ target: link.split('/').join(posix.sep), link: target });
+        bytes += entry.size;
       } else {
         const source = entry.compressedSize === 0 ? null : createReadStream(file, { start, end: start + entry.compressedSize - 1 });
         const mode = platform === 'win32' ? undefined : (entry.mode & 0o777) || 0o644;

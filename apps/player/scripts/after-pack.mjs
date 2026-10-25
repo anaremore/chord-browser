@@ -2,9 +2,14 @@
 // runs after the app is in place and before code signing.
 //
 // 1. ECS's leftover default app goes.
-// 2. The fuses (ARCHITECTURE.md §14.1's hardening, as Chord's) are flipped
-//    here rather than by electron-builder, which flips them after this hook:
-//    castLabs' VMP signature must cover the final binary.
+// 2. The fuses are flipped here rather than by electron-builder, which flips
+//    them after this hook: castLabs' VMP signature must cover the final
+//    binary. EVS signs only binaries it recognizes, which allows exactly one
+//    set besides ECS's defaults (castLabs' FAQ, "Can I use @electron/fuses
+//    with the free version of ECS and EVS?"; electron-releases#152): Chord's
+//    own hardening (ARCHITECTURE.md §14.1) except GrantFileProtocolExtraPrivileges,
+//    which stays on. Any other change is refused ("Binary signature denied",
+//    measured in CI). The bar doesn't use file:// anyway (bar-protocol.ts).
 // 3. macOS production builds are VMP-signed now, before code signing, the
 //    order castLabs requires there. (Windows signs after code signing, in
 //    package.mjs.)
@@ -16,6 +21,7 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { vmpSign } from './evs.mjs';
 
+/** castLabs' supported set, exactly; every fuse not named here keeps Electron's default. */
 export const FUSES = {
   runAsNode: false,
   enableCookieEncryption: true,
@@ -24,7 +30,7 @@ export const FUSES = {
   enableEmbeddedAsarIntegrityValidation: true,
   onlyLoadAppFromAsar: true,
   loadBrowserProcessSpecificV8Snapshot: false,
-  grantFileProtocolExtraPrivileges: false,
+  grantFileProtocolExtraPrivileges: true,
 };
 
 export default async function afterPack(context) {

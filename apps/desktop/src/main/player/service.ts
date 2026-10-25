@@ -20,6 +20,8 @@ import type { PlayerInstaller } from './installer';
 const DAY_MS = 24 * 3_600_000;
 /** The first update check waits for launch to settle. */
 const FIRST_UPDATE_MS = 60_000;
+/** After GitHub couldn't be reached, how long before a notice asks again. */
+const RECHECK_MS = 10 * 60_000;
 /** Opening waits this long for the page: on a first start the CDM comes first (S14: under 2 s; up to a minute on a slow network). */
 const OPEN_MS = 90_000;
 
@@ -59,6 +61,7 @@ export class ChordPlayer {
   private busy = false;
   private failure: PlayerFailure | null = null;
   private cdm: CdmState | null = null;
+  private lastCheck = 0;
   private updateTimer: ReturnType<typeof setTimeout> | null = null;
   /** Goes up whenever what the card shows of the player changes. */
   version = 0;
@@ -101,7 +104,13 @@ export class ChordPlayer {
   offer(): PlayerOffer | null | 'pending' {
     if (!this.deps.enabled() || !this.deps.installer.supported) return null;
     const installer = this.deps.installer;
-    if (installer.state.s === 'unknown') void installer.check();
+    const state = installer.state;
+    // Found out once; after a network failure, again once a while has passed (the next notice that asks).
+    const stale = state.s === 'unavailable' && state.why === 'unreachable' && this.now() - this.lastCheck > RECHECK_MS;
+    if (state.s === 'unknown' || stale) {
+      this.lastCheck = this.now();
+      void installer.check();
+    }
     if (installer.state.s === 'installed' && this.failure) return { state: 'failed', why: this.failure };
     return offerFor(installer.state, { now: this.now(), opening: this.opening });
   }

@@ -474,8 +474,9 @@ if (!app.requestSingleInstanceLock()) {
     const imports = Promise.race([importer?.quit().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
     // Duet first: replies in flight are kept as interrupted, and provider processes end. Ad blocking
     // finishes a change under way (no control page may be open as Electron tears down) and ends its workers.
+    // Chord Player quits by itself once Chord's channel closes: nothing to wait for.
     browser?.player.stopUpdates();
-    void Promise.all([duet?.quit(), adBlocking.stop(), browser?.player.close()])
+    void Promise.all([duet?.quit(), adBlocking.stop()])
       .catch(() => undefined)
       .then(() => imports)
       .then(() => persistence!.close())

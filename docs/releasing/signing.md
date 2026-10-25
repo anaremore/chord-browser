@@ -160,6 +160,7 @@ Chord Player (ARCHITECTURE.md §9, `apps/player`) runs on castLabs ECS. The stre
    - EVS's tokens (`EVS_CONFIG_FILE`) and signature cache (`EVS_CACHE_FILE`) live in the runner's temp folder, never in the workspace or an artifact. *Forget the EVS tokens* deletes them, even after a failure.
 3. *Package* (`apps/player/scripts/package.mjs`, non-interactive with `EVS_NO_ASK`), in castLabs' order:
    - **macOS:** the fuses are flipped, then VMP signing (`sign-pkg`), all in electron-builder's `afterPack`. Then code signing: ad-hoc today, Developer ID once it's set up for Chord.
+   - **The fuses** must be exactly the set castLabs accepts (castLabs' FAQ; `apps/player/scripts/after-pack.mjs`). Any other change to the binary makes EVS answer *Binary signature denied*.
    - **Windows:** code signing (by electron-builder, once a certificate is set up), then VMP signing. Nothing touches the `.exe` after it.
    - `verify-pkg` then checks the signature, and the job fails if it doesn't hold.
 
