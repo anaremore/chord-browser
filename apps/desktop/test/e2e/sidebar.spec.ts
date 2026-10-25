@@ -1,6 +1,6 @@
 /**
  * The sidebar (ROADMAP.md M1.2): folders, Favorites, resizing, Clear Today,
- * the keyboard, moving tabs between chords, and peeking in minimal mode.
+ * the keyboard, moving tabs between chords, and peeking in minimal mode (and its switch in Settings).
  * Native menus can't be clicked from a test, so menu items are reached the
  * way the command bar reaches them: through the action registry.
  */
@@ -479,12 +479,30 @@ test('a tab dropped on another chord moves there, reloading signed out when that
   }
 });
 
-test('minimal mode peeks the sidebar over the page from the left edge, and puts it away', async () => {
-  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+/**
+ * Counts, in the shell, each time the sidebar starts to peek. Lifting the shell above the page makes
+ * Chromium send it a pointer move where the computer's own pointer is, not the test's: over the page,
+ * that puts a peek away again a moment later. So a peek is told by its start, not by its staying.
+ */
+const countPeeks = (shell: Page) =>
+  shell.evaluate(() => {
+    const w = window as unknown as { peeks: number };
+    w.peeks = 0;
+    new MutationObserver((records) => {
+      w.peeks += records.filter((r) => r.oldValue === null).length;
+    }).observe(document.querySelector('[data-sidebar]')!, { attributes: true, attributeFilter: ['data-peek'], attributeOldValue: true });
+  });
+const peeks = (shell: Page) => shell.evaluate(() => (window as unknown as { peeks: number }).peeks);
+
+test('minimal mode peeks the sidebar over the page from the left edge or the toggle, without the bar’s controls twice; Settings turns that off, for good', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_USER_DATA: profile });
+  const peekSwitch = (settings: Page) => settings.getByRole('switch', { name: 'Show the sidebar when you point at the window’s edge' });
   try {
     const shell = await pageWhere(app, isShell);
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
     await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await countPeeks(shell);
     await shell.getByRole('button', { name: 'Hide sidebar' }).click();
     await expect(sidebar).toBeHidden();
     // The page sits right above the shell…
@@ -501,11 +519,71 @@ test('minimal mode peeks the sidebar over the page from the left edge, and puts 
     await shell.mouse.move(60, 300, { steps: 4 });
     await shell.waitForTimeout(800);
     await expect(sidebar).toBeVisible();
+    // Its tabs, under the bar that has the toggle, back, forward, reload and the address: each shows once.
+    await expect(sidebar.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    for (const name of ['Show sidebar', 'Back', 'Forward', 'Reload']) await expect(shell.getByRole('button', { name, exact: true })).toHaveCount(1);
+    await expect(shell.getByRole('button', { name: /^Address/ })).toHaveCount(1);
+    await expect(sidebar.getByRole('button', { name: /^(Show sidebar|Back|Forward|Reload|Address)/ })).toHaveCount(0);
+    await expect(sidebar.locator('header')).toBeHidden();
 
     // Pointing back at the page puts it away, and the shell goes back under the page.
     await shell.mouse.move(700, 300, { steps: 6 });
     await expect(sidebar).toBeHidden();
     await expect.poll(async () => (await views(app))[1]!.url).toBe(`${site.origin}/`);
+    // Resting on the toggle peeks it too, once the pointer has left it since the sidebar was hidden.
+    const show = shell.getByRole('button', { name: 'Show sidebar' });
+    const restOnToggle = async () => {
+      await show.hover();
+      await shell.mouse.move(700, 300);
+      await show.hover();
+    };
+    let before = await peeks(shell);
+    await restOnToggle();
+    await expect.poll(() => peeks(shell)).toBeGreaterThan(before);
+    await shell.mouse.move(700, 300, { steps: 6 });
+    await expect(sidebar).toBeHidden();
+
+    // Settings → Appearance turns it off.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Appearance' }).click();
+    await expect(peekSwitch(settings)).toHaveAttribute('aria-checked', 'true');
+    await peekSwitch(settings).click();
+    await expect(peekSwitch(settings)).toHaveAttribute('aria-checked', 'false');
+    // Neither the edge nor resting on the toggle peeks now…
+    before = await peeks(shell);
+    await shell.mouse.move(1, 300, { steps: 6 });
+    await shell.waitForTimeout(800);
+    await restOnToggle();
+    await shell.waitForTimeout(800);
+    expect(await peeks(shell)).toBe(before);
+    await expect(sidebar).toBeHidden();
+    // …and clicking it still docks the sidebar, with its own toggle, buttons and address.
+    await show.click();
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.getByRole('button', { name: 'Hide sidebar' })).toBeVisible();
+    await expect(sidebar.getByRole('button', { name: /^Address/ })).toBeVisible();
+  } finally {
+    await app.close();
+  }
+
+  // After a relaunch it's still off.
+  app = await launch({ CHORD_USER_DATA: profile });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Appearance' }).click();
+    await expect(peekSwitch(settings)).toHaveAttribute('aria-checked', 'false');
+    await countPeeks(shell);
+    await shell.getByRole('button', { name: 'Hide sidebar' }).click();
+    await expect(sidebar).toBeHidden();
+    await shell.mouse.move(300, 300);
+    await shell.mouse.move(1, 300, { steps: 6 });
+    await shell.waitForTimeout(800);
+    expect(await peeks(shell)).toBe(0);
   } finally {
     await app.close();
   }

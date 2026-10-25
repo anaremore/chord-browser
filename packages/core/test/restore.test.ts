@@ -120,6 +120,15 @@ describe('restoreState', () => {
     expect(restored({ adBlocking: { enabled: 'no' } }).adBlocking.enabled).toBe(true);
   });
 
+  it.each<[string, Record<string, unknown>, boolean]>([
+    ['on for a new profile, and for one saved before the setting', {}, true],
+    ['off as saved', { sidebarPeek: false }, false],
+    ['on as saved', { sidebarPeek: true }, true],
+    ['anything but a boolean: on', { sidebarPeek: 'no' }, true],
+  ])('restores minimal mode’s peek on pointing: %s', (_name, settings, expected) => {
+    expect(restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings }, seed).settings.sidebarPeek).toBe(expected);
+  });
+
   it('restores the interface size only as one of its sizes', () => {
     const restored = (settings: Record<string, unknown>) => restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings }, seed).settings;
     expect(restored({ uiScale: 1.5 }).uiScale).toBe(1.5);

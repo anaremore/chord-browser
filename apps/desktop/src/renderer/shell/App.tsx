@@ -158,8 +158,8 @@ function SidebarToggle({ collapsed, info, onToggle, onHover }: { collapsed: bool
       aria-expanded={!collapsed}
       title={withKeys(collapsed ? 'Show sidebar' : 'Hide sidebar', 'view.toggleSidebar')}
       onClick={onToggle}
-      onPointerEnter={() => onHover?.(true)}
-      onPointerLeave={() => onHover?.(false)}
+      onPointerEnter={onHover && (() => onHover(true))}
+      onPointerLeave={onHover && (() => onHover(false))}
     >
       <PanelLeft {...ICON} />
     </button>
@@ -452,6 +452,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const sidebarWidth = liveWidth ?? win?.sidebarWidth ?? SIDEBAR_WIDTH.default;
 
   // Minimal mode's peek: the sidebar slides in over the page and away once the pointer leaves.
+  // Settings → Appearance can turn it off: then neither the edge nor the toggle listens for it.
+  const pointPeeks = state.settings.sidebarPeek;
   const [peek, setPeek] = useState(false);
   const peekTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const schedulePeek = (open: boolean, delay: number) => {
@@ -460,11 +462,15 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   };
   const keepPeek = () => clearTimeout(peekTimer.current);
   // Right after you hide the sidebar the pointer is still on the toggle: it peeks only once the pointer has left it.
+  // Docking, or turning the peek off, puts it away.
   const peekArmed = useRef(false);
   useEffect(() => {
-    if (!collapsed) setPeek(false);
+    if (!collapsed || !pointPeeks) {
+      keepPeek();
+      setPeek(false);
+    }
     peekArmed.current = false;
-  }, [collapsed]);
+  }, [collapsed, pointPeeks]);
   const hoverToggle = (over: boolean) => {
     if (!over) {
       peekArmed.current = true;
@@ -545,7 +551,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
             />
           )}
           {/* Pointing at the window's left edge peeks the sidebar (DESIGN.md §3.3). */}
-          {collapsed && !peeking && (
+          {collapsed && !peeking && pointPeeks && (
             <div className={styles.edgeZone} aria-hidden onPointerEnter={() => schedulePeek(true, EDGE_PEEK_DELAY_MS)} onPointerLeave={keepPeek} />
           )}
 
@@ -678,7 +684,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
             <div className={styles.bar} data-swipe-area={collapsed || undefined} data-region="bar">
               {collapsed && (
                 <div className={styles.barLead}>
-                  <SidebarToggle collapsed info={info} onToggle={toggleSidebar} onHover={hoverToggle} />
+                  <SidebarToggle collapsed info={info} onToggle={toggleSidebar} onHover={pointPeeks ? hoverToggle : undefined} />
                   <NavButtons live={live} hasTab={Boolean(active)} info={info} />
                 </div>
               )}

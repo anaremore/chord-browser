@@ -30,6 +30,8 @@ describe('IPC contract', () => {
     expect(set.safeParse({ searchEngine: 'evil.example' }).success).toBe(false);
     expect(set.safeParse({ motion: { warp: true } }).success).toBe(false);
     expect(set.safeParse({ telemetry: true }).success).toBe(false);
+    expect(set.safeParse({ sidebarPeek: false }).success).toBe(true);
+    expect(set.safeParse({ sidebarPeek: 'off' }).success).toBe(false);
     const theme = invokeChannels['settings:theme'].request;
     expect(theme.safeParse({ chordId: 'c', theme: { grain: 0.4, appearance: 'dark' } }).success).toBe(true);
     expect(theme.safeParse({ chordId: 'c', theme: { grain: 7 } }).success).toBe(false);

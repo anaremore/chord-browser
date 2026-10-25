@@ -207,6 +207,7 @@ export const SettingsPatch = z.strictObject({
   autoPip: z.boolean().optional(),
   pagePreviews: z.boolean().optional(),
   presentingHidesSidebar: z.boolean().optional(),
+  sidebarPeek: z.boolean().optional(),
   keepScreenshots: z.boolean().optional(),
   uiScale: z.literal(UI_SCALES).optional(),
   colorScheme: z.enum(['system', 'light', 'dark']).optional(),

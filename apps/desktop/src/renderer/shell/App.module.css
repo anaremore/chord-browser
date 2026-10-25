@@ -84,6 +84,7 @@
   inset-inline-start: var(--size-frame-inset);
   z-index: var(--z-popover);
   visibility: visible;
+  padding-block-start: var(--space-2);
   border-radius: var(--radius-frame);
   background-color: var(--color-surface);
   background-image: var(--color-tint);
@@ -169,6 +170,12 @@ kbd {
   gap: var(--space-1);
   align-items: center;
   margin-block-end: var(--space-2);
+}
+
+/* The bar above has the toggle, back, forward, reload and the address: the peeking sidebar starts at the chord. */
+.window[data-peek] .header,
+.window[data-peek] .urlRow {
+  display: none;
 }
 
 .urlPill {
@@ -733,6 +740,12 @@ kbd {
   z-index: var(--z-sticky);
   block-size: var(--size-url-pill);
   background: var(--color-surface-raised);
+}
+
+/* A peeking sidebar has no address to cover: the zone covers the chord's name. */
+.window[data-peek] .favoritesZone {
+  inset-block-start: var(--space-2);
+  block-size: var(--size-chord-header);
 }
 
 .favoriteItem {

@@ -196,6 +196,7 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   if (devtools && typeof devtools === 'object') settings.devtools = cleanDevtoolsSettings(settings.devtools, devtools as Record<string, unknown>);
   if (typeof saved['pagePreviews'] === 'boolean') settings.pagePreviews = saved['pagePreviews'];
   if (typeof saved['presentingHidesSidebar'] === 'boolean') settings.presentingHidesSidebar = saved['presentingHidesSidebar'];
+  if (typeof saved['sidebarPeek'] === 'boolean') settings.sidebarPeek = saved['sidebarPeek'];
   if (typeof saved['keepScreenshots'] === 'boolean') settings.keepScreenshots = saved['keepScreenshots'];
   if (isUiScale(saved['uiScale'])) settings.uiScale = saved['uiScale'];
   const spellcheck = saved['spellcheck'] as Record<string, unknown> | undefined;
