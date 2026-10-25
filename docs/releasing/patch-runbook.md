@@ -106,6 +106,7 @@ Releases come only from CI, from a `v*` tag (§15.3). The tag must match `apps/d
 - [ ] Add the [release notes](#9-release-notes) entry at the top of `RELEASE_NOTES.md`.
 - [ ] Add a `<release>` line at the top of `<releases>` in `flatpak/io.github.anaremore.chord-browser.metainfo.xml` (Flathub shows it).
 - [ ] Refresh the ad-blocking lists every build bundles: `pnpm --filter @chord/desktop lists` (ARCHITECTURE.md §9). Installed copies refresh their own, so a security release can skip it.
+- [ ] If the release adds or changes a major feature, update chordbrowser.com in this commit: its copy, and the README's and the site's screenshots ([site/README.md](../../site/README.md#with-each-release)). The download links update themselves when the release is published.
 - [ ] Commit to `main` (through a PR if `main` is protected): `chore(release): vA.B.C`.
 - [ ] Tag that commit and push only the tag:
   ```sh
@@ -113,6 +114,8 @@ Releases come only from CI, from a `v*` tag (§15.3). The tag must match `apps/d
   git tag -a vA.B.C -m "Chord A.B.C"
   git push origin vA.B.C
   ```
+
+After publishing (§8), *Site downloads* points chordbrowser.com's links at the release and checks the site serves it; a failed run there means the site didn't redeploy.
 
 Never reuse a version number or move a tag: updaters, package repositories and Flathub key on the version. If a tag points at the wrong commit, cut the next patch version instead.
 

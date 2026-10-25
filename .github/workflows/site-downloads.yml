@@ -53,3 +53,20 @@ jobs:
             sleep 5
           done
           exit 1
+
+      # Clank redeploys the site when main changes (its GitHub App must have access to this repo:
+      # site/README.md). A deploy that doesn't happen fails here, so it's noticed, instead of the
+      # site quietly offering the last version.
+      - name: Check chordbrowser.com serves it
+        run: |
+          want="$(node -p "require('./site/public/latest.json').version")"
+          for attempt in $(seq 1 40); do
+            got="$(curl -fsS "https://chordbrowser.com/latest.json?check=$GITHUB_RUN_ID-$attempt" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).version)}catch{console.log('')}})" || true)"
+            if [ "$got" = "$want" ]; then
+              echo "chordbrowser.com offers $want."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error title=Site not updated::chordbrowser.com still offers ${got:-nothing it could read} after 10 minutes, not $want. Check that Clank's GitHub App can see this repo and that the site's last deploy succeeded (site/README.md, On Clank)."
+          exit 1
