@@ -91,7 +91,7 @@ export class Screenshots {
   start(w: AppWindow): void {
     const target = w.captureTarget();
     if (!target) {
-      w.toast({ id: 'screenshot', message: 'There’s no page here to take a screenshot of' });
+      w.toast({ id: 'screenshot', whilePresenting: true, message: 'There’s no page here to take a screenshot of' });
       return;
     }
     this.capturing.set(w.id, { contents: target.contents, pane: target.rect });
@@ -143,7 +143,7 @@ export class Screenshots {
     }
     void pageCall(c.contents.executeJavaScriptInIsolatedWorld(SHOT_WORLD, [{ code: FORGET_SCRIPT }]), null);
     if (!shot) {
-      w.toast({ id: 'screenshot', message: 'Couldn’t take the screenshot' });
+      w.toast({ id: 'screenshot', whilePresenting: true, message: 'Couldn’t take the screenshot' });
       return;
     }
     const entry: ScreenshotEntry = {
@@ -166,6 +166,8 @@ export class Screenshots {
     // Saved either way: if the clipboard said no, Save is how to keep it.
     w.toast({
       id: 'screenshot',
+      // It answers what you just did, and shows nothing private: presenting doesn't hide it.
+      whilePresenting: true,
       message: copied ? 'Screenshot copied' : 'Screenshot taken, but couldn’t be copied',
       action: { label: 'Save', screenshot: { id: entry.id, do: 'save' } },
       ...(shot.ask && this.deps.duetReady(w, entry.url) ? { secondary: { label: 'Ask Duet', screenshot: { id: entry.id, do: 'duet' as const } } } : {}),
@@ -205,11 +207,11 @@ export class Screenshots {
       return;
     }
     if (action === 'copy') {
-      w.toast({ id: 'screenshot', message: (await copyPng(png)) ? 'Screenshot copied' : 'Couldn’t copy the screenshot' });
+      w.toast({ id: 'screenshot', whilePresenting: true, message: (await copyPng(png)) ? 'Screenshot copied' : 'Couldn’t copy the screenshot' });
       return;
     }
     await this.deps.saveFile(screenshotFilename(new Date(entry.createdAt)), png, entry.url, w.isPrivate ? w.id : null);
-    w.toast({ id: 'screenshot', message: 'Screenshot saved to Downloads' });
+    w.toast({ id: 'screenshot', whilePresenting: true, message: 'Screenshot saved to Downloads' });
   }
 
   async clear(w: AppWindow): Promise<void> {

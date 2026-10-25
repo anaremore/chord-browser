@@ -657,7 +657,7 @@ export interface Toast {
   secondary?: ToastAction;
   /** A second line with its own action, about the same thing ("Always open linear.app here?" under "Moved to Work"). */
   also?: { message: string; action: { label: string; command: RendererCommand } };
-  /** Shown even in presenting mode, which hides Chord's other toasts: it's about the share itself. */
+  /** Shown even in presenting mode, which hides Chord's other toasts: it's about the share itself, or answers what you just did (a screenshot). */
   whilePresenting?: boolean;
 }
 
