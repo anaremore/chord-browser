@@ -30,6 +30,10 @@ What's built since 0.2.1; it gets its version when it's released.
   - Chord remembers the side and the size, and whether you like them in a window.
   - Each tab keeps its own: switch tabs and you see that tab's, or none. Closing the tab closes them, and a tab with them open doesn't go to sleep.
 
+- **Opens faster:** the window is ready to use about a tenth of a second sooner. Chord now waits until the first page has loaded to tidy up old data and to look for Claude Code and Codex, and the command bar loads just after the window first appears.
+
+- **Easier on your battery:** on battery, tabs you haven't looked at sleep after 15 minutes instead of an hour, and the Now playing card checks a playing tab every 15 seconds instead of every 5. Chord also no longer wakes every 30 seconds when there's nothing to save. *Sleep tabs you're not using* in Settings → General turns sleeping off, on battery too.
+
 ## 0.2.1 · preview · 2026-10-25
 
 - **Signed for Windows:** the installer and Chord itself are signed by Austin Naremore, through Microsoft's Artifact Signing, so Windows shows who made them. SmartScreen may still warn about the first few signed releases until it knows the publisher. Once you're on this version, Chord installs only updates signed by the same name. Mac builds aren't signed yet.
