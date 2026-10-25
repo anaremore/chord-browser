@@ -560,7 +560,9 @@ if (!app.requestSingleInstanceLock()) {
 
     // Session restore: what chord-data saved, repaired; or a first chord in the OS accent color.
     const opened = await Persistence.open(join(app.getPath('userData'), 'chord.db'));
-    mark('database open');
+    // Where the time went, if this launch turns out slow (CI once spent 4.5 s here on Windows).
+    const t = opened.timing;
+    mark(`database open${t ? ` (data process up after ${t.up} ms; opened ${t.open} ms, pruned ${t.prune} ms, read ${t.read} ms)` : ''}${opened.attempts > 1 ? `, ${opened.attempts} tries` : ''}`);
     markLaunch('restored');
     persistence = opened.persistence;
     const accent = systemInfo().accentColor;

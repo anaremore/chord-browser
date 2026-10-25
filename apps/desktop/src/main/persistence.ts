@@ -19,6 +19,7 @@ import {
   type DataResponse,
   type HistoryEvent,
   type NavState,
+  type OpenTiming,
   type PathPatch,
   type SearchResult,
   type WriteOp,
@@ -74,13 +75,18 @@ export class Persistence {
   private constructor(private readonly file: string) {}
 
   /** Start chord-data and read what was saved (null for a brand-new profile). Rows of unused profiles are dropped. */
-  static async open(file: string): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState> }> {
+  /** `timing` and `attempts`: how the open went, for the launch timeline. */
+  static async open(file: string): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState>; timing: OpenTiming | null; attempts: number }> {
     const persistence = new Persistence(file);
     persistence.spawn();
     // A disk that's busy for a moment gets two more tries before Chord gives up on the profile.
-    const response = await withRetries(() => persistence.request({ type: 'open', file, prune: true }), OPEN_RETRY_WAITS_MS);
+    let attempts = 0;
+    const response = await withRetries(() => {
+      attempts++;
+      return persistence.request({ type: 'open', file, prune: true });
+    }, OPEN_RETRY_WAITS_MS);
     if (!response.ok) throw new Error(response.error);
-    return { persistence, saved: response.saved ?? null, navs: response.navs ?? {} };
+    return { persistence, saved: response.saved ?? null, navs: response.navs ?? {}, timing: response.timing ?? null, attempts };
   }
 
   private spawn(): void {
