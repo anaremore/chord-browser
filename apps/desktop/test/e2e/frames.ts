@@ -176,7 +176,18 @@ export async function trace(cdp: CDPSession, run: () => Promise<void>): Promise<
 interface ProfileNode {
   id: number;
   callFrame: { functionName: string; url: string; lineNumber: number };
+  children?: number[];
 }
+
+/** DOM calls that lay the page out when it's out of date: who calls them is who forces a layout. */
+const LAYOUT_READS = /^(getBoundingClientRect|getClientRects|scrollIntoView|focus|measureScroll|get (offset|client|scroll)(Top|Left|Width|Height)|getComputedStyle)$/;
+
+/**
+ * The same profile's time in DOM calls that read layout (`LAYOUT_READS`), by
+ * the two JS functions that called them: where a forced layout comes from.
+ * Filled by `profile` when given.
+ */
+export type LayoutReads = Map<string, number>;
 
 /**
  * Self time per function in one renderer while `run` runs, from a V8 CPU
@@ -184,7 +195,7 @@ interface ProfileNode {
  * trace only names the outermost calls). Sampling slows the page a little,
  * so it's for finding the cost, not for measuring the budget.
  */
-export async function profile(cdp: CDPSession, run: () => Promise<void>): Promise<Map<string, number>> {
+export async function profile(cdp: CDPSession, run: () => Promise<void>, reads?: LayoutReads): Promise<Map<string, number>> {
   await cdp.send('Profiler.enable');
   await cdp.send('Profiler.setSamplingInterval', { interval: 100 });
   await cdp.send('Profiler.start');
@@ -196,12 +207,21 @@ export async function profile(cdp: CDPSession, run: () => Promise<void>): Promis
     await cdp.send('Profiler.disable');
   }
   const names = new Map(result!.profile.nodes.map((n) => [n.id, frameName(n.callFrame)]));
+  const parent = new Map<number, number>();
+  for (const n of result!.profile.nodes) for (const child of n.children ?? []) parent.set(child, n.id);
   const self = new Map<string, number>();
   const { samples = [], timeDeltas = [] } = result!.profile;
   samples.forEach((id, i) => {
     const name = names.get(id) ?? '?';
     if (name === '(idle)' || name === '(program)') return;
-    self.set(name, (self.get(name) ?? 0) + (timeDeltas[i + 1] ?? 0) / 1000);
+    const ms = (timeDeltas[i + 1] ?? 0) / 1000;
+    self.set(name, (self.get(name) ?? 0) + ms);
+    if (reads && LAYOUT_READS.test(name.split(' ')[0]!)) {
+      const caller = parent.get(id);
+      const outer = caller === undefined ? undefined : parent.get(caller);
+      const key = `${name.split(' ')[0]} ← ${caller === undefined ? '?' : names.get(caller)} ← ${outer === undefined ? '?' : names.get(outer)}`;
+      reads.set(key, (reads.get(key) ?? 0) + ms);
+    }
   });
   return self;
 }

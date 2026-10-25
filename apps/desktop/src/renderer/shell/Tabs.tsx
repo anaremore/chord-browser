@@ -55,7 +55,7 @@ import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import { size, type Appearance } from '@chord/tokens';
 import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture, Plus, ScreenShare, Undo2, Volume2, VolumeX, X } from 'lucide-react';
-import { motion, PresenceContext } from 'motion/react';
+import { PresenceContext } from 'motion/react';
 import {
   createContext,
   memo,
@@ -77,11 +77,12 @@ import { createPortal } from 'react-dom';
 import { useRoving } from '../shared/a11y';
 import { Favicon } from '../shared/Favicon';
 import { DuetIcon } from '../shared/icons';
-import type { MotionMode, SpringFor } from '../shared/motion';
+import { INSTANT, type MotionMode, type SpringFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
 import { announce } from './announce';
 import { api } from './api';
 import styles from './App.module.css';
+import { SlidingPill } from './SlidingPill';
 import { canFly, flashArchive, flyToArchive, MAX_FLIGHTS, takeArchived } from './ArchiveArc';
 import { enter, leave, slideFrom, type Leaving } from './today-motion';
 import { DuetReadTabs } from './duet-context';
@@ -702,7 +703,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
       }}
     >
       {binder}
-      {isActive && <motion.span layoutId={`active-pill-${tab.chordId}`} className={styles.activePill} transition={spring('snappy', 'tabMoves')} />}
+      {isActive && <SlidingPill group={`active-pill-${tab.chordId}`} className={styles.activePill} glide={spring('snappy', 'tabMoves') !== INSTANT} />}
       <div
         ref={handle}
         className={`${styles.row} ${isActive ? styles.active : ''}`}
@@ -911,7 +912,7 @@ const SplitRow = memo(function SplitRow({ split, unread, panes, index, shows, se
       }}
     >
       {binder}
-      {isActive && <motion.span layoutId={`active-pill-${split.chordId}`} className={styles.activePill} transition={spring('snappy', 'tabMoves')} />}
+      {isActive && <SlidingPill group={`active-pill-${split.chordId}`} className={styles.activePill} glide={spring('snappy', 'tabMoves') !== INSTANT} />}
       <div ref={handle} className={`${styles.row} ${isActive ? styles.active : ''}`} data-activate onClick={show}>
         <SplitFace panes={panes} appearance={appearance} />
         {!open && <Count unread={unread} />}
