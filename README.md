@@ -6,11 +6,11 @@ A calm, colorful, open-source browser built around a vertical sidebar. Tabs live
 
 Windows, macOS, and Linux (X11 and Wayland) are all first-class.
 
-> **Status: preview.** Chord 0.1, the first preview, is on [Releases](https://github.com/anaremore/chord-browser/releases): unsigned builds for Windows, macOS and Linux. See the [roadmap](ROADMAP.md) for what's next.
+> **Status: preview.** Chord 0.2.1 is on [chordbrowser.com](https://chordbrowser.com) and [Releases](https://github.com/anaremore/chord-browser/releases), for Windows, macOS and Linux. The Windows builds are signed, and Windows and the AppImage update themselves. See the [roadmap](ROADMAP.md) for what's next.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/chord-dark.png">
-  <img src="docs/images/chord-light.png" alt="Chord on Windows: a sidebar tinted in the chord's colors, with pinned tabs, a folder and today's tabs, beside a Wikipedia article">
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/images/chord-dark-2880.webp">
+  <img src="site/public/images/chord-light-2880.webp" alt="Chord: a sidebar tinted in the chord's colors, with pinned tabs, a folder and today's tabs, beside a Wikipedia article">
 </picture>
 
 ## What's in it
@@ -30,9 +30,9 @@ Everything here works on `main` today and comes with the first preview.
 
 | | |
 |---|---|
-| ![The command bar over a page, with open tabs, a site search and suggestions for "wiki"](docs/images/command-bar.png) | ![Split view: a Wikipedia article and an MDN page side by side](docs/images/split-view.png) |
+| ![The command bar over a page, with open tabs, a site search and suggestions for "wiki"](site/public/images/command-bar-1440.webp) | ![Split view: a Wikipedia article and an MDN page side by side](site/public/images/split-view-1440.webp) |
 | **Command bar:** tabs, history, the archive and actions in one place. | **Split view:** pages side by side, one entry in the sidebar. |
-| ![Duet beside a Wikipedia article, answering from the page with a numbered citation](docs/images/duet.png) | ![Settings, Appearance: the color scheme and a library of themes for the chord](docs/images/themes.png) |
+| ![Duet beside a Wikipedia article, answering from the page with a numbered citation](site/public/images/duet-1440.webp) | ![Settings, Appearance: the color scheme and a library of themes for the chord](site/public/images/themes-860.webp) |
 | **Duet:** answers from your tabs, with citations you can click. | **Themes:** each chord has its own colors, light or dark. |
 
 ## Try the preview

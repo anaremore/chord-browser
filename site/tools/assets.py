@@ -1,13 +1,17 @@
 """
-The site's images, made from the repo's own: the README's screenshots
-(docs/images, from scripts/dev/readme-shots.mjs) as WebP, the app icon as
-favicons, and the card link previews show (1200 x 630, set in Onest).
+The site's images, made from the repo's own: the screenshots (site/shots, from
+scripts/dev/shots.mjs, which runs this too) as WebP at 2x and 1x, the app icon as
+favicons, and the card link previews show (1200 x 630, set in Onest). The page's
+addresses for them end in ?v= and a hash of each file, since images are cached for a year.
+The README shows the same WebP files.
 
 Run from the repo root after the screenshots or the icon change:
     python -I site/tools/assets.py
 Needs Pillow (with WebP) and fontTools with brotli (to read Onest's woff2).
 """
+import hashlib
 import io
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -16,19 +20,30 @@ from fontTools.ttLib import TTFont
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ROOT = Path(__file__).resolve().parents[2]
-SHOTS = ROOT / "docs" / "images"
+SHOTS = ROOT / "site" / "shots"
 BUILD = ROOT / "apps" / "desktop" / "build"
 FONT = ROOT / "apps" / "desktop" / "src" / "renderer" / "assets" / "fonts" / "Onest-latin.woff2"
 OUT = ROOT / "site" / "public"
 IMAGES = OUT / "images"
 
-# The screenshots the page shows, by name; each is a whole Chord window, 1442 x 901.
+# The screenshots the page shows, by name: each a whole Chord window at 2x, 2880 x 1800
+# (Settings, 1720 x 1240). The page gives them half that as width and height, and lets
+# the browser pick the 2x file or the 1x one by the width it shows them at (srcset).
 SCREENSHOTS = ["chord-light", "chord-dark", "command-bar", "split-view", "duet", "themes"]
 
 
 def webp(name: str) -> None:
+    """{name}-2880.webp and {name}-1440.webp (for Settings, -1720 and -860), the old ones gone.
+    Without its screenshot in site/shots (a fresh clone), the WebP files already made stay."""
+    if not (SHOTS / f"{name}.png").exists():
+        print(f"site/shots/{name}.png isn't there: kept its WebP files")
+        return
+    for old in IMAGES.glob(f"{name}*.webp"):
+        old.unlink()
     image = Image.open(SHOTS / f"{name}.png").convert("RGB")
-    image.save(IMAGES / f"{name}.webp", "WEBP", quality=84, method=6)
+    half = image.resize((image.width // 2, image.height // 2), Image.LANCZOS)
+    for size in (image, half):
+        size.save(IMAGES / f"{name}-{size.width}.webp", "WEBP", quality=84, method=6)
 
 
 def onest(size: int, weight: int) -> ImageFont.FreeTypeFont:
@@ -53,6 +68,9 @@ def rounded(image: Image.Image, radius: int) -> Image.Image:
 
 def card() -> None:
     """The link preview: the pale body of the icon, the mark and name, a line, and the window."""
+    if not (SHOTS / "chord-light.png").exists():
+        print("site/shots/chord-light.png isn't there: kept the card")
+        return
     width, height = 1200, 630
     top, bottom = (250, 247, 255), (255, 237, 228)
     background = Image.new("RGB", (width, height))
@@ -94,12 +112,27 @@ def icons() -> None:
     body.resize((32, 32), Image.LANCZOS).save(OUT / "favicon.png", optimize=True)
 
 
+def stamp() -> None:
+    """Each image's address in the page ends in ?v= and its hash: nginx.conf caches /images/ for a
+    year, so a changed image needs a new address, and an unchanged one keeps its own."""
+    page = OUT / "index.html"
+    html = page.read_bytes().decode("utf-8")
+
+    def versioned(match: re.Match[str]) -> str:
+        name = match.group(1)
+        digest = hashlib.sha256((IMAGES / name).read_bytes()).hexdigest()[:10]
+        return f"/images/{name}?v={digest}"
+
+    page.write_bytes(re.sub(r"/images/([\w.-]+)(?:\?v=\w+)?", versioned, html).encode("utf-8"))
+
+
 def main() -> int:
     IMAGES.mkdir(parents=True, exist_ok=True)
     for name in SCREENSHOTS:
         webp(name)
     icons()
     card()
+    stamp()
     for path in sorted(IMAGES.iterdir()):
         print(f"{path.relative_to(ROOT)}  {path.stat().st_size // 1024} KB")
     return 0

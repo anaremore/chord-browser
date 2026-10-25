@@ -18,6 +18,7 @@
     "test/e2e",
     "test/fixtures",
     "test/packaged",
+    "test/shots",
     "test/run-temp.ts",
     "src/renderer/env.d.ts",
     "src/main/duet/extract.ts",

@@ -19,6 +19,9 @@ spikes/**/results/
 # Design QA captures (scripts/dev/qa-windows.mjs)
 .qa/
 
+# The full-size screenshots (scripts/dev/shots.mjs); the site's WebP files are kept instead
+site/shots/
+
 # Flatpak builds (flatpak/build.sh, docs/releasing/flathub.md)
 flatpak/generated-sources.json
 flatpak/.flatpak-builder/

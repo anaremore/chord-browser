@@ -101,10 +101,10 @@ describe('dockerRunArgs', () => {
     expect(after('--env')).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000']);
   });
 
-  it('passes CHORD_NO_MINIFY and CHORD_PERF_ENFORCE in when they’re set, and nothing else from the environment', () => {
-    const withEnv = dockerRunArgs({ ...base, env: { CHORD_NO_MINIFY: '1', CHORD_PERF_ENFORCE: '', HOME: '/home/me', CHORD_USER_DATA: '/tmp/x' } });
+  it('passes CHORD_NO_MINIFY, CHORD_PERF_ENFORCE and CHORD_E2E_SCREEN in when they’re set, and nothing else from the environment', () => {
+    const withEnv = dockerRunArgs({ ...base, env: { CHORD_NO_MINIFY: '1', CHORD_PERF_ENFORCE: '', CHORD_E2E_SCREEN: '3200x2000x24', HOME: '/home/me', CHORD_USER_DATA: '/tmp/x' } });
     const envs = withEnv.flatMap((a, i) => (withEnv[i - 1] === '--env' ? [a] : []));
-    expect(envs).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000', 'CHORD_NO_MINIFY=1']);
+    expect(envs).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000', 'CHORD_NO_MINIFY=1', 'CHORD_E2E_SCREEN=3200x2000x24']);
   });
 
   it('ends with the image, the container script and Playwright’s arguments, untouched', () => {

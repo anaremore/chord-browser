@@ -65,7 +65,7 @@ Checks inside tests that only run on Windows: downloads carry the mark of the we
 
 ## Screenshots
 
-The README's screenshots come from `scripts/dev/readme-shots.mjs`, on Windows. From `apps/desktop`, run `pnpm build`, then `node ../../scripts/dev/readme-shots.mjs`. It uses a throwaway profile and public pages, captures only the Chord window it launched (never the screen), and writes `docs/images/`. Retake them when the UI they show changes.
+The README's and the website's screenshots come from one command, run from the repo root: `node scripts/dev/shots.mjs`. It runs `apps/desktop/test/shots` in the Linux E2E container (the runner above, so no window opens on your desktop), with throwaway profiles and public pages, Chord at 2× on a virtual screen, and captures the whole Chord window. It then copies the pictures to `site/shots/`, which git ignores, and runs `python -I site/tools/assets.py` (that needs Python with Pillow and fontTools), which makes the WebP files in `site/public/images/` that the website and this README show. Retake them when the UI they show changes.
 
 ## License
 

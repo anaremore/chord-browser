@@ -23,15 +23,25 @@ Chord's website: a few static pages, served by nginx, on Clank.
 
 ## Images
 
-The screenshots are the README's (`docs/images`, from `scripts/dev/readme-shots.mjs`). After they or the app icon change:
+The site and the repo's README show the same screenshots, the WebP files in `public/images/`. To retake them, from the repo root:
+
+```sh
+node scripts/dev/shots.mjs
+```
+
+That runs `apps/desktop/test/shots` (`playwright.shots.config.ts`) in the Linux E2E container (`scripts/e2e-linux/run.mjs`, Docker; in WSL 2 on Windows), so no window opens on your desktop. Each picture is the whole Chord window, its 1440 × 900 CSS pixels at 2× (2880 × 1800; Settings is 1720 × 1240), on real public pages with a throwaway profile. It copies them to `site/shots/` and then runs `site/tools/assets.py` (below). Arguments go to Playwright: `-g dark` retakes one session's. If the run fails, nothing is copied.
+
+The PNGs in `site/shots/` are about 1.3 MB each, so git ignores them; only the WebP files are kept. A fresh clone has none, and `assets.py` then keeps the WebP files it finds.
+
+`shots.mjs` runs this step for you. After the app icon changes, run it by hand:
 
 ```sh
 python -I site/tools/assets.py
 ```
 
-That writes the WebP screenshots, the favicons and the link-preview card (`images/card.png`, set in Onest). It needs Pillow with WebP, and fontTools with brotli.
+That writes each screenshot as WebP twice, at 2× and at 1× (`chord-light-2880.webp`, `chord-light-1440.webp`; the page's `width`/`height` attributes are the 1× size), the favicons and the link-preview card (`images/card.png`, set in Onest). The page's `srcset` and `sizes` let a browser pick the 1× file when it shows a picture small enough or on a 1× screen, so only sharp screens fetch the 2× one. It needs Pillow with WebP, and fontTools with brotli.
 
-Fonts and images are cached for a year, so a changed image needs a new file name. `styles.css` and `site.js` are cached for 5 minutes; bump their `?v=` in the HTML when they change.
+Fonts and images are cached for a year, so a changed one needs a new address: `assets.py` ends each image's address in the HTML with `?v=` and a hash of the file, and a changed font needs a new file name. `styles.css` and `site.js` are cached for 5 minutes; bump their `?v=` in the HTML when they change.
 
 ## Try it
 
@@ -60,5 +70,5 @@ The site describes what people can download, so it changes with releases, not wi
 - **On publish, automatic:** *Site downloads* points the links at the new release, Clank redeploys, and the workflow checks chordbrowser.com serves it.
 - **In the release commit** (`chore(release): vA.B.C`, docs/releasing/patch-runbook.md §5), when the release adds or changes a major feature:
   - the copy: the hero, *Everything in its place* and its list, and the privacy promises if they change;
-  - the screenshots: retake them (`scripts/dev/readme-shots.mjs` makes `docs/images`), then run `python -I site/tools/assets.py`;
+  - the screenshots: retake them with `node scripts/dev/shots.mjs` (it makes the site's images, which the README shows too);
   - a quick look at the page, light and dark, before tagging.

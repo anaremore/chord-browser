@@ -6,7 +6,8 @@
 # Installs, builds and runs the desktop E2E suite the way CI's Linux jobs do
 # (.github/workflows/ci.yml): the display setup below is CI's, line for line.
 # Arguments go to Playwright. CHORD_E2E_DISPLAY is x11 (Xvfb with openbox, the
-# default) or wayland (headless Weston).
+# default) or wayland (headless Weston). CHORD_E2E_SCREEN, when set, is Xvfb's
+# screen instead of xvfb-run's 1280x1024x24 (the screenshots, at 2×, need more).
 set -euo pipefail
 
 display="${CHORD_E2E_DISPLAY:-x11}"
@@ -27,7 +28,9 @@ step "E2E on $display"
 case "$display" in
   x11)
     # CI's "E2E (X11, Xvfb with openbox)" step.
-    exec xvfb-run -a sh -c '
+    xvfb=(xvfb-run -a)
+    if [ -n "${CHORD_E2E_SCREEN:-}" ]; then xvfb+=(-s "-screen 0 $CHORD_E2E_SCREEN"); fi
+    exec "${xvfb[@]}" sh -c '
       ready="$(mktemp -u)"
       openbox --startup "touch $ready" &
       for i in $(seq 1 100); do [ -e "$ready" ] && break; sleep 0.1; done

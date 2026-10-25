@@ -117,13 +117,13 @@ export async function newPage(app: ElectronApplication, match: (url: string) => 
   return find()!;
 }
 
-interface ChordGlobal {
+export interface ChordGlobal {
   chord: {
     action: { run(a: string): Promise<void> };
     overlay: { open(mode: string): Promise<void> };
     state: {
       dispatch(c: unknown): Promise<void>;
-      snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, { id: string; title?: string; url?: string; kind: string }>; chords: Record<string, { theme: { stops: { l: number; c: number; h: number }[] } }> } }>;
+      snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, { id: string; title?: string; url?: string; favicon?: string | null; kind: string }>; chords: Record<string, { theme: { stops: { l: number; c: number; h: number }[] } }> } }>;
     };
   };
 }
