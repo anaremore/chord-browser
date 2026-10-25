@@ -372,6 +372,10 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
 - **P2 Sync** through a folder you already sync, end-to-end encrypted with your passphrase (D14). Setup only in its first version: no history, no open tabs. One log per device, merged on every device.
 
 ### Later (P3)
+- **Updates on the fly** (asked 2026-10-24), in three layers, safest first. Every layer is signed with the update key, pinned to the contract of the main process that runs it, and rolls back to the last good version on failure. Main never runs code it downloaded.
+  1. **Data without a release:** a signed pack of site rules, fetched like the ad lists and applied at once. It holds media-sites.ts's buttons, the DRM services, and selector fixes. When Twitch changes its markup, a fix doesn't wait for a release.
+  2. **The UI without a restart:** the `chord://` pages (shell, command bar, popover, Settings, reader) as one signed bundle, versioned to main's IPC contract. A new bundle is swapped in by reloading those views, as after a crash. State lives in main, so nothing is lost.
+  3. **Engine and main:** Chromium and Node can't be swapped while running, so these still need a restart, made nearly invisible. The update downloads in the background and Chord restarts at a quiet moment: nothing playing, sharing or typed but unsent. Tabs come back with their history, scroll and form fields (0.1.x's crash resilience did this groundwork), and Chord says what changed afterwards.
 - **Translation.** Needs its own decision: an on-device engine, or Google's, which Google-free mode rules out.
 - **Search the text of pages you've read**, kept on your computer.
 - **Duet tidying your tabs.** It conflicts with D8 ("Duet reads, it doesn't rearrange"), so it waits for you to ask again.
