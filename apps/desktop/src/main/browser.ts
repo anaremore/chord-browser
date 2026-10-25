@@ -458,7 +458,8 @@ export class Browser {
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       nodeFor: (contents) => this.tabs.nodeFor(contents),
-      contentsOf: (nodeId) => this.tabs.get(nodeId)?.webContents,
+      // A tab picked that fell asleep while the picker was up wakes to be shared.
+      contentsOf: (nodeId) => this.tabs.ensure(nodeId)?.webContents,
       shareableTabs: (nodeId) => shareableTabs(this.store.state, nodeId, this.tabs.loaded()),
       onChange: () => this.syncPopovers(),
       sharingChanged: () => this.syncSharing(),

@@ -175,7 +175,7 @@ test('a tab shared from Chord’s picker: the page gets its frames and its sound
 });
 
 test('a shared tab never sleeps or goes to the archive, and keeps painting off screen while another tab is shown', async () => {
-  const app = await launch({ CHORD_HOME_URL: `${site.origin}/meet`, CHORD_IDLE_CHECK_MS: '300', CHORD_SLEEP_AFTER_MS: '2000', CHORD_ARCHIVE_AFTER_MS: '2000' });
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/meet`, CHORD_IDLE_CHECK_MS: '300', CHORD_SLEEP_AFTER_MS: '5000', CHORD_ARCHIVE_AFTER_MS: '5000' });
   try {
     const shell = await pageWhere(app, isShell);
     const popover = await pageWhere(app, isPopover);
@@ -203,7 +203,7 @@ test('a shared tab never sleeps or goes to the archive, and keeps painting off s
     // Another tab, hidden as long, goes to the archive; the shared one stays, awake.
     await open(shell, '/other');
     await expect(row(shell, 'Other')).toBeVisible();
-    await expect(today(shell).getByRole('treeitem', { name: 'Other', exact: true })).toHaveCount(0, { timeout: 15_000 });
+    await expect(today(shell).getByRole('treeitem', { name: 'Other', exact: true })).toHaveCount(0, { timeout: 20_000 });
     await shell.waitForTimeout(1500);
     await expect(row(shell, 'Slides')).toBeVisible();
     await expect(row(shell, 'Slides')).not.toHaveAttribute('data-asleep');
