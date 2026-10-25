@@ -25,6 +25,7 @@ import { app, clipboard, nativeTheme, net, powerMonitor, session, shell, webCont
 import type { ImportEnv } from '../import/detect';
 import { AdBlocking } from './ad-blocking/service';
 import { FILTER_LISTS } from './ad-blocking/lists';
+import { AfterLaunch } from './after-launch';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { DuetService } from './duet/service';
@@ -93,6 +94,8 @@ const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
 const passkeys = new PasskeyBroker();
+/** Work the first window doesn't need waits until launch is over. */
+const afterLaunch = new AfterLaunch();
 
 /**
  * Safe Browsing (ARCHITECTURE.md §14.5): Google's v5 API in Local List Mode.
@@ -315,8 +318,11 @@ function registerIpc(): void {
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('perf:shell', ({ milestone }, sender) => {
     markLaunch(milestone === 'ready' ? 'shellReady' : 'shellPainted');
-    // The window is up: its command bar may warm up for its first opening now.
-    if (milestone === 'painted') senderWindow(sender).markShellPainted();
+    if (milestone !== 'painted') return;
+    // The window is up: its command bar, popover and preview may load (or warm up) now.
+    mark('shell painted; its command bar, popover and preview load now');
+    senderWindow(sender).markShellPainted();
+    afterLaunch.shellPainted();
   });
   handle('menu:app', (anchor, sender) => browser!.openAppMenu(sender, anchor));
   handle('menu:tab', ({ nodeId, x, y }, sender) => browser!.openTabMenu(sender, nodeId, { x, y }));
@@ -514,6 +520,15 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   watchLaunch();
+  // Launch is over once a first web page has loaded too (after-launch.ts).
+  const watchFirstPage = (_event: unknown, contents: WebContents) => {
+    contents.once('did-stop-loading', () => {
+      if (!/^https?:/i.test(contents.getURL())) return;
+      afterLaunch.pageLoaded();
+      app.off('web-contents-created', watchFirstPage);
+    });
+  };
+  app.on('web-contents-created', watchFirstPage);
   void app.whenReady().then(async () => {
     mark('app ready');
     markLaunch('ready');
@@ -637,11 +652,14 @@ if (!app.requestSingleInstanceLock()) {
       persistence.recordAll(initial);
     }
     setDictionarySource(initial.settings.googleFree);
-    // Sign-ins a chord kept separately, once no chord uses them, are deleted before any session loads them.
     const profilesInUse = new Set(Object.values(initial.chords).map((c) => c.profileId));
-    await removeUnusedPartitions(app.getPath('userData'), profilesInUse);
-    // Their copies of the blocker extension too (not awaited: nothing loads from those).
-    void adBlocking.forgetProfiles(profilesInUse);
+    // Sign-ins a chord kept separately, once no chord uses them, are deleted once launch is over, with their copies of
+    // the blocker extension. No session loads them meanwhile; which profiles are in use is read then, so one made since stays.
+    afterLaunch.run(() => {
+      const inUse = new Set([...Object.values(browser!.store.state.chords).map((c) => c.profileId), ...profiles.keys()]);
+      void removeUnusedPartitions(app.getPath('userData'), inUse);
+      void adBlocking.forgetProfiles(inUse);
+    });
 
     const store = persistence;
     // Development and tests only (ignored when packaged): a stand-in Web Store and its signing key,
@@ -773,6 +791,7 @@ if (!app.requestSingleInstanceLock()) {
       save: async (filename, bytes, mime) => void (await downloads.addFile(filename, bytes, mime, '', null)),
     });
     browser.duet = duet;
+    afterLaunch.run(() => void duet!.afterLaunch());
     // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
     // from before gets it switched off once, through the store, so it's saved like any other change.
     if (!browser.store.state.settings.autoPipDefaultOff) browser.store.dispatch({ t: 'settings.set', settings: { autoPip: false, autoPipDefaultOff: true } });
@@ -839,6 +858,7 @@ if (!app.requestSingleInstanceLock()) {
     if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
     else browser.start();
     mark('windows opened');
+    afterLaunch.opened();
     updates.start();
     browser.player.startUpdates();
   });

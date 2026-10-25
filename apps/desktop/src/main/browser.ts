@@ -757,7 +757,7 @@ export class Browser {
   start(): void {
     const models = Object.values(this.store.state.windows);
     if (models.length === 0) this.newWindow();
-    for (const model of models) if (!this.windows.has(model.id)) this.openWindow(model.id);
+    for (const model of models) if (!this.windows.has(model.id)) this.openWindow(model.id, { deferViews: true });
     this.idle.start();
   }
 
@@ -845,7 +845,7 @@ export class Browser {
     return activeTab(this.store.state, windowId)?.url ?? '';
   }
 
-  private openWindow(windowId: WindowId, { commandBar = false } = {}): AppWindow {
+  private openWindow(windowId: WindowId, { commandBar = false, deferViews = false } = {}): AppWindow {
     const model = this.store.state.windows[windowId]!;
     const w = new AppWindow({
       id: windowId,
@@ -857,6 +857,7 @@ export class Browser {
       onBounds: (bounds) => this.store.dispatch({ t: 'window.bounds', windowId, bounds }),
       presenting: () => this.store.state.presenting !== null,
       devtools: this.store.state.settings.devtools,
+      deferViews,
     });
     this.windows.set(windowId, w);
     this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));

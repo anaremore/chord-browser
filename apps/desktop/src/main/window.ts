@@ -8,6 +8,7 @@
  *   floating an extension's popup, under its button (at most one)
  *   overlay  the command bar: always loaded, hidden until ⌘T / ⌘L (and Peek's scrim and header)
  *   peek     Peek's page, in the card the overlay draws (DESIGN.md §7.9)
+ * At launch, popover, preview and overlay load once the shell has painted (`deferViews`).
  */
 import { join } from 'node:path';
 import { DEFAULT_DEVTOOLS, devtoolsLayout, devtoolsSize, paneRects, type Bounds, type DevtoolsLayout, type DevtoolsSettings, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
@@ -36,6 +37,12 @@ export interface AppWindowOptions {
   presenting(): boolean;
   /** Where docked developer tools go, and how big they are (Settings' one setting). */
   devtools?: DevtoolsSettings;
+  /**
+   * Launch: the command bar, popover and preview load only once the shell has
+   * painted. Main serves every file of Chord's own views, so loading them
+   * alongside the shell slows its start.
+   */
+  deferViews?: boolean;
 }
 
 interface FrameOrigin {
@@ -57,6 +64,8 @@ const NUDGE_MS = 250;
 const PREVIEW_SPRING = springCurve(springs.snappy);
 /** The preview page pads its card so the whole shadow shows (more below); the card's own edge sits this far in. */
 const PREVIEW_PAD = space[6];
+/** Views held back at launch load this long after the shell loaded, if it hasn't painted by then (`deferViews`). */
+const DEFERRED_VIEWS_CAP_MS = 2000;
 
 /**
  * A rect in Chord's UI units (the shell's CSS pixels, which is what the shell
@@ -154,7 +163,7 @@ function reloadOnCrash(contents: WebContents, surface: UiSurface): void {
   });
 }
 
-export function createUiView(uiSession: Session, surface: UiSurface, hash?: string): WebContentsView {
+export function createUiView(uiSession: Session, surface: UiSurface, hash?: string, { load = true }: { load?: boolean } = {}): WebContentsView {
   const { preload, role } = SURFACES[surface];
   const view = new WebContentsView({
     webPreferences: {
@@ -182,7 +191,7 @@ export function createUiView(uiSession: Session, surface: UiSurface, hash?: stri
   registerCaller(view.webContents, role, [origin]);
   lockToOrigins(view.webContents, [origin]);
   if (surface !== 'archive') reloadOnCrash(contents, surface);
-  void view.webContents.loadURL(hash ? `${url}#${encodeURIComponent(hash)}` : url);
+  if (load) void view.webContents.loadURL(hash ? `${url}#${encodeURIComponent(hash)}` : url);
   return view;
 }
 
@@ -251,8 +260,10 @@ export class AppWindow {
   private duetWidth = 0;
   /** Duet's openings and closings waiting for their frame change, oldest first. */
   private readonly duetChanges: { width: number; publish(): void }[] = [];
+  /** Views waiting for the shell's first paint to load (`deferViews`). */
+  private deferred: { view: WebContentsView; surface: UiSurface }[] = [];
 
-  constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds, presenting, devtools }: AppWindowOptions) {
+  constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds, presenting, devtools, deferViews = false }: AppWindowOptions) {
     this.id = id;
     if (devtools) this.devtoolsSettings = devtools;
     this.isPrivate = isPrivate;
@@ -270,12 +281,15 @@ export class AppWindow {
     if (bounds?.maximized) this.window.maximize();
 
     this.shell = createUiView(uiSession, 'shell');
-    this.popover = createUiView(uiSession, 'popover');
+    const load = !deferViews;
+    this.popover = createUiView(uiSession, 'popover', undefined, { load });
     this.popover.setVisible(false);
-    this.preview = createUiView(uiSession, 'preview');
+    this.preview = createUiView(uiSession, 'preview', undefined, { load });
     this.preview.setVisible(false);
-    this.overlay = createUiView(uiSession, 'overlay');
+    this.overlay = createUiView(uiSession, 'overlay', undefined, { load });
     this.overlay.setVisible(false);
+    // The command bar first: it's the one most likely to be wanted soon.
+    if (deferViews) this.deferred = [{ view: this.overlay, surface: 'overlay' }, { view: this.popover, surface: 'popover' }, { view: this.preview, surface: 'preview' }];
     // Tab views go in at index 1, between the shell and the popover.
     this.window.contentView.addChildView(this.shell);
     this.window.contentView.addChildView(this.popover);
@@ -351,6 +365,8 @@ export class AppWindow {
       if (this.window.isDestroyed()) return;
       this.window.show();
       markLaunch('windowShown');
+      // A shell that never paints (its window out of sight) doesn't keep the rest from loading.
+      if (this.deferred.length > 0) setTimeout(() => this.loadDeferred(), DEFERRED_VIEWS_CAP_MS);
     });
     this.shell.webContents.on('did-start-loading', () => {
       this.shellLoaded = false;
@@ -914,7 +930,15 @@ export class AppWindow {
   markShellPainted(): void {
     if (this.shellPainted) return;
     this.shellPainted = true;
+    this.loadDeferred();
     if (this.overlayReady) send(this.overlay.webContents, 'overlay:warm', null);
+  }
+
+  /** The views `deferViews` held back start loading (once). */
+  private loadDeferred(): void {
+    const views = this.deferred;
+    this.deferred = [];
+    for (const { view, surface } of views) if (!view.webContents.isDestroyed()) void view.webContents.loadURL(uiUrl(surface));
   }
 
   /**

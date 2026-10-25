@@ -181,6 +181,8 @@ export class DuetService {
   private readonly thumbsSent = new Map<WindowId, Set<string>>();
   /** Thumbnails as data URLs, by image id (a chat's few, kept once read). */
   private readonly thumbs = new Map<string, string>();
+  /** Drafts, the first-use note and WSL installs found earlier, read from panel.json. */
+  private readonly opened: Promise<void>;
 
   constructor(
     private readonly browser: Browser,
@@ -202,7 +204,7 @@ export class DuetService {
         for (const threadId of [...this.live.keys()]) this.drop(threadId);
       }
     });
-    void this.init();
+    this.opened = this.init();
   }
 
   private get settings() {
@@ -224,6 +226,15 @@ export class DuetService {
     } catch {
       // First run.
     }
+  }
+
+  /**
+   * Once launch is over (after-launch.ts): chats past their date go, and Duet
+   * looks for Claude Code and Codex, which runs each one twice. Opening the
+   * panel or sending before then looks for them itself.
+   */
+  async afterLaunch(): Promise<void> {
+    await this.opened;
     // Keep Duet chats: threads past their date go, the provider's copy with them.
     const before = duetPruneBefore(this.settings.keep, Date.now());
     if (before !== null) {

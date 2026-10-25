@@ -80,7 +80,7 @@ A run that failed because a number grew still counts. The container's numbers ar
 
 These cost a clock read or a frame callback, so they're always on.
 
-- **Main:** `src/main/perf.ts` stamps launch milestones from main's first line. Tests read them through `chordTestHooks.launch()` (`CHORD_E2E_HOOKS=1`). The shell reports `ready` and `painted` over the `perf:shell` IPC.
+- **Main:** `src/main/perf.ts` stamps launch milestones from main's first line. Tests read them through `chordTestHooks.launch()` (`CHORD_E2E_HOOKS=1`). The shell reports `ready` and `painted` over the `perf:shell` IPC; at launch, `painted` is also when the window's command bar, popover and hover preview start loading (ARCHITECTURE.md §1, *Launch order*).
 - **Renderers:** User Timing entries show up in DevTools' Performance panel: `chord:shell-ready`, `chord:shell-painted` and `chord:shell-render` (each shell commit; the oldest are dropped past 500) marks; `chord:command-bar-open`, `chord:keystroke` and `chord:keystroke-history` measures.
 - **Development builds:** `CHORD_PERF_TABS=200` and `CHORD_PERF_VISITS=2000` give a brand-new profile sleeping Today tabs and history to measure against. Pages are `/perf/1` and up on `CHORD_HOME_URL`'s site.
 
