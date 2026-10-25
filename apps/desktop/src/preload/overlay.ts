@@ -30,6 +30,7 @@ const api: OverlayApi = {
   },
   search: {
     suggest: (query, engine) => invoke('search:suggest', engine ? { query, engine } : { query }),
+    image: (engine, image, where) => invoke('search:image', { engine, image, where }),
   },
   archive: { restore: (archiveId) => invoke('archive:restore', { archiveId }) },
   peek: {

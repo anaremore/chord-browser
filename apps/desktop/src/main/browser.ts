@@ -4,6 +4,7 @@
  */
 import {
   ARCHIVE_URL,
+  type ImageSearchEngine,
   activeTab,
   activeTabId,
   blockingOffSites,
@@ -55,6 +56,7 @@ import { DrmNotices, drmServiceFor, findBrowsers, launchEnv } from './drm';
 import { CHECK_WAIT_MS } from './player/install-state';
 import type { PlayerInstaller } from './player/installer';
 import { ChordPlayer, type ChordPlayerDeps } from './player/service';
+import { imageSearchRequest, type SearchImage } from './image-search';
 import { Extensions } from './extensions';
 import type { WebStore } from './extensions/webstore';
 import { FindInPage } from './find';
@@ -1006,6 +1008,30 @@ export class Browser {
       }, CHECK_WAIT_MS + 100);
     }
     return offer;
+  }
+
+  /**
+   * The command bar's "Search … for this image" (main/image-search.ts): a new
+   * tab, in front or behind, or the current one when its address was being
+   * edited, loads the engine's upload as its first page. Never Google in
+   * Google-free mode.
+   */
+  searchByImage(w: AppWindow, engine: ImageSearchEngine, image: SearchImage, where: 'current' | 'front' | 'background'): void {
+    const state = this.store.state;
+    if (engine === 'google' && state.settings.googleFree) return;
+    const request = imageSearchRequest(engine, image, app.isPackaged ? undefined : process.env['CHORD_IMAGE_SEARCH_ORIGIN'] || undefined);
+    const contents = where === 'current' ? w.activeTabContents : this.openTabFor(w, request.home, where === 'background');
+    if (!contents || contents.isDestroyed()) return;
+    contents.loadURL(request.url, { postData: [{ type: 'rawData', bytes: request.body }], extraHeaders: `Content-Type: ${request.contentType}
+` }).catch(() => {});
+  }
+
+  /** A new tab in the window, on `url` for now, and its page, so main can load into it (an upload, say). */
+  private openTabFor(w: AppWindow, url: string, background: boolean): WebContents | null {
+    const before = new Set(Object.keys(this.store.state.nodes));
+    this.store.dispatch({ t: 'tab.open', windowId: w.id, url, background });
+    const nodeId = Object.keys(this.store.state.nodes).find((id) => !before.has(id));
+    return nodeId ? (this.tabs.ensure(nodeId)?.webContents ?? null) : null;
   }
 
   /** The DRM notice's buttons, for the page the window shows: another browser, Chord Player (installing it first), or Not now. */

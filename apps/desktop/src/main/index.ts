@@ -263,6 +263,7 @@ function registerIpc(): void {
   handle('history:search', ({ query }, sender) =>
     fromPrivateWindow(sender) ? { history: [], choices: [], archive: [] } : persistence!.search(query, activeChordOf(sender)),
   );
+  handle('search:image', ({ engine, image, where }, sender) => browser!.searchByImage(senderWindow(sender), engine, image, where));
   handle('search:suggest', ({ query, engine }, sender) => suggestions.suggest(sender.id, query, engine));
   handle('history:choose', ({ text, destination, address }, sender) => {
     const chordId = activeChordOf(sender);

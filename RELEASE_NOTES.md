@@ -37,6 +37,7 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
   - Sign in to each service once in the player: your password manager's browser extension doesn't run there, but its desktop app or a code by e-mail does.
 - **Signing in to Google works again**, where it said "This browser or app may not be secure". On Windows, the passkey dialog no longer pops up by itself each time you click a sign-in field; choose the site's passkey option when you want one.
 - **Passkeys on a security key** sign in on every OS. When the key holds more than one for a site, Chord asks which.
+- **Search by image:** paste or drop an image into the command bar to search Google Lens or Bing by it (your engine's own; Google Lens, clearly named, when yours can't search by image; Bing in Google-free mode).
 - **Screenshots, built in:** press ⌘⇧2 (Ctrl+Shift+2) and click an element, drag an area, or take what's on screen or the whole page. It's on your clipboard at once; Save puts it in Downloads, and your recent screenshots wait in the downloads panel (a private window's only until it closes). Based on Screenboard.
 - **Peek** gets the sign-in box too, when a site in it asks for a username and password.
 - **Link routes for part of a site:** `github.com/acme` can go to Work while the rest of GitHub goes elsewhere (Settings → General → Link routes).
