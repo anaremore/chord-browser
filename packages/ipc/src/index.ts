@@ -1261,6 +1261,8 @@ export interface SyncView extends SyncStatus {
   folderName: string | null;
   /** This computer keeps the key (safeStorage); false on Linux without a keyring, which asks after each launch. */
   keyKept: boolean;
+  /** Kept with no keyring behind it, because you asked to remember it anyway: any program you run could read it. */
+  keyWeak: boolean;
   /** *Turn off* or *Remove*, waiting for its Undo to run out. */
   pendingUndo: { what: 'off' | 'remove'; device?: string; token: string; until: number } | null;
 }
@@ -1293,6 +1295,10 @@ export const invokeChannels = {
   'sync:undo': { roles: ['internal'], request: z.strictObject({ token: z.string().regex(/^[0-9a-f]{16,32}$/) }), response: z.custom<SyncView>() },
   'sync:rename': { roles: ['internal'], request: z.strictObject({ name: z.string().trim().min(1).max(100) }), response: z.custom<SyncView>() },
   'sync:pause': { roles: ['internal'], request: z.strictObject({ paused: z.boolean() }), response: z.custom<SyncView>() },
+  // The folder moved: the system's folder picker again. A lost passphrase: start over under a new one. No keyring: remember the key anyway.
+  'sync:relocate': { roles: ['internal'], request: z.void(), response: z.custom<SyncStepResult>() },
+  'sync:startOver': { roles: ['internal'], request: z.strictObject({ passphrase: syncPassphrase }), response: z.custom<SyncStepResult>() },
+  'sync:rememberKey': { roles: ['internal'], request: z.strictObject({ on: z.boolean() }), response: z.custom<SyncView>() },
   // Import from other browsers: first run's step (shell) and Settings → Your data. Never from a private window.
   'import:sources': { roles: ['shell', 'internal'], request: z.void(), response: z.custom<ImportSource[]>() },
   'import:preview': { roles: ['shell', 'internal'], request: z.strictObject({ key: importKey }), response: z.custom<ImportPreviewResult>() },
@@ -1878,6 +1884,12 @@ export interface SyncApi {
   undo(token: string): Promise<SyncView>;
   rename(name: string): Promise<SyncView>;
   pause(paused: boolean): Promise<SyncView>;
+  /** The folder moved: pick where it is now. */
+  relocate(): Promise<SyncStepResult>;
+  /** A lost passphrase: this computer's setup in the folder under a new one. */
+  startOver(passphrase: string): Promise<SyncStepResult>;
+  /** Linux without a keyring: keep the key anyway, or forget it again. */
+  rememberKey(on: boolean): Promise<SyncView>;
   onStatus(listener: (view: SyncView) => void): () => void;
 }
 

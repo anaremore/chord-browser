@@ -77,6 +77,9 @@ const api: SettingsApi = {
     undo: (token) => invoke('sync:undo', { token }),
     rename: (name) => invoke('sync:rename', { name }),
     pause: (paused) => invoke('sync:pause', { paused }),
+    relocate: () => invoke('sync:relocate'),
+    startOver: (passphrase) => invoke('sync:startOver', { passphrase }),
+    rememberKey: (on) => invoke('sync:rememberKey', { on }),
     onStatus: (listener) => subscribe('sync:status', listener),
   },
 };

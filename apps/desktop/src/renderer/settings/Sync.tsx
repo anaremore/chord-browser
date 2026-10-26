@@ -14,7 +14,7 @@ import { Check } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { plural, ProblemCard } from '../shared/ImportPanel';
 import { api } from './api';
-import { RadioGroup, Row } from './controls';
+import { RadioGroup, Row, Switch } from './controls';
 import styles from './Settings.module.css';
 import local from './YourData.module.css';
 
@@ -303,6 +303,7 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [changing, setChanging] = useState(false);
   const [next, setNext] = useState(EMPTY);
+  const [startingOver, setStartingOver] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -316,21 +317,41 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
   };
   const change = async () => {
     if (!ready(next)) return setNext({ ...next, touched: true });
-    const result = await api.sync.changePassphrase(next.passphrase).catch(() => ({ ok: false, problem: 'io' }) as const);
+    const result = await (startingOver ? api.sync.startOver(next.passphrase) : api.sync.changePassphrase(next.passphrase)).catch(() => ({ ok: false, problem: 'io' }) as const);
     setNext(EMPTY);
-    if (result.ok) setChanging(false);
-    else setProblem(STEP_PROBLEMS[result.problem]);
+    if (result.ok) {
+      setChanging(false);
+      setStartingOver(false);
+    } else setProblem(STEP_PROBLEMS[result.problem]);
+  };
+  const relocate = async () => {
+    setProblem(null);
+    const result = await api.sync.relocate().catch(() => ({ ok: false, problem: 'io' }) as const);
+    if (!result.ok) setProblem(result.problem === 'wrong' ? 'That isn’t this sync’s folder. Choose the folder your other computers sync through.' : STEP_PROBLEMS[result.problem]);
   };
   const pending = view.pendingUndo;
   const self = view.computers.find((c) => c.self);
+  const asking = view.state === 'locked' || (view.state === 'problem' && view.problem === 'changed');
   return (
     <div className={styles.group}>
       <Row label="Sync" description={onText(view, now)} control={null} />
-      {view.state === 'locked' && <PassphraseField text="Sync is paused. Enter your passphrase." button="Unlock" problem={problem} onSubmit={unlock} />}
-      {view.state === 'problem' && view.problem === 'changed' && (
+      {view.state === 'locked' && !startingOver && <PassphraseField text="Sync is paused. Enter your passphrase." button="Unlock" problem={problem} onSubmit={unlock} />}
+      {view.state === 'problem' && view.problem === 'changed' && !startingOver && (
         <PassphraseField text={`The passphrase was changed on ${view.changedBy ?? 'another computer'}. Enter the new one to keep syncing.`} button="Unlock" problem={problem} onSubmit={unlock} />
       )}
-      {view.state === 'problem' && view.problem === 'missing' && <div className={local.actions}><ProblemCard text="Chord can’t find the sync folder. Is your sync app running?" /></div>}
+      {asking && startingOver && (
+        <>
+          <p className={local.note}>
+            Without the passphrase, the synced copy can’t be opened. Starting over puts this computer’s setup in the folder under a new one; your other computers pause until you type it there. What’s on each computer stays.
+          </p>
+          <NewPassphrase ids={`${ids}-over`} value={next} onChange={setNext} />
+        </>
+      )}
+      {view.state === 'problem' && view.problem === 'missing' && (
+        <div className={local.actions}>
+          <ProblemCard text="Chord can’t find the sync folder. Is your sync app running?" action={{ label: 'Choose folder…', run: () => void relocate() }} />
+        </div>
+      )}
       {view.state === 'problem' && view.problem === 'newer' && (
         <div className={local.actions}>
           <ProblemCard text="Another computer has a newer Chord. Update this one to keep syncing." action={{ label: 'Check for updates', run: onUpdates }} />
@@ -386,7 +407,18 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
         ))}
       </ul>
       {view.computers.length > 1 && <p className={local.note}>Removing a computer stops it syncing; it keeps what it has. To lock out a lost one, change the passphrase too.</p>}
-      {!view.keyKept && view.state !== 'locked' && self && <p className={local.note}>This computer has no safe place for the key, so Chord asks for the passphrase after each launch.</p>}
+      {self && view.state !== 'locked' && (!view.keyKept || view.keyWeak) && (
+        // S15 question 6: asking after each launch, with remembering it anyway behind a plain warning.
+        <Row
+          label="Remember the key on this computer"
+          description={
+            view.keyWeak
+              ? 'Kept without a keyring: any program you run could read it, and so could anyone who has this computer.'
+              : 'This computer has no safe place for the key, so Chord asks for the passphrase after each launch. Remembered anyway, any program you run could read it.'
+          }
+          control={<Switch label="Remember the key on this computer" checked={view.keyWeak} onChange={(on) => void api.sync.rememberKey(on)} />}
+        />
+      )}
       {changing && (
         <>
           <p className={local.note}>Your other computers pause until you type the new passphrase on each of them.</p>
@@ -400,19 +432,32 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
             action={{ label: 'Undo', run: () => void api.sync.undo(pending.token) }}
           />
         )}
-        {problem && !changing && view.state !== 'locked' && view.problem !== 'changed' && <ProblemCard text={problem} />}
+        {problem && !changing && (startingOver || !asking) && <ProblemCard text={problem} />}
         <div className={local.buttons}>
-          {changing ? (
+          {changing || startingOver ? (
             <>
-              <button type="button" className={styles.linkButton} onClick={() => setChanging(false)}>
+              <button
+                type="button"
+                className={styles.linkButton}
+                onClick={() => {
+                  setChanging(false);
+                  setStartingOver(false);
+                  setNext(EMPTY);
+                }}
+              >
                 Cancel
               </button>
               <button type="button" className={styles.linkButton} onClick={() => void change()}>
-                Change passphrase
+                {startingOver ? 'Start over' : 'Change passphrase'}
               </button>
             </>
           ) : (
             <>
+              {asking && (
+                <button type="button" className={styles.linkButton} onClick={() => setStartingOver(true)}>
+                  Lost it? Start over…
+                </button>
+              )}
               {(view.state === 'on' || view.state === 'paused') && (
                 <button type="button" className={styles.linkButton} onClick={() => void api.sync.pause(view.state === 'on')}>
                   {view.state === 'on' ? 'Pause' : 'Resume'}

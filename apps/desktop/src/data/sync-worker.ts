@@ -47,6 +47,10 @@ export type ToWorker =
   | { t: 'write'; upto: number; records: DataRecord[]; device: DataRecord[] }
   | { t: 'snapshot'; records: DataRecord[] }
   | { t: 'move'; folder: string; from: number; to: number; device: string; key: Uint8Array; app: string; records: DataRecord[] }
+  /** Whether a folder is this sync's: its generation's file opens with this computer's key (a folder that moved). */
+  | { t: 'look'; folder: string; generation: number; key: Uint8Array }
+  /** A lost passphrase: the next generation with a new one, without the old key, and this computer's snapshot under it. */
+  | { t: 'restart'; folder: string; from: number; passphrase: string; device: string; app: string; records: DataRecord[] }
   | { t: 'rekey'; passphrase: string; records: DataRecord[] }
   | { t: 'remove'; path: string }
   /** A passive checkpoint of chord.db, on this thread's own connection: chord-data's runs none while sync is busy. */
@@ -64,6 +68,8 @@ export type FromWorker =
   | { t: 'written'; upto: number; own: OwnSegment; frames: number; bytes: number }
   | { t: 'snapshotted'; own: OwnSegment }
   | { t: 'moved'; own: OwnSegment }
+  | { t: 'looked'; look: FolderLook }
+  | { t: 'restarted'; key: Uint8Array; generation: number; own: OwnSegment }
   | { t: 'rekeyed'; key: Uint8Array; generation: number; own: OwnSegment }
   /** `copied`: another computer writes under this one's id; `missing`: this computer's segment has gone; `io`: the folder couldn't be written. */
   | { t: 'failed'; problem: 'wrong' | 'conflict' | 'newer' | 'damaged' | 'missing' | 'copied' | 'io'; for: ToWorker['t'] }
@@ -225,6 +231,18 @@ async function handle(message: ToWorker): Promise<void> {
       if (!r) return failed('snapshot', 'missing');
       r.own = await writeSnapshot(r.fs, { generation: r.generation, device: r.device }, message.records, r.key, { app: r.app }, nodeCrypto);
       send({ t: 'snapshotted', own: r.own });
+      return;
+    }
+    case 'look':
+      send({ t: 'looked', look: await lookAtFolder(folderOf(message.folder), message.generation, message.key, nodeCrypto) });
+      return;
+    case 'restart': {
+      // Starting over: a new generation in the same folder, under a new passphrase; this computer's snapshot there, its old folder gone.
+      const fs = folderOf(message.folder);
+      const next = await nextGeneration(fs, message.passphrase, message.device, nodeCrypto);
+      const own = await writeSnapshot(fs, { generation: next.generation, device: message.device }, message.records, next.root, { app: message.app }, nodeCrypto);
+      await fs.remove(deviceFolder(message.from, message.device)).catch(() => undefined);
+      send({ t: 'restarted', key: next.root, generation: next.generation, own });
       return;
     }
     case 'move': {

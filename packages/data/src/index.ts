@@ -153,9 +153,9 @@ export type SyncRequest =
   | { type: 'sync.join'; folder: string; passphrase: string; info: SyncInfo }
   | { type: 'sync.choose'; mode: 'synced' | 'both' }
   /** At launch: the root key main kept (safeStorage), so sync starts without asking. */
-  | { type: 'sync.start'; key: Uint8Array }
+  | { type: 'sync.start'; key: Uint8Array; info: SyncInfo }
   /** No key kept, or the passphrase changed elsewhere: the passphrase, once. */
-  | { type: 'sync.unlock'; passphrase: string }
+  | { type: 'sync.unlock'; passphrase: string; info: SyncInfo }
   | { type: 'sync.passphrase'; passphrase: string }
   | { type: 'sync.off' }
   | { type: 'sync.remove'; device: string }
@@ -170,7 +170,13 @@ export type SyncRequest =
   /** safeStorage's ciphertext of the root key (base64), kept in chord.db; null forgets it. */
   | { type: 'sync.keyBlob'; blob: string | null }
   /** How long sync's steps took on chord-data's thread (development builds' test hooks: perf.spec.ts). */
-  | { type: 'sync.timings' };
+  | { type: 'sync.timings' }
+  /** The folder moved: this one, if it's this sync's (its generation opens with this computer's key). */
+  | { type: 'sync.relocate'; folder: string }
+  /** A lost passphrase (S15 §6, *Start over*): the next generation under a new one; the other computers pause until they have it. */
+  | { type: 'sync.startOver'; passphrase: string; info: SyncInfo }
+  /** The root key, for main to keep with safeStorage when you ask it to on a computer with no keyring (S15 question 6). */
+  | { type: 'sync.key' };
 
 /** chord-data's answer to a sync request. */
 export interface SyncReply {

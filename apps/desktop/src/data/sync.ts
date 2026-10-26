@@ -436,9 +436,11 @@ export class SyncController {
         return this.choose(db, request.mode);
       case 'sync.start':
         this.key = request.key;
+        this.info = request.info;
         this.startWorker();
         return { status: this.status() };
       case 'sync.unlock':
+        this.info = request.info;
         return this.unlock(db, request.passphrase);
       case 'sync.passphrase':
         return this.rekey(db, request.passphrase);
@@ -480,6 +482,13 @@ export class SyncController {
         return {};
       case 'sync.timings':
         return { timings: db.sync.timings };
+      case 'sync.relocate':
+        return this.relocate(db, request.folder);
+      case 'sync.startOver':
+        this.info = request.info;
+        return this.startOver(db, request.passphrase);
+      case 'sync.key':
+        return this.key ? { key: new Uint8Array(this.key) } : { problem: 'missing' };
       case 'sync.keyBlob':
         db.sync.setKeyBlob(request.blob);
         return {};
@@ -603,6 +612,42 @@ export class SyncController {
     }
     this.startWorker();
     return { key: opened.key, status: this.status() };
+  }
+
+  /** The folder moved (*Chord can't find the sync folder*, then *Choose folder…*): this one, only if it's this sync's. */
+  private async relocate(db: ChordDatabase, folder: string): Promise<SyncReply> {
+    const meta = db.sync.meta;
+    if (!meta.on || !this.key) return { problem: 'missing' };
+    const looked = await this.ask({ t: 'look', folder, generation: meta.generation, key: this.key }, ['looked']);
+    // Its generation's file opens with this computer's key, or a newer generation is there (the passphrase changed meanwhile).
+    if (looked.t !== 'looked' || (looked.look.state !== 'ok' && looked.look.state !== 'changed')) return { problem: looked.t === 'looked' && looked.look.state === 'newer' ? 'newer' : 'wrong' };
+    this.stopWorker();
+    db.sync.setMeta({ folder });
+    this.problem = null;
+    this.startWorker();
+    return { status: this.status() };
+  }
+
+  /**
+   * A lost passphrase (S15 §6, *Start over*): the next generation in the same
+   * folder, under a new passphrase, without the old key; this computer's
+   * snapshot goes there. The synced copy under the old one is gone; each
+   * computer's data isn't, and the others pause until they have the new one.
+   */
+  private async startOver(db: ChordDatabase, passphrase: string): Promise<SyncReply> {
+    const meta = db.sync.meta;
+    if (!meta.on || meta.joining || !meta.folder) return { problem: 'missing' };
+    this.stopWorker();
+    const reply = await this.ask({ t: 'restart', folder: meta.folder, from: meta.generation, passphrase, device: db.device(), app: this.info.app, records: db.sync.snapshot() }, ['restarted']);
+    if (reply.t !== 'restarted') return { problem: 'io' };
+    db.atomically(() => {
+      db.sync.setMeta({ generation: reply.generation, retired: { generation: meta.generation, at: Date.now() } });
+      db.sync.snapshotted(reply.own, Date.now());
+    });
+    this.key = reply.key;
+    this.problem = null;
+    this.startWorker();
+    return { key: reply.key, status: this.status() };
   }
 
   /** A new passphrase (S15 §6): the next generation, with this computer's snapshot; the others pause until they have it. */

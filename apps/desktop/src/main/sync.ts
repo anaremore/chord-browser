@@ -76,6 +76,9 @@ interface Pending {
 export class SyncService {
   private status: SyncStatus | null = null;
   private keyKept = false;
+  /** Kept with no keyring behind it (`basic_text`), because you asked to remember it anyway. */
+  private keyWeak = false;
+  private anyway = false;
   private chosen: { id: string; path: string } | null = null;
   private pending: Pending | null = null;
   private readonly toasted = new Set<string>();
@@ -102,11 +105,17 @@ export class SyncService {
     }
   }
 
-  /** The root key, kept by safeStorage (never the passphrase); with no secret store, nothing is kept. */
+  /**
+   * The root key, kept by safeStorage (never the passphrase). With no secret
+   * store, nothing is kept, unless you asked to remember it anyway (S15
+   * question 6): then safeStorage's `basic_text`, which any program you run
+   * could read, and Settings says so.
+   */
   private async keep(key: Uint8Array | undefined): Promise<void> {
     if (!key) return;
     let blob: string | null = null;
-    if (await this.keyring()) {
+    const strong = await this.keyring();
+    if (strong || this.anyway) {
       try {
         blob = (await safeStorage.encryptStringAsync(Buffer.from(key).toString('base64'))).toString('base64');
       } catch (error) {
@@ -114,7 +123,25 @@ export class SyncService {
       }
     }
     this.keyKept = blob !== null;
+    this.keyWeak = blob !== null && !strong;
     await this.options.data.sync({ type: 'sync.keyBlob', blob });
+  }
+
+  /** *Remember the key on this computer anyway* (Linux without a keyring), or forget it again. */
+  async rememberAnyway(on: boolean): Promise<SyncView> {
+    if (await this.keyring()) return this.view();
+    this.anyway = on;
+    if (on) {
+      const answer = await this.options.data.sync({ type: 'sync.key' });
+      await this.keep(answer.key);
+      answer.key?.fill(0);
+    } else {
+      await this.options.data.sync({ type: 'sync.keyBlob', blob: null });
+      this.keyKept = false;
+      this.keyWeak = false;
+    }
+    this.options.notify(this.view());
+    return this.view();
   }
 
   /**
@@ -131,7 +158,9 @@ export class SyncService {
       const key = new Uint8Array(Buffer.from(opened.result, 'base64'));
       if (key.length !== 32) throw new Error('not a key');
       this.keyKept = true;
-      const started = await this.options.data.sync({ type: 'sync.start', key });
+      // Kept with no keyring: you asked for it, and it goes on being kept so.
+      this.keyWeak = this.anyway = !(await this.keyring());
+      const started = await this.options.data.sync({ type: 'sync.start', key, info: this.options.info() });
       key.fill(0);
       if (started.status) this.setStatus(started.status);
       if (opened.shouldReEncrypt) await this.keep(new Uint8Array(Buffer.from(opened.result, 'base64')));
@@ -154,6 +183,7 @@ export class SyncService {
       ...status,
       folderName: status.folder ? basename(status.folder) : null,
       keyKept: this.keyKept,
+      keyWeak: this.keyWeak,
       pendingUndo: this.pending ? { what: this.pending.what, token: this.pending.token, until: this.pending.until, ...(this.pending.device ? { device: this.pending.device } : {}) } : null,
     };
   }
@@ -258,10 +288,32 @@ export class SyncService {
 
   /** The passphrase, once: after launch with no key kept, or after it changed on another computer. */
   async unlock(passphrase: string): Promise<SyncStepResult> {
-    const answer = await this.options.data.sync({ type: 'sync.unlock', passphrase });
+    const answer = await this.options.data.sync({ type: 'sync.unlock', passphrase, info: this.options.info() });
     await this.keep(answer.key);
     answer.key?.fill(0);
     return this.stepResult(answer);
+  }
+
+  /**
+   * A lost passphrase (S15 §6, *Start over*): a new one, and this computer's
+   * setup in the folder under it. The synced copy under the old one can't be
+   * opened; what's on each computer stays, and the others pause until they
+   * have the new one.
+   */
+  async startOver(passphrase: string): Promise<SyncStepResult> {
+    const answer = await this.options.data.sync({ type: 'sync.startOver', passphrase, info: this.options.info() });
+    await this.keep(answer.key);
+    answer.key?.fill(0);
+    return this.stepResult(answer);
+  }
+
+  /** The folder moved (*Chord can't find the sync folder*): the system's folder picker, and the folder it's in now, if it's this sync's. */
+  async relocate(parent: BaseWindow | null): Promise<SyncStepResult> {
+    const options: OpenDialogOptions = { title: 'Choose the sync folder', defaultPath: this.status?.folder ?? this.options.folder(), properties: ['openDirectory'] };
+    const chosen = parent && !parent.isDestroyed() ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+    const path = chosen.filePaths[0];
+    if (chosen.canceled || !path) return { ok: true, view: this.view() };
+    return this.stepResult(await this.options.data.sync({ type: 'sync.relocate', folder: path }));
   }
 
   /** A new passphrase: the next generation; the other computers pause until they have it. */
@@ -317,7 +369,7 @@ export class SyncService {
     this.pending = null;
     const answer = pending.what === 'off' ? await this.options.data.sync({ type: 'sync.off' }) : await this.options.data.sync({ type: 'sync.remove', device: pending.device ?? '' });
     if (pending.what === 'off') {
-      this.keyKept = false;
+      this.keyKept = this.keyWeak = this.anyway = false;
       this.toasted.clear();
     }
     if (answer.status) this.setStatus(answer.status);

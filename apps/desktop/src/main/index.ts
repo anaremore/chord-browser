@@ -511,6 +511,9 @@ function registerIpc(): void {
   handle('sync:undo', ({ token }) => syncService!.undo(token));
   handle('sync:rename', ({ name }) => syncService!.rename(name));
   handle('sync:pause', ({ paused }) => syncService!.pause(paused));
+  handle('sync:relocate', (_request, sender) => syncService!.relocate(browser!.settingsWindowOf(sender)));
+  handle('sync:startOver', ({ passphrase }) => syncService!.startOver(passphrase));
+  handle('sync:rememberKey', ({ on }) => syncService!.rememberAnyway(on));
 }
 
 if (!app.requestSingleInstanceLock()) {

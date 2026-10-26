@@ -7,7 +7,7 @@
  * keeps what it has. The system's folder picker is answered in main, so no
  * window but Chord's opens.
  */
-import { mkdtempSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -182,11 +182,11 @@ async function syncedPair(folder: string): Promise<{ desk: { app: ElectronApplic
   return { desk: { ...deskApp, settings: deskSettings }, laptop: { ...laptopApp, settings: laptopSettings, profile } };
 }
 
-test('a passphrase changed on one computer pauses the other until it has it; with no keyring, a relaunch asks for it again', async () => {
+test('a passphrase changed on one computer pauses the other until it has it; with no keyring, a relaunch asks again; start over, remember the key anyway, and a folder that moved', async () => {
   test.setTimeout(240_000);
   const folder = mkdtempSync(join(tmpdir(), 'chord-e2e-sync-folder-'));
   const { desk, laptop } = await syncedPair(folder);
-  let relaunched: ElectronApplication | null = null;
+  const relaunched: { app: ElectronApplication | null } = { app: null };
   try {
     // The desk changes the passphrase: a new generation, and its snapshot under it.
     const NEW = 'cobalt meadow tinker suitcase lighthouse';
@@ -205,7 +205,8 @@ test('a passphrase changed on one computer pauses the other until it has it; wit
     await expect(laptop.settings.getByText('That passphrase doesn’t open this folder.')).toBeVisible({ timeout: 20_000 });
     await laptop.settings.getByLabel('Passphrase', { exact: true }).fill(NEW);
     await laptop.settings.getByRole('button', { name: 'Unlock' }).click();
-    await expect(laptop.settings.getByText(/^On · /)).toBeVisible({ timeout: 20_000 });
+    // The row says On throughout; *Pause* is there only once sync runs again.
+    await expect(laptop.settings.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 20_000 });
     // It moved: its log is under the new generation, and its old one has gone.
     await expect.poll(() => readdirSync(join(folder, 'Chord sync', '2')).length, { timeout: 20_000 }).toBe(2);
 
@@ -216,19 +217,52 @@ test('a passphrase changed on one computer pauses the other until it has it; wit
     await expect.poll(async () => (await synced(laptop.shell)).chords, { timeout: 20_000 }).toEqual(['After the change']);
 
     // Linux without a keyring (this container has none): the laptop kept no key, so after a relaunch sync waits for the passphrase.
-    await laptop.app.close();
-    const again = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1' }, { profile: laptop.profile });
-    relaunched = again;
-    const shell = await pageWhere(again, isShell);
-    const settings = await openSync(again, shell, folder);
-    await expect(settings.getByText('Sync is paused. Enter your passphrase.')).toBeVisible({ timeout: 20_000 });
-    await settings.getByLabel('Passphrase', { exact: true }).fill(NEW);
-    await settings.getByRole('button', { name: 'Unlock' }).click();
-    await expect(settings.getByText(/^On · /)).toBeVisible({ timeout: 20_000 });
-    await expect(settings.getByText('This computer has no safe place for the key, so Chord asks for the passphrase after each launch.')).toBeVisible();
+    const relaunch = async () => {
+      await (relaunched.app ?? laptop.app).close();
+      relaunched.app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1' }, { profile: laptop.profile });
+      const shell = await pageWhere(relaunched.app, isShell);
+      return { app: relaunched.app, shell, settings: await openSync(relaunched.app, shell, folder) };
+    };
+    let again = await relaunch();
+    await expect(again.settings.getByText('Sync is paused. Enter your passphrase.')).toBeVisible({ timeout: 20_000 });
+
+    // Lost it: start over under a new passphrase. The laptop's setup goes in under it, and the desk pauses until it has it.
+    const OVER = 'violet harbor pretzel ankle compass';
+    await again.settings.getByRole('button', { name: 'Lost it? Start over…' }).click();
+    await again.settings.getByLabel('Passphrase', { exact: true }).fill(OVER);
+    await again.settings.getByLabel('Again').fill(OVER);
+    await again.settings.getByRole('button', { name: 'Start over', exact: true }).click();
+    await expect(again.settings.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 30_000 });
+    expect(readdirSync(join(folder, 'Chord sync'))).toEqual(expect.arrayContaining(['3', 'sync-3.json']));
+    expect(readdirSync(join(folder, 'Chord sync', '3'))).toHaveLength(1);
+    await hooks(desk.app, 'syncRead');
+    await expect(desk.settings.getByText(/The passphrase was changed on .+\. Enter the new one to keep syncing\./)).toBeVisible({ timeout: 20_000 });
+
+    // Remember the key anyway, behind its warning: the next launch carries on without asking.
+    await expect(again.settings.getByText(/This computer has no safe place for the key, so Chord asks for the passphrase after each launch\./)).toBeVisible();
+    await again.settings.getByRole('switch', { name: 'Remember the key on this computer' }).click();
+    await expect(again.settings.getByText(/Kept without a keyring: any program you run could read it/)).toBeVisible({ timeout: 10_000 });
+    again = await relaunch();
+    await expect(again.settings.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 20_000 });
+    await expect(again.settings.getByText('Sync is paused. Enter your passphrase.')).toBeHidden();
+
+    // The folder moved: Chord can't find it, and *Choose folder…* picks where it is now.
+    const moved = `${folder}-moved`;
+    renameSync(folder, moved);
+    await hooks(again.app, 'syncRead');
+    await expect(again.settings.getByText('Chord can’t find the sync folder. Is your sync app running?')).toBeVisible({ timeout: 20_000 });
+    await again.app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog;
+    }, moved);
+    await again.settings.getByRole('button', { name: 'Choose folder…' }).click();
+    await expect(again.settings.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 20_000 });
+    await expect(again.settings.getByText(/^On · .*-moved › Chord sync/)).toBeVisible();
+    // A pass reads from where it is now, and finds nothing wrong.
+    await hooks(again.app, 'syncRead');
+    await expect(again.settings.getByText('Chord can’t find the sync folder. Is your sync app running?')).toBeHidden();
   } finally {
     await desk.app.close();
-    await relaunched?.close();
+    await relaunched.app?.close();
     await laptop.app.close().catch(() => undefined);
   }
 });
