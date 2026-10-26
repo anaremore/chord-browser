@@ -288,6 +288,8 @@ test('the proxy for every chord and a chord’s own, set in Settings: pages, pri
     await runAction(shell, 'window.newPrivate');
     const privateShell = await newPage(app, isShell, privateBefore);
     const privateOverlay = await newPage(app, isOverlay, privateBefore);
+    // A new window opens with the command bar, a moment after the window: opening it again meanwhile would empty what's typed.
+    await expect(privateOverlay.getByRole('dialog')).toBeVisible();
     await visit(privateShell, privateOverlay, url('/private'));
     await expect.poll(titleOf(app, '/private')).toBe('Via A /private');
     expect(direct.seen).toEqual([]);

@@ -369,6 +369,8 @@ test('a private window has no Favorites, makes no folders, and Clear closes its 
     const privateShell = await another(isShell, shell);
     const privateOverlay = await another(isOverlay, overlay);
     await expect(privateShell.getByText('This window is private.')).toBeVisible();
+    // A new window opens with the command bar, a moment after the window: opening it again meanwhile would empty what's typed.
+    await expect(privateOverlay.getByRole('dialog')).toBeVisible();
     for (const path of ['/third', '/fourth']) {
       if (!(await privateOverlay.getByRole('dialog').isVisible())) {
         await privateShell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
