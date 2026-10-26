@@ -241,7 +241,20 @@ export function stable(value: unknown): string {
   }
   return JSON.stringify(value) ?? 'null';
 }
-export const same = (a: unknown, b: unknown): boolean => stable(a) === stable(b);
+/**
+ * Whether two JSON values are the same, keys in any order: as `stable(a) ===
+ * stable(b)`, without writing either out (a site's CSS is 64 KB, and a
+ * reconcile compares every field of every thing).
+ */
+export function same(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => same(v, b[i]));
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every((k) => Object.prototype.hasOwnProperty.call(b, k) && same((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+  }
+  return stable(a) === stable(b);
+}
 
 /**
  * The file's fields that win over this computer's: ones it doesn't have, and

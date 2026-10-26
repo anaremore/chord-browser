@@ -7,7 +7,7 @@
  */
 import type { DuetThread } from '@chord/core';
 import type { DataPush, DataRequest, DataResponse, ImportBatch, ImportBatchReply, SyncRequest } from '@chord/data';
-import { ChordDatabase } from '@chord/data/db';
+import { ChordDatabase, errorPasses } from '@chord/data/db';
 import { SyncController } from './sync';
 
 let db: ChordDatabase | null = null;
@@ -78,7 +78,7 @@ process.parentPort.on('message', (event) => {
             // What sync stamped goes to the folder a moment after the last change.
             sync.afterWrite();
           } catch (error) {
-            reply({ id, ok: false, error: error instanceof Error ? (error.stack ?? error.message) : String(error) });
+            reply({ id, ok: false, error: error instanceof Error ? (error.stack ?? error.message) : String(error), passing: errorPasses(error) });
             // Refused (a full disk): what sync applied isn't in chord.db, and a reconcile finds it again.
             sync.writeRefused();
           }

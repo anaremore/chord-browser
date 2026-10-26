@@ -719,9 +719,12 @@ if (!app.requestSingleInstanceLock()) {
           tabs: perfTabs,
           visits: perfVisits,
           pages: devNumber('CHORD_PERF_PAGES') ?? perfVisits,
+          pinned: devNumber('CHORD_PERF_PINNED') ?? 0,
+          effects: devNumber('CHORD_PERF_EFFECTS') ?? 0,
           homeUrl: HOME_URL,
           newId: () => uuidv7(),
           history: (event) => opened.persistence.history(event),
+          effect: (host, value) => opened.persistence.effect(host, value),
         });
       }
       persistence.recordAll(initial);
@@ -982,6 +985,8 @@ if (!app.requestSingleInstanceLock()) {
           await store.sync({ type: 'sync.flush' });
         },
         syncRead: () => store.sync({ type: 'sync.check' }),
+        /** An idle reconcile now, `local` checked against the rows first, answered once it's done. */
+        syncDrift: () => store.sync({ type: 'sync.reconcile', idle: true, wait: true }),
         /** Sync's costs on chord-data's thread: writes with it on and off, the stamping hook, frames, merged slices (ms). */
         syncTimings: async () => (await store.sync({ type: 'sync.timings' })).timings,
         /** Turn sync off at once (Settings holds it for its Undo first). */

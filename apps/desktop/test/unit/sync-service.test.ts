@@ -62,7 +62,7 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
   const toasts: Toast[] = [];
   let flushing: () => void = () => undefined;
   // Writes chord-data refused, waiting to go again (persistence says so): `setUnsaved` sets it.
-  let unsaved = false;
+  let unsaved = 0;
   const views: SyncView[] = [];
   let push: ((message: DataPush) => void) | null = null;
   const dispatch = (command: Command) => {
@@ -81,7 +81,7 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
     platform: 'linux',
     folder: () => '/home',
   });
-  return { service, home, windowId, commands, toasts, views, whenFlushed: (then: () => void) => void (flushing = then), setUnsaved: (to: boolean) => void (unsaved = to), dispatch, state: () => state, push: (apply: SyncApply) => push!({ push: 'sync.apply', apply }) };
+  return { service, home, windowId, commands, toasts, views, whenFlushed: (then: () => void) => void (flushing = then), setUnsaved: (to: number) => void (unsaved = to), dispatch, state: () => state, push: (apply: SyncApply) => push!({ push: 'sync.apply', apply }) };
 }
 
 describe('a chord another computer deleted', () => {
@@ -119,16 +119,39 @@ describe('turning sync off while chord-data refuses writes', () => {
         asked.push(request);
         return {};
       });
-      h.setUnsaved(true);
+      h.setUnsaved(3);
       h.service.hold('off');
       await vi.advanceTimersByTimeAsync(6_000);
       expect(asked.some((r) => r.type === 'sync.off')).toBe(false);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(asked.some((r) => r.type === 'sync.off')).toBe(false);
       // The writes are in: the next try turns it off.
-      h.setUnsaved(false);
+      h.setUnsaved(0);
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(asked.some((r) => r.type === 'sync.off')).toBe(true);
+      expect(asked.find((r) => r.type === 'sync.off')).toEqual({ type: 'sync.off' });
+      expect(h.toasts.some((t) => t.id === 'sync:unsaved')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('turning sync off while chord-data keeps refusing writes', () => {
+  it('waits two minutes at most: then sync turns off keeping its merged copy, and a toast says how many changes aren’t saved yet', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const asked: SyncRequest[] = [];
+      const h = harness((request) => {
+        asked.push(request);
+        return {};
+      });
+      h.setUnsaved(3);
+      h.service.hold('off');
+      await vi.advanceTimersByTimeAsync(6_000 + 90_000);
+      expect(asked.some((r) => r.type === 'sync.off')).toBe(false);
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(asked.find((r) => r.type === 'sync.off')).toEqual({ type: 'sync.off', keep: true });
+      expect(h.toasts.find((t) => t.id === 'sync:unsaved')?.message).toMatch(/3 changes it brought aren’t saved on this computer yet/);
     } finally {
       vi.useRealTimers();
     }

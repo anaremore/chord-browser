@@ -92,6 +92,15 @@ function archivedTab(r: Row): ArchivedTab {
   };
 }
 
+/** SQLite's primary result codes that can pass: BUSY, LOCKED, READONLY, IOERR (any of its extended codes) and FULL. */
+const PASSING_CODES = new Set([5, 6, 8, 10, 13]);
+
+/** Whether a write refused with this error can go again later (a full disk, an I/O error, a lock), by SQLite's result code. */
+export function errorPasses(error: unknown): boolean {
+  const code = (error as { errcode?: unknown } | null)?.errcode;
+  return typeof code === 'number' && PASSING_CODES.has(code & 0xff);
+}
+
 export class ChordDatabase {
   private readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
@@ -167,7 +176,13 @@ export class ChordDatabase {
       work();
       this.db.exec('COMMIT');
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      // A full disk can end the transaction itself (SQLite rolls back on some I/O errors, and on a failed COMMIT): rolled
+      // back only if one is still open, so the error that's thrown is the real one, never "no transaction is active".
+      try {
+        if (this.db.isTransaction) this.db.exec('ROLLBACK');
+      } catch {
+        // Gone meanwhile: nothing to roll back.
+      }
       throw error;
     }
   }
@@ -295,7 +310,9 @@ export class ChordDatabase {
         const at = performance.now();
         this.sync.stamp(ops, now);
         this.sync.timed('stamp', performance.now() - at);
-      } else if (ops.length > 0 && this.sync.meta.on) this.sync.unstamped = true;
+      } else if (ops.length > 0 && this.sync.meta.on) this.sync.noteUnstamped(ops);
+      // Off, with the merged copy kept (S15 §13): what sync applied, now in, noted, so the copy can go once all of it is.
+      else if (this.sync.meta.kept) this.sync.stamp(ops.filter((op) => op.sync === true), now);
     });
   }
 

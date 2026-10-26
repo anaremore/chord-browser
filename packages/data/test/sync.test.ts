@@ -9,7 +9,8 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { StatementSync } from 'node:sqlite';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apply, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, MAX_STAMP_MS, seedState, SYNC_LIMITS, thingKey, type Command, type Context, type DataRecord, type Stamp, type State } from '@chord/core';
 import { ChordDatabase } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
@@ -494,29 +495,37 @@ describe('pruning a removed computer’s folder', () => {
   });
 });
 
-describe('a deletion stamps only what this computer had', () => {
-  /** Another computer's thing, merged here and never applied (main held it back, or it's past a limit). */
+describe('explicit deletions and inferred ones', () => {
+  /** Another computer's thing, merged here and not yet in chord.db (main applied it, and its write hasn't happened). */
   const theirs = (type: string, id: string, set: Record<string, unknown>) => db.atomically(() => db.sync.merge([{ type, id, at: [Date.now() + 1000, 0, OTHER], set }], Date.now()));
   const tombstoned = (id: string) => outbox().some((r) => r.id === id && r.set['deleted'] === true);
-  const live = (type: string, id: string) => db.sync.snapshot().some((r) => r.type === type && r.id === id && r.set['deleted'] !== true);
+  const live = (type: string, id: string) => {
+    const records = db.sync.snapshot().filter((r) => r.type === type && r.id === id);
+    return records.length > 0 && !records.some((r) => r.set['deleted'] === true);
+  };
+
+  it('a theme another computer has and this one never had: saving this computer’s own list never deletes it (a deletion inferred from a list)', () => {
+    const state = setUp();
+    theirs('theme', 'their-theme', { name: 'Theirs', stops: THEME.stops, grain: 0.2 });
+    drive(state, [{ t: 'theme.save', theme: { id: 'mine', name: 'Mine', stops: THEME.stops, grain: 0.2 } }]);
+    expect(tombstoned('their-theme')).toBe(false);
+    expect(live('theme', 'their-theme')).toBe(true);
+  });
 
   it.each([
-    ['a theme, when this computer saves its own list', 'theme', 'their-theme', { name: 'Theirs', stops: THEME.stops, grain: 0.2 }],
-    ['a Favorite', 'favorite', 'their-fav', { url: 'https://theirs.test/', title: 'Theirs', rank: 'a0', created: 1 }],
-    ['a route', 'route', 'theirs.test', { chord: 'their-chord', created: 1 }],
-    ['a site’s Effects', 'effects', 'theirs.test', { wet: true, css: 'h1 { color: red }', cssOn: true, hidden: [], presets: [], duet: [] }],
-    ['a chord', 'chord', 'their-chord', { name: 'Theirs', icon: 'T', theme: THEME, rank: 'z0', profile: 'default', created: 1 }],
-    ['a folder', 'folder', 'their-folder', { title: 'Theirs', collapsed: false, created: 1 }],
-  ])('%s another computer has and this one never had: never stamped gone', (_what, type, id, set) => {
-    const state = setUp();
+    ['a Favorite', 'favorite', 'favorite', 'their-fav', { url: 'https://theirs.test/', title: 'Theirs', rank: 'a0', created: 1 }],
+    ['a route', 'route', 'linkRoute', 'theirs.test', { chord: 'their-chord', created: 1 }],
+    ['a site’s Effects', 'effects', 'effect', 'theirs.test', { wet: true, css: 'h1 { color: red }', cssOn: true, hidden: [], presets: [], duet: [] }],
+    ['a chord', 'chord', 'chord', 'their-chord', { name: 'Theirs', icon: 'T', theme: THEME, rank: 'z0', profile: 'default', created: 1 }],
+    ['a folder', 'folder', 'node', 'their-folder', { title: 'Theirs', collapsed: false, created: 1 }],
+  ])('%s deleted by id before its apply was written (the write that lands is the deletion): stamped gone, and it stays gone', (_what, type, k, id, set) => {
+    setUp();
     theirs(type, id, set);
-    if (type === 'theme') drive(state, [{ t: 'theme.save', theme: { id: 'mine', name: 'Mine', stops: THEME.stops, grain: 0.2 } }]);
-    else {
-      const k = type === 'route' ? 'linkRoute' : type === 'effects' ? 'effect' : type === 'folder' ? 'node' : type;
-      db.write([{ k, id, value: null } as WriteOp]);
-    }
-    expect(tombstoned(id)).toBe(false);
-    expect(live(type, id)).toBe(true);
+    // Main applied it and you deleted it before persistence wrote the apply: one write, the deletion, with no row and no local.
+    db.write([{ k, id, value: null } as WriteOp]);
+    expect(tombstoned(id)).toBe(true);
+    expect(live(type, id)).toBe(false);
+    expect(new Map([...db.sync.unappliedPages()].flatMap((page) => [...page])).has(thingKey(type, id))).toBe(false);
   });
 
   it('what this computer had and took away is stamped gone: a theme out of its list, a Favorite removed', () => {
@@ -575,21 +584,81 @@ describe('local checked against the rows', () => {
     void state;
   });
 
-  it('a write that slipped past stamping (a join’s window): found, stamped as the change it is, and sent', () => {
+  /** chord-data's own statements, for a test that plays an older version of what's kept. */
+  const raw = (text: string) => (db as unknown as { sql(text: string): StatementSync }).sql(text);
+
+  it('a join’s window: only the ids written in it are read back, and stamped as the joins ends, as the hook would have', () => {
     let state = setUp();
     const id = chordId(state);
-    // As between a join's reading and its end: written, not stamped.
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
     db.sync.setMeta({ joining: true });
-    state = drive(state, [{ t: 'chord.update', chordId: id, name: 'Renamed meanwhile' }]);
-    db.sync.setMeta({ joining: false });
-    expect(outbox().some((r) => r.id === id)).toBe(false);
+    state = drive(state, [
+      { t: 'chord.update', chordId: id, name: 'Renamed meanwhile' },
+      { t: 'favorite.add', favoriteId: 'fav-window', nodeId: tab },
+    ]);
+    expect(outbox()).toEqual([]);
     expect(db.sync.unstamped).toBe(true);
-    expect(db.atomically(() => mendAll())).toBe(1);
+    const local = vi.spyOn(db.sync, 'localThings');
+    expect(db.atomically(() => db.sync.stampJoinWindow('all', Date.now()))).toBeGreaterThanOrEqual(2);
+    db.sync.setMeta({ joining: false });
+    expect(local).not.toHaveBeenCalled();
+    expect(db.sync.unstamped).toBe(false);
     expect(outbox().find((r) => r.id === id)?.set).toMatchObject({ name: 'Renamed meanwhile' });
-    expect(db.sync.snapshot().some((r) => r.type === 'chord' && r.id === id && r.set['name'] === 'Renamed meanwhile')).toBe(true);
-    // Mended: nothing more.
+    expect(outbox().some((r) => r.type === 'favorite' && r.id === 'fav-window')).toBe(true);
+    // Nothing left over for the drift check.
     expect(db.atomically(() => mendAll())).toBe(0);
     void state;
+  });
+
+  it('a real edit that slipped past the hook: stamped at its row’s time, not now, and sent', () => {
+    const state = setUp();
+    const id = chordId(state);
+    const later = Date.now() + 60_000;
+    db.sync.setMeta({ on: false });
+    db.write([{ k: 'chord', id, value: { ...state.chords[id]!, name: 'Renamed unstamped' } }], later);
+    db.sync.setMeta({ on: true });
+    expect(db.atomically(() => mendAll())).toBe(1);
+    const sent = outbox().find((r) => r.id === id);
+    expect(sent?.set).toMatchObject({ name: 'Renamed unstamped' });
+    expect(sent?.at?.[0]).toBe(later);
+    expect(db.atomically(() => mendAll())).toBe(0);
+  });
+
+  it('a difference older than its field’s stamp (another computer’s, newer) only refreshes local: no stamp, nothing sent', () => {
+    const state = setUp();
+    const id = chordId(state);
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: [Date.now() + 60_000, 0, OTHER], set: { name: 'Theirs, later' } }], Date.now()));
+    raw(`UPDATE sync_record SET local = json_set(local, '$.name', 'Stale') WHERE type = 'chord' AND id = ?`).run(id);
+    expect(db.atomically(() => mendAll())).toBe(1);
+    expect(outbox()).toEqual([]);
+    expect(db.sync.snapshot().find((r) => r.type === 'chord' && r.id === id && 'name' in r.set)?.set['name']).toBe('Theirs, later');
+    expect(db.atomically(() => mendAll())).toBe(0);
+    void state;
+  });
+
+  it('upgrading to a version that projects rows otherwise (an icon past the cap): local refreshed, nothing stamped, and after that, nothing to mend', () => {
+    const state = setUp();
+    const big = `data:image/png;base64,${Buffer.alloc(SYNC_LIMITS.iconChars, 3).toString('base64')}`;
+    const tab = { kind: 'tab', id: 'pinned-big', chordId: chordId(state), section: 'pinned', parentId: null, rank: 'a9', url: 'https://big.test/', title: 'Big', pinnedUrl: 'https://big.test/', customTitle: null, favicon: big, lastActiveAt: 1, createdAt: 1 };
+    db.write([{ k: 'node', id: tab.id, value: tab } as WriteOp]);
+    const before = outbox().length;
+    // As the version before the cap kept it: the icon named, under the projection before this one.
+    raw(`UPDATE sync_record SET local = json_set(local, '$.icon', 'sha256-before-the-cap') WHERE type = 'tab' AND id = ?`).run(tab.id);
+    db.sync.setMeta({ projection: 0 });
+    expect(db.atomically(() => mendAll())).toBe(1);
+    expect(outbox().length).toBe(before);
+    expect(db.sync.meta.projection).toBeGreaterThan(0);
+    expect(db.atomically(() => mendAll())).toBe(0);
+    expect(outbox().length).toBe(before);
+  });
+
+  it('pages by bytes: Effects at their largest (60 KB of CSS) are read a few at a time', () => {
+    setUp();
+    const steps = () => [...db.sync.driftRepairs()].length;
+    const empty = db.atomically(() => steps());
+    const css = (i: number) => `/* ${i} */ ${'h1 { color: red } '.repeat(3500)}`;
+    for (let i = 0; i < 24; i++) db.write([{ k: 'effect', id: `site${i}.test`, value: { host: `site${i}.test`, wet: true, css: css(i), cssOn: true, hidden: [], presets: [], duet: [], createdAt: 1, updatedAt: 2, compiled: '', sanitizer: 1 } } as WriteOp]);
+    expect(db.atomically(() => steps())).toBeGreaterThanOrEqual(empty + 2);
   });
 });
 
@@ -601,7 +670,7 @@ describe('icons and reconcile pages stay small', () => {
     expect(db.atomically(() => db.sync.merge([{ type: 'icon', id, set: { mime: 'image/png', data: big } }], Date.now())).dropped).toBe(1);
   });
 
-  it('a reconcile reads no icons, and pages of about half a megabyte at most', () => {
+  it('a reconcile reads no icons, and pages of about a quarter of a megabyte at most', () => {
     setUp();
     const css = (i: number) => `/* ${i} */ ${'h1 { color: red } '.repeat(9000)}`;
     db.atomically(() => db.sync.merge(Array.from({ length: 8 }, (_, i): DataRecord => ({ type: 'effects', id: `site${i}.test`, at: [Date.now() + 1000, 0, OTHER], set: { wet: true, css: css(i), cssOn: true, hidden: [], presets: [], duet: [] } })), Date.now()));

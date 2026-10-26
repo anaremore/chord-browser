@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apply, MAX_FAVORITES, restoreState, seedState, type Command, type DataRecord, type SegmentCursor, type State } from '@chord/core';
 import { ChordDatabase } from '@chord/data/db';
-import { opsForState, opsFromPatches, type DataPush, type WriteOp } from '@chord/data';
+import { opKey, opsForState, opsFromPatches, type DataPush, type WriteOp } from '@chord/data';
 import { SyncController, type WorkerLike } from '../../src/data/sync';
 import type { FromWorker, ToWorker } from '../../src/data/sync-worker';
 
@@ -65,6 +65,9 @@ let state: State;
 /** chord-data refuses main's next writes (a full disk), as many as this says. */
 let refuse = 0;
 let writes = 0;
+/** Writes main has made and persistence hasn't sent yet (`hold`), coalesced by entity as persistence does; `release` sends them. */
+let held: Map<string, WriteOp> | null = null;
+let release: () => void = () => undefined;
 let running: { controller: SyncController; worker: FakeWorker; pushes: DataPush[] } | null = null;
 
 beforeEach(() => {
@@ -76,6 +79,7 @@ beforeEach(() => {
   db.atomically(() => db.sync.addLocal('all'));
   refuse = 0;
   writes = 0;
+  held = null;
 });
 afterEach(() => {
   running?.controller.close();
@@ -103,7 +107,7 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
     () => worker as unknown as WorkerLike,
   );
   const service = new SyncService({
-    data: { sync: (request) => controller.handle(request), flush: async () => undefined, unsaved: () => false, waiting: () => false, onPush: (l) => (listener = l) },
+    data: { sync: (request) => controller.handle(request), flush: async () => undefined, unsaved: () => 0, waiting: () => false, onPush: (l) => (listener = l) },
     state: () => state,
     // The store: the reducer, then what changed written by chord-data (marked as sync's when it came from sync, as
     // persistence does), or refused, as chord-data refuses a batch on a full disk.
@@ -112,6 +116,14 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
       state = result.state;
       const ops = opsFromPatches(result.patches, result.state).map((op): WriteOp => (command.t === 'sync.apply' ? { ...op, sync: true } : op));
       if (ops.length === 0) return;
+      if (held) {
+        // Persistence's queue: a change of yours to an entity replaces sync's waiting one (and keeps its own mark).
+        for (const op of ops) {
+          const waiting = held.get(opKey(op));
+          held.set(opKey(op), op.sync && !(waiting && !waiting.sync) ? op : { ...op, sync: op.sync && waiting?.sync ? true : undefined });
+        }
+        return;
+      }
       if (refuse > 0) {
         refuse--;
         controller.writeRefused();
@@ -129,7 +141,15 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
     platform: 'linux',
     folder: () => dir,
   });
-  await controller.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+  release = () => {
+    const ops = [...(held?.values() ?? [])].map((op): WriteOp => (op.sync ? op : (({ sync: _sync, ...rest }) => rest as WriteOp)(op)));
+    held = null;
+    if (ops.length === 0) return;
+    db.write(ops);
+    writes++;
+    controller.afterWrite();
+  };
+  if (db.sync.meta.on) await controller.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
   await service.afterLaunch();
   running = { controller, worker, pushes };
   return running;
@@ -286,6 +306,45 @@ describe('a write chord-data refused', { timeout: 20_000 }, () => {
     await launch({ fromDisk: true });
     await vi.waitFor(() => expect(db.load()!.chords.find((c) => c.id === home())!.name).toBe('Renamed elsewhere'), { timeout: 6_000 });
     expect(state.chords[home()]).toMatchObject({ name: 'Renamed elsewhere' });
+  });
+});
+
+describe('a deletion made before its apply is written', { timeout: 20_000 }, () => {
+  it('another computer’s Favorite, applied, and removed here before the apply was written (the write that lands is the deletion): stamped gone, sent, and it doesn’t come back', async () => {
+    const first = await launch();
+    held = new Map();
+    await read(first.worker, A, [favoriteRecord(1)]);
+    await vi.waitFor(() => expect(state.favorites['fav-1']).toBeDefined());
+    const result = apply(state, { t: 'favorite.remove', favoriteId: 'fav-1' }, ctx);
+    state = result.state;
+    for (const op of opsFromPatches(result.patches, result.state)) held!.set(opKey(op), op);
+    expect([...held!.values()]).toEqual([{ k: 'favorite', id: 'fav-1', value: null }]);
+    release();
+    expect(db.sync.outbox().records.some((r) => r.type === 'favorite' && r.id === 'fav-1' && r.set['deleted'] === true)).toBe(true);
+    const pushed = applies(first.pushes).length;
+    await first.controller.reconcile();
+    await quiet(500);
+    expect(state.favorites['fav-1']).toBeUndefined();
+    expect(applies(first.pushes).slice(pushed).some((p) => p.push === 'sync.apply' && p.apply.favorites.some((f) => f.id === 'fav-1'))).toBe(false);
+  });
+});
+
+describe('turned off while chord-data refuses writes', { timeout: 20_000 }, () => {
+  it('the merged copy is kept: the next launch puts back what chord.db lacks of it, and once it lacks nothing, the copy goes', async () => {
+    const first = await launch();
+    refuse = 1;
+    await read(first.worker, A, [{ type: 'chord', id: home(), at: at(A), set: { name: 'Renamed elsewhere' } }]);
+    await vi.waitFor(() => expect(state.chords[home()]).toMatchObject({ name: 'Renamed elsewhere' }));
+    await first.controller.handle({ type: 'sync.off', keep: true });
+    expect(db.load()!.chords.find((c) => c.id === home())!.name).not.toBe('Renamed elsewhere');
+    expect(db.sync.meta).toMatchObject({ on: false, kept: true });
+    expect(db.sync.snapshot().some((r) => r.type === 'chord' && r.set['name'] === 'Renamed elsewhere')).toBe(true);
+    // Relaunched, with room again: main reads chord.db, without the rename. The kept copy puts it back, then goes.
+    await launch({ fromDisk: true });
+    await vi.waitFor(() => expect(db.load()!.chords.find((c) => c.id === home())!.name).toBe('Renamed elsewhere'), { timeout: 6_000 });
+    await vi.waitFor(() => expect(db.sync.meta.kept).toBe(false), { timeout: 8_000 });
+    expect(db.sync.snapshot()).toEqual([]);
+    expect(db.sync.meta.on).toBe(false);
   });
 });
 

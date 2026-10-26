@@ -53,31 +53,35 @@ const TRANSIENT = /disk I\/O error|database is locked|database is busy|SQLITE_BU
 
 /**
  * A write chord-data refused for a reason that can pass (a full disk, an I/O
- * error, a lock): never dropped. Its entities go back in the queue, and it's
- * sent again later and later, up to WRITE_RETRY_MAX; past WRITE_TROUBLE tries
- * the app says so. One refused for what's in it would fail for ever, and is
- * still dropped (and logged).
+ * error, a lock): never dropped. chord-data says which by SQLite's result code
+ * (`passing`: FULL, IOERR, BUSY, LOCKED, READONLY); its entities and history
+ * go back in the queue, and are sent again later and later, up to
+ * WRITE_RETRY_MAX; past WRITE_TROUBLE tries the app says so. One refused for
+ * what's in it would fail for ever, and is still dropped (and logged).
  */
 const PASSING = /disk I\/O error|database is locked|database is busy|database or disk is full|SQLITE_BUSY|SQLITE_IOERR|SQLITE_FULL/i;
-export const refusalPasses = (error: string | undefined): boolean => PASSING.test(error ?? '');
+export const refusalPasses = (response: { error?: string; passing?: boolean }): boolean => response.passing ?? PASSING.test(response.error ?? '');
 const WRITE_RETRY_MS = 2000;
 const WRITE_RETRY_MAX = 5 * 60_000;
 const WRITE_TROUBLE = 3;
 
 /**
  * The next batch of a flush: at most `chunk` entities, chords that are kept
- * first (a node's chord is in before it), chords that go last. A chord going
- * takes its node rows with it, so the open tabs it hands to the next chord
- * (and their back/forward histories) must have moved, in an earlier batch or
- * this one, before it goes; a stop between batches leaves the chord, not the
- * tabs, and sync's reconcile deletes it again.
+ * first (a node's chord is in before it). A chord going takes its node rows
+ * with it, so it goes in one transaction with every node's move and deletion
+ * waiting (and their back/forward histories), last in it, however many that
+ * makes: the open tabs it hands to the next chord have moved before it goes,
+ * and a stop between batches can't leave it there, partly emptied.
  */
 export function nextBatch(ops: readonly WriteOp[], chunk: number): WriteOp[] {
-  if (ops.length <= chunk && !ops.some((op) => op.k === 'chord' && op.value === null)) return [...ops];
+  const gone = ops.filter((op) => op.k === 'chord' && op.value === null);
+  if (ops.length <= chunk && gone.length === 0) return [...ops];
   const kept = ops.filter((op) => op.k === 'chord' && op.value !== null);
   const rest = ops.filter((op) => op.k !== 'chord');
-  const gone = ops.filter((op) => op.k === 'chord' && op.value === null);
-  return [...kept, ...rest, ...gone].slice(0, chunk);
+  if (gone.length === 0) return [...kept, ...rest].slice(0, chunk);
+  const nodes = rest.filter((op) => op.k === 'node' || op.k === 'nav');
+  const others = rest.filter((op) => op.k !== 'node' && op.k !== 'nav');
+  return [...kept, ...nodes, ...others.slice(0, Math.max(0, chunk - kept.length - nodes.length - gone.length)), ...gone];
 }
 
 /** Runs `attempt` until it succeeds, fails for a reason that won't pass, or the waits run out. */
@@ -117,6 +121,9 @@ export class Persistence {
   private retry: ReturnType<typeof setTimeout> | undefined;
   private retryMs = 0;
   private refusals = 0;
+  /** What was refused for now and isn't written yet (entities by `opKey`, and history's happenings): `unsaved`. */
+  private readonly retained = new Set<string>();
+  private readonly retainedEvents = new Set<HistoryEvent>();
   private trouble: (failing: boolean) => void = () => undefined;
   /** What chord-data says unasked (sync's changes to apply, and where it stands), and that it started again after a crash. */
   private pushed: (push: DataPush) => void = () => undefined;
@@ -336,9 +343,29 @@ export class Persistence {
     this.timer ??= setTimeout(() => void this.flush(), FLUSH_MS);
   }
 
-  /** Writes chord-data refused are waiting to be sent again: what's in memory isn't all in chord.db yet. */
-  get unsaved(): boolean {
-    return this.refusals > 0;
+  /**
+   * How many things chord-data refused for now are still waiting to be
+   * written (entities, and history's happenings): what's in memory isn't all
+   * in chord.db yet. Each counts until a write of it lands, or is dropped.
+   */
+  get unsaved(): number {
+    return this.retained.size + this.retainedEvents.size;
+  }
+
+  /** A batch is in, or was dropped for what's in it: none of it waits any more. */
+  private settled(ops: readonly WriteOp[], events: readonly HistoryEvent[]): void {
+    for (const op of ops) this.retained.delete(opKey(op));
+    for (const event of events) this.retainedEvents.delete(event);
+  }
+
+  /** A batch refused for now: back in the queue (unless a newer write of an entity is), and waiting until written. */
+  private retain(ops: readonly WriteOp[], events: readonly HistoryEvent[]): void {
+    for (const op of ops) {
+      this.retained.add(opKey(op));
+      if (!this.pending.has(opKey(op))) this.pending.set(opKey(op), op);
+    }
+    for (const event of events) this.retainedEvents.add(event);
+    this.events = [...events, ...this.events];
   }
 
   /** Writes keep failing (`true`, after WRITE_TROUBLE tries), or they're in again (`false`): the app says so. */
@@ -360,7 +387,14 @@ export class Persistence {
     return this.request({ type: 'write', ops: [], events }).then(
       (response) => {
         this.sideEvents = this.sideEvents.filter((e) => !events.includes(e));
+        if (!response.ok && refusalPasses(response)) {
+          // Refused for now (a full disk): back at the front of the queue, sent again with the next try.
+          this.retain([], events);
+          this.refused(response.error);
+          return;
+        }
         if (!response.ok) console.error('chord-data refused a write:', response.error);
+        this.settled([], events);
       },
       // The process died mid-write; the exit handler has requeued them.
       () => undefined,
@@ -388,10 +422,9 @@ export class Persistence {
         this.events = [];
         try {
           const response = await this.request({ type: 'write', ops: this.inFlight, events: this.inFlightEvents });
-          if (!response.ok && refusalPasses(response.error)) {
+          if (!response.ok && refusalPasses(response)) {
             // Refused for now (a full disk): put back, unless a newer write for the same entity is queued, and sent again later.
-            for (const op of this.inFlight) if (!this.pending.has(opKey(op))) this.pending.set(opKey(op), op);
-            this.events = [...this.inFlightEvents, ...this.events];
+            this.retain(this.inFlight, this.inFlightEvents);
             this.inFlight = [];
             this.inFlightEvents = [];
             this.refused(response.error);
@@ -400,6 +433,7 @@ export class Persistence {
           // A batch the database refuses for what's in it would fail for ever if retried; report it and move on.
           if (!response.ok) console.error('chord-data refused a write:', response.error);
           else this.saved();
+          this.settled(this.inFlight, this.inFlightEvents);
           this.inFlight = [];
           this.inFlightEvents = [];
         } catch {

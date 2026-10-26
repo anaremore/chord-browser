@@ -38,6 +38,25 @@ const SLICE = 25;
  */
 const SLICE_CHARS = 512 * 1024;
 const PLAN_SLICE = 50;
+/** Characters of this computer's things added to the copy per transaction while joining: icons and Effects are big. */
+const ADD_CHARS = 128 * 1024;
+
+/** Records in slices of at most `count`, and about `chars` of their values (a record past it goes alone). */
+function* bySize(records: readonly DataRecord[], count: number, chars: number): Generator<DataRecord[]> {
+  let slice: DataRecord[] = [];
+  let size = 0;
+  for (const record of records) {
+    const cost = 100 + Object.values(record.set).reduce<number>((n, v) => n + (typeof v === 'string' ? v.length : v && typeof v === 'object' ? JSON.stringify(v).length : 8), 0);
+    if (slice.length > 0 && (slice.length >= count || size + cost > chars)) {
+      yield slice;
+      slice = [];
+      size = 0;
+    }
+    slice.push(record);
+    size += cost;
+  }
+  if (slice.length > 0) yield slice;
+}
 /**
  * SQLite's checkpoints, which copy the write-ahead log into the database and
  * took 10–70 ms on this thread, run on the worker's thread instead while sync
@@ -157,6 +176,8 @@ export class SyncController {
   private merging: Promise<void> = Promise.resolve();
   /** Whether `local` was checked against the rows this run (at the first reconcile; then with each idle one). */
   private driftChecked = false;
+  /** Off with the merged copy kept: writes are waited for (what was refused, what a reconcile put back), to see if it can go. */
+  private keptChasing = false;
   /** A reconcile running, and whether another was asked for meanwhile (`true`: only idle ones; `false`: a full one). */
   private reconciling = false;
   private reconcileAgain: boolean | null = null;
@@ -264,11 +285,14 @@ export class SyncController {
       return;
     }
     const db = this.db();
-    if (!db?.sync.meta.on || db.sync.meta.joining) return;
+    // Off with the merged copy kept (turned off while writes were refused): only what chord.db lacks of it, put back.
+    const kept = db?.sync.meta.kept === true && !db.sync.meta.on;
+    if (!db || (!kept && (!db.sync.meta.on || db.sync.meta.joining))) return;
     this.reconciling = true;
+    let found = 0;
     try {
       // First, at the first reconcile of a run and with each idle one: `local` checked against the rows, and mended (S15 §13).
-      if (opts.idle || !this.driftChecked) {
+      if (!kept && (opts.idle || !this.driftChecked)) {
         this.driftChecked = true;
         let mended = 0;
         const repairs = db.sync.driftRepairs();
@@ -277,23 +301,35 @@ export class SyncController {
           await new Promise((resolve) => setImmediate(resolve));
         }
         if (mended > 0) {
-          console.error(`Sync: ${mended} thing${mended === 1 ? '' : 's'} here weren't stamped; stamped now`);
+          console.error(`Sync: ${mended} thing${mended === 1 ? '' : 's'} here differed from what sync kept of them; mended`);
           this.scheduleWrite(WRITE_MS);
         }
       }
-      if (!opts.idle) this.pushedAs.clear();
+      if (!opts.idle && !kept) this.pushedAs.clear();
+      let fresh = 0;
       const pages = db.sync.unappliedPages();
       for (let page = this.step(db, 'unapplied', () => pages.next()); !page.done; page = this.step(db, 'unapplied', () => pages.next())) {
-        const found = page.value;
-        const signatures = this.step(db, 'signed', () => db.sync.signatures(found.keys()));
-        for (const [key, names] of found) {
+        const differs = page.value;
+        found += differs.size;
+        const signatures = this.step(db, 'signed', () => db.sync.signatures(differs.keys()));
+        for (const [key, names] of differs) {
           const signature = signatures.get(key);
-          if (opts.idle && signature !== undefined && this.pushedAs.get(key) === signature) continue;
+          const same = signature !== undefined && this.pushedAs.get(key) === signature;
+          if (opts.idle && same) continue;
+          if (!same) fresh++;
           if (signature !== undefined) this.pushedAs.set(key, signature);
           this.changes.set(key, new Set([...(this.changes.get(key) ?? []), ...names]));
         }
         await new Promise((resolve) => setImmediate(resolve));
       }
+      // Kept: chord.db has all of it now, so the copy goes, as turning off would have cleared it. Otherwise writes are
+      // watched for while something new was pushed; what applies as nothing (kept otherwise here) waits for a launch.
+      if (kept && found === 0 && db.sync.meta.kept && !db.sync.meta.on) {
+        this.keptChasing = false;
+        this.pushedAs.clear();
+        this.step(db, 'forget', () => db.atomically(() => db.sync.clear()));
+        console.error('Sync: what it kept after turning off is all saved here now; its copy is gone');
+      } else if (kept) this.keptChasing = fresh > 0;
       if (this.changes.size > 0) this.chain(() => this.pushChanges());
     } finally {
       this.reconciling = false;
@@ -800,6 +836,8 @@ export class SyncController {
   afterWrite(): void {
     const db = this.db();
     if (db?.sync.stamping && db.sync.pending > 0) this.scheduleWrite(WRITE_MS);
+    // Off with the merged copy kept: once what it put back (or what was refused) is written, the copy can go.
+    if (this.keptChasing && db?.sync.meta.kept && !db.sync.meta.on) this.reconcileSoon();
     // It brought a chord, a folder or a split (or moved one), or made room: what waited for one is looked for, soon.
     if (db?.sync.takeDue()) this.reconcileSoon();
     // A change that couldn't win: main is sent the merged value back, and Settings names what.
@@ -1045,7 +1083,7 @@ export class SyncController {
     if (!db) throw new Error('chord-data: sync before open');
     switch (request.type) {
       case 'sync.status':
-        return { status: this.step(db, 'status', () => this.status()), keyBlob: db.sync.keyBlob() };
+        return { status: this.step(db, 'status', () => this.status()), keyBlob: db.sync.keyBlob(), kept: db.sync.meta.kept && !db.sync.meta.on };
       case 'sync.inspect':
         return { inspection: await this.inspect(request.folder) };
       case 'sync.setup':
@@ -1061,7 +1099,8 @@ export class SyncController {
         return { status: this.status() };
       case 'sync.reconcile':
         // After a launch (or chord-data starting again), and after main couldn't apply something: what's merged but not applied, again.
-        void this.reconcile().catch(() => this.readFailed());
+        if (request.wait) await this.reconcile({ idle: request.idle === true });
+        else void this.reconcile({ idle: request.idle === true }).catch(() => this.readFailed());
         return {};
       case 'sync.unlock':
         this.info = request.info;
@@ -1071,7 +1110,7 @@ export class SyncController {
       case 'sync.passphrase':
         return this.rekey(db, request.passphrase);
       case 'sync.off':
-        await this.off(db);
+        await this.off(db, request.keep === true);
         return { status: this.status() };
       case 'sync.remove':
         db.atomically(() => db.sync.stampDevice({ removed: true }, request.device));
@@ -1172,7 +1211,6 @@ export class SyncController {
     this.info = info;
     this.stopWorker();
     db.sync.clear();
-    db.sync.unstamped = false;
     db.sync.setMeta({ on: true, joining: true, folder, generation: opened.generation, name: info.name, own: null, compactedAt: Date.now() });
     this.key = opened.key;
     this.problem = null;
@@ -1201,18 +1239,21 @@ export class SyncController {
   private async choose(db: ChordDatabase, mode: 'synced' | 'both'): Promise<SyncReply> {
     if (!db.sync.meta.joining) return { problem: 'busy' };
     // This computer's things into the copy, a slice at a time, searches answered between (still joining: nothing's stamped meanwhile).
-    const local = this.step(db, 'local', () => db.sync.localThings());
-    for (let at = 0; at < local.length; at += PLAN_SLICE) {
-      this.step(db, 'add', () => db.atomically(() => db.sync.addLocal(mode === 'synced' ? 'synced-setup' : 'all', local.slice(at, at + PLAN_SLICE))));
+    // Read a page at a time, by bytes (icons, Effects), and added in slices of about ADD_CHARS: none holds a search up.
+    const pages = db.sync.localPages();
+    for (let page = this.step(db, 'local', () => pages.next()); !page.done; page = this.step(db, 'local', () => pages.next())) {
+      for (const slice of bySize(page.value, PLAN_SLICE, ADD_CHARS)) {
+        this.step(db, 'add', () => db.atomically(() => db.sync.addLocal(mode === 'synced' ? 'synced-setup' : 'all', slice)));
+        await new Promise((resolve) => setImmediate(resolve));
+      }
       await new Promise((resolve) => setImmediate(resolve));
     }
     this.step(db, 'joined', () =>
       db.atomically(() => {
         db.sync.readmitOutbox();
-        // What you changed here meanwhile (between the join's reading and now, nothing was stamped): the rows against
-        // `local`, in the same transaction that ends the join, so nothing written since is missed.
-        if (db.sync.unstamped) for (const _ of db.sync.driftRepairs(mode === 'synced' ? 'synced-setup' : 'all'));
-        db.sync.unstamped = false;
+        // What you changed here meanwhile (between the join's reading and now, nothing was stamped): those ids, read
+        // back from their rows and stamped in the same transaction that ends the join, so nothing written since is missed.
+        db.sync.stampJoinWindow(mode === 'synced' ? 'synced-setup' : 'all', Date.now());
         db.sync.stampDevice({ ...this.info, removed: false });
         db.sync.setMeta({ joining: false });
       }),
@@ -1350,8 +1391,13 @@ export class SyncController {
     return { key: filed.key, status: this.status() };
   }
 
-  /** Turning off removes this computer, from itself (S15 §6): its device record says so, written before it stops. Its data stays. */
-  private async off(db: ChordDatabase): Promise<void> {
+  /**
+   * Turning off removes this computer, from itself (S15 §6): its device record
+   * says so, written before it stops. Its data stays. `keep`: what sync
+   * applied isn't all in chord.db yet (writes refused), so the merged copy
+   * stays too, until a reconcile finds chord.db lacks nothing of it.
+   */
+  private async off(db: ChordDatabase, keep = false): Promise<void> {
     if (db.sync.meta.on && !db.sync.meta.joining && this.key) {
       db.atomically(() => db.sync.stampDevice({ removed: true }));
       clearTimeout(this.writeTimer);
@@ -1372,7 +1418,11 @@ export class SyncController {
     this.stuck.clear();
     this.wrote.clear();
     this.driftChecked = false;
-    db.sync.clear();
+    if (keep) db.atomically(() => db.sync.keepOff());
+    else db.sync.clear();
+    // Kept: the refused writes still going again are watched for, and the copy goes once they're in.
+    this.keptChasing = keep;
+    this.pushedAs.clear();
     await rm(this.pendingFile(db), { force: true }).catch(() => undefined);
   }
 

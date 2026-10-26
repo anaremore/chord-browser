@@ -147,12 +147,15 @@ describe('joining with Keep both, a change made here meanwhile', () => {
     await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
     const id = Object.keys(state.chords)[0]!;
     db.sync.setMeta({ joining: true });
-    // The rename lands just after the join read this computer's things, before it ends.
-    const read = db.sync.localThings.bind(db.sync);
-    vi.spyOn(db.sync, 'localThings').mockImplementationOnce(() => {
-      const things = read();
-      rename(state, 'Renamed meanwhile');
-      return things;
+    // The rename lands just after the join read this computer's chords (its first page), before it ends.
+    const read = db.sync.localPages.bind(db.sync);
+    vi.spyOn(db.sync, 'localPages').mockImplementationOnce(function* (size?: number) {
+      let first = true;
+      for (const page of read(size)) {
+        yield page;
+        if (first) rename(state, 'Renamed meanwhile');
+        first = false;
+      }
     });
     await controller!.handle({ type: 'sync.choose', mode: 'both' });
     expect(db.sync.meta.joining).toBe(false);

@@ -158,7 +158,8 @@ export type SyncRequest =
   /** `rebind`: the key kept here couldn't be read (this profile may be a copy of another computer's): a new id before it writes. */
   | { type: 'sync.unlock'; passphrase: string; info: SyncInfo; rebind?: boolean }
   | { type: 'sync.passphrase'; passphrase: string }
-  | { type: 'sync.off' }
+  /** `keep`: what sync applied isn't all in chord.db (writes refused a while): the merged copy stays, to put it back later. */
+  | { type: 'sync.off'; keep?: boolean }
   | { type: 'sync.remove'; device: string }
   | { type: 'sync.rename'; name: string }
   | { type: 'sync.pause'; paused: boolean }
@@ -175,7 +176,8 @@ export type SyncRequest =
   /** How long sync's steps took on chord-data's thread (development builds' test hooks: perf.spec.ts). */
   | { type: 'sync.timings' }
   /** What's merged but not applied here (a quit or a crash during a pass or an apply, or an apply that failed), pushed again. */
-  | { type: 'sync.reconcile' }
+  /** `idle`: as the idle timer's (`local` checked against the rows first); `wait`: answered once done (development builds' test hooks). */
+  | { type: 'sync.reconcile'; idle?: boolean; wait?: boolean }
   /** The folder moved: this one, if it's this sync's (its generation opens with this computer's key). */
   | { type: 'sync.relocate'; folder: string }
   /** A lost passphrase (S15 §6, *Start over*): the next generation under a new one; the other computers pause until they have it. */
@@ -197,6 +199,8 @@ export interface SyncReply {
   apply?: SyncApply;
   replace?: { to: string; keep: string[] } | null;
   keyBlob?: string | null;
+  /** Sync is off, and kept its merged copy (turned off while writes were refused): a reconcile puts back what chord.db lacks. */
+  kept?: boolean;
   timings?: SyncTimings;
 }
 
@@ -242,7 +246,8 @@ export type DataResponse =
       counts?: ExportCounts;
       sync?: SyncReply;
     }
-  | { id: number; ok: false; error: string };
+  /** `passing`: refused for a reason that can pass (SQLite's FULL, IOERR, BUSY, LOCKED, READONLY): the write goes again later. */
+  | { id: number; ok: false; error: string; passing?: boolean };
 
 /** The part of an Immer patch this needs. */
 export interface PathPatch {

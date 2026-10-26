@@ -22,9 +22,11 @@ import {
   permissionRecord,
   planMerge,
   routeRecord,
+  same,
   seedState,
   settingsRecords,
   setupRecord,
+  stable,
   themeRecord,
   zoomRecord,
   type Chord,
@@ -606,5 +608,25 @@ describe('data.merge and its Undo', () => {
   it('a settings patch goes through settings.set’s checks', () => {
     const s = apply(used(), { t: 'data.merge', importId: 'imp', settings: { ...defaultSettings(), googleFree: true, searchEngine: 'google', safeBrowsing: true } }, { now: NOW, newId }).state;
     expect(s.settings).toMatchObject({ googleFree: true, searchEngine: 'duckduckgo', safeBrowsing: false });
+  });
+});
+
+describe('same', () => {
+  it('is exactly whether two values write out the same (keys in any order), without writing them out: a seeded table of JSON values', () => {
+    let seed = 7;
+    const next = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    const value = (depth: number): unknown => {
+      const r = next();
+      if (depth > 2 || r < 0.35) return [null, undefined, 0, -0, 1, 1.5, NaN, '', 'a', 'b', true, false][Math.floor(next() * 12)];
+      if (r < 0.65) return Array.from({ length: Math.floor(next() * 3) }, () => value(depth + 1));
+      return Object.fromEntries(Array.from({ length: Math.floor(next() * 3) }, () => [['x', 'y', 'z'][Math.floor(next() * 3)]!, value(depth + 1)]));
+    };
+    const reorder = (v: unknown): unknown => (Array.isArray(v) ? v.map(reorder) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).reverse().map(([k, x]) => [k, reorder(x)])) : v);
+    for (let i = 0; i < 4000; i++) {
+      const a = value(0);
+      const b = next() < 0.5 ? reorder(a) : value(0);
+      expect(same(a, b), JSON.stringify([a, b])).toBe(stable(a) === stable(b));
+    }
+    expect(same({ css: 'h1 { color: red }'.repeat(4000), on: true }, { on: true, css: 'h1 { color: red }'.repeat(4000) })).toBe(true);
   });
 });

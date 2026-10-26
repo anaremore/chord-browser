@@ -46,16 +46,21 @@ const FOCUS_MS = 30_000;
 const PART_GAP_MS = 33;
 /** After an apply that failed, chord-data is asked for what isn't applied again after this long, doubling up to RECONCILE_MAX. */
 const RECONCILE_MS = 5000;
-/** Turning off waits this long at a time while chord-data refuses writes of what sync applied (a full disk). */
-const OFF_WAIT_MS = 30_000;
+/**
+ * Turning off waits this long at a time while chord-data refuses writes of
+ * what sync applied (a full disk), and OFF_WAIT_MAX in all; then it turns off
+ * keeping the merged copy, which puts back what's missing once it can.
+ */
+const OFF_WAIT_MS = 15_000;
+const OFF_WAIT_MAX = 2 * 60_000;
 const RECONCILE_MAX = 5 * 60_000;
 
 export interface SyncServiceOptions {
   data: {
     sync(request: SyncRequest): Promise<SyncReply>;
     flush(): Promise<void>;
-    /** Writes chord-data refused are waiting to be sent again: what's on screen isn't all in chord.db yet. */
-    unsaved(): boolean;
+    /** How many things chord-data refused are waiting to be written again: what's on screen isn't all in chord.db yet. */
+    unsaved(): number;
     /** Whether a change of yours to this entity (`node:<id>`) is waiting to be written, or being written. */
     waiting(key: string): boolean;
     onPush(listener: (push: DataPush) => void): void;
@@ -82,6 +87,8 @@ interface Pending {
   device?: string;
   until: number;
   timer: ReturnType<typeof setTimeout>;
+  /** When turning off began waiting for refused writes (OFF_WAIT_MAX). */
+  since?: number;
 }
 
 export class SyncService {
@@ -202,7 +209,8 @@ export class SyncService {
     const answer = await this.options.data.sync({ type: 'sync.status' }).catch(() => ({}) as SyncReply);
     if (answer.status) this.setStatus(answer.status);
     // What was merged but never applied (a quit or a crash during a pass or an apply): pushed now, key or not.
-    if (answer.status && answer.status.state !== 'off') void this.options.data.sync({ type: 'sync.reconcile' }).catch(() => this.reconcileLater());
+    // Off with the merged copy kept (turned off while writes were refused): what chord.db lacks of it, put back.
+    if (answer.status && (answer.status.state !== 'off' || answer.kept)) void this.options.data.sync({ type: 'sync.reconcile' }).catch(() => this.reconcileLater());
     if (answer.status?.state !== 'locked' || !answer.keyBlob) return;
     try {
       const opened = await safeStorage.decryptStringAsync(Buffer.from(answer.keyBlob, 'base64'));
@@ -427,23 +435,36 @@ export class SyncService {
   private async carryOut(token: string): Promise<void> {
     const pending = this.pending;
     if (pending?.token !== token) return;
+    let unsaved = 0;
     if (pending.what === 'off') {
       // Turning off clears the synced copy: not while what sync applied here isn't all in chord.db (writes refused, waiting
-      // to go again), or it would be gone at the next launch. It waits for them, a while at a time.
+      // to go again), or it would be gone at the next launch. It waits for them, a while at a time, up to OFF_WAIT_MAX;
+      // then it turns off keeping the copy, which puts back what chord.db lacks once it can (S15 §13).
       await this.options.data.flush();
-      if (this.options.data.unsaved()) {
-        if (this.pending?.token !== token) return;
-        this.pending = { ...pending, until: Date.now() + OFF_WAIT_MS, timer: setTimeout(() => void this.carryOut(token), OFF_WAIT_MS) };
+      unsaved = this.options.data.unsaved();
+      if (this.pending?.token !== token) return;
+      const since = pending.since ?? Date.now();
+      if (unsaved > 0 && Date.now() - since < OFF_WAIT_MAX) {
+        this.pending = { ...pending, since, until: Date.now() + OFF_WAIT_MS, timer: setTimeout(() => void this.carryOut(token), OFF_WAIT_MS) };
         this.options.notify(this.view());
         return;
       }
-      if (this.pending?.token !== token) return;
     }
     this.pending = null;
-    const answer = pending.what === 'off' ? await this.options.data.sync({ type: 'sync.off' }) : await this.options.data.sync({ type: 'sync.remove', device: pending.device ?? '' });
+    const answer =
+      pending.what === 'off'
+        ? await this.options.data.sync({ type: 'sync.off', ...(unsaved > 0 ? { keep: true } : {}) })
+        : await this.options.data.sync({ type: 'sync.remove', device: pending.device ?? '' });
     if (pending.what === 'off') {
       this.keyKept = this.keyWeak = this.anyway = false;
       this.toasted.clear();
+      const windowId = unsaved > 0 ? this.options.lastWindow() : null;
+      if (windowId) {
+        this.options.toast(windowId, {
+          id: 'sync:unsaved',
+          message: `Sync is off. ${unsaved === 1 ? 'A change' : `${unsaved} changes`} it brought ${unsaved === 1 ? 'isn’t' : 'aren’t'} saved on this computer yet (its disk is full): Chord keeps ${unsaved === 1 ? 'it' : 'them'}, and saves ${unsaved === 1 ? 'it' : 'them'} once it can.`,
+        });
+      }
     }
     if (answer.status) this.setStatus(answer.status);
     else this.options.notify(this.view());

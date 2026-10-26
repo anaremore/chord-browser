@@ -1887,3 +1887,97 @@ test('sync: keystrokes during a large merge', async () => {
     await app.close();
   }
 });
+/**
+ * Keystrokes while joining with a large setup of this computer's own (S15
+ * §13): 500 pinned tabs here, each with an icon of its own, and Effects at
+ * their largest on 40 sites, join a small synced setup (*Keep both*) while the
+ * command bar types. What's here is read into the copy a page at a time, by
+ * bytes, and added in slices of about 128 KB; then, typing again, `local` is
+ * checked against the rows (the idle reconcile's drift check), a page at a
+ * time. The keystroke budgets hold, and none of sync's steps on chord-data's
+ * thread passes a keystroke's.
+ */
+test('sync: keystrokes while joining with 500 pinned tabs and 40 large Effects here', async () => {
+  test.setTimeout(400_000);
+  cpuBusy = await measureCpuBusy();
+  const folder = mkdtempSync(join(tmpdir(), 'chord-perf-sync-join-'));
+  const fs = diskFolder(join(folder, 'Chord sync'));
+  await fs.mkdir('');
+  const OTHER = 'f00df00df00df00e';
+  const root = await writeSyncFile(fs, 1, SYNC_PASSPHRASE, OTHER, nodeCrypto, FAST_KDF);
+  const THEME = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' };
+  const setup: DataRecord[] = [
+    { type: 'device', id: OTHER, at: [Date.now() - 60_000, 0, OTHER], set: { name: 'Perf laptop', os: 'Linux', app: '0.5.0' } },
+    { type: 'chord', id: 'synced', at: [Date.now() - 60_000, 1, OTHER], set: { name: 'Synced', icon: 'S', theme: THEME, rank: 'z0', profile: 'default', created: 1 } },
+  ];
+  await writeSnapshot(fs, { generation: 1, device: OTHER }, [setup], root, { app: '0.5.0', device: [setup[0]!] }, nodeCrypto);
+
+  const app = await launch({ ...SEEDED, CHORD_PERF_PINNED: '500', CHORD_PERF_EFFECTS: '40' });
+  try {
+    const overlay = await pageWhere(app, isOverlay);
+    const { shell, settings } = await yourData(app);
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog;
+    }, folder);
+    const pinned = () => app.evaluate(() => (globalThis as unknown as { chordTestHooks: { pinnedNames(s: string): { count: number } } }).chordTestHooks.pinnedNames('').count);
+    await expect.poll(pinned, { timeout: 30_000 }).toBe(500);
+
+    await bringToFront(app, shell);
+    await setMotion(app, shell, overlay, true);
+    environment ??= await readEnvironment(app, shell);
+    const { s, typing } = await typingSession(app, shell, overlay);
+    await openCommandBar(shell, overlay);
+    await typeSlowly(overlay, 'warm up');
+    await closeCommandBar(overlay);
+    const alone = await typing('before joining with a large setup here');
+    const start = await syncHook<SyncTimings>(app, 'syncTimings');
+    let joinMs = NaN;
+    const joining = await typing('while joining with a large setup here', async () => {
+      const t0 = performance.now();
+      const state = await settings.evaluate(async (passphrase) => {
+        const sync = (
+          window as unknown as {
+            chord: { sync: { chooseFolder(): Promise<{ ok: boolean; folderId?: string }>; join(id: string, p: string): Promise<{ ok: boolean; view?: { state: string } }>; choose(mode: string): Promise<{ ok: boolean; view?: { state: string } }> } };
+          }
+        ).chord.sync;
+        const folder = await sync.chooseFolder();
+        const joined = await sync.join(folder.folderId!, passphrase);
+        return joined.view?.state === 'choosing' ? ((await sync.choose('both')).view?.state ?? 'failed') : (joined.view?.state ?? 'failed');
+      }, SYNC_PASSPHRASE);
+      expect(state).toBe('on');
+      joinMs = performance.now() - t0;
+    });
+    const joined = await syncHook<SyncTimings>(app, 'syncTimings');
+    const checking = await typing('while local is checked against the rows', async () => {
+      await syncHook(app, 'syncDrift');
+    });
+    const after = await syncHook<SyncTimings>(app, 'syncTimings');
+    // A part's steps: those since the part before (chord-data keeps the last 500; past that, all it keeps).
+    const since = (from: SyncTimings, to: SyncTimings) => (to.steps.length < 500 ? to.steps.slice(from.steps.length) : to.steps);
+    const joinSteps = since(start, joined);
+    const driftSteps = since(joined, after).filter((step) => step.what === 'drift');
+    expect(driftSteps.length).toBeGreaterThan(1);
+    const worstOf = (what: string) => round(max(joinSteps.filter((step) => step.what === what).map((step) => step.ms)));
+    for (const [label, main, steps, extra] of [
+      ['while joining', joining, joinSteps, { joinMs: round(joinMs), readPageMs: { worst: worstOf('local') }, addSliceMs: { worst: worstOf('add') }, joinEndMs: worstOf('joined') }],
+      ['while local is checked against the rows', checking, driftSteps, { pages: driftSteps.length }],
+    ] as const) {
+      record({
+        group: 'sync',
+        name: `Sync: a large setup here, ${label}`,
+        scenario: `${s.scenario}, 500 pinned tabs with icons, 40 large Effects`,
+        motion: null,
+        locked: main.locked,
+        checks: [
+          check('main task', main.task, BUDGET.frameMs, { locked: main.locked }),
+          // chord-data's thread answers the command bar's searches between sync's steps: none past a keystroke's budget.
+          check('sync step', max(steps.map((step) => step.ms)), BUDGET.historyKeystrokeMs, { locked: null }),
+        ],
+        detail: { mainTaskMs: { alone: round(alone.task), during: round(main.task), inside: main.inside }, slowestStepsMs: slowest([...steps]), ...extra },
+      });
+    }
+  } finally {
+    await app.close();
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
