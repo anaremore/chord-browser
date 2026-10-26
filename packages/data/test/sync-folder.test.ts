@@ -897,7 +897,7 @@ describe('a write of this computer’s own that failed after its bytes landed', 
   async function write(fs: SyncFs, own: OwnSegment, records: DataRecord[], root: Uint8Array) {
     let appending: Appending | null = null;
     try {
-      const result = await appendRecords(fs, own, records, root, { app: '0.5.0', device: [], onAppend: (a) => (appending = a) }, nodeCrypto);
+      const result = await appendRecords(fs, own, records, root, { app: '0.5.0', device: [], onAppend: (a) => void (appending = a) }, nodeCrypto);
       return { result, appending: appending as Appending | null, error: null };
     } catch (error) {
       return { result: null, appending: appending as Appending | null, error };
@@ -936,12 +936,17 @@ describe('a write of this computer’s own that failed after its bytes landed', 
     const partial = await write(cut.fs, cut.own, [chord('a', 'A', 2)], cut.root);
     const { bytes: _partBytes, ...markOnly } = partial.appending!;
     expect((await settleAppend(cut.fs, cut.own, markOnly, nodeCrypto)).settled).toBeNull();
+    // Chord quit on a full disk before cutting it back: the next worker reads the bytes back from chord-data's own file
+    // (written once per write), and cuts back what's exactly their first part, keeping its id.
+    const fromFile = new Uint8Array(partial.appending!.bytes!);
+    expect(await settleAppend(cut.fs, cut.own, { ...markOnly, bytes: fromFile }, nodeCrypto)).toEqual({ own: cut.own, settled: 'cut' });
+    expect(await ownIntact(cut.fs, cut.own, nodeCrypto)).toBe('ok');
   });
 
   it('a compaction stopped between its snapshot’s rename and its answer: the snapshot is this computer’s own (its size, ending with its last frame)', async () => {
     const { fs, root, own } = await computer();
     let marker: Appending | null = null;
-    const next = await writeSnapshot(fs, { generation: 1, device: A }, [[chord('work', 'Work', 1), chord('b', 'B', 3)]], root, { app: '0.5.0', device: [], covers: coversOf(own), after: own.segment, onRename: (a) => (marker = a) }, nodeCrypto);
+    const next = await writeSnapshot(fs, { generation: 1, device: A }, [[chord('work', 'Work', 1), chord('b', 'B', 3)]], root, { app: '0.5.0', device: [], covers: coversOf(own), after: own.segment, onRename: (a) => void (marker = a) }, nodeCrypto);
     const kept = JSON.parse(JSON.stringify(marker)) as Appending;
     expect(kept.hash).toBeNull();
     // As if the answer never came: the old segment is gone (it covered it), and the new one is its own, not another writer's.
@@ -972,7 +977,7 @@ describe('a write of this computer’s own that failed after its bytes landed', 
     const filler = Array.from({ length: 4 }, (_, i): DataRecord => ({ type: 'widget', id: `w${i}`, at: [1_800_000_000_000, 0, A], set: { blob: Buffer.from(nodeCrypto.random(300_000)).toString('base64') } }));
     const full = await writeSegment(fs, { generation: 1, device: A, segment: 2 }, filler, root, { snapshot: false, app: '0.5.0', device: [] }, nodeCrypto);
     let appending: Appending | null = null;
-    const result = await appendRecords(fs, full, [chord('a', 'A', 2)], root, { app: '0.5.0', device: [], onAppend: (a) => (appending = a) }, nodeCrypto);
+    const result = await appendRecords(fs, full, [chord('a', 'A', 2)], root, { app: '0.5.0', device: [], onAppend: (a) => void (appending = a) }, nodeCrypto);
     expect(result).toMatchObject({ ok: true, own: { segment: 3 } });
     // As if the answer never came: the next write, from the old segment, settles it first.
     const settled = await settleAppend(fs, full, appending, nodeCrypto);

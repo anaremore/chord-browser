@@ -854,7 +854,7 @@ export async function appendRecords(
   own: OwnSegment,
   records: readonly DataRecord[],
   root: Uint8Array,
-  opts: { app: string; device: readonly DataRecord[]; now?: number; memory?: FolderMemory; onAppend?(appending: Appending): void },
+  opts: { app: string; device: readonly DataRecord[]; now?: number; memory?: FolderMemory; onAppend?(appending: Appending): void | Promise<void> },
   c: DataCrypto,
 ): Promise<AppendResult> {
   const folder = deviceFolder(own.generation, own.device);
@@ -879,7 +879,7 @@ export async function appendRecords(
     const segment = sealSegment(where, records, root, { snapshot: false, app: opts.app, device: opts.device, ...(opts.now ? { now: opts.now } : {}) }, c);
     // The one it closes is its, as it left it: its next snapshot covers it.
     const expect: OwnSegment = { ...segment.own, closed: [...(own.closed ?? []), [own.segment, own.size, own.frames] as Cover] };
-    opts.onAppend?.({ expect, at: 0, length: segment.bytes.length, hash: hex(c.sha256(segment.bytes)), bytes: segment.bytes });
+    await opts.onAppend?.({ expect, at: 0, length: segment.bytes.length, hash: hex(c.sha256(segment.bytes)), bytes: segment.bytes });
     await fs.mkdir(folder);
     await fs.create(`${folder}/${segmentName(n)}`, segment.bytes);
     return { ok: true, own: expect, frames: expect.frames, bytes: expect.size };
@@ -890,7 +890,7 @@ export async function appendRecords(
   const size = own.size + bytes.length;
   const tail = tailOf(sealed.bytes.at(-1), size, c) ?? own.tail;
   const expect: OwnSegment = { ...own, size, frames: own.frames + sealed.count, ...(tail ? { tail } : {}) };
-  opts.onAppend?.({ expect, at: own.size, length: bytes.length, hash: hex(c.sha256(bytes)), bytes });
+  await opts.onAppend?.({ expect, at: own.size, length: bytes.length, hash: hex(c.sha256(bytes)), bytes });
   await fs.append(path, bytes);
   return { ok: true, own: expect, frames: sealed.count, bytes: bytes.length };
 }
@@ -1311,7 +1311,7 @@ export async function writeSnapshot(
   where: { generation: number; device: string },
   records: AsyncIterable<readonly DataRecord[]> | Iterable<readonly DataRecord[]>,
   root: Uint8Array,
-  opts: { app: string; device: readonly DataRecord[]; after?: number; covers?: Cover[]; now?: number; memory?: FolderMemory; onRename?(appending: Appending): void },
+  opts: { app: string; device: readonly DataRecord[]; after?: number; covers?: Cover[]; now?: number; memory?: FolderMemory; onRename?(appending: Appending): void | Promise<void> },
   c: DataCrypto,
 ): Promise<OwnSegment> {
   const folder = deviceFolder(where.generation, where.device);
@@ -1350,7 +1350,7 @@ export async function writeSnapshot(
     }
     // Before it's in place, what it will be: a stop between the rename and the answer leaves it this computer's own.
     const tail = tailOf(last, size, c);
-    opts.onRename?.({ expect: { ...where, segment: n, size, frames: index, closed: [], ...(tail ? { tail } : {}) }, at: 0, length: size, hash: null });
+    await opts.onRename?.({ expect: { ...where, segment: n, size, frames: index, closed: [], ...(tail ? { tail } : {}) }, at: 0, length: size, hash: null });
     await fs.rename(temp, `${folder}/${name}`);
   } catch (error) {
     await fs.remove(temp).catch(() => undefined);

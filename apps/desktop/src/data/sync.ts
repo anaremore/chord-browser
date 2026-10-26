@@ -14,7 +14,8 @@
  * The root key lives here in memory only: main reads it from safeStorage
  * after launch and hands it over, or you type the passphrase.
  */
-import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { applyIsEmpty, CLOCK_AHEAD_MS, emptyApply, localDeviceFields, newDeviceId, SYNC_OFF, type DataRecord, type FolderInspection, type SyncApply, type SyncProblem, type SyncStatus } from '@chord/core';
 import type { DataPush, SyncInfo, SyncReply, SyncRequest } from '@chord/data';
@@ -154,6 +155,8 @@ export class SyncController {
   private nextStream = 1;
   /** Merges one batch at a time, in order. */
   private merging: Promise<void> = Promise.resolve();
+  /** Whether `local` was checked against the rows this run (at the first reconcile; then with each idle one). */
+  private driftChecked = false;
   /** A reconcile running, and whether another was asked for meanwhile (`true`: only idle ones; `false`: a full one). */
   private reconciling = false;
   private reconcileAgain: boolean | null = null;
@@ -264,6 +267,20 @@ export class SyncController {
     if (!db?.sync.meta.on || db.sync.meta.joining) return;
     this.reconciling = true;
     try {
+      // First, at the first reconcile of a run and with each idle one: `local` checked against the rows, and mended (S15 §13).
+      if (opts.idle || !this.driftChecked) {
+        this.driftChecked = true;
+        let mended = 0;
+        const repairs = db.sync.driftRepairs();
+        for (let step = this.step(db, 'drift', () => db.atomically(() => repairs.next())); !step.done; step = this.step(db, 'drift', () => db.atomically(() => repairs.next()))) {
+          mended += step.value;
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        if (mended > 0) {
+          console.error(`Sync: ${mended} thing${mended === 1 ? '' : 's'} here weren't stamped; stamped now`);
+          this.scheduleWrite(WRITE_MS);
+        }
+      }
       if (!opts.idle) this.pushedAs.clear();
       const pages = db.sync.unappliedPages();
       for (let page = this.step(db, 'unapplied', () => pages.next()); !page.done; page = this.step(db, 'unapplied', () => pages.next())) {
@@ -351,12 +368,17 @@ export class SyncController {
     if (this.op) clearTimeout(this.op.deadline);
   }
 
-  /** The operation under way ended. Once one that was asked for, or a pass, ends with nothing more waiting, the folder answers again. */
-  private endOp(): void {
+  /**
+   * The operation under way ended. Once one that reached the folder (not one
+   * that ended without touching it, a watch not wanted behind on Windows), was
+   * asked for or a pass, ends with nothing more waiting, the folder answers again.
+   */
+  private endOp(reached = true): void {
     if (!this.op) return;
     clearTimeout(this.op.deadline);
     const what = this.op.what;
     this.op = null;
+    if (!reached) return;
     this.healthySince ??= Date.now();
     if (this.stalled && this.worker && this.asks.length === 0 && what !== 'tidy') {
       this.stalled = false;
@@ -429,7 +451,7 @@ export class SyncController {
         this.begin(message.op);
         return;
       case 'idle':
-        this.endOp();
+        this.endOp(message.reached !== false);
         return;
       case 'pull':
         this.progress();
@@ -574,6 +596,7 @@ export class SyncController {
       app: this.info.app,
       junk: db.sync.junk(),
       appending: meta.appending,
+      pendingFile: this.pendingFile(db),
       front: this.front,
     } satisfies ToWorker);
     if (db.sync.outboxSize() > 0) this.scheduleWrite(0);
@@ -1149,6 +1172,7 @@ export class SyncController {
     this.info = info;
     this.stopWorker();
     db.sync.clear();
+    db.sync.unstamped = false;
     db.sync.setMeta({ on: true, joining: true, folder, generation: opened.generation, name: info.name, own: null, compactedAt: Date.now() });
     this.key = opened.key;
     this.problem = null;
@@ -1185,6 +1209,10 @@ export class SyncController {
     this.step(db, 'joined', () =>
       db.atomically(() => {
         db.sync.readmitOutbox();
+        // What you changed here meanwhile (between the join's reading and now, nothing was stamped): the rows against
+        // `local`, in the same transaction that ends the join, so nothing written since is missed.
+        if (db.sync.unstamped) for (const _ of db.sync.driftRepairs(mode === 'synced' ? 'synced-setup' : 'all'));
+        db.sync.unstamped = false;
         db.sync.stampDevice({ ...this.info, removed: false });
         db.sync.setMeta({ joining: false });
       }),
@@ -1343,7 +1371,14 @@ export class SyncController {
     this.pruned.clear();
     this.stuck.clear();
     this.wrote.clear();
+    this.driftChecked = false;
     db.sync.clear();
+    await rm(this.pendingFile(db), { force: true }).catch(() => undefined);
+  }
+
+  /** chord-data's own file, beside chord.db, holding what the worker is writing to this computer's log until it's answered. */
+  private pendingFile(db: ChordDatabase): string {
+    return join(dirname(db.file), 'sync-pending');
   }
 
   /** chord-data is closing: the worker goes, with the key. */

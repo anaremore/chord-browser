@@ -18,8 +18,9 @@
  * file call that never returns (a stalled network drive) and chord-data lets
  * this worker go (`abandon`), and nothing more is done in the folder here.
  */
+import { createHash } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parentPort } from 'node:worker_threads';
@@ -77,6 +78,8 @@ export type ToWorker =
       app: string;
       junk: [string, string][];
       appending: Omit<Appending, 'bytes'> | null;
+      /** A file of chord-data's own (beside chord.db) holding what this computer is writing, for a worker after this one to cut back. */
+      pendingFile: string | null;
       /** Whether a Chord window is in front (`front`). */
       front: boolean;
     }
@@ -153,7 +156,8 @@ export type FromWorker =
   | { t: 'changed' }
   /** A folder operation begun (what was asked, or a pass), and ended: chord-data's deadline runs for the one under way only. */
   | { t: 'busy'; op: ToWorker['t'] | 'pass' | 'tidy' | 'watch' }
-  | { t: 'idle' }
+  /** `reached: false`: it ended without touching the folder (a watch not wanted, behind on Windows): no sign the folder answers. */
+  | { t: 'idle'; reached?: false }
   /** About to write to this computer's log: chord-data keeps it until the write is answered. */
   | { t: 'appending'; appending: Omit<Appending, 'bytes'> }
   /** A write of its own that went unanswered landed after all: its segment as it is now, for chord-data to keep. */
@@ -185,6 +189,7 @@ interface Running {
   memory: FolderMemory;
   /** What it's writing to its log, until answered: a write of its own that landed though it failed is its own, not another writer's. */
   appending: Appending | null;
+  pendingFile: string | null;
 }
 
 let running: Running | null = null;
@@ -208,13 +213,14 @@ let acked: { id: number; resolve(ok: boolean): void } | null = null;
 let batches = 0;
 /** One folder operation at a time: a write never interleaves with a snapshot, a read with a new generation. Each says when it begins and ends. */
 let chain: Promise<void> = Promise.resolve();
-const serial = (op: Extract<FromWorker, { t: 'busy' }>['op'], work: () => Promise<void>) => {
+const serial = (op: Extract<FromWorker, { t: 'busy' }>['op'], work: () => Promise<boolean | void>) => {
   const run = async () => {
     send({ t: 'busy', op });
+    let reached: boolean | void = true;
     try {
-      await work();
+      reached = await work();
     } finally {
-      send({ t: 'idle' });
+      send(reached === false ? { t: 'idle', reached: false } : { t: 'idle' });
     }
   };
   chain = chain.then(run, run);
@@ -363,10 +369,24 @@ async function settleOwn(r: Running): Promise<void> {
   if (settled.settled) r.appending = null;
 }
 
-/** Kept until answered: chord-data hears all but the bytes (they're for cutting back a short write, which only this worker does). */
-function appending(r: Running, a: Appending): void {
+/**
+ * Kept until answered, before anything is written: the bytes in chord-data's
+ * own file (`pendingFile`, once per write), for a worker after this one to cut
+ * back a short write; the rest in chord-data's meta. A file it can't write
+ * (the disk full) stops the write: never one it couldn't cut back.
+ */
+async function appending(r: Running, a: Appending): Promise<void> {
+  if (a.bytes && r.pendingFile) await writeFile(r.pendingFile, a.bytes);
   r.appending = a;
   send({ t: 'appending', appending: { expect: a.expect, at: a.at, length: a.length, hash: a.hash } });
+}
+
+/** What the last worker was writing, with its bytes again if chord-data's file has exactly them. */
+async function withBytes(r: Running): Promise<void> {
+  const a = r.appending;
+  if (!a || a.bytes || a.hash === null || !r.pendingFile) return;
+  const bytes = await readFile(r.pendingFile).catch(() => null);
+  if (bytes && bytes.length === a.length && createHash('sha256').update(bytes).digest('hex') === a.hash) r.appending = { ...a, bytes: new Uint8Array(bytes) };
 }
 
 /** The folder changed, or it's time to look: a read, once the burst settles. */
@@ -376,10 +396,10 @@ function later(): void {
 }
 
 /** Watching `r`'s folder (again), and looking every five minutes whatever the watch says. Within a folder operation, under its deadline. */
-async function watchFolder(r: Running): Promise<void> {
+async function watchFolder(r: Running): Promise<boolean> {
   stopWatching();
   poll = setInterval(later, POLL_MS);
-  await watchOnly(r);
+  return watchOnly(r);
 }
 
 /**
@@ -388,13 +408,14 @@ async function watchFolder(r: Running): Promise<void> {
  * looked at every five minutes and when Chord comes to the front, and watched
  * again once a look finds it.
  */
-async function watchOnly(r: Running): Promise<void> {
-  if (watcher || (WATCH_IN_FRONT && !front)) return;
+/** Whether it reached the folder (false: a watch wasn't wanted, or was there already). */
+async function watchOnly(r: Running): Promise<boolean> {
+  if (watcher || (WATCH_IN_FRONT && !front)) return false;
   const folder = join(r.folder, SYNC_FOLDER);
   // Reachable first, off this thread: a share that's stopped answering holds this call, under the operation's deadline,
   // never the thread itself (setting up a watch is synchronous, and would).
-  if (!(await stat(folder).catch(() => null))?.isDirectory()) return;
-  if (running !== r || watcher || (WATCH_IN_FRONT && !front)) return;
+  if (!(await stat(folder).catch(() => null))?.isDirectory()) return true;
+  if (running !== r || watcher || (WATCH_IN_FRONT && !front)) return true;
   try {
     watcher = watch(folder, { recursive: true }, (_event, name) => {
       // This computer's own writes aren't news.
@@ -406,6 +427,7 @@ async function watchOnly(r: Running): Promise<void> {
   } catch {
     watcher = null;
   }
+  return true;
 }
 
 /** The watch closed; the five-minute look goes on. */
@@ -457,6 +479,7 @@ async function handle(message: ToWorker): Promise<void> {
         app: message.app,
         memory: { ...folderMemory(), junk: new Map(message.junk) },
         appending: message.appending,
+        pendingFile: message.pendingFile,
       };
       front = message.front;
       const r = running;
@@ -464,6 +487,7 @@ async function handle(message: ToWorker): Promise<void> {
       void serial('watch', () => watchFolder(r));
       // What a write that was stopped left in this computer's own folder (temp names, older than a minute), first.
       void serial('tidy', async () => {
+        await withBytes(r);
         await removeStaleTemps(r.fs, { generation: r.generation, device: r.device }, Date.now()).catch(() => 0);
       });
       void serial('pass', pass);
@@ -576,8 +600,11 @@ async function handle(message: ToWorker): Promise<void> {
       front = message.front;
       // The watch set up or closed as a folder operation, under its deadline: a hung share never holds this thread.
       void serial('watch', async () => {
-        if (WATCH_IN_FRONT && !front) unwatch();
-        else if (running) await watchOnly(running);
+        if (WATCH_IN_FRONT && !front) {
+          unwatch();
+          return false;
+        }
+        return running ? watchOnly(running) : false;
       });
       return;
     case 'abandon':

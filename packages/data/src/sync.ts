@@ -115,6 +115,9 @@ export interface SyncMeta {
   appending: { expect: OwnSegment; at: number; length: number; hash: string | null } | null;
 }
 
+/** About this much of the copy (its JSON) a reconcile's page reads: the merge's own budget for a slice. */
+const RECONCILE_PAGE_CHARS = 512 * 1024;
+
 /** A thing's merged version and what chord.db has of it, as one short hash: an idle look skips one it pushed as it is. */
 const signatureOf = (row: Row): string =>
   createHash('sha256').update(String(row['fields'])).update('\n').update(String(row['stamps'])).update('\n').update(String(row['local'])).digest('base64url').slice(0, 22);
@@ -202,6 +205,8 @@ export class SyncStore {
   pending = 0;
   /** A write made room for what waited (`takeDue`). */
   private due = false;
+  /** Sync is on but a write wasn't stamped (between a join's reading and its end): the join's end repairs `local` from the rows. */
+  unstamped = false;
   /** How long sync's steps took on chord-data's thread (ms), the last few hundred of each: perf.spec.ts reads them. */
   readonly timings: SyncTimings = { write: [], writeOff: [], stamp: [], frame: [], frameBytes: [], merge: [], plan: [], page: [], steps: [] };
 
@@ -404,7 +409,9 @@ export class SyncStore {
   private icon(url: string | null): { id: string; mime: string; data: string } | null {
     if (!url) return null;
     if (this.icons.has(url)) return this.icons.get(url)!;
-    const icon = iconFrom(url);
+    const read = iconFrom(url);
+    // One past what sync carries isn't synced: the tab or Favorite goes without it.
+    const icon = read && read.data.length <= SYNC_LIMITS.iconChars ? read : null;
     if (this.icons.size >= ICON_CACHE) this.icons.delete(this.icons.keys().next().value!);
     this.icons.set(url, icon);
     return icon;
@@ -422,6 +429,9 @@ export class SyncStore {
       return;
     }
     const had = this.load(type, id);
+    // Gone here, but this computer never had it (another computer's, merged and not applied, past a limit, refused): not
+    // this computer's to delete. Only what it had, and took away, gets a tombstone.
+    if (after === null && (!had?.local || had.local['deleted'] === true)) return;
     const local = after ?? (had ? { deleted: true } : null);
     const changes = localChanges(had?.thing, had?.local ?? null, after);
     if (!changes) {
@@ -499,7 +509,8 @@ export class SyncStore {
 
   /** Whether a write brings a chord, a folder or a split here (new, back, or moved), or takes away a Favorite: what waited for one may apply now. */
   private makesRoom(op: WriteOp): boolean {
-    if (op.k === 'favorite') return op.value === null;
+    // Any change to a Favorite: one gone frees room, one whose address changed frees that address for one refused as a twin.
+    if (op.k === 'favorite') return true;
     if (op.k === 'chord') return op.value !== null && !this.liveHere('chord', op.id);
     if (op.k !== 'node' || !op.value || op.value.kind === 'tab') return false;
     const had = this.localHere(op.value.kind, op.id);
@@ -525,8 +536,11 @@ export class SyncStore {
     for (const theme of themes) this.touch('theme', theme.id, localThemeFields(theme), fromSync, now);
     for (const row of this.sql(`SELECT id FROM sync_record WHERE type = 'theme'`).all() as Row[]) {
       if (ids.has(str(row['id']))) continue;
+      // Only one this computer had, and took out of its list: another computer's it never had (not applied yet, past
+      // the limit, refused) stays, for everyone.
+      if (!this.liveHere('theme', str(row['id']))) continue;
       // One gone frees room for one that waited for it.
-      if (this.liveHere('theme', str(row['id']))) this.due = true;
+      this.due = true;
       this.touch('theme', str(row['id']), null, fromSync, now);
     }
   }
@@ -613,6 +627,124 @@ export class SyncStore {
     }
     for (const [ms, set] of Object.entries(settings)) push('settings', 'settings', [Number(ms), 0, device], set);
     return out;
+  }
+
+  /**
+   * What chord.db's rows have of each synced thing, projected as the stamping
+   * hook projects a write (core's `local*Fields`), a page at a time: chords,
+   * then nodes `size` at a time by id, then Favorites, routes, Effects, and
+   * settings with themes. Icons aren't things of their own here.
+   */
+  private *rowPages(size: number): Generator<{ type: string; id: string; set: SyncValues }[]> {
+    const chords = new Set<string>();
+    const page: { type: string; id: string; set: SyncValues }[] = [];
+    for (const r of this.sql('SELECT * FROM chord WHERE deleted_at IS NULL').all() as Row[]) {
+      const chord = restoreChord(chordOf(r));
+      chords.add(chord.id);
+      const fields = localChordFields(chord);
+      if (fields) page.push({ type: 'chord', id: chord.id, set: fields });
+    }
+    yield page.splice(0);
+    let after = '';
+    for (;;) {
+      const rows = this.sql(`${nodeSelect(', i.mime AS icon_mime, i.data AS icon_data', '\n     LEFT JOIN favicon i ON i.key = t.favicon_key')} AND n.id > ? ORDER BY n.id LIMIT ?`).all(after, size) as Row[];
+      for (const r of rows) {
+        after = str(r['id']);
+        const node: SidebarNode | null = nodeOf(r, iconOf(r));
+        if (!node || !chords.has(node.chordId)) continue;
+        const icon = node.kind === 'tab' ? this.icon(node.favicon) : null;
+        const fields = localNodeFields(node, icon?.id ?? null);
+        if (fields) page.push({ type: node.kind, id: node.id, set: fields });
+      }
+      yield page.splice(0);
+      if (rows.length < size) break;
+    }
+    for (const r of this.sql('SELECT f.*, i.mime AS icon_mime, i.data AS icon_data FROM favorite f LEFT JOIN favicon i ON i.key = f.favicon_key').all() as Row[]) {
+      const favorite = favoriteOf(r, iconOf(r));
+      page.push({ type: 'favorite', id: favorite.id, set: localFavoriteFields(favorite, this.icon(favorite.favicon)?.id ?? null) });
+    }
+    for (const r of this.sql('SELECT * FROM link_route').all() as Row[]) {
+      if (chords.has(str(r['chord_id']))) page.push({ type: 'route', id: str(r['host']), set: localRouteFields({ host: str(r['host']), chordId: str(r['chord_id']), createdAt: num(r['created_at']) }) });
+    }
+    yield page.splice(0);
+    for (const r of this.sql('SELECT * FROM effect').all() as Row[]) {
+      const site = siteEffectsOf(r);
+      const fields = site ? localEffectsFields(site) : null;
+      if (site && fields) page.push({ type: 'effects', id: site.host, set: fields });
+    }
+    yield page.splice(0);
+    const settings: SyncValues = {};
+    for (const r of this.sql('SELECT key, value FROM setting').all() as Row[]) {
+      const key = str(r['key']);
+      const value = parseJson<unknown>(r['value'], null);
+      if (key === 'themes') {
+        for (const theme of (Array.isArray(value) ? value : []).map(validTheme)) if (theme) page.push({ type: 'theme', id: theme.id, set: localThemeFields(theme) });
+        continue;
+      }
+      Object.assign(settings, localSettingFields(key, value, this.platform) ?? {});
+    }
+    page.push({ type: 'settings', id: 'settings', set: settings });
+    yield page.splice(0);
+  }
+
+  /**
+   * `local` checked against the rows, a step at a time, and mended (S15 §13):
+   * a thing whose rows aren't what `local` says was changed here without a
+   * stamp (a write between a join's reading and its end, or anything else that
+   * slipped past the hook), so it's stamped now, as the change it is, and goes
+   * out; one `local` has but the rows don't was deleted so. Each step is one
+   * synchronous slice for the caller to run in a transaction: nothing is
+   * written between its reading and its mending. Yields how many it mended.
+   * `synced-setup`: a join that makes way, whose chords and pinned things go
+   * (they're left as they are).
+   */
+  *driftRepairs(mode: 'all' | 'synced-setup' = 'all', now = () => Date.now(), size = 300): Generator<number> {
+    const skip = (type: string) => mode === 'synced-setup' && (type === 'chord' || NODE_TYPES.has(type));
+    const seen = new Set<string>();
+    const local = this.sql('SELECT local FROM sync_record WHERE type = ? AND id = ?');
+    const differs = (type: string, id: string, set: SyncValues) => {
+      const row = local.get(type, id) as Row | undefined;
+      const had = row?.['local'] ? parseJson<SyncValues | null>(row['local'], null) : null;
+      if (!had || had['deleted'] === true) return true;
+      // Settings: what it has of the ones this computer keeps (another platform's shortcuts aren't in its rows).
+      const names = new Set([...Object.keys(set), ...(type === 'settings' ? [] : Object.keys(had))]);
+      names.delete('deleted');
+      return [...names].some((name) => !same(set[name], had[name]));
+    };
+    for (const page of this.rowPages(size)) {
+      let mended = 0;
+      for (const thing of page) {
+        seen.add(thingKey(thing.type, thing.id));
+        if (skip(thing.type) || !differs(thing.type, thing.id, thing.set)) continue;
+        this.touch(thing.type, thing.id, thing.set, false, now());
+        mended++;
+      }
+      yield mended;
+    }
+    // In `local`, not in the rows: deleted without a stamp, if its row is still gone now.
+    let mended = 0;
+    const gone = (type: string, id: string): boolean => {
+      if (type === 'chord') return !this.sql('SELECT 1 FROM chord WHERE id = ? AND deleted_at IS NULL').get(id);
+      if (NODE_TYPES.has(type)) return !this.sql('SELECT 1 FROM node WHERE id = ? AND deleted_at IS NULL').get(id);
+      if (type === 'favorite') return !this.sql('SELECT 1 FROM favorite WHERE id = ?').get(id);
+      if (type === 'route') return !this.sql('SELECT 1 FROM link_route WHERE host = ?').get(id);
+      if (type === 'effects') return !this.sql('SELECT 1 FROM effect WHERE host = ?').get(id);
+      if (type === 'theme') {
+        const row = this.sql(`SELECT value FROM setting WHERE key = 'themes'`).get() as Row | undefined;
+        return !(parseJson<unknown[]>(row?.['value'], []) ?? []).some((t) => (t as { id?: unknown } | null)?.id === id);
+      }
+      return false;
+    };
+    for (const row of this.sql(`SELECT type, id, local FROM sync_record WHERE type IN ('chord', 'folder', 'tab', 'split', 'favorite', 'route', 'effects', 'theme') AND local IS NOT NULL`).all() as Row[]) {
+      const type = str(row['type']);
+      const id = str(row['id']);
+      if (skip(type) || seen.has(thingKey(type, id))) continue;
+      const had = parseJson<SyncValues | null>(row['local'], null);
+      if (!had || had['deleted'] === true || !gone(type, id)) continue;
+      this.touch(type, id, null, false, now());
+      mended++;
+    }
+    yield mended;
   }
 
   /** Whether this computer is a clearly fresh Chord (core's isFreshSetup): joining replaces its setup without asking. */
@@ -709,6 +841,12 @@ export class SyncStore {
         // An icon is a fact: one that's here stays as it is, without reading it.
         if (r.type === 'icon' && this.sql(`SELECT 1 FROM sync_record WHERE type = 'icon' AND id = ?`).get(r.id)) continue;
         const had = this.load(r.type, r.id);
+        // A node whose id is already another kind of node's here (a folder under a pinned tab's id): refused, and counted.
+        // Things are (type, id) everywhere, and a node's id is one thing only.
+        if (!had && NODE_TYPES.has(r.type) && this.sql(`SELECT 1 FROM sync_record WHERE id = ? AND type IN ('folder', 'tab', 'split') AND type != ?`).get(r.id, r.type)) {
+          result.dropped++;
+          continue;
+        }
         if (!had) {
           // A new thing: within each type's limit, and the copy's.
           counts ??= new Map((this.sql('SELECT type, COUNT(*) AS n FROM sync_record GROUP BY type').all() as Row[]).map((row) => [str(row['type']), num(row['n'])]));
@@ -902,12 +1040,12 @@ export class SyncStore {
     const live = (type: string, id: unknown) => typeof id === 'string' && brief(type, id) !== null && !brief(type, id)!.gone;
     let after = { type: '', id: '' };
     for (;;) {
-      const rows = this.sql(`SELECT type, id, fields, stamps, local FROM sync_record WHERE type > ? OR (type = ? AND id > ?) ORDER BY type, id LIMIT ?`).all(after.type, after.type, after.id, size) as Row[];
+      const rows = this.boundedPage(after, size);
       const out = new Map<string, Set<string>>();
       for (const row of rows) {
         const { thing, local } = this.loaded(str(row['type']), str(row['id']), row);
         after = { type: thing.type, id: thing.id };
-        if (thing.type === 'icon' || thing.type === 'device' || syncKind(thing.type) !== 'sync') continue;
+        if (syncKind(thing.type) !== 'sync') continue;
         const key = thingKey(thing.type, thing.id);
         const gone = isGone(thing);
         const goneHere = local?.['deleted'] === true;
@@ -928,8 +1066,33 @@ export class SyncStore {
         if (names.length > 0) out.set(key, new Set(names));
       }
       yield out;
-      if (rows.length < size) return;
+      if (rows.length === 0) return;
     }
+  }
+
+  /**
+   * A page of the copy for reconciling, after `after` in (type, id) order: no
+   * icons or devices (never applied, and an icon can be big), at most `size`
+   * things and about PAGE_CHARS of them, so a page stays a few milliseconds.
+   */
+  private boundedPage(after: { type: string; id: string }, size: number): Row[] {
+    const heads = this.sql(
+      `SELECT type, id, length(fields) + length(stamps) + coalesce(length(local), 0) AS chars FROM sync_record
+        WHERE type NOT IN ('icon', 'device') AND (type > ? OR (type = ? AND id > ?)) ORDER BY type, id LIMIT ?`,
+    ).all(after.type, after.type, after.id, size) as Row[];
+    let chars = 0;
+    let take = 0;
+    for (const head of heads) {
+      if (take > 0 && chars + num(head['chars']) > RECONCILE_PAGE_CHARS) break;
+      chars += num(head['chars']);
+      take++;
+    }
+    if (take === 0) return [];
+    const last = heads[take - 1]!;
+    return this.sql(
+      `SELECT type, id, fields, stamps, local FROM sync_record
+        WHERE type NOT IN ('icon', 'device') AND (type > ? OR (type = ? AND id > ?)) AND (type < ? OR (type = ? AND id <= ?)) ORDER BY type, id`,
+    ).all(after.type, after.type, after.id, last['type'] as string, last['type'] as string, last['id'] as string) as Row[];
   }
 
   /** Each thing's merged version and what chord.db has of it, as one hash, by key: an idle look skips a thing it pushed as it still is. */
@@ -975,17 +1138,16 @@ export class SyncStore {
   *everythingPages(size = 200): Generator<Map<string, Set<string>>> {
     let after = { type: '', id: '' };
     for (;;) {
-      const rows = this.sql(`SELECT type, id, fields, stamps, local FROM sync_record WHERE type > ? OR (type = ? AND id > ?) ORDER BY type, id LIMIT ?`).all(after.type, after.type, after.id, size) as Row[];
+      const rows = this.boundedPage(after, size);
       const out = new Map<string, Set<string>>();
       for (const row of rows) {
         const { thing, local } = this.loaded(str(row['type']), str(row['id']), row);
         after = { type: thing.type, id: thing.id };
-        if (thing.type === 'icon' || thing.type === 'device') continue;
         const names = Object.keys(thing.fields).filter((name) => !local || !same(thing.fields[name]!.v, local[name]));
         if (names.length > 0) out.set(thingKey(thing.type, thing.id), new Set(names));
       }
       yield out;
-      if (rows.length < size) return;
+      if (rows.length === 0) return;
     }
   }
 

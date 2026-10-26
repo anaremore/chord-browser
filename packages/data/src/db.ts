@@ -295,7 +295,7 @@ export class ChordDatabase {
         const at = performance.now();
         this.sync.stamp(ops, now);
         this.sync.timed('stamp', performance.now() - at);
-      }
+      } else if (ops.length > 0 && this.sync.meta.on) this.sync.unstamped = true;
     });
   }
 

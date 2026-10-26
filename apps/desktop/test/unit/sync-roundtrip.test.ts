@@ -103,7 +103,7 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
     () => worker as unknown as WorkerLike,
   );
   const service = new SyncService({
-    data: { sync: (request) => controller.handle(request), flush: async () => undefined, waiting: () => false, onPush: (l) => (listener = l) },
+    data: { sync: (request) => controller.handle(request), flush: async () => undefined, unsaved: () => false, waiting: () => false, onPush: (l) => (listener = l) },
     state: () => state,
     // The store: the reducer, then what changed written by chord-data (marked as sync's when it came from sync, as
     // persistence does), or refused, as chord-data refuses a batch on a full disk.
@@ -254,6 +254,25 @@ describe('what arrives before what it depends on', { timeout: 20_000 }, () => {
     db.write(opsFromPatches(result.patches, result.state));
     first.controller.afterWrite();
     await vi.waitFor(() => expect(state.favorites['fav-99']).toBeDefined(), { timeout: 6_000 });
+  });
+});
+
+describe('a Favorite refused as a twin', { timeout: 20_000 }, () => {
+  it('another computer’s Favorite at an address one here has: not here; once that one’s address changes, it lands, and no idle look had skipped it', async () => {
+    const first = await launch();
+    const atUrl = (id: string, url: string, device: string): DataRecord => ({ type: 'favorite', id, at: at(device), set: { url, title: id, rank: `r-${id}`, created: 1, deleted: false } });
+    await read(first.worker, A, [atUrl('fav-x', 'https://same.test/', A)]);
+    await vi.waitFor(() => expect(state.favorites['fav-x']).toBeDefined());
+    await read(first.worker, B, [atUrl('fav-y', 'https://same.test/', B)]);
+    await quiet(300);
+    expect(state.favorites['fav-y']).toBeUndefined();
+    // An idle look meanwhile: pushed once more, and applies as nothing.
+    await first.controller.reconcile({ idle: true });
+    await quiet(300);
+    expect(state.favorites['fav-y']).toBeUndefined();
+    // The one here moves to another address (another computer's change, applied): the address is free.
+    await read(first.worker, A, [{ type: 'favorite', id: 'fav-x', at: at(A), set: { url: 'https://moved.test/' } }]);
+    await vi.waitFor(() => expect(state.favorites['fav-y']).toMatchObject({ url: 'https://same.test/' }), { timeout: 6_000 });
   });
 });
 

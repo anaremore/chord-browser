@@ -141,6 +141,28 @@ describe('writing, when it goes wrong', () => {
   });
 });
 
+describe('joining with Keep both, a change made here meanwhile', () => {
+  it('a chord renamed while the join adds this computer’s things (nothing’s stamped then): found as the join ends, in the copy and on its way out', async () => {
+    const { state } = on({ snapshot: ['ok'] });
+    await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+    const id = Object.keys(state.chords)[0]!;
+    db.sync.setMeta({ joining: true });
+    // The rename lands just after the join read this computer's things, before it ends.
+    const read = db.sync.localThings.bind(db.sync);
+    vi.spyOn(db.sync, 'localThings').mockImplementationOnce(() => {
+      const things = read();
+      rename(state, 'Renamed meanwhile');
+      return things;
+    });
+    await controller!.handle({ type: 'sync.choose', mode: 'both' });
+    expect(db.sync.meta.joining).toBe(false);
+    expect(db.sync.snapshot().some((r) => r.type === 'chord' && r.id === id && r.set['name'] === 'Renamed meanwhile')).toBe(true);
+    // On its way out: in this computer's first snapshot (what it covers leaves the outbox), stamped above what it replaced.
+    expect(db.sync.meta.own).toMatchObject({ segment: 2 });
+    expect([...db.sync.unappliedPages()].some((page) => page.has(thingKey('chord', id)))).toBe(false);
+  });
+});
+
 describe('a copy of a profile that never writes', () => {
   it('its key couldn’t be read here: unlocked, it takes a new id at once, and reads the other’s log as another computer’s', async () => {
     on({ snapshot: ['ok'] });
@@ -506,6 +528,37 @@ describe('a folder that stops answering', () => {
 });
 
 describe('deadlines, more', () => {
+  it('an operation that ended without touching the folder (a watch not wanted, behind on Windows) is no sign the folder answers: Settings goes on saying so', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { workers, make } = workerLog();
+      on({}, make);
+      await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+      busy(workers[0]!, 'pass');
+      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(30_000);
+      expect(controller!.status().problem).toBe('stalled');
+      busy(workers[1]!, 'watch');
+      workers[1]!.say({ t: 'idle', reached: false });
+      expect(controller!.status().problem).toBe('stalled');
+      // One that reached it, with nothing else waiting: it answers again.
+      busy(workers[1]!, 'pass');
+      workers[1]!.say(passDone());
+      idle(workers[1]!);
+      await settle();
+      expect(controller!.status().problem).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the worker is told where chord-data keeps what it’s writing (a file beside chord.db), so a worker after it can cut back a short write', async () => {
+    const { workers, make } = workerLog();
+    on({}, make);
+    await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+    expect(workers[0]!.posted[0]).toMatchObject({ t: 'start', pendingFile: join(dir, 'sync-pending') });
+  });
+
   it('setting up the watch on a share that stopped answering: a folder operation like any, under its deadline', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

@@ -932,7 +932,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     // Your data's sync (S15 §6–§8): chord-data's thread and its worker do the work; main keeps the key and applies what comes in.
     syncService = new SyncService({
-      data: { sync: (request) => store.sync(request), flush: () => store.flush(), waiting: (key) => store.waitingHere(key), onPush: (listener) => store.onPush(listener) },
+      data: { sync: (request) => store.sync(request), flush: () => store.flush(), unsaved: () => store.unsaved, waiting: (key) => store.waitingHere(key), onPush: (listener) => store.onPush(listener) },
       state: () => browser!.store.state,
       dispatch: (command) => browser!.store.dispatch(command),
       effects: { syncSites: (sites, gone) => browser!.effects.syncSites(sites, gone) },
@@ -946,6 +946,15 @@ if (!app.requestSingleInstanceLock()) {
       noKeyring: devEnv('CHORD_E2E_NO_KEYRING') === '1',
     });
     store.onRespawn(() => void syncService?.restarted());
+    // Writes chord-data keeps refusing (a full disk): they wait, are sent again later and later, and the window says so.
+    store.onTrouble((failing) => {
+      const windowId = browser?.lastBrowserWindow()?.id;
+      if (!windowId) return;
+      browser!.window(windowId)?.toast({
+        id: 'save:failing',
+        message: failing ? 'Chord can’t save your changes right now. Is the disk full? It keeps trying.' : 'Chord saved your changes again.',
+      });
+    });
     // The key is read once launch is over: safeStorage can ask the OS's keychain, which mustn't hold up the first page.
     afterLaunch.run(() => void syncService!.afterLaunch());
     registerIpc();

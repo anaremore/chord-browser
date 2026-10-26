@@ -61,6 +61,8 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
   const commands: Command[] = [];
   const toasts: Toast[] = [];
   let flushing: () => void = () => undefined;
+  // Writes chord-data refused, waiting to go again (persistence says so): `setUnsaved` sets it.
+  let unsaved = false;
   const views: SyncView[] = [];
   let push: ((message: DataPush) => void) | null = null;
   const dispatch = (command: Command) => {
@@ -68,7 +70,7 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
     state = apply(state, command, ctx).state;
   };
   const service = new SyncService({
-    data: { sync: async (request) => reply(request), flush: async () => flushing(), waiting, onPush: (listener) => (push = listener) },
+    data: { sync: async (request) => reply(request), flush: async () => flushing(), unsaved: () => unsaved, waiting, onPush: (listener) => (push = listener) },
     state: () => state,
     dispatch,
     effects: { syncSites: async () => undefined },
@@ -79,7 +81,7 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
     platform: 'linux',
     folder: () => '/home',
   });
-  return { service, home, windowId, commands, toasts, views, whenFlushed: (then: () => void) => void (flushing = then), dispatch, state: () => state, push: (apply: SyncApply) => push!({ push: 'sync.apply', apply }) };
+  return { service, home, windowId, commands, toasts, views, whenFlushed: (then: () => void) => void (flushing = then), setUnsaved: (to: boolean) => void (unsaved = to), dispatch, state: () => state, push: (apply: SyncApply) => push!({ push: 'sync.apply', apply }) };
 }
 
 describe('a chord another computer deleted', () => {
@@ -105,6 +107,31 @@ describe('a chord another computer deleted, while a change of yours to it waits'
     await vi.waitFor(() => expect(asked.some((r) => r.type === 'sync.repush')).toBe(true));
     expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
     expect(asked.find((r) => r.type === 'sync.repush')).toMatchObject({ keys: expect.arrayContaining(['chord:x', 'node:p']) });
+  });
+});
+
+describe('turning sync off while chord-data refuses writes', () => {
+  it('waits: the synced copy isn’t cleared while what sync applied here isn’t all in chord.db; once it is, sync turns off', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const asked: SyncRequest[] = [];
+      const h = harness((request) => {
+        asked.push(request);
+        return {};
+      });
+      h.setUnsaved(true);
+      h.service.hold('off');
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(asked.some((r) => r.type === 'sync.off')).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(asked.some((r) => r.type === 'sync.off')).toBe(false);
+      // The writes are in: the next try turns it off.
+      h.setUnsaved(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(asked.some((r) => r.type === 'sync.off')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

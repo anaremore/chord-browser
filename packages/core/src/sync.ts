@@ -97,6 +97,12 @@ export const SYNC_LIMITS = {
   fieldName: 100,
   /** One thing, as JSON: an icon's base64 is at most 1.4 MB (records.ts). A merged thing's values are held to it too. */
   thingChars: 2 * 1024 * 1024,
+  /**
+   * An icon sync carries, as base64: favicons are a few KB, so this is
+   * generous, and one bigger is left out, read or written (one of 1.3 MB made
+   * a merged slice of up to 46 ms).
+   */
+  iconChars: 128 * 1024,
   byType: {
     chord: 500,
     folder: 4_000,
@@ -167,7 +173,7 @@ export function checkSyncRecord(r: DataRecord, iconHash: (base64: string) => str
   if (FACTS.has(r.type)) {
     const icon = iconFromRecord({ type: r.type, id: r.id, set: r.set });
     // An icon's id is its bytes' hash: one that isn't would stick (the first copy of a fact stays) and differ between computers.
-    if (!icon || icon.data.length === 0 || `sha256-${iconHash(icon.data)}` !== icon.id) return null;
+    if (!icon || icon.data.length === 0 || icon.data.length > SYNC_LIMITS.iconChars || `sha256-${iconHash(icon.data)}` !== icon.id) return null;
     return { type: 'icon', id: icon.id, set: { mime: icon.mime, data: icon.data } };
   }
   if (!r.at || !isStamp(r.at)) return null;

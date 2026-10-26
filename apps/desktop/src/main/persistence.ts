@@ -51,6 +51,35 @@ const OPEN_RETRY_WAITS_MS = [250, 1000];
  */
 const TRANSIENT = /disk I\/O error|database is locked|database is busy|SQLITE_BUSY|SQLITE_IOERR/i;
 
+/**
+ * A write chord-data refused for a reason that can pass (a full disk, an I/O
+ * error, a lock): never dropped. Its entities go back in the queue, and it's
+ * sent again later and later, up to WRITE_RETRY_MAX; past WRITE_TROUBLE tries
+ * the app says so. One refused for what's in it would fail for ever, and is
+ * still dropped (and logged).
+ */
+const PASSING = /disk I\/O error|database is locked|database is busy|database or disk is full|SQLITE_BUSY|SQLITE_IOERR|SQLITE_FULL/i;
+export const refusalPasses = (error: string | undefined): boolean => PASSING.test(error ?? '');
+const WRITE_RETRY_MS = 2000;
+const WRITE_RETRY_MAX = 5 * 60_000;
+const WRITE_TROUBLE = 3;
+
+/**
+ * The next batch of a flush: at most `chunk` entities, chords that are kept
+ * first (a node's chord is in before it), chords that go last. A chord going
+ * takes its node rows with it, so the open tabs it hands to the next chord
+ * (and their back/forward histories) must have moved, in an earlier batch or
+ * this one, before it goes; a stop between batches leaves the chord, not the
+ * tabs, and sync's reconcile deletes it again.
+ */
+export function nextBatch(ops: readonly WriteOp[], chunk: number): WriteOp[] {
+  if (ops.length <= chunk && !ops.some((op) => op.k === 'chord' && op.value === null)) return [...ops];
+  const kept = ops.filter((op) => op.k === 'chord' && op.value !== null);
+  const rest = ops.filter((op) => op.k !== 'chord');
+  const gone = ops.filter((op) => op.k === 'chord' && op.value === null);
+  return [...kept, ...rest, ...gone].slice(0, chunk);
+}
+
 /** Runs `attempt` until it succeeds, fails for a reason that won't pass, or the waits run out. */
 export async function withRetries(
   attempt: () => Promise<DataResponse>,
@@ -84,6 +113,11 @@ export class Persistence {
   private chain: Promise<void> = Promise.resolve();
   private restarts = 0;
   private closed = false;
+  /** A refused batch waiting to be sent again (`refusalPasses`), and how many tries in a row have failed. */
+  private retry: ReturnType<typeof setTimeout> | undefined;
+  private retryMs = 0;
+  private refusals = 0;
+  private trouble: (failing: boolean) => void = () => undefined;
   /** What chord-data says unasked (sync's changes to apply, and where it stands), and that it started again after a crash. */
   private pushed: (push: DataPush) => void = () => undefined;
   private respawned: () => void = () => undefined;
@@ -297,7 +331,19 @@ export class Persistence {
   }
 
   private schedule(): void {
+    // A refused batch waiting to go again: the next write goes with it then, not sooner.
+    if (this.retry !== undefined) return;
     this.timer ??= setTimeout(() => void this.flush(), FLUSH_MS);
+  }
+
+  /** Writes chord-data refused are waiting to be sent again: what's in memory isn't all in chord.db yet. */
+  get unsaved(): boolean {
+    return this.refusals > 0;
+  }
+
+  /** Writes keep failing (`true`, after WRITE_TROUBLE tries), or they're in again (`false`): the app says so. */
+  onTrouble(listener: (failing: boolean) => void): void {
+    this.trouble = listener;
   }
 
   /**
@@ -331,18 +377,29 @@ export class Persistence {
     clearTimeout(this.timer);
     this.timer = undefined;
     this.chain = this.chain.then(async () => {
+      clearTimeout(this.retry);
+      this.retry = undefined;
       while (this.pending.size > 0 || this.events.length > 0) {
-        let ops = [...this.pending.values()];
-        const chunk = ops.some((op) => op.sync) ? SYNC_WRITE_CHUNK : WRITE_CHUNK;
-        if (ops.length > chunk) ops = [...ops.filter((op) => op.k === 'chord'), ...ops.filter((op) => op.k !== 'chord')].slice(0, chunk);
+        const all = [...this.pending.values()];
+        const ops = nextBatch(all, all.some((op) => op.sync) ? SYNC_WRITE_CHUNK : WRITE_CHUNK);
         for (const op of ops) this.pending.delete(opKey(op));
         this.inFlight = ops;
         this.inFlightEvents = this.events;
         this.events = [];
         try {
           const response = await this.request({ type: 'write', ops: this.inFlight, events: this.inFlightEvents });
-          // A batch the database refuses would fail forever if retried; report it and move on.
+          if (!response.ok && refusalPasses(response.error)) {
+            // Refused for now (a full disk): put back, unless a newer write for the same entity is queued, and sent again later.
+            for (const op of this.inFlight) if (!this.pending.has(opKey(op))) this.pending.set(opKey(op), op);
+            this.events = [...this.inFlightEvents, ...this.events];
+            this.inFlight = [];
+            this.inFlightEvents = [];
+            this.refused(response.error);
+            return;
+          }
+          // A batch the database refuses for what's in it would fail for ever if retried; report it and move on.
           if (!response.ok) console.error('chord-data refused a write:', response.error);
+          else this.saved();
           this.inFlight = [];
           this.inFlightEvents = [];
         } catch {
@@ -352,6 +409,24 @@ export class Persistence {
       }
     });
     return this.chain;
+  }
+
+  /** A batch refused for now: the queue goes again later and later, and past a few tries the app says so. */
+  private refused(error: string | undefined): void {
+    this.refusals++;
+    console.error(`chord-data couldn’t write (try ${this.refusals}); trying again:`, error);
+    this.retryMs = Math.min(WRITE_RETRY_MAX, Math.max(WRITE_RETRY_MS, this.retryMs * 2));
+    clearTimeout(this.retry);
+    this.retry = setTimeout(() => void this.flush(), this.retryMs);
+    if (this.refusals === WRITE_TROUBLE) this.trouble(true);
+  }
+
+  private saved(): void {
+    if (this.refusals === 0) return;
+    const troubled = this.refusals >= WRITE_TROUBLE;
+    this.refusals = 0;
+    this.retryMs = 0;
+    if (troubled) this.trouble(false);
   }
 
   /** Flush and stop, giving up after two seconds so quitting never hangs. */

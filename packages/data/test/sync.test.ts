@@ -493,3 +493,120 @@ describe('pruning a removed computer’s folder', () => {
     expect(db.sync.readCovered(gone)).toBe(true);
   });
 });
+
+describe('a deletion stamps only what this computer had', () => {
+  /** Another computer's thing, merged here and never applied (main held it back, or it's past a limit). */
+  const theirs = (type: string, id: string, set: Record<string, unknown>) => db.atomically(() => db.sync.merge([{ type, id, at: [Date.now() + 1000, 0, OTHER], set }], Date.now()));
+  const tombstoned = (id: string) => outbox().some((r) => r.id === id && r.set['deleted'] === true);
+  const live = (type: string, id: string) => db.sync.snapshot().some((r) => r.type === type && r.id === id && r.set['deleted'] !== true);
+
+  it.each([
+    ['a theme, when this computer saves its own list', 'theme', 'their-theme', { name: 'Theirs', stops: THEME.stops, grain: 0.2 }],
+    ['a Favorite', 'favorite', 'their-fav', { url: 'https://theirs.test/', title: 'Theirs', rank: 'a0', created: 1 }],
+    ['a route', 'route', 'theirs.test', { chord: 'their-chord', created: 1 }],
+    ['a site’s Effects', 'effects', 'theirs.test', { wet: true, css: 'h1 { color: red }', cssOn: true, hidden: [], presets: [], duet: [] }],
+    ['a chord', 'chord', 'their-chord', { name: 'Theirs', icon: 'T', theme: THEME, rank: 'z0', profile: 'default', created: 1 }],
+    ['a folder', 'folder', 'their-folder', { title: 'Theirs', collapsed: false, created: 1 }],
+  ])('%s another computer has and this one never had: never stamped gone', (_what, type, id, set) => {
+    const state = setUp();
+    theirs(type, id, set);
+    if (type === 'theme') drive(state, [{ t: 'theme.save', theme: { id: 'mine', name: 'Mine', stops: THEME.stops, grain: 0.2 } }]);
+    else {
+      const k = type === 'route' ? 'linkRoute' : type === 'effects' ? 'effect' : type === 'folder' ? 'node' : type;
+      db.write([{ k, id, value: null } as WriteOp]);
+    }
+    expect(tombstoned(id)).toBe(false);
+    expect(live(type, id)).toBe(true);
+  });
+
+  it('what this computer had and took away is stamped gone: a theme out of its list, a Favorite removed', () => {
+    let state = setUp();
+    state = drive(state, [{ t: 'theme.save', theme: { id: 'mine', name: 'Mine', stops: THEME.stops, grain: 0.2 } }]);
+    state = drive(state, [{ t: 'theme.delete', id: 'mine' }]);
+    expect(tombstoned('mine')).toBe(true);
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    state = drive(state, [{ t: 'favorite.add', favoriteId: 'fav-mine', nodeId: tab }]);
+    state = drive(state, [{ t: 'favorite.remove', favoriteId: 'fav-mine' }]);
+    expect(tombstoned('fav-mine')).toBe(true);
+    void state;
+  });
+});
+
+describe('one id, one thing', () => {
+  it('a node record under another kind of node’s id (a folder over a pinned tab) is refused and counted; the tab’s edits and deletion stay the tab’s', () => {
+    let state = setUp();
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
+    const result = db.atomically(() => db.sync.merge([{ type: 'folder', id: tab, at: [Date.now() + 1000, 0, OTHER], set: { title: 'Decoy', collapsed: false, created: 1 } }], Date.now()));
+    expect(result.dropped).toBe(1);
+    expect(db.sync.snapshot().some((r) => r.type === 'folder' && r.id === tab)).toBe(false);
+    state = drive(state, [{ t: 'tab.mute', nodeId: tab, muted: true }]);
+    expect(outbox().some((r) => r.type === 'tab' && r.id === tab && r.set['muted'] === true)).toBe(true);
+    state = drive(state, [{ t: 'tab.unpin', nodeId: tab }]);
+    expect(outbox().some((r) => r.type === 'tab' && r.id === tab && r.set['deleted'] === true)).toBe(true);
+    expect(outbox().filter((r) => r.id === tab).every((r) => r.type === 'tab')).toBe(true);
+    void state;
+  });
+});
+
+describe('local checked against the rows', () => {
+  const mendAll = () => {
+    let mended = 0;
+    for (const n of db.sync.driftRepairs()) mended += n;
+    return mended;
+  };
+
+  it('after ordinary writes of every kind, nothing to mend: what stamping keeps is exactly what the rows project to', () => {
+    let state = setUp();
+    const windowId = Object.keys(state.windows)[0]!;
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    state = drive(state, [
+      { t: 'tab.pin', nodeId: tab },
+      { t: 'chord.create', windowId, name: 'Two', icon: 'T', theme: THEME },
+      { t: 'folder.create', folderId: 'f-1', chordId: chordId(state), title: 'Reading' },
+      { t: 'favorite.add', favoriteId: 'fav-1', nodeId: tab },
+      { t: 'theme.save', theme: { id: 'mine', name: 'Mine', stops: THEME.stops, grain: 0.2 } },
+      { t: 'settings.set', settings: { searchEngine: 'duckduckgo' } },
+      { t: 'linkRoute.set', host: 'mail.test', chordId: chordId(state) },
+    ]);
+    // A site's Effects, as the Effects service writes them.
+    db.write([{ k: 'effect', id: 'mail.test', value: { host: 'mail.test', wet: true, css: 'h1 { color: red }', cssOn: true, hidden: [{ selector: '.ad', label: 'Ad', on: true, at: 1 }], presets: ['reading-width'], duet: [], createdAt: 1, updatedAt: 2, compiled: '', sanitizer: 1 } } as WriteOp]);
+    expect(db.atomically(() => mendAll())).toBe(0);
+    void state;
+  });
+
+  it('a write that slipped past stamping (a join’s window): found, stamped as the change it is, and sent', () => {
+    let state = setUp();
+    const id = chordId(state);
+    // As between a join's reading and its end: written, not stamped.
+    db.sync.setMeta({ joining: true });
+    state = drive(state, [{ t: 'chord.update', chordId: id, name: 'Renamed meanwhile' }]);
+    db.sync.setMeta({ joining: false });
+    expect(outbox().some((r) => r.id === id)).toBe(false);
+    expect(db.sync.unstamped).toBe(true);
+    expect(db.atomically(() => mendAll())).toBe(1);
+    expect(outbox().find((r) => r.id === id)?.set).toMatchObject({ name: 'Renamed meanwhile' });
+    expect(db.sync.snapshot().some((r) => r.type === 'chord' && r.id === id && r.set['name'] === 'Renamed meanwhile')).toBe(true);
+    // Mended: nothing more.
+    expect(db.atomically(() => mendAll())).toBe(0);
+    void state;
+  });
+});
+
+describe('icons and reconcile pages stay small', () => {
+  it('an icon past what sync carries (128 KB) is refused at merge', () => {
+    setUp();
+    const big = Buffer.alloc(SYNC_LIMITS.iconChars, 1).toString('base64');
+    const id = `sha256-${createHash('sha256').update(Buffer.from(big, 'base64')).digest('hex')}`;
+    expect(db.atomically(() => db.sync.merge([{ type: 'icon', id, set: { mime: 'image/png', data: big } }], Date.now())).dropped).toBe(1);
+  });
+
+  it('a reconcile reads no icons, and pages of about half a megabyte at most', () => {
+    setUp();
+    const css = (i: number) => `/* ${i} */ ${'h1 { color: red } '.repeat(9000)}`;
+    db.atomically(() => db.sync.merge(Array.from({ length: 8 }, (_, i): DataRecord => ({ type: 'effects', id: `site${i}.test`, at: [Date.now() + 1000, 0, OTHER], set: { wet: true, css: css(i), cssOn: true, hidden: [], presets: [], duet: [] } })), Date.now()));
+    const pages = [...db.sync.unappliedPages()].filter((page) => page.size > 0);
+    expect(pages.length).toBeGreaterThan(1);
+    for (const page of pages) expect(page.size).toBeLessThanOrEqual(4);
+  });
+});
