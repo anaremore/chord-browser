@@ -162,3 +162,74 @@ test('two Chords sync through one folder: set up, join, edit on both, a wrong pa
   }
 });
 
+/** Sets sync up on one Chord and joins it from another, through Settings, as the journey above does. */
+async function syncedPair(folder: string): Promise<{ desk: { app: ElectronApplication; shell: Page; settings: Page }; laptop: { app: ElectronApplication; shell: Page; settings: Page; profile: string } }> {
+  const deskApp = await chordApp(mkdtempSync(join(tmpdir(), 'chord-e2e-desk-')));
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-laptop-'));
+  const laptopApp = await chordApp(profile);
+  const deskSettings = await openSync(deskApp.app, deskApp.shell, folder);
+  await deskSettings.getByRole('button', { name: 'Turn on sync…' }).click();
+  const fields = deskSettings.getByRole('group', { name: 'Turn on sync' });
+  await fields.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
+  await fields.getByLabel('Again').fill(PASSPHRASE);
+  await fields.getByRole('button', { name: 'Start syncing' }).click();
+  await expect(deskSettings.getByText(/^On · /)).toBeVisible({ timeout: 30_000 });
+  const laptopSettings = await openSync(laptopApp.app, laptopApp.shell, folder);
+  await laptopSettings.getByRole('button', { name: 'Turn on sync…' }).click();
+  await laptopSettings.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
+  await laptopSettings.getByRole('button', { name: 'Join' }).click();
+  await expect(laptopSettings.getByText(/^On · /)).toBeVisible({ timeout: 30_000 });
+  return { desk: { ...deskApp, settings: deskSettings }, laptop: { ...laptopApp, settings: laptopSettings, profile } };
+}
+
+test('a passphrase changed on one computer pauses the other until it has it; with no keyring, a relaunch asks for it again', async () => {
+  test.setTimeout(240_000);
+  const folder = mkdtempSync(join(tmpdir(), 'chord-e2e-sync-folder-'));
+  const { desk, laptop } = await syncedPair(folder);
+  let relaunched: ElectronApplication | null = null;
+  try {
+    // The desk changes the passphrase: a new generation, and its snapshot under it.
+    const NEW = 'cobalt meadow tinker suitcase lighthouse';
+    await desk.settings.getByRole('button', { name: 'Change passphrase…' }).click();
+    await desk.settings.getByLabel('Passphrase', { exact: true }).fill(NEW);
+    await desk.settings.getByLabel('Again').fill(NEW);
+    await desk.settings.getByRole('button', { name: 'Change passphrase', exact: true }).click();
+    await expect(desk.settings.getByRole('button', { name: 'Change passphrase…' })).toBeVisible({ timeout: 30_000 });
+    expect(readdirSync(join(folder, 'Chord sync')).sort()).toEqual(['1', '2', 'sync-1.json', 'sync-2.json']);
+
+    // The laptop pauses, and says who changed it; the old passphrase no longer opens it, the new one does.
+    await hooks(laptop.app, 'syncRead');
+    await expect(laptop.settings.getByText(/The passphrase was changed on .+\. Enter the new one to keep syncing\./)).toBeVisible({ timeout: 20_000 });
+    await laptop.settings.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
+    await laptop.settings.getByRole('button', { name: 'Unlock' }).click();
+    await expect(laptop.settings.getByText('That passphrase doesn’t open this folder.')).toBeVisible({ timeout: 20_000 });
+    await laptop.settings.getByLabel('Passphrase', { exact: true }).fill(NEW);
+    await laptop.settings.getByRole('button', { name: 'Unlock' }).click();
+    await expect(laptop.settings.getByText(/^On · /)).toBeVisible({ timeout: 20_000 });
+    // It moved: its log is under the new generation, and its old one has gone.
+    await expect.poll(() => readdirSync(join(folder, 'Chord sync', '2')).length, { timeout: 20_000 }).toBe(2);
+
+    // And a change still crosses, under the new passphrase.
+    const deskState = await snapshot(desk.shell);
+    await dispatch(desk.shell, { t: 'chord.update', chordId: deskState.state.windows[deskState.windowId]!.activeChordId, name: 'After the change' });
+    await carry(desk.app, laptop.app);
+    await expect.poll(async () => (await synced(laptop.shell)).chords, { timeout: 20_000 }).toEqual(['After the change']);
+
+    // Linux without a keyring (this container has none): the laptop kept no key, so after a relaunch sync waits for the passphrase.
+    await laptop.app.close();
+    const again = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1' }, { profile: laptop.profile });
+    relaunched = again;
+    const shell = await pageWhere(again, isShell);
+    const settings = await openSync(again, shell, folder);
+    await expect(settings.getByText('Sync is paused. Enter your passphrase.')).toBeVisible({ timeout: 20_000 });
+    await settings.getByLabel('Passphrase', { exact: true }).fill(NEW);
+    await settings.getByRole('button', { name: 'Unlock' }).click();
+    await expect(settings.getByText(/^On · /)).toBeVisible({ timeout: 20_000 });
+    await expect(settings.getByText('This computer has no safe place for the key, so Chord asks for the passphrase after each launch.')).toBeVisible();
+  } finally {
+    await desk.app.close();
+    await relaunched?.close();
+    await laptop.app.close().catch(() => undefined);
+  }
+});
+

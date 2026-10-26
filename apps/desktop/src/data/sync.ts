@@ -586,13 +586,20 @@ export class SyncController {
     this.problem = null;
     if (opened.generation > meta.generation) {
       // The passphrase changed on another computer: this one moves to the new generation, with a snapshot there, and its old folder goes.
-      this.startWorker();
-      const moved = await this.ask({ t: 'snapshot', records: db.sync.snapshot(), generation: opened.generation, key: opened.key }, ['snapshotted']);
-      if (moved.t === 'snapshotted') db.atomically(() => {
+      // No read runs meanwhile: the worker reads again only once this computer is in the new generation.
+      this.stopWorker();
+      const moved = await this.ask(
+        { t: 'move', folder: meta.folder, from: meta.generation, to: opened.generation, device: db.device(), key: opened.key, app: this.info.app, records: db.sync.snapshot() },
+        ['moved'],
+      );
+      if (moved.t !== 'moved') {
+        this.key = null;
+        return { problem: 'io' };
+      }
+      db.atomically(() => {
         db.sync.setMeta({ generation: opened.generation });
         db.sync.snapshotted(moved.own, Date.now());
       });
-      this.stopWorker();
     }
     this.startWorker();
     return { key: opened.key, status: this.status() };

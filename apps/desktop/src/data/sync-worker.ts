@@ -47,7 +47,8 @@ export type ToWorker =
   | { t: 'read' }
   | { t: 'ack' }
   | { t: 'write'; upto: number; records: DataRecord[]; device: DataRecord[] }
-  | { t: 'snapshot'; records: DataRecord[]; generation?: number; key?: Uint8Array }
+  | { t: 'snapshot'; records: DataRecord[] }
+  | { t: 'move'; folder: string; from: number; to: number; device: string; key: Uint8Array; app: string; records: DataRecord[] }
   | { t: 'rekey'; passphrase: string; records: DataRecord[] }
   | { t: 'remove'; path: string }
   /** A passive checkpoint of chord.db, on this thread's own connection: chord-data's runs none while sync is busy. */
@@ -64,6 +65,7 @@ export type FromWorker =
   | { t: 'pass-done'; look: FolderLook; seen: Record<string, number> }
   | { t: 'written'; upto: number; own: OwnSegment; frames: number; bytes: number }
   | { t: 'snapshotted'; own: OwnSegment }
+  | { t: 'moved'; own: OwnSegment }
   | { t: 'rekeyed'; key: Uint8Array; generation: number; own: OwnSegment }
   /** `copied`: another computer writes under this one's id; `missing`: this computer's segment has gone; `io`: the folder couldn't be written. */
   | { t: 'failed'; problem: 'wrong' | 'conflict' | 'newer' | 'damaged' | 'missing' | 'copied' | 'io'; for: ToWorker['t'] }
@@ -302,17 +304,16 @@ async function handle(message: ToWorker): Promise<void> {
     case 'snapshot': {
       const r = running;
       if (!r) return failed('snapshot', 'missing');
-      // Moving to another generation (the passphrase changed on another computer): the snapshot goes there, under its key.
-      if (message.generation !== undefined && message.key) {
-        const old = r.generation;
-        r.generation = message.generation;
-        r.key = message.key;
-        r.cursors.clear();
-        r.own = await writeSnapshot(r.fs, { generation: r.generation, device: r.device }, message.records, r.key, { app: r.app }, nodeCrypto);
-        await r.fs.remove(deviceFolder(old, r.device)).catch(() => undefined);
-        watchFolder(r);
-      } else r.own = await writeSnapshot(r.fs, { generation: r.generation, device: r.device }, message.records, r.key, { app: r.app }, nodeCrypto);
+      r.own = await writeSnapshot(r.fs, { generation: r.generation, device: r.device }, message.records, r.key, { app: r.app }, nodeCrypto);
       send({ t: 'snapshotted', own: r.own });
+      return;
+    }
+    case 'move': {
+      // The passphrase changed on another computer: this one's snapshot goes under the new generation, with its key, and its old folder goes.
+      const fs = folderOf(message.folder);
+      const own = await writeSnapshot(fs, { generation: message.to, device: message.device }, message.records, message.key, { app: message.app }, nodeCrypto);
+      await fs.remove(deviceFolder(message.from, message.device)).catch(() => undefined);
+      send({ t: 'moved', own });
       return;
     }
     case 'rekey': {
