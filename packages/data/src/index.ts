@@ -23,7 +23,7 @@ import type {
   State,
   WindowModel,
 } from '@chord/core';
-import type { ExportCounts } from '@chord/core';
+import type { ExportCounts, FolderInspection, SyncApply, SyncStatus } from '@chord/core';
 import type { DuetOp, DuetResult } from './duet';
 
 /**
@@ -131,7 +131,62 @@ export type DataRequest =
   | { id: number; type: 'device' }
   /** What an export would hold, for Settings' card. The export itself reads the database in a process of its own. */
   | { id: number; type: 'export.counts' }
+  /** Sync (docs/decisions/S15-your-data.md §6–§8): chord-data's thread owns its tables, and its worker thread the folder. */
+  | ({ id: number } & SyncRequest)
   | { id: number; type: 'close' };
+
+/** This computer as the others list it: its name, its system and its Chord. */
+export interface SyncInfo {
+  name: string;
+  os: string;
+  app: string;
+}
+
+/** Main → chord-data, for sync. A passphrase is passed on to the worker and kept nowhere; a key only in memory. */
+export type SyncRequest =
+  | { type: 'sync.status' }
+  /** What a folder you picked holds: nothing of Chord's yet, or one to join. */
+  | { type: 'sync.inspect'; folder: string }
+  | { type: 'sync.setup'; folder: string; passphrase: string; info: SyncInfo }
+  /** Opens the folder with the passphrase and reads it; then `sync.choose`, unless this is a clearly fresh Chord. */
+  | { type: 'sync.join'; folder: string; passphrase: string; info: SyncInfo }
+  | { type: 'sync.choose'; mode: 'synced' | 'both' }
+  /** At launch: the root key main kept (safeStorage), so sync starts without asking. */
+  | { type: 'sync.start'; key: Uint8Array }
+  /** No key kept, or the passphrase changed elsewhere: the passphrase, once. */
+  | { type: 'sync.unlock'; passphrase: string }
+  | { type: 'sync.passphrase'; passphrase: string }
+  | { type: 'sync.off' }
+  | { type: 'sync.remove'; device: string }
+  | { type: 'sync.rename'; name: string }
+  | { type: 'sync.pause'; paused: boolean }
+  /** Chord came to the front: look at the folder now. */
+  | { type: 'sync.check' }
+  /** Quitting: what's waiting is written now. */
+  | { type: 'sync.flush' }
+  /** Things main put off applying while a change of its own to them waited (`chord:<id>`, `node:<id>`…): again, now it's written. */
+  | { type: 'sync.repush'; keys: string[] }
+  /** safeStorage's ciphertext of the root key (base64), kept in chord.db; null forgets it. */
+  | { type: 'sync.keyBlob'; blob: string | null };
+
+/** chord-data's answer to a sync request. */
+export interface SyncReply {
+  status?: SyncStatus;
+  inspection?: FolderInspection;
+  /** The root key, after setting up, joining or unlocking: main keeps it with safeStorage, if it can. */
+  key?: Uint8Array;
+  /** Why it didn't work: a wrong passphrase, a folder Chord can't use, two set up at once… */
+  problem?: 'wrong' | 'conflict' | 'newer' | 'damaged' | 'missing' | 'io' | 'busy';
+  /** Joined: a clearly fresh Chord, whose setup the synced one replaces without asking. */
+  fresh?: boolean;
+  /** Chosen: everything to apply, and, for *Use the synced setup*, the chord this computer's Today tabs go to and the synced chords that stay. */
+  apply?: SyncApply;
+  replace?: { to: string; keep: string[] } | null;
+  keyBlob?: string | null;
+}
+
+/** chord-data → main, unasked: what another computer changed, to apply; and where sync stands, for Settings. */
+export type DataPush = { push: 'sync.apply'; apply: SyncApply } | { push: 'sync.status'; status: SyncStatus };
 
 /**
  * The import process → chord-data, on an import's port: one batch of history,
@@ -170,6 +225,7 @@ export type DataResponse =
       timing?: OpenTiming;
       device?: string;
       counts?: ExportCounts;
+      sync?: SyncReply;
     }
   | { id: number; ok: false; error: string };
 

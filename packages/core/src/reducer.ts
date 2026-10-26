@@ -277,6 +277,10 @@ export type Command =
   | { t: 'sync.replace'; chordIds: ChordId[]; to: ChordId }
   /** Undo for `sync.replace`: the chords come back, and this window goes to the first. */
   | { t: 'sync.unreplace'; windowId: WindowId; chordIds: ChordId[] }
+  /** A toast's Undo for turning sync off or removing a computer, before it happens (main takes it over). */
+  | { t: 'sync.undo'; token: string }
+  /** A sync problem's toast: Settings → Your data, where it's explained (main takes it over). */
+  | { t: 'sync.open' }
   /**
    * Undo a change to a site's Effects (a toast's button): main takes it over
    * (main/effects), since Effects live outside the store (ARCHITECTURE.md §9).
@@ -2393,6 +2397,11 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'effects.undo':
       // Main's: the store holds no Effects.
+      return;
+
+    case 'sync.undo':
+    case 'sync.open':
+      // Main's: sync's pending steps and Settings live outside the store.
       return;
 
     case 'duet.undoFill':

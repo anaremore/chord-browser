@@ -16,12 +16,15 @@ import {
   type DataRequest,
   type DuetOp,
   type DuetResult,
+  type DataPush,
   type DataResponse,
   type HistoryEvent,
   type NavState,
   type OpenTiming,
   type PathPatch,
   type SearchResult,
+  type SyncReply,
+  type SyncRequest,
   type WriteOp,
 } from '@chord/data';
 import { MessageChannelMain, utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron';
@@ -71,6 +74,9 @@ export class Persistence {
   private chain: Promise<void> = Promise.resolve();
   private restarts = 0;
   private closed = false;
+  /** What chord-data says unasked (sync's changes to apply, and where it stands), and that it started again after a crash. */
+  private pushed: (push: DataPush) => void = () => undefined;
+  private respawned: () => void = () => undefined;
 
   private constructor(private readonly file: string) {}
 
@@ -93,7 +99,8 @@ export class Persistence {
 
   private spawn(): void {
     this.child = utilityProcess.fork(join(import.meta.dirname, 'data.js'), [], { serviceName: 'Chord Data' });
-    this.child.on('message', (response: DataResponse) => {
+    this.child.on('message', (response: DataResponse | DataPush) => {
+      if ('push' in response) return void this.pushed(response);
       const waiter = this.waiting.get(response.id);
       this.waiting.delete(response.id);
       waiter?.resolve(response);
@@ -112,7 +119,10 @@ export class Persistence {
         return;
       }
       this.spawn();
-      void this.request({ type: 'open', file: this.file }).then(() => this.schedule());
+      void this.request({ type: 'open', file: this.file }).then(() => {
+        this.schedule();
+        this.respawned();
+      });
     });
   }
 
@@ -124,11 +134,48 @@ export class Persistence {
     });
   }
 
-  /** Queue the entities a change touched. */
-  record(patches: readonly PathPatch[], state: State): void {
+  /**
+   * Queue the entities a change touched. `sync`: another computer's change
+   * (`sync.apply`), saved without a stamp so it never goes back into this
+   * computer's log. A change of yours to the same entity still waiting keeps
+   * its own mark: it's stamped, so it wins, as it was made later.
+   */
+  record(patches: readonly PathPatch[], state: State, origin: 'sync' | 'here' = 'here'): void {
     if (this.closed) return;
-    for (const op of opsFromPatches(patches, state)) this.pending.set(opKey(op), op);
+    for (const op of opsFromPatches(patches, state)) this.put(op, origin === 'sync');
     if (this.pending.size > 0) this.schedule();
+  }
+
+  private put(op: WriteOp, fromSync: boolean): void {
+    const key = opKey(op);
+    const waiting = this.pending.get(key);
+    this.pending.set(key, fromSync && !(waiting && !waiting.sync) ? { ...op, sync: true } : op);
+  }
+
+  /**
+   * Whether a change of yours to this entity (`node:<id>`, `setting:<key>`…)
+   * is waiting to be written, or being written: sync puts off applying
+   * another computer's to it until it's written and stamped (main/sync.ts).
+   */
+  waitingHere(key: string): boolean {
+    const waiting = this.pending.get(key);
+    if (waiting && !waiting.sync) return true;
+    return this.inFlight.some((op) => !op.sync && opKey(op) === key);
+  }
+
+  /** Sync's requests to chord-data. Throws if it can't answer. */
+  async sync(request: SyncRequest): Promise<SyncReply> {
+    const response = await this.request(request);
+    if (!response.ok) throw new Error(response.error);
+    return response.sync ?? {};
+  }
+
+  onPush(listener: (push: DataPush) => void): void {
+    this.pushed = listener;
+  }
+
+  onRespawn(listener: () => void): void {
+    this.respawned = listener;
   }
 
   /** Queue a whole state (a brand-new profile's first save). */
@@ -145,11 +192,10 @@ export class Persistence {
     this.schedule();
   }
 
-  /** A site's Effects (never a private window's: the caller checks), or null when the site has none any more. */
-  effect(host: string, value: SavedEffects | null): void {
+  /** A site's Effects (never a private window's: the caller checks), or null when the site has none any more; `fromSync` as `record`'s. */
+  effect(host: string, value: SavedEffects | null, fromSync = false): void {
     if (this.closed) return;
-    const op: WriteOp = { k: 'effect', id: host, value };
-    this.pending.set(opKey(op), op);
+    this.put({ k: 'effect', id: host, value }, fromSync);
     this.schedule();
   }
 

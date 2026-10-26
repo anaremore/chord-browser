@@ -85,7 +85,7 @@ export interface EffectsDeps {
   /** Every saved site, as chord-data had them at launch. */
   saved: readonly SavedEffects[];
   /** Save a site, or (null) forget it. Never a private window's. */
-  persist(host: string, site: SavedEffects | null): void;
+  persist(host: string, site: SavedEffects | null, fromSync?: boolean): void;
   /** Settings' switch for every site. */
   everywhere(): boolean;
   setEverywhere(wet: boolean): void;
@@ -239,8 +239,9 @@ export class Effects {
    * copy of what's there now (or an empty site) and returns the new one, or
    * null to remove it. The result is sanitized before anything of it is used.
    * `undo` puts a toast in that window to take the change back. `quiet`: Settings' list hears of it from the caller, once for many.
+   * `fromSync`: another computer's change, saved without a stamp (it never goes back into this computer's log).
    */
-  private change(scope: WindowId | null, host: string, edit: (site: SiteEffects) => SiteEffects | null, undo?: { w: EffectsWindow; message: string }, quiet = false): Promise<void> {
+  private change(scope: WindowId | null, host: string, edit: (site: SiteEffects) => SiteEffects | null, undo?: { w: EffectsWindow; message: string }, quiet = false, fromSync = false): Promise<void> {
     const key = scopeKey(scope, host);
     const run = async () => {
       const before = this.stored(scope, host);
@@ -272,9 +273,9 @@ export class Effects {
         own.set(host, stored ?? { site: emptyEffects(host, Date.now()), compiled: '', sanitizer: SANITIZER_VERSION, notes: noNotes() });
       } else if (stored) {
         this.saved.set(host, stored);
-        this.deps.persist(host, { ...stored.site, compiled: stored.compiled, sanitizer: stored.sanitizer });
+        this.deps.persist(host, { ...stored.site, compiled: stored.compiled, sanitizer: stored.sanitizer }, fromSync);
       } else if (this.saved.delete(host)) {
-        this.deps.persist(host, null);
+        this.deps.persist(host, null, fromSync);
       }
       if (undo) this.offerUndo(undo.w, scope, host, before?.site ?? null, undo.message);
       this.siteChanged(scope, host);
@@ -724,6 +725,28 @@ export class Effects {
     const before = this.imported.get(importId) ?? [];
     this.imported.delete(importId);
     await Promise.all(before.map((b) => this.change(null, b.host, () => (b.site ? clone(b.site) : null), undefined, true)));
+    this.deps.settingsChanged();
+  }
+
+  /* ---------- Your data: sync (S15 §7) ---------- */
+
+  /**
+   * Sites' Effects another computer changed, already merged and checked
+   * (core's planApply, `cleanSiteEffects`): each through `change`, so the
+   * sanitizer makes its stylesheet before any of it is used, as for Effects
+   * you write; and the sites whose Effects went there. No Undo: these are
+   * changes you made elsewhere. Saved as sync's, so they never go back into
+   * this computer's log.
+   */
+  async syncSites(sites: readonly SiteEffects[], gone: readonly string[]): Promise<void> {
+    await Promise.all([
+      ...sites.map((incoming) => {
+        const site = cleanSiteEffects(incoming);
+        if (!site || !hasEffects(site) || (!this.saved.has(site.host) && this.saved.size >= EFFECTS_LIMITS.sites)) return Promise.resolve();
+        return this.change(null, site.host, () => site, undefined, true, true);
+      }),
+      ...gone.map((host) => (this.saved.has(host) ? this.change(null, host, () => null, undefined, true, true) : Promise.resolve())),
+    ]);
     this.deps.settingsChanged();
   }
 

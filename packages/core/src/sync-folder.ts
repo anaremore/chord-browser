@@ -450,7 +450,7 @@ export async function appendRecords(fs: SyncFs, own: OwnSegment, records: readon
   const end = first < 0 ? -1 : head.indexOf(0x0a, first + 1);
   if (end < 0) return { ok: false, problem: 'copied' };
   const line = new Uint8Array(head.subarray(first + 1, end));
-  let salt: Uint8Array | null = null;
+  let salt: Uint8Array | null;
   try {
     salt = envelope.fromBase64((JSON.parse(decoder.decode(line)) as Record<string, unknown>)['salt']);
   } catch {

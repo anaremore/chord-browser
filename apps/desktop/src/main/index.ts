@@ -21,6 +21,7 @@ import {
 } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
+import { hostname } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { app, clipboard, nativeTheme, net, powerMonitor, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import type { ImportEnv } from '../import/detect';
@@ -35,6 +36,7 @@ import { Exporter } from './export';
 import { APP_ID, configureAppIdentity, inFlatpak } from './identity';
 import { ImportGate, Importer } from './import';
 import { FileImporter } from './import-file';
+import { SyncService } from './sync';
 import { handle, send } from './ipc';
 import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
@@ -96,6 +98,7 @@ let duet: DuetService | undefined;
 let importer: Importer | undefined;
 let exporter: Exporter | undefined;
 let fileImporter: FileImporter | undefined;
+let syncService: SyncService | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
@@ -265,6 +268,9 @@ function registerIpc(): void {
     if (command.t === 'effects.undo') return browser!.effects.undo(command.token);
     // A toast's Undo for a form Duet filled: the page puts back what it had (main/duet).
     if (command.t === 'duet.undoFill') return duet?.undoFill(command.token);
+    // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
+    if (command.t === 'sync.undo') return void syncService?.undo(command.token);
+    if (command.t === 'sync.open') return browser!.openSettings('data');
     // Docking and collapsing picture the page first, so its frame can glide (ARCHITECTURE.md §5).
     if (command.t === 'window.sidebar') {
       browser!.setSidebar(w, command.sidebar);
@@ -492,6 +498,19 @@ function registerIpc(): void {
     return fileImporter!.run(fileId, choices, w.id, (progress) => send(sender, 'importFile:progress', progress));
   });
   handle('importFile:undo', ({ importId }) => fileImporter!.undo(importId));
+  // Your data: sync (S15 §8). The folder picker belongs to the Settings window; a folder is named by its id from then on.
+  handle('sync:status', () => syncService!.refresh());
+  handle('sync:chooseFolder', (_request, sender) => syncService!.chooseFolder(browser!.settingsWindowOf(sender)));
+  handle('sync:setup', ({ folderId, passphrase }) => syncService!.setup(folderId, passphrase));
+  handle('sync:join', ({ folderId, passphrase }) => syncService!.join(folderId, passphrase));
+  handle('sync:choose', ({ mode }) => syncService!.choose(mode));
+  handle('sync:unlock', ({ passphrase }) => syncService!.unlock(passphrase));
+  handle('sync:passphrase', ({ passphrase }) => syncService!.changePassphrase(passphrase));
+  handle('sync:off', () => syncService!.hold('off'));
+  handle('sync:remove', ({ device }) => syncService!.hold('remove', device));
+  handle('sync:undo', ({ token }) => syncService!.undo(token));
+  handle('sync:rename', ({ name }) => syncService!.rename(name));
+  handle('sync:pause', ({ paused }) => syncService!.pause(paused));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -544,7 +563,8 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     flushed = true;
     // An import stops, and its copies of another browser's files go; an export stops, and its unfinished file goes (at most 2 s, like the rest).
-    const imports = Promise.race([Promise.all([importer?.quit(), exporter?.quit(), fileImporter?.quit()]).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
+    // Sync writes what's waiting to its folder.
+    const imports = Promise.race([Promise.all([importer?.quit(), exporter?.quit(), fileImporter?.quit(), syncService?.quit()]).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
     // Duet first: replies in flight are kept as interrupted, and provider processes end. Ad blocking
     // finishes a change under way (no control page may be open as Electron tears down) and ends its workers.
     // Chord Player quits by itself once Chord's channel closes: nothing to wait for.
@@ -745,7 +765,7 @@ if (!app.requestSingleInstanceLock()) {
       saveHistory: (nodeId, nav) => persistence?.nav(nodeId, nav),
       effects: {
         saved: opened.effects,
-        persist: (host, site) => persistence?.effect(host, site),
+        persist: (host, site, fromSync) => persistence?.effect(host, site, fromSync),
         workerPath: join(import.meta.dirname, 'effects.js'),
       },
       history: (event) => store.history(event),
@@ -762,7 +782,9 @@ if (!app.requestSingleInstanceLock()) {
       memoryLow: () => (!app.isPackaged && process.env['CHORD_MEMORY_LOW'] === '1') || memoryLow(process.getSystemMemoryInfo(), process.platform),
       // CHORD_ON_BATTERY=1 (development and tests only) acts as if the computer were on battery.
       onBattery: () => (!app.isPackaged && process.env['CHORD_ON_BATTERY'] === '1') || powerMonitor.isOnBatteryPower(),
-      onChange: (change) => store.record(change.patches, change.state),
+      // Another computer's changes (sync.apply) are saved marked as sync's: never stamped, never back into this computer's log.
+      onChange: (change) => store.record(change.patches, change.state, change.command?.t === 'sync.apply' ? 'sync' : 'here'),
+      windowFocused: () => syncService?.focused(),
       proxyReady: (ses) => proxies.ready(ses),
       releaseProfile,
       devtoolsSession,
@@ -903,6 +925,22 @@ if (!app.requestSingleInstanceLock()) {
       toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
       gate: importGate,
     });
+    // Your data's sync (S15 §6–§8): chord-data's thread and its worker do the work; main keeps the key and applies what comes in.
+    syncService = new SyncService({
+      data: { sync: (request) => store.sync(request), flush: () => store.flush(), waiting: (key) => store.waitingHere(key), onPush: (listener) => store.onPush(listener) },
+      state: () => browser!.store.state,
+      dispatch: (command) => browser!.store.dispatch(command),
+      effects: { syncSites: (sites, gone) => browser!.effects.syncSites(sites, gone) },
+      toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
+      lastWindow: () => browser!.lastBrowserWindow()?.id ?? null,
+      notify: (view) => browser?.syncChanged(view),
+      info: () => ({ name: hostname().slice(0, 100) || 'This computer', os: platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : 'Linux', app: app.getVersion() }),
+      platform,
+      folder: () => app.getPath('home'),
+    });
+    store.onRespawn(() => void syncService?.restarted());
+    // The key is read once launch is over: safeStorage can ask the OS's keychain, which mustn't hold up the first page.
+    afterLaunch.run(() => void syncService!.afterLaunch());
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu; and launch timing.

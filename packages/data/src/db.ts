@@ -740,6 +740,16 @@ export class ChordDatabase {
     return id;
   }
 
+  /**
+   * A new id for this computer: another computer writes under the old one in
+   * sync's folder (a profile folder copied to a new computer, S15 §6).
+   */
+  newDevice(): string {
+    const id = newDeviceId();
+    this.sql(`INSERT INTO meta (key, value) VALUES ('device', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(id);
+    return id;
+  }
+
   /** What an export would hold, for Settings' card: a few counts, read in a millisecond or two (export.ts). */
   exportCounts(): ExportCounts {
     return exportCounts((text) => this.sql(text));

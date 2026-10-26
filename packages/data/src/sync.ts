@@ -86,9 +86,13 @@ export interface SyncMeta {
   compactedAt: number;
   framesSince: number;
   bytesSince: number;
+  /** Another computer removed this one: when. Sync is off, and Settings says so until it's turned on again. */
+  removedAt: number | null;
+  /** An earlier generation this computer moved past by changing the passphrase, and when: its file goes after 30 days. */
+  retired: { generation: number; at: number } | null;
 }
 
-const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0 };
+const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null };
 
 /** A merge's outcome: what changed (for main), what was left out, and whether this computer was removed. */
 export interface MergeResult {

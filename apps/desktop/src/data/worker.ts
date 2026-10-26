@@ -2,17 +2,41 @@
  * The chord-data utility process (ARCHITECTURE.md §4): owns the SQLite
  * connection so synchronous database work never runs on main. A crash here
  * doesn't take windows down; main buffers writes and starts a new one.
+ * Sync's tables are chord-data's too, and its worker thread starts here only
+ * while sync is on (sync.ts, docs/decisions/S15-your-data.md §7).
  */
 import type { DuetThread } from '@chord/core';
-import type { DataRequest, DataResponse, ImportBatch, ImportBatchReply } from '@chord/data';
+import type { DataPush, DataRequest, DataResponse, ImportBatch, ImportBatchReply, SyncRequest } from '@chord/data';
 import { ChordDatabase } from '@chord/data/db';
+import { SyncController } from './sync';
 
 let db: ChordDatabase | null = null;
 
 const reply = (response: DataResponse) => process.parentPort.postMessage(response);
+const sync = new SyncController(
+  () => db,
+  (message: DataPush) => process.parentPort.postMessage(message),
+);
+
+// An error nothing caught ends the process: main starts a new one, and puts back the write it was doing.
+const crashed = (what: string) => (error: unknown) => {
+  console.error(`chord-data: ${what}:`, error);
+  process.exit(1);
+};
+process.on('uncaughtException', crashed('uncaught exception'));
+process.on('unhandledRejection', crashed('unhandled rejection'));
+
+const isSync = (request: DataRequest): request is DataRequest & SyncRequest => request.type.startsWith('sync.');
 
 process.parentPort.on('message', (event) => {
   const request = event.data as DataRequest;
+  if (isSync(request)) {
+    sync.handle(request).then(
+      (answer) => reply({ id: request.id, ok: true, sync: answer }),
+      (error: unknown) => reply({ id: request.id, ok: false, error: error instanceof Error ? (error.stack ?? error.message) : String(error) }),
+    );
+    return;
+  }
   try {
     switch (request.type) {
       case 'open': {
@@ -25,6 +49,7 @@ process.parentPort.on('message', (event) => {
           at = now;
           return ms;
         };
+        sync.close();
         db?.close();
         db = new ChordDatabase(request.file);
         const open = lap();
@@ -40,6 +65,8 @@ process.parentPort.on('message', (event) => {
         if (!db) throw new Error('chord-data: write before open');
         db.write(request.ops, Date.now(), request.events);
         reply({ id: request.id, ok: true });
+        // What sync stamped goes to the folder a moment after the last change.
+        sync.afterWrite();
         break;
       case 'search':
         if (!db) throw new Error('chord-data: search before open');
@@ -118,6 +145,7 @@ process.parentPort.on('message', (event) => {
         reply({ id: request.id, ok: true, counts: db.exportCounts() });
         break;
       case 'close':
+        sync.close();
         db?.close();
         db = null;
         reply({ id: request.id, ok: true });

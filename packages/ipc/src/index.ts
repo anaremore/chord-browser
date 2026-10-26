@@ -46,6 +46,8 @@ import {
   type ImportedCounts,
   type MergeCapped,
   type MergeCounts,
+  type FolderInspection,
+  type SyncStatus,
   type ReaderArticle,
   type SettingChange,
   type ScreenshotEntry,
@@ -230,6 +232,11 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('duet.undoFill'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // Presenting mode's indicator turns it off. Only yours: shares start and end it in main.
   z.object({ t: z.literal('presenting.set'), on: z.boolean(), by: z.literal('you') }),
+  // Sync (S15 §8): Undo for turning it off or removing a computer, before either happens (main takes it over);
+  // Undo for joining with the synced setup, whose chords made way; and a problem's toast, opening Settings.
+  z.object({ t: z.literal('sync.undo'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
+  z.object({ t: z.literal('sync.unreplace'), windowId: id, chordIds: z.array(id).max(1000) }),
+  z.object({ t: z.literal('sync.open') }),
   // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
 ]);
 export type RendererCommand = z.infer<typeof RendererCommand>;
@@ -1246,8 +1253,46 @@ export interface FileImportProgress {
   counts: FileImportCounts;
 }
 
+/* ---------- Your data: sync (docs/decisions/S15-your-data.md §6–§8) ---------- */
+
+/** Where sync stands, for Settings: chord-data's status, and main's part of it. */
+export interface SyncView extends SyncStatus {
+  /** The folder's own name ("Dropbox"), to show: Settings never sees a path it could send back. */
+  folderName: string | null;
+  /** This computer keeps the key (safeStorage); false on Linux without a keyring, which asks after each launch. */
+  keyKept: boolean;
+  /** *Turn off* or *Remove*, waiting for its Undo to run out. */
+  pendingUndo: { what: 'off' | 'remove'; device?: string; token: string; until: number } | null;
+}
+
+/** The folder picked (by an id, main keeps the path), and what's in it. `busy`: sync is on already. */
+export type SyncFolderResult = { ok: true; folderId: string; name: string; inspection: FolderInspection } | { ok: false; problem: 'cancelled' | 'busy' };
+
+/** A step's answer: where sync stands now, or why it didn't work. */
+export type SyncStepResult = { ok: true; view: SyncView } | { ok: false; problem: 'wrong' | 'conflict' | 'newer' | 'damaged' | 'missing' | 'io' | 'busy' };
+
+const syncPassphrase = z
+  .string()
+  .max(PASSPHRASE_MAX * 4)
+  .refine((p) => passphraseProblem(p) === null);
+const deviceId = z.string().regex(/^[0-9a-f]{16}$/);
+
 /** Renderer → main requests (`ipcRenderer.invoke`). */
 export const invokeChannels = {
+  // Your data: sync. Settings only; a passphrase is passed on and kept nowhere, a folder is named by its id.
+  'sync:status': { roles: ['internal'], request: z.void(), response: z.custom<SyncView>() },
+  'sync:chooseFolder': { roles: ['internal'], request: z.void(), response: z.custom<SyncFolderResult>() },
+  'sync:setup': { roles: ['internal'], request: z.strictObject({ folderId: id, passphrase: syncPassphrase }), response: z.custom<SyncStepResult>() },
+  // Joining takes any passphrase that could be one: a wrong one is told by the folder's key check.
+  'sync:join': { roles: ['internal'], request: z.strictObject({ folderId: id, passphrase: z.string().min(1).max(PASSPHRASE_MAX * 4) }), response: z.custom<SyncStepResult>() },
+  'sync:choose': { roles: ['internal'], request: z.strictObject({ mode: z.enum(['synced', 'both']) }), response: z.custom<SyncStepResult>() },
+  'sync:unlock': { roles: ['internal'], request: z.strictObject({ passphrase: z.string().min(1).max(PASSPHRASE_MAX * 4) }), response: z.custom<SyncStepResult>() },
+  'sync:passphrase': { roles: ['internal'], request: z.strictObject({ passphrase: syncPassphrase }), response: z.custom<SyncStepResult>() },
+  'sync:off': { roles: ['internal'], request: z.void(), response: z.custom<SyncView>() },
+  'sync:remove': { roles: ['internal'], request: z.strictObject({ device: deviceId }), response: z.custom<SyncView>() },
+  'sync:undo': { roles: ['internal'], request: z.strictObject({ token: z.string().regex(/^[0-9a-f]{16,32}$/) }), response: z.custom<SyncView>() },
+  'sync:rename': { roles: ['internal'], request: z.strictObject({ name: z.string().trim().min(1).max(100) }), response: z.custom<SyncView>() },
+  'sync:pause': { roles: ['internal'], request: z.strictObject({ paused: z.boolean() }), response: z.custom<SyncView>() },
   // Import from other browsers: first run's step (shell) and Settings → Your data. Never from a private window.
   'import:sources': { roles: ['shell', 'internal'], request: z.void(), response: z.custom<ImportSource[]>() },
   'import:preview': { roles: ['shell', 'internal'], request: z.strictObject({ key: importKey }), response: z.custom<ImportPreviewResult>() },
@@ -1576,6 +1621,8 @@ export interface EventPayloads {
   'export:progress': ExportProgress;
   /** An import from a Chord file, to Settings. */
   'importFile:progress': FileImportProgress;
+  /** Where sync stands, to Settings, whenever it changes. */
+  'sync:status': SyncView;
   /** Tabs in the window's chords playing media (or paused a moment ago), newest first, when that changes. */
   'media:state': NowPlaying[];
   /** A reader view's look changed: its chord's colors, its controls, reduced motion. */
@@ -1811,6 +1858,27 @@ export interface SettingsApi {
   exports: ExportApi;
   /** Settings → Your data → From a Chord file. */
   files: FileImportApi;
+  /** Settings → Your data → Sync. */
+  sync: SyncApi;
+}
+
+/** Your data's sync (Settings → Your data → Sync, docs/decisions/S15-your-data.md §8). */
+export interface SyncApi {
+  status(): Promise<SyncView>;
+  /** The system's folder picker; the folder is then the session's, by its id. */
+  chooseFolder(): Promise<SyncFolderResult>;
+  setup(folderId: string, passphrase: string): Promise<SyncStepResult>;
+  join(folderId: string, passphrase: string): Promise<SyncStepResult>;
+  choose(mode: 'synced' | 'both'): Promise<SyncStepResult>;
+  unlock(passphrase: string): Promise<SyncStepResult>;
+  changePassphrase(passphrase: string): Promise<SyncStepResult>;
+  /** Turn off, or remove a computer: each happens when its Undo runs out. */
+  off(): Promise<SyncView>;
+  remove(device: string): Promise<SyncView>;
+  undo(token: string): Promise<SyncView>;
+  rename(name: string): Promise<SyncView>;
+  pause(paused: boolean): Promise<SyncView>;
+  onStatus(listener: (view: SyncView) => void): () => void;
 }
 
 /** Your data's import from a Chord file (Settings → Your data, docs/decisions/S15-your-data.md §8). */

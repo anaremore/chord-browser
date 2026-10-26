@@ -102,6 +102,28 @@
   font: var(--text-small);
 }
 
+/* Sync: the computers that sync, a row each, divided as the card's rows are. */
+.computers {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.computers > * + * {
+  box-shadow: 0 calc(var(--size-hairline) * -1) 0 var(--color-divider);
+}
+
+/* This computer's name, being changed: the field where its name was, and Done. */
+.rename {
+  display: grid;
+  flex: 1;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-3);
+  align-items: center;
+}
+
 @media (forced-colors: active) {
   .input[aria-invalid] {
     outline: var(--size-focus-ring) solid Mark;

@@ -325,6 +325,58 @@ export function localChanges(merged: SyncThing | undefined, before: SyncValues |
   return Object.keys(out).length > 0 ? out : null;
 }
 
+/* ---------- Where sync stands, for Settings ---------- */
+
+/**
+ * A problem that needs you (S15 §8): the folder isn't there (`missing`), the
+ * passphrase was changed on another computer (`changed`), another computer
+ * has a newer Chord (`newer`), this one was removed (`removed`), or two
+ * computers set the folder up at once and the other's won (`conflict`).
+ */
+export type SyncProblem = 'missing' | 'changed' | 'newer' | 'removed' | 'conflict';
+
+export interface SyncComputer {
+  id: string;
+  name: string;
+  os: string;
+  app: string;
+  self: boolean;
+  /** When it last wrote to the folder (ms), if this computer has seen it. */
+  lastSync: number | null;
+}
+
+export interface SyncStatus {
+  /**
+   * `locked`: on, but this computer keeps no key (Linux without a keyring) and
+   * needs the passphrase; `choosing`: joined, and asking what to do with this
+   * computer's own setup.
+   */
+  state: 'off' | 'on' | 'paused' | 'locked' | 'choosing' | 'problem';
+  problem: SyncProblem | null;
+  /** The folder you picked, as a path to show. */
+  folder: string | null;
+  computers: SyncComputer[];
+  /** The newest change from another computer this one has read. */
+  lastChange: { name: string; at: number } | null;
+  /** Changes made here, not yet in the folder. */
+  pending: number;
+  /** Computers whose clocks run more than five minutes ahead: their changes may win over newer ones (S15 §4). */
+  ahead: { name: string; ms: number }[];
+  /** Who changed the passphrase, when that's the problem. */
+  changedBy: string | null;
+  /** When this computer was removed, when that's the problem. */
+  removedAt: number | null;
+  /** Things another computer wrote past what sync keeps (SYNC_LIMITS), left out. */
+  capped: number;
+  /** While choosing: this computer's chords, and the synced setup's. */
+  choosing: { here: number; synced: number } | null;
+}
+
+export const SYNC_OFF: SyncStatus = { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, choosing: null };
+
+/** A clock more than this far ahead of this computer's is named in Settings (S15 §4). */
+export const CLOCK_AHEAD_MS = 5 * 60_000;
+
 /* ---------- What another computer's changes do here ---------- */
 
 /** Things to take away, by kind: a tombstone names one thing of one type, never another with the same id. */

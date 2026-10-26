@@ -52,7 +52,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, DevtoolsAction, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot } from '@chord/ipc';
+import type { ArchiveSnapshot, DevtoolsAction, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
 import { THEME_VARS, type Theme } from '@chord/player-protocol';
 import { createChordTheme, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
@@ -137,6 +137,8 @@ export interface BrowserOptions {
   passkeys: PasskeyBroker;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
+  /** A Chord window came to the front (sync looks at its folder then, S15 §6). */
+  windowFocused?(): void;
   /** Open tabs' back/forward histories as chord-data saved them, by node id. */
   histories?: Record<string, NavState>;
   /** Save an open tab's back/forward history (never a private window's). */
@@ -177,7 +179,7 @@ export interface BrowserOptions {
   /** Effects (ARCHITECTURE.md §9): every saved site, how to save one, and the sanitizer's worker as built. */
   effects: {
     saved: readonly SavedEffects[];
-    persist(host: string, site: SavedEffects | null): void;
+    persist(host: string, site: SavedEffects | null, fromSync?: boolean): void;
     workerPath: string;
   };
   /** Chrome extensions (ARCHITECTURE.md §12). */
@@ -305,7 +307,7 @@ export class Browser {
     this.effects = new Effects({
       workerPath: options.effects.workerPath,
       saved: options.effects.saved,
-      persist: (host, site) => options.effects.persist(host, site),
+      persist: (host, site, fromSync) => options.effects.persist(host, site, fromSync),
       everywhere: () => this.store.state.settings.effects.wet,
       setEverywhere: (wet) => this.store.dispatch({ t: 'settings.set', settings: { effects: { wet } } }),
       // A private window's session is its own profile (`private-<window id>`).
@@ -895,6 +897,7 @@ export class Browser {
     w.window.on('focus', () => {
       this.lastWindowId = windowId;
       this.settingsWindow?.update(this.settingsSnapshot());
+      this.options.windowFocused?.();
     });
     for (const contents of [w.shell.webContents, w.overlay.webContents]) {
       attachShortcuts(contents, this.keyboard);
@@ -1659,6 +1662,12 @@ export class Browser {
   /** The normal browser window used most recently: Settings acts on it, never on a private window. */
   lastBrowserWindow(): AppWindow | undefined {
     return this.lastNormalWindow();
+  }
+
+  /** Where sync stands, to Settings if it's open (Your data → Sync). */
+  syncChanged(view: SyncView): void {
+    const contents = this.settingsWindow?.view.webContents;
+    if (contents && !contents.isDestroyed()) send(contents, 'sync:status', view);
   }
 
   private lastWindow(): AppWindow | undefined {
