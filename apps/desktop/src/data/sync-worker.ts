@@ -11,9 +11,7 @@
  * batch of records read here waits for its answer (`ack`) before the next is
  * read, so a big log is merged a slice at a time with searches in between.
  */
-import { randomBytes } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
-import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parentPort } from 'node:worker_threads';
@@ -34,9 +32,9 @@ import {
   type FolderLook,
   type OwnSegment,
   type SegmentCursor,
-  type SyncFs,
 } from '@chord/core';
 import { nodeCrypto } from '@chord/data/crypto';
+import { NodeFolder } from './sync-folder';
 
 /** chord-data → the worker. */
 export type ToWorker =
@@ -76,85 +74,6 @@ export type FromWorker =
 const POLL_MS = 5 * 60_000;
 /** A burst of changes to the folder (a sync app writing a segment in pieces) reads once, after it settles. */
 const SETTLE_MS = 1000;
-
-/** `Chord sync` on the disk: each new file made under a temp name and renamed into place; appends flushed. */
-export class NodeFolder implements SyncFs {
-  constructor(readonly root: string) {}
-
-  private full(path: string): string {
-    return path ? join(this.root, ...path.split('/')) : this.root;
-  }
-
-  async list(path: string): Promise<string[] | null> {
-    try {
-      return await readdir(this.full(path));
-    } catch {
-      return null;
-    }
-  }
-
-  async stat(path: string): Promise<{ size: number; mtime: number } | null> {
-    try {
-      const s = await stat(this.full(path));
-      return s.isFile() ? { size: s.size, mtime: s.mtimeMs } : null;
-    } catch {
-      return null;
-    }
-  }
-
-  async read(path: string, position: number, length: number): Promise<Uint8Array> {
-    const handle = await open(this.full(path), 'r');
-    try {
-      const buffer = Buffer.alloc(length);
-      const { bytesRead } = await handle.read(buffer, 0, length, position);
-      return new Uint8Array(buffer.subarray(0, bytesRead));
-    } finally {
-      await handle.close();
-    }
-  }
-
-  async create(path: string, bytes: Uint8Array, exclusive = false): Promise<void> {
-    const target = this.full(path);
-    if (exclusive) {
-      const handle = await open(target, 'wx');
-      try {
-        await handle.write(bytes);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      return;
-    }
-    // A temp name no reader takes for a segment (NNNNNN.chordlog only), then renamed: never seen half made.
-    const temp = `${target}.tmp-${randomBytes(4).toString('hex')}`;
-    const handle = await open(temp, 'w');
-    try {
-      await handle.write(bytes);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await rename(temp, target);
-  }
-
-  async append(path: string, bytes: Uint8Array): Promise<void> {
-    const handle = await open(this.full(path), 'a');
-    try {
-      await handle.write(bytes);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-  }
-
-  async mkdir(path: string): Promise<void> {
-    await mkdir(this.full(path), { recursive: true });
-  }
-
-  async remove(path: string): Promise<void> {
-    await rm(this.full(path), { recursive: true, force: true, maxRetries: 3 });
-  }
-}
 
 const port = parentPort!;
 const send = (message: FromWorker) => port.postMessage(message);

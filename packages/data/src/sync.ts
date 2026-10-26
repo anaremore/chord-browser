@@ -544,6 +544,11 @@ export class SyncStore {
         chars += JSON.stringify(r.set).length;
       }
       const merged = mergeRecord(had?.thing, r);
+      // A thing that's here grows only so far, however many records add fields to it.
+      if (had && (Object.keys(merged.thing.fields).length > SYNC_LIMITS.fields || JSON.stringify(merged.thing.fields).length > 2 * SYNC_LIMITS.thingChars)) {
+        result.capped++;
+        continue;
+      }
       this.save(merged.thing, undefined);
       if (r.at) {
         this.clock = seenStamp(this.loadClock(), r.at, now, self);

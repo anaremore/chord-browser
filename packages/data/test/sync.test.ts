@@ -186,6 +186,15 @@ describe('merging another computer’s records', () => {
     expect(result.capped).toBe(5);
   });
 
+  it('a thing that’s here grows only so far, however many records add fields to it', () => {
+    setUp();
+    const fields = (prefix: string) => Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`${prefix}${i}`, i]));
+    const first = db.atomically(() => db.sync.merge([{ type: 'widget', id: 'w1', at: at(1), set: fields('a') }], Date.now()));
+    expect(first.capped).toBe(0);
+    const second = db.atomically(() => db.sync.merge([{ type: 'widget', id: 'w1', at: at(2), set: fields('b') }], Date.now()));
+    expect(second.capped).toBe(1);
+  });
+
   it('notices this computer was removed, by another computer', () => {
     setUp();
     db.sync.stampDevice({ name: 'Desk', os: 'linux', app: '0.5.0', removed: false });
