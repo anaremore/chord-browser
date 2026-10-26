@@ -267,6 +267,9 @@ function Choose({ view }: { view: SyncView }) {
   return (
     <div className={local.card} role="group" aria-label="This computer has its own chords">
       <p className={local.note}>This computer has its own chords.</p>
+      {view.cluttered && (
+        <p className={local.note}>The sync folder holds files Chord doesn’t recognise, so some of your other computers’ setup may not have been read yet. It goes on looking after you join.</p>
+      )}
       <RadioGroup className={styles.group} label="What to do with this computer’s chords">
         {options.map((o) => (
           <button key={o.key} type="button" role="radio" aria-checked={mode === o.key} className={styles.choice} onClick={() => setMode(o.key)}>
@@ -360,6 +363,16 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
           <ProblemCard text="Chord can’t find the sync folder. Is your sync app running?" action={{ label: 'Choose folder…', run: () => void relocate() }} />
         </div>
       )}
+      {view.state === 'problem' && view.problem === 'unwritable' && (
+        <div className={local.actions}>
+          <ProblemCard text={`Chord couldn’t write to the sync folder. It tries again every few minutes; ${view.pending > 0 ? `${plural(view.pending, 'change')} wait here` : 'your changes wait here'}.`} />
+        </div>
+      )}
+      {view.state === 'problem' && view.problem === 'copies' && (
+        <div className={local.actions}>
+          <ProblemCard text="Another computer keeps writing to the sync folder as this one, so sync stopped writing here. Your changes wait. Turn sync off and on again on this computer." action={{ label: 'Turn off', run: () => void api.sync.off() }} />
+        </div>
+      )}
       {view.state === 'problem' && view.problem === 'newer' && (
         <div className={local.actions}>
           <ProblemCard text="Another computer has a newer Chord. Update this one to keep syncing." action={{ label: 'Check for updates', run: onUpdates }} />
@@ -442,7 +455,10 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
       <div className={local.actions}>
         {pending && (
           <ProblemCard
-            text={pending.what === 'off' ? 'Sync turns off on this computer in a moment. What’s here stays.' : `${view.computers.find((c) => c.id === pending.device)?.name ?? 'That computer'} will be removed from sync in a moment.`}
+            text={
+              pending.what === 'off'
+                ? `Sync turns off on this computer in a moment. What’s here stays.${view.pending > 0 ? ` ${plural(view.pending, 'change')} not yet in the folder wait here, and go when you turn sync on again.` : ''}`
+                : `${view.computers.find((c) => c.id === pending.device)?.name ?? 'That computer'} will be removed from sync in a moment.`}
             action={{ label: 'Undo', run: () => void api.sync.undo(pending.token) }}
           />
         )}
@@ -507,6 +523,7 @@ export function SyncSection({ onUpdates }: { onUpdates(): void }) {
         {view.problem === 'removed' && view.removedAt !== null && (
           <p className={styles.groupNote}>{`This computer was removed from sync ${agoText(view.removedAt)}. What’s here stays.`}</p>
         )}
+        {view.pending > 0 && <p className={styles.groupNote}>{`${plural(view.pending, 'change')} made while sync was on didn’t reach the folder. They go when you turn sync on again.`}</p>}
         <TurnOn onUpdates={onUpdates} removed={view.problem === 'removed'} />
       </>
     );

@@ -10,7 +10,18 @@ import { apply, emptyApply, seedState, SYNC_OFF, type Chord, type Command, type 
 import type { DataPush, SyncReply, SyncRequest } from '@chord/data';
 import type { Toast } from '@chord/ipc';
 
-vi.mock('electron', () => ({ dialog: {}, safeStorage: {} }));
+vi.mock('electron', () => ({
+  dialog: {},
+  // A key kept on another computer: this one's keyring can't read it.
+  safeStorage: {
+    isAsyncEncryptionAvailable: async () => true,
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    encryptStringAsync: async (text: string) => Buffer.from(text),
+    decryptStringAsync: async () => {
+      throw new Error('not this computer’s');
+    },
+  },
+}));
 const { SyncService } = await import('../../src/main/sync');
 
 const THEME = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' as const };
@@ -90,6 +101,24 @@ describe('a chord another computer deleted, while a change of yours to it waits'
     await vi.waitFor(() => expect(asked.some((r) => r.type === 'sync.repush')).toBe(true));
     expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
     expect(asked.find((r) => r.type === 'sync.repush')).toMatchObject({ keys: expect.arrayContaining(['chord:x', 'node:p']) });
+  });
+});
+
+describe('a profile copied from another computer', () => {
+  it('its kept key can’t be read here: unlocking asks for a new id', async () => {
+    const asked: SyncRequest[] = [];
+    const h = harness((request) => {
+      asked.push(request);
+      if (request.type === 'sync.status') return { status: { ...SYNC_OFF, state: 'locked' }, keyBlob: 'a2V5' };
+      if (request.type === 'sync.unlock') return { key: new Uint8Array(32), status: { ...SYNC_OFF, state: 'on' } };
+      return {};
+    });
+    await h.service.afterLaunch();
+    await h.service.unlock('correct horse battery staple');
+    expect(asked.find((r) => r.type === 'sync.unlock')).toMatchObject({ rebind: true });
+    // Once unlocked, not again.
+    await h.service.unlock('correct horse battery staple');
+    expect(asked.filter((r) => r.type === 'sync.unlock').at(-1)).not.toHaveProperty('rebind');
   });
 });
 

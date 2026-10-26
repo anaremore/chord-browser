@@ -562,7 +562,7 @@ describe('sync.apply in the store', () => {
     expect(gone.windows[windowId]!.activeTab[home]).toBe('t');
     // The unloaded pinned tab goes, kept for Undo with the chord.
     expect(gone.nodes['u']).toBeUndefined();
-    expect(gone.deletedChords[0]).toMatchObject({ chord: { id: 'w' }, nodes: [expect.objectContaining({ id: 'u' })] });
+    expect(gone.syncUndo[0]).toMatchObject({ chord: { id: 'w' }, nodes: [expect.objectContaining({ id: 'u' })] });
     const undone = apply(gone, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
     expect(undone.chords['w']).toMatchObject({ name: 'w' });
     expect(undone.nodes['u']).toMatchObject({ chordId: 'w', section: 'pinned' });
@@ -591,6 +591,18 @@ describe('sync.apply in the store', () => {
     const undone = apply(later, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
     expect(undone.nodes['t']).toMatchObject({ chordId: 'w', section: 'pinned', pinnedUrl: 'https://t.test/' });
     expect(undone.nodes['u']).toMatchObject({ chordId: 'w', section: 'pinned' });
+  });
+
+  it('what sync took away is kept apart: deleting chords here never pushes it out of reach of its Undo', () => {
+    const { s, windowId } = withLocalTabs();
+    let state = apply(s, { t: 'sync.apply', gone: { chords: ['w'] } }, ctx).state;
+    for (let i = 0; i < 8; i++) {
+      state = apply(state, { t: 'sync.apply', chords: [chord(`x${i}`, { rank: `c${i}` })] }, ctx).state;
+      state = apply(state, { t: 'chord.delete', chordId: `x${i}` }, ctx).state;
+    }
+    expect(state.deletedChords.length).toBeLessThanOrEqual(5);
+    const undone = apply(state, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
+    expect(undone.nodes['u']).toMatchObject({ chordId: 'w' });
   });
 
   it('the chord’s own tombstone goes before its tabs’, so Undo has them all', () => {

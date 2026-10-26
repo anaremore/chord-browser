@@ -16,7 +16,7 @@
  */
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { applyIsEmpty, CLOCK_AHEAD_MS, emptyApply, SYNC_OFF, type DataRecord, type FolderInspection, type SyncApply, type SyncProblem, type SyncStatus } from '@chord/core';
+import { applyIsEmpty, CLOCK_AHEAD_MS, emptyApply, localDeviceFields, newDeviceId, SYNC_OFF, type DataRecord, type FolderInspection, type SyncApply, type SyncProblem, type SyncStatus } from '@chord/core';
 import type { DataPush, SyncInfo, SyncReply, SyncRequest } from '@chord/data';
 import type { ChordDatabase } from '@chord/data/db';
 import type { FromWorker, ToWorker } from './sync-worker';
@@ -45,6 +45,14 @@ const COMPACT_MS = 86_400_000;
 const COMPACT_FRAMES = 500;
 /** An old generation's file goes this long after this computer moved past it. */
 const RETIRE_MS = 30 * 86_400_000;
+/** A write that failed is tried again after this long, doubling each time up to WRITE_RETRY_MAX. */
+const WRITE_RETRY_MS = 30_000;
+const WRITE_RETRY_MAX = 15 * 60_000;
+/** New ids a day, at most: past that, another computer keeps writing as this one, and this one stops writing, saying so. */
+const MAX_NEW_IDS = 3;
+const DAY_MS = 86_400_000;
+/** Passes a join waits for while there's more of the folder to look through. */
+const JOIN_PASSES = 20;
 
 /** A worker's failure as Settings' steps say it: one about writing this computer's log is the folder's. */
 const stepProblem = (problem: Extract<FromWorker, { t: 'failed' }>['problem']): NonNullable<SyncReply['problem']> =>
@@ -71,6 +79,11 @@ export class SyncController {
   /** Things a change made here couldn't win (a stamp at the very last there can be): named in Settings. */
   private readonly stuck = new Map<string, string>();
   private problem: SyncProblem | null = null;
+  /** Writing's own problem (it couldn't write, or keeps finding another computer writing as this one): a look that finds the folder doesn't clear it. */
+  private writeProblem: 'unwritable' | 'copies' | null = null;
+  private retryMs = 0;
+  /** Whether the last pass had more of the folder to look through. */
+  private unfinished = false;
   private changedBy: string | null = null;
   private capped = 0;
   /** Frames of other computers' logs passed over (too big to read), this session. */
@@ -178,18 +191,18 @@ export class SyncController {
    * them, this computer's `device` record for its first frame, and the outbox
    * it covers (`mark`): changes stamped while it's written stay to follow it.
    */
-  private snapshotOf(db: ChordDatabase): { snapshot: { stream: number; device: DataRecord[] }; mark: number } {
+  private snapshotOf(db: ChordDatabase, device: DataRecord[] = db.sync.deviceRecords()): { snapshot: { stream: number; device: DataRecord[] }; mark: number } {
     const stream = this.nextStream++;
     this.streams.set(stream, db.sync.snapshotPages());
-    return { snapshot: { stream, device: db.sync.deviceRecords() }, mark: db.sync.outboxMark() };
+    return { snapshot: { stream, device }, mark: db.sync.outboxMark() };
   }
 
-  /** A snapshot of the copy as this computer's newest segment (compaction, a new id, a log put back). */
-  private async snapshotNow(db: ChordDatabase): Promise<boolean> {
+  /** A snapshot of the copy as this computer's newest segment (compaction, or its first): true once it's there; `copied` when another computer writes under this id. */
+  private async snapshotNow(db: ChordDatabase): Promise<true | 'copied' | false> {
     const { snapshot, mark } = this.snapshotOf(db);
     const reply = await this.ask({ t: 'snapshot', snapshot }, ['snapshotted']);
     this.streams.delete(snapshot.stream);
-    if (reply.t !== 'snapshotted') return false;
+    if (reply.t !== 'snapshotted') return reply.t === 'failed' && reply.problem === 'copied' ? 'copied' : false;
     db.atomically(() => db.sync.snapshotted(reply.own, Date.now(), mark));
     return true;
   }
@@ -221,6 +234,7 @@ export class SyncController {
       own: meta.own,
       cursors: db.sync.cursors(meta.generation),
       app: this.info.app,
+      junk: db.sync.junk(),
     } satisfies ToWorker);
     if (db.sync.outboxSize() > 0) this.scheduleWrite(0);
   }
@@ -277,6 +291,8 @@ export class SyncController {
     for (const [device, at] of Object.entries(message.seen)) this.seen.set(device, at);
     this.tooMany = message.tooMany;
     this.cluttered = message.cluttered;
+    this.unfinished = message.unfinished;
+    if (message.junk) db.sync.saveJunk(message.junk);
     for (const [device, at] of Object.entries(message.wrote)) this.wrote.set(device, Math.max(at, this.wrote.get(device) ?? 0));
     const look = message.look;
     const was = this.problem;
@@ -312,14 +328,15 @@ export class SyncController {
   private async pushChanges(): Promise<void> {
     const db = this.db();
     if (!db || this.changes.size === 0) return;
-    const ordered = db.sync.orderForApply(this.changes);
+    // A chord that went goes in one push with every node of it that went, so it takes them, kept for its Undo.
+    const slices = db.sync.pushSlices(this.changes, PLAN_SLICE);
     this.changes = new Map();
-    for (let at = 0; at < ordered.length; at += PLAN_SLICE) {
+    for (const [at, slice] of slices.entries()) {
       const started = performance.now();
-      const apply = db.sync.planFor(new Map(ordered.slice(at, at + PLAN_SLICE)));
+      const apply = db.sync.planFor(slice);
       db.sync.timed('plan', performance.now() - started);
       if (!applyIsEmpty(apply)) this.push({ push: 'sync.apply', apply });
-      if (at + PLAN_SLICE < ordered.length) await new Promise((resolve) => setImmediate(resolve));
+      if (at < slices.length - 1) await new Promise((resolve) => setImmediate(resolve));
     }
     // Main writes what it applied back to chord-data meanwhile: checkpoints stay small a while longer.
     this.busyFor(db);
@@ -403,15 +420,28 @@ export class SyncController {
     return this.writing;
   }
 
+  /**
+   * What's waiting, appended to this computer's log. Whatever goes wrong, the
+   * changes stay in the outbox until they're in the folder: the folder gone,
+   * they go once a look finds it; a write that fails, it's tried again later,
+   * less and less often, and Settings says so; another computer under this
+   * id, or this computer's log gone, this one takes a new id first.
+   */
   private async writeNow(): Promise<void> {
-    // A log put back that's gone again at once isn't put back for ever: the changes wait for the next try.
-    let putBack = 0;
     for (;;) {
       const db = this.db();
       const meta = db?.sync.meta;
-      if (!db || !meta?.on || meta.joining || meta.paused || !meta.own || !this.key || !this.worker || (this.problem && this.problem !== 'missing')) return;
+      if (!db || !meta?.on || meta.joining || meta.paused || !this.key || !this.worker || (this.problem && this.problem !== 'missing') || this.writeProblem === 'copies') return;
+      // A copied profile, or a log with no segment yet: a snapshot first, under a new id if this may be a copy.
+      if (meta.rebind || !meta.own) {
+        const made = meta.rebind ? await this.newId() : await this.snapshotNow(db);
+        if (made === 'copied') {
+          if (!(await this.newId())) return this.writeFailed();
+        } else if (!made) return this.writeFailed();
+        continue;
+      }
       const { upto, records } = db.sync.outbox();
-      if (records.length === 0) return;
+      if (records.length === 0) return this.writeOk();
       const started = performance.now();
       const reply = await this.ask({ t: 'write', upto, records, device: db.sync.deviceRecords() }, ['written']);
       if (reply.t === 'written') {
@@ -419,59 +449,92 @@ export class SyncController {
         db.sync.timed('frameBytes', reply.bytes);
         db.atomically(() => db.sync.written(reply.upto, reply.own, reply.frames, reply.bytes));
         if (this.problem === 'missing') this.problem = null;
-        await this.compact();
+        this.writeOk();
+        if (!(await this.compact())) return;
         this.pushStatus();
         continue;
       }
       const problem = reply.t === 'failed' ? reply.problem : 'io';
-      if (problem === 'copied' || problem === 'full') {
-        // Another computer writes under this one's id (a copied profile), or its segments reached the top: a new id.
-        await this.newId(problem === 'full');
-        continue;
+      if (problem === 'copied' || problem === 'full' || problem === 'gone') {
+        // Another computer writes under this one's id (a copied profile), its log has gone (another copy may have
+        // compacted it away: S15 §6's copied id), or its segments reached the top: a new id, and its snapshot there.
+        // Nothing in the old folder is deleted; until the new snapshot is there, nothing changes here.
+        if (await this.newId(problem === 'full')) continue;
+        return this.writeFailed();
       }
-      if (problem === 'gone' && putBack++ < 2) {
-        // This computer's log isn't there, though the folder is: another copy of this profile may have compacted it
-        // away (S15 §6's copied id), so this one takes a new id, and its snapshot goes there. Nothing in the old
-        // folder is deleted: whatever's there may be the other copy's.
-        await this.newId();
-        continue;
+      if (problem === 'missing') {
+        // The folder isn't there (the sync app isn't running): the changes wait, and go once a look finds it.
+        this.problem = 'missing';
+        this.pushStatus();
+        return;
       }
-      // The folder isn't there (the sync app isn't running): the changes wait in the outbox, and go once a look finds it.
-      this.problem = 'missing';
-      this.pushStatus();
-      return;
+      return this.writeFailed();
     }
   }
 
+  /** Written: writing's problem, if it had one, is over. */
+  private writeOk(): void {
+    if (this.writeProblem !== 'unwritable') return;
+    this.writeProblem = null;
+    this.retryMs = 0;
+    this.pushStatus();
+  }
+
+  /** It couldn't write: it tries again later, less and less often, and Settings says so. The changes stay waiting. */
+  private writeFailed(): void {
+    if (this.writeProblem !== 'copies') this.writeProblem = 'unwritable';
+    this.retryMs = Math.min(WRITE_RETRY_MAX, Math.max(WRITE_RETRY_MS, this.retryMs * 2));
+    if (this.writeProblem === 'unwritable') this.scheduleWrite(this.retryMs);
+    this.pushStatus();
+  }
+
   /**
-   * A new id for this computer, and its log starts again from a snapshot:
-   * another computer writes under the old one (a copied profile: the old id is
-   * its now), or the old one's segments reached the top (`retireOld`: the old
-   * id is this computer's, and it's marked removed).
+   * A new id for this computer: its first snapshot is written under it, and
+   * only once that's in the folder does the id become this computer's (and
+   * `retireOld`, segments at the top, marks the old one removed). Until then
+   * nothing here changes, and a failure leaves things as they were. Past
+   * MAX_NEW_IDS a day, another computer keeps writing as this one: it stops
+   * writing, and says so.
    */
-  private async newId(retireOld = false): Promise<void> {
+  private async newId(retireOld = false): Promise<boolean> {
     const db = this.db();
-    if (!db) return;
+    if (!db) return false;
+    const now = Date.now();
+    const today = db.sync.meta.newIds.filter((at) => now - at < DAY_MS);
+    if (today.length >= MAX_NEW_IDS) {
+      this.writeProblem = 'copies';
+      this.pushStatus();
+      return false;
+    }
+    const fresh = newDeviceId();
+    const device: DataRecord[] = [{ type: 'device', id: fresh, at: [now, 0, fresh], set: { ...localDeviceFields(this.info), removed: false } }];
+    const { snapshot, mark } = this.snapshotOf(db, device);
+    const reply = await this.ask({ t: 'snapshot', snapshot, as: fresh }, ['snapshotted']);
+    this.streams.delete(snapshot.stream);
+    if (reply.t !== 'snapshotted') return false;
     const old = db.device();
-    db.newDevice();
     db.atomically(() => {
-      db.sync.forgetOwn();
+      db.adoptDevice(fresh);
+      db.sync.setMeta({ newIds: [...today, now], rebind: false });
+      db.sync.snapshotted(reply.own, now, mark);
       if (retireOld) db.sync.stampDevice({ removed: true }, old);
       db.sync.stampDevice({ ...this.info, removed: false });
     });
-    this.stopWorker();
-    this.startWorker();
-    await this.snapshotNow(db);
+    this.scheduleWrite(WRITE_MS);
+    return true;
   }
 
   /** At most daily, once this computer's segments outgrow a snapshot: one snapshot replaces them. */
-  private async compact(force = false): Promise<void> {
+  private async compact(force = false): Promise<boolean> {
     const db = this.db();
-    if (!db) return;
+    if (!db) return false;
     const meta = db.sync.meta;
     const due = Date.now() - meta.compactedAt >= COMPACT_MS && (meta.bytesSince > 2 * db.sync.snapshotChars() || meta.framesSince > COMPACT_FRAMES);
-    if (!force && !due) return;
-    await this.snapshotNow(db);
+    if (!force && !due) return true;
+    const made = await this.snapshotNow(db);
+    // Another computer writes under this id (one of its segments grew past what this one wrote): a new id, deleting nothing.
+    if (made === 'copied') return this.newId();
+    return true;
   }
 
   /**
@@ -505,7 +568,8 @@ export class SyncController {
     const db = this.db();
     if (!db) return SYNC_OFF;
     const meta = db.sync.meta;
-    if (!meta.on) return meta.removedAt ? { ...SYNC_OFF, state: 'problem', problem: 'removed', removedAt: meta.removedAt, folder: meta.folder } : SYNC_OFF;
+    // Off: changes made while it was on that never reached the folder still wait, and Settings says so.
+    if (!meta.on) return meta.removedAt ? { ...SYNC_OFF, state: 'problem', problem: 'removed', removedAt: meta.removedAt, folder: meta.folder, pending: db.sync.outboxSize() } : { ...SYNC_OFF, pending: db.sync.outboxSize() };
     const self = db.device();
     const devices = db.sync.devices();
     const now = Date.now();
@@ -520,10 +584,11 @@ export class SyncController {
     }
     // A clock ahead, from what each computer says of itself (when it made its newest segment), never from stamps a change was bumped to.
     const ahead = [...this.wrote].filter(([device, at]) => device !== self && at > now + CLOCK_AHEAD_MS).map(([device, at]) => ({ name: devices.find((d) => d.id === device)?.name ?? 'Another computer', ms: at - now }));
-    const state: SyncStatus['state'] = meta.joining ? 'choosing' : meta.paused ? 'paused' : !this.key ? 'locked' : this.problem ? 'problem' : 'on';
+    const problem = this.problem ?? this.writeProblem;
+    const state: SyncStatus['state'] = meta.joining ? 'choosing' : meta.paused ? 'paused' : !this.key ? 'locked' : problem ? 'problem' : 'on';
     return {
       state,
-      problem: state === 'problem' ? this.problem : null,
+      problem: state === 'problem' ? problem : null,
       folder: meta.folder,
       computers,
       lastChange,
@@ -567,6 +632,8 @@ export class SyncController {
         return { status: this.status() };
       case 'sync.unlock':
         this.info = request.info;
+        // Its key couldn't be read here: this profile may be a copy of another computer's, so it takes a new id before it writes.
+        if (request.rebind && db.sync.meta.on) db.sync.setMeta({ rebind: true });
         return this.unlock(db, request.passphrase);
       case 'sync.passphrase':
         return this.rekey(db, request.passphrase);
@@ -637,6 +704,7 @@ export class SyncController {
     db.atomically(() => {
       db.sync.setMeta({ on: true, joining: false, folder, generation: inspection.generation, name: info.name, own: null, compactedAt: Date.now() });
       db.sync.addLocal('all');
+      db.sync.readmitOutbox();
       db.sync.stampDevice({ ...info, removed: false });
     });
     const { snapshot, mark } = this.snapshotOf(db);
@@ -671,9 +739,15 @@ export class SyncController {
     this.key = opened.key;
     this.problem = null;
     this.changes.clear();
-    const read = new Promise<void>((resolve) => (this.passDone = resolve));
+    let read = new Promise<void>((resolve) => (this.passDone = resolve));
     this.startWorker();
     await read;
+    // More of the folder to look through (a big one, or junk): the passes that go on from there, so joining gets the
+    // whole setup; a folder full of junk is said in Settings instead.
+    for (let pass = 1; pass < JOIN_PASSES && this.unfinished && !this.cluttered && !this.problem; pass++) {
+      read = new Promise<void>((resolve) => (this.passDone = resolve));
+      await read;
+    }
     if (this.problem) {
       const problem = this.problem;
       this.stopWorker();
@@ -694,6 +768,7 @@ export class SyncController {
       await new Promise((resolve) => setImmediate(resolve));
     }
     db.atomically(() => {
+      db.sync.readmitOutbox();
       db.sync.stampDevice({ ...this.info, removed: false });
       db.sync.setMeta({ joining: false });
     });
@@ -747,6 +822,9 @@ export class SyncController {
       });
     }
     this.startWorker();
+    // A profile that may be a copy of another computer's takes a new id now, writing or not: under its own id, it reads
+    // the other's log as another computer's. Should that fail, its next write tries again first.
+    if (db.sync.meta.rebind && !(await this.newId())) this.writeFailed();
     return { key: opened.key, status: this.status() };
   }
 
@@ -835,7 +913,9 @@ export class SyncController {
     this.problem = null;
     this.changes.clear();
     this.capped = this.refused = 0;
-    this.tooMany = this.cluttered = false;
+    this.tooMany = this.cluttered = this.unfinished = false;
+    this.writeProblem = null;
+    this.retryMs = 0;
     this.pruned.clear();
     this.stuck.clear();
     this.wrote.clear();

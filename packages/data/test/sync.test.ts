@@ -53,12 +53,15 @@ function setUp(): State {
 const outbox = () => db.sync.outbox().records;
 const chordId = (s: State) => Object.keys(s.chords)[0]!;
 
-describe('migration 19', () => {
-  it('adds sync’s tables, empty', () => {
+describe('migrations 19 and 20', () => {
+  it('add sync’s tables, empty, and what its reader remembers of junk', () => {
     expect(db.version).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(19);
+    expect(MIGRATIONS.length).toBe(20);
     expect(db.sync.outboxSize()).toBe(0);
     expect(db.sync.meta.on).toBe(false);
+    expect(db.sync.junk()).toEqual([]);
+    db.sync.saveJunk([['1/00000000000000aa/000002.chordlog', '12:34']]);
+    expect(db.sync.junk()).toEqual([['1/00000000000000aa/000002.chordlog', '12:34']]);
   });
 });
 
@@ -351,5 +354,66 @@ describe('merging another computer’s records', () => {
     // And a later change here is stamped as yours.
     drive(state, [{ t: 'chord.update', chordId: id, name: 'Mine again' }]);
     expect(outbox().map((r) => r.set)).toEqual([{ name: 'Mine again' }]);
+  });
+});
+
+describe('a chord another computer deleted, with more than a push holds', () => {
+  it('its tombstone and every one of its tabs’ go in one push, so its Undo brings every tab back', () => {
+    let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    const big = 'big-chord';
+    const tabs = Array.from({ length: 150 }, (_, i) => `pinned-${i}`);
+    state = {
+      ...state,
+      chords: { ...state.chords, [big]: { id: big, profileId: 'default', name: 'Big', icon: 'B', theme: THEME, rank: 'b0', createdAt: 1 } },
+      nodes: {
+        ...state.nodes,
+        ...Object.fromEntries(
+          tabs.map((id, i) => [
+            id,
+            { kind: 'tab', id, chordId: big, section: 'pinned', parentId: null, rank: `a${String(i).padStart(3, '0')}`, url: `https://t${i}.test/`, title: `T${i}`, pinnedUrl: `https://t${i}.test/`, customTitle: null, favicon: null, lastActiveAt: 1, createdAt: 1 },
+          ]),
+        ),
+      },
+    } as State;
+    db.write(opsForState(state));
+    db.sync.setMeta({ on: true, folder: '/sync', generation: 1, name: 'Desk' });
+    db.atomically(() => db.sync.addLocal('all'));
+    // Another computer deletes the chord: its tombstone, and its 150 tabs', with 60 other changes in the same pass.
+    const at: Stamp = [Date.now() + 1000, 0, OTHER];
+    const records: DataRecord[] = [
+      ...Array.from({ length: 60 }, (_, i): DataRecord => ({ type: 'theme', id: `t${i}`, at, set: { name: `T${i}`, stops: THEME.stops, grain: 0.2 } })),
+      { type: 'chord', id: big, at, set: { deleted: true } },
+      ...tabs.map((id): DataRecord => ({ type: 'tab', id, at, set: { deleted: true } })),
+    ];
+    const merged = db.atomically(() => db.sync.merge(records, Date.now()));
+    const slices = db.sync.pushSlices(merged.changes, 100);
+    expect(slices.length).toBeGreaterThan(1);
+    const withChord = slices.find((slice) => slice.has(thingKey('chord', big)))!;
+    expect(tabs.every((id) => withChord.has(thingKey('tab', id)))).toBe(true);
+    // Applied push by push, as main does: the chord takes its tabs, and its one Undo brings every one back.
+    for (const slice of slices) state = drive(state, [{ t: 'sync.apply', ...db.sync.planFor(slice) }], true);
+    expect(state.chords[big]).toBeUndefined();
+    expect(tabs.some((id) => state.nodes[id])).toBe(false);
+    const windowId = Object.keys(state.windows)[0]!;
+    state = drive(state, [{ t: 'sync.unreplace', windowId, chordIds: [big] }]);
+    expect(tabs.every((id) => state.nodes[id]?.chordId === big)).toBe(true);
+  });
+});
+
+describe('turning sync off with changes not yet in the folder', () => {
+  it('keeps them, and turned on again, the first snapshot holds them', () => {
+    const state = setUp();
+    const id = chordId(state);
+    drive(state, [{ t: 'chord.update', chordId: id, name: 'Unsent' }]);
+    expect(db.sync.outboxSize()).toBe(1);
+    db.sync.clear();
+    expect(db.sync.outboxSize()).toBe(1);
+    // On again: the copy from this computer's things, and what waited.
+    db.sync.setMeta({ on: true, folder: '/sync', generation: 1, name: 'Desk' });
+    db.atomically(() => {
+      db.sync.addLocal('all');
+      db.sync.readmitOutbox();
+    });
+    expect(db.sync.snapshot().some((r) => r.type === 'chord' && r.id === id && r.set['name'] === 'Unsent' && r.at![2] === db.device())).toBe(true);
   });
 });

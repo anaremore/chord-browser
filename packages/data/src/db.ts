@@ -766,7 +766,11 @@ export class ChordDatabase {
    * sync's folder (a profile folder copied to a new computer, S15 §6).
    */
   newDevice(): string {
-    const id = newDeviceId();
+    return this.adoptDevice(newDeviceId());
+  }
+
+  /** This computer's id from now on: sync takes a new one only once its first snapshot under it is in the folder. */
+  adoptDevice(id: string): string {
     this.sql(`INSERT INTO meta (key, value) VALUES ('device', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(id);
     return id;
   }

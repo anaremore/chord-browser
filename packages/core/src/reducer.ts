@@ -328,6 +328,8 @@ export interface Result {
 const MAX_CLOSED = 50;
 /** Deleted chords kept for Undo this session. */
 const MAX_DELETED_CHORDS = 5;
+/** Chords sync took away kept for Undo: far more than a session's toasts offer. */
+const MAX_SYNC_UNDO = 100;
 /** Deleted folders kept for Undo this session. */
 const MAX_DELETED_FOLDERS = 10;
 /** Longest folder name. */
@@ -949,7 +951,7 @@ function putBack(draft: Draft<State>, undo: Draft<MergeUndo>, ctx: Context, effe
  * goes, kept with the chord for Undo this session (`sync.unreplace` puts it
  * back, and what moved too), as chord.delete keeps one.
  */
-function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Context, effects: Effect[], keep = MAX_DELETED_CHORDS, open: ReadonlySet<NodeId> = new Set(Object.keys(draft.live))): void {
+function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Context, effects: Effect[], open: ReadonlySet<NodeId> = new Set(Object.keys(draft.live))): void {
   const chord = draft.chords[chordId];
   const target = draft.chords[to];
   if (!chord || !target || chord.private || target.private || chordId === to) return;
@@ -1000,8 +1002,8 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
   }
   // The rest goes with it, kept for Undo this session.
   const rest = Object.values(draft.nodes).filter((n) => n.chordId === chordId);
-  draft.deletedChords.unshift({ chord: copy(chord), nodes: rest.map((n) => copy(n)), deletedAt: ctx.now, moved: before });
-  if (draft.deletedChords.length > keep) draft.deletedChords.length = keep;
+  draft.syncUndo.unshift({ chord: copy(chord), nodes: rest.map((n) => copy(n)), deletedAt: ctx.now, moved: before });
+  if (draft.syncUndo.length > MAX_SYNC_UNDO) draft.syncUndo.length = MAX_SYNC_UNDO;
   for (const node of rest) {
     if (node.kind === 'tab' && draft.live[node.id]) effects.push({ e: 'view.destroy', nodeId: node.id });
     delete draft.nodes[node.id];
@@ -1016,7 +1018,7 @@ function dropChord(draft: Draft<State>, chordId: ChordId, ctx: Context, effects:
   const index = order.findIndex((c) => c.id === chordId);
   if (index < 0 || order.length < 2) return;
   const neighbor = (order[index + 1] ?? order[index - 1])!;
-  giveWay(draft, chordId, neighbor.id, ctx, effects, MAX_DELETED_CHORDS, open);
+  giveWay(draft, chordId, neighbor.id, ctx, effects, open);
   for (const [host, route] of Object.entries(draft.linkRoutes)) if (route.chordId === chordId) delete draft.linkRoutes[host];
 }
 
@@ -1029,9 +1031,9 @@ function dropChord(draft: Draft<State>, chordId: ChordId, ctx: Context, effects:
 function unreplace(draft: Draft<State>, windowId: WindowId, chordIds: readonly ChordId[], ctx: Context, effects: Effect[]): void {
   const back: ChordId[] = [];
   for (const chordId of chordIds) {
-    const index = draft.deletedChords.findIndex((d) => d.chord.id === chordId);
+    const index = draft.syncUndo.findIndex((d) => d.chord.id === chordId);
     if (index < 0) continue;
-    const [deleted] = draft.deletedChords.splice(index, 1);
+    const [deleted] = draft.syncUndo.splice(index, 1);
     if (!draft.chords[chordId]) {
       draft.chords[chordId] = deleted!.chord;
       for (const node of deleted!.nodes) if (!draft.nodes[node.id]) draft.nodes[node.id] = node;
@@ -1224,7 +1226,7 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
 
 /** `sync.replace`: this computer's own chords make way for the synced setup (joining with *Use the synced setup*), each kept for Undo. */
 function replaceChords(draft: Draft<State>, chordIds: readonly ChordId[], to: ChordId, ctx: Context, effects: Effect[]): void {
-  for (const chordId of chordIds) giveWay(draft, chordId, to, ctx, effects, MAX_DELETED_CHORDS + chordIds.length);
+  for (const chordId of chordIds) giveWay(draft, chordId, to, ctx, effects);
 }
 
 function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[]): void {

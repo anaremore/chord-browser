@@ -18,7 +18,9 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parentPort } from 'node:worker_threads';
 import {
+  AnotherWriter,
   appendRecords,
+  coversOf,
   deviceFolder,
   folderMemory,
   inspectFolder,
@@ -53,13 +55,14 @@ export type ToWorker =
   | { t: 'inspect'; folder: string }
   | ({ t: 'setup'; folder: string; generation: number; passphrase: string; device: string; app: string } & { snapshot: Snapshot })
   | { t: 'unlock'; folder: string; passphrase: string }
-  | { t: 'start'; folder: string; generation: number; device: string; key: Uint8Array; own: OwnSegment | null; cursors: { device: string; segment: number; cursor: SegmentCursor }[]; app: string }
+  | { t: 'start'; folder: string; generation: number; device: string; key: Uint8Array; own: OwnSegment | null; cursors: { device: string; segment: number; cursor: SegmentCursor }[]; app: string; junk: [string, string][] }
   | { t: 'read' }
   | { t: 'ack' }
   /** A page of a snapshot; `lost`: chord-data has no such snapshot (it stopped), and nothing is put in place. */
   | { t: 'chunk'; stream: number; records: DataRecord[]; done: boolean; lost?: boolean }
   | { t: 'write'; upto: number; records: DataRecord[]; device: DataRecord[] }
-  | { t: 'snapshot'; snapshot: Snapshot }
+  /** This computer's snapshot: compaction (covering its segments), or under a new id (`as`), which it takes only once the snapshot is there. */
+  | { t: 'snapshot'; snapshot: Snapshot; as?: string }
   | { t: 'move'; folder: string; from: number; to: number; device: string; key: Uint8Array; app: string; snapshot: Snapshot }
   /** Whether a folder is this sync's: its generation's file opens with this computer's key (a folder that moved). */
   | { t: 'look'; folder: string; generation: number; key: Uint8Array }
@@ -84,7 +87,8 @@ export type FromWorker =
   | { t: 'records'; device: string; segment: number; records: DataRecord[]; cursor: SegmentCursor; refused: number }
   | { t: 'newer'; device: string }
   /** `seen`: when each computer last wrote here; `wrote`: when each says it made its newest segment read (its own clock). */
-  | { t: 'pass-done'; look: FolderLook; seen: Record<string, number>; wrote: Record<string, number>; tooMany: boolean; cluttered: boolean }
+  /** `junk`: what the reader remembers of junk, when it changed (chord-data keeps it across launches). */
+  | { t: 'pass-done'; look: FolderLook; seen: Record<string, number>; wrote: Record<string, number>; tooMany: boolean; cluttered: boolean; unfinished: boolean; junk?: [string, string][] }
   | { t: 'pull'; stream: number }
   | { t: 'written'; upto: number; own: OwnSegment; frames: number; bytes: number }
   | { t: 'snapshotted'; own: OwnSegment }
@@ -215,15 +219,18 @@ async function pass(): Promise<void> {
         }
       }
     }
-    send({ t: 'pass-done', look, seen, wrote, tooMany, cluttered });
-    // More to look through: the next pass goes on from there, a little later, never straight after.
-    if (unfinished && running === r) {
+    const junk = r.memory.dirty ? [...r.memory.junk] : undefined;
+    r.memory.dirty = false;
+    send({ t: 'pass-done', look, seen, wrote, tooMany, cluttered, unfinished, ...(junk ? { junk } : {}) });
+    // More to look through: the next pass goes on from there, a little later, never straight after. A folder full of
+    // junk is looked through at the usual times only.
+    if (unfinished && !cluttered && running === r) {
       clearTimeout(next);
       next = setTimeout(() => void serial(pass), NEXT_PASS_MS);
     }
   } catch (error) {
     console.error('Sync couldn’t read the folder:', error);
-    send({ t: 'pass-done', look: { state: 'missing' }, seen: {}, wrote: {}, tooMany: false, cluttered: false });
+    send({ t: 'pass-done', look: { state: 'missing' }, seen: {}, wrote: {}, tooMany: false, cluttered: false, unfinished: false });
   } finally {
     reading = false;
     if (again && running === r) {
@@ -263,8 +270,8 @@ function stopWatching(): void {
 const failed = (for_: ToWorker['t'], problem: Extract<FromWorker, { t: 'failed' }>['problem']) => send({ t: 'failed', problem, for: for_ });
 
 /** A snapshot of this computer, written as chord-data's pages come, past its newest segment there. */
-const snapshotTo = (fs: NodeFolder, where: { generation: number; device: string }, snapshot: Snapshot, key: Uint8Array, app: string, after?: number) =>
-  writeSnapshot(fs, where, pages(snapshot.stream), key, { app, device: snapshot.device, ...(after !== undefined ? { after } : {}), ...(running?.fs === fs ? { memory: running.memory } : {}) }, nodeCrypto);
+const snapshotTo = (fs: NodeFolder, where: { generation: number; device: string }, snapshot: Snapshot, key: Uint8Array, app: string) =>
+  writeSnapshot(fs, where, pages(snapshot.stream), key, { app, device: snapshot.device, ...(running?.fs === fs ? { memory: running.memory } : {}) }, nodeCrypto);
 
 async function handle(message: ToWorker): Promise<void> {
   switch (message.t) {
@@ -295,7 +302,7 @@ async function handle(message: ToWorker): Promise<void> {
         own: message.own,
         cursors: new Map(message.cursors.map((c) => [cursorKey(c.device, c.segment), c.cursor])),
         app: message.app,
-        memory: folderMemory(),
+        memory: { ...folderMemory(), junk: new Map(message.junk) },
       };
       watchFolder(running);
       void serial(pass);
@@ -316,7 +323,25 @@ async function handle(message: ToWorker): Promise<void> {
     case 'snapshot': {
       const r = running;
       if (!r) return failed('snapshot', 'missing');
-      r.own = await snapshotTo(r.fs, { generation: r.generation, device: r.device }, message.snapshot, r.key, r.app, r.own?.segment);
+      if (message.as) {
+        // A new id: its first snapshot, and only then is it this computer's. The old one's folder is left as it is.
+        const own = await snapshotTo(r.fs, { generation: r.generation, device: message.as }, message.snapshot, r.key, r.app);
+        r.device = message.as;
+        r.own = own;
+        watchFolder(r);
+        send({ t: 'snapshotted', own });
+        return;
+      }
+      // Compaction: past its newest segment, covering what it wrote; another writer under this id stops it (`copied`).
+      const mine = r.own && r.own.generation === r.generation && r.own.device === r.device ? r.own : null;
+      r.own = await writeSnapshot(
+        r.fs,
+        { generation: r.generation, device: r.device },
+        pages(message.snapshot.stream),
+        r.key,
+        { app: r.app, device: message.snapshot.device, covers: coversOf(mine), memory: r.memory, ...(mine ? { after: mine.segment } : {}) },
+        nodeCrypto,
+      );
       send({ t: 'snapshotted', own: r.own });
       return;
     }
@@ -406,7 +431,7 @@ function checkpoint(path: string): void {
   }
 }
 
-const problemOf = (error: unknown): Extract<FromWorker, { t: 'failed' }>['problem'] => (error instanceof SegmentsFull ? 'full' : 'io');
+const problemOf = (error: unknown): Extract<FromWorker, { t: 'failed' }>['problem'] => (error instanceof SegmentsFull ? 'full' : error instanceof AnotherWriter ? 'copied' : 'io');
 
 port.on('message', (message: ToWorker) => {
   if (message.t === 'checkpoint') return checkpoint(message.database);

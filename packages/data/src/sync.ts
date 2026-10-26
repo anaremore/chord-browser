@@ -92,9 +92,13 @@ export interface SyncMeta {
   removedAt: number | null;
   /** An earlier generation this computer moved past by changing the passphrase, and when: its file goes after 30 days. */
   retired: { generation: number; at: number } | null;
+  /** When this computer took new ids (another computer wrote under its own): past a few a day, it stops writing and says so. */
+  newIds: number[];
+  /** This profile may be a copy (its key couldn't be read here): it takes a new id before it writes. */
+  rebind: boolean;
 }
 
-const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null };
+const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null, newIds: [], rebind: false };
 
 /**
  * Sync's costs, as chord-data measures them: a whole write() with sync on and
@@ -944,21 +948,78 @@ export class SyncStore {
     return (this.sql(`SELECT id, fields, stamps, local FROM sync_record WHERE type = 'device'`).all() as Row[]).map((row) => deviceOf(this.loaded('device', str(row['id']), row).thing)).filter((d) => d !== null);
   }
 
-  /** Turning off: the copy, the outbox and the cursors go, and the key; this computer's data stays. */
+  /**
+   * Turning off: the copy, the cursors, the junk remembered and the key go;
+   * this computer's data stays, and so do changes not yet in the folder (the
+   * outbox): turned on again, they go then (`readmitOutbox`).
+   */
   clear(): void {
     this.sql('DELETE FROM sync_record').run();
-    this.total = null;
-    this.lost.clear();
-    this.sql('DELETE FROM sync_outbox').run();
     this.sql('DELETE FROM sync_cursor').run();
+    this.sql('DELETE FROM sync_junk').run();
     this.sql(`DELETE FROM meta WHERE key IN ('sync', 'sync.clock', 'sync.key')`).run();
     this.metaCache = null;
     this.clock = null;
     this.pending = 0;
   }
 
-  /** A new id for this computer (another one writes under the old, S15 §6), and its log starts again. */
-  forgetOwn(): void {
-    this.setMeta({ own: null, framesSince: 0, bytesSince: 0 });
+  /**
+   * Changes made while sync was on that never reached the folder (it was
+   * turned off first, or couldn't write): into the copy, so the first snapshot
+   * after it's on again holds them, each with its stamp.
+   */
+  readmitOutbox(): void {
+    for (const row of this.sql('SELECT record FROM sync_outbox ORDER BY seq').all() as Row[]) {
+      const r = parseJson<DataRecord | null>(row['record'], null);
+      if (!r || typeof r.type !== 'string' || typeof r.id !== 'string' || !r.set) continue;
+      const had = this.load(r.type, r.id);
+      this.save(mergeRecord(had?.thing, r).thing, had ? undefined : null, had?.cost ?? 0);
+    }
+  }
+
+  /** What the reader remembers of junk in the folder (name, size and time), kept across launches. */
+  junk(): [string, string][] {
+    return (this.sql('SELECT path, seen FROM sync_junk').all() as Row[]).map((r) => [str(r['path']), str(r['seen'])]);
+  }
+
+  saveJunk(entries: readonly [string, string][]): void {
+    this.sql('DELETE FROM sync_junk').run();
+    const insert = this.sql('INSERT INTO sync_junk (path, seen) VALUES (?, ?)');
+    for (const [path, seen] of entries) insert.run(path, seen);
+  }
+
+  /**
+   * Changed things as pushes of about `size` each, in the order main applies
+   * them (`orderForApply`), a chord that went always in one push with every
+   * node of it that went: it takes them with it, kept for its Undo, rather
+   * than a later push deleting them one by one.
+   */
+  pushSlices(changes: Map<string, Set<string>>, size: number): Map<string, Set<string>>[] {
+    const ordered = this.orderForApply(changes);
+    const goneChords = new Set(ordered.filter(([key]) => key.startsWith('chord\n') && isGone(this.load('chord', key.slice(6))?.thing)).map(([key]) => key.slice(6)));
+    const withChord = new Map<string, [string, Set<string>][]>();
+    const rest: [string, Set<string>][] = [];
+    for (const entry of ordered) {
+      const [type, id] = entry[0].split('\n') as [string, string];
+      const thing = NODE_TYPES.has(type) ? this.load(type, id)?.thing : undefined;
+      const chord = thing && isGone(thing) ? (thing.fields['pos']?.v as { chord?: unknown } | undefined)?.chord : undefined;
+      if (typeof chord === 'string' && goneChords.has(chord)) withChord.set(chord, [...(withChord.get(chord) ?? []), entry]);
+      else rest.push(entry);
+    }
+    const slices: Map<string, Set<string>>[] = [];
+    let slice = new Map<string, Set<string>>();
+    const add = (group: [string, Set<string>][]) => {
+      if (slice.size > 0 && slice.size + group.length > size) {
+        slices.push(slice);
+        slice = new Map();
+      }
+      for (const [key, names] of group) slice.set(key, names);
+    };
+    for (const entry of rest) {
+      const [type, id] = entry[0].split('\n') as [string, string];
+      add(type === 'chord' && goneChords.has(id) ? [entry, ...(withChord.get(id) ?? [])] : [entry]);
+    }
+    if (slice.size > 0) slices.push(slice);
+    return slices;
   }
 }

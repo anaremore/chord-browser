@@ -155,7 +155,8 @@ export type SyncRequest =
   /** At launch: the root key main kept (safeStorage), so sync starts without asking. */
   | { type: 'sync.start'; key: Uint8Array; info: SyncInfo }
   /** No key kept, or the passphrase changed elsewhere: the passphrase, once. */
-  | { type: 'sync.unlock'; passphrase: string; info: SyncInfo }
+  /** `rebind`: the key kept here couldn't be read (this profile may be a copy of another computer's): a new id before it writes. */
+  | { type: 'sync.unlock'; passphrase: string; info: SyncInfo; rebind?: boolean }
   | { type: 'sync.passphrase'; passphrase: string }
   | { type: 'sync.off' }
   | { type: 'sync.remove'; device: string }

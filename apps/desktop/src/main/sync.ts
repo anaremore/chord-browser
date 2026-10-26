@@ -81,6 +81,8 @@ export class SyncService {
   /** Kept with no keyring behind it (`basic_text`), because you asked to remember it anyway. */
   private keyWeak = false;
   private anyway = false;
+  /** The key kept here couldn't be read: this profile may be a copy of another computer's, so unlocking takes a new id. */
+  private unbound = false;
   private chosen: { id: string; path: string } | null = null;
   private pending: Pending | null = null;
   private readonly toasted = new Set<string>();
@@ -167,8 +169,11 @@ export class SyncService {
       if (started.status) this.setStatus(started.status);
       if (opened.shouldReEncrypt) await this.keep(new Uint8Array(Buffer.from(opened.result, 'base64')));
     } catch (error) {
+      // DPAPI, the Keychain and a secret service keep a key for this computer only: one that can't be read here is
+      // likely a profile copied from another computer, which must not go on writing as it.
       console.error('Sync couldn’t read its key:', error);
       this.keyKept = false;
+      this.unbound = true;
     }
   }
 
@@ -295,7 +300,8 @@ export class SyncService {
 
   /** The passphrase, once: after launch with no key kept, or after it changed on another computer. */
   async unlock(passphrase: string): Promise<SyncStepResult> {
-    const answer = await this.options.data.sync({ type: 'sync.unlock', passphrase, info: this.options.info() });
+    const answer = await this.options.data.sync({ type: 'sync.unlock', passphrase, info: this.options.info(), ...(this.unbound ? { rebind: true } : {}) });
+    if (answer.key) this.unbound = false;
     await this.keep(answer.key);
     answer.key?.fill(0);
     return this.stepResult(answer);
@@ -489,6 +495,8 @@ const PROBLEM_TOASTS: Record<string, string> = {
   locked: 'Sync is paused. Enter your passphrase to keep syncing.',
   changed: 'Sync has a new passphrase. Enter it to keep syncing.',
   missing: 'Chord can’t find the sync folder. Is your sync app running?',
+  unwritable: 'Chord couldn’t write to the sync folder. Your changes wait here, and it tries again.',
+  copies: 'Another computer keeps writing to the sync folder as this one. Sync stopped writing here.',
   newer: 'Another computer has a newer Chord. Update this one to keep syncing.',
   removed: 'This computer was removed from sync.',
   conflict: 'Sync was set up on two computers at once. Set it up on one, then join from the others.',

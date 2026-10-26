@@ -337,10 +337,12 @@ export function localChanges(merged: SyncThing | undefined, before: SyncValues |
 /**
  * A problem that needs you (S15 §8): the folder isn't there (`missing`), the
  * passphrase was changed on another computer (`changed`), another computer
- * has a newer Chord (`newer`), this one was removed (`removed`), or two
- * computers set the folder up at once and the other's won (`conflict`).
+ * has a newer Chord (`newer`), this one was removed (`removed`), two
+ * computers set the folder up at once and the other's won (`conflict`), it
+ * couldn't write and tries again (`unwritable`), or another computer keeps
+ * writing as this one (`copies`).
  */
-export type SyncProblem = 'missing' | 'changed' | 'newer' | 'removed' | 'conflict';
+export type SyncProblem = 'missing' | 'changed' | 'newer' | 'removed' | 'conflict' | 'unwritable' | 'copies';
 
 export interface SyncComputer {
   id: string;

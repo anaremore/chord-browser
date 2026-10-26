@@ -629,6 +629,12 @@ export interface State {
   closed: ClosedTab[];
   /** Chords deleted this session, with their tabs, for Undo (newest first; not persisted). */
   deletedChords: DeletedChord[];
+  /**
+   * Chords sync took away this session (another computer deleted them, or they made way for the synced setup), with
+   * their tabs and what moved out of them, for the toast's Undo (newest first; not persisted). Apart from
+   * deletedChords, so deleting chords here never pushes one out.
+   */
+  syncUndo: DeletedChord[];
   /** The Favorites row, shared by every chord. */
   favorites: Record<string, Favorite>;
   /** Folders deleted this session, with what was in them, for Undo (newest first; not persisted). */
@@ -673,6 +679,7 @@ export const emptyState = (): State => ({
   live: {},
   closed: [],
   deletedChords: [],
+  syncUndo: [],
   favorites: {},
   deletedFolders: [],
   siteZoom: {},

@@ -303,4 +303,9 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (generation, device, segment)
   ) STRICT;
   `,
+  // 20: what sync's reader remembers of junk in the folder (S15 §13): each name with its size and time when looked
+  // into, so it's looked into once, across launches too. At most a few thousand rows (core's MAX_JUNK).
+  `
+  CREATE TABLE IF NOT EXISTS sync_junk (path TEXT PRIMARY KEY, seen TEXT NOT NULL) STRICT;
+  `,
 ];
