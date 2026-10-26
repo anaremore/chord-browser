@@ -339,11 +339,17 @@ test('Duet, keyboard only: open it, set it up, ask, answer its question from the
     await expect(panel.getByText(/I can see \d+ tabs\./)).toBeVisible();
     await expect(panel.getByText('Allowed', { exact: true })).toBeVisible();
 
-    // What Duet can read: one Tab stop, arrows choose.
-    const scope = panel.getByRole('radiogroup', { name: 'What Duet can read' });
-    await tabTo(shell, scope.getByRole('radio', { checked: true }), { back: true });
-    await shell.keyboard.press('ArrowRight');
-    await expect(scope.getByRole('radio', { name: 'This chord' })).toHaveAttribute('aria-checked', 'true');
+    // What Duet can read: ↵ opens its menu on the choice it has, ↓ moves, ↵ chooses, and the keyboard is back on the button.
+    const reads = panel.getByRole('button', { name: /^(Reads |Asks before reading)/ });
+    await tabTo(shell, reads, { back: true });
+    await shell.keyboard.press('Enter');
+    const ladder = panel.getByRole('menu', { name: 'What Duet can read' });
+    await expect(ladder).toBeVisible();
+    await shell.keyboard.press('ArrowDown');
+    await shell.keyboard.press('Enter');
+    await expect(ladder).toHaveCount(0);
+    await expect(reads).toHaveText('Reads this chord');
+    await expect(reads).toBeFocused();
 
     // The Chats menu: ↵ opens it on its first item, ↓ moves, Esc closes it and the keyboard is back on its button.
     const chats = panel.getByRole('button', { name: 'Chats' });

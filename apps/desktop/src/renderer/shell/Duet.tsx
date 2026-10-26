@@ -18,6 +18,7 @@ import {
   DUET_FORM_TEXT_MAX,
   DUET_PROVIDER_NAMES,
   DUET_SCOPE_HINTS,
+  DUET_SCOPE_NAMES,
   DUET_SCOPE_SHORT,
   DUET_SCOPES,
   fieldCount,
@@ -36,7 +37,7 @@ import type { DuetAction, DuetView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Download, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { useMenu, useRoving } from '../shared/a11y';
+import { useMenu } from '../shared/a11y';
 import { announce } from './announce';
 import { api } from './api';
 import styles from './Duet.module.css';
@@ -978,9 +979,11 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
   const panel = useRef<HTMLElement>(null);
   const modelMenu = useMenu(menu === 'model', () => setMenu(null));
   const threadMenu = useMenu(menu === 'thread', () => setMenu(null));
-  const scopeGroup = useRoving<HTMLDivElement>({ items: '[role="radio"]', current: '[aria-checked="true"]', orientation: 'horizontal', activate: true });
+  const scopeMenu = useMenu(menu === 'scope', () => setMenu(null));
   useDuetAnnouncements(view);
   const thread = view.thread;
+  /** What this chat may read (DuetScope; a new chat's is "The tab you're on"). */
+  const scope = thread?.scope ?? 'ask';
   const ready = view.provider !== null && view.providers.some((p) => p.provider === (view.thread?.provider ?? view.provider) && p.installed && p.signedIn);
   usePanelFocus(panel, view.chordOff ? 'off' : !view.provider ? 'intro' : !ready ? 'setup' : view.firstUse ? 'first-use' : 'ready', present);
   const [renaming, setRenaming] = useState(false);
@@ -1182,31 +1185,54 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
               </button>
             </div>
           )}
+          {/* What the chat may read: one button saying what it does now, and a menu of the four with what each means. */}
           <div className={styles.scopeRow}>
-            <span className={styles.muted}>Reads</span>
             {view.readsNothing ? (
               <>
-                <span className={styles.scopeFixed}>Nothing</span>
+                <span className={styles.scopeFixed}>Reads nothing</span>
                 <button type="button" className={styles.quiet} onClick={() => act({ do: 'settings' })}>
                   Change in Settings
                 </button>
               </>
             ) : (
-              <div ref={scopeGroup.ref} className={styles.scope} role="radiogroup" aria-label="What Duet can read" onKeyDown={scopeGroup.onKeyDown}>
+              <button
+                type="button"
+                className={styles.chip}
+                aria-haspopup="menu"
+                aria-expanded={menu === 'scope'}
+                aria-controls={menu === 'scope' ? 'duet-scope' : undefined}
+                title={DUET_SCOPE_HINTS[scope]}
+                onClick={() => setMenu(menu === 'scope' ? null : 'scope')}
+              >
+                {DUET_SCOPE_SHORT[scope]}
+                <ChevronDown size={12} strokeWidth={2} aria-hidden />
+              </button>
+            )}
+            {menu === 'scope' && (
+              <ul ref={scopeMenu.ref} id="duet-scope" className={`${styles.menu} ${styles.scopeMenu}`} role="menu" aria-label="What Duet can read" onKeyDown={scopeMenu.onKeyDown}>
                 {DUET_SCOPES.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    role="radio"
-                    aria-checked={(thread?.scope ?? 'ask') === s}
-                    className={styles.scopeOption}
-                    title={DUET_SCOPE_HINTS[s]}
-                    onClick={() => act({ do: 'scope', scope: s })}
-                  >
-                    {DUET_SCOPE_SHORT[s]}
-                  </button>
+                  <li key={s} role="none">
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      tabIndex={-1}
+                      aria-checked={scope === s}
+                      aria-label={DUET_SCOPE_NAMES[s]}
+                      aria-describedby={`duet-scope-${s}`}
+                      className={`${styles.menuItem} ${styles.scopeItem}`}
+                      onClick={() => {
+                        act({ do: 'scope', scope: s });
+                        setMenu(null);
+                      }}
+                    >
+                      <span>{DUET_SCOPE_NAMES[s]}</span>
+                      <span id={`duet-scope-${s}`} className={styles.scopeHint}>
+                        {DUET_SCOPE_HINTS[s]}
+                      </span>
+                    </button>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
           </div>
           {empty ? (

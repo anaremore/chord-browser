@@ -6,6 +6,8 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.3.0; it gets its version when it's released.
 
+- **What Duet can read is one button at the top of its panel**, saying what the chat does now (*Reads this tab*, for example). It opens the four choices, each with what it lets Duet read. The row of four buttons it replaces didn't fit the panel.
+
 - **Fixed: Effects not coming back after reloading a busy page.** On a site that keeps the page busy as it loads, like Reddit, an Effect could stop showing after a reload, though the card still said it was on. Chord stopped waiting for the page to take the styles, and took them out when they arrived late. Now they stay.
 
 - **Duet fills in forms you ask it to**, on the tab you're on: "fill this in with my work address", say. It reads what the form asks for, never what's already typed in it, and shows each field with the value it suggests in a card in its panel, where you can change a value or leave a field out. Nothing goes into the page until you press **Fill**, and Chord never sends a form: you press the page's own button. Undo puts every field back.

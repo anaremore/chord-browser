@@ -654,11 +654,7 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
     await expect(panel).toMatchAriaSnapshot(`
       - button "Chats" [expanded=false]
       - button "Close Duet"
-      - radiogroup "What Duet can read":
-        - radio "Ask"
-        - radio "This tab" [checked]
-        - radio "This chord"
-        - radio "All tabs"
+      - button "Reads this tab" [expanded=false]
       - textbox "Message Duet"
     `);
     const input = panel.getByRole('textbox', { name: 'Message Duet' });

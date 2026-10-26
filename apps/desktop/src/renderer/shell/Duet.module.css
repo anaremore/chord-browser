@@ -279,6 +279,7 @@
 }
 
 .scopeRow {
+  position: relative;
   display: flex;
   flex: none;
   gap: var(--space-2);
@@ -287,42 +288,26 @@
   font: var(--text-small);
 }
 
-.scope {
-  display: flex;
-  flex: 1;
-  gap: var(--space-1);
+/* The reading choices' menu: under its button, as wide as the panel allows, each choice with what it means. */
+.scopeMenu {
+  inset-block-start: calc(100% + var(--space-1));
+  inset-inline: var(--space-3);
   min-inline-size: 0;
-  padding: var(--space-1);
-  border-radius: var(--radius-sm);
-  background: var(--color-item-hover);
 }
 
-.scopeOption {
-  flex: 1;
-  min-inline-size: 0;
-  block-size: var(--size-hit-min);
-  padding-inline: var(--space-2);
-  overflow: hidden;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: transparent;
+.scopeItem {
+  flex-direction: column;
+  gap: var(--space-0);
+  align-items: flex-start;
+  block-size: auto;
+  padding-block: var(--space-2);
+  text-align: start;
+}
+
+.scopeHint {
   color: var(--color-fg-muted);
   font: var(--text-small);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition:
-    background-color var(--duration-fade-fast) var(--ease-standard),
-    color var(--duration-fade-fast) var(--ease-standard);
-}
-
-.scopeOption:hover {
-  color: var(--color-fg);
-}
-
-.scopeOption[aria-checked='true'] {
-  background: var(--color-surface-raised);
-  box-shadow: var(--shadow-raised);
-  color: var(--color-fg);
+  white-space: normal;
 }
 
 /* Settings' "Nothing": set there, not per chat, so it's a word rather than a choice. */

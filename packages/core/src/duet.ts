@@ -29,9 +29,9 @@ export const DUET_PROVIDER_NAMES: Record<DuetProvider, string> = { claude: 'Clau
 export type DuetScope = 'every' | 'ask' | 'chord' | 'all';
 export const DUET_SCOPES = ['every', 'ask', 'chord', 'all'] as const satisfies readonly DuetScope[];
 export const isDuetScope = (value: unknown): value is DuetScope => DUET_SCOPES.includes(value as DuetScope);
-/** Settings' names, and the panel's shorter ones. */
+/** Settings' names (and the panel's menu), and the panel's button, which says what the chat does now. */
 export const DUET_SCOPE_NAMES: Record<DuetScope, string> = { every: 'Ask every time', ask: 'The tab you’re on', chord: 'Tabs in this chord', all: 'All your tabs' };
-export const DUET_SCOPE_SHORT: Record<DuetScope, string> = { every: 'Ask', ask: 'This tab', chord: 'This chord', all: 'All tabs' };
+export const DUET_SCOPE_SHORT: Record<DuetScope, string> = { every: 'Asks before reading', ask: 'Reads this tab', chord: 'Reads this chord', all: 'Reads all tabs' };
 /** What each choice lets Duet read: Settings' descriptions and the panel's tooltips. */
 export const DUET_SCOPE_HINTS: Record<DuetScope, string> = {
   every: 'Nothing goes with your messages unless you attach it. Duet asks before reading any page, even the one you’re on.',

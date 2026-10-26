@@ -189,15 +189,21 @@ test('what Duet can read: "Ask every time" attaches nothing for you; "Nothing", 
     const shell = await shellOf(app);
     const panel = await openDuet(shell);
     await setUp(panel);
-    const reads = panel.getByRole('radiogroup', { name: 'What Duet can read' });
-    // The ladder a chat can choose from, with the tab you're on attached by default.
-    await expect(reads.getByRole('radio')).toHaveText(['Ask', 'This tab', 'This chord', 'All tabs']);
-    await expect(reads.getByRole('radio', { name: 'This tab' })).toHaveAttribute('aria-checked', 'true');
+    // One button says what the chat reads; its menu has the ladder, each choice with what it means.
+    const reads = panel.getByRole('button', { name: /^(Reads |Asks before reading)/ });
+    await expect(reads).toHaveText('Reads this tab');
+    await reads.click();
+    const ladder = panel.getByRole('menu', { name: 'What Duet can read' });
+    await expect(ladder.getByRole('menuitemradio')).toHaveText([/^Ask every time/, /^The tab you’re on/, /^Tabs in this chord/, /^All your tabs/]);
+    await expect(ladder.getByRole('menuitemradio', { name: 'The tab you’re on' })).toHaveAttribute('aria-checked', 'true');
+    await expect(ladder.getByRole('menuitemradio', { name: 'Tabs in this chord' })).toHaveAccessibleDescription('Duet reads this chord’s tabs, history and Archive without asking.');
+    await panel.screenshot({ path: join(capturesDir, 'duet-reads-menu.png') });
     const chip = panel.getByText(/^Reading 127\.0\.0\.1/);
     await expect(chip).toBeVisible();
     // Ask every time: nothing goes with a message unless you attach it.
-    await reads.getByRole('radio', { name: 'Ask' }).click();
-    await expect(reads.getByRole('radio', { name: 'Ask' })).toHaveAttribute('aria-checked', 'true');
+    await ladder.getByRole('menuitemradio', { name: 'Ask every time' }).click();
+    await expect(ladder).toHaveCount(0);
+    await expect(reads).toHaveText('Asks before reading');
     await expect(chip).toHaveCount(0);
     await expect(panel.getByRole('button', { name: 'Attach a tab' })).toBeVisible();
 
@@ -214,7 +220,7 @@ test('what Duet can read: "Ask every time" attaches nothing for you; "Nothing", 
 
     // The panel says so, with no choice per chat, nothing attached and no way to attach.
     await expect(reads).toHaveCount(0);
-    await expect(panel.getByText('Nothing', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Reads nothing', { exact: true })).toBeVisible();
     await expect(panel.getByRole('button', { name: 'Change in Settings' })).toBeVisible();
     await expect(panel.getByRole('button', { name: 'Attach a tab' })).toHaveCount(0);
     await expect(chip).toHaveCount(0);
@@ -246,7 +252,8 @@ test('what Duet can read: "Ask every time" attaches nothing for you; "Nothing", 
     await panel.getByRole('button', { name: 'Change in Settings' }).click();
     await expect(choice).toBeVisible();
     await choice.getByRole('radio', { name: /^The tab you’re on/ }).click();
-    await expect(reads.getByRole('radio', { name: 'This tab' })).toBeVisible();
+    // The chat's own choice is back (it was Ask every time; Settings' choice is for new chats).
+    await expect(reads).toHaveText('Asks before reading');
   } finally {
     await app.close();
   }
@@ -420,7 +427,8 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     const add = settings.getByRole('textbox', { name: 'Add a site Duet never reads' });
     await add.fill('127.0.0.1');
     await add.press('Enter');
-    await panel.getByRole('radiogroup', { name: 'What Duet can read' }).getByRole('radio', { name: 'All tabs' }).click();
+    await panel.getByRole('button', { name: /^(Reads |Asks before reading)/ }).click();
+    await panel.getByRole('menu', { name: 'What Duet can read' }).getByRole('menuitemradio', { name: 'All your tabs' }).click();
     await expect(panel.getByText(/Reading 127\.0\.0\.1/)).toHaveCount(0);
     await send(panel, 'list my tabs');
     await expect(panel.getByText('I can see 0 tabs.')).toBeVisible();
