@@ -57,6 +57,13 @@ export const SEGMENT_CLOSE = 1024 * 1024;
 export const PASS_BYTES = 16 * 1024 * 1024;
 /** `sync-<n>.json` is small; one bigger isn't Chord's. */
 const MAX_SYNC_FILE = 64 * 1024;
+/**
+ * The most computers a pass reads (sync keeps 64 devices), and the newest
+ * segments of each it looks at: compaction keeps a log to a few, and 1,000 is
+ * a gigabyte of segments (each closes at 1 MB).
+ */
+const MAX_COMPUTERS = 64;
+const MAX_SEGMENTS = 1000;
 /** Sync's own format, apart from the records' (`DATA_FORMAT`) and the envelope's. */
 export const SYNC_FORMAT = 1;
 
@@ -567,9 +574,10 @@ export async function* readComputers(
   opts: { generation: number; self: string; root: Uint8Array; cursor(device: string, segment: number): SegmentCursor | null; budget?: number },
   c: DataCrypto,
 ): AsyncGenerator<ReadEvent> {
-  for (const device of await devicesIn(fs, opts.generation)) {
+  // A folder can hold anything: no more computers than sync keeps devices, and no more of a computer's segments than a log needs.
+  for (const device of (await devicesIn(fs, opts.generation)).slice(0, MAX_COMPUTERS)) {
     if (device === opts.self) continue;
-    const segments = await segmentsOf(fs, opts.generation, device);
+    const segments = (await segmentsOf(fs, opts.generation, device)).slice(-MAX_SEGMENTS);
     if (segments.length === 0) continue;
     // The newest snapshot: everything before it is in it.
     let start = segments[0]!;

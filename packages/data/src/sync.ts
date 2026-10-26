@@ -94,6 +94,21 @@ export interface SyncMeta {
 
 const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null };
 
+/**
+ * Sync's costs, as chord-data measures them: a whole write() with sync on and
+ * off, the stamping hook inside it, a frame from asking the worker to its
+ * answer (and its bytes), and each merged slice.
+ */
+export interface SyncTimings {
+  write: number[];
+  writeOff: number[];
+  stamp: number[];
+  frame: number[];
+  frameBytes: number[];
+  merge: number[];
+  plan: number[];
+}
+
 /** A merge's outcome: what changed (for main), what was left out, and whether this computer was removed. */
 export interface MergeResult {
   changes: Map<string, Set<string>>;
@@ -113,6 +128,8 @@ interface Loaded {
 }
 
 const ICON_CACHE = 500;
+/** Things main applies apart from chords and sidebar nodes. */
+const SYNC_TYPES_APPLIED: ReadonlySet<string> = new Set(['favorite', 'theme', 'route', 'settings', 'effects']);
 
 /** A data URL's icon: its bytes' SHA-256 as its id (core's iconId), its type, its bytes as base64. */
 function iconFrom(url: string | null): { id: string; mime: string; data: string } | null {
@@ -132,6 +149,14 @@ export class SyncStore {
   private readonly icons = new Map<string, { id: string; mime: string; data: string } | null>();
   /** Changes stamped since the worker last took the outbox: chord-data writes them about 3 s after the last. */
   pending = 0;
+  /** How long sync's steps took on chord-data's thread (ms), the last few hundred of each: perf.spec.ts reads them. */
+  readonly timings: SyncTimings = { write: [], writeOff: [], stamp: [], frame: [], frameBytes: [], merge: [], plan: [] };
+
+  timed(what: keyof SyncTimings, ms: number): void {
+    const list = this.timings[what];
+    list.push(Math.round(ms * 1000) / 1000);
+    if (list.length > 500) list.shift();
+  }
 
   constructor(
     private readonly sql: Sql,
@@ -263,12 +288,13 @@ export class SyncStore {
    * (`fromSync`), it's only noted as what this computer has.
    */
   private touch(type: string, id: string, after: SyncValues | null, fromSync: boolean, now: number, icon: { id: string; mime: string; data: string } | null = null): void {
-    const had = this.load(type, id);
-    const local = after ?? (had ? { deleted: true } : null);
     if (fromSync) {
-      if (had) this.setLocal(type, id, local);
+      // Another computer's value, applied: only noted, without reading what's merged (applying a big merge writes hundreds).
+      this.setLocal(type, id, after ?? { deleted: true });
       return;
     }
+    const had = this.load(type, id);
+    const local = after ?? (had ? { deleted: true } : null);
     const changes = localChanges(had?.thing, had?.local ?? null, after);
     if (!changes) {
       if (had && !same(had.local, local)) this.setLocal(type, id, local);
@@ -297,6 +323,13 @@ export class SyncStore {
           this.touch('chord', op.id, op.value ? localChordFields(op.value) : null, fromSync, now);
           break;
         case 'node': {
+          if (fromSync) {
+            // A sync write names its node's kind; one gone, whichever kind sync has under its id.
+            const icon = op.value?.kind === 'tab' ? this.icon(op.value.favicon) : null;
+            if (op.value) this.setLocal(op.value.kind, op.id, localNodeFields(op.value, icon?.id ?? null) ?? { deleted: true });
+            else this.sql(`UPDATE sync_record SET local = '{"deleted":true}' WHERE id = ? AND type IN ('folder', 'tab', 'split')`).run(op.id);
+            break;
+          }
           if (!op.value) {
             const type = this.nodeType(op.id);
             if (type) this.touch(type, op.id, null, fromSync, now);
@@ -577,6 +610,41 @@ export class SyncStore {
       newId,
     };
     return planApply(this.changeList(changes), ctx);
+  }
+
+  /**
+   * Changed things in the order main applies them, so each lands in what holds
+   * it whichever push it's in: chords, folders by depth, splits, tabs, the
+   * rest; what went last (a tab moved out of a chord that went stays).
+   */
+  orderForApply(changes: Map<string, Set<string>>): [string, Set<string>][] {
+    const things = new Map<string, Loaded | null>();
+    const get = (type: string, id: string) => {
+      const key = thingKey(type, id);
+      if (!things.has(key)) things.set(key, this.load(type, id));
+      return things.get(key) ?? null;
+    };
+    const depth = (thing: SyncThing): number => {
+      let n = 0;
+      for (let parent = (thing.fields['pos']?.v as { parent?: unknown } | undefined)?.parent; typeof parent === 'string' && n <= 16; n++) {
+        const up = get('folder', parent)?.thing;
+        parent = up ? (up.fields['pos']?.v as { parent?: unknown } | undefined)?.parent : null;
+      }
+      return n;
+    };
+    const rank = (key: string): number => {
+      const [type, id] = key.split('\n') as [string, string];
+      const thing = get(type, id)?.thing;
+      if (!thing) return 100;
+      if (isGone(thing)) return type === 'chord' ? 90 : 80;
+      if (type === 'chord') return 0;
+      if (type === 'folder') return 10 + depth(thing);
+      if (type === 'split') return 40;
+      if (type === 'tab') return 50;
+      return SYNC_TYPES_APPLIED.has(type) ? 60 : 70;
+    };
+    const ranks = new Map([...changes.keys()].map((key) => [key, rank(key)]));
+    return [...changes].sort(([a], [b]) => ranks.get(a)! - ranks.get(b)!);
   }
 
   /** Every thing whose merged value differs from what this computer has (or never had): what a join applies. */

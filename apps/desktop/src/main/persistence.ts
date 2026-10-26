@@ -30,6 +30,8 @@ import {
 import { MessageChannelMain, utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron';
 
 const FLUSH_MS = 250;
+/** Entities per write past which a flush goes in several, each a transaction of a few milliseconds. */
+const WRITE_CHUNK = 100;
 const CLOSE_TIMEOUT_MS = 2000;
 const MAX_RESTARTS = 3;
 
@@ -70,6 +72,8 @@ export class Persistence {
   /** History happenings, written in order with the next batch; never coalesced. */
   private events: HistoryEvent[] = [];
   private inFlightEvents: HistoryEvent[] = [];
+  /** History's happenings sent ahead of the queue for a search (`flushEvents`), until written. */
+  private sideEvents: HistoryEvent[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private chain: Promise<void> = Promise.resolve();
   private restarts = 0;
@@ -112,8 +116,9 @@ export class Persistence {
       // Put the interrupted batch back, unless a newer write for the same entity is already queued.
       for (const op of this.inFlight) if (!this.pending.has(opKey(op))) this.pending.set(opKey(op), op);
       this.inFlight = [];
-      this.events = [...this.inFlightEvents, ...this.events];
+      this.events = [...this.inFlightEvents, ...this.sideEvents, ...this.events];
       this.inFlightEvents = [];
+      this.sideEvents = [];
       if (this.restarts++ >= MAX_RESTARTS) {
         console.error('chord-data keeps exiting; changes are no longer being saved');
         return;
@@ -208,11 +213,13 @@ export class Persistence {
 
   /**
    * History, archived tabs and learned picks for what was typed in the command bar.
-   * Pending writes go first, so a page visited or a tab archived a moment ago is found.
+   * History's happenings waiting go first, so a page visited or a tab archived a
+   * moment ago is found; the sidebar's own writes needn't, so a big one (a merge
+   * from another computer being saved) never holds a search up.
    */
   async search(query: string, chordId: string | null): Promise<SearchResult> {
     try {
-      await this.flush();
+      await this.flushEvents();
       const response = await this.request({ type: 'search', query, chordId, now: Date.now() });
       return response.ok && response.search ? response.search : { history: [], choices: [], archive: [] };
     } catch {
@@ -261,10 +268,10 @@ export class Persistence {
     return response.duet ?? {};
   }
 
-  /** The archive page's entries. Pending writes go first, so a tab archived a moment ago is there. */
+  /** The archive page's entries. History's happenings waiting go first, so a tab archived a moment ago is there. */
   async archiveList(query: string, limit: number): Promise<ArchivePage> {
     try {
-      await this.flush();
+      await this.flushEvents();
       const response = await this.request({ type: 'archive.list', query, limit });
       return response.ok && response.archive ? response.archive : { items: [], more: false };
     } catch {
@@ -275,7 +282,7 @@ export class Persistence {
   /** One archive entry with its history, or the newest one archived for `reasons`. */
   async archiveEntry(which: { archiveId: string } | { reasons: ArchiveReason[] }): Promise<ArchiveEntry | null> {
     try {
-      await this.flush();
+      await this.flushEvents();
       const response = await this.request('archiveId' in which ? { type: 'archive.get', archiveId: which.archiveId } : { type: 'archive.latest', reasons: which.reasons });
       return response.ok ? (response.entry ?? null) : null;
     } catch {
@@ -287,24 +294,54 @@ export class Persistence {
     this.timer ??= setTimeout(() => void this.flush(), FLUSH_MS);
   }
 
-  /** Write everything queued so far; batches go one at a time, in order. */
+  /**
+   * History's happenings waiting (visits, picks, the archive's comings and
+   * goings), written now on their own, ahead of any sidebar writes still
+   * queued: what a search or the archive reads. chord-data takes requests in
+   * order, so a write already sent is in before them.
+   */
+  private flushEvents(): Promise<void> {
+    if (this.events.length === 0) return Promise.resolve();
+    const events = this.events;
+    this.events = [];
+    this.sideEvents.push(...events);
+    return this.request({ type: 'write', ops: [], events }).then(
+      (response) => {
+        this.sideEvents = this.sideEvents.filter((e) => !events.includes(e));
+        if (!response.ok) console.error('chord-data refused a write:', response.error);
+      },
+      // The process died mid-write; the exit handler has requeued them.
+      () => undefined,
+    );
+  }
+
+  /**
+   * Write everything queued so far; batches go one at a time, in order. A
+   * big one (a merge from another computer applied, an import's parts) goes
+   * WRITE_CHUNK entities at a time, each its own transaction, chords first:
+   * chord-data answers the command bar's searches between them.
+   */
   flush(): Promise<void> {
     clearTimeout(this.timer);
     this.timer = undefined;
     this.chain = this.chain.then(async () => {
-      if (this.pending.size === 0 && this.events.length === 0) return;
-      this.inFlight = [...this.pending.values()];
-      this.pending.clear();
-      this.inFlightEvents = this.events;
-      this.events = [];
-      try {
-        const response = await this.request({ type: 'write', ops: this.inFlight, events: this.inFlightEvents });
-        // A batch the database refuses would fail forever if retried; report it and move on.
-        if (!response.ok) console.error('chord-data refused a write:', response.error);
-        this.inFlight = [];
-        this.inFlightEvents = [];
-      } catch {
-        // The process died mid-write; the exit handler has requeued the batch.
+      while (this.pending.size > 0 || this.events.length > 0) {
+        let ops = [...this.pending.values()];
+        if (ops.length > WRITE_CHUNK) ops = [...ops.filter((op) => op.k === 'chord'), ...ops.filter((op) => op.k !== 'chord')].slice(0, WRITE_CHUNK);
+        for (const op of ops) this.pending.delete(opKey(op));
+        this.inFlight = ops;
+        this.inFlightEvents = this.events;
+        this.events = [];
+        try {
+          const response = await this.request({ type: 'write', ops: this.inFlight, events: this.inFlightEvents });
+          // A batch the database refuses would fail forever if retried; report it and move on.
+          if (!response.ok) console.error('chord-data refused a write:', response.error);
+          this.inFlight = [];
+          this.inFlightEvents = [];
+        } catch {
+          // The process died mid-write; the exit handler has requeued the batch.
+          return;
+        }
       }
     });
     return this.chain;

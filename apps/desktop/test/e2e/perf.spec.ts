@@ -13,12 +13,15 @@
  * a budget. How to run it and read the report: docs/testing/performance.md.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { availableParallelism, cpus, release, tmpdir, totalmem } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type CDPSession, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { appendRecords, writeSnapshot, writeSyncFile, type DataRecord, type OwnSegment, type SyncFs } from '@chord/core';
+import { nodeCrypto } from '@chord/data/crypto';
 import { grew, launchLimit, memoryLimit, runnerKey, UPDATE_COMMAND, type Baselines, type Measured } from './baselines';
 import { browserPid, busiestWindow, frameIntervals, framesOf, insideLongestTask, layoutsOf, longestTask, profile, trace, type Frame, type TraceEvent } from './frames';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
@@ -56,7 +59,7 @@ interface Check {
 }
 
 interface Row {
-  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view' | 'memory' | 'export' | 'import';
+  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view' | 'memory' | 'export' | 'import' | 'sync';
   name: string;
   scenario: string;
   motion: 'on' | 'off' | null;
@@ -1537,3 +1540,336 @@ for (const into of ['a profile with data', 'a new profile'] as const) {
     }
   });
 }
+
+/* ---------- Your data's sync ---------- */
+
+/** Sync's costs as chord-data measures them (main's test hook): writes with sync on and off, the stamping hook, frames, merged slices. */
+interface SyncTimings {
+  write: number[];
+  writeOff: number[];
+  stamp: number[];
+  frame: number[];
+  frameBytes: number[];
+  merge: number[];
+  plan: number[];
+}
+const syncHook = <T>(app: ElectronApplication, name: string) => app.evaluate((_electron, hook) => (globalThis as unknown as { chordTestHooks: Record<string, () => Promise<unknown>> }).chordTestHooks[hook]!(), name) as Promise<T>;
+const SYNC_PASSPHRASE = 'harbor lantern quietly orbit maple';
+/** scrypt at its smallest for a folder the test writes itself: the cost measured is sync's, not the key's. */
+const FAST_KDF = { N: 2 ** 10, r: 8, p: 1 };
+
+/** A folder on the disk, as sync's worker sees one (the test writes another computer's log into it with core's protocol). */
+function diskFolder(root: string): SyncFs {
+  const at = (path: string) => (path ? join(root, ...path.split('/')) : root);
+  return {
+    list: async (path) => (existsSync(at(path)) ? readdirSync(at(path)) : null),
+    stat: async (path) => {
+      const s = statSync(at(path), { throwIfNoEntry: false });
+      return s?.isFile() ? { size: s.size, mtime: s.mtimeMs } : null;
+    },
+    read: async (path, position, length) => {
+      const fd = openSync(at(path), 'r');
+      try {
+        const buffer = Buffer.alloc(length);
+        return new Uint8Array(buffer.subarray(0, readSync(fd, buffer, 0, length, position)));
+      } finally {
+        closeSync(fd);
+      }
+    },
+    create: async (path, bytes, exclusive) => writeFileSync(at(path), bytes, { flag: exclusive ? 'wx' : 'w' }),
+    append: async (path, bytes) => appendFileSync(at(path), bytes),
+    mkdir: async (path) => void mkdirSync(at(path), { recursive: true }),
+    remove: async (path) => rmSync(at(path), { recursive: true, force: true }),
+  };
+}
+
+/** Turns sync on in Settings' own way (its API), the folder picker answered in main: a new folder, or one to join with *Keep both*. */
+async function turnOnSync(app: ElectronApplication, shell: Page, folder: string): Promise<Page> {
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog;
+  }, folder);
+  await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
+  const settings = await pageWhere(app, isSettings);
+  const state = await settings.evaluate(async (passphrase) => {
+    const sync = (
+      window as unknown as {
+        chord: {
+          sync: {
+            chooseFolder(): Promise<{ ok: boolean; folderId?: string; inspection?: { state: string } }>;
+            setup(id: string, p: string): Promise<{ ok: boolean; view?: { state: string } }>;
+            join(id: string, p: string): Promise<{ ok: boolean; view?: { state: string } }>;
+            choose(mode: string): Promise<{ ok: boolean; view?: { state: string } }>;
+          };
+        };
+      }
+    ).chord.sync;
+    const folder = await sync.chooseFolder();
+    if (!folder.ok) return 'no folder';
+    if (folder.inspection?.state === 'new') return (await sync.setup(folder.folderId!, passphrase)).view?.state ?? 'failed';
+    const joined = await sync.join(folder.folderId!, passphrase);
+    if (joined.view?.state === 'choosing') return (await sync.choose('both')).view?.state ?? 'failed';
+    return joined.view?.state ?? 'failed';
+  }, SYNC_PASSPHRASE);
+  expect(state).toBe('on');
+  return settings;
+}
+
+/** chord-data's private memory (MB): its worker thread, when there is one, is in the same process. */
+async function chordDataMemory(app: ElectronApplication): Promise<number> {
+  await new Promise((done) => setTimeout(done, 2000));
+  return round((await processMemory(app)).get('chord-data') ?? NaN);
+}
+
+/**
+ * One change, from its stamp to its frame (S15 §7): a chord renamed, then
+ * written to the folder at once (not 3 s later), each time; with a sidebar's
+ * worth of tabs. Before: the same writes with sync off. After: the stamping
+ * hook inside write(), the whole write, and the worker's frame from asking to
+ * answer, with the frame's size. And chord-data's memory with sync off, with
+ * its worker on, and off again.
+ */
+test('sync: one change, stamp to frame; chord-data’s memory with the sync worker on and off', async () => {
+  test.setTimeout(240_000);
+  cpuBusy = await measureCpuBusy();
+  const folder = mkdtempSync(join(tmpdir(), 'chord-perf-sync-'));
+  const app = await launch({ CHORD_PERF_TABS: String(EXPORT.tabs) });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect(shell.getByRole('tree', { name: 'Today' })).toBeVisible();
+    const chordId = await shell.evaluate(async () => {
+      const { state, windowId } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string }> } }> } } }).chord.state.snapshot();
+      return state.windows[windowId]!.activeChordId;
+    });
+    // Two of its Today tabs pinned, so the chord has synced tabs as well as a name.
+    await shell.evaluate(async () => {
+      const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, { id: string; kind: string; section: string }> } }>; dispatch(c: unknown): Promise<void> } } }).chord.state;
+      const { state } = await chord.snapshot();
+      for (const node of Object.values(state.nodes).filter((n) => n.kind === 'tab' && n.section === 'today').slice(0, 2)) await chord.dispatch({ t: 'tab.pin', nodeId: node.id });
+    });
+    const CHANGES = 30;
+    const rename = async (i: number) => {
+      await shell.evaluate(({ chordId, name }) => (window as unknown as { chord: { state: { dispatch(c: unknown): Promise<void> } } }).chord.state.dispatch({ t: 'chord.update', chordId, name }), { chordId, name: `Chord ${i}` });
+      const t0 = Date.now();
+      await syncHook(app, 'syncWrite');
+      return Date.now() - t0;
+    };
+    const memoryOff = await chordDataMemory(app);
+    for (let i = 0; i < CHANGES; i++) await rename(i);
+    const before = await syncHook<SyncTimings>(app, 'syncTimings');
+
+    await turnOnSync(app, shell, folder);
+    const memoryOn = await chordDataMemory(app);
+    const ends: number[] = [];
+    for (let i = 0; i < CHANGES; i++) ends.push(await rename(CHANGES + i));
+    const after = await syncHook<SyncTimings>(app, 'syncTimings');
+    await syncHook(app, 'syncOff');
+    const memoryAfter = await chordDataMemory(app);
+
+    const writesOff = before.writeOff.slice(-CHANGES);
+    const writesOn = after.write.slice(-CHANGES);
+    const stamps = after.stamp.slice(-CHANGES);
+    const frames = after.frame.slice(-CHANGES);
+    expect(frames.length).toBe(CHANGES);
+    record({
+      group: 'sync',
+      name: 'Sync: one change, stamp to frame',
+      scenario: `${EXPORT.tabs} Today tabs`,
+      motion: null,
+      locked: screenLocked(),
+      checks: [
+        // chord-data's thread answers the command bar's searches: the hook and the write it's in stay far under a frame.
+        check('write with sync on', max(writesOn), BUDGET.fastFrameMs, { locked: null }),
+        check('stamping hook', max(stamps), BUDGET.fastFrameMs, { locked: null }),
+        // The frame: the worker seals and appends it, off chord-data's thread.
+        check('frame', median(frames), 100, { locked: null }),
+      ],
+      detail: {
+        writeOffMs: { median: round(median(writesOff)), worst: round(max(writesOff)) },
+        writeOnMs: { median: round(median(writesOn)), worst: round(max(writesOn)) },
+        stampMs: { median: round(median(stamps) * 100) / 100, worst: round(max(stamps) * 100) / 100 },
+        frameMs: { median: round(median(frames)), worst: round(max(frames)) },
+        frameBytes: { median: median(after.frameBytes.slice(-CHANGES)), worst: max(after.frameBytes.slice(-CHANGES)) },
+        // From the test asking for the write to the frame being in the folder: main, chord-data and the worker, round trip.
+        changeToFrameMs: { median: round(median(ends)), worst: round(max(ends)) },
+        changes: CHANGES,
+      },
+    });
+    record({
+      group: 'sync',
+      name: 'Sync: chord-data’s memory, worker on and off',
+      scenario: 'one window',
+      motion: null,
+      locked: null,
+      // Reported: the worker thread's own heap, and what turning sync off gives back.
+      checks: [],
+      detail: { offMb: memoryOff, onMb: memoryOn, offAgainMb: memoryAfter, workerMb: round(memoryOn - memoryOff) },
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+/**
+ * Keystrokes during a large merge (S15 §7): S15's realistic setup (12 chords,
+ * 260 pinned tabs in 40 folders, 200 icons, 24 Favorites, 30 routes, Effects
+ * on 40 sites) is another computer's log in the folder, which this Chord, with
+ * 50,000 visits of history, joins while the command bar types: about 1,500
+ * records merged and 600 things applied. Then, typing again, that computer
+ * renames every folder and tab, a frame of 300 records a few times a second
+ * (its own writes come 3 s apart at most), each merged by chord-data in slices
+ * between the searches and applied by main a part at a time. The keystroke
+ * budgets hold, and main's own work stays under a frame.
+ */
+test('sync: keystrokes during a large merge', async () => {
+  test.setTimeout(400_000);
+  cpuBusy = await measureCpuBusy();
+  const folder = mkdtempSync(join(tmpdir(), 'chord-perf-sync-merge-'));
+  // Another computer's log, written as its worker would, with core's own protocol.
+  const fs = diskFolder(join(folder, 'Chord sync'));
+  await fs.mkdir('');
+  const root = await writeSyncFile(fs, 1, SYNC_PASSPHRASE, 'f00df00df00df00d', nodeCrypto, FAST_KDF);
+  const OTHER = 'f00df00df00df00d';
+  let clock = Date.now() - 60_000;
+  const stamp = (): [number, number, string] => [++clock, 0, OTHER];
+  const THEME = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' };
+  const icons = Array.from({ length: 200 }, (_, i) => {
+    const bytes = Buffer.from(`icon ${i} `.repeat(40));
+    return { id: `sha256-${createHash('sha256').update(bytes).digest('hex')}`, mime: 'image/png', data: bytes.toString('base64') };
+  });
+  const setup: DataRecord[] = [
+    { type: 'device', id: OTHER, at: stamp(), set: { name: 'Perf desk', os: 'Linux', app: '0.5.0' } },
+    ...icons.map((icon): DataRecord => ({ type: 'icon', id: icon.id, set: { mime: icon.mime, data: icon.data } })),
+    ...Array.from({ length: 12 }, (_, c): DataRecord => ({ type: 'chord', id: `c${c}`, at: stamp(), set: { name: `Chord ${c}`, icon: 'C', theme: THEME, rank: `a${String(c).padStart(2, '0')}`, profile: 'default', created: 1 } })),
+    ...Array.from({ length: 40 }, (_, f): DataRecord => ({ type: 'folder', id: `f${f}`, at: stamp(), set: { pos: { chord: `c${f % 12}`, section: 'pinned', parent: null, rank: `b${String(f).padStart(3, '0')}` }, title: `Folder ${f}`, collapsed: true, created: 1 } })),
+    ...Array.from({ length: 260 }, (_, t): DataRecord => {
+      const inFolder = t < 200;
+      const chord = inFolder ? `c${(t % 40) % 12}` : `c${t % 12}`;
+      return {
+        type: 'tab',
+        id: `t${t}`,
+        at: stamp(),
+        set: { pos: { chord, section: 'pinned', parent: inFolder ? `f${t % 40}` : null, rank: `c${String(t).padStart(3, '0')}` }, pinnedUrl: `${site.origin}/perf/${t}`, title: `Page ${t}`, customTitle: null, icon: icons[t % 200]!.id, muted: false, created: 1 },
+      };
+    }),
+    ...Array.from({ length: 24 }, (_, i): DataRecord => ({ type: 'favorite', id: `fav${i}`, at: stamp(), set: { url: `https://fav${i}.test/`, title: `Favorite ${i}`, icon: icons[i]!.id, rank: `a${String(i).padStart(2, '0')}`, created: 1 } })),
+    ...Array.from({ length: 30 }, (_, i): DataRecord => ({ type: 'route', id: `route${i}.test`, at: stamp(), set: { chord: `c${i % 12}`, created: 1 } })),
+    ...Array.from({ length: 40 }, (_, i): DataRecord => ({ type: 'effects', id: `fx${i}.test`, at: stamp(), set: { wet: true, css: `h1 { color: rgb(${i}, 0, 0) }`, cssOn: true, hidden: [], presets: [], duet: [] } })),
+  ];
+  let own: OwnSegment = await writeSnapshot(fs, { generation: 1, device: OTHER }, setup, root, { app: '0.5.0' }, nodeCrypto);
+  let generation = 0;
+  /** That computer renames every folder and tab: one frame of 300 records. */
+  const renameAll = async () => {
+    generation++;
+    const records: DataRecord[] = [
+      ...Array.from({ length: 40 }, (_, f): DataRecord => ({ type: 'folder', id: `f${f}`, at: stamp(), set: { title: `Folder ${f} · ${generation}` } })),
+      ...Array.from({ length: 260 }, (_, t): DataRecord => ({ type: 'tab', id: `t${t}`, at: stamp(), set: { customTitle: `Page ${t} · ${generation}` } })),
+    ];
+    const appended = await appendRecords(fs, own, records, root, { app: '0.5.0', device: [] }, nodeCrypto);
+    if (!appended.ok) throw new Error(appended.problem);
+    own = appended.own;
+  };
+
+  const app = await launch(SEEDED);
+  try {
+    const overlay = await pageWhere(app, isOverlay);
+    const { shell, settings } = await yourData(app);
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog;
+    }, folder);
+    /** Pinned folders and tabs, and how many are named with `suffix`: read in main by a development hook, so the check costs main next to nothing. */
+    const pinned = (suffix = '') => app.evaluate((_electron, end) => (globalThis as unknown as { chordTestHooks: { pinnedNames(s: string): { count: number; named: number } } }).chordTestHooks.pinnedNames(end), suffix);
+    /** Joining, as Settings' card does it (*Keep both*: this profile has 50,000 visits of its own), and the whole setup in the sidebar. */
+    const join = async (): Promise<number> => {
+      const t0 = performance.now();
+      const state = await settings.evaluate(async (passphrase) => {
+        const sync = (
+          window as unknown as {
+            chord: { sync: { chooseFolder(): Promise<{ ok: boolean; folderId?: string }>; join(id: string, p: string): Promise<{ ok: boolean; view?: { state: string } }>; choose(mode: string): Promise<{ ok: boolean; view?: { state: string } }> } };
+          }
+        ).chord.sync;
+        const folder = await sync.chooseFolder();
+        const joined = await sync.join(folder.folderId!, passphrase);
+        return joined.view?.state === 'choosing' ? ((await sync.choose('both')).view?.state ?? 'failed') : (joined.view?.state ?? 'failed');
+      }, SYNC_PASSPHRASE);
+      expect(state).toBe('on');
+      await expect.poll(async () => (await pinned()).count, { timeout: 30_000, intervals: [100] }).toBe(300);
+      return performance.now() - t0;
+    };
+    /** One frame from that computer: written, chord-data told to look, and every tab's new name on screen. */
+    const roundOnce = async (): Promise<number> => {
+      const t0 = performance.now();
+      await renameAll();
+      await syncHook(app, 'syncRead');
+      const name = `· ${generation}`;
+      await expect.poll(async () => (await pinned(name)).named, { timeout: 20_000, intervals: [100] }).toBe(300);
+      return performance.now() - t0;
+    };
+
+    await bringToFront(app, shell);
+    await setMotion(app, shell, overlay, true);
+    environment ??= await readEnvironment(app, shell);
+    const { s, typing } = await typingSession(app, shell, overlay);
+    await openCommandBar(shell, overlay);
+    await typeSlowly(overlay, 'warm up');
+    await closeCommandBar(overlay);
+    const alone = await typing('before a merge');
+    // The large merge: joining, while typing. Its 1,500 records merged, and 600 things applied.
+    let joinMs = NaN;
+    const joining = await typing('while joining', async () => {
+      joinMs = await join();
+    });
+    const before = await syncHook<SyncTimings>(app, 'syncTimings');
+    // Then frames of 300 changes from that computer, one after another, a few times a second (its own writes come 3 s apart at most).
+    const rounds: number[] = [];
+    const during = await typing('during frames of 300 changes', async (typed) => {
+      while (!typed()) {
+        rounds.push(await roundOnce());
+        await new Promise((done) => setTimeout(done, 400));
+      }
+    });
+    expect(rounds.length).toBeGreaterThan(0);
+    const after = await syncHook<SyncTimings>(app, 'syncTimings');
+    const joinMerges = before.merge;
+    const merges = after.merge.slice(before.merge.length);
+    for (const [label, main, extra] of [
+      ['while joining', joining, { joinMs: round(joinMs), mergeSliceMs: { median: round(median(joinMerges)), worst: round(max(joinMerges)), slices: joinMerges.length }, planMs: { worst: round(max(before.plan)) }, writeMs: { worst: round(max(before.write)) } }],
+      [
+        'during frames of 300 changes',
+        during,
+        {
+          rounds: rounds.length,
+          // From the other computer writing its frame to every tab's new name in the sidebar.
+          roundMs: { median: round(median(rounds)), worst: round(max(rounds)) },
+          mergeSliceMs: { median: round(median(merges)), worst: round(max(merges)), slices: merges.length },
+          // chord-data's other work for each frame: what changed, read back for main (its pushes); main's writes of what it applied.
+          planMs: { median: round(median(after.plan.slice(before.plan.length))), worst: round(max(after.plan.slice(before.plan.length))) },
+          writeMs: { median: round(median(after.write.slice(before.write.length))), worst: round(max(after.write.slice(before.write.length))) },
+        },
+      ],
+    ] as const) {
+      const slices = label === 'while joining' ? joinMerges : merges;
+      record({
+        group: 'sync',
+        name: `Sync: a large merge, ${label}`,
+        scenario: s.scenario,
+        motion: null,
+        locked: main.locked,
+        checks: [
+          // Main's own work while changes are applied, from the trace: no task past a frame, and room to spare in any 30 ms (rule 1).
+          check('main task', main.task, BUDGET.frameMs, { locked: main.locked }),
+          check('main busiest 30 ms', main.busiest.ms, BUDGET.frameMs, { locked: main.locked }),
+          // chord-data's thread answers the command bar's searches between merged slices: none past a keystroke's budget.
+          check('merge slice', max(slices), BUDGET.historyKeystrokeMs, { locked: null }),
+        ],
+        detail: {
+          mainTaskMs: { alone: round(alone.task), during: round(main.task), inside: main.inside },
+          mainBusiest30Ms: { alone: alone.busiest, during: main.busiest },
+          mainLagMs: { alone: round(alone.lag), during: round(main.lag) },
+          ...extra,
+        },
+      });
+    }
+  } finally {
+    await app.close();
+  }
+});

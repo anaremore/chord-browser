@@ -16,15 +16,24 @@
  */
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { applyIsEmpty, CLOCK_AHEAD_MS, SYNC_OFF, type FolderInspection, type SyncProblem, type SyncStatus } from '@chord/core';
+import { applyIsEmpty, CLOCK_AHEAD_MS, emptyApply, SYNC_OFF, type FolderInspection, type SyncApply, type SyncProblem, type SyncStatus } from '@chord/core';
 import type { DataPush, SyncInfo, SyncReply, SyncRequest } from '@chord/data';
 import type { ChordDatabase } from '@chord/data/db';
 import type { FromWorker, ToWorker } from './sync-worker';
 
 /** Changes are written this long after the last one (S15 §6), so a burst of them is one frame. */
 const WRITE_MS = 3000;
-/** Records merged per transaction: a few milliseconds each, with searches answered between them. */
-const SLICE = 200;
+/** Records merged per transaction, and changed things read back for main per push: a few milliseconds each, with searches answered between them. */
+const SLICE = 100;
+const PLAN_SLICE = 100;
+/**
+ * SQLite's checkpoints, which copy the write-ahead log into the database and
+ * took 10–70 ms on this thread, run on the worker's thread instead while sync
+ * merges and main writes what it applied, until this long after; and that
+ * often meanwhile.
+ */
+const BUSY_MS = 5000;
+const CHECKPOINT_MS = 500;
 /** Compaction at most daily, once a computer's own segments pass twice a snapshot's size, or 500 frames (S15 §6). */
 const COMPACT_MS = 86_400_000;
 const COMPACT_FRAMES = 500;
@@ -51,6 +60,8 @@ export class SyncController {
   private passDone: (() => void) | null = null;
   /** Merges one batch at a time, in order. */
   private merging: Promise<void> = Promise.resolve();
+  /** Checkpoints are small while sync is busy (BUSY_MS). */
+  private busy: { db: ChordDatabase; timer: ReturnType<typeof setTimeout>; every: ReturnType<typeof setInterval> } | null = null;
 
   constructor(
     private readonly db: () => ChordDatabase | null,
@@ -116,6 +127,8 @@ export class SyncController {
 
   private stopWorker(): void {
     clearTimeout(this.writeTimer);
+    // Checkpoints go back to chord-data's own connection.
+    this.quiet();
     const worker = this.worker;
     this.worker = null;
     if (!worker) return;
@@ -153,6 +166,7 @@ export class SyncController {
     const db = this.db();
     try {
       if (!db) return;
+      if (message.records.length > 0) this.busyFor(db);
       const { generation } = db.sync.meta;
       const now = Date.now();
       for (let at = 0; at === 0 || at < message.records.length; at += SLICE) {
@@ -160,11 +174,13 @@ export class SyncController {
         if (!db.sync.meta.on) break;
         const slice = message.records.slice(at, at + SLICE);
         const last = at + SLICE >= message.records.length;
+        const started = performance.now();
         const result = db.atomically(() => {
           const merged = db.sync.merge(slice, now);
           if (last) db.sync.saveCursor(generation, message.device, message.segment, message.cursor);
           return merged;
         });
+        db.sync.timed('merge', performance.now() - started);
         for (const [key, names] of result.changes) {
           const had = this.changes.get(key) ?? new Set<string>();
           for (const name of names) had.add(name);
@@ -197,20 +213,66 @@ export class SyncController {
     if (this.problem === 'conflict' || this.problem === 'changed' || this.problem === 'newer') this.stopWorker();
     const done = this.passDone;
     this.passDone = null;
-    if (!db.sync.meta.joining) this.pushChanges();
+    if (!db.sync.meta.joining) await this.pushChanges();
     this.retire();
     this.pushStatus();
     done?.();
   }
 
-  /** What changed since main last heard, as one `sync.apply`. */
-  private pushChanges(): void {
+  /**
+   * What changed since main last heard, as `sync.apply` pushes: parents
+   * before what they hold (chords, folders by depth, splits, tabs, the rest,
+   * what went last), a slice at a time, each read back in a few milliseconds
+   * with searches answered between them.
+   */
+  private async pushChanges(): Promise<void> {
     const db = this.db();
     if (!db || this.changes.size === 0) return;
-    const changes = this.changes;
+    const ordered = db.sync.orderForApply(this.changes);
     this.changes = new Map();
-    const apply = db.sync.planFor(changes);
-    if (!applyIsEmpty(apply)) this.push({ push: 'sync.apply', apply });
+    for (let at = 0; at < ordered.length; at += PLAN_SLICE) {
+      const started = performance.now();
+      const apply = db.sync.planFor(new Map(ordered.slice(at, at + PLAN_SLICE)));
+      db.sync.timed('plan', performance.now() - started);
+      if (!applyIsEmpty(apply)) this.push({ push: 'sync.apply', apply });
+      if (at + PLAN_SLICE < ordered.length) await new Promise((resolve) => setImmediate(resolve));
+    }
+    // Main writes what it applied back to chord-data meanwhile: checkpoints stay small a while longer.
+    this.busyFor(db);
+  }
+
+  /**
+   * While sync merges and main writes what it applied (until BUSY_MS after),
+   * the worker thread runs chord.db's checkpoints, passive ones on a
+   * connection of its own, every CHECKPOINT_MS, and chord-data's thread none.
+   */
+  private busyFor(db: ChordDatabase): void {
+    const worker = this.worker;
+    if (!worker) return;
+    if (this.busy?.db !== db) {
+      this.quiet();
+      db.checkpointElsewhere(true);
+      const every = setInterval(() => this.worker?.postMessage({ t: 'checkpoint', database: db.file } satisfies ToWorker), CHECKPOINT_MS);
+      every.unref();
+      this.busy = { db, timer: setTimeout(() => undefined, 0), every };
+    }
+    clearTimeout(this.busy!.timer);
+    const timer = setTimeout(() => {
+      if (this.busy?.timer === timer) this.quiet();
+    }, BUSY_MS);
+    timer.unref();
+    this.busy!.timer = timer;
+  }
+
+  /** Not busy any more: chord-data's own connection checkpoints again, after one last checkpoint from the worker. */
+  private quiet(): void {
+    const busy = this.busy;
+    if (!busy) return;
+    this.busy = null;
+    clearTimeout(busy.timer);
+    clearInterval(busy.every);
+    this.worker?.postMessage({ t: 'checkpoint', database: busy.db.file } satisfies ToWorker);
+    if (this.db() === busy.db) busy.db.checkpointElsewhere(false);
   }
 
   /** Another computer removed this one: sync stops here, and this computer's data stays (S15 §6). */
@@ -254,8 +316,11 @@ export class SyncController {
       if (!db || !meta?.on || meta.joining || meta.paused || !meta.own || !this.key || !this.worker || (this.problem && this.problem !== 'missing')) return;
       const { upto, records } = db.sync.outbox();
       if (records.length === 0) return;
+      const started = performance.now();
       const reply = await this.ask({ t: 'write', upto, records, device: db.sync.deviceRecords() }, ['written']);
       if (reply.t === 'written') {
+        db.sync.timed('frame', performance.now() - started);
+        db.sync.timed('frameBytes', reply.bytes);
         db.atomically(() => db.sync.written(reply.upto, reply.own, reply.frames, reply.bytes));
         if (this.problem === 'missing') this.problem = null;
         await this.compact();
@@ -410,8 +475,11 @@ export class SyncController {
         return {};
       case 'sync.repush':
         for (const [key, names] of db.sync.thingsFor(request.keys)) this.changes.set(key, names);
-        this.pushChanges();
+        // After any merge under way, in order with it.
+        this.merging = this.merging.then(() => this.pushChanges());
         return {};
+      case 'sync.timings':
+        return { timings: db.sync.timings };
       case 'sync.keyBlob':
         db.sync.setKeyBlob(request.blob);
         return {};
@@ -488,7 +556,18 @@ export class SyncController {
       db.sync.setMeta({ joining: false });
     });
     this.changes.clear();
-    const apply = db.sync.planFor(db.sync.everything());
+    // Everything the synced setup has, read back a slice at a time, searches answered between, as one apply.
+    const apply = emptyApply();
+    const ordered = db.sync.orderForApply(db.sync.everything());
+    for (let at = 0; at < ordered.length; at += PLAN_SLICE) {
+      const started = performance.now();
+      const part = db.sync.planFor(new Map(ordered.slice(at, at + PLAN_SLICE)));
+      db.sync.timed('plan', performance.now() - started);
+      for (const key of ['chords', 'nodes', 'favorites', 'themes', 'routes', 'effects'] as const) (apply[key] as unknown[]).push(...part[key]);
+      for (const key of Object.keys(apply.gone) as (keyof SyncApply['gone'])[]) (apply.gone[key] as unknown[]).push(...part.gone[key]);
+      if (part.settings) apply.settings = { ...apply.settings, ...part.settings };
+      if (at + PLAN_SLICE < ordered.length) await new Promise((resolve) => setImmediate(resolve));
+    }
     const synced = db.sync.syncedChords();
     const replace = mode === 'synced' && synced[0] ? { to: synced[0], keep: synced } : null;
     const reply = await this.ask({ t: 'snapshot', records: db.sync.snapshot() }, ['snapshotted']);

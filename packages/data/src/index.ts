@@ -25,6 +25,7 @@ import type {
 } from '@chord/core';
 import type { ExportCounts, FolderInspection, SyncApply, SyncStatus } from '@chord/core';
 import type { DuetOp, DuetResult } from './duet';
+import type { SyncTimings } from './sync';
 
 /**
  * The latest value of one saved entity, or null to delete it. `sync`: the
@@ -167,7 +168,9 @@ export type SyncRequest =
   /** Things main put off applying while a change of its own to them waited (`chord:<id>`, `node:<id>`…): again, now it's written. */
   | { type: 'sync.repush'; keys: string[] }
   /** safeStorage's ciphertext of the root key (base64), kept in chord.db; null forgets it. */
-  | { type: 'sync.keyBlob'; blob: string | null };
+  | { type: 'sync.keyBlob'; blob: string | null }
+  /** How long sync's steps took on chord-data's thread (development builds' test hooks: perf.spec.ts). */
+  | { type: 'sync.timings' };
 
 /** chord-data's answer to a sync request. */
 export interface SyncReply {
@@ -183,6 +186,7 @@ export interface SyncReply {
   apply?: SyncApply;
   replace?: { to: string; keep: string[] } | null;
   keyBlob?: string | null;
+  timings?: SyncTimings;
 }
 
 /** chord-data → main, unasked: what another computer changed, to apply; and where sync stands, for Settings. */

@@ -642,7 +642,7 @@ export function planApply(changed: Iterable<SyncChange>, ctx: ApplyContext): Syn
 }
 
 /** Things per `sync.apply`: each is one store change on main, small enough for a frame (as an import's parts, merge.ts). */
-export const SYNC_PART = 200;
+export const SYNC_PART = 50;
 
 /**
  * A push as `sync.apply` parts: chords first, then nodes (parents first, a

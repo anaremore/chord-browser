@@ -61,13 +61,17 @@ process.parentPort.on('message', (event) => {
         reply({ id: request.id, ok: true, saved, navs, effects, timing: { up, open, prune, read: lap() } });
         break;
       }
-      case 'write':
+      case 'write': {
         if (!db) throw new Error('chord-data: write before open');
+        const at = performance.now();
+        const stamping = db.sync.stamping;
         db.write(request.ops, Date.now(), request.events);
+        db.sync.timed(stamping ? 'write' : 'writeOff', performance.now() - at);
         reply({ id: request.id, ok: true });
         // What sync stamped goes to the folder a moment after the last change.
         sync.afterWrite();
         break;
+      }
       case 'search':
         if (!db) throw new Error('chord-data: search before open');
         reply({ id: request.id, ok: true, search: db.search(request.query, request.chordId, request.now) });

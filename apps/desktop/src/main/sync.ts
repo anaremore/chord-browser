@@ -40,6 +40,8 @@ import { dialog, safeStorage, type BaseWindow, type OpenDialogOptions } from 'el
 const UNDO_MS = 6000;
 /** Chord coming to the front looks at the folder, at most this often. */
 const FOCUS_MS = 30_000;
+/** Between two parts of what another computer changed: two frames at 60 Hz, so main and the renderers each take one part at a time with room to spare. */
+const PART_GAP_MS = 33;
 
 export interface SyncServiceOptions {
   data: {
@@ -344,7 +346,15 @@ export class SyncService {
    * write gets its stamp first, then chord-data sends what's merged again.
    */
   private async apply(apply: SyncApply, joining = false): Promise<void> {
-    const waiting = this.options.data.waiting;
+    const isWaiting = this.options.data.waiting;
+    // A split goes with its panes: one of them put off puts off the lot, or the store would settle the split without it.
+    const groups = new Map<string, string[]>();
+    for (const node of apply.nodes) {
+      const group = node.kind === 'split' ? node.id : node.kind === 'tab' && node.parentId && apply.nodes.some((n) => n.id === node.parentId && n.kind === 'split') ? node.parentId : null;
+      if (group) groups.set(group, [...(groups.get(group) ?? []), node.id]);
+    }
+    const heldGroups = new Set([...groups].filter(([, ids]) => ids.some((id) => isWaiting(`node:${id}`))).flatMap(([, ids]) => ids.map((id) => `node:${id}`)));
+    const waiting = (key: string) => heldGroups.has(key) || isWaiting(key);
     const later = new Set<string>();
     const hold = <T>(list: T[], key: (item: T) => string) =>
       list.filter((item) => {
@@ -380,10 +390,10 @@ export class SyncService {
     // What each window shows, to tell it if it goes.
     const before = this.options.state();
     const shown = Object.values(before.windows).map((w) => ({ windowId: w.id, chordId: w.activeChordId, name: before.chords[w.activeChordId]?.name ?? '' }));
+    // Input and painting go first between parts, two frames apart, the first too (not in the task that brought the push). Nothing here is urgent.
     for (const part of syncParts(filtered)) {
+      await new Promise((resolve) => setTimeout(resolve, PART_GAP_MS));
       this.options.dispatch({ t: 'sync.apply', ...part });
-      // Input and painting go first between parts.
-      await new Promise((resolve) => setImmediate(resolve));
     }
     if (filtered.effects.length > 0 || filtered.gone.effects.length > 0) await this.options.effects.syncSites(filtered.effects, filtered.gone.effects);
     const after = this.options.state();

@@ -291,7 +291,11 @@ export class ChordDatabase {
         if (op.k === 'nav') this.sql('UPDATE tab SET nav_state = ? WHERE node_id = ?').run(op.value ? Buffer.from(JSON.stringify(op.value)) : null, op.id);
       }
       // Sync's stamping hook (S15 §7), in the same transaction: what you changed of synced things gets a stamp. Off, it isn't called.
-      if (this.sync.stamping) this.sync.stamp(ops, now);
+      if (this.sync.stamping) {
+        const at = performance.now();
+        this.sync.stamp(ops, now);
+        this.sync.timed('stamp', performance.now() - at);
+      }
     });
   }
 
@@ -719,7 +723,24 @@ export class ChordDatabase {
    */
   importing(on: boolean): void {
     this.writingImports = Math.max(0, this.writingImports + (on ? 1 : -1));
-    this.db.exec(`PRAGMA wal_autocheckpoint = ${this.writingImports > 0 ? IMPORT_CHECKPOINT : DEFAULT_CHECKPOINT}`);
+    this.checkpointing();
+  }
+
+  /**
+   * Sync's worker thread runs the checkpoints, on a connection of its own,
+   * while sync merges and main writes what it applied (true), so none runs on
+   * this thread meanwhile; then this connection runs them again (false). A
+   * checkpoint here took 10–70 ms in the Linux container (S15 §13).
+   */
+  checkpointElsewhere(on: boolean): void {
+    this.elsewhere = on;
+    this.checkpointing();
+  }
+
+  private elsewhere = false;
+
+  private checkpointing(): void {
+    this.db.exec(`PRAGMA wal_autocheckpoint = ${this.elsewhere ? 0 : this.writingImports > 0 ? IMPORT_CHECKPOINT : DEFAULT_CHECKPOINT}`);
   }
 
   /** Duet's threads and messages (packages/data/src/duet.ts). */

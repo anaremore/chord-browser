@@ -15,6 +15,7 @@ import { randomBytes } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
 import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { parentPort } from 'node:worker_threads';
 import {
   appendRecords,
@@ -49,6 +50,8 @@ export type ToWorker =
   | { t: 'snapshot'; records: DataRecord[]; generation?: number; key?: Uint8Array }
   | { t: 'rekey'; passphrase: string; records: DataRecord[] }
   | { t: 'remove'; path: string }
+  /** A passive checkpoint of chord.db, on this thread's own connection: chord-data's runs none while sync is busy. */
+  | { t: 'checkpoint'; database: string }
   | { t: 'stop' };
 
 /** The worker → chord-data. */
@@ -342,7 +345,24 @@ async function handle(message: ToWorker): Promise<void> {
   }
 }
 
+/** chord.db, for checkpoints only: SQLite lets any connection copy the write-ahead log in, and a passive one never waits for the writer. */
+let database: DatabaseSync | null = null;
+
+function checkpoint(path: string): void {
+  try {
+    database ??= new DatabaseSync(path, { timeout: 1000 });
+    database.exec('PRAGMA wal_checkpoint(PASSIVE)');
+  } catch (error) {
+    console.error('Sync couldn’t checkpoint chord.db:', error);
+  }
+}
+
 port.on('message', (message: ToWorker) => {
+  if (message.t === 'checkpoint') return checkpoint(message.database);
+  if (message.t === 'stop') {
+    database?.close();
+    database = null;
+  }
   if (message.t === 'ack') {
     const resolve = acked;
     acked = null;

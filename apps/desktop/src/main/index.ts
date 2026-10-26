@@ -966,6 +966,15 @@ if (!app.requestSingleInstanceLock()) {
           await store.sync({ type: 'sync.flush' });
         },
         syncRead: () => store.sync({ type: 'sync.check' }),
+        /** Sync's costs on chord-data's thread: writes with it on and off, the stamping hook, frames, merged slices (ms). */
+        syncTimings: async () => (await store.sync({ type: 'sync.timings' })).timings,
+        /** Turn sync off at once (Settings holds it for its Undo first). */
+        syncOff: () => store.sync({ type: 'sync.off' }),
+        /** Pinned folders and tabs, and how many have a name ending in `suffix`: what a sync check waits for, without a state snapshot. */
+        pinnedNames: (suffix: string) => {
+          const pinned = Object.values(browser!.store.state.nodes).filter((n) => n.section === 'pinned');
+          return { count: pinned.length, named: pinned.filter((n) => (n.kind === 'tab' ? n.customTitle : n.kind === 'folder' ? n.title : null)?.endsWith(suffix)).length };
+        },
         /** Ad blocking's lists, and what each session has (the extension, the dispatcher). */
         adBlocking: () => ({ status: adBlocking.status(), ...adBlocking.inspect() }),
         /** Check the lists that are due now, as the timer would. */
