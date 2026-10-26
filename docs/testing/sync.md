@@ -1,6 +1,6 @@
 # Sync: checking by hand
 
-E2E covers Chord's part in the Linux container (`test/e2e/sync.spec.ts`): two Chords with profiles of their own share one temp folder, set sync up, join, edit on both and agree, try a wrong passphrase, remove one, change the passphrase, relaunch with no keyring, start over, remember the key anyway, and find a folder that moved. Unit tests cover the folder protocol against an in-memory folder: a frame half there, a shorter file, conflicted copies, compaction in the middle of a read, a copied id, a newer format and a changed passphrase (ARCHITECTURE.md §9, *Your data: sync*).
+E2E covers Chord's part in the Linux container (`test/e2e/sync.spec.ts`): two Chords with profiles of their own share one temp folder, set sync up, join, edit on both and agree, try a wrong passphrase, remove one, change the passphrase, relaunch with no keyring, start over, remember the key anyway, and find a folder that moved. Unit tests cover the folder protocol against an in-memory folder: a frame half there, a shorter file, conflicted copies, compaction in the middle of a read, a copied id, a newer format and a changed passphrase, and what someone who can write to the folder can't do: junk under a segment's or a computer's name, bytes added to a log, frames past what a frame holds (ARCHITECTURE.md §9, *Your data: sync*).
 
 What they can't reach is real sync apps and real keychains: how each app uploads a file that grows, delivers one half-written, keeps files online only, makes conflicted copies, and whether Chord's folder watch fires. Check these by hand before the release that ships sync, and when a sync app changes how it works.
 
@@ -23,7 +23,7 @@ Run these for each app, between two systems at least. A change counts as arrived
 | Rename a chord, recolor it, pin a tab, move it into a folder, add a Favorite, change the search engine, on each computer in turn | Each arrives on the other, with nothing doubled |
 | Edit the same chord's name on both within a few seconds, offline on one, then back online | Both end with the same name: the later edit's |
 | Rename a chord on one, delete it on the other | It stays deleted on both |
-| Delete a chord the other computer is showing | That window moves to another chord, with *“Work” was deleted on another computer* |
+| Delete a chord the other computer is showing, with Today tabs there | That window moves to another chord, still showing its tab; its Today tabs are at the top of that chord's Today; *“Work” was deleted on another computer. Its 2 tabs moved to “…”.* with **Undo**, which brings the chord and its tabs back |
 | Unpin a tab on one that's open on the other | On the other it moves to Today, still open |
 | A split in Pinned, made on one | It arrives whole, both panes, on the other |
 | Effects on a site, made on one | They apply on the other's next visit to the site |
@@ -31,8 +31,8 @@ Run these for each app, between two systems at least. A change counts as arrived
 | Leave both running for a day with a few changes | Nothing doubles; the folder holds a few segments per computer, not hundreds |
 | Remove the second computer from the first | After 6 s (with Undo before), the second says *This computer was removed from sync* and keeps what it has |
 | Turn sync off on one | Its Undo; then it leaves the other's list. Its data stays |
-| *Change passphrase…* on one | The other says *The passphrase was changed on <name>*; the old passphrase doesn't open it, the new one does; then changes cross again. In the folder: `sync-2.json` and `2/`, and each computer's `1/<id>` folder goes once it has moved |
-| *Lost it? Start over…* on one, while it asks for the passphrase | It goes on under the new passphrase; the other says *The passphrase was changed on <name>* and takes the new one. In the folder: the next `sync-<n>.json` |
+| *Change passphrase…* on one | The other says *The passphrase was changed on <name>*; the old passphrase doesn't open it, the new one does; then changes cross again. In the folder: `sync-2.json` and `2/`; the others' `1/<id>` folders go once they've moved, and the changer's after 30 days |
+| *Lost it? Start over…* on one, while it asks for the passphrase | It goes on under the new passphrase; the other says *Sync was started again in this folder with a new passphrase.* (naming no one) and takes the new one. In the folder: the next `sync-<n>.json` |
 | Quit the sync app, move the synced folder elsewhere on the disk, start the app again | *Chord can’t find the sync folder.* **Choose folder…**, the folder where it is now: sync carries on, nothing doubles. Another folder: *That isn’t this sync’s folder.* |
 | Set sync up on two computers at once, in a new folder, before the app syncs | The second to find the other's file stops: *Sync was set up in this folder from two computers at once.* |
 

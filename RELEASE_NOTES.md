@@ -13,7 +13,8 @@ What's built since 0.5.0; it gets its version when it's released.
 - **Sync your setup between your computers**, in Settings → Your data → *Sync*, through a folder you already sync: iCloud Drive, Dropbox, OneDrive or Syncthing. Your chords, pinned tabs and folders, Favorites, themes, settings, link routes and Effects stay the same on each computer. History, Today tabs, Duet chats, page zoom, site permissions and proxies stay on each one.
   - Pick the folder, and choose a passphrase. Everything Chord puts there is encrypted with it, and you type it once on each computer. Lose it and the synced copy can't be opened; what's on each computer stays, and *Start over* syncs it again under a new one.
   - On another computer, pick the same folder and enter the passphrase. A new Chord takes your synced setup; one with chords of its own asks whether to use the synced setup (with Undo) or keep both.
-  - A change on one computer reaches the others a few seconds after your sync app delivers it. If two computers change the same thing, the later change wins; changes to different things both stay.
+  - A change on one computer reaches the others a few seconds after your sync app delivers it. If two computers change the same thing, the later change wins; changes to different things both stay. A computer whose clock is wrong can't make your changes lose to it.
+  - A chord deleted on another computer never takes this computer's Today tabs or the tabs you have open: they move to another chord, a message says where, and Undo brings the chord back.
   - Settings lists your computers. Remove one or turn sync off, each with Undo first, pause it, or change the passphrase. Your data on each computer stays whatever you do.
   - What comes from the folder is treated as untrusted, as a file is: tabs don't load until you open them, Effects are checked again, a chord never changes its sign-ins or proxy, and sync never carries permissions or Duet chats.
 
