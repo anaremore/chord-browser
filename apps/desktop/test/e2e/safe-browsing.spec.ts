@@ -262,12 +262,14 @@ test('a private window is checked as well, and keeps nothing', async () => {
   try {
     const shell = await pageWhere(app, isShell);
     await answerOffer(app, true);
+    // The window's own command bar, found first: since it loads after the shell paints, a private window's can come before it.
+    const mainOverlay = await pageWhere(app, isOverlay);
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('window.newPrivate'));
     await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
     // Its command bar loads after its shell.
     await expect.poll(() => app.windows().filter((p) => isOverlay(p.url())).length).toBe(2);
     const privateShell = app.windows().filter((p) => isShell(p.url()))[1]!;
-    const privateOverlay = app.windows().filter((p) => isOverlay(p.url()))[1]!;
+    const privateOverlay = app.windows().find((p) => isOverlay(p.url()) && p !== mainOverlay)!;
     await expect(privateOverlay.getByRole('dialog')).toBeVisible();
     await privateOverlay.getByRole('combobox').fill(`${site.origin}/phish.html`);
     await privateOverlay.keyboard.press('Enter');

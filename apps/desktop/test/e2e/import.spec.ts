@@ -119,6 +119,8 @@ test('Settings: Firefox’s folders, open tabs and history land in the window be
     const shell = await pageWhere(app, isShell);
     const before = await snapshot(shell);
     const personal = chordNamed(before, 'Personal')!.id;
+    // The window's own command bar, found first: since it loads after the shell paints, a private window's can come before it.
+    const overlay = await pageWhere(app, isOverlay);
     // A private window open meanwhile is left alone.
     await runAction(shell, 'window.newPrivate');
     await newPage(app, isShell, [shell]);
@@ -146,7 +148,6 @@ test('Settings: Firefox’s folders, open tabs and history land in the window be
     expect(Object.values(s.state.favorites).map((f) => f.url)).toEqual(['https://news.test/ff']);
     const privateChord = Object.values(s.state.chords).find((c) => c.private)!;
     expect(Object.values(s.state.nodes).filter((n) => n.chordId === privateChord.id).map((n) => n.url)).not.toContain('https://open.test/two');
-    const overlay = await pageWhere(app, isOverlay);
     await expect.poll(async () => (await historyFor(overlay, 'firefox news')).history.length).toBe(1);
 
     // Undo, from Settings: chords, folders, tabs, favorites and history all go.

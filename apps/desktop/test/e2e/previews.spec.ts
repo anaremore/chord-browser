@@ -171,12 +171,14 @@ test('a private window is never pictured', async () => {
   try {
     const shell = await pageWhere(app, isShell);
     await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    // The window's own command bar, found first: since it loads after the shell paints, a private window's can come before it.
+    const mainOverlay = await pageWhere(app, isOverlay);
     await runAction(shell, 'window.newPrivate');
     await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
     // Its command bar loads after its shell.
     await expect.poll(() => app.windows().filter((p) => isOverlay(p.url())).length).toBe(2);
     const privateShell = app.windows().filter((p) => isShell(p.url()))[1]!;
-    const privateOverlay = app.windows().filter((p) => isOverlay(p.url()))[1]!;
+    const privateOverlay = app.windows().find((p) => isOverlay(p.url()) && p !== mainOverlay)!;
     await open(privateShell, privateOverlay, `${site.origin}/colors`);
     await open(privateShell, privateOverlay, `${site.origin}/second`);
     await privateShell.waitForTimeout(2000);

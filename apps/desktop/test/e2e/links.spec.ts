@@ -299,9 +299,11 @@ test('a pinned tab’s link to another site opens in Peek: Esc or a click outsid
     await expect(peek).toBeHidden();
 
     // A private window has no pinned tabs, but any link can open in Peek from its menu; nothing of it is kept.
+    // The window's own command bar, found first: since it loads after the shell paints, a private window's can come before it.
+    const mainOverlay = await pageWhere(app, isOverlay);
     await runAction(shell, 'window.newPrivate');
     await expect.poll(() => app.windows().filter((p) => isOverlay(p.url())).length).toBe(2);
-    const privateOverlay = app.windows().filter((p) => isOverlay(p.url()))[1]!;
+    const privateOverlay = app.windows().find((p) => isOverlay(p.url()) && p !== mainOverlay)!;
     await expect(privateOverlay.getByRole('dialog')).toBeVisible();
     await privateOverlay.getByRole('combobox').fill(`${site.origin}/private`);
     await privateOverlay.keyboard.press('Enter');

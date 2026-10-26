@@ -204,9 +204,11 @@ test('a private window is covered: its requests are checked in Chord, its ad slo
     const shell = await pageWhere(app, isShell);
     const tab = await pageWhere(app, (url) => url.startsWith(newsUrl()));
     await rulesReady(app);
+    // The window's own command bar, found first: since it loads after the shell paints, a private window's can come before it.
+    const mainOverlay = await pageWhere(app, isOverlay);
     await shell.evaluate(() => (window as unknown as Chord).chord.action.run('window.newPrivate'));
     await expect.poll(() => app.windows().filter((p) => isOverlay(p.url())).length).toBe(2);
-    const privateOverlay = app.windows().filter((p) => isOverlay(p.url()))[1]!;
+    const privateOverlay = app.windows().find((p) => isOverlay(p.url()) && p !== mainOverlay)!;
     await expect(privateOverlay.getByRole('dialog')).toBeVisible();
     const before = adHits();
     await privateOverlay.getByRole('combobox').fill(`http://news.test:${site.port}/`);
@@ -264,9 +266,11 @@ test('the lists refresh from their own host, and the new rules apply in chords a
     expect(await probe(tab)).toBe('blocked');
     expect(site.hits).not.toContain('brand-new-tracker.test/t.js');
     // A private window's engine has them too.
+    // The window's own command bar, found first: since it loads after the shell paints, a private window's can come before it.
+    const mainOverlay = await pageWhere(app, isOverlay);
     await shell.evaluate(() => (window as unknown as Chord).chord.action.run('window.newPrivate'));
     await expect.poll(() => app.windows().filter((p) => isOverlay(p.url())).length).toBe(2);
-    const privateOverlay = app.windows().filter((p) => isOverlay(p.url()))[1]!;
+    const privateOverlay = app.windows().find((p) => isOverlay(p.url()) && p !== mainOverlay)!;
     await expect(privateOverlay.getByRole('dialog')).toBeVisible();
     await privateOverlay.getByRole('combobox').fill(`http://other.test:${site.port}/`);
     await privateOverlay.keyboard.press('Enter');
