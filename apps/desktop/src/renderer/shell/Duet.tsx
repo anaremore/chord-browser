@@ -14,14 +14,20 @@ import {
   citationIsQuoted,
   contextLabel,
   contextPercent,
+  DUET_FORM_AREA_MAX,
+  DUET_FORM_TEXT_MAX,
   DUET_PROVIDER_NAMES,
   DUET_SCOPE_HINTS,
   DUET_SCOPE_SHORT,
   DUET_SCOPES,
+  fieldCount,
+  fillLeftOutNote,
   nameTabs,
   splitCitations,
   stripCitations,
   type DuetContextUsage,
+  type DuetFillCard,
+  type DuetFillField,
   type DuetImage,
   type DuetMessage,
   type DuetProvider,
@@ -268,12 +274,12 @@ function MadeImage({ image }: { image: DuetImage }) {
 
 type Row = { kind: 'message'; message: DuetMessage } | { kind: 'tools'; messages: DuetMessage[] };
 
-/** Consecutive tool activity in a turn folds into one quiet row. */
+/** Consecutive tool activity in a turn folds into one quiet row; a fill card is a row of its own. */
 function rows(messages: readonly DuetMessage[]): Row[] {
   const out: Row[] = [];
   for (const message of messages) {
     const last = out.at(-1);
-    if (message.body.role === 'tool') {
+    if (message.body.role === 'tool' && !message.body.fill) {
       if (last?.kind === 'tools') last.messages.push(message);
       else out.push({ kind: 'tools', messages: [message] });
     } else out.push({ kind: 'message', message });
@@ -355,6 +361,134 @@ function Approval({ message }: { message: DuetMessage }) {
   );
 }
 
+/** Text inputs whose own kind the card's editor keeps (a date picker for a date); the rest edit as text. */
+const EDITOR_TYPES = new Set(['email', 'tel', 'url', 'number', 'date', 'time', 'month', 'week', 'datetime-local']);
+
+/** One field's value on the card, editable: text, a choice, or checked or not. */
+function FillEditor({ field, value, disabled, onChange }: { field: DuetFillField; value: string | boolean; disabled: boolean; onChange(value: string | boolean): void }) {
+  const common = { className: styles.fillInput, 'aria-label': field.label, disabled };
+  if (field.kind === 'checkbox') {
+    return (
+      <select {...common} value={value ? 'yes' : 'no'} onChange={(e) => onChange(e.target.value === 'yes')}>
+        <option value="yes">Checked</option>
+        <option value="no">Not checked</option>
+      </select>
+    );
+  }
+  if (field.kind === 'select' || field.kind === 'radio') {
+    return (
+      <select {...common} value={String(value)} onChange={(e) => onChange(e.target.value)}>
+        {field.options.map((o, i) => (
+          <option key={i} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  const max = Math.min(field.kind === 'textarea' ? DUET_FORM_AREA_MAX : DUET_FORM_TEXT_MAX, field.maxLength ?? Infinity);
+  if (field.kind === 'textarea') {
+    return <textarea {...common} rows={Math.min(5, Math.max(2, String(value).split('\n').length))} maxLength={max} value={String(value)} onChange={(e) => onChange(e.target.value)} />;
+  }
+  return <input {...common} type={EDITOR_TYPES.has(field.type) ? field.type : 'text'} maxLength={max} value={String(value)} onChange={(e) => onChange(e.target.value)} />;
+}
+
+/** How a fill card ended, in a line: its fields go once it has. */
+function fillOutcome(card: DuetFillCard): string {
+  if (card.status === 'filled') return `Filled ${fieldCount(card.filled ?? 0)}.${card.note ? ` ${card.note}` : ''}`;
+  if (card.status === 'undone') return `Filled ${fieldCount(card.filled ?? 0)}, then undone.${card.note ? ` ${card.note}` : ''}`;
+  if (card.status === 'dismissed') return 'Not filled.';
+  return card.note ?? 'Nothing was filled.';
+}
+
+/**
+ * Duet's values for a form (D16, DESIGN.md §7.8): each field with its label
+ * and value, editable, and a checkbox to leave it out. Nothing goes into the
+ * page until Fill; main checks every value again. ⌘↵ / Ctrl+↵ fills and Esc
+ * says not now, from inside the card only: the message field's keys never
+ * write into a page.
+ */
+function FillCard({ message }: { message: DuetMessage }) {
+  const card = message.body.role === 'tool' ? message.body.fill : undefined;
+  const [values, setValues] = useState<Record<string, string | boolean>>(() => Object.fromEntries((card?.fields ?? []).map((f) => [f.id, f.value])));
+  const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set(card?.fields.map((f) => f.id)));
+  if (!card) return null;
+  const heading = `Fill this form on ${card.site}`;
+  if (card.status !== 'pending') {
+    return (
+      <div className={styles.approval}>
+        <p className={styles.approvalTitle}>{heading}</p>
+        <p className={styles.muted}>{fillOutcome(card)}</p>
+      </div>
+    );
+  }
+  const chosen = card.fields.filter((f) => kept.has(f.id));
+  const fill = () => {
+    if (chosen.length) act({ do: 'fill', messageId: message.id, fields: chosen.map((f) => ({ id: f.id, value: values[f.id] ?? f.value })) });
+  };
+  const dismiss = () => act({ do: 'dismissFill', messageId: message.id });
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      dismiss();
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      fill();
+    }
+  };
+  const leftOut = fillLeftOutNote(card.leftOut);
+  return (
+    <div className={`${styles.approval} ${styles.fill}`} data-pending role="group" aria-label={heading} aria-describedby={`fill-${message.id}`} onKeyDown={onKey}>
+      <p className={styles.approvalTitle}>{heading}</p>
+      <p id={`fill-${message.id}`} className={styles.muted}>
+        Nothing goes into the page until you press Fill, and you send the form yourself.
+      </p>
+      <ul className={styles.fillFields}>
+        {card.fields.map((f) => {
+          const on = kept.has(f.id);
+          return (
+            <li key={f.id} className={styles.fillField}>
+              <label className={styles.fillLabel}>
+                <input
+                  type="checkbox"
+                  className={styles.fillKeep}
+                  checked={on}
+                  aria-label={`Fill “${f.label}”`}
+                  onChange={(e) => {
+                    const next = new Set(kept);
+                    if (e.target.checked) next.add(f.id);
+                    else next.delete(f.id);
+                    setKept(next);
+                  }}
+                />
+                <span className={styles.ellipsis}>{f.label}</span>
+                {f.required && <span className={styles.fillRequired}>Required</span>}
+              </label>
+              <FillEditor field={f} value={values[f.id] ?? f.value} disabled={!on} onChange={(value) => setValues({ ...values, [f.id]: value })} />
+            </li>
+          );
+        })}
+      </ul>
+      {leftOut && <p className={styles.muted}>{leftOut}</p>}
+      {card.truncated && <p className={styles.muted}>This page has more fields than Duet reads at once: these are the first.</p>}
+      {card.note && (
+        <p className={styles.fillNote} role="status">
+          {card.note}
+        </p>
+      )}
+      <div className={`${styles.approvalActions} ${styles.fillActions}`}>
+        <button type="button" className={styles.primary} disabled={chosen.length === 0} title="Fill (⌘↵ / Ctrl+↵)" onClick={fill}>
+          Fill {fieldCount(chosen.length)}
+        </button>
+        <span className={styles.flex} />
+        <button type="button" className={styles.quiet} title="Not now (Esc)" onClick={dismiss}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MessageView({ message, last, onLink, onEdit, view }: { message: DuetMessage; last: boolean; onLink(url: string): void; onEdit(message: DuetMessage): void; view: DuetView }) {
   const [copied, setCopied] = useState(false);
   const copy = (text: string) => {
@@ -365,6 +499,7 @@ function MessageView({ message, last, onLink, onEdit, view }: { message: DuetMes
   const body = message.body;
   if (body.role === 'divider') return <p className={styles.divider}>{body.text}</p>;
   if (body.role === 'approval') return <Approval message={message} />;
+  if (body.role === 'tool' && body.fill) return <FillCard message={message} />;
   if (body.role === 'user') {
     return (
       <div className={styles.userWrap}>
@@ -744,11 +879,12 @@ function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
 
 /**
  * What screen readers hear from Duet (DESIGN.md §10): that it finished
- * answering (not each word as it streams), and that it's asking to read more.
+ * answering (not each word as it streams), that it's asking to read more,
+ * and that it suggests values for a form.
  */
 function useDuetAnnouncements(view: DuetView): void {
   const wasBusy = useRef(view.busy);
-  const asked = useRef(new Set(view.messages.filter((m) => m.body.role === 'approval').map((m) => m.id)));
+  const asked = useRef(new Set(view.messages.filter((m) => m.body.role === 'approval' || (m.body.role === 'tool' && m.body.fill)).map((m) => m.id)));
   useEffect(() => {
     if (wasBusy.current && !view.busy) {
       const last = [...view.messages].reverse().find((m) => m.body.role === 'assistant');
@@ -757,9 +893,14 @@ function useDuetAnnouncements(view: DuetView): void {
     }
     wasBusy.current = view.busy;
     for (const m of view.messages) {
-      if (m.body.role !== 'approval' || asked.current.has(m.id)) continue;
-      asked.current.add(m.id);
-      if (m.body.decision === 'pending') announce(`Duet is asking: ${m.body.description}. Allow once, Allow for this chat, or No.`);
+      if (asked.current.has(m.id)) continue;
+      if (m.body.role === 'approval') {
+        asked.current.add(m.id);
+        if (m.body.decision === 'pending') announce(`Duet is asking: ${m.body.description}. Allow once, Allow for this chat, or No.`);
+      } else if (m.body.role === 'tool' && m.body.fill) {
+        asked.current.add(m.id);
+        if (m.body.fill.status === 'pending') announce(`Duet suggests values for ${fieldCount(m.body.fill.fields.length)} on ${m.body.fill.site}. Check them, then Fill or Not now.`);
+      }
     }
   }, [view]);
 }

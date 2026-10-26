@@ -12,14 +12,62 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { DUET_WORLD, EXTRACT_SCRIPT } from '../../src/main/duet/extract';
+import { formScripts } from '../../src/main/duet/forms';
 import { buildPdf, SAMPLE_PDF_PAGES } from '../fixtures/pdf';
-import { isOverlay, isPopover, isSettings, pageWhere } from './a11y-kit';
+import { isOverlay, isPopover, isSettings, isShell, newPage, pageWhere } from './a11y-kit';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
 
 /** Requests for the test PDF, and whether each carried the sign-in cookie. */
 const pdfRequests: { signedIn: boolean }[] = [];
+
+/**
+ * A sign-up form for Duet to fill (D16), below the fold: fields it may fill, a
+ * password, a card number, a one-time code, a hidden field, one moved off
+ * screen, and another site's frame with a form of its own. Its name field is
+ * controlled the way React does it (a setter on the element tracks what the
+ * framework wrote; only an input event whose value it hasn't seen is a
+ * change), its regions follow the country chosen, and the page notes clicks,
+ * changes and any submit.
+ */
+const signupPage = (port: number) => `<title>Sign up</title>
+<h1>Join the band</h1>
+<div style="height: 1600px"></div>
+<form id="signup" action="/submitted" method="post">
+  <p><label>Full name <input id="name" name="name" autocomplete="name" required></label></p>
+  <p><label>Email <input id="email" type="email" name="email" autocomplete="email"></label></p>
+  <p><label>Password <input id="pw" type="password" name="password" autocomplete="new-password"></label></p>
+  <p><label>Card number <input id="card" name="cardnumber" autocomplete="cc-number"></label></p>
+  <p><label>Verification code <input id="otp" name="otp" autocomplete="one-time-code"></label></p>
+  <input type="hidden" name="csrf" value="csrf-secret-token">
+  <input id="sneaky" name="nickname" aria-label="Nickname" style="position: absolute; left: -9999px">
+  <p><label>Country <select id="country" name="country"><option value="">Choose one</option><option value="ca">Canada</option><option value="uk">United Kingdom</option></select></label></p>
+  <p><label>Region <select id="region" name="region"><option>Any</option></select></label></p>
+  <fieldset><legend>Plan</legend><label><input type="radio" name="plan" value="free" checked> Free</label> <label><input type="radio" name="plan" value="pro"> Pro</label></fieldset>
+  <p><label><input id="news" type="checkbox" name="news"> Send me news</label></p>
+  <p><label>Bio <textarea id="bio" name="bio"></textarea></label></p>
+  <button id="submit" type="submit">Sign up</button>
+</form>
+<iframe src="http://localhost:${port}/frame-form" title="Partner"></iframe>
+<script>
+  const nameField = document.getElementById('name');
+  const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  let tracked = nameField.value;
+  Object.defineProperty(nameField, 'value', { configurable: true, get() { return native.get.call(this); }, set(v) { tracked = String(v); native.set.call(this, v); } });
+  window.react = { name: '', changes: [] };
+  nameField.addEventListener('input', () => { if (nameField.value !== tracked) { tracked = nameField.value; window.react.name = nameField.value; window.react.changes.push(nameField.value); } });
+  window.seen = { clicks: [], changes: [], submits: 0, animations: 0 };
+  document.addEventListener('click', (e) => window.seen.clicks.push(e.target.id || e.target.name), true);
+  document.addEventListener('change', (e) => window.seen.changes.push(e.target.name), true);
+  document.getElementById('signup').addEventListener('submit', (e) => { e.preventDefault(); window.seen.submits++; });
+  const regions = { '': ['Any'], ca: ['Ontario', 'Quebec'], uk: ['England', 'Scotland', 'Wales'] };
+  document.getElementById('country').addEventListener('change', (e) => {
+    document.getElementById('region').replaceChildren(...regions[e.target.value].map((r) => new Option(r)));
+  });
+  // The most fields outlined at once: Chord's highlight is Web Animations, which leave nothing else in the page.
+  setInterval(() => { window.seen.animations = Math.max(window.seen.animations, document.getAnimations().length); }, 20);
+</script>`;
 
 const appDir = resolve(import.meta.dirname, '../..');
 const fake = resolve(import.meta.dirname, 'fake-claude.mjs');
@@ -48,6 +96,8 @@ test.beforeAll(async () => {
       '<p hidden>hidden-attribute</p><p style="display: none">display-none</p><p style="visibility: hidden">visibility-hidden</p>' +
       '<p style="opacity: 0">opacity-zero</p><div style="position: absolute; left: -9999px">moved-off-screen</div>' +
       '<div style="display: contents" hidden><p>hidden-contents-wrapper</p></div>',
+    // A page of 5,000 fields: reading its form has to stay bounded.
+    '/many': `<title>Many</title><form>${Array.from({ length: 5000 }, (_, i) => `<label>Field ${i} <input name="field${i}"></label>`).join('')}</form>`,
   };
   const server = createServer((req, res) => {
     // A PDF behind a sign-in: /login sets the cookie and goes on to it; without the cookie it's 403.
@@ -64,7 +114,8 @@ test.beforeAll(async () => {
       res.end(signedIn ? Buffer.from(buildPdf(SAMPLE_PDF_PAGES, { title: 'Field guide' })) : 'sign in first');
       return;
     }
-    const body = pages[req.url ?? '/'];
+    const port = (server.address() as AddressInfo).port;
+    const body = req.url === '/signup' ? signupPage(port) : req.url === '/frame-form' ? '<title>Partner</title><label>Frame field <input name="frame_field"></label>' : pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body ?? 'not found');
   });
@@ -381,6 +432,228 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     await expect(panel.getByRole('textbox', { name: 'Message Duet' })).toHaveCount(0);
     await panel.getByRole('button', { name: 'Turn on in this chord' }).click();
     await expect(panel.getByRole('textbox', { name: 'Message Duet' })).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
+/** The sign-up page's fields as they are now: what's typed, chosen and checked, and what the page saw happen. */
+const signupState = (tab: Page) =>
+  tab.evaluate(() => {
+    const value = (id: string) => (document.getElementById(id) as HTMLInputElement).value;
+    const w = window as unknown as { react: { name: string; changes: string[] }; seen: { clicks: string[]; changes: string[]; submits: number; animations: number } };
+    return {
+      name: value('name'),
+      email: value('email'),
+      country: value('country'),
+      region: value('region'),
+      plan: (document.querySelector('input[name=plan]:checked') as HTMLInputElement | null)?.value ?? null,
+      news: (document.getElementById('news') as HTMLInputElement).checked,
+      bio: value('bio'),
+      react: w.react,
+      seen: w.seen,
+      scrolled: window.scrollY,
+      url: location.href,
+    };
+  });
+
+/** Switch the window to the tab with this title. */
+const activateTab = (shell: Page, title: string) =>
+  shell.evaluate(async (title) => {
+    const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { nodes: Record<string, { id: string; title?: string }> } }>; dispatch(c: unknown): Promise<void> } } }).chord;
+    const { windowId, state } = await chord.state.snapshot();
+    const node = Object.values(state.nodes).find((n) => n.title === title)!;
+    await chord.state.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
+  }, title);
+
+test('Duet fills a form you ask it to: you check and change its values in a card, Fill puts them in as typing would, nothing is submitted, and Undo puts back what was there', async () => {
+  const setup = fresh();
+  const app = await launch(setup, '/signup');
+  try {
+    const shell = await shellOf(app);
+    const tab = await pageWhere(app, (url) => url === `${site.origin}/signup`);
+    // What you'd typed already, as a framework writes it (its own setter, so it isn't a change React would hear of).
+    await tab.evaluate(() => {
+      (document.getElementById('name') as HTMLInputElement).value = 'typed-before';
+      (document.getElementById('email') as HTMLInputElement).value = 'old@example.com';
+      (document.getElementById('bio') as HTMLTextAreaElement).value = 'draft-bio-secret';
+    });
+    const panel = await openDuet(shell);
+    await setUp(panel);
+    await send(panel, "Fill in this sign-up form for me: I'm Ada Lovelace, ada@example.com, in the UK, on the Pro plan, send me news, and my bio is Mathematician.");
+    const host = new URL(site.origin).host;
+    const card = panel.getByRole('group', { name: `Fill this form on ${host}` });
+    await expect(card).toBeVisible();
+    await expect(panel.getByText('Check the values in the card, then press Fill.')).toBeVisible();
+
+    // What Duet was given: each fillable field's structure, never what's in it, nothing sensitive, hidden or in another site's frame.
+    const read = readFileSync(join(setup.config, 'form-read.json'), 'utf8');
+    const form = JSON.parse(read) as { trust: string; fields: { id: string; name: string; label: string; kind: string; options?: string[] }[]; left_out: Record<string, number> };
+    expect(form.trust).toBe('untrusted');
+    expect(form.fields.map((f) => [f.name, f.label, f.kind])).toEqual([
+      ['name', 'Full name', 'text'],
+      ['email', 'Email', 'text'],
+      ['country', 'Country', 'select'],
+      ['region', 'Region', 'select'],
+      ['plan', 'Plan', 'radio'],
+      ['news', 'Send me news', 'checkbox'],
+      ['bio', 'Bio', 'textarea'],
+    ]);
+    expect(form.fields.find((f) => f.name === 'country')?.options).toEqual(['Choose one', 'Canada', 'United Kingdom']);
+    expect(form.left_out).toEqual({ password: 1, payment: 1, code: 1 });
+    for (const never of ['typed-before', 'old@example.com', 'draft-bio-secret', 'csrf', 'nickname', 'Nickname', 'frame_field', 'Frame field', 'cardnumber', 'otp']) expect(read).not.toContain(never);
+    expect(JSON.parse(readFileSync(join(setup.config, 'fill-tools.json'), 'utf8'))).toEqual(expect.arrayContaining(['read_form', 'propose_fill']));
+    // An id Chord never gave is caught, and so is a second card for the same message.
+    expect(readFileSync(join(setup.config, 'fill-stale.json'), 'utf8')).toContain('f999: not a field in your last read_form');
+    expect(readFileSync(join(setup.config, 'fill-again.json'), 'utf8')).toContain('You already showed the user values for this message');
+
+    // The card: each field with Duet's value, and what Chord left out. Nothing is in the page yet.
+    await expect(card.getByRole('textbox', { name: 'Full name' })).toHaveValue('Ada Lovelace');
+    await expect(card.getByRole('textbox', { name: 'Email' })).toHaveValue('ada@example.com');
+    await expect(card.getByRole('combobox', { name: 'Country' })).toHaveValue('United Kingdom');
+    await expect(card.getByRole('combobox', { name: 'Region' })).toHaveValue('Any');
+    await expect(card.getByRole('combobox', { name: 'Plan' })).toHaveValue('Pro');
+    await expect(card.getByRole('combobox', { name: 'Send me news' })).toHaveValue('yes');
+    await expect(card.getByRole('textbox', { name: 'Bio' })).toHaveValue('Mathematician.');
+    await expect(card).toContainText('Left out: Password, Card number and Verification code. Chord never fills passwords, payment details and one-time codes, so fill those yourself.');
+    expect(await signupState(tab)).toMatchObject({ name: 'typed-before', email: 'old@example.com', country: '', plan: 'free', news: false, bio: 'draft-bio-secret' });
+
+    // Change one value and leave one out, then Fill.
+    await card.getByRole('textbox', { name: 'Email' }).fill('ada@lovelace.dev');
+    await card.getByRole('checkbox', { name: 'Fill “Bio”' }).uncheck();
+    await expect(card.getByRole('textbox', { name: 'Bio' })).toBeDisabled();
+    mkdirSync(capturesDir, { recursive: true });
+    await card.screenshot({ path: join(capturesDir, `duet-${process.platform}-${process.arch}-fill-card.png`) });
+    await tab.evaluate(() => window.scrollTo(0, 0));
+    await card.getByRole('button', { name: 'Fill 6 fields' }).click();
+
+    // In the page as typing would put them: React's controlled field heard its input event; nothing was clicked but
+    // the checkbox and radio Chord set, nothing submitted, nowhere navigated. The fields were outlined, the first scrolled to.
+    // The regions changed with the country, so Region was left alone, and the card says so.
+    await expect.poll(async () => (await signupState(tab)).name).toBe('Ada Lovelace');
+    const filled = await signupState(tab);
+    expect(filled).toMatchObject({ name: 'Ada Lovelace', email: 'ada@lovelace.dev', country: 'uk', region: 'England', plan: 'pro', news: true, bio: 'draft-bio-secret', url: `${site.origin}/signup` });
+    expect(filled.react).toEqual({ name: 'Ada Lovelace', changes: ['Ada Lovelace'] });
+    expect(filled.seen.clicks.sort()).toEqual(['news', 'plan']);
+    expect(filled.seen.changes).toEqual(['name', 'email', 'country', 'plan', 'news']);
+    expect(filled.seen.submits).toBe(0);
+    await expect.poll(async () => (await signupState(tab)).seen.animations).toBeGreaterThanOrEqual(5);
+    await expect.poll(async () => (await signupState(tab)).scrolled).toBeGreaterThan(0);
+    await expect(panel.getByText('Filled 5 fields. Region changed as the other fields went in, so Chord left it alone. Ask Duet again for it.')).toBeVisible();
+    await expect(card).toHaveCount(0);
+
+    // Undo puts back every field the fill changed, as typing would, and still nothing is submitted.
+    const toast = shell.getByRole('region', { name: 'Notifications' }).getByRole('group', { name: `Filled 5 fields on ${host}` });
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect.poll(async () => (await signupState(tab)).name).toBe('typed-before');
+    const undone = await signupState(tab);
+    expect(undone).toMatchObject({ name: 'typed-before', email: 'old@example.com', country: '', region: 'Any', plan: 'free', news: false, bio: 'draft-bio-secret' });
+    expect(undone.react.name).toBe('typed-before');
+    expect(undone.seen.submits).toBe(0);
+    await expect(panel.getByText('Filled 5 fields, then undone.')).toBeVisible();
+  } finally {
+    await app.close();
+  }
+  // Chord keeps the card's line, never its values.
+  const saved = Buffer.concat(['chord.db', 'chord.db-wal'].map((f) => join(setup.profile, f)).filter((f) => existsSync(f)).map((f) => readFileSync(f)));
+  expect(saved.includes('Filled 5 fields in “Sign up”, then undid it')).toBe(true);
+  expect(saved.includes('ada@lovelace.dev')).toBe(false);
+});
+
+test('Duet fills nothing it shouldn’t: a form that changed, another tab in front, a Never site, reading nothing, a private window', async () => {
+  const setup = fresh();
+  const app = await launch(setup, '/signup');
+  try {
+    const shell = await shellOf(app);
+    const tab = await pageWhere(app, (url) => url === `${site.origin}/signup`);
+    const panel = await openDuet(shell);
+    await setUp(panel);
+    const card = panel.getByRole('group', { name: `Fill this form on ${new URL(site.origin).host}` });
+    const empty = { name: '', email: '', country: '', plan: 'free', news: false, bio: '' };
+
+    // The page swaps a field after Duet read it (the email field becomes a password field): nothing at all is filled.
+    await send(panel, 'Fill in this form for me');
+    await expect(card).toBeVisible();
+    await tab.evaluate(() => document.getElementById('email')!.setAttribute('type', 'password'));
+    await card.getByRole('button', { name: /^Fill \d+ fields$/ }).click();
+    await expect(panel.getByText('The form changed since Duet read it, so nothing was filled. Ask Duet again.')).toBeVisible();
+    expect(await signupState(tab)).toMatchObject(empty);
+
+    // Another tab in front: the card waits, and says how to go on.
+    await tab.reload();
+    await send(panel, 'Fill it in again');
+    await expect(card).toBeVisible();
+    await shell.evaluate(async (url) => {
+      const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string }>; dispatch(c: unknown): Promise<void> } } }).chord;
+      await chord.state.dispatch({ t: 'tab.open', windowId: (await chord.state.snapshot()).windowId, url });
+    }, `${site.origin}/second`);
+    await card.getByRole('button', { name: /^Fill \d+ fields$/ }).click();
+    await expect(card.getByRole('status')).toHaveText('Go back to “Sign up” to fill it.');
+
+    // A Never site: Fill refuses, and so does reading its form again.
+    await activateTab(shell, 'Sign up');
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Duet' }).click();
+    const add = settings.getByRole('textbox', { name: 'Add a site Duet never reads' });
+    await add.fill('127.0.0.1');
+    await add.press('Enter');
+    await shell.bringToFront();
+    await card.getByRole('button', { name: /^Fill \d+ fields$/ }).click();
+    await expect(panel.getByText('Duet can’t read this site any more, so nothing was filled.')).toBeVisible();
+    await send(panel, 'Fill the form once more');
+    await expect(panel.getByText(/^I can't read the form: Duet can never read this page/)).toBeVisible();
+    expect(await signupState(tab)).toMatchObject(empty);
+
+    // Reading nothing: Duet has no tools at all, and a read it tries anyway is refused.
+    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ duet: { readsNothing: true } }));
+    await send(panel, 'Fill it, please');
+    await expect(panel.getByText(/^I can't read the form: Duet is set to read nothing/)).toBeVisible();
+    expect(JSON.parse(readFileSync(join(setup.config, 'fill-tools.json'), 'utf8'))).toEqual([]);
+    expect(await signupState(tab)).toMatchObject({ ...empty, seen: expect.objectContaining({ submits: 0 }) });
+
+    // A private window has no Duet to ask: main says so to its shell, which shows no panel.
+    await runAction(shell, 'window.newPrivate');
+    const privateShell = await newPage(app, isShell, [shell]);
+    const view = await privateShell.evaluate(() => (window as unknown as { chord: { duet: { view(): Promise<{ enabled: boolean; messages: unknown[] }> } } }).chord.duet.view());
+    expect(view).toMatchObject({ enabled: false, messages: [] });
+    await runAction(privateShell, 'duet.toggle');
+    await expect.poll(() => privateShell.evaluate(() => (window as unknown as { chord: { duet: { view(): Promise<{ open: boolean }> } } }).chord.duet.view().then((v) => v.open))).toBe(true);
+    // Long enough for main's push (33 ms) and a frame: a panel that was coming would be here.
+    await privateShell.waitForTimeout(500);
+    await expect(privateShell.getByRole('complementary', { name: 'Duet' })).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('Duet reads the form on a page of 5,000 fields in a moment, and stops at what it may describe', async () => {
+  const app = await launch(fresh(), '/many');
+  try {
+    await shellOf(app);
+    const url = `${site.origin}/many`;
+    // As you'd ask: the page loaded and laid out (a read during loading pays for the page's first layout too).
+    await expect.poll(() => app.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((w) => w.getURL() === url && !w.isLoading()), url), { timeout: 20_000 }).toBe(true);
+    await (await pageWhere(app, (u) => u === url)).evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    const timed = (await app.evaluate(
+      async ({ webContents }, { url, world, code }) => {
+        const contents = webContents.getAllWebContents().find((w) => w.getURL() === url)!;
+        const runs: { ms: number; read: unknown }[] = [];
+        for (let i = 0; i < 3; i++) {
+          const started = performance.now();
+          const read = await contents.executeJavaScriptInIsolatedWorld(world, [{ code: code.replace('TOKEN', String(i)) }]);
+          runs.push({ ms: performance.now() - started, read });
+        }
+        return runs;
+      },
+      { url, world: DUET_WORLD, code: formScripts.read('0123456789abcdef0123TOKEN') },
+    )) as { ms: number; read: { controls: unknown[]; truncated: boolean } }[];
+    console.log(`read_form on 5,000 fields: ${timed.map((t) => t.ms.toFixed(1)).join(' / ')} ms, ${timed[0]!.read.controls.length} described`);
+    for (const { ms, read } of timed) {
+      expect(read.truncated).toBe(true);
+      expect(read.controls).toHaveLength(300);
+      expect(ms).toBeLessThan(500);
+    }
   } finally {
     await app.close();
   }

@@ -14,6 +14,8 @@ import {
   SEARCH_ENGINES,
   SHORTCUTS,
   UI_SCALES,
+  DUET_FORM_AREA_MAX,
+  DUET_FORM_MAX_FIELDS,
   DUET_SCOPES,
   type ActionId as CoreActionId,
   type ArchiveAfter,
@@ -190,6 +192,8 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('import.undo'), importId: id }),
   // A toast's Undo for a change to a site's Effects (main takes it over: Effects live outside the store).
   z.object({ t: z.literal('effects.undo'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
+  // A toast's Undo for a form Duet filled (main takes it over: what was there before stays in the page).
+  z.object({ t: z.literal('duet.undoFill'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // Presenting mode's indicator turns it off. Only yours: shares start and end it in main.
   z.object({ t: z.literal('presenting.set'), on: z.boolean(), by: z.literal('you') }),
   // chord.delete isn't here: main deletes, then offers Undo in a toast. So is split.separate.
@@ -957,6 +961,19 @@ export const DuetAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('makeWithCodex') }),
   /** A tab a reply mentions: switch to it, or open its page if it's gone. */
   z.object({ do: z.literal('showTab'), ref: z.string().regex(/^t[0-9]{1,4}$/) }),
+  /**
+   * A fill card's Fill (D16): the fields you kept, with your values. Main checks each against
+   * what it read, the tab against the one on screen, and the page against the one read.
+   */
+  z.object({
+    do: z.literal('fill'),
+    messageId: id,
+    fields: z
+      .array(z.strictObject({ id: z.string().regex(/^f[0-9]{1,6}$/), value: z.union([z.string().max(DUET_FORM_AREA_MAX), z.boolean()]) }))
+      .max(DUET_FORM_MAX_FIELDS),
+  }),
+  /** A fill card's Not now. */
+  z.object({ do: z.literal('dismissFill'), messageId: id }),
   z.object({ do: z.literal('export') }),
 ]);
 export type DuetAction = z.infer<typeof DuetAction>;

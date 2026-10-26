@@ -246,6 +246,8 @@ function registerIpc(): void {
     if (command.t === 'import.undo') return importer!.undo(command.importId);
     // A toast's Undo for Effects: they live in main, not in the store.
     if (command.t === 'effects.undo') return browser!.effects.undo(command.token);
+    // A toast's Undo for a form Duet filled: the page puts back what it had (main/duet).
+    if (command.t === 'duet.undoFill') return duet?.undoFill(command.token);
     // Docking and collapsing picture the page first, so its frame can glide (ARCHITECTURE.md §5).
     if (command.t === 'window.sidebar') {
       browser!.setSidebar(w, command.sidebar);

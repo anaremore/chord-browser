@@ -236,6 +236,11 @@ export type Command =
    * (main/effects), since Effects live outside the store (ARCHITECTURE.md §9).
    */
   | { t: 'effects.undo'; token: string }
+  /**
+   * Undo a form Duet filled (a toast's button): main puts the fields back
+   * from the page's own isolated world (main/duet), outside the store.
+   */
+  | { t: 'duet.undoFill'; token: string }
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -1760,6 +1765,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'effects.undo':
       // Main's: the store holds no Effects.
+      return;
+
+    case 'duet.undoFill':
+      // Main's: what a fill replaced stays in the page.
       return;
   }
 }

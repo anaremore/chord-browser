@@ -45,6 +45,8 @@ export const durations = {
   tooltip: 600,
   springLoad: 600,
   toast: 6000,
+  /** A field Duet filled is outlined this long, arriving in a tenth of it, so you see where the values went (DESIGN.md §7.8). */
+  fillHighlight: 1200,
   /** One turn of the loading spinner. */
   spin: 900,
 } as const;

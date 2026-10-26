@@ -111,6 +111,24 @@ async function turn(text, images = []) {
     const sizes = images.map((i) => `${i.source.media_type} ${jpegSize(i.source.data)}`).join(', ');
     return finish(await say(`I see ${images.length === 1 ? 'one image' : `${images.length} images`}: ${sizes}. You asked: ${text.split('\n')[0]}`));
   }
+  // Asked to fill a form (D16): it lists Chord's tools, reads the form on the attached tab (t1 when nothing's attached,
+  // as a confused model might), tries a field id Chord never gave, proposes values for the fields it knows from what
+  // the user wrote, then tries a second card in the same turn. Each answer is kept where the test can see it.
+  if (/\bfill\b/i.test(text)) {
+    const tab = ref ?? 't1';
+    const tools = (await mcp('tools/list', {}))?.mcp_response?.result?.tools ?? [];
+    writeFileSync(join(config, 'fill-tools.json'), JSON.stringify(tools.map((t) => t.name)));
+    const read = toolText(await callTool('read_form', { tab_id: tab }));
+    writeFileSync(join(config, 'form-read.json'), read);
+    const form = JSON.parse(read || '{}');
+    if (!form.fields) return finish(await say(`I can't read the form: ${form.data?.refused ?? 'no fields'}`));
+    writeFileSync(join(config, 'fill-stale.json'), toolText(await callTool('propose_fill', { tab_id: tab, values: [{ field: 'f999', value: 'x' }] })));
+    const known = { name: 'Ada Lovelace', email: 'ada@example.com', country: 'United Kingdom', region: 'Any', plan: 'Pro', news: true, bio: 'Mathematician.' };
+    const values = form.fields.filter((f) => f.name in known).map((f) => ({ field: f.id, value: known[f.name] }));
+    writeFileSync(join(config, 'fill-shown.json'), toolText(await callTool('propose_fill', { tab_id: tab, values })));
+    writeFileSync(join(config, 'fill-again.json'), toolText(await callTool('propose_fill', { tab_id: tab, values })));
+    return finish(await say('Check the values in the card, then press Fill. You send the form yourself.'));
+  }
   // An Effects request (main/effects): it reads the page's outline through Chord's one tool, keeps what it got
   // where the test can see it, and answers in Effects' fixed shape. Its patch tries a fetch too
   // (FAKE_CLAUDE_EVIL: a server that counts requests), which Chord has to take out.

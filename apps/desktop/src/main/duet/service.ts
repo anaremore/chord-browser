@@ -5,7 +5,7 @@
  * truth; a provider's session is a cache that's resumed when it still works
  * and replaced, primed with a summary, when it doesn't.
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -19,7 +19,14 @@ import {
   duetInstructions,
   duetPruneBefore,
   duetTool,
+  fieldCount,
+  fillChangedNote,
+  fillWrites,
+  formRead,
+  formResult,
   isNeverReadable,
+  proposedFill,
+  samePage,
   nameTabs,
   pageResult,
   pdfPageOf,
@@ -43,6 +50,8 @@ import {
   type DuetImageMaking,
   type DuetTabName,
   type DuetContextUsage,
+  type DuetFillCard,
+  type DuetFormRead,
   type DuetMessage,
   type DuetMessageBody,
   type DuetProvider,
@@ -54,7 +63,8 @@ import {
   type TabNode,
   type WindowId,
 } from '@chord/core';
-import type { DuetAction, DuetView } from '@chord/ipc';
+import type { DuetAction, DuetView, Toast } from '@chord/ipc';
+import { durations, easing } from '@chord/tokens';
 import { app, clipboard, ClipboardItem, nativeImage, net, type WebContents } from 'electron';
 import { pathToFileURL } from 'node:url';
 import type { Browser } from '../browser';
@@ -65,6 +75,7 @@ import { ClaudeSession } from './claude';
 import { CodexSession } from './codex';
 import { claudeConfigDir, claudeProjectFolder, detect, detectInWsl, mayBeInWsl, notInstalled, openSignIn, rememberedInWsl, type Detected, type Launch, type ProviderStatus } from './detect';
 import { readPage, screenshot, type PageRead } from './extract';
+import { fillFormPage, readFormPage, undoFillPage, type FillOutcome } from './forms';
 import { DuetImages, imageInfo, newImageId } from './images';
 import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
 import { extractPdf, fetchPdf, PdfError, pdfProblemCopy } from './pdf';
@@ -114,6 +125,41 @@ interface ThreadState {
   pdfs: Map<NodeId, PdfRead>;
   /** Images Codex made that are still being written: the reply is kept only once they're on disk. */
   saving: Set<Promise<void>>;
+  /** The last form Duet read in this chat (read_form): its fields by Chord's ids, and the page's token for that read. */
+  form: { nodeId: NodeId; token: string; read: DuetFormRead } | null;
+  /** Fill cards waiting for you, by message id: the read they're for (the card in the panel holds the values). */
+  fills: Map<string, { nodeId: NodeId; token: string; read: DuetFormRead }>;
+  /** Chord's next field id in this chat: ids never repeat, so one from an earlier read is caught, not taken for another field. */
+  nextField: number;
+  /** The reply that showed a fill card: one card for each message you send. */
+  fillTurn: string | null;
+}
+
+/** A fill's Undo, by its toast's token. */
+interface FillUndo {
+  state: ThreadState;
+  messageId: string;
+  windowId: WindowId;
+  nodeId: NodeId;
+  url: string;
+}
+
+/** Undo tokens kept for fill toasts. */
+const FILL_UNDOS = 30;
+
+/** Why Fill wrote nothing (fillFormPage's answers), as the card says it. */
+const FILL_PROBLEMS: Record<Exclude<FillOutcome, { ok: true }>['why'], string> = {
+  navigated: 'The page moved on since Duet read the form, so nothing was filled. Ask Duet again.',
+  gone: 'The form isn’t on the page any more, so nothing was filled.',
+  changed: 'The form changed since Duet read it, so nothing was filled. Ask Duet again.',
+  'no-answer': 'The page didn’t answer in time, so Chord can’t say what went in. Check the form.',
+};
+
+/** A message as chord-data keeps it: a fill card's values stay in memory (D16). */
+function saved(message: DuetMessage): DuetMessage {
+  if (message.body.role !== 'tool' || !message.body.fill) return message;
+  const { fill: _fill, ...body } = message.body;
+  return { ...message, body };
 }
 
 /** Where Duet's images go when you save one: Downloads, listed as a finished download. */
@@ -183,6 +229,10 @@ export class DuetService {
   private readonly thumbs = new Map<string, string>();
   /** Drafts, the first-use note and WSL installs found earlier, read from panel.json. */
   private readonly opened: Promise<void>;
+  /** Fills that can be undone, by their toast's token. */
+  private readonly fillUndos = new Map<string, FillUndo>();
+  /** Cards whose Fill is under way: a second press waits for nothing and writes nothing. */
+  private readonly filling = new Set<string>();
 
   constructor(
     private readonly browser: Browser,
@@ -202,6 +252,12 @@ export class DuetService {
       // busy ones too, so a reply already under way can't read on with the tools it started with.
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'duet' && p.path[2] === 'readsNothing')) {
         for (const threadId of [...this.live.keys()]) this.drop(threadId);
+        // A fill card waiting then fills nothing: what it read was read before.
+        if (this.settings.readsNothing) {
+          for (const state of this.threads.values()) {
+            for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') void this.endFill(state, m, 'expired', 'Duet is set to read nothing now, so nothing was filled.');
+          }
+        }
       }
     });
     this.opened = this.init();
@@ -311,6 +367,10 @@ export class DuetService {
       context: null,
       pdfs: new Map(),
       saving: new Set(),
+      form: null,
+      fills: new Map(),
+      nextField: 1,
+      fillTurn: null,
     };
   }
 
@@ -521,7 +581,7 @@ export class DuetService {
     this.toast(windowId, { id: 'duet-image', message: 'Image copied' });
   }
 
-  private toast(windowId: WindowId, toast: { id: string; message: string }): void {
+  private toast(windowId: WindowId, toast: Toast): void {
     const shell = this.browser.window(windowId)?.shell.webContents;
     if (shell) send(shell, 'toast:show', toast);
   }
@@ -829,6 +889,13 @@ export class DuetService {
         return this.exportThread(state);
       case 'settings':
         return this.browser.openSettings('duet');
+      case 'fill':
+        return this.fill(windowId, state, action.messageId, action.fields);
+      case 'dismissFill': {
+        const message = state.messages.find((m) => m.id === action.messageId);
+        if (message?.body.role === 'tool' && message.body.fill?.status === 'pending') await this.endFill(state, message, 'dismissed');
+        return;
+      }
     }
   }
 
@@ -1117,14 +1184,14 @@ export class DuetService {
   private async addMessage(state: ThreadState, body: DuetMessageBody): Promise<DuetMessage> {
     const message: DuetMessage = { id: uuidv7(), threadId: state.thread!.id, createdAt: Date.now(), body };
     state.messages.push(message);
-    await this.persistence.duet({ op: 'saveMessage', message }).catch(() => undefined);
+    await this.persistence.duet({ op: 'saveMessage', message: saved(message) }).catch(() => undefined);
     this.schedulePush();
     return message;
   }
 
   private async updateMessage(message: DuetMessage, body: DuetMessageBody): Promise<void> {
     message.body = body;
-    await this.persistence.duet({ op: 'saveMessage', message }).catch(() => undefined);
+    await this.persistence.duet({ op: 'saveMessage', message: saved(message) }).catch(() => undefined);
     this.schedulePush();
   }
 
@@ -1170,6 +1237,7 @@ export class DuetService {
     if (!spec || !state.thread) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
     if (this.settings.readsNothing) return { text: toolResult({ refused: 'Duet is set to read nothing, in Settings → Duet.' }, false), isError: true };
     try {
+      if (spec.name === 'read_form' || spec.name === 'propose_fill') return await this.formTool(state, spec.name, args);
       return await this.readTool(state, spec.name, args);
     } catch (error) {
       return { text: toolResult({ error: error instanceof Error ? error.message : String(error) }, false), isError: true };
@@ -1311,6 +1379,146 @@ export class DuetService {
       });
     }
     return contents.isDestroyed() ? null : contents;
+  }
+
+  /* ---------- Filling forms (D16, ARCHITECTURE.md §11.6) ---------- */
+
+  /**
+   * read_form and propose_fill. Only the tab on screen in the window the
+   * message came from, and only where Duet may read (never a private window, a
+   * chord where it's off, a Never site or a Chord page), never in reader view.
+   * Reading follows the chat's scope as read_tab does (a card under Ask every
+   * time). A proposal shows one card for each message you send, for fields of
+   * the last read only, on a page still at the address it was read at.
+   */
+  private async formTool(state: ThreadState, tool: 'read_form' | 'propose_fill', args: Record<string, unknown>): Promise<ToolOutput> {
+    const refuse = (why: string, problems?: string[]) => ({ text: toolResult({ refused: why, ...(problems ? { problems } : {}) }, false), isError: true });
+    const node = this.resolveTab(state, args['tab_id']);
+    if (!node) return refuse('No such tab. Use the tab id from "Attached:".');
+    if (!this.readable(node)) return refuse('Duet can never read this page (a private window, a Chord page, or a site the user keeps private).');
+    if (!state.windowId || this.activeTab(state.windowId)?.id !== node.id) return refuse('Duet fills forms only on the tab on screen. Ask the user to switch to it, then to ask again.');
+    if (this.browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its form. Ask the user to close reader view first.');
+    const title = node.title || safeHost(node.url);
+    if (tool === 'read_form') {
+      const thread = state.thread!;
+      if (readNeedsApproval({ scope: thread.scope, attached: state.attached.has(node.id), sameChord: node.chordId === state.chordId, tool, granted: state.grants.has(`read:${node.id}`) || state.grants.has(tool) })) {
+        const { decision } = await this.ask(state, tool, `Read the form on “${title}”`, [node.url]);
+        if (decision === 'denied') return refuse('The user said no to reading that form. Carry on without it, or ask them.');
+      }
+      const contents = await this.loadedContents(node.id);
+      const token = randomBytes(12).toString('hex');
+      const page = contents ? await readFormPage(contents, token) : null;
+      if (!page) return refuse('That page could not be read.');
+      const read = formRead(page, state.nextField);
+      state.nextField += read.fields.length;
+      state.form = { nodeId: node.id, token, read };
+      state.read.add(node.id);
+      await this.activity(state, tool, `Read the form on “${title}”`, `${fieldCount(read.fields.length)}${read.leftOut.length ? ` · ${read.leftOut.length} left out` : ''}`);
+      return { text: formResult(read, { ref: this.refFor(state, node.id), retrievedAt: Date.now() }) };
+    }
+    const form = state.form;
+    if (!form) return refuse('Read the form with read_form first.');
+    if (form.nodeId !== node.id) return refuse('That isn’t the tab whose form you read. Read its form first.');
+    if (state.streaming && state.fillTurn === state.streaming.id) return refuse('You already showed the user values for this message. Wait for their answer.');
+    const contents = this.browser.tabs.get(node.id)?.webContents;
+    if (!contents || contents.isDestroyed()) return refuse('That tab could not be read.');
+    const mapped = proposedFill(form.read, args, contents.getURL());
+    if (!mapped.ok) return refuse('Some values can’t go in this form. Fix them and call propose_fill again.', mapped.problems);
+    // A newer card takes the place of one still waiting.
+    for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') await this.endFill(state, m, 'expired', 'Duet suggested other values below.');
+    state.fillTurn = state.streaming?.id ?? null;
+    const card: DuetFillCard = { status: 'pending', title, site: safeHost(node.url), fields: mapped.fields, leftOut: form.read.leftOut, truncated: form.read.truncated };
+    const message = await this.addMessage(state, { role: 'tool', tool, summary: `Suggested values for ${fieldCount(card.fields.length)} in “${title}”`, detail: card.site, ok: true, fill: card });
+    state.fills.set(message.id, { nodeId: node.id, token: form.token, read: form.read });
+    return {
+      text: toolResult(
+        {
+          shown: true,
+          fields: card.fields.length,
+          note: 'The user now checks these in a card in the Duet panel, changes or leaves out what they like, and presses Fill themselves. Nothing is in the page yet, and Chord never submits: tell them to check the card, and that they send the form with the page’s own button.',
+        },
+        false,
+      ),
+    };
+  }
+
+  /**
+   * A card's Fill: your values, checked again here against what Chord read,
+   * into the page it read them from, if that's still the tab on screen in this
+   * window at the same address. Then the toast's Undo.
+   */
+  private async fill(windowId: WindowId, state: ThreadState, messageId: string, edits: readonly { id: string; value: string | boolean }[]): Promise<void> {
+    // Pressed twice: the second would find the fields already filled and keep them as what Undo goes back to.
+    if (this.filling.has(messageId)) return;
+    this.filling.add(messageId);
+    try {
+      await this.fillOnce(windowId, state, messageId, edits);
+    } finally {
+      this.filling.delete(messageId);
+    }
+  }
+
+  private async fillOnce(windowId: WindowId, state: ThreadState, messageId: string, edits: readonly { id: string; value: string | boolean }[]): Promise<void> {
+    const message = state.messages.find((m) => m.id === messageId);
+    if (message?.body.role !== 'tool' || message.body.fill?.status !== 'pending') return;
+    const card = message.body.fill;
+    const meta = state.fills.get(messageId);
+    if (!meta) return this.endFill(state, message, 'expired', 'This suggestion has ended, so nothing was filled.');
+    if (this.settings.readsNothing) return this.endFill(state, message, 'expired', 'Duet is set to read nothing now, so nothing was filled.');
+    const node = this.browser.store.state.nodes[meta.nodeId];
+    if (node?.kind !== 'tab') return this.endFill(state, message, 'expired', 'The tab is closed, so nothing was filled.');
+    if (!this.readable(node)) return this.endFill(state, message, 'expired', 'Duet can’t read this site any more, so nothing was filled.');
+    // Another tab in front: the card waits, and says how to go on.
+    if (this.activeTab(windowId)?.id !== node.id) return this.noteFill(message, `Go back to “${card.title}” to fill it.`);
+    const contents = this.browser.tabs.get(node.id)?.webContents;
+    if (!contents || contents.isDestroyed() || !samePage(meta.read.url, contents.getURL())) return this.endFill(state, message, 'expired', FILL_PROBLEMS.navigated);
+    const checked = fillWrites(meta.read, card.fields, edits);
+    if (!checked.ok) return this.noteFill(message, checked.problems.join(' '));
+    if (checked.writes.length === 0) return this.noteFill(message, 'Choose at least one field to fill.');
+    const undo = randomBytes(12).toString('hex');
+    const highlight = { color: this.browser.accentOf(node.id) ?? 'Highlight', ms: durations.fillHighlight, stagger: durations.stagger, easing: easing.standard };
+    const outcome = await fillFormPage(contents, { token: meta.token, writes: checked.writes, undo, highlight });
+    if (!outcome.ok) return this.endFill(state, message, 'expired', FILL_PROBLEMS[outcome.why]);
+    // Fields that changed as the others went in (a country's states) were left as they were: the card names them.
+    const note = fillChangedNote(meta.read.fields.filter((f) => outcome.skipped.includes(f.key)).map((f) => f.label));
+    await this.endFill(state, message, 'filled', note || undefined, outcome.filled);
+    this.fillUndos.set(undo, { state, messageId, windowId, nodeId: node.id, url: contents.getURL() });
+    while (this.fillUndos.size > FILL_UNDOS) this.fillUndos.delete(this.fillUndos.keys().next().value!);
+    this.toast(windowId, { id: `duet-fill:${messageId}`, message: `Filled ${fieldCount(outcome.filled)} on ${card.site}`, action: { label: 'Undo', command: { t: 'duet.undoFill', token: undo } } });
+  }
+
+  /** A fill's Undo (its toast): the page puts back each field the fill changed, unless you've changed it since. */
+  async undoFill(token: string): Promise<void> {
+    const u = this.fillUndos.get(token);
+    if (!u) return;
+    this.fillUndos.delete(token);
+    const contents = this.browser.tabs.get(u.nodeId)?.webContents;
+    const result = contents && !contents.isDestroyed() && samePage(u.url, contents.getURL()) ? await undoFillPage(contents, token) : null;
+    if (!result) return this.toast(u.windowId, { id: `duet-fill:${u.messageId}`, message: 'Couldn’t undo: the page has moved on' });
+    const message = u.state.messages.find((m) => m.id === u.messageId);
+    if (message) await this.endFill(u.state, message, 'undone', result.kept ? `${fieldCount(result.kept)} you changed since stayed as you left ${result.kept === 1 ? 'it' : 'them'}.` : undefined);
+  }
+
+  /** A card that waits with a note: what to do before Fill can work. */
+  private async noteFill(message: DuetMessage, note: string): Promise<void> {
+    if (message.body.role !== 'tool' || !message.body.fill) return;
+    await this.updateMessage(message, { ...message.body, fill: { ...message.body.fill, note } });
+  }
+
+  /** A card ends: filled, undone, not now, or nothing filled and why. Its saved line says which (*Filled 4 fields in “Sign up”*). */
+  private async endFill(state: ThreadState, message: DuetMessage, status: Exclude<DuetFillCard['status'], 'pending'>, note?: string, filled?: number): Promise<void> {
+    if (message.body.role !== 'tool' || !message.body.fill) return;
+    const { note: _waiting, ...card } = message.body.fill;
+    const count = filled ?? card.filled ?? 0;
+    const summary =
+      status === 'filled' ? `Filled ${fieldCount(count)} in “${card.title}”` : status === 'undone' ? `Filled ${fieldCount(count)} in “${card.title}”, then undid it` : `Didn’t fill “${card.title}”`;
+    state.fills.delete(message.id);
+    await this.updateMessage(message, {
+      ...message.body,
+      summary,
+      ok: status === 'filled' || status === 'undone',
+      fill: { ...card, status, ...(note ? { note } : {}), ...(status === 'filled' ? { filled: count } : {}) },
+    });
   }
 
   /* ---------- Citations, export ---------- */

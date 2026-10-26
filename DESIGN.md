@@ -619,7 +619,7 @@ Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
 
 ### 7.8 `DuetPanel`
 
-As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECTURE.md §11).
+As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECTURE.md §11). It fills a form only when you ask, after you check its values (D16, `FillCard` below).
 
 - **Frame:** a `surface` frame (`radius-frame`, `shadow-frame`), 380 px, right of the page with an 8 px gap. The page's frame narrows to make room.
 - **Header (40 px):** the chat's title (click *Rename* to edit it in place), the context meter, a *provider · model* chip ("Claude Code · Default") that opens the model menu, the **Chats** menu (New chat, Rename, Export as Markdown, Delete this chat, recent chats, Turn off in this chord), and close.
@@ -639,6 +639,17 @@ As built in Phase 2. Duet chats and reads; it never changes your tabs (ARCHITECT
   - Buttons: **Allow once** (⌘↵ / Ctrl+↵) · **Allow for this chat** · **No** (Esc).
   - *As built (M1.6):* those keys work from the message field too, while a card waits; the question is announced to screen readers.
   - The card never auto-accepts. Once answered it shrinks to a muted line (*Allowed*, *Not allowed*).
+- **`FillCard`** (*built 2026-10-25*; D16, ARCHITECTURE.md §11.6): Duet's values for a form you asked it to fill, in the timeline where it proposed them, on the approval card's surface with its accent ring while it waits. Nothing goes into the page until you press Fill.
+  - **Head:** *Fill this form on example.com*, then in `fg-muted`: *Nothing goes into the page until you press Fill, and you send the form yourself.*
+  - **One row per field:** a checkbox to keep it (named *Fill “Email”*, on to start), the page's label, and *Required* in `text-micro`, `fg-subtle`, at the row's end. Under it the value, editable, on `item-hover` (`radius-sm`, `text-small`): a text field (a date, time, number, email, phone or address field for those types, never taking more than the page's field does), a text area, a select of the field's choices (a radio group's too), or *Checked · Not checked* for a checkbox. A field left out dims to half.
+  - **What Chord left out,** in `fg-muted`: *Left out: Password, Card number and Verification code. Chord never fills passwords, payment details and one-time codes, so fill those yourself.* A page with more fields than Duet reads at once: *This page has more fields than Duet reads at once: these are the first.*
+  - **Fill 5 fields** (the accent pill; its count follows what you keep, and it's off at none; ⌘↵ / Ctrl+↵ inside the card) · **Not now** (quiet, Esc). They stay at the timeline's bottom edge while a long card scrolls under them.
+  - **Before Fill can work,** a line in `danger`: *Go back to “Sign up” to fill it.* (another tab is in front; the card waits), or a value the field won't take (*Name is longer than the field takes (20 characters).*).
+  - **In the page:** each field outlined in the chord's accent for a moment, the first scrolled into view (at once with reduced motion), and the toast *Filled 5 fields on example.com* · **Undo**.
+  - **Ended,** it shrinks to its head and a line in `fg-muted`: *Filled 5 fields.* (and, for a field the others changed as they went in, *Region changed as the other fields went in, so Chord left it alone. Ask Duet again for it.*) · *Filled 5 fields, then undone.* (and *1 field you changed since stayed as you left it.*) · *Not filled.* · or why nothing went in: *The form changed since Duet read it, so nothing was filled. Ask Duet again.* · *The page moved on since Duet read the form, so nothing was filled. Ask Duet again.* · *The form isn’t on the page any more, so nothing was filled.* · *The tab is closed, so nothing was filled.* · *Duet can’t read this site any more, so nothing was filled.* · *Duet is set to read nothing now, so nothing was filled.* · *Duet suggested other values below.* · *The page didn’t answer in time, so Chord can’t say what went in. Check the form.*
+  - **Undo after the page moved on:** the toast *Couldn’t undo: the page has moved on*.
+  - **Accessibility:** a group named by its head, described by its first line; screen readers hear *Duet suggests values for 5 fields on example.com. Check them, then Fill or Not now.* Only the card's own keys fill: the message field's ⌘↵ never writes into a page.
+  - After a relaunch it's an activity line (*Filled 5 fields in “Sign up”*): Chord never keeps the values.
 - **Working:** a dot and *Working… 12s* while a reply streams; text renders as it arrives, with no typing animation.
 - **Follow:** the list follows new text until you scroll up more than 40 px; then a **Jump to latest** pill appears.
 - **Composer:**
@@ -987,6 +998,7 @@ With no other browser on the computer, first run leaves the step out, and Settin
 - "Moved to Personal (sign-ins differ, so it reloaded) · Undo"
 - "Not blocking ads on nytimes.com · Undo" · "Blocking ads on nytimes.com again · Undo"
 - "Moved to Work (sign-ins differ, so it reloaded and is no longer shared) · Undo" · "Stopped sharing “Slides”: it moved to other sign-ins, so it loaded again" (these two show in presenting mode too, §7.13)
+- "Filled 5 fields on example.com · Undo" (Duet's fill card, §7.8)
 
 Empty states get a small abstract illustration in the chord's own colors (three soft shapes echoing the mark), animated once with `gentle`. They never look like stock art.
 

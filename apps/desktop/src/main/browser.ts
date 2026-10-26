@@ -1401,21 +1401,32 @@ export class Browser {
     w.window.focus();
   }
 
-  /** The chord's colors for the player's bar: the tab's chord, as a solid window draws it (DESIGN.md §5). */
-  private playerTheme(nodeId: NodeId): Theme | null {
+  /** The tab's chord's colors, as a solid window draws them (DESIGN.md §5). */
+  private chordTheme(nodeId: NodeId) {
     const state = this.store.state;
     const node = state.nodes[nodeId];
     const chord = node ? state.chords[node.chordId] : undefined;
     if (!chord) return null;
     const info = systemInfo();
     const accent = info.accentColor ? hexToRgb(info.accentColor) : null;
-    const theme = createChordTheme(chord.theme, {
+    return createChordTheme(chord.theme, {
       systemAppearance: info.appearance,
       material: 'solid',
       contrast: state.settings.interface.contrast,
       glass: state.settings.interface.glass,
       focus: accent ? rgbToOklch(accent) : null,
     });
+  }
+
+  /** The tab's chord's accent, as CSS: what outlines the fields Duet fills. */
+  accentOf(nodeId: NodeId): string | null {
+    return this.chordTheme(nodeId)?.vars['--color-accent'] ?? null;
+  }
+
+  /** The chord's colors for the player's bar: the tab's chord, as a solid window draws it (DESIGN.md §5). */
+  private playerTheme(nodeId: NodeId): Theme | null {
+    const theme = this.chordTheme(nodeId);
+    if (!theme) return null;
     const vars: Theme['vars'] = {};
     for (const name of THEME_VARS) if (theme.vars[name]) vars[name] = theme.vars[name];
     return { appearance: theme.appearance, vars };

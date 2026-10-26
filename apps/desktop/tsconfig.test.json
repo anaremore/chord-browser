@@ -22,6 +22,7 @@
     "test/run-temp.ts",
     "src/renderer/env.d.ts",
     "src/main/duet/extract.ts",
+    "src/main/duet/forms.ts",
     "src/main/page-call.ts",
     "src/main/safe-browsing/database.ts",
     "src/main/safe-browsing/proto.ts",

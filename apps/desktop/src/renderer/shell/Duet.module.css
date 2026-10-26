@@ -768,6 +768,78 @@
   align-items: center;
 }
 
+/* A fill card (D16): each field's label over its value, a checkbox to leave it out, Fill always in reach. */
+.fill p {
+  margin: 0;
+}
+
+.fillFields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fillField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.fillLabel {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-inline-size: 0;
+  font: var(--text-small);
+}
+
+.fillKeep {
+  flex: none;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.fillRequired {
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--color-fg-subtle);
+  font: var(--text-micro);
+  letter-spacing: var(--text-micro-tracking);
+}
+
+.fillInput {
+  box-sizing: border-box;
+  inline-size: 100%;
+  min-block-size: var(--size-icon-button);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+  resize: vertical;
+}
+
+.fillInput:disabled {
+  opacity: 0.5;
+}
+
+.fillNote {
+  color: var(--color-danger);
+  font: var(--text-small);
+}
+
+/* Fill stays at the timeline's bottom edge while a long card scrolls under it. */
+.fillActions {
+  position: sticky;
+  inset-block-end: 0;
+  padding-block: var(--space-2) 0;
+  background: var(--color-surface-raised);
+}
+
 .jump {
   position: absolute;
   inset-block-end: var(--space-3);
