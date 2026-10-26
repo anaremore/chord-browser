@@ -997,6 +997,7 @@ With no other browser on the computer, first run leaves the step out, and Settin
   - under either, at the card's foot, **Lost it? Start over…**: *Without the passphrase, the synced copy can’t be opened. Starting over puts this computer’s setup in the folder under a new one; your other computers pause until you type it there. What’s on each computer stays.* over the two new-passphrase fields, with **Cancel** and **Start over**;
   - *Chord couldn’t write to the sync folder. It tries again every few minutes; 3 changes wait here.* (it does, later and later);
   - *Chord couldn’t take in changes from the sync folder. It tries again in a few minutes; nothing’s lost meanwhile.* (it does, later and later: what it couldn’t take in is read again);
+  - *The sync folder isn’t answering. Is your sync app or network drive working? Chord tries again in a few minutes; 3 changes wait here.* (a minute without an answer from the folder: it tries again, later and later);
   - *Another computer keeps writing to the sync folder as this one, so sync stopped writing here. Your changes wait. Turn sync off and on again on this computer.* **Turn off**;
   - *Chord can’t find the sync folder. Is your sync app running?* **Choose folder…** (it keeps looking meanwhile): the system's folder picker, and a folder that isn't this sync's gets *That isn’t this sync’s folder. Choose the folder your other computers sync through.*;
   - *Another computer has a newer Chord. Update this one to keep syncing.* **Check for updates**;
