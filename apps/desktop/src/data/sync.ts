@@ -25,6 +25,12 @@ import type { FromWorker, ToWorker } from './sync-worker';
 const WRITE_MS = 3000;
 /** Records merged per transaction, and changed things read back for main per push: a few milliseconds each, with searches answered between them. */
 const SLICE = 100;
+/**
+ * Characters of things read and written per merged slice: a slice of tiny
+ * changes to a thing of 2 MB is one rewrite of it, not a hundred, and a slice
+ * stops once it has rewritten about this much.
+ */
+const SLICE_CHARS = 512 * 1024;
 const PLAN_SLICE = 100;
 /**
  * SQLite's checkpoints, which copy the write-ahead log into the database and
@@ -58,6 +64,12 @@ export class SyncController {
   /** When each computer last wrote to the folder, and the newest stamp read from each. */
   private readonly seen = new Map<string, number>();
   private readonly newest = new Map<string, number>();
+  /** When each computer says it made its newest segment read (its own clock): what tells its clock is ahead. */
+  private readonly wrote = new Map<string, number>();
+  /** The folder holds more junk than sync remembers: computers not known yet aren't looked for. */
+  private cluttered = false;
+  /** Things a change made here couldn't win (a stamp at the very last there can be): named in Settings. */
+  private readonly stuck = new Map<string, string>();
   private problem: SyncProblem | null = null;
   private changedBy: string | null = null;
   private capped = 0;
@@ -228,17 +240,18 @@ export class SyncController {
       this.refused += message.refused;
       const { generation } = db.sync.meta;
       const now = Date.now();
-      for (let at = 0; at === 0 || at < message.records.length; at += SLICE) {
+      for (let at = 0; at === 0 || at < message.records.length; ) {
         // Removed meanwhile (an earlier slice said so): nothing more is merged.
         if (!db.sync.meta.on) break;
         const slice = message.records.slice(at, at + SLICE);
-        const last = at + SLICE >= message.records.length;
         const started = performance.now();
         const result = db.atomically(() => {
-          const merged = db.sync.merge(slice, now);
-          if (last) db.sync.saveCursor(generation, message.device, message.segment, message.cursor);
+          const merged = db.sync.merge(slice, now, SLICE_CHARS);
+          if (at + Math.max(1, merged.consumed) >= message.records.length) db.sync.saveCursor(generation, message.device, message.segment, message.cursor);
           return merged;
         });
+        at += Math.max(1, result.consumed);
+        const last = at >= message.records.length;
         db.sync.timed('merge', performance.now() - started);
         for (const [key, names] of result.changes) {
           const had = this.changes.get(key) ?? new Set<string>();
@@ -263,6 +276,8 @@ export class SyncController {
     if (!db) return;
     for (const [device, at] of Object.entries(message.seen)) this.seen.set(device, at);
     this.tooMany = message.tooMany;
+    this.cluttered = message.cluttered;
+    for (const [device, at] of Object.entries(message.wrote)) this.wrote.set(device, Math.max(at, this.wrote.get(device) ?? 0));
     const look = message.look;
     const was = this.problem;
     // A newer generation that's this computer's own (it's moving there, or a look from before it moved): no reason to pause.
@@ -363,6 +378,16 @@ export class SyncController {
   afterWrite(): void {
     const db = this.db();
     if (db?.sync.stamping && db.sync.pending > 0) this.scheduleWrite(WRITE_MS);
+    // A change that couldn't win: main is sent the merged value back, and Settings names what.
+    const lost = db?.sync.takeLost();
+    if (db && lost && lost.size > 0) {
+      for (const [key, names] of lost) {
+        this.changes.set(key, new Set([...(this.changes.get(key) ?? []), ...names]));
+        this.stuck.set(key, db.sync.describe(key));
+      }
+      this.merging = this.merging.then(() => this.pushChanges());
+      this.pushStatus();
+    }
   }
 
   private scheduleWrite(ms: number): void {
@@ -405,9 +430,11 @@ export class SyncController {
         continue;
       }
       if (problem === 'gone' && putBack++ < 2) {
-        // This computer's log isn't there, though the folder is (someone deleted it, or a computer that took it for
-        // removed): a fresh snapshot puts it back, and what's waiting goes after it.
-        if (await this.snapshotNow(db)) continue;
+        // This computer's log isn't there, though the folder is: another copy of this profile may have compacted it
+        // away (S15 §6's copied id), so this one takes a new id, and its snapshot goes there. Nothing in the old
+        // folder is deleted: whatever's there may be the other copy's.
+        await this.newId();
+        continue;
       }
       // The folder isn't there (the sync app isn't running): the changes wait in the outbox, and go once a look finds it.
       this.problem = 'missing';
@@ -491,7 +518,8 @@ export class SyncController {
       if (device === self || (lastChange && lastChange.at >= at)) continue;
       lastChange = { name: devices.find((d) => d.id === device)?.name ?? 'Another computer', at };
     }
-    const ahead = [...this.newest].filter(([device, at]) => device !== self && at > now + CLOCK_AHEAD_MS).map(([device, at]) => ({ name: devices.find((d) => d.id === device)?.name ?? 'Another computer', ms: at - now }));
+    // A clock ahead, from what each computer says of itself (when it made its newest segment), never from stamps a change was bumped to.
+    const ahead = [...this.wrote].filter(([device, at]) => device !== self && at > now + CLOCK_AHEAD_MS).map(([device, at]) => ({ name: devices.find((d) => d.id === device)?.name ?? 'Another computer', ms: at - now }));
     const state: SyncStatus['state'] = meta.joining ? 'choosing' : meta.paused ? 'paused' : !this.key ? 'locked' : this.problem ? 'problem' : 'on';
     return {
       state,
@@ -506,7 +534,9 @@ export class SyncController {
       capped: this.capped,
       refused: this.refused,
       tooMany: this.tooMany,
-      choosing: meta.joining ? { here: (db.sync.localThings().filter((r) => r.type === 'chord').length), synced: db.sync.syncedChords().length } : null,
+      cluttered: this.cluttered,
+      stuck: [...this.stuck.values()],
+      choosing: meta.joining ? { here: db.sync.chordsHere(), synced: db.sync.syncedChords().length } : null,
     };
   }
 
@@ -657,15 +687,25 @@ export class SyncController {
   /** Joining, decided: this computer's setup joins the synced one (`both`), or makes way for it (`synced`); then its first segment, a snapshot. */
   private async choose(db: ChordDatabase, mode: 'synced' | 'both'): Promise<SyncReply> {
     if (!db.sync.meta.joining) return { problem: 'busy' };
+    // This computer's things into the copy, a slice at a time, searches answered between (still joining: nothing's stamped meanwhile).
+    const local = db.sync.localThings();
+    for (let at = 0; at < local.length; at += PLAN_SLICE) {
+      db.atomically(() => db.sync.addLocal(mode === 'synced' ? 'synced-setup' : 'all', local.slice(at, at + PLAN_SLICE)));
+      await new Promise((resolve) => setImmediate(resolve));
+    }
     db.atomically(() => {
-      db.sync.addLocal(mode === 'synced' ? 'synced-setup' : 'all');
       db.sync.stampDevice({ ...this.info, removed: false });
       db.sync.setMeta({ joining: false });
     });
     this.changes.clear();
     // Everything the synced setup has, read back a slice at a time, searches answered between, as one apply.
     const apply = emptyApply();
-    const ordered = db.sync.orderForApply(db.sync.everything());
+    const all = new Map<string, Set<string>>();
+    for (const page of db.sync.everythingPages()) {
+      for (const [key, names] of page) all.set(key, names);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    const ordered = db.sync.orderForApply(all);
     for (let at = 0; at < ordered.length; at += PLAN_SLICE) {
       const started = performance.now();
       const part = db.sync.planFor(new Map(ordered.slice(at, at + PLAN_SLICE)));
@@ -795,8 +835,10 @@ export class SyncController {
     this.problem = null;
     this.changes.clear();
     this.capped = this.refused = 0;
-    this.tooMany = false;
+    this.tooMany = this.cluttered = false;
     this.pruned.clear();
+    this.stuck.clear();
+    this.wrote.clear();
     db.sync.clear();
   }
 

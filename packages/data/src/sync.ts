@@ -122,16 +122,30 @@ export interface MergeResult {
   capped: number;
   /** Another computer took this one off: when (its stamp's time). */
   removed: number | null;
-  /** The newest stamp from each computer that wrote here, for Settings' *last change* and clocks ahead. */
+  /** When the newest change from each computer that wrote here came (its stamp, or now if that's ahead), for Settings' *last change*. */
   newest: Map<string, number>;
+  /** How many of the records were taken: the rest wait for the next slice (the budget ran out). */
+  consumed: number;
 }
 
 interface Loaded {
   thing: SyncThing;
   local: SyncValues | null;
-  /** Its values as saved (JSON): what it counts for against SYNC_LIMITS.chars. */
-  chars: number;
+  /** What it counts for against SYNC_LIMITS.chars (`costOf`). */
+  cost: number;
 }
+
+/**
+ * What a thing counts for against SYNC_LIMITS.chars: its values and stamps as
+ * saved, and for each field what a snapshot adds for it (a record's type, id
+ * and stamp, when every field has a stamp of its own), so the cap bounds what a
+ * snapshot holds, not only the values.
+ */
+const costOf = (id: string, values: number, stamps: number, fields: number): number => values + stamps + fields * (id.length + 60);
+const COST_SQL = `length(fields) + length(stamps) + (length(stamps) - length(replace(stamps, '[', ''))) * (length(id) + 60)`;
+/** What one field adds to its thing's cost (an estimate made as records are merged; the save counts it exactly). */
+const fieldCost = (id: string, name: string, field: { v: unknown; at: Stamp }): number => 2 * (name.length + 4) + (JSON.stringify(field.v)?.length ?? 4) + JSON.stringify(field.at).length + id.length + 60;
+const valueCost = (name: string, v: unknown): number => name.length + 4 + (JSON.stringify(v)?.length ?? 4);
 
 const ICON_CACHE = 500;
 /** A snapshot is read for the worker a page at a time: about this many characters, so a big one is never held whole. */
@@ -238,29 +252,72 @@ export class SyncStore {
     const stamps = parseJson<Record<string, Stamp>>(row['stamps'], {});
     const fields: SyncThing['fields'] = {};
     for (const [name, v] of Object.entries(values)) fields[name] = { v, at: stamps[name] ?? [0, 0, ''] };
-    return { thing: { type, id, fields }, local: row['local'] === null || row['local'] === undefined ? null : parseJson<SyncValues | null>(row['local'], null), chars: typeof row['fields'] === 'string' ? row['fields'].length : 0 };
+    const length = (v: unknown) => (typeof v === 'string' ? v.length : 0);
+    return {
+      thing: { type, id, fields },
+      local: row['local'] === null || row['local'] === undefined ? null : parseJson<SyncValues | null>(row['local'], null),
+      cost: costOf(id, length(row['fields']), length(row['stamps']), Object.keys(values).length),
+    };
   }
 
-  private save(thing: SyncThing, local: SyncValues | null | undefined, valuesJson?: string): void {
+  /** A thing saved; `was` is what it counted for before (0 for a new one). Returns what it counts for now. */
+  private save(thing: SyncThing, local: SyncValues | null | undefined, was = 0): number {
     const values: Record<string, unknown> = {};
     const stamps: Record<string, Stamp> = {};
     for (const [name, field] of Object.entries(thing.fields)) {
       values[name] = field.v;
       stamps[name] = field.at;
     }
-    const fields = valuesJson ?? JSON.stringify(values);
+    const fields = JSON.stringify(values);
+    const stampsJson = JSON.stringify(stamps);
     if (local === undefined) {
       this.sql(`INSERT INTO sync_record (type, id, fields, stamps) VALUES (?, ?, ?, ?) ON CONFLICT(type, id) DO UPDATE SET fields = excluded.fields, stamps = excluded.stamps`).run(
         thing.type,
         thing.id,
         fields,
-        JSON.stringify(stamps),
+        stampsJson,
       );
     } else {
       this.sql(
         `INSERT INTO sync_record (type, id, fields, stamps, local) VALUES (?, ?, ?, ?, ?) ON CONFLICT(type, id) DO UPDATE SET fields = excluded.fields, stamps = excluded.stamps, local = excluded.local`,
-      ).run(thing.type, thing.id, fields, JSON.stringify(stamps), local === null ? null : JSON.stringify(local));
+      ).run(thing.type, thing.id, fields, stampsJson, local === null ? null : JSON.stringify(local));
     }
+    const cost = costOf(thing.id, fields.length, stampsJson.length, Object.keys(values).length);
+    if (this.total !== null) this.total += cost - was;
+    return cost;
+  }
+
+  /** What the copy counts for in all (`costOf` of every thing), kept as things are saved once it's been counted. */
+  private total: number | null = null;
+
+  private totalCost(): number {
+    this.total ??= num((this.sql(`SELECT COALESCE(SUM(${COST_SQL}), 0) AS n FROM sync_record`).get() as Row)['n']);
+    return this.total;
+  }
+
+  /** What the copy counts for against SYNC_LIMITS.chars (tests, and Settings one day). */
+  size(): number {
+    return this.totalCost();
+  }
+
+  /** Things a change made here couldn't win (another computer's stamp is at the very last there can be): the merged value stays. */
+  private readonly lost = new Map<string, Set<string>>();
+
+  /** A thing, as Settings names it: a chord's or a pinned tab's name, a Favorite's title, or what kind of thing it is. */
+  describe(key: string): string {
+    const [type, id] = key.split('\n') as [string, string];
+    const fields = this.load(type, id)?.thing.fields ?? {};
+    const text = (name: string) => (typeof fields[name]?.v === 'string' && (fields[name]!.v as string).trim() ? (fields[name]!.v as string).trim().slice(0, 60) : null);
+    const named = text('name') ?? text('customTitle') ?? text('title');
+    if (named) return `“${named}”`;
+    return type === 'settings' ? 'a setting' : type === 'route' || type === 'effects' ? id : `a ${type}`;
+  }
+
+  /** What lost since last asked: main is sent the merged value, so this computer shows what every other one does. */
+  takeLost(): Map<string, Set<string>> {
+    const out = new Map(this.lost);
+    this.lost.clear();
+    return out;
   }
 
   private setLocal(type: string, id: string, local: SyncValues | null): void {
@@ -281,8 +338,22 @@ export class SyncStore {
       const field = had?.thing.fields[name];
       if (field && compareStamps(at, field.at) <= 0) at = stampAbove(field.at, this.device());
     }
-    const record: DataRecord = { type, id, at, set };
-    this.save(mergeRecord(had?.thing, record).thing, local);
+    // Above a stamp at the very last there can be, no stamp is: such a change can't win anywhere, so it isn't written,
+    // and main is sent the merged value back. This computer never shows what its own copy, and every other, doesn't.
+    const wins: SyncValues = {};
+    for (const [name, v] of Object.entries(set)) {
+      const field = had?.thing.fields[name];
+      if (field && compareStamps(at, field.at) <= 0) {
+        const key = thingKey(type, id);
+        this.lost.set(key, (this.lost.get(key) ?? new Set()).add(name));
+      } else wins[name] = v;
+    }
+    if (Object.keys(wins).length === 0) {
+      if (had && local !== undefined) this.setLocal(type, id, local);
+      return;
+    }
+    const record: DataRecord = { type, id, at, set: wins };
+    this.save(mergeRecord(had?.thing, record).thing, local, had?.cost ?? 0);
     this.sql('INSERT INTO sync_outbox (record) VALUES (?)').run(JSON.stringify(record));
     this.pending++;
   }
@@ -496,16 +567,16 @@ export class SyncStore {
    * here after another computer deleted it stays, for everyone, and one that
    * wasn't goes (S15 §13).
    */
-  addLocal(mode: 'all' | 'synced-setup'): Map<string, Set<string>> {
+  addLocal(mode: 'all' | 'synced-setup', records: readonly DataRecord[] = this.localThings()): Map<string, Set<string>> {
     const changes = new Map<string, Set<string>>();
-    for (const record of this.localThings()) {
+    for (const record of records) {
       if (mode === 'synced-setup' && (record.type === 'chord' || NODE_TYPES.has(record.type))) continue;
       const here = record.type === 'settings' || record.type === 'icon' ? record : { ...record, set: { ...record.set, deleted: false } };
       const r = mode === 'synced-setup' && here.type === 'settings' ? { ...here, at: [0, 0, this.device()] as Stamp } : here;
       const had = this.load(r.type, r.id);
       const merged = mergeRecord(had?.thing, r);
       const local = { ...(had?.local && had.local['deleted'] !== true ? had.local : {}), ...r.set };
-      this.save(merged.thing, local);
+      this.save(merged.thing, local, had?.cost ?? 0);
       if (r.at) this.clock = seenStamp(this.loadClock(), r.at, Date.now(), this.device());
       // What the copy has that differs from this computer's: main applies it.
       const differs = Object.keys(merged.thing.fields).filter((name) => !same(merged.thing.fields[name]!.v, local[name]));
@@ -540,71 +611,104 @@ export class SyncStore {
 
   /**
    * Records another computer wrote, merged into the copy in one transaction
-   * (the caller's): each checked, within SYNC_LIMITS, field by field. The
-   * clock moves up to every stamp read. `self` is this computer, whose own
-   * removal is noticed unless it's joining.
+   * (the caller's): each checked, within SYNC_LIMITS, field by field. Records
+   * for one thing are merged together and the thing saved once; a thing the
+   * records change nothing in isn't written at all; and once about `budget`
+   * characters of things have been read and written, the rest wait for the
+   * next slice (`consumed` says how many were taken), so a slice stays a few
+   * milliseconds however big the things it changes. The clock moves up to
+   * each stamp read, at most a minute past the wall clock. `self` is this
+   * computer, whose own removal is noticed unless it's joining.
    */
-  merge(records: readonly DataRecord[], now: number): MergeResult {
-    const result: MergeResult = { changes: new Map(), dropped: 0, capped: 0, removed: null, newest: new Map() };
+  merge(records: readonly DataRecord[], now: number, budget = Number.POSITIVE_INFINITY): MergeResult {
+    const result: MergeResult = { changes: new Map(), dropped: 0, capped: 0, removed: null, newest: new Map(), consumed: 0 };
     const self = this.device();
     let counts: Map<string, number> | null = null;
-    let chars = -1;
+    let work = 0;
+    /** The things this slice changes, as merged so far, each with what it counted for when read. */
+    const open = new Map<string, { thing: SyncThing; was: number; cost: number; values: number; dirty: boolean; isNew: boolean }>();
     for (const raw of records) {
+      // Past the budget, only more for a thing already read this slice: that costs no more reading or writing.
+      if (result.consumed > 0 && work >= budget && !open.has(thingKey(raw.type, raw.id))) break;
+      result.consumed++;
       const r = checkSyncRecord(raw, iconHash);
       if (!r) {
         result.dropped++;
         continue;
       }
-      const had = this.load(r.type, r.id);
-      if (!had) {
-        // A new thing: within each type's limit, and the copy's.
-        counts ??= new Map((this.sql('SELECT type, COUNT(*) AS n FROM sync_record GROUP BY type').all() as Row[]).map((row) => [str(row['type']), num(row['n'])]));
-        const type = syncKind(r.type) === 'unknown' ? '?' : r.type;
-        const count = type === '?' ? [...counts].filter(([t]) => syncKind(t) === 'unknown').reduce((n, [, c]) => n + c, 0) : (counts.get(type) ?? 0);
-        const limit = type === '?' ? SYNC_LIMITS.unknown : (SYNC_LIMITS.byType[type] ?? 0);
-        const total = [...counts.values()].reduce((n, c) => n + c, 0);
-        if (count >= limit || total >= SYNC_LIMITS.things) {
-          result.capped++;
-          continue;
+      const key = thingKey(r.type, r.id);
+      let entry = open.get(key);
+      if (!entry) {
+        // An icon is a fact: one that's here stays as it is, without reading it.
+        if (r.type === 'icon' && this.sql(`SELECT 1 FROM sync_record WHERE type = 'icon' AND id = ?`).get(r.id)) continue;
+        const had = this.load(r.type, r.id);
+        if (!had) {
+          // A new thing: within each type's limit, and the copy's.
+          counts ??= new Map((this.sql('SELECT type, COUNT(*) AS n FROM sync_record GROUP BY type').all() as Row[]).map((row) => [str(row['type']), num(row['n'])]));
+          const type = syncKind(r.type) === 'unknown' ? '?' : r.type;
+          const count = type === '?' ? [...counts].filter(([t]) => syncKind(t) === 'unknown').reduce((n, [, c]) => n + c, 0) : (counts.get(type) ?? 0);
+          const limit = type === '?' ? SYNC_LIMITS.unknown : (SYNC_LIMITS.byType[type] ?? 0);
+          const total = [...counts.values()].reduce((n, c) => n + c, 0);
+          if (count >= limit || total >= SYNC_LIMITS.things) {
+            result.capped++;
+            continue;
+          }
+          counts.set(r.type, (counts.get(r.type) ?? 0) + 1);
         }
+        const thing = had?.thing ?? { type: r.type, id: r.id, fields: {} };
+        const values = Object.entries(thing.fields).reduce((n, [name, f]) => n + valueCost(name, f.v), 2);
+        entry = { thing, was: had?.cost ?? 0, cost: had?.cost ?? 0, values, dirty: false, isNew: !had };
+        open.set(key, entry);
+        work += entry.was;
       }
-      const merged = mergeRecord(had?.thing, r);
-      // Every thing, new or old, grows only so far (fields, and its values as JSON), and the copy as a whole no further
-      // than SYNC_LIMITS.chars, however many records add to it.
-      const values = JSON.stringify(Object.fromEntries(Object.entries(merged.thing.fields).map(([name, f]) => [name, f.v])));
-      if (Object.keys(merged.thing.fields).length > SYNC_LIMITS.fields || values.length > SYNC_LIMITS.thingChars) {
+      const merged = mergeRecord(entry.thing, r);
+      const moved = Object.keys(r.set).filter((name) => merged.thing.fields[name] !== entry.thing.fields[name]);
+      // Nothing it changes (an older stamp, a record read twice): nothing to write.
+      if (moved.length === 0) continue;
+      // Every thing, new or old, grows only so far (fields, and its values), and the copy as a whole no further than
+      // SYNC_LIMITS.chars, counting stamps and what a snapshot adds, however many records add to it.
+      let cost = entry.cost;
+      let values = entry.values;
+      for (const name of moved) {
+        const before = entry.thing.fields[name];
+        const after = merged.thing.fields[name]!;
+        cost += fieldCost(r.id, name, after) - (before ? fieldCost(r.id, name, before) : 0);
+        values += valueCost(name, after.v) - (before ? valueCost(name, before.v) : 0);
+      }
+      if (Object.keys(merged.thing.fields).length > SYNC_LIMITS.fields || values > SYNC_LIMITS.thingChars || this.totalCost() + (cost - entry.cost) > SYNC_LIMITS.chars) {
         result.capped++;
         continue;
       }
-      const grows = values.length - (had?.chars ?? 0);
-      if (grows > 0) {
-        if (chars < 0) chars = num((this.sql('SELECT COALESCE(SUM(length(fields)), 0) AS n FROM sync_record').get() as Row)['n']);
-        if (chars + grows > SYNC_LIMITS.chars) {
-          result.capped++;
-          continue;
-        }
-      }
-      if (chars >= 0) chars += grows;
-      if (!had) counts!.set(r.type, (counts!.get(r.type) ?? 0) + 1);
-      this.save(merged.thing, undefined, values);
+      this.total = this.totalCost() + (cost - entry.cost);
+      work += Math.max(0, cost - entry.cost);
+      entry.thing = merged.thing;
+      entry.cost = cost;
+      entry.values = values;
+      entry.dirty = true;
       if (r.at) {
         this.clock = seenStamp(this.loadClock(), r.at, now, self);
         this.clockDirty = true;
+        // When it came, as this computer's clock says: a stamp bumped to win over one far ahead says nothing of its computer's clock.
         const by = r.at[2];
-        if (r.at[0] > (result.newest.get(by) ?? 0)) result.newest.set(by, r.at[0]);
+        const at = Math.min(r.at[0], now);
+        if (at > (result.newest.get(by) ?? 0)) result.newest.set(by, at);
       }
       if (merged.changed.length > 0) {
-        const key = thingKey(r.type, r.id);
         const names = result.changes.get(key) ?? new Set<string>();
         for (const name of merged.changed) names.add(name);
         result.changes.set(key, names);
       }
       if (r.type === 'device' && r.id === self && merged.changed.includes('removed') && merged.thing.fields['removed']?.v === true) result.removed = merged.thing.fields['removed'].at[0];
     }
+    for (const entry of open.values()) {
+      if (!entry.dirty) continue;
+      // Saved once, counted exactly: the estimate made while merging gives way to what was written.
+      this.total = this.totalCost() - entry.cost + entry.was;
+      work += this.save(entry.thing, undefined, entry.was);
+    }
     this.saveClock();
     return result;
   }
-
   saveCursor(generation: number, device: string, segment: number, cursor: SegmentCursor): void {
     this.sql(
       `INSERT INTO sync_cursor (generation, device, segment, head, offset, frame, snapshot) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -693,14 +797,30 @@ export class SyncStore {
 
   /** Every thing whose merged value differs from what this computer has (or never had): what a join applies. */
   everything(): Map<string, Set<string>> {
-    const out = new Map<string, Set<string>>();
-    for (const row of this.sql('SELECT type, id, fields, stamps, local FROM sync_record').all() as Row[]) {
-      const { thing, local } = this.loaded(str(row['type']), str(row['id']), row);
-      if (thing.type === 'icon' || thing.type === 'device') continue;
-      const names = Object.keys(thing.fields).filter((name) => !local || !same(thing.fields[name]!.v, local[name]));
-      if (names.length > 0) out.set(thingKey(thing.type, thing.id), new Set(names));
+    return new Map([...this.everythingPages()].flatMap((page) => [...page]));
+  }
+
+  /** The same, `size` things at a time, by key: a join reads it with searches answered between. */
+  *everythingPages(size = 200): Generator<Map<string, Set<string>>> {
+    let after = { type: '', id: '' };
+    for (;;) {
+      const rows = this.sql(`SELECT type, id, fields, stamps, local FROM sync_record WHERE type > ? OR (type = ? AND id > ?) ORDER BY type, id LIMIT ?`).all(after.type, after.type, after.id, size) as Row[];
+      const out = new Map<string, Set<string>>();
+      for (const row of rows) {
+        const { thing, local } = this.loaded(str(row['type']), str(row['id']), row);
+        after = { type: thing.type, id: thing.id };
+        if (thing.type === 'icon' || thing.type === 'device') continue;
+        const names = Object.keys(thing.fields).filter((name) => !local || !same(thing.fields[name]!.v, local[name]));
+        if (names.length > 0) out.set(thingKey(thing.type, thing.id), new Set(names));
+      }
+      yield out;
+      if (rows.length < size) return;
     }
-    return out;
+  }
+
+  /** This computer's chords, for Settings while it's choosing: a count, not a read of everything. */
+  chordsHere(): number {
+    return num((this.sql('SELECT COUNT(*) AS n FROM chord WHERE deleted_at IS NULL').get() as Row)['n']);
   }
 
   /**
@@ -781,7 +901,7 @@ export class SyncStore {
         let chars = 0;
         let full = false;
         for (const row of rows) {
-          const { thing, chars: size } = this.loaded(str(row['type']), str(row['id']), row);
+          const { thing, cost: size } = this.loaded(str(row['type']), str(row['id']), row);
           page.push(...thingRecords(thing));
           chars += size;
           after = { type: thing.type, id: thing.id };
@@ -827,6 +947,8 @@ export class SyncStore {
   /** Turning off: the copy, the outbox and the cursors go, and the key; this computer's data stays. */
   clear(): void {
     this.sql('DELETE FROM sync_record').run();
+    this.total = null;
+    this.lost.clear();
     this.sql('DELETE FROM sync_outbox').run();
     this.sql('DELETE FROM sync_cursor').run();
     this.sql(`DELETE FROM meta WHERE key IN ('sync', 'sync.clock', 'sync.key')`).run();
@@ -837,7 +959,6 @@ export class SyncStore {
 
   /** A new id for this computer (another one writes under the old, S15 §6), and its log starts again. */
   forgetOwn(): void {
-    this.sql('DELETE FROM sync_cursor WHERE device = ?').run(this.device());
     this.setMeta({ own: null, framesSince: 0, bytesSince: 0 });
   }
 }

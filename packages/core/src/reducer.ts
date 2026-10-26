@@ -949,15 +949,15 @@ function putBack(draft: Draft<State>, undo: Draft<MergeUndo>, ctx: Context, effe
  * goes, kept with the chord for Undo this session (`sync.unreplace` puts it
  * back, and what moved too), as chord.delete keeps one.
  */
-function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Context, effects: Effect[], keep = MAX_DELETED_CHORDS): void {
+function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Context, effects: Effect[], keep = MAX_DELETED_CHORDS, open: ReadonlySet<NodeId> = new Set(Object.keys(draft.live))): void {
   const chord = draft.chords[chordId];
   const target = draft.chords[to];
   if (!chord || !target || chord.private || target.private || chordId === to) return;
   const today = children(draft as State, chordId, 'today', null);
-  const open = Object.values(draft.nodes)
-    .filter((n) => n.chordId === chordId && n.kind === 'tab' && n.section === 'pinned' && draft.live[n.id])
+  const opened = Object.values(draft.nodes)
+    .filter((n) => n.chordId === chordId && n.kind === 'tab' && n.section === 'pinned' && open.has(n.id))
     .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
-  const going = [...today, ...open];
+  const going = [...today, ...opened];
   const ranks = generateNKeysBetween(null, children(draft as State, to, 'today', null)[0]?.rank ?? null, going.length);
   const resign = chord.profileId !== target.profileId;
   const moved = new Set<NodeId>();
@@ -1011,12 +1011,12 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
 }
 
 /** A chord another computer deleted (sync): it makes way for its neighbour, never losing what's only this computer's. Never the last one. */
-function dropChord(draft: Draft<State>, chordId: ChordId, ctx: Context, effects: Effect[]): void {
+function dropChord(draft: Draft<State>, chordId: ChordId, ctx: Context, effects: Effect[], open: ReadonlySet<NodeId>): void {
   const order = sortedChords(draft as State).filter((c) => !c.private);
   const index = order.findIndex((c) => c.id === chordId);
   if (index < 0 || order.length < 2) return;
   const neighbor = (order[index + 1] ?? order[index - 1])!;
-  giveWay(draft, chordId, neighbor.id, ctx, effects);
+  giveWay(draft, chordId, neighbor.id, ctx, effects, MAX_DELETED_CHORDS, open);
   for (const [host, route] of Object.entries(draft.linkRoutes)) if (route.chordId === chordId) delete draft.linkRoutes[host];
 }
 
@@ -1065,6 +1065,8 @@ function unreplace(draft: Draft<State>, windowId: WindowId, chordIds: readonly C
  * elsewhere.
  */
 function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>, ctx: Context, effects: Effect[]): void {
+  // What's open here before anything changes: what a deleted chord carries, and what a tombstone moves to Today.
+  const openBefore = new Set(Object.keys(draft.live));
   // Chords: a new one is added, with sign-ins of its own if it had them (never a private window's, never ones a chord
   // here has); one you have takes its name, icon, colors and place. Never its sign-ins, never a proxy.
   const profilesHere = new Set(Object.values(draft.chords).map((c) => c.profileId));
@@ -1175,15 +1177,20 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
   // What went. A tab another computer unpinned or deleted: an open one moves to the top of Today here, an unloaded one
   // goes. A folder: what's still in it (moved in meanwhile) goes to the top of its section. A split: its panes stay, where it was.
   const gone = cmd.gone ?? {};
-  // Chords first: each makes way, with everything in it kept for Undo, and what's only this computer's moved to another.
-  for (const chordId of gone.chords ?? []) dropChord(draft, chordId, ctx, effects);
-  const goneNodes = new Set((gone.nodes ?? []).filter(({ id, kind }) => draft.nodes[id]?.kind === kind && !draft.chords[draft.nodes[id]!.chordId]?.private).map(({ id }) => id));
-  const leaving = new Set([...goneNodes].filter((id) => draft.nodes[id]?.kind === 'tab' && !draft.live[id]));
+  // Chords first: each makes way, with everything in it kept for Undo, and what's only this computer's (what was open
+  // here before this apply, whatever sign-ins it lands in) moved to another.
+  for (const chordId of gone.chords ?? []) dropChord(draft, chordId, ctx, effects, openBefore);
+  // A node's tombstone is about a pinned one: one that's in Today here now (moved out of a chord that went, or unpinned
+  // here) is only this computer's, and stays.
+  const goneNodes = new Set(
+    (gone.nodes ?? []).filter(({ id, kind }) => draft.nodes[id]?.kind === kind && draft.nodes[id]!.section === 'pinned' && !draft.chords[draft.nodes[id]!.chordId]?.private).map(({ id }) => id),
+  );
+  const leaving = new Set([...goneNodes].filter((id) => draft.nodes[id]?.kind === 'tab' && !openBefore.has(id)));
   const landGone = landWindows(draft, leaving, ctx, effects);
   for (const id of goneNodes) {
     const node = draft.nodes[id]!;
     if (node.kind === 'tab') {
-      if (draft.live[id]) {
+      if (openBefore.has(id)) {
         const top = topOfToday(draft, node.chordId);
         node.section = 'today';
         node.parentId = null;

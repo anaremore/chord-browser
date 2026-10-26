@@ -382,11 +382,15 @@ export interface SyncStatus {
   refused: number;
   /** More computers write to the folder than sync reads (64): the rest are left out. */
   tooMany: boolean;
+  /** The folder holds more files Chord doesn't recognise than it looks through: computers it doesn't know yet aren't found. */
+  cluttered: boolean;
+  /** Things changes made here couldn't win (another computer's stamp is the very last there can be), as Settings names them. */
+  stuck: string[];
   /** While choosing: this computer's chords, and the synced setup's. */
   choosing: { here: number; synced: number } | null;
 }
 
-export const SYNC_OFF: SyncStatus = { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, choosing: null };
+export const SYNC_OFF: SyncStatus = { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, cluttered: false, stuck: [], choosing: null };
 
 /** A clock more than this far ahead of this computer's is named in Settings (S15 §4). */
 export const CLOCK_AHEAD_MS = 5 * 60_000;

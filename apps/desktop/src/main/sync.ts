@@ -180,7 +180,7 @@ export class SyncService {
   /* ---------- where it stands ---------- */
 
   view(): SyncView {
-    const status = this.status ?? { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, choosing: null };
+    const status = this.status ?? { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, cluttered: false, stuck: [], choosing: null };
     return {
       ...status,
       folderName: status.folder ? basename(status.folder) : null,
@@ -421,6 +421,10 @@ export class SyncService {
         later.add(key(item));
         return false;
       });
+    // A chord that went, put off: its nodes' tombstones wait with it, so it takes them with it (kept for Undo) when it goes.
+    const state = this.options.state();
+    const heldChords = new Set(apply.gone.chords.filter((id) => !joining && waiting(`chord:${id}`)));
+    const withChord = (n: { id: string }) => heldChords.has(state.nodes[n.id]?.chordId ?? '');
     const filtered: SyncApply = {
       ...apply,
       chords: hold(apply.chords, (c) => `chord:${c.id}`),
@@ -431,7 +435,7 @@ export class SyncService {
       gone: {
         ...apply.gone,
         chords: hold(apply.gone.chords, (id) => `chord:${id}`),
-        nodes: hold(apply.gone.nodes, (n) => `node:${n.id}`),
+        nodes: hold(apply.gone.nodes, (n) => `node:${n.id}`).filter((n) => !withChord(n) || (later.add(`node:${n.id}`), false)),
         favorites: hold(apply.gone.favorites, (id) => `favorite:${id}`),
         routes: hold(apply.gone.routes, (host) => `linkRoute:${host}`),
       },

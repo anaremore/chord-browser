@@ -571,6 +571,28 @@ describe('sync.apply in the store', () => {
     expect(undone.windows[windowId]!.activeChordId).toBe('w');
   });
 
+  it.each([
+    ['the chord has sign-ins of its own', (s: State) => void (s.chords['w']!.profileId = 'mine')],
+    ['the chord it makes way for has other sign-ins', (s: State) => void (s.chords[Object.keys(s.chords).find((id) => id !== 'w')!]!.profileId = 'elsewhere')],
+  ])('a pinned tab open but not shown, when %s: carried by what was open before, never lost to its own tombstone, and Undo has it', (_what, signIns) => {
+    const s = state();
+    const home = Object.keys(s.chords).find((id) => id !== 'w')!;
+    const windowId = Object.keys(s.windows)[0]!;
+    s.chords['w'] = { ...s.chords['w']!, profileId: 'default' };
+    signIns(s);
+    // 't' is open (it has a view) but the window shows home's chord.
+    expect(s.live['t']).toBeDefined();
+    const gone = apply(s, { t: 'sync.apply', gone: { chords: ['w'], nodes: [{ id: 't', kind: 'tab' }, { id: 'u', kind: 'tab' }] } }, ctx).state;
+    expect(gone.nodes['t']).toMatchObject({ chordId: home, section: 'today', pinnedUrl: null });
+    expect(gone.live['t']).toBeUndefined();
+    // Its tombstone, in a later push, doesn't take it either: in Today here it's only this computer's.
+    const later = apply(gone, { t: 'sync.apply', gone: { nodes: [{ id: 't', kind: 'tab' }] } }, ctx).state;
+    expect(later.nodes['t']).toMatchObject({ chordId: home, section: 'today' });
+    const undone = apply(later, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
+    expect(undone.nodes['t']).toMatchObject({ chordId: 'w', section: 'pinned', pinnedUrl: 'https://t.test/' });
+    expect(undone.nodes['u']).toMatchObject({ chordId: 'w', section: 'pinned' });
+  });
+
   it('the chord’s own tombstone goes before its tabs’, so Undo has them all', () => {
     const { s, windowId } = withLocalTabs();
     const gone = apply(s, { t: 'sync.apply', gone: { chords: ['w'], nodes: [{ id: 'u', kind: 'tab' }, { id: 't', kind: 'tab' }] } }, ctx).state;

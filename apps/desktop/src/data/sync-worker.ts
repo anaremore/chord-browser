@@ -20,6 +20,7 @@ import { parentPort } from 'node:worker_threads';
 import {
   appendRecords,
   deviceFolder,
+  folderMemory,
   inspectFolder,
   lookAtFolder,
   mayPrune,
@@ -34,7 +35,7 @@ import {
   type DataRecord,
   type FolderInspection,
   type FolderLook,
-  type JunkSeen,
+  type FolderMemory,
   type OwnSegment,
   type SegmentCursor,
 } from '@chord/core';
@@ -82,7 +83,8 @@ export type FromWorker =
   | { t: 'unlocked'; key: Uint8Array; generation: number }
   | { t: 'records'; device: string; segment: number; records: DataRecord[]; cursor: SegmentCursor; refused: number }
   | { t: 'newer'; device: string }
-  | { t: 'pass-done'; look: FolderLook; seen: Record<string, number>; tooMany: boolean }
+  /** `seen`: when each computer last wrote here; `wrote`: when each says it made its newest segment read (its own clock). */
+  | { t: 'pass-done'; look: FolderLook; seen: Record<string, number>; wrote: Record<string, number>; tooMany: boolean; cluttered: boolean }
   | { t: 'pull'; stream: number }
   | { t: 'written'; upto: number; own: OwnSegment; frames: number; bytes: number }
   | { t: 'snapshotted'; own: OwnSegment }
@@ -105,8 +107,8 @@ export type FromWorker =
 const POLL_MS = 5 * 60_000;
 /** A burst of changes to the folder (a sync app writing a segment in pieces) reads once, after it settles. */
 const SETTLE_MS = 1000;
-/** Junk segments remembered (by path, size and time), so each is looked into once: about 100 bytes each. */
-const JUNK_KEPT = 200_000;
+/** A pass that looked into as many segments as it may goes on after this long: never back to back. */
+const NEXT_PASS_MS = 2000;
 
 const port = parentPort!;
 const send = (message: FromWorker) => port.postMessage(message);
@@ -121,19 +123,8 @@ interface Running {
   own: OwnSegment | null;
   cursors: Map<string, SegmentCursor>;
   app: string;
-  junk: JunkSeen;
-}
-
-/** Junk seen, in a set that's emptied rather than grown past JUNK_KEPT. */
-function junkSeen(): JunkSeen {
-  const seen = new Set<string>();
-  return {
-    has: (key) => seen.has(key),
-    add: (key) => {
-      if (seen.size >= JUNK_KEPT) seen.clear();
-      seen.add(key);
-    },
-  };
+  /** Junk remembered, and where looking for computers not known yet got to: never forgotten while it's needed (core's MAX_JUNK bounds it). */
+  memory: FolderMemory;
 }
 
 let running: Running | null = null;
@@ -142,6 +133,7 @@ let poll: ReturnType<typeof setInterval> | undefined;
 let settle: ReturnType<typeof setTimeout> | undefined;
 let reading = false;
 let again = false;
+let next: ReturnType<typeof setTimeout> | undefined;
 let acked: (() => void) | null = null;
 /** One folder operation at a time: a write never interleaves with a snapshot, a read with a new generation. */
 let chain: Promise<void> = Promise.resolve();
@@ -188,14 +180,32 @@ async function pass(): Promise<void> {
   try {
     const look = await lookAtFolder(r.fs, r.generation, r.key, nodeCrypto);
     const seen: Record<string, number> = {};
+    const wrote: Record<string, number> = {};
     let tooMany = false;
+    let cluttered = false;
+    let unfinished = false;
     if (look.state === 'ok' || look.state === 'changed') {
-      for await (const event of readComputers(r.fs, { generation: r.generation, self: r.device, root: r.key, cursor: (d, s) => r.cursors.get(cursorKey(d, s)) ?? null, junk: r.junk }, nodeCrypto)) {
+      // The segments of each computer read past their first frame: a computer known to have a real log.
+      const known = new Map<string, number[]>();
+      for (const [key, cursor] of r.cursors) {
+        if (cursor.frame === 0) continue;
+        const at = key.lastIndexOf('/');
+        const device = key.slice(0, at);
+        known.set(device, [...(known.get(device) ?? []), Number(key.slice(at + 1))]);
+      }
+      for await (const event of readComputers(
+        r.fs,
+        { generation: r.generation, self: r.device, root: r.key, cursor: (d, s) => r.cursors.get(cursorKey(d, s)) ?? null, known: (d) => known.get(d) ?? [], memory: r.memory },
+        nodeCrypto,
+      )) {
         if (running !== r) return;
-        if (event.kind === 'seen') seen[event.device] = event.at;
-        else if (event.kind === 'newer') send({ t: 'newer', device: event.device });
+        if (event.kind === 'seen') {
+          seen[event.device] = event.at;
+          if (event.wrote !== null) wrote[event.device] = event.wrote;
+        } else if (event.kind === 'newer') send({ t: 'newer', device: event.device });
         else if (event.kind === 'too-many') tooMany = true;
-        else if (event.kind === 'unfinished') again = true;
+        else if (event.kind === 'unfinished') unfinished = true;
+        else if (event.kind === 'cluttered') cluttered = true;
         else {
           r.cursors.set(cursorKey(event.device, event.segment), event.cursor);
           await new Promise<void>((resolve) => {
@@ -205,10 +215,15 @@ async function pass(): Promise<void> {
         }
       }
     }
-    send({ t: 'pass-done', look, seen, tooMany });
+    send({ t: 'pass-done', look, seen, wrote, tooMany, cluttered });
+    // More to look through: the next pass goes on from there, a little later, never straight after.
+    if (unfinished && running === r) {
+      clearTimeout(next);
+      next = setTimeout(() => void serial(pass), NEXT_PASS_MS);
+    }
   } catch (error) {
     console.error('Sync couldn’t read the folder:', error);
-    send({ t: 'pass-done', look: { state: 'missing' }, seen: {}, tooMany: false });
+    send({ t: 'pass-done', look: { state: 'missing' }, seen: {}, wrote: {}, tooMany: false, cluttered: false });
   } finally {
     reading = false;
     if (again && running === r) {
@@ -249,7 +264,7 @@ const failed = (for_: ToWorker['t'], problem: Extract<FromWorker, { t: 'failed' 
 
 /** A snapshot of this computer, written as chord-data's pages come, past its newest segment there. */
 const snapshotTo = (fs: NodeFolder, where: { generation: number; device: string }, snapshot: Snapshot, key: Uint8Array, app: string, after?: number) =>
-  writeSnapshot(fs, where, pages(snapshot.stream), key, { app, device: snapshot.device, ...(after !== undefined ? { after } : {}) }, nodeCrypto);
+  writeSnapshot(fs, where, pages(snapshot.stream), key, { app, device: snapshot.device, ...(after !== undefined ? { after } : {}), ...(running?.fs === fs ? { memory: running.memory } : {}) }, nodeCrypto);
 
 async function handle(message: ToWorker): Promise<void> {
   switch (message.t) {
@@ -280,7 +295,7 @@ async function handle(message: ToWorker): Promise<void> {
         own: message.own,
         cursors: new Map(message.cursors.map((c) => [cursorKey(c.device, c.segment), c.cursor])),
         app: message.app,
-        junk: junkSeen(),
+        memory: folderMemory(),
       };
       watchFolder(running);
       void serial(pass);
@@ -292,7 +307,7 @@ async function handle(message: ToWorker): Promise<void> {
     case 'write': {
       const r = running;
       if (!r?.own) return failed('write', 'gone');
-      const result = await appendRecords(r.fs, r.own, message.records, r.key, { app: r.app, device: message.device }, nodeCrypto);
+      const result = await appendRecords(r.fs, r.own, message.records, r.key, { app: r.app, device: message.device, memory: r.memory }, nodeCrypto);
       if (!result.ok) return failed('write', result.problem);
       r.own = result.own;
       send({ t: 'written', upto: message.upto, own: result.own, frames: result.frames, bytes: result.bytes });
@@ -367,6 +382,7 @@ async function handle(message: ToWorker): Promise<void> {
     }
     case 'stop':
       stopWatching();
+      clearTimeout(next);
       running?.key.fill(0);
       running = null;
       for (const resolve of pulls.values()) resolve({ records: [], done: true, lost: true });

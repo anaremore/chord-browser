@@ -33,7 +33,7 @@ const tab = (id: string, chordId: string, extra: Partial<TabNode> = {}): TabNode
 });
 
 /** A store with this computer's chords: its first-run one, and "x", shown, with a Today tab and a pinned one. */
-function harness(reply: (request: SyncRequest) => SyncReply) {
+function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: string) => boolean = () => false) {
   let n = 0;
   const ctx = { now: 1000, newId: () => `id-${++n}` };
   let state: State = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
@@ -53,7 +53,7 @@ function harness(reply: (request: SyncRequest) => SyncReply) {
     state = apply(state, command, ctx).state;
   };
   const service = new SyncService({
-    data: { sync: async (request) => reply(request), flush: async () => undefined, waiting: () => false, onPush: (listener) => (push = listener) },
+    data: { sync: async (request) => reply(request), flush: async () => undefined, waiting, onPush: (listener) => (push = listener) },
     state: () => state,
     dispatch,
     effects: { syncSites: async () => undefined },
@@ -79,6 +79,17 @@ describe('a chord another computer deleted', () => {
     expect(h.state().chords['x']).toBeDefined();
     expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
     expect(h.state().nodes['d']).toMatchObject({ chordId: 'x', section: 'today' });
+  });
+});
+
+describe('a chord another computer deleted, while a change of yours to it waits', () => {
+  it('its tabs’ tombstones wait with it, so when it goes it takes them, kept for its Undo', async () => {
+    const asked: SyncRequest[] = [];
+    const h = harness((request) => (asked.push(request), {}), (key) => key === 'chord:x');
+    h.push({ ...emptyApply(), gone: { ...emptyApply().gone, chords: ['x'], nodes: [{ id: 'p', kind: 'tab' }] } });
+    await vi.waitFor(() => expect(asked.some((r) => r.type === 'sync.repush')).toBe(true));
+    expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
+    expect(asked.find((r) => r.type === 'sync.repush')).toMatchObject({ keys: expect.arrayContaining(['chord:x', 'node:p']) });
   });
 });
 

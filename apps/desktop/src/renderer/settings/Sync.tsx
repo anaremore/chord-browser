@@ -376,6 +376,10 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
       {view.capped > 0 && <p className={local.note}>{`${plural(view.capped, 'thing')} from another computer went past what sync keeps, and stayed out.`}</p>}
       {view.refused > 0 && <p className={local.note}>{`${plural(view.refused, 'part')} of another computer’s changes went past what sync reads, and stayed out.`}</p>}
       {view.tooMany && <p className={local.note}>More than 64 computers sync through this folder. Chord reads 64 of them; remove the ones you don’t use.</p>}
+      {view.cluttered && (
+        <p className={local.note}>The sync folder holds files Chord doesn’t recognise, so it stops looking there for computers it doesn’t know yet. Remove them, or start sync again in a new folder.</p>
+      )}
+      {view.stuck.length > 0 && <p className={local.note}>{`Another computer’s clock is set far ahead, so some changes here can’t sync: ${view.stuck.slice(0, 3).join(', ')}${view.stuck.length > 3 ? ', and more' : ''}.`}</p>}
       <ul className={local.computers} aria-label="Computers that sync">
         {view.computers.map((c) => (
           <li key={c.id} className={styles.row}>

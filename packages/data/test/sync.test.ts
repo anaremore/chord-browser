@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { apply, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, seedState, SYNC_LIMITS, thingKey, type Command, type Context, type DataRecord, type Stamp, type State } from '@chord/core';
+import { apply, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, MAX_STAMP_MS, seedState, SYNC_LIMITS, thingKey, type Command, type Context, type DataRecord, type Stamp, type State } from '@chord/core';
 import { ChordDatabase } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
 import { opsForState, opsFromPatches, type WriteOp } from '../src';
@@ -217,6 +217,62 @@ describe('merging another computer’s records', () => {
     // The clock moved no further than a minute past the wall clock: the next change elsewhere is stamped by the time.
     drive(state, [{ t: 'settings.set', settings: { searchEngine: 'duckduckgo' } }]);
     expect(outbox().at(-1)!.at![0]).toBeLessThanOrEqual(Date.now() + CLOCK_DRIFT_MS);
+  });
+
+  it('a change that can’t win (a stamp at the very last there can be, from a computer with a larger id) isn’t written, and main is sent the merged value back', () => {
+    let state = setUp();
+    const id = chordId(state);
+    const top: Stamp = [MAX_STAMP_MS, MAX_COUNTER, 'ffffffffffffffff'];
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: top, set: { name: 'Zed' } }], Date.now()));
+    const before = outbox().length;
+    state = drive(state, [{ t: 'chord.update', chordId: id, name: 'Alpha' }]);
+    // Nothing goes out that every other computer would drop in favour of Zed.
+    expect(outbox().slice(before).filter((r) => 'name' in r.set)).toEqual([]);
+    // What lost is named, and what the copy has (Zed) is what main is sent: this computer shows what every other does.
+    const lost = db.sync.takeLost();
+    expect([...lost.keys()]).toEqual([thingKey('chord', id)]);
+    expect(db.sync.describe(thingKey('chord', id))).toBe('“Zed”');
+    expect(db.sync.planFor(lost).chords.map((c) => c.name)).toEqual(['Zed']);
+    state = drive(state, [{ t: 'sync.apply', chords: db.sync.planFor(lost).chords }], true);
+    expect(state.chords[id]!.name).toBe('Zed');
+    expect(db.sync.takeLost().size).toBe(0);
+  });
+
+  it('a change from another computer stamped far ahead counts as come now: no last change in the future', () => {
+    setUp();
+    const result = db.atomically(() => db.sync.merge([{ type: 'chord', id: 'far', at: [Date.now() + 300 * 86_400_000, 0, OTHER], set: { name: 'Far' } }], Date.now()));
+    expect(result.newest.get(OTHER)!).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('what a thing counts for includes its stamps and what a snapshot adds for them: never less than the snapshot holds', () => {
+    setUp();
+    // 200 fields of one character, each with a stamp of its own: a snapshot of one record per field.
+    const fields = Array.from({ length: 200 }, (_, i): DataRecord => ({ type: 'widget', id: 'many-stamps', at: at(i + 1), set: { [`f${i}`]: 'x' } }));
+    db.atomically(() => db.sync.merge(fields, Date.now()));
+    const snapshot = db.sync.snapshot().filter((r) => r.id === 'many-stamps');
+    expect(snapshot).toHaveLength(200);
+    expect(db.sync.size()).toBeGreaterThanOrEqual(snapshot.reduce((n, r) => n + JSON.stringify(r).length, 0));
+  });
+
+  it('many small changes to one big thing: one slice reads and writes it once', () => {
+    setUp();
+    db.atomically(() => db.sync.merge([{ type: 'widget', id: 'big', at: at(1), set: { blob: 'x'.repeat(1024 * 1024) } }], Date.now()));
+    const small = Array.from({ length: 100 }, (_, i): DataRecord => ({ type: 'widget', id: 'big', at: at(i + 2), set: { tick: i } }));
+    const started = performance.now();
+    const result = db.atomically(() => db.sync.merge(small, Date.now(), 512 * 1024));
+    const ms = performance.now() - started;
+    expect(result.consumed).toBe(100);
+    // First built, each record rewrote the thing: about 470 ms for this slice.
+    expect(ms).toBeLessThan(150);
+    expect(db.sync.snapshot().find((r) => r.id === 'big' && 'tick' in r.set)!.set['tick']).toBe(99);
+  });
+
+  it('a slice stops once it has read and written its budget of things, and says how many records it took', () => {
+    setUp();
+    const big = Array.from({ length: 5 }, (_, i): DataRecord => ({ type: 'widget', id: `big${i}`, at: at(1), set: { blob: 'x'.repeat(300 * 1024) } }));
+    const result = db.atomically(() => db.sync.merge(big, Date.now(), 512 * 1024));
+    expect(result.consumed).toBe(2);
+    expect(db.atomically(() => db.sync.merge(big.slice(result.consumed), Date.now(), 512 * 1024)).consumed).toBe(2);
   });
 
   it('every thing grows only so far, and the copy as a whole: changes to things it has count, not only new things', () => {

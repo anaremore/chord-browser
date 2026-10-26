@@ -20,10 +20,12 @@ import {
   ENCRYPTED_LINE,
   ENVELOPE_VERSION,
   envelope,
+  folderMemory,
   generations,
   inspectFolder,
   lookAtFolder,
   MAX_COMPUTERS,
+  MAX_JUNK,
   MAX_SEGMENT,
   mayPrune,
   nextGeneration,
@@ -40,7 +42,7 @@ import {
   writeSnapshot,
   writeSyncFile,
   type DataRecord,
-  type JunkSeen,
+  type FolderMemory,
   type OwnSegment,
   type ReadEvent,
   type SegmentCursor,
@@ -147,23 +149,12 @@ function forgedSegment(where: { generation: number; device: string; segment: num
   return envelope.concat([utf8.encode(`${ENCRYPTED_LINE} ${ENVELOPE_VERSION}\n`), line, utf8.encode('\n'), frame(0, recordLine(device(where.device, 'X'))), frame(1, records.map(recordLine).join(''))]);
 }
 
-function junkSeen(): JunkSeen & { size: number } {
-  const seen = new Set<string>();
-  return {
-    has: (key) => seen.has(key),
-    add: (key) => void seen.add(key),
-    get size() {
-      return seen.size;
-    },
-  };
-}
-
 /** Everything B reads of the others, merged naively (the merge itself is core's, tested there), with its cursors kept. */
 class Reader {
   readonly cursors = new Map<string, SegmentCursor>();
   readonly records: DataRecord[] = [];
   readonly events: ReadEvent[] = [];
-  readonly junk = junkSeen();
+  readonly memory: FolderMemory = folderMemory();
   constructor(
     private readonly fs: SyncFs,
     private readonly self: string,
@@ -174,7 +165,15 @@ class Reader {
     const got: DataRecord[] = [];
     for await (const event of readComputers(
       this.fs,
-      { generation: this.generation, self: this.self, root: this.root, cursor: (d, s) => this.cursors.get(`${d}/${s}`) ?? null, junk: this.junk, ...(budget ? { budget: { ...STEP_BUDGET, ...budget } } : {}) },
+      {
+        generation: this.generation,
+        self: this.self,
+        root: this.root,
+        cursor: (d, s) => this.cursors.get(`${d}/${s}`) ?? null,
+        known: (d) => [...this.cursors].filter(([key, cursor]) => key.startsWith(`${d}/`) && cursor.frame > 0).map(([key]) => Number(key.split('/')[1])),
+        memory: this.memory,
+        ...(budget ? { budget: { ...STEP_BUDGET, ...budget } } : {}),
+      },
       nodeCrypto,
     )) {
       this.events.push(event);
@@ -376,10 +375,10 @@ describe('junk anyone who can write to the folder puts there, without the passph
     // Appending goes on in its own segment: the junk is no other computer.
     await append([chord('a', 'A', 2)]);
     expect(own().segment).toBe(1);
-    // A snapshot goes past its newest real segment, not past the junk, and clears the junk out of its folder.
+    // A snapshot goes past its newest real segment, not past the junk; it deletes only its own earlier segments, never what it can't show it wrote.
     setOwn(await snapshot(fs, { generation: 1, device: A }, [chord('work', 'Work', 1), chord('a', 'A', 2)], root, { after: own().segment }));
     expect(own().segment).toBe(2);
-    expect(await segmentsOf(fs, 1, A)).toEqual([2]);
+    expect(await segmentsOf(fs, 1, A)).toEqual([2, 5, MAX_SEGMENT]);
     expect(ids(await reader.pass()).sort()).toEqual([A, 'a', 'work'].sort());
   });
 
@@ -391,7 +390,7 @@ describe('junk anyone who can write to the folder puts there, without the passph
     // Nor once it's been looked at: no cursor says it's a snapshot.
     await append([chord('b', 'B', 3)]);
     expect(ids(await reader.pass())).toEqual(['b']);
-    expect(reader.junk.size).toBeGreaterThan(0);
+    expect(reader.memory.junk.size).toBeGreaterThan(0);
   });
 
   it('64 junk computers, sorted before the real ones, stop no reading; only computers with a real segment count', async () => {
@@ -510,10 +509,20 @@ describe('a removed computer', () => {
     await remover.pass();
     // Read to its end, but made after the removal (it turned sync off and on again): it stays.
     expect(await mayPrune(fs, { generation: 1, device: B }, removedAt, root, (s) => remover.cursors.get(`${B}/${s}`) ?? null, nodeCrypto)).toBe(false);
-    // Junk in a removed computer's folder keeps nothing.
+    // Junk in a removed computer's folder keeps nothing: a whole first frame that doesn't open.
     const gone = deviceId(0x77);
-    fs.plant(`1/${gone}/${segmentName(1)}`, junkHeader({ generation: 1, device: gone, segment: 1 }));
+    const garbage = new Uint8Array(4 + 40);
+    new DataView(garbage.buffer).setUint32(0, 40);
+    fs.plant(`1/${gone}/${segmentName(1)}`, envelope.concat([utf8.encode(junkHeader({ generation: 1, device: gone, segment: 1 })), garbage]));
     expect(await mayPrune(fs, { generation: 1, device: gone }, removedAt, root, () => null, nodeCrypto)).toBe(true);
+    // One still being delivered (its first frame not all there) may be a computer's new snapshot: its folder stays.
+    const rejoined = await twoComputers();
+    const whole = await snapshot(rejoined.fs, { generation: 1, device: B }, [chord('x', 'X', 1, B)], rejoined.root);
+    rejoined.fs.cut(`1/${B}/${segmentName(whole.segment)}`, rejoined.fs.files.get(`1/${B}/${segmentName(whole.segment)}`)!.bytes.length - 30);
+    const half = new Uint8Array(rejoined.fs.files.get(`1/${B}/${segmentName(whole.segment)}`)!.bytes);
+    const header = new TextDecoder('latin1').decode(half).indexOf('\n', new TextDecoder('latin1').decode(half).indexOf('\n') + 1) + 1;
+    rejoined.fs.plant(`1/${B}/${segmentName(whole.segment)}`, half.slice(0, header + 10));
+    expect(await mayPrune(rejoined.fs, { generation: 1, device: B }, Date.now() + 60_000, rejoined.root, () => null, nodeCrypto)).toBe(false);
   });
 });
 
@@ -578,5 +587,147 @@ describe('a newer Chord, and a new passphrase', () => {
     const fs = new MemoryFolder();
     await writeSyncFile(fs, 1, PASS, A, nodeCrypto, FAST);
     await expect(writeSyncFile(fs, 1, PASS, B, nodeCrypto, FAST)).rejects.toThrow();
+  });
+});
+
+describe('two copies of one profile, writing under one id', () => {
+  /** A computer writing as chord-data does: what it knows (its copy), its newest segment, and a new id when another writes under its own. */
+  class Writer {
+    readonly memory = folderMemory();
+    constructor(
+      private readonly fs: SyncFs,
+      private readonly root: Uint8Array,
+      public id: string,
+      public own: OwnSegment,
+      public known: DataRecord[],
+      private readonly nextId: () => string,
+    ) {}
+    clone(id = this.id): Writer {
+      return new Writer(this.fs, this.root, id, { ...this.own }, [...this.known], this.nextId);
+    }
+    async write(records: DataRecord[]): Promise<void> {
+      this.known.push(...records);
+      const result = await appendRecords(this.fs, this.own, records, this.root, { app: '0.5.0', device: [device(this.id, 'X')], memory: this.memory }, nodeCrypto);
+      if (result.ok) {
+        this.own = result.own;
+        return;
+      }
+      if (result.problem !== 'copied' && result.problem !== 'gone') throw new Error(result.problem);
+      // S15 §6: another computer writes under this id, or may (its log is gone): a new id, and everything it knows there.
+      this.id = this.nextId();
+      this.own = await snapshot(this.fs, { generation: 1, device: this.id }, this.known, this.root);
+    }
+    async compact(): Promise<void> {
+      this.own = await snapshot(this.fs, { generation: 1, device: this.id }, this.known, this.root, { after: this.own.segment });
+    }
+  }
+
+  it('after one compacts away the other’s segment, neither deletes the other’s log; the other takes a new id, and both converge', async () => {
+    const { fs, root, own, append } = await twoComputers();
+    await append([chord('a0', 'A0', 2)]);
+    let n = 0x500;
+    const nextId = () => deviceId(n++);
+    const original = new Writer(fs, root, A, own(), [chord('work', 'Work', 1), chord('a0', 'A0', 2)], nextId);
+    // The profile is copied to a second computer: the same id, the same segment, the same copy.
+    const copy = original.clone();
+    for (let round = 1; round <= 6; round++) {
+      await original.compact();
+      await original.write([chord(`a${round}`, `A${round}`, 10 * round)]);
+      await copy.write([chord(`b${round}`, `B${round}`, 10 * round + 1)]);
+      await copy.compact();
+      await copy.write([chord(`c${round}`, `C${round}`, 10 * round + 2)]);
+      // Both logs are there, each a real one.
+      expect(await segmentsOf(fs, 1, original.id)).toContain(original.own.segment);
+      expect(await segmentsOf(fs, 1, copy.id)).toContain(copy.own.segment);
+    }
+    expect(copy.id).not.toBe(original.id);
+    // A third computer reads everything both wrote; each of them reads the other's.
+    const everything = (records: DataRecord[]) => new Set(records.filter((r) => r.type === 'chord').map((r) => r.id));
+    const expected = everything([...original.known, ...copy.known]);
+    const third = new Reader(fs, '00000000000000cc', root);
+    await third.pass();
+    expect(everything(third.records)).toEqual(expected);
+    const byOriginal = new Reader(fs, original.id, root);
+    await byOriginal.pass();
+    expect(everything([...original.known, ...byOriginal.records])).toEqual(expected);
+    const byCopy = new Reader(fs, copy.id, root);
+    await byCopy.pass();
+    expect(everything([...copy.known, ...byCopy.records])).toEqual(expected);
+  });
+
+  it('this computer’s segment gone with nothing real past it: a new id all the same, and nothing in the old folder deleted', async () => {
+    const { fs, root, own, append } = await twoComputers();
+    await append([chord('a0', 'A0', 2)]);
+    let n = 0x600;
+    const writer = new Writer(fs, root, A, own(), [chord('work', 'Work', 1), chord('a0', 'A0', 2)], () => deviceId(n++));
+    fs.plant(`1/${A}/${segmentName(9)}`, 'something else');
+    await fs.remove(`1/${A}/${segmentName(1)}`);
+    await writer.write([chord('a1', 'A1', 3)]);
+    expect(writer.id).not.toBe(A);
+    expect(await segmentsOf(fs, 1, A)).toEqual([9]);
+    const reader = new Reader(fs, B, root);
+    expect(ids(await reader.pass()).filter((id) => id !== writer.id)).toEqual(expect.arrayContaining(['work', 'a0', 'a1']));
+  });
+});
+
+describe('what writing and reading cost with junk about', () => {
+  /** A folder that counts what's read from it. */
+  class Counting extends MemoryFolder {
+    bytes = 0;
+    override async read(path: string, position: number, length: number): Promise<Uint8Array> {
+      const out = await super.read(path, position, length);
+      this.bytes += out.length;
+      return out;
+    }
+  }
+
+  it('a write looks only just past this computer’s segment, reads little of what it finds there, and remembers junk', async () => {
+    const fs = new Counting();
+    const set = await setUp(fs, 1, PASS, A, nodeCrypto, FAST);
+    if (!set.ok) throw new Error('setup failed');
+    let own = await snapshot(fs, { generation: 1, device: A }, [chord('work', 'Work', 1)], set.root);
+    // 100 junk segments past this computer's, each a plausible header and 64 KB a first frame could be.
+    const filler = new Uint8Array(4 + 64 * 1024);
+    new DataView(filler.buffer).setUint32(0, 64 * 1024);
+    for (let n = 2; n < 102; n++) fs.plant(`1/${A}/${segmentName(n)}`, envelope.concat([utf8.encode(junkHeader({ generation: 1, device: A, segment: n })), filler]));
+    const memory = folderMemory();
+    const write = async (name: string) => {
+      fs.bytes = 0;
+      const result = await appendRecords(fs, own, [chord('work', name, 2)], set.root, { app: '0.5.0', device: [], memory }, nodeCrypto);
+      if (!result.ok) throw new Error(result.problem);
+      own = result.own;
+      return fs.bytes;
+    };
+    // The first write looks into two names (a header, and the 4 bytes saying a first frame is too long), and its own segment's head.
+    expect(await write('One')).toBeLessThan(16 * 1024);
+    // Later ones only its own segment's head: the junk is remembered.
+    expect(await write('Two')).toBeLessThan(5 * 1024);
+    expect(await write('Three')).toBeLessThan(5 * 1024);
+  });
+
+  it('junk computers past what one pass looks into: the next pass goes on from there, and finds the computer after them', async () => {
+    const { fs, root } = await twoComputers();
+    const later = 'ffffffffffffff01';
+    await snapshot(fs, { generation: 1, device: later }, [chord('late', 'Late', 1, later)], root);
+    for (let i = 0; i < 1500; i++) fs.plant(`1/${deviceId(0x1000 + i)}/${segmentName(1)}`, junkHeader({ generation: 1, device: deviceId(0x1000 + i), segment: 1 }));
+    const reader = new Reader(fs, B, root);
+    expect(ids(await reader.pass())).not.toContain('late');
+    expect(reader.events.some((e) => e.kind === 'unfinished')).toBe(true);
+    expect(ids(await reader.pass())).toContain('late');
+    // Once looked through, a pass looks into nothing more.
+    reader.events.length = 0;
+    await reader.pass();
+    expect(reader.events.some((e) => e.kind === 'unfinished' || e.kind === 'cluttered')).toBe(false);
+  });
+
+  it('past what sync remembers, it stops looking for computers it doesn’t know and says so; the ones it knows go on', async () => {
+    const { fs, reader, append } = await twoComputers();
+    await reader.pass();
+    for (let i = 0; i < MAX_JUNK + 100; i++) fs.plant(`1/${deviceId(0x1000 + i)}/${segmentName(1)}`, junkHeader({ generation: 1, device: deviceId(0x1000 + i), segment: 1 }));
+    for (let pass = 0; pass < 6; pass++) await reader.pass();
+    expect(reader.events.some((e) => e.kind === 'cluttered')).toBe(true);
+    expect(reader.memory.junk.size).toBeLessThanOrEqual(MAX_JUNK);
+    await append([chord('still', 'Still', 9)]);
+    expect(ids(await reader.pass())).toEqual(['still']);
   });
 });
