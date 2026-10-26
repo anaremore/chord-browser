@@ -6,8 +6,9 @@
  * (ARCHITECTURE.md §1, rule 1). Main starts it when a stylesheet changes and
  * lets it go after half a minute without work.
  */
+import type { EffectsParts } from '@chord/core';
 import { parentPort } from 'node:worker_threads';
-import { compileEffects, sanitizeCss, type Compiled, type EffectsParts, type Sanitized } from './sanitize';
+import { compileEffects, sanitizeCss, type Compiled, type Sanitized } from './sanitize';
 
 export type EffectsWorkerRequest = { id: number; type: 'compile'; parts: EffectsParts } | { id: number; type: 'patch'; css: string };
 
@@ -16,7 +17,8 @@ export type EffectsWorkerReply = { id: number; ok: true; result: Compiled | Sani
 /** One request's answer (exported for the unit tests, which run it without a thread). */
 export function handle(request: EffectsWorkerRequest): EffectsWorkerReply {
   try {
-    const result = request.type === 'compile' ? compileEffects(request.parts) : sanitizeCss(request.css);
+    // A patch is kept without the !important that joining adds, so it reads as it was written when it's edited.
+    const result = request.type === 'compile' ? compileEffects(request.parts) : sanitizeCss(request.css, { important: false });
     return { id: request.id, ok: true, result };
   } catch (error) {
     return { id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) };

@@ -15,12 +15,19 @@
  *   only those out (it passes no origin to Blink, which assumes the author's),
  *   and a user-origin sheet would stay until its document went (seen in
  *   effects.spec.ts: Dry left the page styled).
+ * - **Each one's switch.** Your CSS, each hidden element and each of Duet's
+ *   patches can be switched off and kept (a preset that's off isn't kept).
+ *   The site's stylesheet is made from what's on (`effectsParts`), so
+ *   switching one is a change like any other: one stylesheet made again and
+ *   swapped on the site's pages.
  * - **Dry/Wet.** Each site has its own switch; Settings' switch makes every
- *   site dry at once. Dry keeps everything and applies nothing. A tab's
- *   `live.effects` says which, for the button beside the address.
+ *   site dry at once. Dry keeps everything and applies nothing, over whatever
+ *   each item's switch says. A tab's `live.effects` says which, for the button
+ *   beside the address.
  * - **Sanitizing.** Every change goes through the sanitizer in Effects' worker
- *   (compiler.ts) before anything of it is used; nothing is applied from a
- *   stylesheet an older sanitizer made until the new one has made it again.
+ *   (compiler.ts) before anything of it is used, an edited Duet patch as much
+ *   as your CSS; nothing is applied from a stylesheet an older sanitizer made
+ *   until the new one has made it again.
  * - **Ask Duet.** Your Claude Code or Codex app writes a patch from the page's
  *   outline (scripts.ts), under Duet's reading rules: never a private window, a
  *   chord where Duet is off, a Never site, or a form field's value.
@@ -29,11 +36,12 @@ import {
   cleanOutline,
   EFFECTS_LIMITS,
   EFFECTS_OUTLINE_TOOL,
-  effectPreset,
   effectsHost,
   effectsInstructions,
+  effectsParts,
   effectsSummary,
   effectsTurn,
+  effectsWet,
   emptyEffects,
   hasEffects,
   outlineResult,
@@ -53,7 +61,7 @@ import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
 import { SHOT_WORLD } from '../screenshots/scripts';
 import { EffectsCompiler } from './compiler';
-import type { Removal } from './sanitize';
+import type { Compiled, Removal } from './sanitize';
 import { SANITIZER_VERSION } from './sanitize';
 import { EFFECTS_WORLD, OUTLINE_MS, OUTLINE_SCRIPT, SELECTOR_SCRIPT, type PageOutline, type PickedElement } from './scripts';
 
@@ -114,8 +122,23 @@ interface Stored {
   /** The stylesheet the sanitizer made, and which version of it. */
   compiled: string;
   sanitizer: number;
-  /** What it left out of your CSS; null until it's been made this launch. */
-  removed: Removal[] | null;
+  /** What it said about the stylesheet, for the card; null until it's been made this launch. */
+  notes: Notes | null;
+}
+
+/** What the sanitizer said about what's switched on: what it left out of your CSS and of each of Duet's patches (by id), and the hidden elements' selectors it can't use. */
+interface Notes {
+  css: Removal[];
+  duet: Map<string, Removal[]>;
+  unusable: Set<string>;
+}
+
+const noNotes = (): Notes => ({ css: [], duet: new Map(), unusable: new Set() });
+
+/** The notes on a stylesheet made from a site's parts (`effectsParts`), whose patches were the ones that are on, in order. */
+function notesOf(site: SiteEffects, compiled: Compiled): Notes {
+  const on = site.duet.filter((d) => d.on);
+  return { css: compiled.removed, duet: new Map(on.map((d, i) => [d.id, compiled.patches[i] ?? []])), unusable: new Set(compiled.unusable) };
 }
 
 interface Page {
@@ -182,7 +205,7 @@ export class Effects {
     const stale: string[] = [];
     for (const s of deps.saved) {
       const { compiled, sanitizer, ...site } = s;
-      this.saved.set(site.host, { site, compiled, sanitizer, removed: null });
+      this.saved.set(site.host, { site, compiled, sanitizer, notes: null });
       if (sanitizer !== SANITIZER_VERSION) stale.push(site.host);
     }
     // Made by an older sanitizer: made again before any of it is used.
@@ -195,17 +218,17 @@ export class Effects {
     return (scope ? this.privates.get(scope)?.get(host) : undefined) ?? this.saved.get(host);
   }
 
-  /** The stylesheet a page should have now: none while dry, or until the current sanitizer made it. */
+  /** The stylesheet a page should have now: none while dry, with nothing on, or until the current sanitizer made it. */
   private cssFor(page: Page): string | null {
     const st = page.host ? this.stored(page.scope, page.host) : undefined;
-    if (!st || !st.compiled || st.sanitizer !== SANITIZER_VERSION || !st.site.wet || !this.deps.everywhere()) return null;
+    if (!st || !st.compiled || st.sanitizer !== SANITIZER_VERSION || !effectsWet(st.site, this.deps.everywhere())) return null;
     return st.compiled;
   }
 
   private liveFor(scope: WindowId | null, host: string | null): LiveTab['effects'] {
     const st = host ? this.stored(scope, host) : undefined;
     if (!st || !hasEffects(st.site)) return null;
-    return st.site.wet && this.deps.everywhere() ? 'wet' : 'dry';
+    return effectsWet(st.site, this.deps.everywhere()) ? 'wet' : 'dry';
   }
 
   /**
@@ -222,31 +245,28 @@ export class Effects {
       let stored: Stored | null = null;
       if (next && (hasEffects(next) || scope)) {
         let compiled = '';
-        let removed: Removal[] = [];
+        let notes = noNotes();
         let sanitizer = SANITIZER_VERSION;
-        if (hasEffects(next)) {
+        // Only what's on goes in; with everything off there's nothing to make.
+        const parts = effectsParts(next);
+        if (parts.presets.length > 0 || parts.hidden.length > 0 || parts.css.trim() || parts.duet.length > 0) {
           try {
-            const result = await this.compiler.compile({
-              presets: next.presets.map((id) => effectPreset(id)?.css ?? ''),
-              hidden: next.hidden.map((h) => h.selector),
-              css: next.css,
-              duet: next.duet.map((d) => d.css),
-            });
+            const result = await this.compiler.compile(parts);
             compiled = result.css;
-            removed = result.removed;
+            notes = notesOf(next, result);
           } catch (error) {
             // Nothing is applied that the sanitizer didn't make: the site waits for the next change, or the next launch.
             console.error('[chord] Effects couldn’t check a stylesheet:', error instanceof Error ? error.message : error);
             sanitizer = 0;
           }
         }
-        stored = { site: next, compiled, sanitizer, removed };
+        stored = { site: next, compiled, sanitizer, notes };
       }
       if (scope) {
         // A private window keeps its own copy, an empty one too: what was saved doesn't show through it.
         let own = this.privates.get(scope);
         if (!own) this.privates.set(scope, (own = new Map()));
-        own.set(host, stored ?? { site: emptyEffects(host, Date.now()), compiled: '', sanitizer: SANITIZER_VERSION, removed: [] });
+        own.set(host, stored ?? { site: emptyEffects(host, Date.now()), compiled: '', sanitizer: SANITIZER_VERSION, notes: noNotes() });
       } else if (stored) {
         this.saved.set(host, stored);
         this.deps.persist(host, { ...stored.site, compiled: stored.compiled, sanitizer: stored.sanitizer });
@@ -395,16 +415,16 @@ export class Effects {
     this.cards.set(w.id, { nodeId: front.nodeId, host: front.host, scope, opened: ++this.opened });
     this.deps.popoverChanged(w.id);
     w.focusPopover();
-    // What was left out of your CSS is known once it's been made this launch.
+    // What was left out of your CSS and Duet's patches is known once the stylesheet's been made this launch.
     const st = this.stored(scope, front.host);
-    if (st && st.removed === null && hasEffects(st.site)) void this.notes(st, w.id);
+    if (st && st.notes === null && hasEffects(st.site)) void this.notes(st, w.id);
     else this.push(w.id);
   }
 
-  /** What the sanitizer leaves out of a site's CSS, found again without changing anything. */
+  /** What the sanitizer leaves out of what's on, found again without changing anything. */
   private async notes(st: Stored, windowId: WindowId): Promise<void> {
-    const result = await this.compiler.patch(st.site.css).catch(() => null);
-    st.removed = result?.removed ?? [];
+    const result = await this.compiler.compile(effectsParts(st.site)).catch(() => null);
+    st.notes = result ? notesOf(st.site, result) : noNotes();
     this.push(windowId);
   }
 
@@ -429,15 +449,18 @@ export class Effects {
     const available = front ? (this.duet?.available(windowId, front.url) ?? null) : null;
     const ask = this.asks.get(windowId);
     const mine = ask && ask.host === card.host && ask.scope === card.scope ? ask : null;
+    const notes = st?.notes;
+    const removals = (removed: readonly Removal[] | undefined) => (removed ?? []).map(({ what, line, kind }) => ({ what, line, kind }));
     return {
       host: card.host,
       wet: site.wet,
       everywhere: this.deps.everywhere(),
       css: site.css,
-      removed: (st?.removed ?? []).map(({ what, line, kind }) => ({ what, line, kind })),
-      hidden: site.hidden.map(({ selector, label }) => ({ selector, label })),
+      cssOn: site.cssOn,
+      removed: removals(notes?.css),
+      hidden: site.hidden.map(({ selector, label, on }) => ({ selector, label, on, usable: !notes?.unusable.has(selector) })),
       presets: [...site.presets],
-      duet: site.duet.map(({ id, ask, summary }) => ({ id, ask, summary })),
+      duet: site.duet.map(({ id, ask, summary, css, on }) => ({ id, ask, summary, css, on, removed: removals(notes?.duet.get(id)) })),
       ask: { available: available !== null, provider: available?.provider ?? null, busy: Boolean(mine?.busy), startedAt: mine?.startedAt ?? null, error: mine?.error ?? null, note: mine?.note ?? null },
       private: card.scope !== null,
     };
@@ -455,8 +478,11 @@ export class Effects {
     const now = Date.now();
     switch (action.do) {
       case 'css':
-        // The field has its own undo; a toast for each pause in typing would only be noise.
+        // The field has its own undo; a toast for each pause in typing would only be noise. So with the editors below.
         return this.change(scope, host, (site) => ({ ...site, css: action.css, updatedAt: now }));
+      case 'cssOn':
+        // A switch is its own undo, as a preset's chip is.
+        return this.change(scope, host, (site) => ({ ...site, cssOn: action.on, updatedAt: now }));
       case 'wet':
         return this.change(scope, host, (site) => ({ ...site, wet: action.wet, updatedAt: now }));
       case 'everywhere':
@@ -464,8 +490,30 @@ export class Effects {
         return;
       case 'preset':
         return this.change(scope, host, (site) => ({ ...site, presets: togglePreset(site.presets, action.id, action.on), updatedAt: now }));
+      case 'hiddenOn':
+        return this.change(scope, host, (site) => ({ ...site, hidden: site.hidden.map((h) => (h.selector === action.selector ? { ...h, on: action.on } : h)), updatedAt: now }));
+      case 'editHidden': {
+        const { selector, label } = action.next;
+        return this.change(scope, host, (site) =>
+          // Another element is hidden by that selector already: the card says so, and nothing changes.
+          site.hidden.some((h) => h.selector === selector && h.selector !== action.selector)
+            ? site
+            : { ...site, hidden: site.hidden.map((h) => (h.selector === action.selector ? { ...h, selector, label: label.trim() } : h)), updatedAt: now },
+        );
+      }
+      case 'duetOn':
+        return this.change(scope, host, (site) => ({ ...site, duet: site.duet.map((d) => (d.id === action.id ? { ...d, on: action.on } : d)), updatedAt: now }));
+      case 'editDuet':
+        // Kept as written, like your CSS: the sanitizer makes the stylesheet from it, and the card says what it left out.
+        return this.change(scope, host, (site) => ({
+          ...site,
+          duet: site.duet.map((d) => (d.id === action.id ? { ...d, summary: action.summary.replace(/\s+/g, ' ').trim(), css: action.css } : d)),
+          updatedAt: now,
+        }));
       case 'unhide': {
-        const label = this.stored(scope, host)?.site.hidden.find((h) => h.selector === action.selector)?.label ?? 'it';
+        // Its name, or its selector when you emptied the name.
+        const hidden = this.stored(scope, host)?.site.hidden.find((h) => h.selector === action.selector);
+        const label = hidden ? hidden.label || hidden.selector : 'it';
         return this.change(scope, host, (site) => ({ ...site, hidden: site.hidden.filter((h) => h.selector !== action.selector), updatedAt: now }), { w, message: `Showing ${label} again` });
       }
       case 'removeDuet': {
@@ -538,8 +586,11 @@ export class Effects {
     if (!found || typeof found.selector !== 'string' || typeof found.label !== 'string' || !found.selector || found.selector.length > EFFECTS_LIMITS.selector) return null;
     const label = found.label.slice(0, EFFECTS_LIMITS.label);
     const selector = found.selector.trim();
+    // Picking one that's in the list but off turns it on again.
     await this.change(pick.scope, pick.host, (site) =>
-      site.hidden.some((h) => h.selector === selector) ? site : { ...site, hidden: [...site.hidden, { selector, label, at: Date.now() }].slice(-EFFECTS_LIMITS.hidden), updatedAt: Date.now() },
+      site.hidden.some((h) => h.selector === selector)
+        ? { ...site, hidden: site.hidden.map((h) => (h.selector === selector ? { ...h, on: true } : h)), updatedAt: Date.now() }
+        : { ...site, hidden: [...site.hidden, { selector, label, on: true, at: Date.now() }].slice(-EFFECTS_LIMITS.hidden), updatedAt: Date.now() },
     );
     pick.hidden++;
     return { label };
@@ -604,7 +655,7 @@ export class Effects {
         const at = Date.now();
         await this.change(card.scope, card.host, (site) => ({
           ...site,
-          duet: [...site.duet, { id: uuidv7(at), ask: text.trim().slice(0, EFFECTS_LIMITS.ask), summary: answer.summary || text.trim().slice(0, EFFECTS_LIMITS.summary), css: clean.css, at }].slice(-EFFECTS_LIMITS.duet),
+          duet: [...site.duet, { id: uuidv7(at), ask: text.trim().slice(0, EFFECTS_LIMITS.ask), summary: answer.summary || text.trim().slice(0, EFFECTS_LIMITS.summary), css: clean.css, on: true, at }].slice(-EFFECTS_LIMITS.duet),
           updatedAt: at,
         }));
       }

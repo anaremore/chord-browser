@@ -4,8 +4,9 @@
  * runs while nobody edits. Requests are answered in order. If the thread dies
  * it starts again for the next request, at most a few times a launch.
  */
+import type { EffectsParts } from '@chord/core';
 import { Worker } from 'node:worker_threads';
-import type { Compiled, EffectsParts, Sanitized } from './sanitize';
+import type { Compiled, Sanitized } from './sanitize';
 import type { EffectsWorkerReply, EffectsWorkerRequest } from './worker';
 
 const IDLE_MS = 30_000;
@@ -26,12 +27,12 @@ export class EffectsCompiler {
 
   constructor(private readonly workerPath: string) {}
 
-  /** A site's one stylesheet, from its parts. */
+  /** A site's one stylesheet, from what's switched on. */
   compile(parts: EffectsParts): Promise<Compiled> {
     return this.request({ type: 'compile', parts }) as Promise<Compiled>;
   }
 
-  /** One stylesheet on its own (a patch from Duet), as it'd be kept. */
+  /** One stylesheet on its own (a patch from Duet), as it's kept: nothing that fetches, and no !important added. */
   patch(css: string): Promise<Sanitized> {
     return this.request({ type: 'patch', css }) as Promise<Sanitized>;
   }

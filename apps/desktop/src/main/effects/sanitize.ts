@@ -27,6 +27,7 @@
  *
  * Pure: no Electron, no DOM. Unit-tested with many hostile inputs.
  */
+import type { EffectsParts } from '@chord/core';
 import { tokenize, TokenType, type CSSToken } from '@csstools/css-tokenizer';
 import {
   isCommentNode,
@@ -649,28 +650,20 @@ export function verify(css: string): boolean {
   return true;
 }
 
-/** What makes up a site's stylesheet, in the order it's applied: later wins. */
-export interface EffectsParts {
-  /** The presets' own CSS. */
-  presets: readonly string[];
-  /** Selectors of elements you hid. */
-  hidden: readonly string[];
-  css: string;
-  /** Duet's patches, oldest first. */
-  duet: readonly string[];
-}
-
 export interface Compiled {
   css: string;
   /** What was left out of your CSS. */
   removed: Removal[];
+  /** What was left out of each of Duet's patches, in the order they came. */
+  patches: Removal[][];
   /** Hidden elements whose selector couldn't be used. */
   unusable: string[];
 }
 
 /**
- * A site's one stylesheet: each part sanitized on its own (none can leave a
- * block open for the next), then checked once more as a whole.
+ * A site's one stylesheet, from what's switched on (`effectsParts`): each part
+ * sanitized on its own (none can leave a block open for the next), then
+ * checked once more as a whole.
  */
 export function compileEffects(parts: EffectsParts): Compiled {
   const chunks: string[] = [];
@@ -683,8 +676,13 @@ export function compileEffects(parts: EffectsParts): Compiled {
   }
   const own = sanitizeCss(parts.css);
   chunks.push(own.css);
-  for (const patch of parts.duet) chunks.push(sanitizeCss(patch).css);
+  const patches: Removal[][] = [];
+  for (const patch of parts.duet) {
+    const clean = sanitizeCss(patch);
+    chunks.push(clean.css);
+    patches.push(clean.removed);
+  }
   const css = chunks.filter(Boolean).join('\n');
-  if (!verify(css)) return { css: '', removed: [{ what: 'everything', line: 1, kind: 'fetch' }], unusable };
-  return { css, removed: own.removed, unusable };
+  if (!verify(css)) return { css: '', removed: [{ what: 'everything', line: 1, kind: 'fetch' }], patches, unusable };
+  return { css, removed: own.removed, patches, unusable };
 }

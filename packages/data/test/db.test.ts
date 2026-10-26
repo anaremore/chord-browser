@@ -236,9 +236,13 @@ describe('chord-data', () => {
       host: 'news.test',
       wet: false,
       css: 'h1 { color: red }',
-      hidden: [{ selector: '#ad', label: 'div#ad', at: 2 }],
+      cssOn: false,
+      hidden: [
+        { selector: '#ad', label: 'div#ad', on: true, at: 2 },
+        { selector: '#promo', label: 'Promo', on: false, at: 2 },
+      ],
       presets: ['dark' as const],
-      duet: [{ id: 'd1', ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }', at: 3 }],
+      duet: [{ id: 'd1', ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }', on: false, at: 3 }],
       createdAt: 1,
       updatedAt: 4,
     };
@@ -264,6 +268,28 @@ describe('chord-data', () => {
     expect(only!.hidden.map((h) => h.selector)).toEqual(['#ok']);
     db.close();
     expect(count('effect')).toBe(1);
+  });
+
+  it('upgrades a version-14 profile to 15: a site’s Effects read as everything on, and each one’s switch is kept from then on', () => {
+    const v14 = new DatabaseSync(file);
+    for (const migration of MIGRATIONS.slice(0, 14)) v14.exec(migration);
+    v14.exec('PRAGMA user_version = 14');
+    v14.prepare(
+      `INSERT INTO effect (host, wet, css, hidden, presets, duet, compiled, sanitizer, created_at, updated_at)
+       VALUES ('news.test', 1, 'h1 { color: red }', ?, '["dark"]', ?, 'h1 {\n  color: red !important;\n}', 1, 1, 2)`,
+    ).run(JSON.stringify([{ selector: '#ad', label: 'div#ad', at: 1 }]), JSON.stringify([{ id: 'd1', ask: 'Bigger text', summary: 'Bigger', css: 'body { font-size: 20px }', at: 1 }]));
+    v14.close();
+
+    let db = new ChordDatabase(file);
+    expect(db.version).toBe(MIGRATIONS.length);
+    const [old] = db.loadEffects();
+    expect(old).toMatchObject({ host: 'news.test', css: 'h1 { color: red }', cssOn: true, hidden: [{ selector: '#ad', on: true }], duet: [{ id: 'd1', on: true }], compiled: 'h1 {\n  color: red !important;\n}', sanitizer: 1 });
+    db.write([{ k: 'effect', id: 'news.test', value: { ...old!, cssOn: false, hidden: [{ ...old!.hidden[0]!, on: false }], duet: [{ ...old!.duet[0]!, on: false }], updatedAt: 3 } }]);
+    db.close();
+    db = new ChordDatabase(file);
+    const [after] = db.loadEffects();
+    expect(after).toMatchObject({ cssOn: false, hidden: [{ selector: '#ad', on: false }], duet: [{ id: 'd1', on: false }], updatedAt: 3 });
+    db.close();
   });
 
   it('keeps a muted tab muted across a restart, until it’s unmuted', () => {

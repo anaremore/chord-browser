@@ -171,18 +171,21 @@ describe('sanitizeSelector', () => {
 });
 
 describe('compileEffects', () => {
-  it('puts presets, then hidden elements, then your CSS, then Duet’s patches', () => {
-    const { css, removed, unusable } = compileEffects({
+  it('puts presets, then hidden elements, then your CSS, then Duet’s patches, and says what it left out of each', () => {
+    const { css, removed, patches, unusable } = compileEffects({
       presets: ['body { max-width: 70ch }'],
       hidden: ['#ad', `a url(${EVIL})`],
       css: `h1 { color: red } body { background: url(${EVIL}) }`,
-      duet: ['h1 { color: green }'],
+      // The second as you might edit it: a fetch on its second line.
+      duet: ['h1 { color: green }', `p { color: blue }\nbody { background: image-set("${EVIL}" 1x) }`],
     });
-    const order = ['max-width: 70ch', '#ad {', 'color: red', 'color: green'].map((s) => css.indexOf(s));
+    const order = ['max-width: 70ch', '#ad {', 'color: red', 'color: green', 'color: blue'].map((s) => css.indexOf(s));
     expect(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1]!))).toBe(true);
     expect(css).toContain('#ad {\n  display: none !important;\n}');
+    expect(css).toContain('color: blue !important');
     expect(unusable).toEqual([`a url(${EVIL})`]);
     expect(removed.map((r) => r.what)).toEqual(['url()']);
+    expect(patches.map((p) => p.map((r) => `${r.what} on line ${r.line}`))).toEqual([[], ['image-set() on line 2']]);
     expect(fetches(css)).toEqual([]);
   });
 

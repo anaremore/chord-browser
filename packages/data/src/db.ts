@@ -741,14 +741,15 @@ export class ChordDatabase {
       return;
     }
     this.sql(
-      `INSERT INTO effect (host, wet, css, hidden, presets, duet, compiled, sanitizer, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(host) DO UPDATE SET wet = excluded.wet, css = excluded.css, hidden = excluded.hidden, presets = excluded.presets,
+      `INSERT INTO effect (host, wet, css, css_on, hidden, presets, duet, compiled, sanitizer, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(host) DO UPDATE SET wet = excluded.wet, css = excluded.css, css_on = excluded.css_on, hidden = excluded.hidden, presets = excluded.presets,
          duet = excluded.duet, compiled = excluded.compiled, sanitizer = excluded.sanitizer, updated_at = excluded.updated_at`,
     ).run(
       host,
       site.wet ? 1 : 0,
       site.css,
+      site.cssOn ? 1 : 0,
       JSON.stringify(site.hidden),
       JSON.stringify(site.presets),
       JSON.stringify(site.duet),
@@ -771,6 +772,7 @@ export class ChordDatabase {
         host: r['host'],
         wet: num(r['wet']) !== 0,
         css: r['css'],
+        cssOn: num(r['css_on']) !== 0,
         hidden: parseJson<unknown>(r['hidden'], []),
         presets: parseJson<unknown>(r['presets'], []),
         duet: parseJson<unknown>(r['duet'], []),

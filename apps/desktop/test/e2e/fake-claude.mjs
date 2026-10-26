@@ -118,6 +118,11 @@ async function turn(text, images = []) {
     const result = toolText(await callTool('read_page_outline', {}));
     writeFileSync(join(config, 'effects-outline.json'), result);
     if (/nothing/i.test(text)) return finish(await say(JSON.stringify({ css: '', summary: "CSS can't do that." })));
+    // A second patch, with a summary longer than the card's row (effects.spec.ts edits this one).
+    if (/mario/i.test(text)) {
+      const css = 'body { background-color: rgb(92, 148, 252) }\nmain p { color: rgb(255, 255, 255) }';
+      return finish(await say(JSON.stringify({ css, summary: 'Mario Bros theme: a sky-blue page, with white paragraphs and blocky headings' })));
+    }
     const evil = process.env.FAKE_CLAUDE_EVIL ?? 'https://evil.invalid';
     const css = `main h1 { color: rgb(0, 128, 0) } body { background-image: url(${evil}/duet.png) }`;
     return finish(await say(`Here it is:\n\`\`\`json\n${JSON.stringify({ css, summary: 'Green headline' })}\n\`\`\``));

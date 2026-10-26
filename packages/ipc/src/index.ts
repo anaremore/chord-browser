@@ -350,6 +350,13 @@ export const EffectsSiteChange = z.discriminatedUnion('do', [
 ]);
 export type EffectsSiteChange = z.infer<typeof EffectsSiteChange>;
 
+/** Something the sanitizer left out ("url()", "@import"), the line it was on, and why: it would load a file, or Chord doesn't know it. */
+export interface EffectsRemoval {
+  what: string;
+  line: number;
+  kind: 'fetch' | 'unknown';
+}
+
 /** One site's Effects as the card shows them (DESIGN.md §7.15), pushed as `effects:state` while it's open. */
 export interface EffectsView {
   host: string;
@@ -357,13 +364,16 @@ export interface EffectsView {
   wet: boolean;
   /** Settings' switch for every site: dry there makes every site dry, whatever its own switch says. */
   everywhere: boolean;
-  /** Your CSS, as you wrote it. */
+  /** Your CSS, as you wrote it, and its own switch. */
   css: string;
+  cssOn: boolean;
   /** What the sanitizer left out of your CSS, and the line each was on. */
-  removed: { what: string; line: number; kind: 'fetch' | 'unknown' }[];
-  hidden: { selector: string; label: string }[];
+  removed: EffectsRemoval[];
+  /** Each element you hid, with its own switch; `usable` is false when the sanitizer can't use its selector, so it hides nothing. */
+  hidden: { selector: string; label: string; on: boolean; usable: boolean }[];
   presets: EffectPresetId[];
-  duet: { id: string; ask: string; summary: string }[];
+  /** Each of Duet's patches: its stylesheet (as Duet or you wrote it), its own switch, and what was left out of it while it's on. */
+  duet: { id: string; ask: string; summary: string; css: string; on: boolean; removed: EffectsRemoval[] }[];
   /**
    * Ask Duet: offered only where Duet may read the page (set up, on in this
    * chord, not a Never site, not a private window); how a request is going.
@@ -386,10 +396,21 @@ export interface EffectsView {
 /** What the card asks main to do. Main checks it against the card's own site again. */
 export const EffectsAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('css'), css: z.string().max(EFFECTS_LIMITS.css) }),
+  z.object({ do: z.literal('cssOn'), on: z.boolean() }),
   z.object({ do: z.literal('wet'), wet: z.boolean() }),
   z.object({ do: z.literal('everywhere'), wet: z.boolean() }),
   z.object({ do: z.literal('preset'), id: z.enum(EFFECT_PRESET_IDS), on: z.boolean() }),
+  /** A hidden element by its selector: on or off, edited (a narrower selector, another name), or removed. */
+  z.object({ do: z.literal('hiddenOn'), selector: z.string().min(1).max(EFFECTS_LIMITS.selector), on: z.boolean() }),
+  z.object({
+    do: z.literal('editHidden'),
+    selector: z.string().min(1).max(EFFECTS_LIMITS.selector),
+    next: z.object({ selector: z.string().trim().min(1).max(EFFECTS_LIMITS.selector), label: z.string().max(EFFECTS_LIMITS.label) }),
+  }),
   z.object({ do: z.literal('unhide'), selector: z.string().min(1).max(EFFECTS_LIMITS.selector) }),
+  /** One of Duet's patches by its id: on or off, edited (its name and CSS), or removed. */
+  z.object({ do: z.literal('duetOn'), id: z.string().min(1).max(64), on: z.boolean() }),
+  z.object({ do: z.literal('editDuet'), id: z.string().min(1).max(64), summary: z.string().max(EFFECTS_LIMITS.summary), css: z.string().max(EFFECTS_LIMITS.duetCss) }),
   z.object({ do: z.literal('removeDuet'), id: z.string().min(1).max(64) }),
   z.object({ do: z.literal('clear') }),
   /** Hide an element: the card steps aside for the picker. */

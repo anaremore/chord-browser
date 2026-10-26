@@ -2,11 +2,13 @@
  * Effects (ARCHITECTURE.md §9, decision D13): your own styles for a site, in
  * place of Arc's Boosts. A site's Effects are your CSS, elements you hid,
  * presets you turned on and patches Duet wrote, joined into one stylesheet
- * that main inserts on each of the site's pages, as a stylesheet only. The
- * Dry/Wet switch takes them off at once, per site and everywhere.
+ * that main inserts on each of the site's pages, as a stylesheet only. Each
+ * one has its own switch, and the Dry/Wet switch takes them all off at once,
+ * per site and everywhere, over whatever each one's says.
  *
- * What's here is pure: the site key, the presets, limits, checking saved and
- * imported data, the export record (0.4), and what Duet is told and answers.
+ * What's here is pure: the site key, the presets, limits, what goes into a
+ * site's stylesheet, checking saved and imported data, the export record
+ * (0.4), and what Duet is told and answers.
  * The sanitizer, which every stylesheet goes through before it's used, lives
  * with its worker in main (`main/effects/sanitize.ts`).
  */
@@ -108,19 +110,27 @@ export const EFFECT_PRESETS: readonly EffectPreset[] = [
 export const EFFECT_PRESET_IDS = EFFECT_PRESETS.map((p) => p.id) as [EffectPresetId, ...EffectPresetId[]];
 export const effectPreset = (id: string): EffectPreset | undefined => EFFECT_PRESETS.find((p) => p.id === id);
 
-/** An element you hid: the selector the picker made for it, and how the list names it. */
+/** An element you hid: the selector the picker made for it (or you narrowed), and how the list names it. */
 export interface HiddenElement {
   selector: string;
   label: string;
+  /** Its own switch: off, the element shows again and stays in the list. */
+  on: boolean;
   at: number;
 }
 
-/** A patch Duet wrote when you asked: your words, its summary, and its stylesheet (as the sanitizer left it). */
+/**
+ * A patch Duet wrote when you asked: your words, its summary (which you can
+ * rename), and its stylesheet, as the sanitizer left Duet's or as you edited
+ * it. Either way it's sanitized again with the rest before it's used.
+ */
 export interface DuetEffect {
   id: string;
   ask: string;
   summary: string;
   css: string;
+  /** Its own switch. */
+  on: boolean;
   at: number;
 }
 
@@ -131,7 +141,10 @@ export interface SiteEffects {
   wet: boolean;
   /** Your CSS, as you wrote it. */
   css: string;
+  /** Your CSS's own switch. */
+  cssOn: boolean;
   hidden: HiddenElement[];
+  /** The presets that are on, in the order they were turned on (one that's off isn't kept). */
   presets: EffectPresetId[];
   duet: DuetEffect[];
   createdAt: number;
@@ -144,14 +157,14 @@ export interface SavedEffects extends SiteEffects {
   sanitizer: number;
 }
 
-export const emptyEffects = (host: string, now: number): SiteEffects => ({ host, wet: true, css: '', hidden: [], presets: [], duet: [], createdAt: now, updatedAt: now });
+export const emptyEffects = (host: string, now: number): SiteEffects => ({ host, wet: true, css: '', cssOn: true, hidden: [], presets: [], duet: [], createdAt: now, updatedAt: now });
 
-/** Whether a site has anything to apply (an empty one is removed). */
+/** Whether a site has Effects kept, on or off (an empty one is removed). */
 export const hasEffects = (site: Pick<SiteEffects, 'css' | 'hidden' | 'presets' | 'duet'>): boolean =>
   site.css.trim().length > 0 || site.hidden.length > 0 || site.presets.length > 0 || site.duet.length > 0;
 
-/** "Your CSS · 2 hidden · Dark · 1 from Duet": what a site has, for Settings' list. */
-export function effectsSummary(site: Pick<SiteEffects, 'css' | 'hidden' | 'presets' | 'duet'>): string {
+/** "Your CSS · 2 hidden · Dark · 1 from Duet · 1 off": what a site has, for Settings' list. */
+export function effectsSummary(site: Pick<SiteEffects, 'css' | 'cssOn' | 'hidden' | 'presets' | 'duet'>): string {
   const parts: string[] = [];
   if (site.css.trim()) parts.push('Your CSS');
   if (site.hidden.length) parts.push(`${site.hidden.length} hidden`);
@@ -160,14 +173,45 @@ export function effectsSummary(site: Pick<SiteEffects, 'css' | 'hidden' | 'prese
     if (preset) parts.push(preset.name);
   }
   if (site.duet.length) parts.push(`${site.duet.length} from Duet`);
+  const off = (site.css.trim() && !site.cssOn ? 1 : 0) + site.hidden.filter((h) => !h.on).length + site.duet.filter((d) => !d.on).length;
+  if (off) parts.push(`${off} off`);
   return parts.join(' · ');
 }
+
+/** What makes up a site's stylesheet, in the order it's applied: later wins. The sanitizer checks each part and joins them (`main/effects/sanitize.ts`). */
+export interface EffectsParts {
+  /** The presets' own CSS. */
+  presets: string[];
+  /** Selectors of elements you hid. */
+  hidden: string[];
+  /** Your CSS, as you wrote it. */
+  css: string;
+  /** Duet's patches, oldest first. */
+  duet: string[];
+}
+
+/**
+ * A site's stylesheet before it's sanitized: only what's switched on. Dry/Wet
+ * isn't in it, so making a site dry or wet everywhere needs no new stylesheet:
+ * it decides whether this one goes on at all (`effectsWet`).
+ */
+export function effectsParts(site: SiteEffects): EffectsParts {
+  return {
+    presets: site.presets.map((id) => effectPreset(id)?.css ?? ''),
+    hidden: site.hidden.filter((h) => h.on).map((h) => h.selector),
+    css: site.cssOn ? site.css : '',
+    duet: site.duet.filter((d) => d.on).map((d) => d.css),
+  };
+}
+
+/** Whether a site's stylesheet goes on its pages: wet on its own switch and on every site's, whatever each item's switch says. */
+export const effectsWet = (site: Pick<SiteEffects, 'wet'>, everywhere: boolean): boolean => site.wet && everywhere;
 
 const isHost = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 300 && /^[a-z0-9.\-[\]:]+$/.test(v) && !v.startsWith('www.');
 const str = (v: unknown, max: number): string | null => (typeof v === 'string' && v.length <= max ? v : null);
 const time = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : fallback);
 
-/** A site as saved or imported, checked field by field; null if it isn't one. Lists past their limits keep their newest. */
+/** A site as saved or imported, checked field by field; null if it isn't one. Lists past their limits keep their newest. A switch that isn't there (an older row or record) is on. */
 export function cleanSiteEffects(raw: unknown, now = Date.now()): SiteEffects | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
@@ -180,7 +224,7 @@ export function cleanSiteEffects(raw: unknown, now = Date.now()): SiteEffects | 
     const selector = str(item?.['selector'], EFFECTS_LIMITS.selector)?.trim();
     if (!selector || seen.has(selector)) continue;
     seen.add(selector);
-    hidden.push({ selector, label: (str(item?.['label'], 1000) ?? '').slice(0, EFFECTS_LIMITS.label), at: time(item?.['at'], 0) });
+    hidden.push({ selector, label: (str(item?.['label'], 1000) ?? '').slice(0, EFFECTS_LIMITS.label), on: item?.['on'] !== false, at: time(item?.['at'], 0) });
   }
   const presets = [...new Set((Array.isArray(r['presets']) ? r['presets'] : []).filter((p): p is EffectPresetId => typeof p === 'string' && EFFECT_PRESET_IDS.includes(p as EffectPresetId)))];
   const duet: DuetEffect[] = [];
@@ -194,6 +238,7 @@ export function cleanSiteEffects(raw: unknown, now = Date.now()): SiteEffects | 
       ask: (str(item?.['ask'], 10_000) ?? '').slice(0, EFFECTS_LIMITS.ask),
       summary: (str(item?.['summary'], 10_000) ?? '').slice(0, EFFECTS_LIMITS.summary),
       css: patch,
+      on: item?.['on'] !== false,
       at: time(item?.['at'], 0),
     });
   }
@@ -201,6 +246,7 @@ export function cleanSiteEffects(raw: unknown, now = Date.now()): SiteEffects | 
     host: r['host'],
     wet: r['wet'] !== false,
     css,
+    cssOn: r['cssOn'] !== false,
     hidden: hidden.slice(-EFFECTS_LIMITS.hidden),
     presets,
     duet: duet.slice(-EFFECTS_LIMITS.duet),
@@ -213,8 +259,9 @@ export function cleanSiteEffects(raw: unknown, now = Date.now()): SiteEffects | 
 
 /**
  * One site's Effects in the export and sync format: one record per site,
- * replaced whole (last writer wins, by `updatedAt`). What main inserts is
- * left out: an imported record is sanitized again before anything of it is
+ * replaced whole (last writer wins, by `updatedAt`), with each item's own
+ * switch (`cssOn`, `on`; one that isn't there reads as on). What main inserts
+ * is left out: an imported record is sanitized again before anything of it is
  * used, so a file that was changed by hand can't add a fetch.
  */
 export interface EffectsRecord {
@@ -223,9 +270,10 @@ export interface EffectsRecord {
   site: string;
   wet: boolean;
   css: string;
-  hidden: { selector: string; label: string }[];
+  cssOn: boolean;
+  hidden: { selector: string; label: string; on: boolean }[];
   presets: EffectPresetId[];
-  duet: { ask: string; summary: string; css: string }[];
+  duet: { ask: string; summary: string; css: string; on: boolean }[];
   updatedAt: number;
 }
 
@@ -236,9 +284,10 @@ export function effectsRecord(site: SiteEffects): EffectsRecord {
     site: site.host,
     wet: site.wet,
     css: site.css,
-    hidden: site.hidden.map(({ selector, label }) => ({ selector, label })),
+    cssOn: site.cssOn,
+    hidden: site.hidden.map(({ selector, label, on }) => ({ selector, label, on })),
     presets: [...site.presets],
-    duet: site.duet.map(({ ask, summary, css }) => ({ ask, summary, css })),
+    duet: site.duet.map(({ ask, summary, css, on }) => ({ ask, summary, css, on })),
     updatedAt: site.updatedAt,
   };
 }
@@ -254,6 +303,7 @@ export function effectsFromRecord(raw: unknown, newId: () => string, now = Date.
       host: r['site'],
       wet: r['wet'],
       css: r['css'],
+      cssOn: r['cssOn'],
       hidden: Array.isArray(r['hidden']) ? r['hidden'].map((h) => ({ ...(h as object), at: updatedAt })) : [],
       presets: r['presets'],
       duet: Array.isArray(r['duet']) ? r['duet'].map((d) => ({ ...(d as object), id: newId(), at: updatedAt })) : [],

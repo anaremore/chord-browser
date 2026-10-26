@@ -259,4 +259,9 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE duet_thread_next RENAME TO duet_thread;
   CREATE INDEX duet_thread_chord ON duet_thread(chord_id, last_used_at DESC);
   `,
+  // 15: each of a site's Effects has its own switch (ARCHITECTURE.md §9). Your CSS's is a column; each hidden element's
+  // and Duet patch's is `on` in its JSON. A row from before has neither, and reads as everything on.
+  `
+  ALTER TABLE effect ADD COLUMN css_on INTEGER NOT NULL DEFAULT 1;
+  `,
 ];
