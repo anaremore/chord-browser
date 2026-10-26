@@ -2,9 +2,11 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
-## Next · preview (unreleased)
+## 0.4.0 · preview · 2026-10-26
 
-What's built since 0.3.0; it gets its version when it's released.
+- **Duet fills in forms you ask it to**, on the tab you're on: "fill this in with my work address", say. It reads what the form asks for, never what's already typed in it, and shows each field with the value it suggests in a card in its panel, where you can change a value or leave a field out. Nothing goes into the page until you press **Fill**, and Chord never sends a form: you press the page's own button. Undo puts every field back.
+  - It never fills passwords, payment details, one-time codes or hidden fields, and says which ones it left for you.
+  - It follows what you've let Duet read: never in a private window, on a site you said Duet may never read, or when Duet is set to read nothing.
 
 - **Proxies:** one for every chord, or one for a chord of its own. In Settings → Privacy → Proxy, choose the system's (as before), none, a proxy server (HTTP, HTTPS or SOCKS5) or an automatic configuration file. Private windows and Chord's own requests, like update checks, use it too.
   - A chord can have its own, from Settings, its right-click menu or the command bar. It comes with the chord's own sign-ins, so a chord that shares yours is signed out of sites, and Chord says so before it does it. Undo puts both back.
@@ -14,10 +16,6 @@ What's built since 0.3.0; it gets its version when it's released.
 - **What Duet can read is one button at the top of its panel**, saying what the chat does now (*Reads this tab*, for example). It opens the four choices, each with what it lets Duet read. The row of four buttons it replaces didn't fit the panel.
 
 - **Fixed: Effects not coming back after reloading a busy page.** On a site that keeps the page busy as it loads, like Reddit, an Effect could stop showing after a reload, though the card still said it was on. Chord stopped waiting for the page to take the styles, and took them out when they arrived late. Now they stay.
-
-- **Duet fills in forms you ask it to**, on the tab you're on: "fill this in with my work address", say. It reads what the form asks for, never what's already typed in it, and shows each field with the value it suggests in a card in its panel, where you can change a value or leave a field out. Nothing goes into the page until you press **Fill**, and Chord never sends a form: you press the page's own button. Undo puts every field back.
-  - It never fills passwords, payment details, one-time codes or hidden fields, and says which ones it left for you.
-  - It follows what you've let Duet read: never in a private window, on a site you said Duet may never read, or when Duet is set to read nothing.
 
 ## 0.3.0 · preview · 2026-10-25
 

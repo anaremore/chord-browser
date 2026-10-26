@@ -1,7 +1,7 @@
 {
   "name": "@chord/desktop",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Chord: a calm, colorful browser",
   "homepage": "https://github.com/anaremore/chord-browser",
   "author": {

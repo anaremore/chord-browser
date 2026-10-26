@@ -26,9 +26,10 @@ Everything here works on `main` today and comes with the latest preview.
 - **Chrome extensions**, including password managers.
 - **Pop-out video:** a playing video floats into picture-in-picture when you switch tabs.
 - **Safe Browsing:** a warning before suspected phishing and malware sites and downloads, from Google's lists, checked on your computer. Release builds only (it needs Chord's API key); off in Google-free mode.
-- **Duet** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. You choose what it can read, from your tabs down to nothing at all; it cites what it read, and never sees your sign-in. Turn it off in Settings and it's gone.
+- **Duet** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. You choose what it can read, from your tabs down to nothing at all; it cites what it read, and never sees your sign-in. It can fill in a form you ask it to, once you've checked each value. Turn it off in Settings and it's gone.
 - **Effects:** restyle a site your way, with your own CSS, hidden elements, presets, or styles Duet writes. Dry/Wet takes them off at once. They're styles only, and never load anything.
 - **Developer tools** dock beside the page, as in Chrome, or pop out into a window.
+- **Proxies:** one for every chord, or one for a chord of its own (HTTP, HTTPS or SOCKS5, or a configuration file), in place before any page loads.
 
 | | |
 |---|---|
