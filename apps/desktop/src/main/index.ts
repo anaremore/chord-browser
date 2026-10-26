@@ -960,6 +960,12 @@ if (!app.requestSingleInstanceLock()) {
         safeBrowsingCheck: (urls: string[]) => safeBrowsing.check(urls, 'frame'),
         /** Effects: the saved sites, what each page has, and how long applying and checking took (ms). */
         effects: () => browser!.effects.inspect(),
+        /** Sync: write what's waiting now (not 3 s after the last change), and look at the folder now (not at the next watch or poll). */
+        syncWrite: async () => {
+          await store.flush();
+          await store.sync({ type: 'sync.flush' });
+        },
+        syncRead: () => store.sync({ type: 'sync.check' }),
         /** Ad blocking's lists, and what each session has (the extension, the dispatcher). */
         adBlocking: () => ({ status: adBlocking.status(), ...adBlocking.inspect() }),
         /** Check the lists that are due now, as the timer would. */
