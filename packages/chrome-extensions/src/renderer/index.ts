@@ -119,17 +119,21 @@ export const injectExtensionAPIs = (runInMainWorld: boolean) => {
       (...args: any[]) =>
         electron.invokeExtension(extensionId, fnName, opts, ...args)
 
-    function imageData2base64(imageData: ImageData) {
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return null
-
-      canvas.width = imageData.width
-      canvas.height = imageData.height
-      ctx.putImageData(imageData, 0, 0)
-
-      return canvas.toDataURL()
+    // Chord: an ImageData (or one like it) and its pixels, which cross to main as they are.
+    const isImageData = (value: unknown): value is ImageData =>
+      Boolean(value) &&
+      typeof value === 'object' &&
+      typeof (value as ImageData).width === 'number' &&
+      typeof (value as ImageData).height === 'number' &&
+      ArrayBuffer.isView((value as ImageData).data)
+    /** As base64 text, which crosses every bridge and IPC as it is. */
+    const pixelsOf = ({ width, height, data }: ImageData) => {
+      const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+      let text = ''
+      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+      return { width, height, rgba: btoa(text) }
     }
+    const setIconMessage = invokeExtension('browserAction.setIcon')
 
     class ExtensionEvent<T extends Function> implements chrome.events.Event<T> {
       constructor(private name: string) {}
@@ -265,31 +269,23 @@ export const injectExtensionAPIs = (runInMainWorld: boolean) => {
         setTitle: invokeExtension('browserAction.setTitle'),
         getTitle: invokeExtension('browserAction.getTitle'),
 
-        setIcon: invokeExtension('browserAction.setIcon', {
-          serialize: (details: chrome.action.TabIconDetails) => {
-            if (details.imageData) {
-              if (manifest.manifest_version === 3) {
-                // TODO(mv3): might need to use offscreen document to serialize
-                console.warn(
-                  'action.setIcon with imageData is not yet supported by electron-chrome-extensions',
-                )
-                details.imageData = undefined
-              } else if (details.imageData instanceof ImageData) {
-                details.imageData = imageData2base64(details.imageData) as any
-              } else {
-                details.imageData = Object.entries(details.imageData).reduce(
-                  (obj: any, pair: any[]) => {
-                    obj[pair[0]] = imageData2base64(pair[1])
-                    return obj
-                  },
-                  {},
-                )
+        // Chord: imageData goes to main as its pixels, which main makes a PNG of. A Manifest V3 extension
+        // draws its icon in its service worker, which has no canvas to make a data URL with; and it's
+        // turned into pixels here, in the extension's own world, as an ImageData can't cross to the preload.
+        setIcon: (details: chrome.action.TabIconDetails, ...rest: any[]) => {
+          const image = details?.imageData as unknown
+          const sent = !image
+            ? details
+            : {
+                ...details,
+                imageData: isImageData(image)
+                  ? pixelsOf(image)
+                  : Object.fromEntries(
+                      Object.entries(image as Record<string, unknown>).map(([size, one]) => [size, isImageData(one) ? pixelsOf(one) : undefined]),
+                    ),
               }
-            }
-
-            return [details]
-          },
-        }),
+          return setIconMessage(sent, ...rest)
+        },
 
         setPopup: invokeExtension('browserAction.setPopup'),
         getPopup: invokeExtension('browserAction.getPopup'),

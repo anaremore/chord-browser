@@ -82,6 +82,16 @@ test('an extension: told it was installed once, its scripts and rules run, and i
     // Pinned by default, in the shelf, with its badge; nothing extension-related in the header.
     await expect(shelf.getByRole('button', { name: 'Chord Test, 7' })).toBeVisible({ timeout: 20_000 });
     await expect(shell.locator('[data-placement="bar"]')).toHaveCount(0);
+    // The icon its service worker drew (setIcon with imageData), not the puzzle piece buttons show without one.
+    const icon = shelf.getByRole('button', { name: 'Chord Test, 7' }).locator('img');
+    await expect(icon).toHaveAttribute('src', /^data:image\/png/, { timeout: 10_000 });
+    const middle = await icon.evaluate(async (img: HTMLImageElement) => {
+      await img.decode();
+      const g = new OffscreenCanvas(img.naturalWidth, img.naturalHeight).getContext('2d')!;
+      g.drawImage(img, 0, 0);
+      return [...g.getImageData(img.naturalWidth >> 1, img.naturalHeight >> 1, 1, 1).data];
+    });
+    expect(middle).toEqual([30, 160, 90, 255]);
 
     // The content script ran, and the rule the manifest enables blocks (Chord's install step turns it on).
     await expect.poll(() => tab.evaluate(() => document.documentElement.dataset['chordTestExtension'])).toBe('injected');

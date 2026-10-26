@@ -1,4 +1,4 @@
-// Modified by Chord contributors, 2026-10-22: getIcon(), public getState()/activateClick(), the openActionPopup hook, the browser-action-updated event, and a Uint8Array response body. See CHORD-CHANGES.md in this package.
+// Modified by Chord contributors, 2026-10-22: getIcon(), public getState()/activateClick(), the openActionPopup hook, the browser-action-updated event, and a Uint8Array response body. 2026-10-25: icons drawn as pixels (setIcon's imageData), and the extension's own icon when a set one can't be read. See CHORD-CHANGES.md in this package.
 import { Menu, MenuItem, protocol, nativeImage, app } from 'electron'
 import { ExtensionContext } from '../context'
 import { PopupView } from '../popup'
@@ -6,12 +6,14 @@ import { ExtensionEvent } from '../router'
 import {
   getExtensionUrl,
   getExtensionManifest,
+  getIconImage,
   getIconPath,
   resolveExtensionPath,
   matchSize,
   ResizeType,
 } from './common'
 import debug from 'debug'
+import { closestSize, pixelsFrom, pngFromPixels } from './pixels'
 
 const d = debug('electron-chrome-extensions:browserAction')
 
@@ -285,17 +287,25 @@ export class BrowserActionAPI {
         const imagePath = matchSize(iconDetails.path, imageSize, resizeType)
         const iconAbsPath = imagePath && resolveExtensionPath(extension, imagePath)
         if (iconAbsPath) iconImage = nativeImage.createFromPath(iconAbsPath)
-      } else if (typeof iconDetails.imageData === 'string') {
-        iconImage = nativeImage.createFromDataURL(iconDetails.imageData)
-      } else if (typeof iconDetails.imageData === 'object') {
-        const imageData = matchSize(iconDetails.imageData as any, imageSize, resizeType)
-        iconImage = imageData ? nativeImage.createFromDataURL(imageData) : undefined
+      } else if (iconDetails.imageData) {
+        // Chord: pixels (from the renderer, see its setIcon), one image or a set by size; a data URL, as before.
+        const data: unknown = iconDetails.imageData
+        const one = typeof data === 'string' || pixelsFrom(data) ? data : closestSize(data as Record<string, unknown>, imageSize)
+        const pixels = pixelsFrom(one)
+        if (pixels) iconImage = nativeImage.createFromBuffer(pngFromPixels(pixels))
+        else if (typeof one === 'string') iconImage = nativeImage.createFromDataURL(one)
       }
 
       if (iconImage?.isEmpty()) {
         d('crx: icon image is empty', iconDetails)
         iconImage = undefined
       }
+    }
+
+    // Chord: an icon the extension set that can't be read leaves its own, never none.
+    if (!iconImage && extension) {
+      const own = getIconImage(extension)
+      if (own && !own.isEmpty()) iconImage = own
     }
 
     return iconImage

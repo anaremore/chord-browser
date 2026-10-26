@@ -11,3 +11,12 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 });
 
 chrome.action.setBadgeText({ text: '7' });
+
+// Its button's icon, drawn here in the service worker as Tampermonkey draws its own: setIcon with imageData.
+const drawn = (side) => {
+  const g = new OffscreenCanvas(side, side).getContext('2d');
+  g.fillStyle = 'rgb(30, 160, 90)';
+  g.fillRect(0, 0, side, side);
+  return g.getImageData(0, 0, side, side);
+};
+chrome.action.setIcon({ imageData: { 16: drawn(16), 32: drawn(32) } });
