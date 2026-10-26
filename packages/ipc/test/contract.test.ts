@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RendererCommand, SystemInfo, invokeChannels } from '../src';
+import { ImportedSettings, RendererCommand, SystemInfo, invokeChannels } from '../src';
 
 describe('IPC contract', () => {
   it('rejects unknown nav actions', () => {
@@ -66,6 +66,18 @@ describe('IPC contract', () => {
     expect(run.safeParse({ history: true, duet: true, passphrase: 'too short' }).success).toBe(false);
     // Main asks where with the system's save dialog: a renderer can't name a path.
     expect(run.safeParse({ history: true, duet: true, passphrase: null, path: '/etc/cron.d/x' }).success).toBe(false);
+  });
+
+  it('gives import from a Chord file to Settings alone, naming a file by its id, and checks the settings a file brings', () => {
+    for (const channel of ['importFile:choose', 'importFile:open', 'importFile:run', 'importFile:undo'] as const) expect(invokeChannels[channel].roles).toEqual(['internal']);
+    const open = invokeChannels['importFile:open'].request;
+    expect(open.safeParse({ fileId: 'f1', passphrase: null }).success).toBe(true);
+    expect(open.safeParse({ fileId: 'f1', passphrase: null, path: '/etc/passwd' }).success).toBe(false);
+    const run = invokeChannels['importFile:run'].request;
+    expect(run.safeParse({ fileId: 'f1', choices: { history: true, duet: false, effects: true, settings: false } }).success).toBe(true);
+    expect(run.safeParse({ fileId: 'f1', choices: { history: true, duet: false, effects: true, settings: false, permissions: 'allow' } }).success).toBe(false);
+    expect(ImportedSettings.safeParse({ searchEngine: 'kagi', safeBrowsingAsked: true, reader: { font: 'serif' } }).success).toBe(true);
+    for (const bad of [{ searchEngine: 'evil.example' }, { uiScale: 1.25 }, { checkForUpdates: false }, { onboarded: false }, { reader: { font: 'comic' } }]) expect(ImportedSettings.safeParse(bad).success).toBe(false);
   });
 
   it('lets Settings open only https links', () => {

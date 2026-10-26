@@ -324,28 +324,33 @@ export interface DataFileRead {
   problem: DataFileProblem | null;
 }
 
-const failed = (problem: DataFileProblem, encrypted: boolean, header: DataHeader | null = null): DataFileRead => ({ header, encrypted, records: [], problem });
+/** A copy of some bytes. Never `slice`: on a Node Buffer it's a view of the same memory, which the next read overwrites. */
+const copyOf = (bytes: Uint8Array): Uint8Array => new Uint8Array(bytes);
+
+/** How much of a file's start a reader needs to find its header: the envelope's line and a header line of at most 64 KB. */
+export const DATA_HEAD = 64 * 1024 + 64;
+const MAX_HEADER = 64 * 1024;
 
 /**
- * The lines after the header, a piece at a time (a frame's, or a plain file's
- * lines), as records. A line that isn't one makes the file damaged; so does
- * an end line that miscounts, or anything after it. The end line is any
- * object with an integer `end` and no `type`, so a later format 1 may add to it.
+ * The lines after the header, as records, a piece at a time (a frame's, or a
+ * plain file's lines as they arrive). A line that isn't one makes the file
+ * damaged; so does an end line that miscounts, or anything after it. The end
+ * line is any object with an integer `end` and no `type`, so a later format 1
+ * may add to it.
  */
-class LineReader {
-  private end: number | null = null;
+class Lines {
+  private endCount: number | null = null;
   private bad = 0;
-
-  constructor(private readonly read: DataFileRead) {}
+  private records = 0;
 
   /** A line too long to read: it counts, as damage. */
   refuse(): void {
     this.bad++;
   }
 
-  line(text: string): void {
+  line(text: string, out: DataRecord[]): void {
     if (!text) return;
-    if (this.end !== null || text.length > MAX_LINE) {
+    if (this.endCount !== null || text.length > MAX_LINE) {
       this.bad++;
       return;
     }
@@ -357,15 +362,217 @@ class LineReader {
       return;
     }
     const v = value as Record<string, unknown> | null;
-    if (v && typeof v === 'object' && !Array.isArray(v) && Number.isInteger(v['end']) && !('type' in v)) this.end = v['end'] as number;
-    else if (isDataRecord(value)) this.read.records.push(value);
-    else this.bad++;
+    if (v && typeof v === 'object' && !Array.isArray(v) && Number.isInteger(v['end']) && !('type' in v)) this.endCount = v['end'] as number;
+    else if (isDataRecord(value)) {
+      this.records++;
+      out.push(value);
+    } else this.bad++;
   }
 
-  finish(): void {
-    if (this.bad > 0 || (this.end !== null && this.end !== this.read.records.length + this.bad)) this.read.problem = 'damaged';
-    else if (this.end === null) this.read.problem ??= 'cut-short';
+  /** At the end: damaged, cut short (no end line), or whole. */
+  problem(): DataFileProblem | null {
+    if (this.bad > 0 || (this.endCount !== null && this.endCount !== this.records + this.bad)) return 'damaged';
+    return this.endCount === null ? 'cut-short' : null;
   }
+}
+
+/**
+ * A file's records, read as its bytes come, so no file is ever in memory
+ * whole (an import takes files up to 2 GB): `push` the bytes after the header
+ * in pieces of any size, then `end`. Never throws.
+ */
+export interface DataRecordStream {
+  /** The next bytes: the records whole in them so far. */
+  push(bytes: Uint8Array): DataRecord[];
+  /** The file has ended: the last records. `problem` then says whether it was whole. */
+  end(): DataRecord[];
+  readonly problem: DataFileProblem | null;
+}
+
+/** A plain file's lines, a line at a time. A line past MAX_LINE is passed over to its end, and counts as damage. */
+class PlainStream implements DataRecordStream {
+  private readonly decoder = new TextDecoder('utf-8');
+  private readonly lines = new Lines();
+  private pending: Uint8Array[] = [];
+  private pendingSize = 0;
+  private skipping = false;
+  private total = 0;
+  private over = false;
+  problem: DataFileProblem | null = null;
+
+  push(bytes: Uint8Array): DataRecord[] {
+    const out: DataRecord[] = [];
+    if (this.over) return out;
+    if ((this.total += bytes.length) > MAX_TOTAL) {
+      this.over = true;
+      return out;
+    }
+    for (let at = 0; at < bytes.length; ) {
+      const next = bytes.indexOf(0x0a, at);
+      const end = next < 0 ? bytes.length : next;
+      if (!this.skipping && this.pendingSize + end - at > MAX_LINE) {
+        this.skipping = true;
+        this.lines.refuse();
+        this.pending = [];
+        this.pendingSize = 0;
+      }
+      if (!this.skipping) {
+        // A line's first part is copied until its end comes: the caller may reuse its buffer.
+        if (next < 0) {
+          this.pending.push(copyOf(bytes.subarray(at, end)));
+          this.pendingSize += end - at;
+        } else this.lines.line(this.take(bytes.subarray(at, end)), out);
+      }
+      if (next < 0) break;
+      this.skipping = false;
+      at = next + 1;
+    }
+    return out;
+  }
+
+  /** A whole line: what was pending, then its last part. */
+  private take(last: Uint8Array): string {
+    if (this.pendingSize === 0) return this.decoder.decode(last);
+    const whole = concat([...this.pending, last]);
+    this.pending = [];
+    this.pendingSize = 0;
+    return this.decoder.decode(whole);
+  }
+
+  end(): DataRecord[] {
+    const out: DataRecord[] = [];
+    if (!this.over && !this.skipping && this.pendingSize > 0) this.lines.line(this.take(new Uint8Array(0)), out);
+    this.problem = this.over ? 'damaged' : this.lines.problem();
+    return out;
+  }
+}
+
+/**
+ * An encrypted file's frames, each opened and inflated once it's whole. A
+ * frame that fails its check is passed over (each stands alone), so the rest
+ * can still be read; frames swapped or dropped fail from there on, by index.
+ */
+class FrameStream implements DataRecordStream {
+  private readonly decoder = new TextDecoder('utf-8');
+  private readonly lines = new Lines();
+  private buffer: Uint8Array[] = [];
+  private size = 0;
+  private index = 0;
+  private last = false;
+  private damaged = false;
+  private stopped = false;
+  private total = 0;
+  problem: DataFileProblem | null = null;
+
+  constructor(
+    private readonly c: DataCrypto,
+    private readonly key: Uint8Array,
+    private readonly headerHash: Uint8Array,
+  ) {}
+
+  /** The first `n` buffered bytes, in one piece, taken out of the buffer. */
+  private take(n: number): Uint8Array {
+    const first = this.buffer[0]!;
+    this.size -= n;
+    if (first.length >= n) {
+      if (first.length === n) this.buffer.shift();
+      else this.buffer[0] = first.subarray(n);
+      return first.subarray(0, n);
+    }
+    const out = new Uint8Array(n);
+    for (let at = 0; at < n; ) {
+      const part = this.buffer[0]!;
+      const used = Math.min(part.length, n - at);
+      out.set(part.subarray(0, used), at);
+      at += used;
+      if (used === part.length) this.buffer.shift();
+      else this.buffer[0] = part.subarray(used);
+    }
+    return out;
+  }
+
+  /** The next frame's length, from its first 4 bytes, left where they are. */
+  private nextLength(): number {
+    const head = this.buffer[0]!.length >= 4 ? this.buffer[0]! : concat(this.buffer).subarray(0, 4);
+    return new DataView(head.buffer, head.byteOffset, 4).getUint32(0);
+  }
+
+  push(bytes: Uint8Array): DataRecord[] {
+    const out: DataRecord[] = [];
+    if (this.stopped || bytes.length === 0) return out;
+    // Copied: the caller may reuse its buffer, and a frame can span several pieces.
+    this.buffer.push(copyOf(bytes));
+    this.size += bytes.length;
+    while (this.size > 0 && !this.stopped) {
+      if (this.last) {
+        // Bytes after the last frame are damage.
+        this.damaged = this.stopped = true;
+        break;
+      }
+      if (this.size < 4) break;
+      const length = this.nextLength();
+      if (length < NONCE + TAG || length > MAX_FRAME) {
+        // The frames can't be told apart past here.
+        this.damaged = this.stopped = true;
+        break;
+      }
+      if (this.size < 4 + length) break;
+      const frame = this.take(4 + length);
+      this.open(frame.subarray(4, 4 + NONCE), frame.subarray(4 + NONCE), out);
+    }
+    if (this.stopped) {
+      this.buffer = [];
+      this.size = 0;
+    }
+    return out;
+  }
+
+  private open(nonce: Uint8Array, body: Uint8Array, out: DataRecord[]): void {
+    let plain = this.c.open(this.key, nonce, body, frameAad(this.headerHash, this.index, false));
+    if (!plain) {
+      plain = this.c.open(this.key, nonce, body, frameAad(this.headerHash, this.index, true));
+      this.last = Boolean(plain);
+    }
+    this.index++;
+    const inflated = plain && this.c.inflate(plain, MAX_INFLATED);
+    // A frame that fails its check is passed over: the frames around it can still be read, a whole line each.
+    if (!inflated) {
+      this.damaged = true;
+      return;
+    }
+    if ((this.total += inflated.length) > MAX_TOTAL) {
+      this.damaged = this.stopped = true;
+      return;
+    }
+    for (const text of this.decoder.decode(inflated).split('\n')) this.lines.line(text, out);
+  }
+
+  end(): DataRecord[] {
+    // A frame begun but not whole, or a few bytes too few for its length: the file was cut off.
+    const cut = !this.stopped && this.size > 0;
+    const lines = this.lines.problem();
+    this.problem = this.damaged || lines === 'damaged' ? 'damaged' : lines === 'cut-short' || cut || !this.last ? 'cut-short' : null;
+    return [];
+  }
+}
+
+/**
+ * A file opened: its header, whether it's encrypted, and either why it can't
+ * be read at all or a way to read its records. An encrypted file's key is
+ * made once and kept until `close`, so the file can be read through more than
+ * once (an import counts it, then brings it in) without scrypt again.
+ */
+export interface DataFileOpen {
+  header: DataHeader | null;
+  encrypted: boolean;
+  /** Why none of its records can be read; `records` gives null then. */
+  problem: DataFileProblem | null;
+  /** Where its records start: the bytes from here on go to a stream's `push`. */
+  start: number;
+  /** A new reader of its records, from `start`. */
+  records(): DataRecordStream | null;
+  /** Forget the key. */
+  close(): void;
 }
 
 /** Whether a key derivation is one this Chord makes keys with, within what it takes (scrypt itself needs N < 2^(16·r)). */
@@ -377,123 +584,85 @@ function usableKdf(kdf: unknown): kdf is DataKdf {
   return N >= 2 ** 10 && (N & (N - 1)) === 0 && r >= 1 && r <= 32 && N < 2 ** (16 * r) && p >= 1 && p <= 4 && 128 * N * r <= MAX_SCRYPT_MEMORY;
 }
 
+const unopened = (problem: DataFileProblem, encrypted: boolean, header: DataHeader | null = null): DataFileOpen => ({
+  header,
+  encrypted,
+  problem,
+  start: 0,
+  records: () => null,
+  close: () => undefined,
+});
+
 /**
- * A whole file, plain or encrypted (by its first line, never its name). With
- * the right passphrase an encrypted file reads exactly as the plain one would.
- * Never throws: what can't be read is a problem, with what could be.
+ * Open a file, plain or encrypted (by its first line, never its name), from
+ * its first DATA_HEAD bytes (`head`, the whole file if it's shorter) and its
+ * size. With the right passphrase an encrypted file reads exactly as the plain
+ * one would. Never throws: what can't be read is a problem.
  */
-export async function readDataFile(bytes: Uint8Array, passphrase: string | null, c: DataCrypto): Promise<DataFileRead> {
+export async function openDataFile(head: Uint8Array, size: number, passphrase: string | null, c: DataCrypto): Promise<DataFileOpen> {
   const decoder = new TextDecoder('utf-8');
-  const firstBreak = bytes.indexOf(0x0a);
-  const first = decoder.decode(bytes.subarray(0, firstBreak < 0 ? Math.min(bytes.length, 64 * 1024) : Math.min(firstBreak, 64 * 1024)));
+  const firstBreak = head.indexOf(0x0a);
+  const first = decoder.decode(head.subarray(0, firstBreak < 0 ? Math.min(head.length, MAX_HEADER) : Math.min(firstBreak, MAX_HEADER)));
   const magic = /^chord-encrypted (\d{1,6})$/.exec(first);
   if (!magic) {
     let raw: unknown;
     try {
       raw = JSON.parse(first);
     } catch {
-      return failed('not-chord', false);
+      return unopened('not-chord', false);
     }
     const header = parseHeader(raw);
-    if (!header) return failed('not-chord', false);
-    if (header.format > DATA_FORMAT) return failed('newer', false, header);
-    const read: DataFileRead = { header, encrypted: false, records: [], problem: null };
-    if (bytes.length > MAX_TOTAL) return { ...read, problem: 'damaged' };
-    const lines = new LineReader(read);
-    // A line at a time, so no string is ever the whole file.
-    for (let at = firstBreak < 0 ? bytes.length : firstBreak + 1; at < bytes.length; ) {
-      const next = bytes.indexOf(0x0a, at);
-      const end = next < 0 ? bytes.length : next;
-      if (end - at > MAX_LINE) lines.refuse();
-      else lines.line(decoder.decode(bytes.subarray(at, end)));
-      at = end + 1;
-    }
-    lines.finish();
-    return read;
+    if (!header) return unopened('not-chord', false);
+    if (header.format > DATA_FORMAT) return unopened('newer', false, header);
+    return { header, encrypted: false, problem: null, start: firstBreak < 0 ? size : firstBreak + 1, records: () => new PlainStream(), close: () => undefined };
   }
 
   const envelope = Number(magic[1]);
-  if (envelope !== ENVELOPE_VERSION) return failed(envelope > ENVELOPE_VERSION ? 'newer' : 'not-chord', true);
-  const headerEnd = bytes.indexOf(0x0a, firstBreak + 1);
-  if (headerEnd < 0 || headerEnd - firstBreak > 64 * 1024) return failed(headerEnd < 0 ? 'cut-short' : 'damaged', true);
-  const headerBytes = bytes.subarray(firstBreak + 1, headerEnd);
+  if (envelope !== ENVELOPE_VERSION) return unopened(envelope > ENVELOPE_VERSION ? 'newer' : 'not-chord', true);
+  const headerEnd = head.indexOf(0x0a, firstBreak + 1);
+  // No end to the header in the whole file is a file cut short; none within 64 KB, a damaged one.
+  if (headerEnd < 0 || headerEnd - firstBreak > MAX_HEADER) return unopened(headerEnd < 0 && head.length >= size ? 'cut-short' : 'damaged', true);
+  const headerBytes = copyOf(head.subarray(firstBreak + 1, headerEnd));
   let raw: Record<string, unknown>;
   try {
     raw = JSON.parse(decoder.decode(headerBytes)) as Record<string, unknown>;
   } catch {
-    return failed('damaged', true);
+    return unopened('damaged', true);
   }
   const header = parseHeader(raw);
-  if (!header) return failed('damaged', true);
-  if (header.format > DATA_FORMAT || !usableKdf(raw['kdf'])) return failed('newer', true, header);
+  if (!header) return unopened('damaged', true);
+  if (header.format > DATA_FORMAT || !usableKdf(raw['kdf'])) return unopened('newer', true, header);
   const kdfSalt = fromBase64(raw['kdf'].salt);
   const fileSalt = fromBase64(raw['salt']);
   const check = fromBase64(raw['check']);
-  if (!kdfSalt || kdfSalt.length < 16 || !fileSalt || fileSalt.length < 16 || !check || check.length !== NONCE + CHECK_WORD.length + TAG) return failed('damaged', true, header);
-  if (passphrase === null) return failed('needs-passphrase', true, header);
+  if (!kdfSalt || kdfSalt.length < 16 || !fileSalt || fileSalt.length < 16 || !check || check.length !== NONCE + CHECK_WORD.length + TAG) return unopened('damaged', true, header);
+  if (passphrase === null) return unopened('needs-passphrase', true, header);
 
   let root: Uint8Array;
   try {
     root = await rootKey(c, passphrase, raw['kdf'], kdfSalt);
   } catch {
     // Parameters this crypto library won't run: a newer Chord's, as far as this one can tell.
-    return failed('newer', true, header);
+    return unopened('newer', true, header);
   }
   const word = c.open(checkKey(c, root, kdfSalt), check.subarray(0, NONCE), check.subarray(NONCE), new Uint8Array(0));
-  if (!word || decoder.decode(word) !== CHECK_WORD) return failed('wrong-passphrase', true, header);
+  if (!word || decoder.decode(word) !== CHECK_WORD) return unopened('wrong-passphrase', true, header);
   const key = fileKey(c, root, fileSalt);
   root.fill(0);
-
   const headerHash = c.sha256(headerBytes);
-  const read: DataFileRead = { header, encrypted: true, records: [], problem: null };
-  const lines = new LineReader(read);
-  let at = headerEnd + 1;
-  let index = 0;
-  let last = false;
-  let damaged = false;
-  let total = 0;
-  while (at < bytes.length) {
-    if (last || bytes.length - at < 4) {
-      // Bytes after the last frame are damage; a few too few for a length, a frame cut off.
-      damaged ||= last;
-      if (!last) read.problem = 'cut-short';
-      break;
-    }
-    const length = new DataView(bytes.buffer, bytes.byteOffset + at, 4).getUint32(0);
-    if (length < NONCE + TAG || length > MAX_FRAME) {
-      // The frames can't be told apart past here.
-      damaged = true;
-      break;
-    }
-    if (at + 4 + length > bytes.length) {
-      read.problem = 'cut-short';
-      break;
-    }
-    const nonce = bytes.subarray(at + 4, at + 4 + NONCE);
-    const body = bytes.subarray(at + 4 + NONCE, at + 4 + length);
-    at += 4 + length;
-    let plain = c.open(key, nonce, body, frameAad(headerHash, index, false));
-    if (!plain) {
-      plain = c.open(key, nonce, body, frameAad(headerHash, index, true));
-      last = Boolean(plain);
-    }
-    index++;
-    const inflated = plain && c.inflate(plain, MAX_INFLATED);
-    // A frame that fails its check is passed over: the frames around it can still be read, a whole line each.
-    if (!inflated) {
-      damaged = true;
-      continue;
-    }
-    total += inflated.length;
-    if (total > MAX_TOTAL) {
-      damaged = true;
-      break;
-    }
-    for (const text of decoder.decode(inflated).split('\n')) lines.line(text);
-  }
-  key.fill(0);
-  lines.finish();
-  if (damaged) read.problem = 'damaged';
-  else if (!last) read.problem ??= 'cut-short';
-  return read;
+  return { header, encrypted: true, problem: null, start: headerEnd + 1, records: () => new FrameStream(c, key, headerHash), close: () => key.fill(0) };
+}
+
+/**
+ * A whole file in memory, plain or encrypted: `openDataFile` and one stream,
+ * at once. Never throws: what can't be read is a problem, with what could be.
+ */
+export async function readDataFile(bytes: Uint8Array, passphrase: string | null, c: DataCrypto): Promise<DataFileRead> {
+  const opened = await openDataFile(bytes.subarray(0, DATA_HEAD), bytes.length, passphrase, c);
+  const stream = opened.records();
+  if (!stream) return { header: opened.header, encrypted: opened.encrypted, records: [], problem: opened.problem };
+  const records = stream.push(bytes.subarray(opened.start));
+  for (const record of stream.end()) records.push(record);
+  opened.close();
+  return { header: opened.header, encrypted: opened.encrypted, records, problem: stream.problem };
 }

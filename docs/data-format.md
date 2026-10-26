@@ -29,7 +29,7 @@ UTF-8 [JSON Lines](https://jsonlines.org): one JSON value per line, each line en
 
 3. **The end**, the last line: `{"end":<the number of records>}`. A file without it, or with a different count, was cut off or changed. A reader takes any object with a whole-number `end` and no `type` as the end line, since a later Chord may add to it.
 
-**Limits.** No line is longer than 32 MiB of UTF-8: Chord leaves out a record that would be (a huge image, say) and says so, and refuses a longer line when it reads. A whole file holds at most 2 GiB of lines.
+**Limits.** No line is longer than 32 MiB of UTF-8: Chord leaves out a record that would be (a huge image, say) and says so, and refuses a longer line when it reads. A whole file holds at most 2 GiB of lines. Chord reads a file as it comes, a line (or a frame) at a time, never whole.
 
 ## Records
 
@@ -161,6 +161,17 @@ def decrypt(data: bytes, passphrase: str) -> bytes:
 
 sys.stdout.buffer.write(decrypt(open(sys.argv[1], "rb").read(), sys.argv[2]))
 ```
+
+## What Chord does with a file it imports
+
+Settings → Your data → *From a Chord file* brings a file back. What Chord does with one, so a file you write by hand does what you expect:
+
+- **Field by field, the newer stamp wins** over the same field here (each row's `updated_at` stands in for Chord's own stamps). A value equal to Chord's changes nothing. Into a profile with nothing but its first chord, every field of the file wins, and that chord makes way for the file's.
+- **Nothing is deleted.** A thing whose newest `deleted` is `true` is passed over: it neither comes in nor goes. Something deleted here comes back if the file has it.
+- **Matches merge:** a `favorite` at an address Chord has is that Favorite; `route`, `effects`, `zoom` and `permission` by their ids, a site or an origin.
+- **Permissions:** only `block`. **Settings**, and a chord's own `proxy`, only when you turn on *Settings from the file*. **A chord Chord has keeps its sign-ins** (`profile`).
+- **`page`:** a visit Chord has (the same address at the same millisecond) isn't added again; `typed` takes the larger count. **`thread`, `message`:** added by id, never replaced; a chat comes with no session, reads no more than a new chat would, and its turns go to Claude Code or Codex only as data, never as instructions. **`image`:** only if its bytes are the PNG, JPEG or WebP its `mime` says.
+- Every record is checked as Chord checks its own saved data. One that doesn't read, or points at a chord or folder that isn't there, is left out or put at its section's root.
 
 ## Versions
 

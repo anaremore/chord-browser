@@ -1,9 +1,10 @@
 /**
  * Settings → Your data (docs/decisions/S15-your-data.md §8; DESIGN.md §8.8):
  * everything in Chord in one file you can keep, read or bring to another
- * computer, and what comes in, from another browser now and from a Chord
- * file next. Main asks where to save with the system's dialog and a process
- * of its own writes the file; this page only says how it's going.
+ * computer, and what comes in: a Chord file (ChordFile.tsx), or another
+ * browser's bookmarks and history. Main asks where to save with the system's
+ * dialog and a process of its own writes the file; this page only says how
+ * it's going.
  */
 import { passphraseProblem, suggestPassphrase, type ExportCounts } from '@chord/core';
 import type { ExportProgress, SettingsSnapshot, SystemInfo } from '@chord/ipc';
@@ -11,6 +12,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { plural, ProblemCard, ProgressLine } from '../shared/ImportPanel';
 import { api } from './api';
 import { Row, SectionHeader, Switch } from './controls';
+import { FromChordFile } from './ChordFile';
 import { FromAnotherBrowser } from './Import';
 import styles from './Settings.module.css';
 import local from './YourData.module.css';
@@ -228,17 +230,14 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
   );
 }
 
-export function YourDataSection({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
+export function YourDataSection({ snapshot, info, onUpdates }: { snapshot: SettingsSnapshot; info: SystemInfo; onUpdates(): void }) {
   return (
     <>
       <SectionHeader title="Your data" description="Take everything in Chord with you in one file, or bring in what you had in another browser." />
       <h2 className={styles.groupTitle}>Export</h2>
       <Export snapshot={snapshot} />
       <h2 className={styles.groupTitle}>Import</h2>
-      <div className={styles.group}>
-        {/* Bringing back a Chord file is S15's step 2 (Import): its row gets "Choose a file…" then. */}
-        <Row label="From a Chord file" description="Coming in a later version: bring back an export, here or on another computer." control={null} />
-      </div>
+      <FromChordFile onUpdates={onUpdates} />
       <FromAnotherBrowser snapshot={snapshot} info={info} />
     </>
   );

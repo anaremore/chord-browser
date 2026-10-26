@@ -30,6 +30,7 @@ import { opsForState } from '../src';
 import { sha256Hex } from '../src/crypto';
 import { ChordDatabase } from '../src/db';
 import { exportCounts, exportRecords, type ExportItem, type ExportOptions } from '../src/export';
+import { chatsHere, localRecords, pagesHere } from '../src/import-file';
 
 let dir: string;
 let file: string;
@@ -276,5 +277,25 @@ describe('an export', () => {
     expect(exportCounts((text) => ro.prepare(text))).toEqual(db.exportCounts());
     ro.close();
     db.close();
+  });
+});
+
+describe('an import’s view of what’s here (import-file.ts)', () => {
+  it('reads this computer’s setup as an export would, and which pages and chats are here, over a read-only connection', () => {
+    const { db } = seeded();
+    db.close();
+    const ro = new DatabaseSync(file, { readOnly: true });
+    try {
+      const sql = (text: string) => ro.prepare(text);
+      const records = localRecords(sql, { device: DEVICE, platform: 'linux', sha256: sha256Hex });
+      // Setup, Today tabs and their icons, stamped; never history or chats, which an import only adds to.
+      expect(new Set(records.map((r) => r.type))).toEqual(new Set(['chord', 'folder', 'tab', 'favorite', 'theme', 'settings', 'route', 'effects', 'zoom', 'permission', 'icon']));
+      expect(records.filter((r) => r.type !== 'icon').every((r) => r.at?.[2] === DEVICE)).toBe(true);
+      const here = pagesHere(sql);
+      expect([here('https://news.test/a'), here('https://www.news.test/a'), here('https://news.test/c'), here('javascript:alert(1)')]).toEqual([true, true, false, false]);
+      expect(chatsHere(sql)).toEqual(new Set(['th']));
+    } finally {
+      ro.close();
+    }
   });
 });

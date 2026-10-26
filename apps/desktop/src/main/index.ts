@@ -34,6 +34,7 @@ import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { Exporter } from './export';
 import { APP_ID, configureAppIdentity, inFlatpak } from './identity';
 import { Importer } from './import';
+import { FileImporter } from './import-file';
 import { handle, send } from './ipc';
 import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
@@ -94,6 +95,7 @@ let persistence: Persistence | undefined;
 let duet: DuetService | undefined;
 let importer: Importer | undefined;
 let exporter: Exporter | undefined;
+let fileImporter: FileImporter | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
@@ -257,8 +259,8 @@ function registerIpc(): void {
   handle('state:snapshot', (_request, sender) => ({ windowId: senderWindow(sender).id, state: browser!.store.state }));
   handle('cmd:dispatch', (command, sender) => {
     const w = senderWindow(sender);
-    // An import's toast: its history goes too, and a running import stops first.
-    if (command.t === 'import.undo') return importer!.undo(command.importId);
+    // An import's toast: its history goes too, and a running import stops first. A Chord file's takes back all it changed.
+    if (command.t === 'import.undo') return fileImporter?.owns(command.importId) ? fileImporter.undo(command.importId) : importer!.undo(command.importId);
     // A toast's Undo for Effects: they live in main, not in the store.
     if (command.t === 'effects.undo') return browser!.effects.undo(command.token);
     // A toast's Undo for a form Duet filled: the page puts back what it had (main/duet).
@@ -481,6 +483,15 @@ function registerIpc(): void {
   handle('export:counts', () => exporter!.counts());
   handle('export:run', (request, sender) => exporter!.run(browser!.settingsWindowOf(sender), request, (progress) => send(sender, 'export:progress', progress)));
   handle('export:show', ({ exportId }) => exporter!.show(exportId));
+  // Your data: from a Chord file. The open dialog belongs to the Settings window; it lands in the last normal window, never a private one.
+  handle('importFile:choose', (_request, sender) => fileImporter!.choose(browser!.settingsWindowOf(sender)));
+  handle('importFile:open', ({ fileId, passphrase }) => fileImporter!.open(fileId, passphrase));
+  handle('importFile:run', ({ fileId, choices }, sender) => {
+    const w = importWindow(sender);
+    if (!w || w.isPrivate) return { ok: false, problem: 'missing' };
+    return fileImporter!.run(fileId, choices, w.id, (progress) => send(sender, 'importFile:progress', progress));
+  });
+  handle('importFile:undo', ({ importId }) => fileImporter!.undo(importId));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -533,7 +544,7 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     flushed = true;
     // An import stops, and its copies of another browser's files go; an export stops, and its unfinished file goes (at most 2 s, like the rest).
-    const imports = Promise.race([Promise.all([importer?.quit(), exporter?.quit()]).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
+    const imports = Promise.race([Promise.all([importer?.quit(), exporter?.quit(), fileImporter?.quit()]).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
     // Duet first: replies in flight are kept as interrupted, and provider processes end. Ad blocking
     // finishes a change under way (no control page may be open as Electron tears down) and ends its workers.
     // Chord Player quits by itself once Chord's channel closes: nothing to wait for.
@@ -873,6 +884,20 @@ if (!app.requestSingleInstanceLock()) {
       platform,
       folder: () => app.getPath('documents'),
       data: { flush: () => store.flush(), device: () => store.device(), counts: () => store.exportCounts() },
+    });
+    // Your data's import from a Chord file (S15 §5, §7): a process of its own reads and checks the file.
+    fileImporter = new FileImporter({
+      workerPath: join(import.meta.dirname, 'import-file.js'),
+      database: join(app.getPath('userData'), 'chord.db'),
+      images: join(app.getPath('userData'), 'duet', 'images'),
+      platform,
+      folder: () => app.getPath('documents'),
+      state: () => browser!.store.state,
+      dispatch: (command) => browser!.store.dispatch(command),
+      data: { flush: () => store.flush(), device: () => store.device(), port: (importId) => store.importPort(importId), undo: (importId) => store.undoImport(importId) },
+      effects: { importSites: (importId, sites) => browser!.effects.importSites(importId, sites), undoImport: (importId) => browser!.effects.undoImport(importId) },
+      duet: () => duet,
+      toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
     });
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's

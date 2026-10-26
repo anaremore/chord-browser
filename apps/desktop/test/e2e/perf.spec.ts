@@ -56,7 +56,7 @@ interface Check {
 }
 
 interface Row {
-  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view' | 'memory' | 'export';
+  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view' | 'memory' | 'export' | 'import';
   name: string;
   scenario: string;
   motion: 'on' | 'off' | null;
@@ -1198,6 +1198,48 @@ async function mainLoad(app: ElectronApplication, run: () => Promise<void>): Pro
 }
 
 /**
+ * Typing in the command bar while Your data's work runs (an export, an
+ * import): `typing` types EXPORT_TYPING with the command bar open while
+ * `during` runs (until it's told typing is done), records the keystrokes, and
+ * says what main did meanwhile, read from the same trace.
+ */
+async function typingSession(app: ElectronApplication, shell: Page, overlay: Page) {
+  const renderers = await app.evaluate(({ webContents }) =>
+    webContents
+      .getAllWebContents()
+      .map((c) => ({ pid: c.getOSProcessId(), name: /shell/.test(c.getURL()) ? 'shell' : /overlay/.test(c.getURL()) ? 'command bar' : '' }))
+      .filter((r) => r.name),
+  );
+  const cdp = await shell.context().newCDPSession(shell);
+  const s: Session = { app, shell, overlay, cdp, renderers, scenario: '50,000 visits', motion: 'on' };
+  const typing = async (when: string, during?: (typed: () => boolean) => Promise<void>) => {
+    await openCommandBar(shell, overlay);
+    await takeMeasures(overlay, 'chord:keystroke');
+    await takeMeasures(overlay, 'chord:keystroke-history');
+    const locked = screenLocked();
+    let typed = false;
+    const act = async () => void (await Promise.all([during?.(() => typed), typeSlowly(overlay, EXPORT_TYPING).then(() => (typed = true))]));
+    // Main's own work, from the same trace: its longest task, what was in it, and its busiest 30 ms.
+    let task = NaN;
+    let inside: string[] = [];
+    let busiest = { ms: NaN, tasks: [] as number[] };
+    const main = await mainLoad(app, () =>
+      interaction(s, `Type in the command bar, ${when}`, [{ act }], (events) => {
+        const pid = browserPid(events);
+        if (pid === undefined) return;
+        task = longestTask(events, pid, 'CrBrowserMain').ms;
+        inside = insideLongestTask(events, pid, 'CrBrowserMain');
+        busiest = busiestWindow(events, pid, 'CrBrowserMain', 30);
+      }),
+    );
+    await recordTyping(s, when, locked);
+    await closeCommandBar(overlay);
+    return { ...main, task, inside, busiest, locked };
+  };
+  return { s, typing };
+}
+
+/**
  * Exporting 50,000 visits while typing in the command bar (S15 §7), exports
  * one after another so every keystroke lands during one: the export reads the
  * database in a process of its own, so the keystroke budgets hold (history's
@@ -1227,39 +1269,7 @@ test('export: 50,000 visits while typing in the command bar', async () => {
     await bringToFront(app, shell);
     await setMotion(app, shell, overlay, true);
     environment ??= await readEnvironment(app, shell);
-    const renderers = await app.evaluate(({ webContents }) =>
-      webContents
-        .getAllWebContents()
-        .map((c) => ({ pid: c.getOSProcessId(), name: /shell/.test(c.getURL()) ? 'shell' : /overlay/.test(c.getURL()) ? 'command bar' : '' }))
-        .filter((r) => r.name),
-    );
-    const cdp = await shell.context().newCDPSession(shell);
-    const s: Session = { app, shell, overlay, cdp, renderers, scenario: '50,000 visits', motion: 'on' };
-    /** Types EXPORT_TYPING with the command bar open, while `during` runs (until it's told typing is done). */
-    const typing = async (when: string, during?: (typed: () => boolean) => Promise<void>) => {
-      await openCommandBar(shell, overlay);
-      await takeMeasures(overlay, 'chord:keystroke');
-      await takeMeasures(overlay, 'chord:keystroke-history');
-      const locked = screenLocked();
-      let typed = false;
-      const act = async () => void (await Promise.all([during?.(() => typed), typeSlowly(overlay, EXPORT_TYPING).then(() => (typed = true))]));
-      // Main's own work, from the same trace: its longest task, what was in it, and its busiest 30 ms.
-      let task = NaN;
-      let inside: string[] = [];
-      let busiest = { ms: NaN, tasks: [] as number[] };
-      const main = await mainLoad(app, () =>
-        interaction(s, `Type in the command bar, ${when}`, [{ act }], (events) => {
-          const pid = browserPid(events);
-          if (pid === undefined) return;
-          task = longestTask(events, pid, 'CrBrowserMain').ms;
-          inside = insideLongestTask(events, pid, 'CrBrowserMain');
-          busiest = busiestWindow(events, pid, 'CrBrowserMain', 30);
-        }),
-      );
-      await recordTyping(s, when, locked);
-      await closeCommandBar(overlay);
-      return { ...main, task, inside, busiest, locked };
-    };
+    const { s, typing } = await typingSession(app, shell, overlay);
     /** One export, from Settings' button as a click would: its wall time there, to *Saved*, and its size. */
     const exportOnce = () =>
       settings.evaluate(
@@ -1346,3 +1356,174 @@ test('export: 50,000 visits while typing in the command bar', async () => {
     await app.close();
   }
 });
+
+/* ---------- Your data's import ---------- */
+
+/** One import from Settings' API, as its buttons do: the file read and counted, imported, then undone. */
+interface ImportRun {
+  phase: string;
+  readMs: number;
+  importMs: number;
+  undoMs: number;
+  pages: number;
+}
+
+/** S15's profile, each launch a fresh one: 50,000 visits on 15,000 pages and a sidebar's worth of Today tabs. */
+const SEEDED = { CHORD_PERF_TABS: String(EXPORT.tabs), CHORD_PERF_VISITS: String(EXPORT.visits), CHORD_PERF_PAGES: String(EXPORT.pages) };
+
+/** Settings → Your data, once every seeded visit is written (the Export card counts them). */
+async function yourData(app: ElectronApplication): Promise<{ shell: Page; settings: Page }> {
+  const shell = await pageWhere(app, isShell);
+  await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
+  const settings = await pageWhere(app, isSettings);
+  await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Your data' }).click();
+  await settings.getByRole('button', { name: 'Export…' }).click();
+  await expect(settings.getByText('15,001 pages', { exact: true })).toBeVisible({ timeout: 60_000 });
+  return { shell, settings };
+}
+
+/** The file the import checks bring in: S15's profile, exported once. */
+let importFile: Promise<string> | null = null;
+const fileToImport = () => (importFile ??= exportForImport());
+async function exportForImport(): Promise<string> {
+  const file = join(mkdtempSync(join(tmpdir(), 'chord-perf-import-')), 'import.jsonl');
+  const from = await launch(SEEDED);
+  try {
+    const { settings } = await yourData(from);
+    await from.evaluate(({ dialog }, path) => {
+      dialog.showSaveDialog = (async () => ({ canceled: false, filePath: path })) as typeof dialog.showSaveDialog;
+    }, file);
+    await settings.getByRole('button', { name: 'Choose where to save…' }).click();
+    await expect(settings.getByText(/^Saved import\.jsonl, /)).toBeVisible({ timeout: 60_000 });
+    return file;
+  } finally {
+    await from.close();
+  }
+}
+
+/**
+ * Importing a Chord file of 50,000 visits on 15,000 pages while typing in the
+ * command bar (S15 §7, §9): S15's profile exported, then imported into another
+ * with the same pages visited at other times, so every page is weighed against
+ * its own visits; each import is undone and the next begins, so every
+ * keystroke lands during one (reading, setup, history or Undo). Into a profile
+ * with data (something pinned), and into a new one, where the file's chord
+ * takes the first-run chord's place and the window goes to it (a restore). The
+ * import process reads and plans; history goes to chord-data in batches that
+ * fit between two keystrokes' searches, and Undo gives it back in slices; main
+ * applies setup a part at a time. The keystroke budgets hold, the shell's and
+ * command bar's frames stay in budget, and main's own work, read from the same
+ * trace, stays under a frame.
+ */
+for (const into of ['a profile with data', 'a new profile'] as const) {
+  test(`import: 50,000 visits into ${into} while typing in the command bar`, async () => {
+    test.setTimeout(400_000);
+    const file = await fileToImport();
+    cpuBusy = await measureCpuBusy();
+    // A new profile is first run's: one tab, but history enough to search as you type.
+    const app = await launch(into === 'a new profile' ? { ...SEEDED, CHORD_PERF_TABS: '0' } : SEEDED);
+    try {
+      const overlay = await pageWhere(app, isOverlay);
+      const { shell, settings } = await yourData(app);
+      if (into === 'a profile with data') {
+        // Something pinned: the profile keeps its chord, and the file's comes in beside it.
+        const tab = await shell.evaluate(async () => {
+          const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, { id: string; kind: string; section: string }> } }> } } }).chord.state.snapshot();
+          return Object.values(state.nodes).find((n) => n.kind === 'tab' && n.section === 'today')!.id;
+        });
+        await shell.evaluate((nodeId) => (window as unknown as { chord: { state: { dispatch(c: unknown): Promise<void> } } }).chord.state.dispatch({ t: 'tab.pin', nodeId }), tab);
+      }
+      await app.evaluate(({ dialog }, path) => {
+        dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog;
+      }, file);
+      await bringToFront(app, shell);
+      await setMotion(app, shell, overlay, true);
+      environment ??= await readEnvironment(app, shell);
+      const { s, typing } = await typingSession(app, shell, overlay);
+      const importOnce = () =>
+        settings.evaluate(async (): Promise<ImportRun> => {
+          type Progress = { importId: string; phase: string; counts: { pages: number } };
+          const api = (
+            window as unknown as {
+              chord: {
+                files: {
+                  choose(): Promise<{ ok: boolean; fileId?: string }>;
+                  open(fileId: string, passphrase: null): Promise<{ ok: boolean }>;
+                  run(fileId: string, choices: Record<string, boolean>): Promise<{ ok: boolean; importId?: string }>;
+                  undo(importId: string): Promise<void>;
+                  onProgress(listener: (p: Progress) => void): () => void;
+                };
+              };
+            }
+          ).chord.files;
+          const next = (phases: string[]) =>
+            new Promise<Progress>((resolve) => {
+              const off = api.onProgress((p) => {
+                if (!phases.includes(p.phase)) return;
+                off();
+                resolve(p);
+              });
+            });
+          const t0 = performance.now();
+          const chosen = await api.choose();
+          const opened = chosen.ok ? await api.open(chosen.fileId!, null) : { ok: false };
+          if (!opened.ok) return { phase: 'unread', readMs: 0, importMs: 0, undoMs: 0, pages: 0 };
+          const t1 = performance.now();
+          const finished = next(['done', 'failed']);
+          const run = await api.run(chosen.fileId!, { history: true, duet: true, effects: true, settings: false });
+          if (!run.ok) return { phase: 'refused', readMs: t1 - t0, importMs: 0, undoMs: 0, pages: 0 };
+          const done = await finished;
+          const t2 = performance.now();
+          const undone = next(['undone']);
+          await api.undo(run.importId!);
+          await undone;
+          return { phase: done.phase, readMs: t1 - t0, importMs: t2 - t1, undoMs: performance.now() - t2, pages: done.counts.pages };
+        });
+
+      // A first pass warms the command bar up; then typing alone, what main does without an import.
+      await openCommandBar(shell, overlay);
+      await typeSlowly(overlay, 'warm up');
+      await closeCommandBar(overlay);
+      const alone = await typing('before an import');
+      // Then the same words while imports run one after another, so every keystroke lands during one.
+      const runs: ImportRun[] = [];
+      const during = await typing('during imports', async (typed) => {
+        while (!typed()) runs.push(await importOnce());
+      });
+      expect(runs.length).toBeGreaterThan(0);
+      expect(runs.every((r) => r.phase === 'done')).toBe(true);
+      // Every page was here, visited at other times: each one's visits came in.
+      expect(runs.map((r) => r.pages)).toEqual(runs.map(() => EXPORT.pages + 1));
+      const imports = runs.map((r) => r.importMs);
+      record({
+        group: 'import',
+        name: `Import: 50,000 visits into ${into}`,
+        scenario: s.scenario,
+        motion: null,
+        locked: during.locked,
+        checks: [
+          // Main's own work while imports run, from the trace: no task past a frame, and room to spare in any 30 ms (rule 1).
+          check('main task', during.task, BUDGET.frameMs, { locked: during.locked }),
+          check('main busiest 30 ms', during.busiest.ms, BUDGET.frameMs, { locked: during.locked }),
+          check('wall time', median(imports), 10_000, { locked: during.locked }),
+        ],
+        detail: {
+          mainTaskMs: { alone: round(alone.task), during: round(during.task), inside: during.inside },
+          mainBusiest30Ms: { alone: alone.busiest, during: during.busiest },
+          // How late a 5 ms timer in main fired at worst: reported, not held, since it varies run to run (typing alone too).
+          mainLagMs: { alone: round(alone.lag), during: round(during.lag) },
+          // Main's process CPU time (every thread, IPC and launching processes included): what each import and its Undo cost it.
+          mainCpuMs: { alone: round(alone.cpuMs), during: round(during.cpuMs), perImport: round((during.cpuMs - alone.cpuMs * (during.wallMs / alone.wallMs)) / runs.length) },
+          imports: runs.length,
+          // Reading the file and counting it against what's here; importing (setup, then history); and its Undo.
+          readMs: { median: round(median(runs.map((r) => r.readMs))), worst: round(max(runs.map((r) => r.readMs))) },
+          importMs: { median: round(median(imports)), worst: round(max(imports)), runs: imports.map(round) },
+          undoMs: { median: round(median(runs.map((r) => r.undoMs))), worst: round(max(runs.map((r) => r.undoMs))) },
+          pages: runs[0]!.pages,
+        },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+}

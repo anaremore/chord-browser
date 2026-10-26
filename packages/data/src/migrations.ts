@@ -279,4 +279,10 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE link_route ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
   `,
+  // 18: Your data's import (docs/decisions/S15-your-data.md §5, §12). A Duet chat brought in from a Chord file is marked with
+  // when it came: its earlier turns reach a provider only as untrusted data, never in the instructions. NULL for a chat made
+  // here. Sync's tables, once 18, come with 19.
+  `
+  ALTER TABLE duet_thread ADD COLUMN imported_at INTEGER;
+  `,
 ];

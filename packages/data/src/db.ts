@@ -10,6 +10,7 @@ import {
   ARCHIVE_KEEP_MS,
   dayOf,
   decayOfVisits,
+  duetMessageText,
   foldChoiceText,
   frecencyOn,
   HALF_LIFE_DAYS,
@@ -26,6 +27,8 @@ import {
   type Chord,
   type Choice,
   type Download,
+  type DuetMessage,
+  type DuetThread,
   type ExportCounts,
   type Favorite,
   type ImportedPage,
@@ -38,7 +41,7 @@ import {
   type WindowModel,
 } from '@chord/core';
 import type { ArchiveEntry, ArchivePage, HistoryEvent, NavState, SearchResult, WriteOp } from './index';
-import { runDuet, type DuetOp, type DuetResult } from './duet';
+import { runDuet, threadOf, type DuetOp, type DuetResult } from './duet';
 import { exportCounts } from './export';
 import { MIGRATIONS } from './migrations';
 import { chordOf, favoriteOf, iconOf, nodeOf, nodeSelect, num, parseJson, siteEffectsOf, str, strOrNull, type Row } from './rows';
@@ -54,6 +57,11 @@ const ARCHIVE_SEARCH_LIMIT = 20;
 const CHOICE_LIFETIME_MS = 90 * 86_400_000;
 /** What's left of a page's frecency after an import's Undo, as a share of what it had, below which it's rounding. */
 const ROUNDING = 1e-9;
+/** History pages an import's Undo puts back per transaction: a few milliseconds' work, so searches get in between. */
+const UNDO_SLICE = 100;
+/** Pages of write-ahead log before SQLite checkpoints: its own default, and while an import writes (`importing`). */
+const DEFAULT_CHECKPOINT = 1000;
+const IMPORT_CHECKPOINT = 250;
 
 /** `data:` favicon URLs are stored once each, by content hash. */
 function splitDataUrl(url: string): { key: string; mime: string; data: Uint8Array } | null {
@@ -85,6 +93,8 @@ export class ChordDatabase {
   private readonly statements = new Map<string, StatementSync>();
   /** Imports undone this session: their late batches are ignored. */
   private readonly undoneImports = new Set<string>();
+  /** Imports writing now (their batches, or their Undo): while any is, checkpoints come smaller (`importing`). */
+  private writingImports = 0;
 
   constructor(readonly file: string) {
     this.db = new DatabaseSync(file);
@@ -457,13 +467,18 @@ export class ChordDatabase {
         last_visit_before INTEGER NOT NULL, title_before TEXT NOT NULL, title_set TEXT,
         PRIMARY KEY (import_id, url_id)
       ) STRICT;
+      CREATE TEMP TABLE IF NOT EXISTS import_thread (import_id TEXT NOT NULL, thread_id TEXT NOT NULL, PRIMARY KEY (import_id, thread_id)) STRICT;
+      CREATE TEMP TABLE IF NOT EXISTS import_message (import_id TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY (import_id, message_id)) STRICT;
     `);
   }
 
   /**
-   * One batch of another browser's history, all or nothing. Every visit is
-   * kept (as `import` visits) and counts toward frecency as if Chord had seen
-   * it; a page Chord knows keeps its own title. Returns the pages written.
+   * One batch of imported history, all or nothing: another browser's, or a
+   * Chord file's. Every visit is kept (as `import` visits) and counts toward
+   * frecency as if Chord had seen it, but a visit Chord has already (the same
+   * page at the same moment) isn't added again, so importing a file twice adds
+   * nothing (S15 §5). A page Chord knows keeps its own title. Returns the pages
+   * that gained visits.
    */
   importHistory(importId: string, pages: readonly ImportedPage[], now = Date.now()): number {
     // A batch still on its way when the import was undone stays out.
@@ -474,25 +489,34 @@ export class ChordDatabase {
       this.sql('INSERT OR IGNORE INTO import_batch (import_id, visit_floor, visit_ceiling) SELECT ?, COALESCE(MAX(id), 0), COALESCE(MAX(id), 0) FROM history_visit').run(importId);
       for (const page of pages) {
         const place = placeKey(page.url);
-        const visits = page.visits.filter((at) => Number.isFinite(at) && at > 0);
-        const typed = page.typed.filter((at) => Number.isFinite(at) && at > 0);
+        if (!place) continue;
+        const row = this.sql('SELECT id, title, typed_count, last_visit_at, decay_day FROM history_url WHERE profile_id = ? AND place = ?').get(DEFAULT_PROFILE, place) as Row | undefined;
+        const have = row ? new Set((this.sql('SELECT visited_at FROM history_visit WHERE url_id = ?').all(num(row['id'])) as Row[]).map((r) => num(r['visited_at']))) : null;
+        const fresh = (at: number) => Number.isFinite(at) && at > 0 && !have?.has(at);
+        const visits = page.visits.filter(fresh);
+        const typed = page.typed.filter(fresh);
+        // A count without times: the larger of the two counts, so what the file has of Chord's own isn't added again.
+        const typedAdded = page.typedCount === undefined ? typed.length : Math.max(0, Math.floor(page.typedCount) - (row ? num(row['typed_count']) : 0));
         const decay = decayOfVisits([...visits, ...typed], now);
-        if (!place || visits.length === 0 || decay === null) continue;
+        if (visits.length === 0 || decay === null) continue;
         const last = visits.reduce((a, b) => Math.max(a, b), 0);
-        const row = this.sql('SELECT id, title, last_visit_at, decay_day FROM history_url WHERE profile_id = ? AND place = ?').get(DEFAULT_PROFILE, place) as Row | undefined;
         let urlId: number;
         let created = false;
         if (row) {
           urlId = num(row['id']);
-          this.sql(
-            `UPDATE history_url SET visit_count = visit_count + ?, typed_count = typed_count + ?, last_visit_at = MAX(last_visit_at, ?),
-               decay_day = ?, title = CASE WHEN title = '' THEN ? ELSE title END
-             WHERE id = ?`,
-          ).run(visits.length, typed.length, last, addDecay(num(row['decay_day']), decay, now), page.title, urlId);
+          this.sql('UPDATE history_url SET visit_count = visit_count + ?, typed_count = typed_count + ?, last_visit_at = MAX(last_visit_at, ?), decay_day = ? WHERE id = ?').run(
+            visits.length,
+            typedAdded,
+            last,
+            addDecay(num(row['decay_day']), decay, now),
+            urlId,
+          );
+          // A page without a title takes the import's. Only then: setting the title, even to itself, rewrites its search entry.
+          if (!str(row['title']) && page.title) this.sql('UPDATE history_url SET title = ? WHERE id = ?').run(page.title, urlId);
         } else {
           const result = this.sql(
             `INSERT INTO history_url (profile_id, place, url, title, visit_count, typed_count, last_visit_at, decay_day) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          ).run(DEFAULT_PROFILE, place, page.url, page.title, visits.length, typed.length, last, decay);
+          ).run(DEFAULT_PROFILE, place, page.url, page.title, visits.length, typedAdded, last, decay);
           urlId = Number(result.lastInsertRowid);
           created = true;
         }
@@ -501,7 +525,7 @@ export class ChordDatabase {
         if (noted) {
           this.sql('UPDATE import_page SET visits = visits + ?, typed = typed + ?, decay = ? WHERE import_id = ? AND url_id = ?').run(
             visits.length,
-            typed.length,
+            typedAdded,
             addDecay(num(noted['decay']), decay, now),
             importId,
             urlId,
@@ -511,7 +535,7 @@ export class ChordDatabase {
           this.sql(
             `INSERT INTO import_page (import_id, url_id, created, visits, typed, decay, last_visit_before, title_before, title_set)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ).run(importId, urlId, created ? 1 : 0, visits.length, typed.length, decay, row ? num(row['last_visit_at']) : 0, titleBefore, row && !titleBefore && page.title ? page.title : null);
+          ).run(importId, urlId, created ? 1 : 0, visits.length, typedAdded, decay, row ? num(row['last_visit_at']) : 0, titleBefore, row && !titleBefore && page.title ? page.title : null);
         }
         for (const at of visits) this.sql(`INSERT INTO history_visit (url_id, visited_at, transition) VALUES (?, ?, 'import')`).run(urlId, at);
         added++;
@@ -522,20 +546,93 @@ export class ChordDatabase {
   }
 
   /**
+   * One batch of a Chord file's Duet chats (S15 §5), all or nothing: threads
+   * and messages are added by id, never replaced, so what's here stays as it
+   * is and a file imported twice adds nothing. A message goes only into a
+   * thread that's here. Each thread comes marked as imported, with no
+   * provider session: nothing is sent anywhere until you write in it. Returns
+   * the threads and the number of messages it added.
+   */
+  importDuet(importId: string, threads: readonly DuetThread[], messages: readonly DuetMessage[]): { threads: string[]; messages: number } {
+    const added = { threads: [] as string[], messages: 0 };
+    if (this.undoneImports.has(importId)) return added;
+    this.importTables();
+    this.transaction(() => {
+      for (const t of threads) {
+        const result = this.sql(
+          `INSERT INTO duet_thread (id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at, imported_at)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+        ).run(t.id, t.chordId, t.title, t.provider, t.model, t.scope, t.createdAt, t.updatedAt, t.lastUsedAt, t.importedAt ?? Date.now());
+        if (result.changes === 0) continue;
+        this.sql('INSERT OR IGNORE INTO import_thread (import_id, thread_id) VALUES (?, ?)').run(importId, t.id);
+        added.threads.push(t.id);
+      }
+      for (const m of messages) {
+        if (!this.sql('SELECT 1 FROM duet_thread WHERE id = ?').get(m.threadId)) continue;
+        const result = this.sql('INSERT INTO duet_message (id, thread_id, role, text, body, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING').run(
+          m.id,
+          m.threadId,
+          m.body.role,
+          duetMessageText(m.body),
+          JSON.stringify(m.body),
+          m.createdAt,
+        );
+        if (result.changes === 0) continue;
+        this.sql('INSERT OR IGNORE INTO import_message (import_id, message_id) VALUES (?, ?)').run(importId, m.id);
+        added.messages++;
+      }
+    });
+    return added;
+  }
+
+  /**
    * An import's Undo: its visits go, and on each page it touched what it
    * added comes off (visits, typed visits, frecency, a title it gave), so what
    * Chord saw before, meanwhile, or from another import stays. A page it
-   * brought that nothing else has used goes too.
+   * brought that nothing else has used goes too. So do the Duet chats and
+   * messages it added: the threads come back, for main to end their sessions
+   * and delete the providers' copies.
    */
-  undoImport(importId: string, now = Date.now()): void {
+  undoImport(importId: string, now = Date.now()): DuetThread[] {
+    const threads: DuetThread[] = [];
+    for (;;) {
+      const slice = this.undoImportSlice(importId, now);
+      threads.push(...slice.threads);
+      if (slice.done) return threads;
+    }
+  }
+
+  /**
+   * One slice of an import's Undo, in a transaction of its own, so chord-data
+   * answers the command bar's searches between slices (a big import's Undo is
+   * thousands of pages; chord-data's worker yields between them): its chats
+   * first, then `pages` of the history pages it touched at a time. `done` once
+   * nothing of it is left.
+   */
+  undoImportSlice(importId: string, now = Date.now(), pages = UNDO_SLICE): { done: boolean; threads: DuetThread[] } {
     this.undoneImports.add(importId);
     this.importTables();
+    const threads = (this.sql('SELECT t.* FROM duet_thread t JOIN import_thread i ON i.thread_id = t.id WHERE i.import_id = ?').all(importId) as Row[]).map(threadOf);
+    if (threads.length > 0 || this.sql('SELECT 1 FROM import_message WHERE import_id = ? LIMIT 1').get(importId)) {
+      this.transaction(() => {
+        this.sql('DELETE FROM duet_message WHERE id IN (SELECT message_id FROM import_message WHERE import_id = ?)').run(importId);
+        this.sql('DELETE FROM duet_thread WHERE id IN (SELECT thread_id FROM import_thread WHERE import_id = ?)').run(importId);
+        this.sql('DELETE FROM import_message WHERE import_id = ?').run(importId);
+        this.sql('DELETE FROM import_thread WHERE import_id = ?').run(importId);
+      });
+      return { done: false, threads };
+    }
     const batch = this.sql('SELECT visit_floor, visit_ceiling FROM import_batch WHERE import_id = ?').get(importId) as Row | undefined;
-    if (!batch) return;
+    if (!batch) return { done: true, threads: [] };
+    let done = true;
     this.transaction(() => {
-      this.sql(`DELETE FROM history_visit WHERE id > ? AND id <= ? AND transition = 'import'`).run(num(batch['visit_floor']), num(batch['visit_ceiling']));
-      for (const page of this.sql('SELECT * FROM import_page WHERE import_id = ?').all(importId) as Row[]) {
+      const touched = this.sql('SELECT * FROM import_page WHERE import_id = ? LIMIT ?').all(importId, pages + 1) as Row[];
+      done = touched.length <= pages;
+      for (const page of touched.slice(0, pages)) {
         const urlId = num(page['url_id']);
+        this.sql('DELETE FROM import_page WHERE import_id = ? AND url_id = ?').run(importId, urlId);
+        // Its visits, by their page (an index), within the import's range of visits.
+        this.sql(`DELETE FROM history_visit WHERE url_id = ? AND id > ? AND id <= ? AND transition = 'import'`).run(urlId, num(batch['visit_floor']), num(batch['visit_ceiling']));
         const row = this.sql('SELECT visit_count, typed_count, decay_day FROM history_url WHERE id = ?').get(urlId) as Row | undefined;
         if (!row) continue;
         const left = this.sql('SELECT COUNT(*) AS n, MAX(visited_at) AS last FROM history_visit WHERE url_id = ?').get(urlId) as Row;
@@ -551,16 +648,33 @@ export class ChordDatabase {
         const total = frecencyOn(num(row['decay_day']), now);
         const score = total - frecencyOn(num(page['decay']), now);
         const decay = score > total * ROUNDING ? dayOf(now) + HALF_LIFE_DAYS * Math.log2(score) : used(null, num(left['last']) || num(page['last_visit_before']) || now);
+        this.sql('UPDATE history_url SET visit_count = ?, typed_count = ?, last_visit_at = MAX(?, ?), decay_day = ? WHERE id = ?').run(
+          visits,
+          typed,
+          num(page['last_visit_before']),
+          num(left['last']),
+          decay,
+          urlId,
+        );
+        // A title it gave goes back, if it's still that one. Only then: setting the title rewrites the page's search entry.
         const titleSet = strOrNull(page['title_set']);
-        this.sql(
-          `UPDATE history_url SET visit_count = ?, typed_count = ?, last_visit_at = MAX(?, ?), decay_day = ?,
-             title = CASE WHEN ? IS NOT NULL AND title = ? THEN ? ELSE title END
-           WHERE id = ?`,
-        ).run(visits, typed, num(page['last_visit_before']), num(left['last']), decay, titleSet, titleSet, str(page['title_before']), urlId);
+        if (titleSet !== null) this.sql('UPDATE history_url SET title = ? WHERE id = ? AND title = ?').run(str(page['title_before']), urlId, titleSet);
       }
-      this.sql('DELETE FROM import_page WHERE import_id = ?').run(importId);
-      this.sql('DELETE FROM import_batch WHERE import_id = ?').run(importId);
+      if (done) this.sql('DELETE FROM import_batch WHERE import_id = ?').run(importId);
     });
+    return { done, threads: [] };
+  }
+
+  /**
+   * An import starts (true) or stops (false) writing. Meanwhile SQLite's
+   * checkpoints, which copy the write-ahead log into the database on this
+   * thread and so hold up the command bar's searches, come smaller and more
+   * often: at SQLite's 1,000 pages one took about 20 ms during a 50,000-visit
+   * import, at 250 about 10, for about half as long again in all (S15 §12).
+   */
+  importing(on: boolean): void {
+    this.writingImports = Math.max(0, this.writingImports + (on ? 1 : -1));
+    this.db.exec(`PRAGMA wal_autocheckpoint = ${this.writingImports > 0 ? IMPORT_CHECKPOINT : DEFAULT_CHECKPOINT}`);
   }
 
   /** Duet's threads and messages (packages/data/src/duet.ts). */

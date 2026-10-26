@@ -467,6 +467,12 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
   const info = useLive(infoSource);
   const snapshot = useLive(snapshotSource);
   const [section, setSection] = useState<SectionId>(initialSection);
+  /** A Chord file from a newer Chord: check for updates, and show where the answer is (About). */
+  const checkForUpdates = () => {
+    void api.settings.checkForUpdates();
+    setSection('about');
+    history.replaceState(null, '', '#about');
+  };
   // Each "Edit colors…" from a chord's menu is a new request to open the editor; each "Its own…" proxy, to open the chord's.
   const [editColors, setEditColors] = useState(() => (initialHash()?.colors ? 1 : 0));
   const [proxyFocus, setProxyFocus] = useState<ProxyFocus | null>(() => {
@@ -541,7 +547,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'effects' && <EffectsSection snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
-              {section === 'data' && <YourDataSection snapshot={snapshot} info={info} />}
+              {section === 'data' && <YourDataSection snapshot={snapshot} info={info} onUpdates={checkForUpdates} />}
               {section === 'duet' && <DuetSettings snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}

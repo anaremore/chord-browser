@@ -4,7 +4,7 @@
  * and every way a file can be changed, cut or misread.
  */
 import { describe, expect, it } from 'vitest';
-import { dataHeader, encryptedWriter, plainWriter, readDataFile, SCRYPT, type DataRecord, type DataFileWriter, type ScryptParams } from '@chord/core';
+import { DATA_HEAD, dataHeader, encryptedWriter, openDataFile, plainWriter, readDataFile, SCRYPT, type DataRecord, type DataFileWriter, type ScryptParams } from '@chord/core';
 import { nodeCrypto } from '../src/crypto';
 
 const DEVICE = '9f2c4e1a7b3d5c60';
@@ -208,5 +208,63 @@ describe('what goes wrong', () => {
     const { head, frames } = parts(await encrypted());
     const read = await readDataFile(join(Buffer.from(change(Buffer.from(head).toString('latin1')), 'latin1'), frames), PASSPHRASE, nodeCrypto);
     expect(read.problem).toBe(problem);
+  });
+});
+
+/** A file through `openDataFile` and one stream, `size` bytes at a time, as the import process reads it from disk. */
+async function stream(file: Uint8Array, passphrase: string | null, size: number) {
+  const opened = await openDataFile(file.subarray(0, DATA_HEAD), file.length, passphrase, nodeCrypto);
+  const reader = opened.records();
+  if (!reader) return { problem: opened.problem, records: [] as DataRecord[] };
+  const out: DataRecord[] = [];
+  // One Node Buffer, reused for every piece, as the import process reads: the reader copies what it keeps
+  // (a Buffer's slice is a view of the same memory, which the next read would overwrite).
+  const buffer = Buffer.alloc(size);
+  for (let at = opened.start; at < file.length; at += size) {
+    const piece = file.subarray(at, Math.min(file.length, at + size));
+    buffer.set(piece);
+    out.push(...reader.push(buffer.subarray(0, piece.length)));
+    buffer.fill(0);
+  }
+  out.push(...reader.end());
+  opened.close();
+  return { problem: reader.problem, records: out };
+}
+
+describe('a file read as it comes (the import process)', () => {
+  it.each([1, 7, 4096, 65_536, 1024 * 1024])('reads the same, plain and encrypted, %i bytes at a time', async (size) => {
+    const plain = write(plainWriter(header));
+    expect(await stream(plain, null, size)).toEqual({ problem: null, records });
+    expect(await stream(await encrypted(), PASSPHRASE, Math.max(size, 512))).toEqual({ problem: null, records });
+  });
+
+  it('reads a file of several megabytes a megabyte at a time, every line across every boundary', async () => {
+    const many: DataRecord[] = Array.from({ length: 25_000 }, (_, i) => ({ type: 'page', id: `http://127.0.0.1:40000/perf/${i}`, set: { title: `Chord Harmony ${i}`, visits: [1_700_000_000_000 + i, 1_700_000_100_000 + i, 1_700_000_200_000 + i], typed: 0 } }));
+    const plain = write(plainWriter(header), many);
+    expect(plain.length).toBeGreaterThan(3 * 1024 * 1024);
+    expect(await stream(plain, null, 1024 * 1024)).toEqual({ problem: null, records: many });
+  });
+
+  it('opens a file once and reads it through twice with the one key: scrypt runs once', async () => {
+    const file = await encrypted();
+    let derived = 0;
+    const counting = { ...nodeCrypto, scrypt: (...args: Parameters<typeof nodeCrypto.scrypt>) => (derived++, nodeCrypto.scrypt(...args)) };
+    const opened = await openDataFile(file.subarray(0, DATA_HEAD), file.length, PASSPHRASE, counting);
+    for (let pass = 0; pass < 2; pass++) {
+      const reader = opened.records()!;
+      expect([...reader.push(file.subarray(opened.start)), ...reader.end()]).toEqual(records);
+    }
+    expect(derived).toBe(1);
+  });
+
+  it('passes over a damaged frame, reading the frames around it', async () => {
+    const { head, frames } = parts(await encrypted());
+    const bad = Buffer.from(frames[1]!);
+    bad[bad.length - 5]! ^= 1;
+    const read = await stream(join(head, [frames[0]!, bad, ...frames.slice(2)]), PASSPHRASE, 65_536);
+    expect(read.problem).toBe('damaged');
+    expect(read.records.length).toBeGreaterThan(0);
+    expect(read.records.length).toBeLessThan(records.length);
+    expect(read.records.at(-1)).toEqual(records.at(-1));
   });
 });

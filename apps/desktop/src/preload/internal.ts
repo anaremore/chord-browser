@@ -57,6 +57,13 @@ const api: SettingsApi = {
     show: (exportId) => invoke('export:show', { exportId }),
     onProgress: (listener) => subscribe('export:progress', listener),
   },
+  files: {
+    choose: () => invoke('importFile:choose'),
+    open: (fileId, passphrase) => invoke('importFile:open', { fileId, passphrase }),
+    run: (fileId, choices) => invoke('importFile:run', { fileId, choices }),
+    undo: (importId) => invoke('importFile:undo', { importId }),
+    onProgress: (listener) => subscribe('importFile:progress', listener),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

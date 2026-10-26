@@ -35,6 +35,7 @@ import {
   screenshotFilename,
   readNeedsApproval,
   attachesTabOnScreen,
+  earlierTurns,
   splitCitations,
   stripCitations,
   textFragmentUrl,
@@ -191,6 +192,8 @@ interface Live {
 }
 
 const THREADS_IN_MENU = 12;
+/** What a chat's links may open: web pages, nothing else. */
+const WEB_PAGE = /^https?:\/\/[^\s/]/i;
 /** PDFs kept per chat for later ranges and citations; the oldest goes first. */
 const PDFS_KEPT = 3;
 /** Development and tests: a shorter idle window, so "start fresh, offer Continue" can be seen. */
@@ -880,8 +883,9 @@ export class DuetService {
         const node = this.browser.store.state.nodes[state.refs.get(action.ref) ?? ''];
         if (node?.kind === 'tab') this.browser.store.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
         else {
+          // Only a web page: a chat can come from a file, and a file can say anything.
           const url = this.tabNames(state)[action.ref]?.url;
-          if (url) this.browser.store.dispatch({ t: 'tab.open', windowId, url });
+          if (url && WEB_PAGE.test(url)) this.browser.store.dispatch({ t: 'tab.open', windowId, url });
         }
         return;
       }
@@ -974,7 +978,7 @@ export class DuetService {
     this.pending.delete(windowId);
     for (const p of pending) await this.images.save(p.image, p.bytes, p.thumb);
     const images = nothing ? [] : (reuseImages ?? pending.map((p) => p.image));
-    await this.addMessage(state, images.length > 0 ? { role: 'user', text: trimmed, attachments, images: [...images] } : { role: 'user', text: trimmed, attachments });
+    const sent = await this.addMessage(state, images.length > 0 ? { role: 'user', text: trimmed, attachments, images: [...images] } : { role: 'user', text: trimmed, attachments });
     delete this.drafts[thread.id];
     thread.lastUsedAt = now;
     thread.updatedAt = now;
@@ -984,12 +988,15 @@ export class DuetService {
     state.streaming = { id: uuidv7(), threadId: thread.id, createdAt: Date.now(), body: { role: 'assistant', text: '', citations: [], status: 'streaming' } };
     state.startedAt = Date.now();
     this.schedulePush();
+    // A chat from a file, to a provider that hasn't seen it: its earlier turns go first, as untrusted data (S15 §5).
+    const unseen = Boolean(thread.importedAt) && !thread.providerSessionId && !this.live.get(thread.id)?.session.alive;
     const session = await this.sessionFor(state);
     if (!session) {
       await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Duet couldn't start. Check Settings → Duet." } });
       return;
     }
-    session.send(userTurnText(trimmed, attachments), await this.imagesToSend(images, pending));
+    const earlier = unseen ? earlierTurns(state.messages.filter((m) => m !== sent)) : '';
+    session.send(earlier + userTurnText(trimmed, attachments), await this.imagesToSend(images, pending));
   }
 
   /** The message's images for the model, base64-encoded: from the composer, or from disk for a retry. */
@@ -1034,7 +1041,7 @@ export class DuetService {
     const making: DuetImageMaking = thread.provider === 'codex' ? (images ? 'codex' : 'codex-off') : 'claude';
     // Settings' "Nothing": no tools at all, so the model has no way to ask for a page (ARCHITECTURE.md §11.3).
     const readsPages = !this.settings.readsNothing;
-    const instructions = duetInstructions(summary, making, readsPages);
+    const instructions = duetInstructions(summary, making, readsPages, Boolean(thread.importedAt));
     const instructionsFile = join(this.root, 'instructions', `${thread.id}.md`);
     await writeFile(instructionsFile, instructions, { encoding: 'utf8', mode: 0o600 });
     const resumeId = summary ? null : thread.providerSessionId;
@@ -1107,8 +1114,11 @@ export class DuetService {
       state.messages.splice(index, 0, divider);
       await this.persistence.duet({ op: 'saveMessage', message: divider }).catch(() => undefined);
     }
-    const session = await this.sessionFor(state, transcriptSummary(earlier) || undefined);
-    if (session && lastUser?.body.role === 'user') session.send(userTurnText(lastUser.body.text, lastUser.body.attachments), await this.imagesToSend(lastUser.body.images ?? [], []));
+    // A chat from a file never has its turns in the instructions: they go with the message, as untrusted data (S15 §5).
+    const imported = Boolean(thread.importedAt);
+    const session = await this.sessionFor(state, imported ? undefined : transcriptSummary(earlier) || undefined);
+    const before = imported ? earlierTurns(earlier) : '';
+    if (session && lastUser?.body.role === 'user') session.send(before + userTurnText(lastUser.body.text, lastUser.body.attachments), await this.imagesToSend(lastUser.body.images ?? [], []));
     else if (!session) await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Duet couldn't start." } });
   }
 
@@ -1543,7 +1553,10 @@ export class DuetService {
       }
       return;
     }
-    if (citation.url) this.browser.store.dispatch({ t: 'tab.open', windowId, url: citation.page ? pdfPageUrl(citation.url, citation.page) : textFragmentUrl(citation.url, citation.quote) });
+    // Only a web page: a chat can come from a file (S15 §5), and its links are checked again here, where they open.
+    if (citation.url && WEB_PAGE.test(citation.url)) {
+      this.browser.store.dispatch({ t: 'tab.open', windowId, url: citation.page ? pdfPageUrl(citation.url, citation.page) : textFragmentUrl(citation.url, citation.quote) });
+    }
   }
 
   private async exportThread(state: ThreadState): Promise<void> {
@@ -1580,6 +1593,30 @@ export class DuetService {
     delete this.drafts[threadId];
     if (this.showing.get(chordId) === threadId) this.fresh(chordId);
     await this.refreshRecent(chordId);
+  }
+
+  /**
+   * Chats a Chord file brought in, or its Undo took away (S15 §5): each
+   * panel's list of recent chats follows, and what's loaded is read again, so
+   * messages that came or went show as they are. Ones taken away end their
+   * sessions first, and the providers' copies go, as Delete does.
+   */
+  async importChanged(removed: readonly DuetThread[] = []): Promise<void> {
+    const gone = new Set(removed.map((t) => t.id));
+    for (const [key, state] of [...this.threads]) {
+      const removedHere = Boolean(state.thread && gone.has(state.thread.id));
+      // A chat answering now stays as it is, unless it's one that went.
+      if (state.streaming && !removedHere) continue;
+      if (removedHere) this.close(state);
+      this.threads.delete(key);
+    }
+    for (const thread of removed) {
+      await this.deleteProviderCopy(thread);
+      delete this.drafts[thread.id];
+    }
+    for (const [chordId, key] of [...this.showing]) if (gone.has(key) || !this.threads.has(key)) this.showing.delete(chordId);
+    for (const chordId of [...this.recent.keys()]) await this.refreshRecent(chordId);
+    this.schedulePush();
   }
 
   async clearAll(): Promise<void> {

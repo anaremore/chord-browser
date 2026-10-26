@@ -9,6 +9,8 @@ import type {
   Choice,
   Chord,
   Download,
+  DuetMessage,
+  DuetThread,
   Favorite,
   ImportedPage,
   InstalledExtension,
@@ -117,7 +119,7 @@ export type DataRequest =
    * never pass through main (ARCHITECTURE.md §9). Each batch is answered.
    */
   | { id: number; type: 'import.port'; importId: string }
-  /** Take back what an import added to history: its Undo. */
+  /** Take back what an import added to history and Duet: its Undo. The chats it took away come back (`duet.removed`). */
   | { id: number; type: 'import.undo'; importId: string }
   /** This computer's id for Your data (made the first time it's asked for). */
   | { id: number; type: 'device' }
@@ -125,13 +127,17 @@ export type DataRequest =
   | { id: number; type: 'export.counts' }
   | { id: number; type: 'close' };
 
-/** The import process → chord-data, on an import's port: one batch of history, written in one transaction. */
+/**
+ * The import process → chord-data, on an import's port: one batch of history,
+ * or of a Chord file's Duet chats (S15 §5), written in one transaction.
+ */
 export interface ImportBatch {
-  pages: ImportedPage[];
+  pages?: ImportedPage[];
+  duet?: { threads: DuetThread[]; messages: DuetMessage[] };
 }
 
-/** chord-data's answer to each batch: the pages written, or why it couldn't. */
-export type ImportBatchReply = { ok: true; added: number } | { ok: false; error: string };
+/** chord-data's answer to each batch: the pages written (or messages, for chats) and the chats added, or why it couldn't. */
+export type ImportBatchReply = { ok: true; added: number; threads?: string[] } | { ok: false; error: string };
 
 /** chord-data → main. */
 /** How `open` spent its time, for the launch timeline (ms): the data process's own start, then each step. */

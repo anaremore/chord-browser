@@ -22,6 +22,7 @@ import {
   SPLIT,
   PRIVATE_CHORD_THEME,
   extensionKey,
+  isPrivateProfile,
   isUiScale,
   privateProfileId,
   type ArchivedTab,
@@ -46,6 +47,7 @@ import {
   type SitePermission,
   type SplitDirection,
   type SplitNode,
+  type Settings,
   type SettingsPatch,
   type State,
   type TabNode,
@@ -53,6 +55,9 @@ import {
   type WindowModel,
 } from './model';
 import { routeFor, routeKey } from './links';
+import { emptyMergeUndo, type MergePart, type MergeUndo } from './merge';
+import { isTabUrl } from './records';
+import { restoreChord, validTheme } from './restore';
 import { cleanProxy, sameProxy, type ProxySettings } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
@@ -245,6 +250,15 @@ export type Command =
    */
   | { t: 'import.undo'; importId: string; limit?: number }
   /**
+   * Part of an import from a Chord file (main only; `planMerge` in merge.ts
+   * decides it): things to add or update, each whole, by id; Settings'
+   * changes; and a new profile's first-run chord making way. What it replaces
+   * is kept for Undo, which `import.undo` puts back first. Nothing is
+   * deleted, nothing lands in a private window's chord, a chord keeps its
+   * sign-ins, a site gets only blocks, and nothing loads until it's opened.
+   */
+  | ({ t: 'data.merge'; importId: string } & MergePart)
+  /**
    * Undo a change to a site's Effects (a toast's button): main takes it over
    * (main/effects), since Effects live outside the store (ARCHITECTURE.md §9).
    */
@@ -331,6 +345,8 @@ const CHANGES_SPLITS: ReadonlySet<Command['t']> = new Set<Command['t']>([
   'split.join',
   // An imported tab may have been put in a split since.
   'import.undo',
+  // A Chord file brings splits, and can move tabs into and out of them.
+  'data.merge',
 ]);
 
 /** What a window's content frame holds: its panes and how they share it. */
@@ -597,6 +613,294 @@ function changeProfile(draft: Draft<State>, chord: Draft<Chord>, profileId: Prof
     draft.live[shown] = { ...IDLE_LIVE, loading: true };
     effects.push({ e: 'view.ensure', nodeId: shown }, { e: 'view.show', windowId: win.id, nodeId: shown });
   }
+}
+
+/** A plain copy of a draft's value, for an Undo to put back later. */
+const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+const PERMISSIONS: readonly SitePermission[] = ['camera', 'microphone', 'location', 'notifications', 'clipboard-read'];
+
+/**
+ * Tabs that move to another chord (an import's move, or its Undo putting one
+ * back): windows showing one land elsewhere, and a page whose sign-ins change
+ * closes, to load in its new session when it's shown. Call before they move;
+ * call what it returns after.
+ */
+function moving(draft: Draft<State>, moves: ReadonlyMap<NodeId, ChordId>, ctx: Context, effects: Effect[]): () => void {
+  const leaving = new Set([...moves.keys()].filter((id) => draft.nodes[id]?.kind === 'tab'));
+  const land = landWindows(draft, leaving, ctx, effects);
+  return () => {
+    for (const id of leaving) {
+      const node = draft.nodes[id];
+      const from = draft.chords[moves.get(id) ?? ''];
+      if (!node || !draft.live[id] || draft.chords[node.chordId]?.profileId === from?.profileId) continue;
+      delete draft.live[id];
+      effects.push({ e: 'view.destroy', nodeId: id });
+    }
+    land();
+  };
+}
+
+/** `data.merge`: one part of a Chord file's import, checked again here (main's boundary), with what it replaces kept for Undo. */
+function mergeIn(draft: Draft<State>, cmd: Extract<Command, { t: 'data.merge' }>, ctx: Context, effects: Effect[]): void {
+  const record = (draft.imports[cmd.importId] ??= { chordIds: [], nodeIds: [], favoriteIds: [] });
+  const undo = (record.merged ??= emptyMergeUndo());
+  if (undo.restored) return;
+
+  // Chords: a new one is added; one you have takes the file's name, icon, colors, place and proxy, never other sign-ins.
+  for (const incoming of cmd.chords ?? []) {
+    if (incoming.private || isPrivateProfile(incoming.profileId)) continue;
+    const chord = restoreChord({ ...incoming, name: incoming.name.trim().slice(0, MAX_CHORD_NAME) || 'Chord' });
+    const existing = draft.chords[chord.id];
+    if (!existing) {
+      draft.chords[chord.id] = chord;
+      record.chordIds.push(chord.id);
+      continue;
+    }
+    if (existing.private) continue;
+    if (!(chord.id in undo.chords) && !record.chordIds.includes(chord.id)) undo.chords[chord.id] = copy(existing);
+    existing.name = chord.name;
+    existing.icon = chord.icon;
+    existing.theme = chord.theme;
+    existing.rank = chord.rank;
+    if (chord.proxy && existing.profileId !== DEFAULT_PROFILE) existing.proxy = chord.proxy;
+    else delete existing.proxy;
+  }
+
+  // Folders, tabs and splits, parents first. Each in a chord that's there, in a folder (or, for a tab, a split) of the same chord, never inside itself; otherwise at its section's root.
+  const made = new Set(record.chordIds);
+  const added = new Set(undo.added);
+  const moves = new Map<NodeId, ChordId>();
+  for (const node of cmd.nodes ?? []) {
+    const existing = draft.nodes[node.id];
+    const to = draft.chords[node.chordId];
+    if (existing && to && !to.private && existing.chordId !== node.chordId && existing.kind === node.kind && (node.kind !== 'tab' || isTabUrl(node.url))) moves.set(node.id, existing.chordId);
+  }
+  const land = moving(draft, moves, ctx, effects);
+  for (const incoming of cmd.nodes ?? []) {
+    const chord = draft.chords[incoming.chordId];
+    const existing = draft.nodes[incoming.id];
+    if (!chord || chord.private || (incoming.kind === 'tab' && !isTabUrl(incoming.url))) continue;
+    if (existing && (existing.kind !== incoming.kind || draft.chords[existing.chordId]?.private)) continue;
+    const node = { ...incoming } as SidebarNode;
+    if (node.parentId !== null) {
+      const parent = draft.nodes[node.parentId];
+      const fits =
+        parent &&
+        parent.id !== node.id &&
+        parent.chordId === node.chordId &&
+        (parent.kind === 'folder' || (parent.kind === 'split' && node.kind === 'tab')) &&
+        !(existing && isWithin(draft as State, parent.id, node.id));
+      if (fits) node.section = parent.section;
+      else node.parentId = null;
+    }
+    if (node.kind === 'folder' && node.section !== 'pinned') continue;
+    if (node.kind === 'tab') node.pinnedUrl = node.section === 'pinned' ? (node.pinnedUrl ?? node.url) : null;
+    if (existing) {
+      if (!(node.id in undo.nodes) && !added.has(node.id)) undo.nodes[node.id] = copy(existing);
+      // What's live stays: a tab's icon, unless the file brings one, and when it was last shown.
+      draft.nodes[node.id] = node.kind === 'tab' && existing.kind === 'tab' ? { ...node, favicon: node.favicon ?? existing.favicon, lastActiveAt: existing.lastActiveAt } : node;
+      continue;
+    }
+    // Unloaded: no live entry, so nothing loads until it's opened.
+    draft.nodes[node.id] = node;
+    undo.added.push(node.id);
+    added.add(node.id);
+    // Undo takes away the chords it made whole; elsewhere it needs the tops of what it added.
+    if (!made.has(node.chordId) && (node.parentId === null || !added.has(node.parentId))) record.nodeIds.push(node.id);
+  }
+  land();
+
+  // Favorites: one you have takes the file's title, icon and place; a new one only while the row has room and not twice.
+  for (const favorite of cmd.favorites ?? []) {
+    if (!/^https?:\/\//i.test(favorite.url)) continue;
+    const existing = draft.favorites[favorite.id];
+    if (existing) {
+      if (!(favorite.id in undo.favorites) && !record.favoriteIds.includes(favorite.id)) undo.favorites[favorite.id] = copy(existing);
+      draft.favorites[favorite.id] = { ...favorite, favicon: favorite.favicon ?? existing.favicon, createdAt: existing.createdAt };
+      continue;
+    }
+    const order = Object.values(draft.favorites);
+    if (order.length >= MAX_FAVORITES || order.some((f) => f.url === favorite.url)) continue;
+    draft.favorites[favorite.id] = favorite;
+    record.favoriteIds.push(favorite.id);
+  }
+
+  for (const incoming of cmd.themes ?? []) {
+    const theme = validTheme(incoming);
+    if (!theme) continue;
+    const index = draft.settings.themes.findIndex((t) => t.id === theme.id);
+    if (index < 0 && draft.settings.themes.length >= MAX_THEMES) continue;
+    if (!(theme.id in undo.themes)) undo.themes[theme.id] = index >= 0 ? copy(draft.settings.themes[index]!) : null;
+    if (index >= 0) draft.settings.themes[index] = theme;
+    else draft.settings.themes.push(theme);
+  }
+
+  for (const route of cmd.routes ?? []) {
+    const host = routeKey(route.host);
+    const chord = draft.chords[route.chordId];
+    if (!host || host !== route.host || !chord || chord.private) continue;
+    const existing = draft.linkRoutes[host];
+    if (!(host in undo.routes)) undo.routes[host] = existing ? copy(existing) : null;
+    draft.linkRoutes[host] = { host, chordId: chord.id, createdAt: existing?.createdAt ?? route.createdAt };
+  }
+
+  for (const [host, factor] of Object.entries(cmd.zoom ?? {})) {
+    if (!/^[a-z0-9.:[\]-]{1,300}$/.test(host) || typeof factor !== 'number' || !(factor >= MIN_ZOOM && factor <= MAX_ZOOM) || Math.abs(factor - 1) < 0.001) continue;
+    if (!(host in undo.zoom)) undo.zoom[host] = draft.siteZoom[host] ?? null;
+    draft.siteZoom[host] = factor;
+  }
+
+  // Blocks only: there's no way here to allow anything.
+  for (const [origin, permissions] of Object.entries(cmd.blocks ?? {})) {
+    const blocked = (Array.isArray(permissions) ? permissions : []).filter((p) => PERMISSIONS.includes(p));
+    if (!/^https?:\/\/[^\s/]+$/.test(origin) || blocked.length === 0) continue;
+    if (!(origin in undo.permissions)) undo.permissions[origin] = draft.sitePermissions[origin] ? copy(draft.sitePermissions[origin]!) : null;
+    const site = (draft.sitePermissions[origin] ??= {});
+    for (const permission of blocked) site[permission] = 'block';
+  }
+
+  // Settings, through settings.set's own checks; what each one was, for Undo (Google-free mode can move the search engine too).
+  if (cmd.settings) {
+    const before = copy(draft.settings) as Record<string, unknown>;
+    run(draft, { t: 'settings.set', settings: cmd.settings }, ctx, effects);
+    for (const key of Object.keys(draft.settings) as (keyof Settings)[]) {
+      if (key === 'themes') continue;
+      const after = JSON.stringify(draft.settings[key]);
+      if (after === JSON.stringify(before[key])) continue;
+      undo.settings[key] = { before: undo.settings[key]?.before ?? before[key], after };
+    }
+  }
+
+  if (cmd.makeWay) makeWay(draft, undo, cmd.makeWay.chordId, cmd.makeWay.to, effects);
+}
+
+/**
+ * A new profile's first-run chord makes way for a file's (S15 §5): its tabs
+ * go to the top of `to`'s Today (anything pinned to the end of its Pinned),
+ * windows on it go to `to`, showing the tab they showed, and it goes. Undo
+ * brings it back as it was.
+ */
+function makeWay(draft: Draft<State>, undo: Draft<MergeUndo>, chordId: ChordId, to: ChordId, effects: Effect[]): void {
+  const chord = draft.chords[chordId];
+  const target = draft.chords[to];
+  if (!chord || !target || chord.private || target.private || chordId === to || undo.madeWay || sortedChords(draft as State).length < 2) return;
+  const nodes = Object.values(draft.nodes).filter((n) => n.chordId === chordId);
+  undo.madeWay = { chord: copy(chord), nodes: nodes.map(copy), to };
+  const today = children(draft as State, chordId, 'today', null);
+  const pinned = children(draft as State, chordId, 'pinned', null);
+  const todayRanks = generateNKeysBetween(null, children(draft as State, to, 'today', null)[0]?.rank ?? null, today.length);
+  const pinnedRanks = generateNKeysBetween(children(draft as State, to, 'pinned', null).at(-1)?.rank ?? null, null, pinned.length);
+  today.forEach((n, i) => (draft.nodes[n.id]!.rank = todayRanks[i]!));
+  pinned.forEach((n, i) => (draft.nodes[n.id]!.rank = pinnedRanks[i]!));
+  const resign = chord.profileId !== target.profileId;
+  for (const node of nodes) {
+    draft.nodes[node.id]!.chordId = to;
+    if (resign && draft.live[node.id]) {
+      delete draft.live[node.id];
+      effects.push({ e: 'view.destroy', nodeId: node.id });
+    }
+  }
+  for (const win of Object.values(draft.windows)) {
+    const shown = win.activeTab[chordId] ?? null;
+    delete win.activeTab[chordId];
+    if (win.activeChordId !== chordId) continue;
+    win.activeChordId = to;
+    win.activeTab[to] = shown;
+    // The tab it showed stays on screen; in other sign-ins it loads again there.
+    if (shown && !draft.live[shown]) {
+      draft.live[shown] = { ...IDLE_LIVE, loading: true };
+      effects.push({ e: 'view.ensure', nodeId: shown });
+    }
+    effects.push({ e: 'view.show', windowId: win.id, nodeId: shown });
+  }
+  for (const [host, route] of Object.entries(draft.linkRoutes)) {
+    if (route.chordId !== chordId) continue;
+    if (!(host in undo.routes)) undo.routes[host] = copy(route);
+    delete draft.linkRoutes[host];
+  }
+  delete draft.chords[chordId];
+}
+
+/**
+ * The first part of an import's Undo, for a Chord file: what it updated goes
+ * back to what it was (where it's still there), and the first-run chord that
+ * made way comes back with its tabs. Taking away what it added follows, as
+ * for any import.
+ */
+function putBack(draft: Draft<State>, undo: Draft<MergeUndo>, ctx: Context, effects: Effect[]): void {
+  const way = undo.madeWay;
+  if (way && !draft.chords[way.chord.id]) {
+    draft.chords[way.chord.id] = copy(way.chord);
+    const resign = draft.chords[way.to]?.profileId !== way.chord.profileId;
+    const moved = new Set(way.nodes.map((n) => n.id));
+    for (const before of way.nodes) {
+      const node = draft.nodes[before.id];
+      if (!node) continue;
+      draft.nodes[before.id] = { ...node, chordId: before.chordId, section: before.section, parentId: before.parentId, rank: before.rank } as SidebarNode;
+      if (resign && draft.live[before.id]) {
+        delete draft.live[before.id];
+        effects.push({ e: 'view.destroy', nodeId: before.id });
+      }
+    }
+    // Windows on the chord it made way for go back to it, showing the tab they showed if it was one of its.
+    for (const win of Object.values(draft.windows)) {
+      const shown = win.activeTab[way.to] ?? null;
+      const back = shown && moved.has(shown) ? shown : null;
+      if (back) win.activeTab[way.to] = null;
+      if (win.activeChordId !== way.to) continue;
+      win.activeChordId = way.chord.id;
+      win.activeTab[way.chord.id] = back;
+      if (back && !draft.live[back]) {
+        draft.live[back] = { ...IDLE_LIVE, loading: true };
+        effects.push({ e: 'view.ensure', nodeId: back });
+      }
+      effects.push({ e: 'view.show', windowId: win.id, nodeId: back });
+    }
+  }
+  for (const [id, before] of Object.entries(undo.chords)) {
+    const chord = draft.chords[id];
+    if (!chord) continue;
+    draft.chords[id] = restoreChord({ ...copy(before), profileId: chord.profileId });
+  }
+  const moves = new Map<NodeId, ChordId>();
+  for (const [id, before] of Object.entries(undo.nodes)) {
+    const node = draft.nodes[id];
+    if (node && node.kind === before.kind && node.chordId !== before.chordId && draft.chords[before.chordId]) moves.set(id, node.chordId);
+  }
+  const land = moving(draft, moves, ctx, effects);
+  for (const [id, before] of Object.entries(undo.nodes)) {
+    const node = draft.nodes[id];
+    if (!node || node.kind !== before.kind || !draft.chords[before.chordId]) continue;
+    const back = copy(before);
+    if (back.parentId !== null && draft.nodes[back.parentId]?.chordId !== back.chordId) back.parentId = null;
+    draft.nodes[id] = node.kind === 'tab' && back.kind === 'tab' ? { ...back, favicon: node.favicon ?? back.favicon, lastActiveAt: node.lastActiveAt } : back;
+  }
+  land();
+  for (const [id, before] of Object.entries(undo.favorites)) if (draft.favorites[id]) draft.favorites[id] = copy(before);
+  for (const [id, before] of Object.entries(undo.themes)) {
+    const index = draft.settings.themes.findIndex((t) => t.id === id);
+    if (before === null) {
+      if (index >= 0) draft.settings.themes.splice(index, 1);
+    } else if (index >= 0) draft.settings.themes[index] = copy(before);
+  }
+  for (const [host, before] of Object.entries(undo.routes)) {
+    if (before === null) delete draft.linkRoutes[host];
+    else if (draft.chords[before.chordId]) draft.linkRoutes[host] = copy(before);
+  }
+  for (const [host, before] of Object.entries(undo.zoom)) {
+    if (before === null) delete draft.siteZoom[host];
+    else draft.siteZoom[host] = before;
+  }
+  for (const [origin, before] of Object.entries(undo.permissions)) {
+    if (before === null) delete draft.sitePermissions[origin];
+    else draft.sitePermissions[origin] = copy(before);
+  }
+  // A setting goes back only if it's still as the import left it: one you've changed since is yours.
+  for (const [key, change] of Object.entries(undo.settings) as [keyof Settings, { before: unknown; after: string }][]) {
+    if (JSON.stringify(draft.settings[key]) === change.after) (draft.settings as Record<string, unknown>)[key] = copy(change.before);
+  }
+  undo.restored = true;
 }
 
 function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[]): void {
@@ -1744,9 +2048,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       return;
     }
 
+    case 'data.merge':
+      mergeIn(draft, cmd, ctx, effects);
+      return;
+
     case 'import.undo': {
       const record = draft.imports[cmd.importId];
       if (!record) return;
+      // A Chord file's: what it updated goes back first, in one part (merge.ts keeps it small), then what it added goes.
+      if (record.merged && !record.merged.restored) putBack(draft, record.merged, ctx, effects);
       const order = sortedChords(draft as State);
       const gone = new Set(record.chordIds.filter((id) => draft.chords[id]));
       // There's always a chord to land on (the import never removes one it didn't make).

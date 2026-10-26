@@ -3,6 +3,7 @@
  * connection so synchronous database work never runs on main. A crash here
  * doesn't take windows down; main buffers writes and starts a new one.
  */
+import type { DuetThread } from '@chord/core';
 import type { DataRequest, DataResponse, ImportBatch, ImportBatchReply } from '@chord/data';
 import { ChordDatabase } from '@chord/data/db';
 
@@ -64,11 +65,19 @@ process.parentPort.on('message', (event) => {
         const port = event.ports[0];
         if (!db || !port) throw new Error('chord-data: import port before open');
         const { importId } = request;
-        // The import process's batches of history, each written in one transaction and answered.
+        // Smaller checkpoints while the import writes, until its process closes the port (or goes).
+        const writing = db;
+        writing.importing(true);
+        port.on('close', () => writing.importing(false));
+        // The import process's batches of history (and a Chord file's Duet chats), each written in one transaction and answered.
         port.on('message', ({ data }) => {
           try {
             if (!db) throw new Error('chord-data: closed');
-            port.postMessage({ ok: true, added: db.importHistory(importId, (data as ImportBatch).pages) } satisfies ImportBatchReply);
+            const batch = data as ImportBatch;
+            if (batch.duet) {
+              const added = db.importDuet(importId, batch.duet.threads, batch.duet.messages);
+              port.postMessage({ ok: true, added: added.messages, threads: added.threads } satisfies ImportBatchReply);
+            } else port.postMessage({ ok: true, added: db.importHistory(importId, batch.pages ?? []) } satisfies ImportBatchReply);
           } catch (error) {
             port.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies ImportBatchReply);
           }
@@ -77,11 +86,29 @@ process.parentPort.on('message', (event) => {
         reply({ id: request.id, ok: true });
         break;
       }
-      case 'import.undo':
+      case 'import.undo': {
         if (!db) throw new Error('chord-data: import before open');
-        db.undoImport(request.importId);
-        reply({ id: request.id, ok: true });
+        // A slice at a time, each its own transaction, with the command bar's searches (and anything else waiting) in between,
+        // and smaller checkpoints meanwhile.
+        const undoing = db;
+        const removed: DuetThread[] = [];
+        undoing.importing(true);
+        const step = () => {
+          try {
+            if (db !== undoing) throw new Error('chord-data: closed');
+            const slice = undoing.undoImportSlice(request.importId);
+            removed.push(...slice.threads);
+            if (!slice.done) return void setImmediate(step);
+            undoing.importing(false);
+            reply({ id: request.id, ok: true, duet: { removed } });
+          } catch (error) {
+            if (db === undoing) undoing.importing(false);
+            reply({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) });
+          }
+        };
+        step();
         break;
+      }
       case 'device':
         if (!db) throw new Error('chord-data: device before open');
         reply({ id: request.id, ok: true, device: db.device() });

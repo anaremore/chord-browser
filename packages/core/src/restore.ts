@@ -169,7 +169,8 @@ export function validTheme(v: unknown): CustomTheme | null {
   return { id: t.id, name: t.name.slice(0, 40), stops: t.stops.map((s) => ({ l: s.l, c: s.c, h: s.h })), grain: t.grain };
 }
 
-function restoreSettings(saved: Record<string, unknown>, platform?: Platform): Settings {
+/** Settings as saved (by key, groups whole), checked: what isn't a usable value is the default. An import checks a file's settings with it too (merge.ts). */
+export function restoreSettings(saved: Record<string, unknown>, platform?: Platform): Settings {
   const settings = defaultSettings();
   settings.shortcuts = cleanOverrides(saved['shortcuts'], platform);
   const scheme = saved['colorScheme'];

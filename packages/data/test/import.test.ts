@@ -115,6 +115,23 @@ describe('importing history', () => {
     expect(visitRows()).toEqual([]);
   });
 
+  it('skips visits it has already, so a file imported twice adds nothing; a typed count takes the larger', () => {
+    db.write([], t0, [{ k: 'visit', url: 'https://news.test/', title: 'News', at: t0 - DAY }]);
+    const file = (): ImportedPage[] => [
+      { url: 'https://news.test/', title: 'News', visits: [t0 - 2 * DAY, t0 - DAY], typed: [], typedCount: 3 },
+      { url: 'https://maps.test/', title: 'Maps', visits: [t0 - 3 * DAY], typed: [], typedCount: 0 },
+    ];
+    // Chord's own visit is one of the file's (it came from here): only the other is added.
+    expect(db.importHistory('first', file(), t0)).toBe(2);
+    expect(db.search('news', null, t0).history[0]).toMatchObject({ visitCount: 2, typedCount: 3 });
+    expect(db.importHistory('second', file(), t0)).toBe(0);
+    expect(db.search('news', null, t0).history[0]).toMatchObject({ visitCount: 2, typedCount: 3 });
+    expect(db.search('maps', null, t0).history[0]).toMatchObject({ visitCount: 1 });
+    db.undoImport('first', t0);
+    expect(db.search('news', null, t0).history[0]).toMatchObject({ visitCount: 1, typedCount: 0 });
+    expect(db.search('maps', null, t0).history).toEqual([]);
+  });
+
   it('forgets how to undo once chord-data reopens: an import’s Undo lasts the session', () => {
     db.importHistory('i1', [page('https://new.test/', 'New', [t0])], t0);
     db.close();

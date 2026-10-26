@@ -6,7 +6,7 @@
  */
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ArchiveReason, ExportCounts, PersistedState, SavedEffects, State } from '@chord/core';
+import type { ArchiveReason, DuetThread, ExportCounts, PersistedState, SavedEffects, State } from '@chord/core';
 import {
   opKey,
   opsForState,
@@ -186,10 +186,11 @@ export class Persistence {
     return port2;
   }
 
-  /** Take back what an import added to history (its Undo). */
-  async undoImport(importId: string): Promise<void> {
+  /** Take back what an import added to history and Duet (its Undo): the chats it took away, for Duet to end their sessions. */
+  async undoImport(importId: string): Promise<DuetThread[]> {
     const response = await this.request({ type: 'import.undo', importId });
     if (!response.ok) throw new Error(response.error);
+    return response.duet?.removed ?? [];
   }
 
   /** This computer's id, for an export's header and stamps (made the first time it's asked for). */

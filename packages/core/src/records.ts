@@ -15,6 +15,7 @@ import { routeKey } from './links';
 import {
   DEFAULT_PROFILE,
   DEFAULT_SETTINGS,
+  isPrivateProfile,
   MAX_ZOOM,
   MIN_ZOOM,
   type Chord,
@@ -133,8 +134,8 @@ export function exportedProxy(value: unknown): ProxySettings | null {
   return { ...proxy, pac: url.href } as ProxySettings;
 }
 
-/** Where a tab read from a file may be: a web page, or Chord's archive page. */
-const isTabUrl = (v: unknown): v is string => isWebUrl(v) || (typeof v === 'string' && v.startsWith(ARCHIVE_URL));
+/** Where a tab read from a file may be: a web page, or Chord's archive page. The reducer checks an import's tabs with it again. */
+export const isTabUrl = (v: unknown): v is string => isWebUrl(v) || (typeof v === 'string' && v.startsWith(ARCHIVE_URL));
 
 /* ---------- Setup ---------- */
 
@@ -159,7 +160,8 @@ export function chordFromRecord(r: DataRecord): Chord | null {
   const name = text(s['name'], 200);
   const icon = text(s['icon'], 64);
   const theme = chordThemeFrom(s['theme']);
-  const profile = s['profile'] === DEFAULT_PROFILE || isId(s['profile']) ? (s['profile'] as string) : null;
+  // Its own sign-ins, or everyone's; never a private window's, which only a private window has.
+  const profile = s['profile'] === DEFAULT_PROFILE || (isId(s['profile']) && !isPrivateProfile(s['profile'])) ? (s['profile'] as string) : null;
   if (r.type !== 'chord' || !isId(r.id) || name === null || icon === null || !theme || !isRank(s['rank']) || !profile) return null;
   // As restore does: a proxy of its own only with sign-ins of its own, and only one that can be used.
   const proxy = profile !== DEFAULT_PROFILE && s['proxy'] ? cleanProxy(s['proxy']) : null;
@@ -579,29 +581,44 @@ export function messageRecord(message: DuetMessage): DataRecord {
 
 const STATUSES = ['streaming', 'done', 'interrupted', 'error'] as const;
 const DECISIONS = ['pending', 'once', 'thread', 'denied', 'expired'] as const;
+/** A chat's handle for a tab ("t3"), as Duet's citations and attachments name it. */
+const isTabRef = (v: unknown): v is string => typeof v === 'string' && /^t\d{1,4}$/.test(v);
+/** At most this many attachments, citations, images or targets in one message: far more than Chord ever writes. */
+const MAX_PER_MESSAGE = 200;
 
-/** A body read back: each role's fields checked; links that aren't http(s) are dropped, as they would be on import (S15 §5). */
+/**
+ * A body read back: each role's fields checked, every list and string within
+ * what Chord itself writes; links that aren't http(s) are dropped, as they
+ * would be on import (S15 §5), so a file's `javascript:` never becomes a link.
+ */
 function bodyFrom(raw: unknown): DuetMessageBody | null {
   if (!raw || typeof raw !== 'object') return null;
   const b = raw as Record<string, unknown>;
-  const images = Array.isArray(b['images']) ? b['images'].map(imageRefFrom).filter((i): i is DuetImage => i !== null) : null;
+  const list = (v: unknown) => (Array.isArray(v) ? v.slice(0, MAX_PER_MESSAGE) : []).filter((x): x is Record<string, unknown> => Boolean(x) && typeof x === 'object');
+  const images = Array.isArray(b['images']) ? list(b['images']).map(imageRefFrom).filter((i): i is DuetImage => i !== null) : null;
   switch (b['role']) {
     case 'user': {
       const value = text(b['text'], 200_000);
       if (value === null) return null;
-      const attachments = (Array.isArray(b['attachments']) ? b['attachments'] : [])
-        .map((a) => a as Record<string, unknown>)
-        .filter((a) => a && typeof a['ref'] === 'string' && isWebUrl(a['url']) && typeof a['title'] === 'string')
+      const attachments = list(b['attachments'])
+        .filter((a) => isTabRef(a['ref']) && isWebUrl(a['url']) && text(a['title'], 10_000) !== null)
         .map((a): DuetAttachment => ({ ref: a['ref'] as string, url: a['url'] as string, title: a['title'] as string }));
       return { role: 'user', text: value, attachments, ...(images ? { images } : {}) };
     }
     case 'assistant': {
       const value = text(b['text'], 400_000);
       if (value === null) return null;
-      const citations = (Array.isArray(b['citations']) ? b['citations'] : [])
-        .map((c) => c as Record<string, unknown>)
-        .filter((c) => c && typeof c['n'] === 'number' && typeof c['ref'] === 'string' && isWebUrl(c['url']) && typeof c['title'] === 'string' && typeof c['quote'] === 'string')
-        .map((c): DuetCitation => ({ n: c['n'] as number, ref: c['ref'] as string, url: c['url'] as string, title: c['title'] as string, quote: c['quote'] as string, tabId: null, ...(typeof c['page'] === 'number' ? { page: c['page'] } : {}) }));
+      const citations = list(b['citations'])
+        .filter((c) => Number.isInteger(c['n']) && (c['n'] as number) > 0 && isTabRef(c['ref']) && isWebUrl(c['url']) && text(c['title'], 10_000) !== null && text(c['quote'], 2000) !== null)
+        .map((c): DuetCitation => ({
+          n: c['n'] as number,
+          ref: c['ref'] as string,
+          url: c['url'] as string,
+          title: c['title'] as string,
+          quote: c['quote'] as string,
+          tabId: null,
+          ...(Number.isInteger(c['page']) && (c['page'] as number) > 0 ? { page: c['page'] as number } : {}),
+        }));
       const status = STATUSES.includes(b['status'] as (typeof STATUSES)[number]) ? (b['status'] as (typeof STATUSES)[number]) : 'done';
       const error = text(b['error'], 4000);
       return { role: 'assistant', text: value, citations, status, ...(error ? { error } : {}), ...(images ? { images } : {}) };
@@ -615,7 +632,7 @@ function bodyFrom(raw: unknown): DuetMessageBody | null {
     case 'approval': {
       const tool = text(b['tool'], 100);
       const description = text(b['description'], 4000);
-      const target = Array.isArray(b['target']) ? b['target'].filter((t): t is string => typeof t === 'string' && t.length <= 2000) : [];
+      const target = Array.isArray(b['target']) ? b['target'].slice(0, MAX_PER_MESSAGE).filter((t): t is string => typeof t === 'string' && t.length <= 2000) : [];
       const decision = DECISIONS.includes(b['decision'] as (typeof DECISIONS)[number]) ? (b['decision'] as (typeof DECISIONS)[number]) : 'expired';
       return tool !== null && description !== null ? { role: 'approval', tool, description, target, decision } : null;
     }

@@ -1,26 +1,29 @@
 /**
- * Your data's export (docs/decisions/S15-your-data.md §8–§9; DESIGN.md §8.8):
+ * Your data's export and import (docs/decisions/S15-your-data.md §8–§9; DESIGN.md §8.8):
  * a profile seeded with a bit of everything, and with everything an export
  * must leave out, exports from Settings → Your data, plain and then
  * encrypted. The plain file's lines parse and hold what was seeded and
- * nothing else; the encrypted one opens with its passphrase only. The system's
- * save dialog is answered in main, so no window but Chord's opens.
+ * nothing else; the encrypted one opens with its passphrase only. Then the
+ * files come back: into a new profile, everything as it was, and one Undo
+ * takes it all back; into a profile with data, settings off until you turn
+ * them on. The system's save and open dialogs are answered in main, so no
+ * window but Chord's opens.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { placeKey, readDataFile, type DataRecord } from '@chord/core';
+import { effectsHost, placeKey, readDataFile, type DataRecord } from '@chord/core';
 import { nodeCrypto } from '@chord/data/crypto';
-import { audit, capturesDir, expectClean, isSettings, isShell, launch, newPage, pageWhere, runAction, startSite, type Site } from './a11y-kit';
+import { audit, capturesDir, dispatch, expectClean, isOverlay, isSettings, isShell, launch, newPage, pageWhere, runAction, startSite, type Site } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
 
 let site: Site;
 test.beforeAll(async () => {
-  site = await startSite({ '/': '<title>Home page</title><p>Home</p>' });
+  site = await startSite({ '/': '<title>Home page</title><p>Home</p>', '/styled': '<title>Styled</title><p>Styled by its Effects</p>' });
 });
 test.afterAll(() => site.server.close());
 
@@ -273,6 +276,266 @@ test('a folder Chord can’t write to says so, and offers to choose another', as
     await card.getByRole('button', { name: 'Choose where to save…' }).click();
     await expect(card.getByText(/^Saved backup\.jsonl, /)).toBeVisible({ timeout: 30_000 });
     expect(readFileSync(out, 'utf8')).toMatch(/^\{"chord":"data"/);
+  } finally {
+    await app.close();
+  }
+});
+
+/* ---------- Import (S15 §5, §8, §9 step 2) ---------- */
+
+interface ImportSnapshot {
+  windowId: string;
+  state: {
+    chords: Record<string, { id: string; name: string; profileId: string; proxy?: unknown; private?: boolean }>;
+    nodes: Record<string, { id: string; kind: string; chordId: string; parentId: string | null; section: string; title?: string; customTitle?: string | null; url?: string }>;
+    favorites: Record<string, { id: string; url: string; title: string }>;
+    windows: Record<string, { activeChordId: string }>;
+    live: Record<string, unknown>;
+    settings: { searchEngine: string; themes: { name: string }[]; proxy: { mode: string } };
+    sitePermissions: Record<string, Record<string, string>>;
+    imports: Record<string, unknown>;
+  };
+}
+interface ImportWindow {
+  chord: {
+    state: { snapshot(): Promise<ImportSnapshot> };
+    history: { search(q: string): Promise<{ history: { url: string }[] }> };
+    duet: { search(q: string): Promise<{ threadTitle: string }[]> };
+  };
+}
+const stateOf = (shell: Page) => shell.evaluate(() => (window as unknown as ImportWindow).chord.state.snapshot());
+const historyFor = (overlay: Page, query: string) => overlay.evaluate(async (q) => (await (window as unknown as ImportWindow).chord.history.search(q)).history.map((h) => h.url).sort(), query);
+const chatsFor = (overlay: Page, query: string) => overlay.evaluate(async (q) => (await (window as unknown as ImportWindow).chord.duet.search(q)).map((h) => h.threadTitle), query);
+const backgroundOf = (page: Page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+const STYLED = 'rgb(1, 2, 3)';
+
+/** The system's open dialog, answered in main with `path`. */
+const answerOpenDialog = (app: ElectronApplication, path: string) =>
+  app.evaluate(({ dialog }, target) => {
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [target] })) as typeof dialog.showOpenDialog;
+  }, path);
+
+async function openYourData(app: ElectronApplication, shell: Page): Promise<Page> {
+  await runAction(shell, 'app.settings');
+  const settings = await pageWhere(app, isSettings);
+  await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Your data' }).click();
+  return settings;
+}
+
+/** What a chord.db says of a Duet chat: whether it came from a file, and its provider session. */
+function chatRow(profile: string, id: string): { imported_at: number | null; provider_session_id: string | null } | undefined {
+  const db = new DatabaseSync(join(profile, 'chord.db'), { readOnly: true });
+  try {
+    return db.prepare('SELECT imported_at, provider_session_id FROM duet_thread WHERE id = ?').get(id) as { imported_at: number | null; provider_session_id: string | null } | undefined;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * The seeded profile (`seed`), with Effects for the test site, exported once,
+ * plain and encrypted: the files the import journeys bring in.
+ */
+let exported: Promise<{ plain: string; sealed: string; passphrase: string }> | null = null;
+const exportedProfile = () => (exported ??= exportSeeded());
+async function exportSeeded(): Promise<{ plain: string; sealed: string; passphrase: string }> {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const out = mkdtempSync(join(tmpdir(), 'chord-e2e-export-'));
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, { profile });
+  const personal = await (await pageWhere(app, isShell)).evaluate(async () => {
+    const { state, windowId } = await (window as unknown as ImportWindow & { chord: { state: { snapshot(): Promise<ImportSnapshot> } } }).chord.state.snapshot();
+    return state.windows[windowId]!.activeChordId;
+  });
+  await app.close();
+  seed(profile, personal);
+  const db = new DatabaseSync(join(profile, 'chord.db'));
+  db.prepare(`INSERT INTO effect (host, wet, css, css_on, hidden, presets, duet, compiled, sanitizer, created_at, updated_at) VALUES (?, 1, ?, 1, '[]', '[]', '[]', '', 0, 1, 1700000000009)`).run(
+    effectsHost(`${site.origin}/`)!,
+    `body { background-color: ${STYLED} }`,
+  );
+  db.close();
+  app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, { profile });
+  try {
+    const settings = await openExport(app, await pageWhere(app, isShell));
+    const card = settings.getByRole('group', { name: 'Export your data' });
+    const plain = join(out, 'backup.jsonl');
+    await answerSaveDialog(app, plain);
+    await card.getByRole('button', { name: 'Choose where to save…' }).click();
+    await expect(card.getByText(/^Saved backup\.jsonl, /)).toBeVisible({ timeout: 30_000 });
+    await card.getByRole('switch', { name: 'Encrypt with a passphrase' }).click();
+    await card.getByRole('button', { name: 'Suggest one' }).click();
+    const passphrase = await card.getByLabel('Passphrase', { exact: true }).inputValue();
+    const sealed = join(out, 'backup.chorddata');
+    await answerSaveDialog(app, sealed);
+    await card.getByRole('button', { name: 'Choose where to save…' }).click();
+    await expect(card.getByText(/^Saved backup\.chorddata, /)).toBeVisible({ timeout: 30_000 });
+    return { plain, sealed, passphrase };
+  } finally {
+    await app.close();
+  }
+}
+
+test('a Chord file into a new profile: everything comes in as it was, nothing loads, and one Undo takes it all back', async () => {
+  test.setTimeout(240_000);
+  const { plain } = await exportedProfile();
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_APPEARANCE: 'dark' }, { profile });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Home page');
+    const before = await stateOf(shell);
+    const first = before.state.windows[before.windowId]!.activeChordId;
+    const settings = await openYourData(app, shell);
+
+    // The file chosen in the system's dialog, read off main, and counted against this new profile.
+    await answerOpenDialog(app, plain);
+    await settings.getByRole('button', { name: 'Choose a file…' }).click();
+    const card = settings.getByRole('group', { name: 'From a Chord file' });
+    await expect(card.getByText(/^From another computer, exported \w{3} \d{1,2}, \d{4} by Chord /)).toBeVisible({ timeout: 30_000 });
+    await expect(card.getByText(/^New: 2 chords, 1 pinned tab, 1 Today tab, 1 folder, 1 Favorite, 1 theme, 1 link route, Effects for 2 sites, page zoom for 1 site, blocked permissions for 1 site\. The chord Chord started with makes way\.$/)).toBeVisible();
+    await expect(card.getByText('2 new pages, for search in every chord')).toBeVisible();
+    await expect(card.getByText('1 new chat, 1 image. Nothing is sent anywhere until you write in one.')).toBeVisible();
+    await expect(card.getByText(`${effectsHost(`${site.origin}/`)} and news.test. Chord checks every stylesheet again before it uses it.`)).toBeVisible();
+    // A new profile takes the file's settings, each named; its proxies too.
+    await expect(card.getByRole('switch', { name: 'Import settings from the file' })).toHaveAttribute('aria-checked', 'true');
+    const changes = card.getByRole('list', { name: 'What the file’s settings change' });
+    await expect(changes).toContainText('Search engine: Google → DuckDuckGo');
+    await expect(changes).toContainText('Proxy for every chord: The system’s proxy → No proxy');
+    await expect(changes).toContainText('Work’s own proxy: The proxy for every chord → SOCKS5 proxy at 10.0.0.2:1080');
+    await expect(card.getByText('Tabs stay unloaded until you open them. Sites you’d allowed to use your camera, microphone or location ask again.')).toBeVisible();
+    expectClean(await audit(settings, 'Settings → Your data → From a Chord file', { appearance: 'dark' }));
+    await card.getByRole('button', { name: 'Import', exact: true }).scrollIntoViewIfNeeded();
+    await settings.screenshot({ path: resolve(capturesDir, 'settings-your-data-import-dark.png') });
+
+    await card.getByRole('button', { name: 'Import', exact: true }).click();
+    const done = /^Imported 2 chords, 2 tabs, 1 Favorite, Effects for 2 sites, \d+ settings, \d+ pages of history and 1 Duet chat/;
+    await expect(card.getByText(done)).toBeVisible({ timeout: 30_000 });
+    await expect(shell.getByRole('group', { name: done })).toBeVisible();
+
+    // The file's chords, in place of the one first run made; its tab went with the window to the first of them.
+    const after = await stateOf(shell);
+    expect(Object.values(after.state.chords).map((c) => c.name).sort()).toEqual(['Personal', 'Work']);
+    expect(after.state.chords[first]).toBeUndefined();
+    const work = after.state.chords['work']!;
+    expect(work).toMatchObject({ profileId: 'work-signins', proxy: { mode: 'server' } });
+    expect(after.state.nodes['mail']).toMatchObject({ chordId: 'work', parentId: 'folder', section: 'pinned', customTitle: 'Mail', url: 'https://mail.test/inbox' });
+    expect(Object.values(after.state.favorites).map((f) => f.url)).toEqual(['https://calendar.test/']);
+    expect(after.state.settings).toMatchObject({ searchEngine: 'duckduckgo', themes: [{ name: 'Late Night' }], proxy: { mode: 'none' } });
+    // Blocks only: the camera the other computer allowed asks again here.
+    expect(after.state.sitePermissions).toEqual({ 'https://meet.test': { notifications: 'block' } });
+    // Nothing loaded: the only page is the one the window was already showing.
+    expect(Object.keys(after.state.live)).toEqual(Object.keys(before.state.live));
+    await dispatch(shell, { t: 'chord.activate', windowId: after.windowId, chordId: 'work' });
+    await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Reading');
+    await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Mail');
+
+    // History in the command bar, the chat in its search, and its image beside Duet's own.
+    await expect.poll(() => historyFor(overlay, 'story')).toEqual(['https://news.test/a', 'https://news.test/b']);
+    await expect.poll(() => chatsFor(overlay, 'lighthouse')).toEqual(['Trip']);
+    expect(chatRow(profile, 'th')).toMatchObject({ provider_session_id: null, imported_at: expect.any(Number) });
+    expect(readFileSync(join(profile, 'duet', 'images', `${IMAGE_ID}.png`))).toEqual(ICON);
+
+    // The site's Effects, sanitized again here, on its next page.
+    await dispatch(shell, { t: 'tab.open', windowId: after.windowId, url: `${site.origin}/styled` });
+    const styled = await pageWhere(app, (url) => url === `${site.origin}/styled`);
+    await expect.poll(() => backgroundOf(styled)).toBe(STYLED);
+
+    // One Undo, from Settings: everything it brought goes, and the first-run chord comes back with its tab.
+    await card.getByRole('button', { name: 'Undo' }).click();
+    await expect(card.getByText('Import undone.')).toBeVisible({ timeout: 30_000 });
+    const undone = await stateOf(shell);
+    expect(Object.keys(undone.state.chords)).toEqual([first]);
+    expect(Object.values(undone.state.nodes).map((n) => n.id)).toContain(Object.values(before.state.nodes)[0]!.id);
+    expect(undone.state.favorites).toEqual({});
+    expect(undone.state.settings).toMatchObject({ searchEngine: 'google', themes: [], proxy: { mode: 'system' } });
+    expect(undone.state.sitePermissions).toEqual({});
+    expect(undone.state.imports).toEqual({});
+    expect(await historyFor(overlay, 'story')).toEqual([]);
+    expect(await chatsFor(overlay, 'lighthouse')).toEqual([]);
+    expect(chatRow(profile, 'th')).toBeUndefined();
+    expect(existsSync(join(profile, 'duet', 'images', `${IMAGE_ID}.png`))).toBe(false);
+    // The styled tab went with the chord it was in; the site, opened again, has no Effects.
+    expect(styled.isClosed()).toBe(true);
+    await dispatch(shell, { t: 'tab.open', windowId: undone.windowId, url: `${site.origin}/styled` });
+    const plainAgain = await pageWhere(app, (url) => url === `${site.origin}/styled`);
+    await expect(plainAgain.getByText('Styled by its Effects')).toBeVisible();
+    expect(await backgroundOf(plainAgain)).not.toBe(STYLED);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a Chord file into a profile with data: problems first, then its settings off until you turn them on, named, and the toast’s Undo', async () => {
+  test.setTimeout(240_000);
+  const { sealed, passphrase } = await exportedProfile();
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  // A profile of its own: a chord with a pinned tab, and a Favorite at the file's address under another name.
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, { profile });
+  await pageWhere(app, isShell);
+  await app.close();
+  const db = new DatabaseSync(join(profile, 'chord.db'));
+  db.exec(`INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES ('side', 'default', 'Side project', 'S', '{"stops":[{"l":0.7,"c":0.1,"h":120}],"grain":0.2,"appearance":"auto"}', 'b0', 1, 1)`);
+  db.exec(`INSERT INTO node (id, chord_id, parent_id, section, kind, rank, created_at, updated_at) VALUES ('notes', 'side', NULL, 'pinned', 'tab', 'a0', 1, 1)`);
+  db.exec(`INSERT INTO tab (node_id, pinned_url, url, title, last_active_at) VALUES ('notes', 'https://notes.test/', 'https://notes.test/', 'Notes', 1)`);
+  db.exec(`INSERT INTO favorite (id, url, title, rank, created_at, updated_at) VALUES ('mine', 'https://calendar.test/', 'Cal (mine)', 'a0', 1, 0)`);
+  db.close();
+
+  app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_APPEARANCE: 'light' }, { profile });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const before = await stateOf(shell);
+    const settings = await openYourData(app, shell);
+    const card = settings.getByRole('group', { name: 'From a Chord file' });
+
+    // Not a Chord file: said in a soft card, with one way on.
+    const text = join(mkdtempSync(join(tmpdir(), 'chord-e2e-files-')), 'notes.txt');
+    writeFileSync(text, 'Dear diary\n');
+    await answerOpenDialog(app, text);
+    await settings.getByRole('button', { name: 'Choose a file…' }).click();
+    await expect(card.getByText('That isn’t a Chord file.')).toBeVisible({ timeout: 30_000 });
+
+    // Encrypted: its passphrase, and a wrong one said so.
+    await answerOpenDialog(app, sealed);
+    await card.getByRole('button', { name: 'Choose another file…' }).click();
+    await expect(card.getByText('This file is encrypted. Enter its passphrase.')).toBeVisible({ timeout: 30_000 });
+    await card.getByLabel('Passphrase', { exact: true }).fill(`${passphrase}!`);
+    await card.getByRole('button', { name: 'Open' }).click();
+    await expect(card.getByText('That passphrase doesn’t open this file.')).toBeVisible({ timeout: 30_000 });
+    expectClean(await audit(settings, 'Settings → Your data → From a Chord file, a wrong passphrase', { appearance: 'light' }));
+    await card.getByRole('button', { name: 'Try again' }).click();
+    await card.getByLabel('Passphrase', { exact: true }).fill(passphrase);
+    await card.getByRole('button', { name: 'Open' }).click();
+
+    // A profile with data: settings stay off until you turn them on, and each change is named either way.
+    // The Favorite here at the file's address, under an older name: newer there, so it's that one, renamed.
+    await expect(card.getByText(/^New: 2 chords, 1 pinned tab, 1 Today tab, 1 folder, 1 theme, .*\. Newer than yours: 1 Favorite\. Everything else is here already\.$/)).toBeVisible({ timeout: 30_000 });
+    const toggle = card.getByRole('switch', { name: 'Import settings from the file' });
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await expect(card.getByText(/^Off: yours stay as they are\. \d+ changes if you turn it on:$/)).toBeVisible();
+    await expect(card.getByRole('list', { name: 'What the file’s settings change' })).toContainText('Search engine: Google → DuckDuckGo');
+    expectClean(await audit(settings, 'Settings → Your data → From a Chord file, a profile with data', { appearance: 'light' }));
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await card.getByRole('button', { name: 'Import', exact: true }).click();
+    const done = /^Imported 2 chords, 2 tabs, 1 Favorite, Effects for 2 sites, \d+ settings, \d+ pages of history and 1 Duet chat/;
+    await expect(card.getByText(done)).toBeVisible({ timeout: 30_000 });
+
+    const after = await stateOf(shell);
+    expect(Object.values(after.state.chords).map((c) => c.name).sort()).toEqual(['Personal', 'Personal', 'Side project', 'Work']);
+    expect(after.state.nodes['notes']).toMatchObject({ chordId: 'side', title: 'Notes' });
+    // The file's Favorite is the one here, at its address: never a second.
+    expect(Object.values(after.state.favorites).map((f) => [f.id, f.url, f.title])).toEqual([['mine', 'https://calendar.test/', 'Calendar']]);
+    expect(after.state.settings.searchEngine).toBe('duckduckgo');
+
+    // The window's toast takes it all back.
+    await shell.getByRole('group', { name: done }).getByRole('button', { name: 'Undo' }).click();
+    await expect(card.getByText('Import undone.')).toBeVisible({ timeout: 30_000 });
+    const undone = await stateOf(shell);
+    expect(Object.keys(undone.state.chords).sort()).toEqual(Object.keys(before.state.chords).sort());
+    expect(Object.values(undone.state.favorites).map((f) => [f.id, f.title])).toEqual([['mine', 'Cal (mine)']]);
+    expect(undone.state.settings.searchEngine).toBe('google');
+    expect(Object.keys(undone.state.nodes).sort()).toEqual(Object.keys(before.state.nodes).sort());
   } finally {
     await app.close();
   }

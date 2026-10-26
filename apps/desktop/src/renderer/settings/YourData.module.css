@@ -65,6 +65,43 @@
   justify-content: flex-end;
 }
 
+/* From a Chord file: what Chord is doing while it reads, inset as the rows are. */
+.note {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+/* A line across both of the fields' columns. */
+.span {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+/* Each change the file's settings would make, under their switch's row. */
+.changes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + var(--space-3));
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+/* It belongs to the row above: no divider between them. */
+.card > .changes {
+  box-shadow: none;
+}
+
+/* The small print under the switches. */
+.small {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
 @media (forced-colors: active) {
   .input[aria-invalid] {
     outline: var(--size-focus-ring) solid Mark;

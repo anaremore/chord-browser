@@ -38,7 +38,7 @@ type Sql = (text: string) => StatementSync;
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const num = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'bigint' ? Number(v) : 0);
 
-const threadOf = (r: Row): DuetThread => ({
+export const threadOf = (r: Row): DuetThread => ({
   id: str(r['id']),
   chordId: str(r['chord_id']),
   title: str(r['title']),
@@ -49,10 +49,11 @@ const threadOf = (r: Row): DuetThread => ({
   createdAt: num(r['created_at']),
   updatedAt: num(r['updated_at']),
   lastUsedAt: num(r['last_used_at']),
+  ...(r['imported_at'] === null || r['imported_at'] === undefined ? {} : { importedAt: num(r['imported_at']) }),
 });
 
 /** The images in the messages of the threads `where` picks (a condition on `t`), read before they're deleted. */
-function imagesIn(sql: Sql, where: string, ...params: (string | number)[]): DuetImage[] {
+export function imagesIn(sql: Sql, where: string, ...params: (string | number)[]): DuetImage[] {
   const rows = sql(`SELECT m.body FROM duet_message m JOIN duet_thread t ON t.id = m.thread_id WHERE ${where} AND m.body LIKE '%"images":%'`).all(...params) as Row[];
   return rows.flatMap((r) => {
     try {
@@ -94,6 +95,7 @@ export function runDuet(sql: Sql, op: DuetOp): DuetResult {
     }
     case 'saveThread': {
       const t = op.thread;
+      // Whether it came from a file is set once, by the import (db.ts, importDuet), and stays.
       sql(
         `INSERT INTO duet_thread (id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

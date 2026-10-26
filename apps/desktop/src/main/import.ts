@@ -50,7 +50,7 @@ export interface ImporterOptions {
   state(): State;
   dispatch(command: Command): void;
   /** chord-data: a port for an import's history batches, and an import's Undo. */
-  history: { port(importId: string): Promise<MessagePortMain>; undo(importId: string): Promise<void> };
+  history: { port(importId: string): Promise<MessagePortMain>; undo(importId: string): Promise<unknown> };
   toast(windowId: WindowId, toast: Toast): void;
 }
 
@@ -58,7 +58,7 @@ export interface ImporterOptions {
 const keyOf = (profile: FoundProfile) => createHash('sha256').update(profile.dir).digest('hex').slice(0, 16);
 
 const numbers = new Intl.NumberFormat('en-US');
-const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
+export const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
 const NONE: ImportCounts = { bookmarks: 0, folders: 0, chords: 0, favorites: 0, tabs: 0, pages: 0 };
 
 /** "Chrome", "Chrome · Work" when it has several profiles, "Firefox (Flatpak)". */
@@ -90,7 +90,7 @@ export function doneMessage(counts: ImportCounts, browser: string): string {
 }
 
 /** A promise that gives up after `ms` (chord-data that never answers mustn't hold an import or its Undo forever). */
-function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+export function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error('timed out')), ms);
@@ -99,20 +99,24 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * One import process, with a temp folder for its copies; the folder goes
- * when the process ends, however it ends (`closed` says when it's gone).
+ * One import process: another browser's, with a temp folder for its copies
+ * (the folder goes when the process ends, however it ends: `closed` says when
+ * it's gone), or a Chord file's (main/import-file.ts), which needs none.
  * Replies that arrive before they're asked for wait in order.
  */
-class ImportProcess {
+export class ImportProcess<Request = ImportRequest, Reply = ImportReply> {
   private readonly child: UtilityProcess;
-  private readonly inbox: ImportReply[] = [];
-  private waiting: ((reply: ImportReply | null) => void) | null = null;
+  private readonly inbox: Reply[] = [];
+  private waiting: ((reply: Reply | null) => void) | null = null;
   private exited = false;
   readonly closed: Promise<void>;
 
-  private constructor(path: string, readonly temp: string) {
+  private constructor(
+    path: string,
+    readonly temp: string | null,
+  ) {
     this.child = utilityProcess.fork(path, [], { serviceName: 'Chord Import', stdio: 'ignore' });
-    this.child.on('message', (reply: ImportReply) => {
+    this.child.on('message', (reply: Reply) => {
       if (this.waiting) this.settle(reply);
       else this.inbox.push(reply);
     });
@@ -120,6 +124,7 @@ class ImportProcess {
       this.child.once('exit', () => {
         this.exited = true;
         this.settle(null);
+        if (!temp) return resolve();
         void rm(temp, { recursive: true, force: true, maxRetries: 3 })
           .catch(() => undefined)
           .then(() => resolve());
@@ -127,22 +132,22 @@ class ImportProcess {
     });
   }
 
-  static async start(path: string): Promise<ImportProcess> {
-    return new ImportProcess(path, await mkdtemp(join(tmpdir(), PREFIX)));
+  static async start<Request = ImportRequest, Reply = ImportReply>(path: string, { temp = true }: { temp?: boolean } = {}): Promise<ImportProcess<Request, Reply>> {
+    return new ImportProcess<Request, Reply>(path, temp ? await mkdtemp(join(tmpdir(), PREFIX)) : null);
   }
 
-  private settle(reply: ImportReply | null): void {
+  private settle(reply: Reply | null): void {
     const waiting = this.waiting;
     this.waiting = null;
     waiting?.(reply);
   }
 
-  send(request: ImportRequest, transfer: MessagePortMain[] = []): void {
+  send(request: Request, transfer: MessagePortMain[] = []): void {
     if (!this.exited) this.child.postMessage(request, transfer);
   }
 
   /** The next reply; null if the process ended, took too long (it's stopped then), or is already being waited on. */
-  next(timeoutMs: number): Promise<ImportReply | null> {
+  next(timeoutMs: number): Promise<Reply | null> {
     if (this.inbox.length > 0) return Promise.resolve(this.inbox.shift()!);
     if (this.exited || this.waiting) return Promise.resolve(null);
     return new Promise((resolve) => {
@@ -157,7 +162,7 @@ class ImportProcess {
     });
   }
 
-  ask(request: ImportRequest, timeoutMs: number): Promise<ImportReply | null> {
+  ask(request: Request, timeoutMs: number): Promise<Reply | null> {
     this.send(request);
     return this.next(timeoutMs);
   }
@@ -236,7 +241,7 @@ export class Importer {
     this.letGo();
     const session: Session = { key, profile, process, ready: false, history: 0, idle: undefined };
     this.session = session;
-    const reply = await process.ask({ type: 'read', profile, temp: process.temp, chordId }, READ_TIMEOUT_MS);
+    const reply = await process.ask({ type: 'read', profile, temp: process.temp!, chordId }, READ_TIMEOUT_MS);
     // Another profile was picked meanwhile, and this one let go (its process has ended).
     if (this.session !== session) return { ok: false, problem: 'missing' };
     if (reply?.type !== 'overview') {

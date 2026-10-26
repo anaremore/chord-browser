@@ -43,7 +43,10 @@ import {
   type ImportChoices,
   type ImportOverview,
   type ImportTarget,
+  type ImportedCounts,
+  type MergeCounts,
   type ReaderArticle,
+  type SettingChange,
   type ScreenshotEntry,
   type ReaderSettings,
   type SearchEngineId,
@@ -827,6 +830,15 @@ export const ReaderSettingsPatch = z
   })
   .partial();
 
+/**
+ * Settings a Chord file brings (S15 §5), checked in main against the same
+ * schema Settings' own changes pass: only the ones that travel (never the
+ * interface's size or update checks, which are this computer's), with the
+ * two no Settings row sets alone: Safe Browsing's notice answered, and reader
+ * view's look.
+ */
+export const ImportedSettings = SettingsPatch.omit({ uiScale: true, checkForUpdates: true }).extend({ safeBrowsingAsked: z.boolean().optional(), reader: ReaderSettingsPatch.optional() });
+
 /** The archive page's entries, newest first (chord-data's ArchivePage). */
 export interface ArchiveList {
   items: ArchivedTab[];
@@ -1172,6 +1184,65 @@ export const ExportRequestSchema = z.strictObject({
 });
 export type ExportRequest = z.infer<typeof ExportRequestSchema>;
 
+/* ---------- Your data: import from a Chord file (docs/decisions/S15-your-data.md §5, §8) ---------- */
+
+/**
+ * Why a Chord file can't be imported: it isn't one (`not-chord`), a newer
+ * Chord wrote it (`newer`), it's encrypted (`needs-passphrase`) and that
+ * passphrase doesn't open it (`wrong-passphrase`), Chord couldn't read it
+ * (`unreadable`), the file chosen isn't open any more (`missing`), or another
+ * import is still running (`busy`).
+ */
+export type FileImportProblem = 'not-chord' | 'newer' | 'needs-passphrase' | 'wrong-passphrase' | 'unreadable' | 'missing' | 'busy';
+
+/** What a Chord file would bring, counted before anything comes in, against what's here (S15 §8). */
+export interface FileImportPreview {
+  fileId: string;
+  /** The file's name, without its folder. */
+  name: string;
+  encrypted: boolean;
+  /** This computer wrote it (its id is the file's). */
+  thisComputer: boolean;
+  /** When it was exported (ISO 8601), and by which Chord. */
+  created: string;
+  app: string;
+  /** Only a first-run chord here: everything in the file comes in, and Settings from the file starts on. */
+  newProfile: boolean;
+  /** Setup that's new, and newer than yours; everything else is here already. */
+  counts: { new: MergeCounts; newer: MergeCounts };
+  history: { pages: number; newPages: number };
+  duet: { chats: number; newChats: number; images: number };
+  /** Sites with Effects that are new or newer, for the switch's list. */
+  effects: { host: string; new: boolean }[];
+  /** Each setting the file would change, and each chord's own proxy, named. */
+  settings: SettingChange[];
+  /** Things from a newer Chord, passed over. */
+  skipped: number;
+  /** Part of the file is damaged or cut short: what's counted is what could be read. */
+  damaged: boolean;
+}
+
+export type FileChooseResult = { ok: true; fileId: string; name: string } | { ok: false; problem: 'cancelled' | 'busy' };
+export type FileOpenResult = { ok: true; preview: FileImportPreview } | { ok: false; problem: FileImportProblem };
+
+/** The preview's switches. Main checks the file again, and the reducer every part of it. */
+export const FileImportChoicesSchema = z.strictObject({ history: z.boolean(), duet: z.boolean(), effects: z.boolean(), settings: z.boolean() });
+export type FileImportChoices = z.infer<typeof FileImportChoicesSchema>;
+export type FileRunResult = { ok: true; importId: string } | { ok: false; problem: 'missing' | 'busy' };
+
+/** What an import from a Chord file brought (core's importedText says it). */
+export type FileImportCounts = ImportedCounts;
+
+/** How an import from a Chord file is going, pushed to Settings (`importFile:progress`). */
+export interface FileImportProgress {
+  importId: string;
+  /** `setup` while chords and tabs land, `history` while pages are written (`done` of `total`), `duet`, then `done`; `failed` keeps what landed; `undone` after Undo. */
+  phase: 'setup' | 'history' | 'duet' | 'done' | 'failed' | 'undone';
+  done: number;
+  total: number;
+  counts: FileImportCounts;
+}
+
 /** Renderer → main requests (`ipcRenderer.invoke`). */
 export const invokeChannels = {
   // Import from other browsers: first run's step (shell) and Settings → Your data. Never from a private window.
@@ -1187,6 +1258,13 @@ export const invokeChannels = {
   'export:counts': { roles: ['internal'], request: z.void(), response: z.custom<ExportCounts>() },
   'export:run': { roles: ['internal'], request: ExportRequestSchema, response: z.custom<ExportRunResult>() },
   'export:show': { roles: ['internal'], request: z.strictObject({ exportId: id }), response: z.void() },
+  // Your data: from a Chord file. Main shows the system's open dialog and keeps the path; a process of its own reads the
+  // file. A renderer names the file by its id, never a path. The passphrase goes to that process and is kept nowhere.
+  'importFile:choose': { roles: ['internal'], request: z.void(), response: z.custom<FileChooseResult>() },
+  'importFile:open': { roles: ['internal'], request: z.strictObject({ fileId: id, passphrase: z.string().max(PASSPHRASE_MAX * 4).nullable() }), response: z.custom<FileOpenResult>() },
+  'importFile:run': { roles: ['internal'], request: z.strictObject({ fileId: id, choices: FileImportChoicesSchema }), response: z.custom<FileRunResult>() },
+  /** Settings' Undo (the window's toast dispatches import.undo). */
+  'importFile:undo': { roles: ['internal'], request: z.strictObject({ importId: id }), response: z.void() },
   'duet:view': { roles: ['shell'], request: z.void(), response: z.custom<DuetView>() },
   'duet:do': { roles: ['shell'], request: DuetAction, response: z.void() },
   /** The command bar's @duet. */
@@ -1493,6 +1571,8 @@ export interface EventPayloads {
   'import:progress': ImportProgress;
   /** An export of your data, to Settings. */
   'export:progress': ExportProgress;
+  /** An import from a Chord file, to Settings. */
+  'importFile:progress': FileImportProgress;
   /** Tabs in the window's chords playing media (or paused a moment ago), newest first, when that changes. */
   'media:state': NowPlaying[];
   /** A reader view's look changed: its chord's colors, its controls, reduced motion. */
@@ -1726,6 +1806,19 @@ export interface SettingsApi {
   imports: ImportApi;
   /** Settings → Your data → Export. */
   exports: ExportApi;
+  /** Settings → Your data → From a Chord file. */
+  files: FileImportApi;
+}
+
+/** Your data's import from a Chord file (Settings → Your data, docs/decisions/S15-your-data.md §8). */
+export interface FileImportApi {
+  /** The system's open dialog; the file is then the session's, by its id. */
+  choose(): Promise<FileChooseResult>;
+  /** Read it (off main), with its passphrase if it's encrypted, and count what it would bring. */
+  open(fileId: string, passphrase: string | null): Promise<FileOpenResult>;
+  run(fileId: string, choices: FileImportChoices): Promise<FileRunResult>;
+  undo(importId: string): Promise<void>;
+  onProgress(listener: (progress: FileImportProgress) => void): () => void;
 }
 
 /** Your data's export (Settings → Your data, docs/decisions/S15-your-data.md §8). */

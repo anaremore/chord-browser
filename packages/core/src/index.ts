@@ -12,6 +12,7 @@ export * from './input';
 export * from './keywords';
 export * from './links';
 export * from './media';
+export * from './merge';
 export * from './model';
 export * from './page';
 export * from './proxy';

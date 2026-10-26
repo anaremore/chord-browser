@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./db": "./src/db.ts",
     "./export": "./src/export.ts",
+    "./import-file": "./src/import-file.ts",
     "./crypto": "./src/crypto.ts"
   },
   "scripts": {

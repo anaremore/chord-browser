@@ -34,6 +34,7 @@
  */
 import {
   cleanOutline,
+  cleanSiteEffects,
   EFFECTS_LIMITS,
   EFFECTS_OUTLINE_TOOL,
   effectsHost,
@@ -192,6 +193,8 @@ export class Effects {
   private readonly asks = new Map<WindowId, Ask>();
   private readonly picks = new Map<WindowId, Pick>();
   private readonly undos = new Map<string, { scope: WindowId | null; host: string; before: SiteEffects | null }>();
+  /** What each import from a Chord file changed, by site, as it was (null: it had none). */
+  private readonly imported = new Map<string, { host: string; site: SiteEffects | null }[]>();
   private readonly chains = new Map<string, Promise<void>>();
   private readonly compiler: EffectsCompiler;
   private opened = 0;
@@ -235,9 +238,9 @@ export class Effects {
    * Change one site's Effects, one change at a time per site: `edit` gets a
    * copy of what's there now (or an empty site) and returns the new one, or
    * null to remove it. The result is sanitized before anything of it is used.
-   * `undo` puts a toast in that window to take the change back.
+   * `undo` puts a toast in that window to take the change back. `quiet`: Settings' list hears of it from the caller, once for many.
    */
-  private change(scope: WindowId | null, host: string, edit: (site: SiteEffects) => SiteEffects | null, undo?: { w: EffectsWindow; message: string }): Promise<void> {
+  private change(scope: WindowId | null, host: string, edit: (site: SiteEffects) => SiteEffects | null, undo?: { w: EffectsWindow; message: string }, quiet = false): Promise<void> {
     const key = scopeKey(scope, host);
     const run = async () => {
       const before = this.stored(scope, host);
@@ -275,7 +278,7 @@ export class Effects {
       }
       if (undo) this.offerUndo(undo.w, scope, host, before?.site ?? null, undo.message);
       this.siteChanged(scope, host);
-      if (!scope) this.deps.settingsChanged();
+      if (!scope && !quiet) this.deps.settingsChanged();
     };
     const chain = (this.chains.get(key) ?? Promise.resolve()).then(run, run);
     this.chains.set(key, chain);
@@ -682,6 +685,46 @@ export class Effects {
     if (!this.saved.has(change.host)) return Promise.resolve();
     if (change.do === 'remove') return this.change(null, change.host, () => null);
     return this.change(null, change.host, (site) => ({ ...site, wet: change.wet, updatedAt: Date.now() }));
+  }
+
+  /* ---------- Your data: an import from a Chord file (S15 §5) ---------- */
+
+  /**
+   * Sites' Effects from a Chord file, each merged with what's here already
+   * (core's planMerge) and checked (`cleanSiteEffects`): each one goes through
+   * `change`, so the sanitizer makes its stylesheet before any of it is used,
+   * as for Effects you write. They apply on the site's next page. What each
+   * site had is kept, for the import's Undo.
+   */
+  async importSites(importId: string, sites: readonly SiteEffects[]): Promise<void> {
+    const before = this.imported.get(importId) ?? [];
+    this.imported.set(importId, before);
+    await Promise.all(
+      sites.map((incoming) => {
+        const site = cleanSiteEffects(incoming);
+        if (!site || !hasEffects(site) || (!this.saved.has(site.host) && this.saved.size >= EFFECTS_LIMITS.sites)) return Promise.resolve();
+        return this.change(
+          null,
+          site.host,
+          (current) => {
+            if (!before.some((b) => b.host === site.host)) before.push({ host: site.host, site: this.saved.has(site.host) ? clone(current) : null });
+            return site;
+          },
+          undefined,
+          true,
+        );
+      }),
+    );
+    // Settings' list of sites, once for the lot.
+    this.deps.settingsChanged();
+  }
+
+  /** An import's Undo: each site it changed as it was, or without Effects again. */
+  async undoImport(importId: string): Promise<void> {
+    const before = this.imported.get(importId) ?? [];
+    this.imported.delete(importId);
+    await Promise.all(before.map((b) => this.change(null, b.host, () => (b.site ? clone(b.site) : null), undefined, true)));
+    this.deps.settingsChanged();
   }
 
   /** Development and tests: what's saved, what each page has, and main's timings. */

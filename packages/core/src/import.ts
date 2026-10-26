@@ -8,6 +8,7 @@
  * Passwords, cookies, autofill and extensions are never read.
  */
 import { generateNKeysBetween } from 'fractional-indexing';
+import type { MergeUndo } from './merge';
 import { DEFAULT_PROFILE, MAX_FAVORITES, type Chord, type ChordId, type ChordThemeSpec, type Favorite, type FolderNode, type SidebarNode, type State, type TabNode } from './model';
 import { dayOf, frecencyOn, HALF_LIFE_DAYS } from './rank';
 import { sortedChords, sortedFavorites } from './select';
@@ -66,6 +67,12 @@ export interface ImportedPage {
   title: string;
   visits: number[];
   typed: number[];
+  /**
+   * How many times it was typed, without when (a Chord file's `typed`, S15 §1):
+   * the page's count becomes the larger of this and Chord's own, so a file
+   * from this computer, or one imported twice, adds nothing.
+   */
+  typedCount?: number;
 }
 
 /**
@@ -98,9 +105,11 @@ export interface ImportChoices {
 /** What one import added, so its Undo can take exactly that away (this session only, never saved). */
 export interface ImportRecord {
   chordIds: ChordId[];
-  /** Folders and tabs it put at the top of chords you already had; everything else it made is inside these or in its own chords. */
+  /** Folders and tabs it put in chords you already had, at the top of what it added there; everything else it made is inside these or in its own chords. */
   nodeIds: string[];
   favoriteIds: string[];
+  /** An import from a Chord file (`data.merge`) also updates what's older, and Undo puts that back (merge.ts). */
+  merged?: MergeUndo;
 }
 
 /** The bookmarks bar's links that become Favorites; the rest go in a folder. The row wraps well before this. */
