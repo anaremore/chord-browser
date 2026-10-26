@@ -106,15 +106,18 @@ export interface SyncMeta {
   coveredReads: Record<string, string>;
   /**
    * What the worker is writing to this computer's log, kept until it's
-   * answered (core's `Appending`, its bytes as base64): after a write that
-   * failed, or a worker let go mid-write, the next worker takes those bytes as
-   * this computer's own if they're there, and never as another writer's.
+   * answered (core's `Appending`: where, how long, its hash, never its
+   * bytes): after a write that failed, a worker let go mid-write, or a stop
+   * between a snapshot's rename and its answer, the next worker takes exactly
+   * those bytes as this computer's own if they're there, never as another
+   * writer's. `own` is kept up to date with what it settles.
    */
-  appending: { expect: OwnSegment; at: number; bytes: string } | null;
+  appending: { expect: OwnSegment; at: number; length: number; hash: string | null } | null;
 }
 
-/** A thing's version in the copy: a short hash of its merged fields and stamps, as stored. */
-const versionOf = (row: Row): string => createHash('sha256').update(String(row['fields'])).update('\n').update(String(row['stamps'])).digest('base64url').slice(0, 22);
+/** A thing's merged version and what chord.db has of it, as one short hash: an idle look skips one it pushed as it is. */
+const signatureOf = (row: Row): string =>
+  createHash('sha256').update(String(row['fields'])).update('\n').update(String(row['stamps'])).update('\n').update(String(row['local'])).digest('base64url').slice(0, 22);
 
 const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null, newIds: [], rebind: false, coveredReads: {}, appending: null };
 
@@ -197,6 +200,8 @@ export class SyncStore {
   private readonly icons = new Map<string, { id: string; mime: string; data: string } | null>();
   /** Changes stamped since the worker last took the outbox: chord-data writes them about 3 s after the last. */
   pending = 0;
+  /** A write made room for what waited (`takeDue`). */
+  private due = false;
   /** How long sync's steps took on chord-data's thread (ms), the last few hundred of each: perf.spec.ts reads them. */
   readonly timings: SyncTimings = { write: [], writeOff: [], stamp: [], frame: [], frameBytes: [], merge: [], plan: [], page: [], steps: [] };
 
@@ -444,6 +449,7 @@ export class SyncStore {
     const chordsGone = ops.filter((op) => op.k === 'chord' && !op.value);
     for (const op of chordsGone.length > 0 ? [...chordsGone, ...ops.filter((op) => !chordsGone.includes(op))] : ops) {
       const fromSync = op.sync === true;
+      if (!this.due) this.due = this.makesRoom(op);
       switch (op.k) {
         case 'chord':
           this.touch('chord', op.id, op.value ? localChordFields(op.value) : null, fromSync, now);
@@ -491,13 +497,37 @@ export class SyncStore {
     this.saveClock();
   }
 
+  /** Whether a write brings a chord, a folder or a split here (new, back, or moved), or takes away a Favorite: what waited for one may apply now. */
+  private makesRoom(op: WriteOp): boolean {
+    if (op.k === 'favorite') return op.value === null;
+    if (op.k === 'chord') return op.value !== null && !this.liveHere('chord', op.id);
+    if (op.k !== 'node' || !op.value || op.value.kind === 'tab') return false;
+    const had = this.localHere(op.value.kind, op.id);
+    if (!had || had['deleted'] === true) return true;
+    const pos = had['pos'] as { chord?: unknown; parent?: unknown } | undefined;
+    return pos?.chord !== op.value.chordId || pos?.parent !== op.value.parentId;
+  }
+
+  private localHere(type: string, id: string): SyncValues | null {
+    const row = this.sql('SELECT local FROM sync_record WHERE type = ? AND id = ?').get(type, id) as Row | undefined;
+    return row?.['local'] ? parseJson<SyncValues | null>(row['local'], null) : null;
+  }
+
+  private liveHere(type: string, id: string): boolean {
+    const local = this.localHere(type, id);
+    return local !== null && local['deleted'] !== true;
+  }
+
   /** Custom themes are things of their own: each one in the list, and a tombstone for each that left it. */
   private themes(value: unknown, fromSync: boolean, now: number): void {
     const themes = (Array.isArray(value) ? value : []).map(validTheme).filter((t) => t !== null);
     const ids = new Set(themes.map((t) => t.id));
     for (const theme of themes) this.touch('theme', theme.id, localThemeFields(theme), fromSync, now);
     for (const row of this.sql(`SELECT id FROM sync_record WHERE type = 'theme'`).all() as Row[]) {
-      if (!ids.has(str(row['id']))) this.touch('theme', str(row['id']), null, fromSync, now);
+      if (ids.has(str(row['id']))) continue;
+      // One gone frees room for one that waited for it.
+      if (this.liveHere('theme', str(row['id']))) this.due = true;
+      this.touch('theme', str(row['id']), null, fromSync, now);
     }
   }
 
@@ -851,21 +881,20 @@ export class SyncStore {
   }
 
   /**
-   * What this computer hasn't applied of the copy, by thing, a page at a time:
-   * main's writes of what it applied are what set `local`, so after a quit or
-   * a crash during a pass or an apply (or an apply that failed), what's merged
-   * but not on screen differs from it, and is pushed again. A thing never
-   * applied here; one gone in the copy but not here, or the other way round;
-   * and a field this computer keeps whose value differs. Fields it never keeps
-   * (a tab's title off its home, another platform's shortcuts) and ones it
-   * never takes (a chord's sign-ins, Effects' Duet ids) aren't differences.
-   *
-   * And none of it if main has applied this very version (`applied`, the
-   * hash `versions` gives): what this computer keeps can differ from it for
-   * good, tidied by the same checks every apply makes, refused, or put
-   * elsewhere for where it is here (a folder too deep, the last chord, a split
-   * without its panes). Comparing through each kind's codec would catch only
-   * the first; the version catches all three, so a relaunch pushes nothing.
+   * Reconciling (S15 §13): what chord.db durably has against the merged copy,
+   * by thing, a page at a time; whatever differs is pushed to main again.
+   * What chord.db has of each thing is `local`: its rows as the stamping hook
+   * projects them (core's `local*Fields`), kept in the same transaction as the
+   * rows themselves, so a write chord-data refused, or one a crash cut off,
+   * leaves it as it was, and shows here. A thing never applied here; one gone
+   * in the copy but not here, or the other way round; and a field this
+   * computer keeps whose value differs. Fields it never keeps (a tab's title
+   * off its home, another platform's shortcuts) and ones it never takes (a
+   * chord's sign-ins, Effects' Duet ids) aren't differences. What this
+   * computer always keeps otherwise (tidied, refused, waiting for its chord or
+   * folder, past a cap) differs too, and is pushed again, to apply as
+   * nothing, or as something once what it waited for is here. Only what can't
+   * apply anywhere yet (its chord isn't in the copy at all) is left out.
    */
   *unappliedPages(size = 200): Generator<Map<string, Set<string>>> {
     const never: Record<string, readonly string[]> = { chord: ['profile'], effects: ['duet'] };
@@ -873,59 +902,58 @@ export class SyncStore {
     const live = (type: string, id: unknown) => typeof id === 'string' && brief(type, id) !== null && !brief(type, id)!.gone;
     let after = { type: '', id: '' };
     for (;;) {
-      const rows = this.sql(`SELECT type, id, fields, stamps, local, applied FROM sync_record WHERE type > ? OR (type = ? AND id > ?) ORDER BY type, id LIMIT ?`).all(after.type, after.type, after.id, size) as Row[];
+      const rows = this.sql(`SELECT type, id, fields, stamps, local FROM sync_record WHERE type > ? OR (type = ? AND id > ?) ORDER BY type, id LIMIT ?`).all(after.type, after.type, after.id, size) as Row[];
       const out = new Map<string, Set<string>>();
       for (const row of rows) {
         const { thing, local } = this.loaded(str(row['type']), str(row['id']), row);
         after = { type: thing.type, id: thing.id };
         if (thing.type === 'icon' || thing.type === 'device' || syncKind(thing.type) !== 'sync') continue;
         const key = thingKey(thing.type, thing.id);
-        const differs = (names: Set<string>) => {
-          if (names.size > 0 && (row['applied'] === null || row['applied'] !== versionOf(row))) out.set(key, names);
-        };
         const gone = isGone(thing);
         const goneHere = local?.['deleted'] === true;
-        // What can't apply here yet waits, unpushed, for what it depends on: main asks again once chords or folders come.
         if (!gone && (NODE_TYPES.has(thing.type) || thing.type === 'route')) {
-          const pos = (thing.type === 'route' ? { chord: thing.fields['chord']?.v } : thing.fields['pos']?.v) as { chord?: unknown; parent?: unknown } | undefined;
+          const pos = (thing.type === 'route' ? { chord: thing.fields['chord']?.v } : thing.fields['pos']?.v) as { chord?: unknown } | undefined;
           if (!live('chord', pos?.chord)) continue;
-          if (local && !goneHere && typeof pos?.parent === 'string' && !live('folder', pos.parent) && !live('split', pos.parent)) continue;
         }
         if (!local || goneHere) {
-          if (!gone) differs(new Set(Object.keys(thing.fields)));
+          if (!gone) out.set(key, new Set(Object.keys(thing.fields)));
           continue;
         }
         if (gone) {
-          differs(new Set(['deleted']));
+          out.set(key, new Set(['deleted']));
           continue;
         }
         const skip = never[thing.type] ?? [];
-        differs(new Set(Object.keys(thing.fields).filter((name) => name !== 'deleted' && name in local && !skip.includes(name) && !same(thing.fields[name]!.v, local[name]))));
+        const names = Object.keys(thing.fields).filter((name) => name !== 'deleted' && name in local && !skip.includes(name) && !same(thing.fields[name]!.v, local[name]));
+        if (names.length > 0) out.set(key, new Set(names));
       }
       yield out;
       if (rows.length < size) return;
     }
   }
 
-  /** Each thing's version as the copy has it now (a hash of its merged fields and stamps), by key: what a push carries, for main to confirm. */
-  versions(keys: Iterable<string>): Record<string, string> {
-    const statement = this.sql('SELECT fields, stamps FROM sync_record WHERE type = ? AND id = ?');
-    const out: Record<string, string> = {};
+  /** Each thing's merged version and what chord.db has of it, as one hash, by key: an idle look skips a thing it pushed as it still is. */
+  signatures(keys: Iterable<string>): Map<string, string> {
+    const statement = this.sql('SELECT fields, stamps, local FROM sync_record WHERE type = ? AND id = ?');
+    const out = new Map<string, string>();
     for (const key of keys) {
       const at = key.indexOf('\n');
       const row = statement.get(key.slice(0, at), key.slice(at + 1)) as Row | undefined;
-      if (row) out[key] = versionOf(row);
+      if (row) out.set(key, signatureOf(row));
     }
     return out;
   }
 
-  /** Main applied these versions and wrote them back (`sync.applied`): a thing still at its version isn't pushed again. */
-  markApplied(versions: Record<string, string>): void {
-    const statement = this.sql('UPDATE sync_record SET applied = ? WHERE type = ? AND id = ?');
-    for (const [key, version] of Object.entries(versions)) {
-      const at = key.indexOf('\n');
-      statement.run(version, key.slice(0, at), key.slice(at + 1));
-    }
+  /**
+   * Since chord-data last asked: a write here (sync's own apply, or yours, an
+   * Undo) brought a chord, a folder or a split, or moved one, or took away a
+   * Favorite or a theme. What waited for one of those (a tab for its chord or
+   * folder, a Favorite for room) may apply now: chord-data reconciles soon.
+   */
+  takeDue(): boolean {
+    const due = this.due;
+    this.due = false;
+    return due;
   }
 
   /** How far this computer has read each other computer's folder in this generation: its cursors, as one string each. */

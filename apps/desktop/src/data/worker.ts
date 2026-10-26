@@ -63,13 +63,26 @@ process.parentPort.on('message', (event) => {
       }
       case 'write': {
         if (!db) throw new Error('chord-data: write before open');
-        const at = performance.now();
-        const stamping = db.sync.stamping;
-        db.write(request.ops, Date.now(), request.events);
-        db.sync.timed(stamping ? 'write' : 'writeOff', performance.now() - at);
-        reply({ id: request.id, ok: true });
-        // What sync stamped goes to the folder a moment after the last change.
-        sync.afterWrite();
+        const writing = db;
+        const { id, ops, events } = request;
+        // On the next turn: a search that came in behind it (the command bar typing while sync applies) is answered first,
+        // rather than waiting out the write. Main sends one write at a time and waits for its answer, so they stay in order.
+        setImmediate(() => {
+          try {
+            if (db !== writing) throw new Error('chord-data: closed');
+            const at = performance.now();
+            const stamping = writing.sync.stamping;
+            writing.write(ops, Date.now(), events);
+            writing.sync.timed(stamping ? 'write' : 'writeOff', performance.now() - at);
+            reply({ id, ok: true });
+            // What sync stamped goes to the folder a moment after the last change.
+            sync.afterWrite();
+          } catch (error) {
+            reply({ id, ok: false, error: error instanceof Error ? (error.stack ?? error.message) : String(error) });
+            // Refused (a full disk): what sync applied isn't in chord.db, and a reconcile finds it again.
+            sync.writeRefused();
+          }
+        });
         break;
       }
       case 'search':

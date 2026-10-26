@@ -1587,7 +1587,12 @@ function diskFolder(root: string): SyncFs {
     rename: async (from, to) => renameSync(at(from), at(to)),
     mkdir: async (path) => void mkdirSync(at(path), { recursive: true }),
     remove: async (path) => rmSync(at(path), { recursive: true, force: true }),
-    truncate: async (path, size) => truncateSync(at(path), size),
+    cutBack: async (path, to, expect) => {
+      const bytes = readFileSync(at(path));
+      if (bytes.length !== to + expect.length || !bytes.subarray(to).equals(Buffer.from(expect))) return false;
+      truncateSync(at(path), to);
+      return true;
+    },
   };
 }
 

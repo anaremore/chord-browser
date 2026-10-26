@@ -57,8 +57,14 @@ export interface SyncFs {
   mkdir(path: string): Promise<void>;
   /** A file, or a folder and everything in it. */
   remove(path: string): Promise<void>;
-  /** A file cut back to its first `size` bytes: only ever this computer's own segment, after a write of its own cut short. */
-  truncate(path: string, size: number): Promise<void>;
+  /**
+   * This computer's own segment cut back to its first `at` bytes after a write
+   * of its own the disk took only part of: only if it's exactly `at` plus
+   * `expect`'s length long and ends with `expect`, checked on the open file
+   * just before it's cut, so nothing written meanwhile is cut. False, and
+   * nothing cut, otherwise.
+   */
+  cutBack(path: string, at: number, expect: Uint8Array): Promise<boolean>;
 }
 
 export const SYNC_FOLDER = 'Chord sync';
@@ -604,18 +610,24 @@ export async function ownIntact(fs: SyncFs, own: OwnSegment, c: DataCrypto): Pro
 }
 
 /**
- * What this computer is writing to its log (S15 §13): the bytes, where they go
- * (`at`; 0 for a new segment, made whole by a rename), and its segment as it
- * will be once they're there. Kept until the write is answered (chord-data
- * keeps it across a restart of the worker, or of Chord), so a write of its own
- * is never taken for another writer's: one whose bytes landed though the call
- * failed (a flush or a close that threw, the worker stopped mid-flush) is its,
- * and one cut short (a full disk) is cut back and written again.
+ * What this computer is writing to its log (S15 §13): where it goes (`at`; 0
+ * for a whole new segment, or a snapshot, made whole by a rename), how many
+ * bytes, their SHA-256 (hex; null for a snapshot, written a page at a time,
+ * whose last frame's hash its segment carries), and its segment as it will be
+ * once they're there. Kept until the write is answered (chord-data keeps it
+ * across a restart of the worker, or of Chord, without the bytes), so a write
+ * of its own is never taken for another writer's: one whose bytes landed
+ * though the call failed (a flush or a close that threw, the worker stopped
+ * mid-flush, Chord quit between a snapshot's rename and its answer) is its,
+ * and one the disk took only part of is cut back and written again (that
+ * needs the bytes, which the worker that wrote them has).
  */
 export interface Appending {
   expect: OwnSegment;
   at: number;
-  bytes: Uint8Array;
+  length: number;
+  hash: string | null;
+  bytes?: Uint8Array;
 }
 
 const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((byte, i) => byte === b[i]);
@@ -628,24 +640,31 @@ const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.leng
  * it was, and the write goes again. Anything else there (more bytes, or
  * other ones) isn't settled: it's another writer's, as before.
  */
-export async function settleAppend(fs: SyncFs, own: OwnSegment, appending: Appending | null | undefined): Promise<{ own: OwnSegment; settled: 'landed' | 'cut' | null }> {
+export async function settleAppend(fs: SyncFs, own: OwnSegment, appending: Appending | null | undefined, c: DataCrypto): Promise<{ own: OwnSegment; settled: 'landed' | 'cut' | null }> {
   const none = { own, settled: null };
   if (!appending || appending.expect.generation !== own.generation || appending.expect.device !== own.device) return none;
-  const { expect, at, bytes } = appending;
+  const { expect, at, length } = appending;
   const fresh = expect.segment !== own.segment;
   if (fresh ? expect.segment < own.segment || at !== 0 : at !== own.size) return none;
   const path = `${deviceFolder(expect.generation, expect.device)}/${segmentName(expect.segment)}`;
   const stat = await fs.stat(path);
   if (!stat || stat.size <= at) return none;
   const extra = stat.size - at;
-  if (extra > bytes.length) return none;
+  if (extra > length) return none;
+  if (extra === length) {
+    // All of it: exactly its bytes (by their hash), or for a snapshot, exactly its size ending with its last frame.
+    if (appending.hash !== null) {
+      const got = await fs.read(path, at, extra);
+      if (got.length !== extra || hex(c.sha256(got)) !== appending.hash) return none;
+    } else if ((await ownIntact(fs, expect, c)) !== 'ok') return none;
+    return { own: expect, settled: 'landed' };
+  }
+  // Only its first bytes (a short write): its own only if they're exactly those, which only the worker that wrote them
+  // knows. A new segment or a snapshot is never seen half made (it's renamed into place whole).
+  if (fresh || !appending.bytes) return none;
   const got = await fs.read(path, at, extra);
-  if (!sameBytes(got, bytes.subarray(0, extra))) return none;
-  if (extra === bytes.length) return { own: expect, settled: 'landed' };
-  // A new segment is never seen half made (it's renamed into place whole): a part of one isn't this computer's.
-  if (fresh) return none;
-  await fs.truncate(path, at);
-  return { own, settled: 'cut' };
+  if (!sameBytes(got, appending.bytes.subarray(0, extra))) return none;
+  return (await fs.cutBack(path, at, got)) ? { own, settled: 'cut' } : none;
 }
 
 /** A name this computer's own writing leaves for a moment: a segment made under a temp name, a snapshot written as `.part-`. */
@@ -860,7 +879,7 @@ export async function appendRecords(
     const segment = sealSegment(where, records, root, { snapshot: false, app: opts.app, device: opts.device, ...(opts.now ? { now: opts.now } : {}) }, c);
     // The one it closes is its, as it left it: its next snapshot covers it.
     const expect: OwnSegment = { ...segment.own, closed: [...(own.closed ?? []), [own.segment, own.size, own.frames] as Cover] };
-    opts.onAppend?.({ expect, at: 0, bytes: segment.bytes });
+    opts.onAppend?.({ expect, at: 0, length: segment.bytes.length, hash: hex(c.sha256(segment.bytes)), bytes: segment.bytes });
     await fs.mkdir(folder);
     await fs.create(`${folder}/${segmentName(n)}`, segment.bytes);
     return { ok: true, own: expect, frames: expect.frames, bytes: expect.size };
@@ -871,7 +890,7 @@ export async function appendRecords(
   const size = own.size + bytes.length;
   const tail = tailOf(sealed.bytes.at(-1), size, c) ?? own.tail;
   const expect: OwnSegment = { ...own, size, frames: own.frames + sealed.count, ...(tail ? { tail } : {}) };
-  opts.onAppend?.({ expect, at: own.size, bytes });
+  opts.onAppend?.({ expect, at: own.size, length: bytes.length, hash: hex(c.sha256(bytes)), bytes });
   await fs.append(path, bytes);
   return { ok: true, own: expect, frames: sealed.count, bytes: bytes.length };
 }
@@ -1292,7 +1311,7 @@ export async function writeSnapshot(
   where: { generation: number; device: string },
   records: AsyncIterable<readonly DataRecord[]> | Iterable<readonly DataRecord[]>,
   root: Uint8Array,
-  opts: { app: string; device: readonly DataRecord[]; after?: number; covers?: Cover[]; now?: number; memory?: FolderMemory },
+  opts: { app: string; device: readonly DataRecord[]; after?: number; covers?: Cover[]; now?: number; memory?: FolderMemory; onRename?(appending: Appending): void },
   c: DataCrypto,
 ): Promise<OwnSegment> {
   const folder = deviceFolder(where.generation, where.device);
@@ -1329,6 +1348,9 @@ export async function writeSnapshot(
       index += sealed.count;
       last = sealed.bytes.at(-1);
     }
+    // Before it's in place, what it will be: a stop between the rename and the answer leaves it this computer's own.
+    const tail = tailOf(last, size, c);
+    opts.onRename?.({ expect: { ...where, segment: n, size, frames: index, closed: [], ...(tail ? { tail } : {}) }, at: 0, length: size, hash: null });
     await fs.rename(temp, `${folder}/${name}`);
   } catch (error) {
     await fs.remove(temp).catch(() => undefined);

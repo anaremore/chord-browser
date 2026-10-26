@@ -13,11 +13,16 @@ import type { SyncFs } from '@chord/core';
 /**
  * Set once chord-data has let this worker go (a file call that never returned
  * held it a minute): when that call does return, nothing more is done in the
- * folder, so the worker started in its place is the only one writing.
+ * folder, so the worker started in its place is the only one writing. Checked
+ * right before every call that changes the folder (`live`), not only when an
+ * operation starts: one already under way stops at its next.
  */
 let abandoned = false;
 export const abandonFolder = (): void => {
   abandoned = true;
+};
+const live = (): void => {
+  if (abandoned) throw new Abandoned();
 };
 
 export class Abandoned extends Error {
@@ -96,35 +101,38 @@ export class NodeFolder implements SyncFs {
     return target;
   }
 
+  /** A file written whole; one the call couldn't finish (a short write, a flush that failed) is removed in the same call, never left half made. */
   async create(path: string, bytes: Uint8Array, exclusive = false): Promise<void> {
     const target = await this.writable(path);
-    if (exclusive) {
-      const handle = await open(target, 'wx');
+    // A temp name no reader takes for a segment (NNNNNN.chordlog only), then renamed: never seen half made. The folder's
+    // file is made in place (`exclusive`: never over another), and only ever by this call.
+    const made = exclusive ? target : `${target}.tmp-${randomBytes(4).toString('hex')}`;
+    live();
+    const handle = await open(made, exclusive ? 'wx' : 'w');
+    try {
       try {
+        live();
         await writeAll(handle, bytes);
         await handle.sync();
       } finally {
         await handle.close();
       }
-      return;
+    } catch (error) {
+      await rm(made, { force: true }).catch(() => undefined);
+      throw error;
     }
-    // A temp name no reader takes for a segment (NNNNNN.chordlog only), then renamed: never seen half made.
-    const temp = `${target}.tmp-${randomBytes(4).toString('hex')}`;
-    const handle = await open(temp, 'w');
-    try {
-      await writeAll(handle, bytes);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    if (abandoned) throw new Abandoned();
-    await rename(temp, target);
+    if (exclusive) return;
+    live();
+    await rename(made, target);
   }
 
   /** The bytes at the end, flushed; a write the disk took only part of throws (`ShortWrite`), and the caller cuts it back. */
   async append(path: string, bytes: Uint8Array): Promise<void> {
-    const handle = await open(await this.writable(path), 'a');
+    const target = await this.writable(path);
+    live();
+    const handle = await open(target, 'a');
     try {
+      live();
       await writeAll(handle, bytes);
       await handle.sync();
     } finally {
@@ -132,11 +140,20 @@ export class NodeFolder implements SyncFs {
     }
   }
 
-  async truncate(path: string, size: number): Promise<void> {
-    const handle = await open(await this.writable(path), 'r+');
+  async cutBack(path: string, at: number, expect: Uint8Array): Promise<boolean> {
+    const target = await this.writable(path);
+    live();
+    const handle = await open(target, 'r+');
     try {
-      await handle.truncate(size);
+      // On the open file, just before the cut: exactly its own bytes past `at`, or nothing is cut.
+      if ((await handle.stat()).size !== at + expect.length) return false;
+      const buffer = Buffer.alloc(expect.length);
+      const { bytesRead } = await handle.read(buffer, 0, expect.length, at);
+      if (bytesRead !== expect.length || !buffer.equals(Buffer.from(expect.buffer, expect.byteOffset, expect.byteLength))) return false;
+      live();
+      await handle.truncate(at);
       await handle.sync();
+      return true;
     } finally {
       await handle.close();
     }
@@ -144,18 +161,23 @@ export class NodeFolder implements SyncFs {
 
   async rename(from: string, to: string): Promise<void> {
     const source = await this.writable(from);
-    await rename(source, await this.writable(to));
+    const target = await this.writable(to);
+    live();
+    await rename(source, target);
   }
 
   async mkdir(path: string): Promise<void> {
     // `Chord sync` itself is made only where nothing is: a link someone put there is never written through.
     if ((await lstat(this.root).catch(() => null))?.isSymbolicLink()) throw new Error('Sync won’t write through a link');
+    live();
     await mkdir(this.full(path), { recursive: true });
     if (path) await this.writable(`${path}/.`);
   }
 
   async remove(path: string): Promise<void> {
     // rm never follows a link it removes, but the folder it's in must be the sync folder's own.
-    await rm(await this.writable(path), { recursive: true, force: true, maxRetries: 3 });
+    const target = await this.writable(path);
+    live();
+    await rm(target, { recursive: true, force: true, maxRetries: 3 });
   }
 }

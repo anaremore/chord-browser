@@ -60,8 +60,6 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
   };
   const commands: Command[] = [];
   const toasts: Toast[] = [];
-  // Writes chord-data refused so far (main counts them): `fail` refuses one.
-  let failures = 0;
   let flushing: () => void = () => undefined;
   const views: SyncView[] = [];
   let push: ((message: DataPush) => void) | null = null;
@@ -70,7 +68,7 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
     state = apply(state, command, ctx).state;
   };
   const service = new SyncService({
-    data: { sync: async (request) => reply(request), flush: async () => flushing(), failures: () => failures, waiting, onPush: (listener) => (push = listener) },
+    data: { sync: async (request) => reply(request), flush: async () => flushing(), waiting, onPush: (listener) => (push = listener) },
     state: () => state,
     dispatch,
     effects: { syncSites: async () => undefined },
@@ -81,7 +79,7 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
     platform: 'linux',
     folder: () => '/home',
   });
-  return { service, home, windowId, commands, toasts, views, fail: () => void failures++, whenFlushed: (then: () => void) => void (flushing = then), dispatch, state: () => state, push: (apply: SyncApply, versions?: Record<string, string>) => push!({ push: 'sync.apply', apply, ...(versions ? { versions } : {}) }) };
+  return { service, home, windowId, commands, toasts, views, whenFlushed: (then: () => void) => void (flushing = then), dispatch, state: () => state, push: (apply: SyncApply) => push!({ push: 'sync.apply', apply }) };
 }
 
 describe('a chord another computer deleted', () => {
@@ -110,47 +108,8 @@ describe('a chord another computer deleted, while a change of yours to it waits'
   });
 });
 
-describe('confirming what was applied', () => {
-  const key = (type: string, id: string) => `${type}\n${id}`;
-
-  it('a tab whose chord isn’t here yet, and one whose folder isn’t: not confirmed; once a chord or folder comes, what waited is asked for again', async () => {
-    const asked: SyncRequest[] = [];
-    const h = harness((request) => {
-      asked.push(request);
-      return {};
-    });
-    const confirmed = () => asked.filter((r): r is Extract<SyncRequest, { type: 'sync.applied' }> => r.type === 'sync.applied');
-    const early = tab('early', 'later-chord');
-    const inFolder = tab('in-folder', 'x', { parentId: 'later-folder' });
-    h.push({ ...emptyApply(), chords: [chord('y', 'c0')], nodes: [early, inFolder] }, { [key('chord', 'y')]: 'v1', [key('tab', 'early')]: 'v2', [key('tab', 'in-folder')]: 'v3' });
-    await vi.waitFor(() => expect(confirmed()).toHaveLength(1));
-    // The chord that came is confirmed; the tab waiting for its chord, and the one put at the top for want of its folder, aren't.
-    expect(confirmed()[0]!.versions).toEqual({ [key('chord', 'y')]: 'v1' });
-    expect(h.state().nodes['early']).toBeUndefined();
-    expect(h.state().nodes['in-folder']).toMatchObject({ chordId: 'x', parentId: null });
-    // A chord came: what waited is asked for again.
-    expect(asked.filter((r) => r.type === 'sync.reconcile')).toHaveLength(1);
-    // A push of only tabs, all of which apply: confirmed, and nothing more asked for.
-    h.push({ ...emptyApply(), nodes: [tab('plain', 'x')] }, { [key('tab', 'plain')]: 'v4' });
-    await vi.waitFor(() => expect(confirmed()).toHaveLength(2));
-    expect(confirmed()[1]!.versions).toEqual({ [key('tab', 'plain')]: 'v4' });
-    expect(asked.filter((r) => r.type === 'sync.reconcile')).toHaveLength(1);
-  });
-
-  it('kept otherwise for good (a folder that would hold itself): confirmed, so it isn’t pushed again for nothing', async () => {
-    const asked: SyncRequest[] = [];
-    const h = harness((request) => {
-      asked.push(request);
-      return {};
-    });
-    const folder = { kind: 'folder' as const, id: 'f', chordId: 'x', section: 'pinned' as const, parentId: 'f', rank: 'a1', title: 'F', collapsed: false, createdAt: 1 };
-    h.push({ ...emptyApply(), nodes: [folder] }, { [key('folder', 'f')]: 'v1' });
-    await vi.waitFor(() => expect(asked.some((r) => r.type === 'sync.applied')).toBe(true));
-    expect(h.state().nodes['f']).toMatchObject({ parentId: null });
-    expect(asked.find((r) => r.type === 'sync.applied')).toMatchObject({ versions: { [key('folder', 'f')]: 'v1' } });
-  });
-
-  it('a write of what was applied that chord-data refused (a full disk): nothing is confirmed, and it’s asked for again later', async () => {
+describe('an apply that fails', () => {
+  it('nothing’s confirmed or lost: chord-data is asked to reconcile, later and later', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const asked: SyncRequest[] = [];
@@ -158,17 +117,16 @@ describe('confirming what was applied', () => {
         asked.push(request);
         return {};
       });
-      // The store's write of the apply is refused (as persistence counts it) before main confirms.
-      const flushed = vi.fn(() => h.fail());
-      h.whenFlushed(flushed);
-      h.push({ ...emptyApply(), nodes: [tab('plain', 'x')] }, { [key('tab', 'plain')]: 'v1' });
-      for (let i = 0; i < 20 && flushed.mock.calls.length === 0; i++) await vi.advanceTimersByTimeAsync(40);
-      await vi.advanceTimersByTimeAsync(10);
-      expect(flushed).toHaveBeenCalled();
-      expect(asked.some((r) => r.type === 'sync.applied')).toBe(false);
-      // Asked for again, later.
+      // The store throws applying it (here, effects that can't be applied).
+      const effects = { host: 'x.test', wet: true, css: '', cssOn: true, hidden: [], presets: [], duet: [], updatedAt: 1 };
+      (h.service as unknown as { options: { effects: { syncSites(): Promise<void> } } }).options.effects.syncSites = async () => {
+        throw new Error('the sanitizer failed');
+      };
+      h.push({ ...emptyApply(), effects: [effects as never] });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(asked.some((r) => r.type === 'sync.reconcile')).toBe(false);
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(asked.some((r) => r.type === 'sync.reconcile')).toBe(true);
+      expect(asked.filter((r) => r.type === 'sync.reconcile')).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

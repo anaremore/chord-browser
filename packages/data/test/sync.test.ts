@@ -53,11 +53,10 @@ function setUp(): State {
 const outbox = () => db.sync.outbox().records;
 const chordId = (s: State) => Object.keys(s.chords)[0]!;
 
-describe('migrations 19, 20 and 21', () => {
-  it('add sync’s tables, empty, what its reader remembers of junk, and the version main applied of each thing', () => {
+describe('migrations 19 and 20', () => {
+  it('add sync’s tables, empty, and what its reader remembers of junk', () => {
     expect(db.version).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(21);
-    expect(db.sync.versions([])).toEqual({});
+    expect(MIGRATIONS.length).toBe(20);
     expect(db.sync.outboxSize()).toBe(0);
     expect(db.sync.meta.on).toBe(false);
     expect(db.sync.junk()).toEqual([]);
@@ -294,7 +293,8 @@ describe('merging another computer’s records', () => {
     // And one thing grows no further than one thing may, field by field.
     const wide = db.atomically(() => db.sync.merge([{ type: 'widget', id: 'w0', at: at(3), set: { more: blob(SYNC_LIMITS.thingChars - 100) } }], Date.now()));
     expect(wide.capped).toBe(1);
-  });
+    // Tens of megabytes merged: seconds when the whole suite runs at once.
+  }, 30_000);
 
   it('an icon whose bytes aren’t what its id says is left out', () => {
     setUp();

@@ -61,7 +61,7 @@ import { restoreChord, validTheme } from './restore';
 import { cleanProxy, sameProxy, type ProxySettings } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
-import { thingKey, type SyncApply, type SyncGone } from './sync';
+import type { SyncApply, SyncGone } from './sync';
 import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
 
@@ -1078,32 +1078,6 @@ function holds(state: State, parent: SidebarNode | undefined, node: SidebarNode)
       (parent.kind === 'folder' || (parent.kind === 'split' && node.kind === 'tab')) &&
       !isWithin(state, parent.id, node.id),
   );
-}
-
-/**
- * What `sync.apply` couldn't apply as it came because something it depends on
- * isn't here yet, judged from the state after it (and after any other part of
- * the same push), by thing (`thingKey`): a node or a route whose chord isn't
- * here, and a node whose folder (or split) isn't, or is in another chord, or
- * came after it and holds it now. Main doesn't confirm these, so they're pushed
- * again once what they wait on comes (S15 §13). Everything else was applied as
- * it came, or as this computer always will have it (refused for good, tidied,
- * put at the top for a cycle): confirmed, so never pushed again for nothing.
- */
-export function syncWaiting(state: State, apply: SyncApply): string[] {
-  const out: string[] = [];
-  for (const node of apply.nodes) {
-    if (!state.chords[node.chordId]) {
-      out.push(thingKey(node.kind, node.id));
-      continue;
-    }
-    const here = state.nodes[node.id];
-    if (!here || node.parentId === null || here.parentId === node.parentId) continue;
-    const parent = state.nodes[node.parentId];
-    if (!parent || parent.chordId !== node.chordId || holds(state, parent, here)) out.push(thingKey(node.kind, node.id));
-  }
-  for (const route of apply.routes) if (!state.chords[route.chordId]) out.push(thingKey('route', route.host));
-  return out;
 }
 
 /**

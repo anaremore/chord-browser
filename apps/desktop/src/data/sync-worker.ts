@@ -19,6 +19,7 @@
  * this worker go (`abandon`), and nothing more is done in the folder here.
  */
 import { watch, type FSWatcher } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parentPort } from 'node:worker_threads';
@@ -75,7 +76,7 @@ export type ToWorker =
       cursors: { device: string; segment: number; cursor: SegmentCursor }[];
       app: string;
       junk: [string, string][];
-      appending: Appending | null;
+      appending: Omit<Appending, 'bytes'> | null;
       /** Whether a Chord window is in front (`front`). */
       front: boolean;
     }
@@ -151,10 +152,12 @@ export type FromWorker =
   /** The folder changed (a watch fired): chord-data may ask for a read. */
   | { t: 'changed' }
   /** A folder operation begun (what was asked, or a pass), and ended: chord-data's deadline runs for the one under way only. */
-  | { t: 'busy'; op: ToWorker['t'] | 'pass' | 'tidy' }
+  | { t: 'busy'; op: ToWorker['t'] | 'pass' | 'tidy' | 'watch' }
   | { t: 'idle' }
   /** About to write to this computer's log: chord-data keeps it until the write is answered. */
-  | { t: 'appending'; appending: Appending };
+  | { t: 'appending'; appending: Omit<Appending, 'bytes'> }
+  /** A write of its own that went unanswered landed after all: its segment as it is now, for chord-data to keep. */
+  | { t: 'settled'; own: OwnSegment };
 
 /** Looks this often, whatever the watch says: watching cloud and network folders isn't reliable (S15 §6). */
 const POLL_MS = 5 * 60_000;
@@ -275,7 +278,7 @@ async function pass(): Promise<void> {
       // A write of its own that landed though it failed, or was cut short, is settled first: never taken for another writer.
       await settleOwn(r);
       // The folder is there: watched again if a watch failed (it was deleted or moved, and is back).
-      if (running === r) watchOnly(r);
+      if (running === r) await watchOnly(r);
       const intact = await ownIntact(r.fs, r.own, nodeCrypto);
       if (intact === 'other' || intact === 'gone') send({ t: 'own-changed' });
     }
@@ -351,9 +354,19 @@ async function pass(): Promise<void> {
 /** A write of this computer's that may have landed (`appending`): its own if it did, cut back if it was cut short. */
 async function settleOwn(r: Running): Promise<void> {
   if (!r.own || !r.appending) return;
-  const settled = await settleAppend(r.fs, r.own, r.appending);
-  if (settled.settled === 'landed') r.own = settled.own;
+  const settled = await settleAppend(r.fs, r.own, r.appending, nodeCrypto);
+  if (settled.settled === 'landed') {
+    r.own = settled.own;
+    // Kept by chord-data at once, before any next write's marker, which is relative to it.
+    send({ t: 'settled', own: r.own });
+  }
   if (settled.settled) r.appending = null;
+}
+
+/** Kept until answered: chord-data hears all but the bytes (they're for cutting back a short write, which only this worker does). */
+function appending(r: Running, a: Appending): void {
+  r.appending = a;
+  send({ t: 'appending', appending: { expect: a.expect, at: a.at, length: a.length, hash: a.hash } });
 }
 
 /** The folder changed, or it's time to look: a read, once the burst settles. */
@@ -362,11 +375,11 @@ function later(): void {
   settle = setTimeout(() => send({ t: 'changed' }), SETTLE_MS);
 }
 
-/** Watching `r`'s folder (again), and looking every five minutes whatever the watch says. */
-function watchFolder(r: Running): void {
+/** Watching `r`'s folder (again), and looking every five minutes whatever the watch says. Within a folder operation, under its deadline. */
+async function watchFolder(r: Running): Promise<void> {
   stopWatching();
-  watchOnly(r);
   poll = setInterval(later, POLL_MS);
+  await watchOnly(r);
 }
 
 /**
@@ -375,10 +388,15 @@ function watchFolder(r: Running): void {
  * looked at every five minutes and when Chord comes to the front, and watched
  * again once a look finds it.
  */
-function watchOnly(r: Running): void {
+async function watchOnly(r: Running): Promise<void> {
   if (watcher || (WATCH_IN_FRONT && !front)) return;
+  const folder = join(r.folder, SYNC_FOLDER);
+  // Reachable first, off this thread: a share that's stopped answering holds this call, under the operation's deadline,
+  // never the thread itself (setting up a watch is synchronous, and would).
+  if (!(await stat(folder).catch(() => null))?.isDirectory()) return;
+  if (running !== r || watcher || (WATCH_IN_FRONT && !front)) return;
   try {
-    watcher = watch(join(r.folder, SYNC_FOLDER), { recursive: true }, (_event, name) => {
+    watcher = watch(folder, { recursive: true }, (_event, name) => {
       // This computer's own writes aren't news.
       if (typeof name === 'string' && name.replaceAll('\\', '/').startsWith(`${deviceFolder(r.generation, r.device)}/`)) return;
       later();
@@ -441,8 +459,9 @@ async function handle(message: ToWorker): Promise<void> {
         appending: message.appending,
       };
       front = message.front;
-      watchFolder(running);
       const r = running;
+      // Nothing here touches the folder: the watch, the tidying and the first pass are folder operations, each under a deadline.
+      void serial('watch', () => watchFolder(r));
       // What a write that was stopped left in this computer's own folder (temp names, older than a minute), first.
       void serial('tidy', async () => {
         await removeStaleTemps(r.fs, { generation: r.generation, device: r.device }, Date.now()).catch(() => 0);
@@ -457,22 +476,7 @@ async function handle(message: ToWorker): Promise<void> {
       const r = running;
       if (!r?.own) return failed('write', 'gone');
       await settleOwn(r);
-      const result = await appendRecords(
-        r.fs,
-        r.own,
-        message.records,
-        r.key,
-        {
-          app: r.app,
-          device: message.device,
-          memory: r.memory,
-          onAppend: (appending) => {
-            r.appending = appending;
-            send({ t: 'appending', appending });
-          },
-        },
-        nodeCrypto,
-      );
+      const result = await appendRecords(r.fs, r.own, message.records, r.key, { app: r.app, device: message.device, memory: r.memory, onAppend: (a) => appending(r, a) }, nodeCrypto);
       if (!result.ok) return failed('write', result.problem);
       r.own = result.own;
       r.appending = null;
@@ -488,7 +492,7 @@ async function handle(message: ToWorker): Promise<void> {
         r.device = message.as;
         r.own = own;
         r.appending = null;
-        watchFolder(r);
+        await watchFolder(r);
         send({ t: 'snapshotted', own });
         return;
       }
@@ -500,7 +504,8 @@ async function handle(message: ToWorker): Promise<void> {
         { generation: r.generation, device: r.device },
         pages(message.snapshot.stream),
         r.key,
-        { app: r.app, device: message.snapshot.device, covers: coversOf(mine), memory: r.memory, ...(mine ? { after: mine.segment } : {}) },
+        // Before it's renamed into place, what it will be: a stop before the answer leaves it this computer's own.
+        { app: r.app, device: message.snapshot.device, covers: coversOf(mine), memory: r.memory, ...(mine ? { after: mine.segment } : {}), onRename: (a) => appending(r, a) },
         nodeCrypto,
       );
       r.appending = null;
@@ -543,7 +548,7 @@ async function handle(message: ToWorker): Promise<void> {
       r.key = message.key;
       r.cursors.clear();
       r.own = await snapshotTo(r.fs, { generation: r.generation, device: r.device }, message.snapshot, r.key, r.app);
-      watchFolder(r);
+      await watchFolder(r);
       send({ t: 'rekeyed', own: r.own });
       return;
     }
@@ -569,8 +574,11 @@ async function handle(message: ToWorker): Promise<void> {
     }
     case 'front':
       front = message.front;
-      if (WATCH_IN_FRONT && !front) unwatch();
-      else if (running) watchOnly(running);
+      // The watch set up or closed as a folder operation, under its deadline: a hung share never holds this thread.
+      void serial('watch', async () => {
+        if (WATCH_IN_FRONT && !front) unwatch();
+        else if (running) await watchOnly(running);
+      });
       return;
     case 'abandon':
       // Let go: the call that held it returns some day, and then nothing more is done in the folder (NodeFolder refuses).

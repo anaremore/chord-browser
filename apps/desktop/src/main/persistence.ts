@@ -33,11 +33,11 @@ const FLUSH_MS = 250;
 /** Entities per write past which a flush goes in several, each a transaction of a few milliseconds. */
 const WRITE_CHUNK = 100;
 /**
- * Fewer when they're what another computer changed: each also marks the thing
- * applied in sync's copy, so 100 took up to 9 ms, and a search that came in
- * behind one, and behind a merged slice, waited for both.
+ * Fewer when they're what another computer changed: each also notes the thing
+ * in sync's copy, so 100 took up to 9 ms, 50 up to 8, and a search that came in
+ * behind one, and behind a merged slice, waited for both. 25 is 2 to 4 ms.
  */
-const SYNC_WRITE_CHUNK = 50;
+const SYNC_WRITE_CHUNK = 25;
 const CLOSE_TIMEOUT_MS = 2000;
 const MAX_RESTARTS = 3;
 
@@ -84,22 +84,11 @@ export class Persistence {
   private chain: Promise<void> = Promise.resolve();
   private restarts = 0;
   private closed = false;
-  private failed = 0;
   /** What chord-data says unasked (sync's changes to apply, and where it stands), and that it started again after a crash. */
   private pushed: (push: DataPush) => void = () => undefined;
   private respawned: () => void = () => undefined;
 
   private constructor(private readonly file: string) {}
-
-  /**
-   * Batches chord-data refused (a full disk, an I/O error), or never answered
-   * because it exited mid-write, so far. `flush()` resolves either way, as
-   * export and import rely on; sync confirms what it applied only when none
-   * more failed since (main/sync.ts).
-   */
-  get writeFailures(): number {
-    return this.failed;
-  }
 
   /** Start chord-data and read what was saved (null for a brand-new profile). Rows of unused profiles are dropped. */
   /** `timing` and `attempts`: how the open went, for the launch timeline. */
@@ -131,7 +120,6 @@ export class Persistence {
       this.waiting.clear();
       if (this.closed) return;
       // Put the interrupted batch back, unless a newer write for the same entity is already queued.
-      if (this.inFlight.length > 0 || this.inFlightEvents.length > 0) this.failed++;
       for (const op of this.inFlight) if (!this.pending.has(opKey(op))) this.pending.set(opKey(op), op);
       this.inFlight = [];
       this.events = [...this.inFlightEvents, ...this.sideEvents, ...this.events];
@@ -354,14 +342,11 @@ export class Persistence {
         try {
           const response = await this.request({ type: 'write', ops: this.inFlight, events: this.inFlightEvents });
           // A batch the database refuses would fail forever if retried; report it and move on.
-          if (!response.ok) {
-            this.failed++;
-            console.error('chord-data refused a write:', response.error);
-          }
+          if (!response.ok) console.error('chord-data refused a write:', response.error);
           this.inFlight = [];
           this.inFlightEvents = [];
         } catch {
-          // The process died mid-write; the exit handler has requeued the batch (and counted it).
+          // The process died mid-write; the exit handler has requeued the batch.
           return;
         }
       }

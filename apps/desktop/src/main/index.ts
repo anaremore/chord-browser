@@ -932,7 +932,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     // Your data's sync (S15 §6–§8): chord-data's thread and its worker do the work; main keeps the key and applies what comes in.
     syncService = new SyncService({
-      data: { sync: (request) => store.sync(request), flush: () => store.flush(), failures: () => store.writeFailures, waiting: (key) => store.waitingHere(key), onPush: (listener) => store.onPush(listener) },
+      data: { sync: (request) => store.sync(request), flush: () => store.flush(), waiting: (key) => store.waitingHere(key), onPush: (listener) => store.onPush(listener) },
       state: () => browser!.store.state,
       dispatch: (command) => browser!.store.dispatch(command),
       effects: { syncSites: (sites, gone) => browser!.effects.syncSites(sites, gone) },

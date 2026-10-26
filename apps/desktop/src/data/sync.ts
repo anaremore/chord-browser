@@ -29,7 +29,7 @@ const WRITE_MS = 3000;
  * behind one of these and a write of what main applied, so each is kept to a
  * few milliseconds (100 took up to 8).
  */
-const SLICE = 50;
+const SLICE = 25;
 /**
  * Characters of things read and written per merged slice: a slice of tiny
  * changes to a thing of 2 MB is one rewrite of it, not a hundred, and a slice
@@ -83,6 +83,10 @@ const HEALTHY_MS = 10 * 60_000;
  * free for the rest of Chord, until one returns.
  */
 const MAX_STUCK = 2;
+/** After a write that brings chords or folders (or makes room), what waited is looked for once this long after the last such write. */
+const RECONCILE_SOON_MS = 2000;
+/** And every so often while idle, skipping what it pushed as it still is. */
+const IDLE_RECONCILE_MS = 10 * 60_000;
 
 /** What starts sync's worker thread: a real one, or a stand-in in tests. */
 export type WorkerLike = Pick<Worker, 'postMessage' | 'on' | 'unref' | 'terminate'>;
@@ -150,6 +154,15 @@ export class SyncController {
   private nextStream = 1;
   /** Merges one batch at a time, in order. */
   private merging: Promise<void> = Promise.resolve();
+  /** A reconcile running, and whether another was asked for meanwhile (`true`: only idle ones; `false`: a full one). */
+  private reconciling = false;
+  private reconcileAgain: boolean | null = null;
+  private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+  private idleTimer: ReturnType<typeof setInterval> | undefined;
+  /** This session, what a reconcile last pushed of each thing (its merged version and what chord.db had): an idle look skips it while both stay. */
+  private readonly pushedAs = new Map<string, string>();
+  /** Since when the worker has done its work without a timeout (null after one): the wait before another starts over only after HEALTHY_MS of it. */
+  private healthySince: number | null = null;
   /** Whether a Chord window is in front: the worker watches the folder on Windows only then. */
   private front = true;
   /** Checkpoints are small while sync is busy (BUSY_MS). */
@@ -232,20 +245,52 @@ export class SyncController {
   }
 
   /**
-   * What's merged but not on this computer's screen (`unappliedPages`), pushed
-   * to main again: after a launch, and after a failed apply or merge. Main's
-   * writes of what it applied are what mark a thing applied (`local`), so a
-   * quit or a crash during a pass or an apply never leaves a change off screen.
+   * Reconciling (S15 §13): what chord.db durably has against the merged copy
+   * (`unappliedPages`), a page at a time, and whatever differs pushed to main
+   * again, sliced like any push. After a launch, after main couldn't apply a
+   * push, soon after a write that brought chords or folders or made room
+   * (`reconcileSoon`), and every IDLE_RECONCILE_MS while idle. What this
+   * computer always keeps otherwise is pushed again each time, and applies as
+   * nothing; only the idle look skips a thing it pushed as it still is (the
+   * merged version and what chord.db has, both unchanged), so it stays cheap.
+   * One at a time: asked for while one runs, it runs again after.
    */
-  async reconcile(): Promise<void> {
+  async reconcile(opts: { idle?: boolean } = {}): Promise<void> {
+    if (this.reconciling) {
+      this.reconcileAgain = opts.idle === true && this.reconcileAgain !== false;
+      return;
+    }
     const db = this.db();
     if (!db?.sync.meta.on || db.sync.meta.joining) return;
-    const pages = db.sync.unappliedPages();
-    for (let page = this.step(db, 'unapplied', () => pages.next()); !page.done; page = this.step(db, 'unapplied', () => pages.next())) {
-      for (const [key, names] of page.value) this.changes.set(key, new Set([...(this.changes.get(key) ?? []), ...names]));
-      await new Promise((resolve) => setImmediate(resolve));
+    this.reconciling = true;
+    try {
+      if (!opts.idle) this.pushedAs.clear();
+      const pages = db.sync.unappliedPages();
+      for (let page = this.step(db, 'unapplied', () => pages.next()); !page.done; page = this.step(db, 'unapplied', () => pages.next())) {
+        const found = page.value;
+        const signatures = this.step(db, 'signed', () => db.sync.signatures(found.keys()));
+        for (const [key, names] of found) {
+          const signature = signatures.get(key);
+          if (opts.idle && signature !== undefined && this.pushedAs.get(key) === signature) continue;
+          if (signature !== undefined) this.pushedAs.set(key, signature);
+          this.changes.set(key, new Set([...(this.changes.get(key) ?? []), ...names]));
+        }
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      if (this.changes.size > 0) this.chain(() => this.pushChanges());
+    } finally {
+      this.reconciling = false;
+      const again = this.reconcileAgain;
+      this.reconcileAgain = null;
+      if (again !== null) void this.reconcile({ idle: again }).catch(() => this.readFailed());
     }
-    if (this.changes.size > 0) this.chain(() => this.pushChanges());
+  }
+
+  /** What waited for chords, folders or room, looked for once RECONCILE_SOON_MS after the last write that brought some: never once per part of a push. */
+  private reconcileSoon(): void {
+    clearTimeout(this.reconcileTimer);
+    this.reconcileTimer = setTimeout(() => this.guard(() => void this.reconcile().catch(() => this.readFailed())), RECONCILE_SOON_MS);
+    this.reconcileTimer.unref?.();
   }
 
   /* ---------- the worker ---------- */
@@ -301,12 +346,18 @@ export class SyncController {
     if (this.op) this.begin(this.op.what);
   }
 
+  /** The operation under way waits on chord-data (a step being merged): no deadline until it's answered (`progress`). */
+  private pause(): void {
+    if (this.op) clearTimeout(this.op.deadline);
+  }
+
   /** The operation under way ended. Once one that was asked for, or a pass, ends with nothing more waiting, the folder answers again. */
   private endOp(): void {
     if (!this.op) return;
     clearTimeout(this.op.deadline);
     const what = this.op.what;
     this.op = null;
+    this.healthySince ??= Date.now();
     if (this.stalled && this.worker && this.asks.length === 0 && what !== 'tidy') {
       this.stalled = false;
       this.pushStatus();
@@ -340,7 +391,9 @@ export class SyncController {
     done?.();
     this.stalled = true;
     const now = Date.now();
-    if (now - this.lastStall > HEALTHY_MS) this.stallMs = 0;
+    // The wait starts over only after HEALTHY_MS of work done since a worker last started well: never the waiting itself.
+    if (this.healthySince !== null && now - this.healthySince > HEALTHY_MS) this.stallMs = 0;
+    this.healthySince = null;
     this.lastStall = now;
     this.stallMs = Math.min(STALL_RETRY_MAX, Math.max(STALL_RETRY_MS, this.stallMs * 2));
     this.restartLater(this.stallMs);
@@ -379,8 +432,11 @@ export class SyncController {
         this.endOp();
         return;
       case 'pull':
-      case 'records':
         this.progress();
+        break;
+      case 'records':
+        // The worker waits on chord-data's merge now, not the folder: its deadline waits too, until the step is answered.
+        this.pause();
         break;
       default:
         break;
@@ -406,11 +462,16 @@ export class SyncController {
         this.chain(() => this.merge(from, message));
         return;
       case 'appending': {
-        // Kept until the write is answered: a worker that starts after this one (or after a relaunch) settles it.
-        const { expect, at, bytes } = message.appending;
-        this.db()?.sync.setMeta({ appending: { expect, at, bytes: Buffer.from(bytes).toString('base64') } });
+        // Kept until the write is answered (its length and hash, never its bytes): a worker that starts after this one, or after
+        // a relaunch, settles it.
+        const { expect, at, length, hash } = message.appending;
+        this.db()?.sync.setMeta({ appending: { expect, at, length, hash } });
         return;
       }
+      case 'settled':
+        // A write of its own that landed though it went unanswered: its segment as it is now, kept before the next one's marker.
+        this.db()?.sync.setMeta({ own: message.own, appending: null });
+        return;
       case 'own-changed': {
         // This computer's segment isn't as it left it (another copy of the profile wrote to it): a new id, before it writes.
         const db = this.db();
@@ -476,6 +537,9 @@ export class SyncController {
 
   private stopWorker(): void {
     clearTimeout(this.writeTimer);
+    clearInterval(this.idleTimer);
+    this.idleTimer = undefined;
+    clearTimeout(this.reconcileTimer);
     clearTimeout(this.stallRetry);
     this.stallRetry = undefined;
     if (this.op) clearTimeout(this.op.deadline);
@@ -509,10 +573,20 @@ export class SyncController {
       cursors: db.sync.cursors(meta.generation),
       app: this.info.app,
       junk: db.sync.junk(),
-      appending: meta.appending ? { expect: meta.appending.expect, at: meta.appending.at, bytes: new Uint8Array(Buffer.from(meta.appending.bytes, 'base64')) } : null,
+      appending: meta.appending,
       front: this.front,
     } satisfies ToWorker);
     if (db.sync.outboxSize() > 0) this.scheduleWrite(0);
+    if (this.idleTimer === undefined) {
+      this.idleTimer = setInterval(
+        () =>
+          this.guard(() => {
+            if (this.changes.size === 0) void this.reconcile({ idle: true }).catch(() => this.readFailed());
+          }),
+        IDLE_RECONCILE_MS,
+      );
+      this.idleTimer.unref?.();
+    }
   }
 
   /** Look at the folder now (Chord came to the front, or the folder changed). */
@@ -638,12 +712,8 @@ export class SyncController {
     for (const [at, slice] of slices.entries()) {
       const started = performance.now();
       const apply = db.sync.planFor(slice);
-      // Each thing's version, which main confirms once it has applied it and written it back (`sync.applied`).
-      const versions = db.sync.versions(slice.keys());
       db.sync.timed('plan', performance.now() - started);
-      if (!applyIsEmpty(apply)) this.push({ push: 'sync.apply', apply, versions });
-      // Nothing of it applies here (all of it refused, or as this computer has it already): seen, and not pushed again.
-      else db.atomically(() => db.sync.markApplied(versions));
+      if (!applyIsEmpty(apply)) this.push({ push: 'sync.apply', apply });
       if (at < slices.length - 1) await new Promise((resolve) => setImmediate(resolve));
     }
     // Main writes what it applied back to chord-data meanwhile: checkpoints stay small a while longer.
@@ -707,6 +777,8 @@ export class SyncController {
   afterWrite(): void {
     const db = this.db();
     if (db?.sync.stamping && db.sync.pending > 0) this.scheduleWrite(WRITE_MS);
+    // It brought a chord, a folder or a split (or moved one), or made room: what waited for one is looked for, soon.
+    if (db?.sync.takeDue()) this.reconcileSoon();
     // A change that couldn't win: main is sent the merged value back, and Settings names what.
     const lost = db?.sync.takeLost();
     if (db && lost && lost.size > 0) {
@@ -717,6 +789,13 @@ export class SyncController {
       this.chain(() => this.pushChanges());
       this.pushStatus();
     }
+  }
+
+  /** chord-data refused a write (a full disk): what sync applied in it isn't in chord.db, so a reconcile finds it different again. */
+  writeRefused(): void {
+    this.guard(() => {
+      if (this.db()?.sync.meta.on) this.reconcileSoon();
+    });
   }
 
   private scheduleWrite(ms: number): void {
@@ -957,14 +1036,6 @@ export class SyncController {
         this.info = request.info;
         this.startWorker();
         return { status: this.status() };
-      case 'sync.applied': {
-        // Main applied these versions and wrote them back (or saw nothing of them apply here): not pushed again, unless
-        // they change. Ones it put off for a change of its own waiting aren't, and come again.
-        const held = new Set(db.sync.thingsFor(request.later).keys());
-        const versions = Object.fromEntries(Object.entries(request.versions).filter(([key]) => !held.has(key)));
-        this.step(db, 'applied', () => db.atomically(() => db.sync.markApplied(versions)));
-        return {};
-      }
       case 'sync.reconcile':
         // After a launch (or chord-data starting again), and after main couldn't apply something: what's merged but not applied, again.
         void this.reconcile().catch(() => this.readFailed());
@@ -1128,12 +1199,9 @@ export class SyncController {
       await new Promise((resolve) => setImmediate(resolve));
     }
     const ordered = this.step(db, 'order', () => db.sync.orderForApply(all));
-    const versions: Record<string, string> = {};
     for (let at = 0; at < ordered.length; at += PLAN_SLICE) {
       const started = performance.now();
-      const slice = new Map(ordered.slice(at, at + PLAN_SLICE));
-      const part = db.sync.planFor(slice);
-      Object.assign(versions, db.sync.versions(slice.keys()));
+      const part = db.sync.planFor(new Map(ordered.slice(at, at + PLAN_SLICE)));
       db.sync.timed('plan', performance.now() - started);
       for (const key of ['chords', 'nodes', 'favorites', 'themes', 'routes', 'effects'] as const) (apply[key] as unknown[]).push(...part[key]);
       for (const key of Object.keys(apply.gone) as (keyof SyncApply['gone'])[]) (apply.gone[key] as unknown[]).push(...part.gone[key]);
@@ -1146,7 +1214,7 @@ export class SyncController {
     // Main writes all of it back next: checkpoints stay on the worker's connection meanwhile, never chord-data's thread.
     this.busyFor(db);
     this.pushStatus();
-    return { apply, replace, versions, status: this.status() };
+    return { apply, replace, status: this.status() };
   }
 
   /** The passphrase, once (no key kept here, or it changed on another computer): a newer generation is moved to with a snapshot. */
@@ -1281,6 +1349,7 @@ export class SyncController {
   /** chord-data is closing: the worker goes, with the key. */
   close(): void {
     clearTimeout(this.readRetry);
+    clearTimeout(this.reconcileTimer);
     for (const worker of this.stuckWorkers) void worker.terminate();
     this.stuckWorkers.clear();
     this.stopWorker();

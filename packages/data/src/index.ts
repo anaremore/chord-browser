@@ -176,11 +176,6 @@ export type SyncRequest =
   | { type: 'sync.timings' }
   /** What's merged but not applied here (a quit or a crash during a pass or an apply, or an apply that failed), pushed again. */
   | { type: 'sync.reconcile' }
-  /**
-   * Main applied a push (or a join's apply) and wrote it back: each thing's version, as the push gave it, but for things
-   * it put off for a change of its own waiting (`later`, as `sync.repush`'s keys). Those versions aren't pushed again.
-   */
-  | { type: 'sync.applied'; versions: Record<string, string>; later: string[] }
   /** The folder moved: this one, if it's this sync's (its generation opens with this computer's key). */
   | { type: 'sync.relocate'; folder: string }
   /** A lost passphrase (S15 §6, *Start over*): the next generation under a new one; the other computers pause until they have it. */
@@ -201,14 +196,12 @@ export interface SyncReply {
   /** Chosen: everything to apply, and, for *Use the synced setup*, the chord this computer's Today tabs go to and the synced chords that stay. */
   apply?: SyncApply;
   replace?: { to: string; keep: string[] } | null;
-  /** Chosen: each thing's version in `apply`, for main to confirm once it has applied them (`sync.applied`). */
-  versions?: Record<string, string>;
   keyBlob?: string | null;
   timings?: SyncTimings;
 }
 
 /** chord-data → main, unasked: what another computer changed, to apply; and where sync stands, for Settings. */
-export type DataPush = { push: 'sync.apply'; apply: SyncApply; versions?: Record<string, string> } | { push: 'sync.status'; status: SyncStatus };
+export type DataPush = { push: 'sync.apply'; apply: SyncApply } | { push: 'sync.status'; status: SyncStatus };
 
 /**
  * The import process → chord-data, on an import's port: one batch of history,

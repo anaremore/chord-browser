@@ -114,9 +114,11 @@ class MemoryFolder implements SyncFs {
     for (const file of [...this.files.keys()]) if (file === path || file.startsWith(`${path}/`)) this.files.delete(file);
     for (const dir of [...this.dirs]) if (dir === path || dir.startsWith(`${path}/`)) this.dirs.delete(dir);
   }
-  async truncate(path: string, size: number): Promise<void> {
-    const file = this.files.get(path)!;
-    this.files.set(path, { bytes: file.bytes.slice(0, size), mtime: this.clock++ });
+  async cutBack(path: string, at: number, expect: Uint8Array): Promise<boolean> {
+    const file = this.files.get(path);
+    if (!file || file.bytes.length !== at + expect.length || !file.bytes.subarray(at).every((byte, i) => byte === expect[i])) return false;
+    this.files.set(path, { bytes: file.bytes.slice(0, at), mtime: this.clock++ });
+    return true;
   }
   /** A file as a sync app might deliver it: cut to its first `n` bytes. */
   cut(path: string, n: number): void {
@@ -909,7 +911,7 @@ describe('a write of this computer’s own that failed after its bytes landed', 
     expect(first.error).toBeTruthy();
     // Without what it was writing, its segment looks like another writer's.
     expect(await ownIntact(fs, own, nodeCrypto)).toBe('other');
-    const settled = await settleAppend(fs, own, first.appending);
+    const settled = await settleAppend(fs, own, first.appending, nodeCrypto);
     expect(settled.settled).toBe('landed');
     expect(await ownIntact(fs, settled.own, nodeCrypto)).toBe('ok');
     const second = await write(fs, settled.own, [chord('b', 'B', 3)], root);
@@ -918,15 +920,35 @@ describe('a write of this computer’s own that failed after its bytes landed', 
     expect(ids(await reader.pass())).toEqual([A, 'work', 'a', 'b']);
   });
 
-  it('the worker let go mid-flush: what it was writing, kept by chord-data, settles it in the next worker the same way', async () => {
+  it('the worker let go mid-flush: what it was writing, as chord-data keeps it (its length and hash, never its bytes), settles it in the next worker the same way', async () => {
     const { fs, root, own } = await computer();
     fs.fail = 'after';
     const first = await write(fs, own, [chord('a', 'A', 2)], root);
-    // As chord-data keeps it (bytes as base64) and hands it to the next worker.
-    const kept = JSON.parse(JSON.stringify({ ...first.appending!, bytes: Buffer.from(first.appending!.bytes).toString('base64') })) as { expect: OwnSegment; at: number; bytes: string };
-    const handed: Appending = { ...kept, bytes: new Uint8Array(Buffer.from(kept.bytes, 'base64')) };
-    const settled = await settleAppend(fs, own, handed);
+    const { bytes: _bytes, ...kept } = first.appending!;
+    const handed = JSON.parse(JSON.stringify(kept)) as Appending;
+    expect(handed).not.toHaveProperty('bytes');
+    expect(handed.length).toBe(first.appending!.bytes!.length);
+    const settled = await settleAppend(fs, own, handed, nodeCrypto);
     expect(settled).toEqual({ own: first.appending!.expect, settled: 'landed' });
+    // Without the bytes, only all of them settle: a part isn't taken as its own.
+    const cut = await computer();
+    cut.fs.fail = 'short';
+    const partial = await write(cut.fs, cut.own, [chord('a', 'A', 2)], cut.root);
+    const { bytes: _partBytes, ...markOnly } = partial.appending!;
+    expect((await settleAppend(cut.fs, cut.own, markOnly, nodeCrypto)).settled).toBeNull();
+  });
+
+  it('a compaction stopped between its snapshot’s rename and its answer: the snapshot is this computer’s own (its size, ending with its last frame)', async () => {
+    const { fs, root, own } = await computer();
+    let marker: Appending | null = null;
+    const next = await writeSnapshot(fs, { generation: 1, device: A }, [[chord('work', 'Work', 1), chord('b', 'B', 3)]], root, { app: '0.5.0', device: [], covers: coversOf(own), after: own.segment, onRename: (a) => (marker = a) }, nodeCrypto);
+    const kept = JSON.parse(JSON.stringify(marker)) as Appending;
+    expect(kept.hash).toBeNull();
+    // As if the answer never came: the old segment is gone (it covered it), and the new one is its own, not another writer's.
+    const settled = await settleAppend(fs, own, kept, nodeCrypto);
+    expect(settled.settled).toBe('landed');
+    expect(settled.own).toMatchObject({ segment: next.segment, size: next.size, frames: next.frames, tail: next.tail });
+    expect(await appendRecords(fs, settled.own, [chord('c', 'C', 4)], root, { app: '0.5.0', device: [] }, nodeCrypto)).toMatchObject({ ok: true });
   });
 
   it('a short write on a full disk: its part is cut back, and the write goes again whole; readers never see the part', async () => {
@@ -936,7 +958,7 @@ describe('a write of this computer’s own that failed after its bytes landed', 
     expect(first.error).toBeTruthy();
     const path = `1/${A}/${segmentName(own.segment)}`;
     expect((await fs.stat(path))!.size).toBeGreaterThan(own.size);
-    const settled = await settleAppend(fs, own, first.appending);
+    const settled = await settleAppend(fs, own, first.appending, nodeCrypto);
     expect(settled).toEqual({ own, settled: 'cut' });
     expect((await fs.stat(path))!.size).toBe(own.size);
     const second = await write(fs, own, [chord('a', 'A', 2)], root);
@@ -953,7 +975,7 @@ describe('a write of this computer’s own that failed after its bytes landed', 
     const result = await appendRecords(fs, full, [chord('a', 'A', 2)], root, { app: '0.5.0', device: [], onAppend: (a) => (appending = a) }, nodeCrypto);
     expect(result).toMatchObject({ ok: true, own: { segment: 3 } });
     // As if the answer never came: the next write, from the old segment, settles it first.
-    const settled = await settleAppend(fs, full, appending);
+    const settled = await settleAppend(fs, full, appending, nodeCrypto);
     expect(settled.settled).toBe('landed');
     expect(settled.own).toMatchObject({ segment: 3 });
   });
@@ -964,14 +986,14 @@ describe('a write of this computer’s own that failed after its bytes landed', 
     const first = await write(fs, own, [chord('a', 'A', 2)], root);
     const path = `1/${A}/${segmentName(own.segment)}`;
     await fs.append(path, Uint8Array.from([1, 2, 3]));
-    expect((await settleAppend(fs, own, first.appending)).settled).toBeNull();
+    expect((await settleAppend(fs, own, first.appending, nodeCrypto)).settled).toBeNull();
     const other = await computer();
     other.fs.fail = 'after';
     const mine = await write(other.fs, other.own, [chord('a', 'A', 2)], other.root);
     const bytes = new Uint8Array(other.fs.files.get(path)!.bytes);
     bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 0xff;
     other.fs.plant(path, bytes);
-    expect((await settleAppend(other.fs, other.own, mine.appending)).settled).toBeNull();
+    expect((await settleAppend(other.fs, other.own, mine.appending, nodeCrypto)).settled).toBeNull();
     expect(await appendRecords(other.fs, other.own, [chord('b', 'B', 3)], other.root, { app: '0.5.0', device: [] }, nodeCrypto)).toEqual({ ok: false, problem: 'copied' });
   });
 });

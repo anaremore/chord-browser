@@ -99,24 +99,60 @@ describe('a write the disk didn’t finish', () => {
       await expect(fs.append('1/00000000000000aa/000001.chordlog', bytes('frame'))).rejects.toBeInstanceOf(ShortWrite);
       short.mockRestore();
       expect(readFileSync(join(root, '1', '00000000000000aa', '000001.chordlog'), 'utf8')).toBe('head\nfra');
-      await fs.truncate('1/00000000000000aa/000001.chordlog', 5);
+      // Cut back only while it's exactly that: not when it's longer (something appended since), nor other bytes.
+      expect(await fs.cutBack('1/00000000000000aa/000001.chordlog', 5, bytes('fr'))).toBe(false);
+      expect(await fs.cutBack('1/00000000000000aa/000001.chordlog', 5, bytes('xyz'))).toBe(false);
+      expect(readFileSync(join(root, '1', '00000000000000aa', '000001.chordlog'), 'utf8')).toBe('head\nfra');
+      expect(await fs.cutBack('1/00000000000000aa/000001.chordlog', 5, bytes('fra'))).toBe(true);
       expect(readFileSync(join(root, '1', '00000000000000aa', '000001.chordlog'), 'utf8')).toBe('head\n');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  // Last in this file: once a worker is let go, its folder does nothing more, for good.
-  it('a worker let go: when the call that held it returns, nothing more is done in the folder', async () => {
+  it('a new file the disk took only part of: its temp file is removed in the same call, never left behind', async () => {
     const root = mkdtempSync(join(tmpdir(), 'chord-sync-'));
     try {
       const fs = new NodeFolder(root);
       await fs.mkdir('1/00000000000000aa');
+      const probe = await open(join(root, 'probe'), 'w');
+      const handle = Object.getPrototypeOf(probe) as { write(buffer: Uint8Array): Promise<{ bytesWritten: number }> };
+      await probe.close();
+      const original = handle.write;
+      const short = vi.spyOn(handle, 'write').mockImplementationOnce(function (this: unknown, buffer: Uint8Array) {
+        return original.call(this, buffer.subarray(0, 2));
+      });
+      await expect(fs.create('1/00000000000000aa/000002.chordlog', bytes('a whole segment'))).rejects.toBeInstanceOf(ShortWrite);
+      short.mockRestore();
+      expect(readdirSync(join(root, '1', '00000000000000aa'))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Last in this file: once a worker is let go, its folder does nothing more, for good.
+  it('a worker let go while a call was under way: the change it was about to make isn’t made, nor any after', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'chord-sync-'));
+    try {
+      const fs = new NodeFolder(root);
+      await fs.mkdir('1/00000000000000aa');
+      await fs.create('1/00000000000000aa/000001.chordlog', bytes('head\n'));
+      // Let go while the append is opening its file: the write itself, checked just before, never happens.
+      const probe = await open(join(root, 'probe'), 'w');
+      const handle = Object.getPrototypeOf(probe) as { write(buffer: Uint8Array): Promise<{ bytesWritten: number }> };
+      await probe.close();
+      const writes = vi.spyOn(handle, 'write');
+      const appending = fs.append('1/00000000000000aa/000001.chordlog', bytes('late'));
       abandonFolder();
-      await expect(fs.create('1/00000000000000aa/000001.chordlog', bytes('x'))).rejects.toThrow('let this worker go');
-      await expect(fs.append('1/00000000000000aa/000001.chordlog', bytes('x'))).rejects.toThrow();
+      await expect(appending).rejects.toThrow('let this worker go');
+      expect(writes).not.toHaveBeenCalled();
+      writes.mockRestore();
+      expect(readFileSync(join(root, '1', '00000000000000aa', '000001.chordlog'), 'utf8')).toBe('head\n');
+      await expect(fs.create('1/00000000000000aa/000002.chordlog', bytes('x'))).rejects.toThrow('let this worker go');
+      await expect(fs.cutBack('1/00000000000000aa/000001.chordlog', 0, bytes('head\n'))).rejects.toThrow();
       await expect(fs.remove('1')).rejects.toThrow();
-      expect(existsSync(join(root, '1', '00000000000000aa', '000001.chordlog'))).toBe(false);
+      expect(existsSync(join(root, '1', '00000000000000aa', '000002.chordlog'))).toBe(false);
+      expect(readFileSync(join(root, '1', '00000000000000aa', '000001.chordlog'), 'utf8')).toBe('head\n');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
