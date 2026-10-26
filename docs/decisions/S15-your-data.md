@@ -1,6 +1,6 @@
 # S15: Your data — export, import and sync
 
-*2026-10-25 · ROADMAP.md 0.4 · decision D14 (ARCHITECTURE.md §16) · **reviewed and decided 2026-10-25:** the maintainer took all ten recommendations in §10. Nothing is built yet.*
+*2026-10-25 · ROADMAP.md 0.5 · decision D14 (ARCHITECTURE.md §16) · **reviewed and decided 2026-10-25:** the maintainer took all ten recommendations in §10. **Step 1, Export, built 2026-10-26** (ARCHITECTURE.md §9 *Your data: export*, DESIGN.md §8.8, [docs/data-format.md](../data-format.md)): what it decided and found is in §11, and marked *as built* where it lands. Import and sync aren't built yet.*
 
 **In short.** Export and sync use one record format. Export ships first, then import, then sync.
 
@@ -27,7 +27,7 @@
 - `set` holds the fields this record changes. Fields it doesn't list keep their values.
 - `at` is the stamp of every field in `set`: `[milliseconds, counter, device]` (§4). After merging, one thing's fields can carry different stamps. A snapshot then writes it as one record per stamp, so most things are one line and a few are several.
 - A deletion is `"set":{"deleted":true}`: a tombstone. Deleting is just another field under the same rule. A later edit made elsewhere doesn't bring the thing back; only `"deleted":false` does (Undo, or an import that restores it, §5).
-- History, Duet chats and icons are facts, not setup. They're never synced, and an import only adds what's missing, so their records have no `at`.
+- History, Duet chats and icons are facts, not setup, so their records have no `at`. History and Duet chats are never synced, and an import only adds what's missing. Icons are synced (setup uses them), but an icon's id is its content, so it never changes. *(Corrected 2026-10-26: this line said icons were never synced, which the table below contradicted.)*
 
 ### The record types
 
@@ -35,7 +35,7 @@
 
 | Type | Id | Fields | From | Export | Sync |
 |---|---|---|---|---|---|
-| `chord` | UUIDv7 | `name`, `icon`, `theme` (stops, grain, appearance, themeId), `rank`, `profile` (`default`, or the id of its own sign-ins), `created` | `chord`, `Chord` | ✓ | ✓ |
+| `chord` | UUIDv7 | `name`, `icon`, `theme` (stops, grain, appearance, themeId), `rank`, `profile` (`default`, or the id of its own sign-ins), `created`; `proxy` (its own, or `null`: added 2026-10-26, §11) | `chord`, `Chord` | ✓ | ✓, without `proxy` |
 | `folder` | UUIDv7 | `pos`, `title`, `collapsed`, `created` | `node` + `folder` | ✓ | ✓ |
 | `tab` | UUIDv7 | `pos`, `url`, `pinnedUrl`, `title`, `customTitle`, `icon`, `muted`, `created` | `node` + `tab`, `TabNode` | Pinned and Today | Pinned only, without `url` |
 | `split` | UUIDv7 | `pos`, `direction`, `sizes`, `created`. Its panes are the tabs whose `pos.parent` is the split. | `node` + `split` | ✓ | Pinned only |
@@ -55,14 +55,15 @@
 
 - **A pinned tab syncs its home, not where you've browsed to.** Sync leaves out `url`. A new copy on another computer opens at `pinnedUrl`, and `title` and `icon` are written only while the tab is on its pinned address. Browsing in a pinned tab is activity, not setup (D14).
 - **Leaving Pinned counts as a deletion for sync.** If you unpin a tab, sync writes its tombstone. On another computer the tab leaves Pinned too: an open copy moves to that computer's Today, and an unloaded one goes. Pinning it again writes the whole record, with `deleted: false`.
-- **Effects:** `EffectsRecord` in `core/effects.ts` already anticipates this, and it changes a little now, before any file exists. Its fields become the `effects` record's fields, its `version: 1` moves to the file header, and its `updatedAt` becomes the stamp. Each item's own switch is in it (2026-10-25), and one that isn't there reads as on, so a record written before the switches loads with everything on. Your CSS's switch is a field of its own, `cssOn`, next to `css`; a hidden element's and a patch's (`on`) are inside `hidden` and `duet`, so each of those lists merges as one field, switches and all (§4). Every record read is still checked by `effectsFromRecord` and then the sanitizer worker.
+- **Effects:** `EffectsRecord` in `core/effects.ts` already anticipates this, and it changes a little now, before any file exists. Its fields become the `effects` record's fields, its `version: 1` moves to the file header, and its `updatedAt` becomes the stamp. Each item's own switch is in it (2026-10-25), and one that isn't there reads as on, so a record written before the switches loads with everything on. Your CSS's switch is a field of its own, `cssOn`, next to `css`; a hidden element's and a patch's (`on`) are inside `hidden` and `duet`, so each of those lists merges as one field, switches and all (§4). Every record read is still checked by `effectsFromRecord` and then the sanitizer worker. *As built 2026-10-26:* exactly so (`effectsRecord(site, at)`, `effectsFromRecord(record, newId)`); a stamp's time becomes the site's `updatedAt` and its items' times.
 - **Unused columns aren't exported:** `chord.duet_enabled` (Duet's off chords are in settings) and `tab.zoom` (zoom is per site).
 
 ### Which settings travel
 
 | | Settings |
 |---|---|
-| Exported and synced | search engine and suggestions; color scheme; interface contrast and tint; motion; extension buttons; whether new chords get their own sign-ins; archive and sleep timing; auto picture-in-picture; page previews; presenting; sidebar peek; keep screenshots; spelling; Google-free mode; Safe Browsing and whether its notice was answered; ad blocking and its sites; tab counts and their sites; Duet's on/off, keep, scope, reads-nothing, never sites, off chords and Codex images; where links from other apps open; reader view; Effects' Dry/Wet everywhere |
+| Exported and synced | search engine and suggestions; color scheme; interface contrast and tint; motion; extension buttons; whether new chords get their own sign-ins; archive and sleep timing; auto picture-in-picture; page previews; presenting; sidebar peek; keep screenshots; spelling; Google-free mode; Safe Browsing and whether its notice was answered; ad blocking and its sites; tab counts and their sites; Duet's on/off, keep, scope, reads-nothing, never sites, off chords and Codex images; where links from other apps open; reader view; Effects' Dry/Wet everywhere; whether exports are encrypted (*Encrypt with a passphrase*, remembered: added 2026-10-26) |
+| Exported, never synced, because it's about this computer's network | the proxy for every chord (and a chord's own, on its `chord` record). *Added 2026-10-26, §11.* |
 | Keyboard shortcuts | per OS family. A Mac writes `shortcuts.mac`, and Windows and Linux write `shortcuts.other`; each computer uses only its own family's. |
 | Neither, because they're about this computer | interface size (it depends on the display), mini window size, DevTools' side and size, update checks (they depend on how Chord was installed), Duet's app and model (which CLI is installed here) |
 | Neither, because they're one-time flags | first run done; the one-time switch-off of auto picture-in-picture |
@@ -137,7 +138,7 @@ The realistic profile: 12 chords, 260 pinned tabs in 40 folders, 60 Today tabs, 
 
 - **Duet images go in as they are,** base64 in a plain file. Deflating them gains nothing.
 - **A sync folder holds about 270 KB per computer** (setup only). An everyday change adds a frame of well under 1 KB.
-- **Time for the whole file on this Windows development machine:** serializing the history took 12 ms, deflating everything 82 ms, and AES-GCM 1 ms (8 MiB took 8 ms). scrypt takes about 0.5 s. ⚠ SQLite reading the 50,000 visits isn't measured yet.
+- **Time for the whole file on this Windows development machine:** serializing the history took 12 ms, deflating everything 82 ms, and AES-GCM 1 ms (8 MiB took 8 ms). scrypt takes about 0.5 s. ~~⚠ SQLite reading the 50,000 visits isn't measured yet.~~ *Measured 2026-10-26* (§11): 70–77 ms to read them; the whole plain export 209 ms in the Linux container, encrypted 787 ms.
 
 ### Extension and MIME type
 
@@ -165,7 +166,7 @@ Checked 2026-10-25 by running Electron 45.0.0's own Node (24.22.0, through `ELEC
 ### The choices
 
 - **KDF: scrypt, with N=2¹⁷, r=8, p=1.** That's 128 MiB and about 0.5 s here, and it's OWASP's minimum for scrypt. Argon2id would be the first choice, but here it would need a WebAssembly build (⚠ not evaluated), slower than native code, for one derivation per export, per import and per computer. The header names the KDF and its parameters, so a later Chord can move to Argon2id once BoringSSL has it, or raise N, and still open old files.
-- **The passphrase is normalized to NFC.** *Suggest one* offers five random words. There's a minimum length (open question 9), and there's no recovery (D14).
+- **The passphrase is normalized to NFC.** *Suggest one* offers five random words. There's a minimum length (open question 9), and there's no recovery (D14). *As built:* at least 12 characters, counted as characters (code points), at most 1,024; the words come from Chord's own list of 1,738 (`core/words.ts`), about 54 bits for five.
 - **Cipher: AES-256-GCM.** It's the only AEAD that Electron's Node ships as a cipher. It's fast on CPUs with AES instructions, which covers nearly all of Chord's targets. ⚠ Some arm64 boards lack them (the Raspberry Pi 4, for one), but even software AES is quick at a few MB.
 - **Keys:**
   - The root key is scrypt of the passphrase and the KDF salt.
@@ -247,7 +248,7 @@ Tombstones are kept forever in v1. Each is about 90 bytes, and setup is deleted 
 
 - **Into a new profile,** everything in the file comes in: it's a restore. A profile that has only its first-run chord counts as new, and that chord makes way.
 - **Into a profile with data, import adds what's missing and updates what's older. It never deletes.**
-  - **Things compare field by field:** the file's stamp against this computer's. With sync on, this computer's stamps are sync's own (§7). Without sync, they're the rows' `updated_at`. Migration 16 adds `updated_at` to `setting`, `favorite` and `link_route`, which lack it, so an old export can't overwrite yesterday's edit.
+  - **Things compare field by field:** the file's stamp against this computer's. With sync on, this computer's stamps are sync's own (§7). Without sync, they're the rows' `updated_at`. Migration 17 (built with export, 2026-10-26; this said 16 before Effects' switches and proxies took 15 and 16) adds `updated_at` to `setting`, `favorite` and `link_route`, which lack it, so an old export can't overwrite yesterday's edit.
   - **With sync on, what an import brings keeps the file's stamps,** so it can't overrule a newer change another computer made. Only something brought back from deletion gets a new stamp.
   - **Tombstones in a file are ignored,** though exports have none anyway.
   - **Something you deleted here comes back** if the file has it: importing it is the choice.
@@ -334,9 +335,9 @@ The first computer writes `sync-1.json`. If two computers set up the same empty 
 
 Main only routes, as performance rule 1 asks.
 
-**Export runs in a short-lived utility process,** like browser import.
+**Export runs in a short-lived utility process,** like browser import. *Built 2026-10-26 as written here* (ARCHITECTURE.md §9, *Your data: export*).
 - Main flushes pending writes and shows the OS's save dialog (async). It then starts *Chord Export* with the database path, the Duet images folder, the target, the options and the passphrase, if there is one. Main never holds the data.
-- **The process opens `chord.db` itself, read-only** (`node:sqlite`'s `readOnly` option), in one read transaction. WAL gives it a steady snapshot while chord-data goes on writing. ⚠ A second, read-only connection from another process is standard SQLite, but Chord hasn't tried it yet.
+- **The process opens `chord.db` itself, read-only** (`node:sqlite`'s `readOnly` option), in one read transaction. WAL gives it a steady snapshot while chord-data goes on writing. ~~⚠ A second, read-only connection from another process is standard SQLite, but Chord hasn't tried it yet.~~ *Checked 2026-10-26* (§11): the snapshot holds, chord-data's writes neither fail nor wait, on Node 24.19 and on Electron 45's own Node, and in the export process itself in the E2E container.
 - It streams rows (`StatementSync.iterate()`) through core's record functions into frames, writes to `<name>.part`, and renames that when done.
 - It sends progress at most 10 times a second, then exits and gives its memory back.
 - chord-data's thread does nothing for it, so command bar searches keep their 16 ms.
@@ -353,10 +354,10 @@ Main only routes, as performance rule 1 asks.
 - **Things whose winning value changed go to main as one push.** Main applies them as a `sync.apply` command: no Undo toast, and nothing written to the log. A quiet toast appears only when something you're looking at goes away, such as the chord on screen.
 
 **The change to packages/data is moderate, and additive.**
-- **Migration 16 (with export; 15 is Effects' switches):** `updated_at` on `setting`, `favorite` and `link_route`, set on every write, plus a small `meta` table for the device id.
-- **`export.ts`:** turns rows into records over a read-only connection, for the export process.
+- **Migration 17 (with export; Effects' switches took 15 and proxies 16, so this was 16 before):** `updated_at` on `setting`, `favorite` and `link_route`, set on every write that changes the row, plus a small `meta` table for the device id. *Built 2026-10-26.*
+- **`export.ts`:** turns rows into records over a read-only connection, for the export process. *Built 2026-10-26*, with `rows.ts` (rows as the model has them, shared with `db.ts`) and `crypto.ts` (Node's primitives for core's container).
 - **Import:** `importHistory` learns to skip visits it already has. A new `duet.import` op adds threads, messages and images, with Undo bookkeeping like `import_page`'s.
-- **Migration 17 (with sync):**
+- **Migration 18 (with sync; it was 17):**
   - `sync_record` (type, id, fields JSON, stamps JSON): the merged copy;
   - `sync_outbox`;
   - `sync_cursor`: how far each segment has been read;
@@ -383,9 +384,10 @@ Settings → **Your data**, in place of today's Import, which moves in as a grou
   - **Choose where to save…** opens the OS's save dialog at *Chord data 2026-11-30.jsonl* (or `.chorddata`).
   - While Chord writes: a 4 px accent bar and *Writing history: 8,000 of 15,002 pages*. Then *Saved Chord data 2026-11-30.jsonl, 3.8 MB* and *Show in folder*.
   - If it can't save: *Chord couldn't save there. Choose another place.* **Choose where to save…**
+- *As built 2026-10-26* (DESIGN.md §8.8), with these additions: the two fields are *Passphrase* and *Again*; *Suggest one* puts its words in both and shows them, with *Five words at random. Write them down, or keep them in your password manager.*, and typing hides them again; a field's problem shows once you've left it (*At least 12 characters.* · *The two don’t match.*); the line under the bar says *Locking the file with your passphrase…*, *Writing your setup…*, *Writing Today tabs…* and *Writing Duet chats: 3 of 20 chats* too; two more problems: *Chord couldn’t read your data to write the file. Choose where to save to try again.* and *Chord is still writing your last export. Try again when it’s done.* The passphrase fields empty once a file is saved.
 
 **Import**
-- A row: *From a Chord file*, with *Bring back an export, here or on another computer. Nothing here is removed.* and **Choose a file…**
+- A row: *From a Chord file*, with *Bring back an export, here or on another computer. Nothing here is removed.* and **Choose a file…** (*Until step 2, as built:* the row says *Coming in a later version: bring back an export, here or on another computer.*, with no button.)
 - A row: *From another browser*: today's panel, unchanged (DESIGN.md §8.7).
 - After you choose a file:
   - *Reading Chord data 2026-11-30.chorddata…*
@@ -426,10 +428,10 @@ Settings → **Your data**, in place of today's Import, which moves in as a grou
 
 As the maintainer prefers: a few journey E2Es, which run in the Linux container and CI, never on the desktop, plus table-driven unit tests. ⚠ The durations are estimates.
 
-**1. Export** (about a week)
+**1. Export** (about a week) · **built 2026-10-26** (§11)
 - **What's built:**
   - in core: the record codecs, the clock (for stamps from rows) and the encrypted container;
-  - migration 16, `export.ts` and the export process;
+  - migration 17 (it was 16), `export.ts` and the export process;
   - Settings' card and `docs/data-format.md`.
 - **Unit tables:**
   - model → record → model for every type, including the fields that must never appear: back/forward state, live state, private chords;
@@ -447,7 +449,7 @@ As the maintainer prefers: a few journey E2Es, which run in the Linux container 
   - Once more, into a profile with data.
 
 **3. Sync** (two to three weeks)
-- **What's built:** migration 17, the stamping hook, the worker, the folder protocol, and Settings.
+- **What's built:** migration 18 (it was 17), the stamping hook, the worker, the folder protocol, and Settings.
 - **Unit tables:**
   - the clock: behind, ahead, equal, the counter;
   - the field merge: concurrent edits, edit against delete, bringing a thing back, the same tab moved twice, a cycle, equal ranks, settings that conflict, unknown types kept and written back;
@@ -477,6 +479,44 @@ As the maintainer prefers: a few journey E2Es, which run in the Linux container 
 9. **Passphrase length:** **I recommend at least 12 characters,** with *Suggest one*.
 10. **Tombstones forever in v1, and extensions left out of v1:** **I recommend both.**
 
+## 11. Building export: what it decided and found (2026-10-26)
+
+Step 1 is built as §1–§3, §7 and §8 say, apart from what's here. [docs/data-format.md](../data-format.md) is the format as built.
+
+### Decided
+
+- **Proxies: exported as settings, never synced.** Two arrived after this was written: Settings' proxy for every chord (`settings.proxy`) and a chord's own (`chord.proxy`, ARCHITECTURE.md §9 *Proxies*). I agree with the suggestion, by §1's principles:
+  - *Exported*, because it's setup you typed (a server, its port, the addresses that skip it, a PAC file's address), and a restore, here after a reinstall or on a new computer, should bring it back. The proxy for every chord is the `proxy` field of the settings record, whole; a chord's own is its `chord` record's `proxy` field (`null` for the proxy for every chord), which restore's rule keeps only on a chord with its own sign-ins. Neither holds a password: there's no field for one (D12).
+  - *Never synced*, because it's about the network this computer is on, and a wrong one fails closed: Chord sets proxies with no direct fallback, so a laptop's corporate proxy or a `127.0.0.1:1080` SSH tunnel synced to a desktop at home would stop every page there. It's a new row in *Which settings travel*: "Exported, never synced". Sync leaves `chord.proxy` out of chord records.
+  - *On import* (step 2): a proxy is a setting like any other, named in the preview (*Proxy for every chord: system's → SOCKS5 proxy at 10.0.0.2:1080*), on for a new profile and off until you turn it on for a profile with data (question 2). A chord's own comes in with its chord only when *Settings from the file* is on, since it decides whether that chord's pages load at all.
+- **Effects' per-item switches** go in as §1 had them (`cssOn`, and `on` inside `hidden` and `duet`), and read as on when missing.
+- **Which fields a setting is.** A group that a settings change merges part by part (`SettingsPatch`'s nested `Partial`s: motion, interface, spelling, ad blocking, tab counts, Duet, reader view, Effects) is a field per part, with dotted names; a value that's replaced whole (the proxy, a list, a family's shortcuts) is one field. Every key of `Settings` says how it travels in `SETTING_TRAVEL` (core's `records.ts`), typed so that a new setting doesn't build until it does. *Encrypt with a passphrase*, which Chord remembers (§3), is a new setting, `encryptExports`, exported and synced.
+- **Stamps from rows.** A row's `updated_at` moves only when its value changes (migration 17's columns; chords' and nodes' already moved on every write). A row from before migration 17 has 0: when it last changed isn't known, so it's older than anything a file has.
+- **The encrypted file, exactly:** the frames' plaintexts are the plain file's lines after its header, the end line included, so a decrypted file reads as a plain one. A frame's length counts the bytes after it (nonce, ciphertext, tag). Its associated data is the SHA-256 of the header line without its `\n`, the index as 8 bytes big-endian, and one byte for the last frame. `check` is a nonce, then `chord` sealed with the check key and no associated data. A reader passes over a frame that fails its check (each stands alone), so *Import what's readable* gets everything else; frames swapped or dropped fail from there on, by their index.
+- **Readers refuse what costs too much:** a key derivation needing more than 256 MiB (or that scrypt won't run: N < 2^(16·r)), a frame over 40 MiB, a frame that inflates past 48 MiB, a line over 32 MiB, a file of more than 2 GiB of lines; they parse a frame's lines as it comes, never the whole file as one string, and never throw. A key derivation Chord doesn't know or won't run reads as *newer*. Plain files may have `\r\n` endings (JSON's whitespace). The end line is any object with a whole-number `end` and no `type`, so format 1 can add to it.
+- **Writers keep to the readers' limits:** a record whose line would pass 32 MiB (a huge image Codex made, say) is left out, and *Saved* says how many were.
+- **The envelope has a version of its own** (`chord-encrypted 1`), apart from the records' `format`: a new record format needn't change how files are sealed, nor the other way round.
+- **Never a password, even in a proxy's PAC address:** one there is taken out on export. A PAC file on this computer (`file:`) is kept, as the setting it is. Tabs read from a file take only web addresses and the archive page (`chord://archive/`).
+- **Order inside setup:** chords, then Pinned in the sidebar's order (a folder or split before what's in it), Favorites, themes, settings, routes, Effects, zoom, permissions.
+
+### Found
+
+- **⚠ A second, read-only connection from another process: works.** A writer as chord-data keeps the database (WAL, `synchronous=NORMAL`) committed a batch every 50 ms while a read-only connection (`readOnly: true`) held one read transaction for 1.5 s and read 50,000 visits joined to 15,000 pages. The reader's counts didn't move while the writer added rows; the writer never failed or waited (its worst batch 1.9 ms on Node 24.19, 2.5 ms on Electron 45's Node 24.22 through `ELECTRON_RUN_AS_NODE`); the read took 70–77 ms; a write through it was refused; and it opened with no other connection and no `-wal` or `-shm` too. `data/test/export.test.ts` keeps the snapshot check.
+- **⚠ `node:sqlite` in a utility process other than chord-data: works** (the export process in `your-data.spec.ts`, Linux X11 in the container, reading while chord-data had the database open). Worker threads inside a utility process (sync's) are still unchecked.
+- **⚠ Decrypting with Python: works.** docs/data-format.md's reader (Python 3.12, `cryptography` 44, `hashlib.scrypt`) gave a Chord-written file's records and end line back byte for byte, with the passphrase typed composed or decomposed; a wrong one failed.
+- **⚠ SQLite reading 50,000 visits:** 70–77 ms (above). **The whole export**, measured by `perf.spec.ts` (*export: 50,000 visits while typing in the command bar*) in the Linux container on 4 CPUs (CI's runner size), on a generated profile of 50,000 visits on 15,001 pages and 61 Today tabs, from the click to *Saved*:
+  - **Plain: 209 ms** (median of 23 exports run one after another; the slowest 236 ms), **2.44 MB**.
+  - **Encrypted: 787 ms**, about 500 of them scrypt; **241 KB**. The generated titles repeat, so they deflate about ten to one; real ones won't (§2's estimate is nearer three to one).
+  - **While typing** 35 letters in the command bar, every keystroke during an export: history's results committed in at most 10.7 ms (8.6 typing alone), within their 16 ms; rows from memory were never late; the shell's and the command bar's worst frame 7.6 ms (6.4 alone), their longest task 5.6 ms. chord-data, which answers those searches, never waits on the export.
+  - **Main:** its longest task went from 1.6 ms to 5.2 ms, once per export, and nearly all of it is Electron's `utilityProcess.fork` (0.3–4.8 ms on main, measured); its busiest 30 ms held 11.3 ms of tasks (3.5 alone). Its process CPU time came to about 17 ms per export, every thread included. A 5 ms timer's worst delay is too noisy to judge in the container (8.5 to 28 ms typing alone, across runs), so it's reported, not held.
+- **The line in §1 that called icons never synced** contradicted the table; corrected there.
+
+### Not done here
+
+- **⚠ The Flatpak, saving outside Downloads.** Its only folder of the user's is Downloads (`--filesystem=xdg-download`), so a file saved elsewhere comes back through the document portal, which lets Chord write the file it chose and nothing beside it. When `<name>.part` can't be made there (`EACCES`, `EPERM`), the export writes the chosen file in place. Not tried in a Flatpak.
+- `readDataFile` reads a whole file into memory; step 2's import process, which takes files up to 2 GB, should read frames as they come.
+- *From a Chord file* is a row with no button: step 2 gives it **Choose a file…** and the preview.
+
 ## What was checked, and what wasn't
 
 **Checked:**
@@ -486,14 +526,13 @@ As the maintainer prefers: a few journey E2Es, which run in the Linux container 
 - OWASP: N=2¹⁷, r=8, p=1 is its minimum for scrypt.
 - The model, tables and functions named here, in the code as of `cd27baf`.
 
+**Checked since, building export (2026-10-26, §11):** a read-only second connection to the live database from another process; `node:sqlite` in a second utility process; SQLite's time to read 50,000 visits, and the whole export's; decrypting a file with Python.
+
 **Not checked (⚠ above):**
-- the sizes, which come from generated data;
-- SQLite's time to read 50,000 visits;
-- a read-only second connection to the live database from another process;
+- the sizes, which come from generated data (export's measured ones are generated too);
 - worker threads (with `node:sqlite`) inside a utility process;
 - how each sync app uploads, holds online-only files and delivers half-written ones;
 - folder watching on cloud folders;
 - `application/jsonl`'s registration status (from secondary sources);
-- decrypting a file with Python;
 - AES speed on arm64 boards without AES instructions;
 - the build estimates.
