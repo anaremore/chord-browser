@@ -10,6 +10,12 @@ What's built since 0.5.0; it gets its version when it's released.
   - Into a new Chord it's a restore: everything comes in, settings too, in place of the chord Chord started with.
   - Into a Chord you use, your settings stay as they are unless you turn on *Settings from the file*, which names each change first. History, Duet chats and Effects each have a switch.
   - A file is treated as untrusted: tabs don't load until you open them, every site's Effects are checked again, sites you'd allowed to use your camera, microphone or location ask again, and Duet chats send nothing anywhere until you write in one.
+- **Sync your setup between your computers**, in Settings → Your data → *Sync*, through a folder you already sync: iCloud Drive, Dropbox, OneDrive or Syncthing. Your chords, pinned tabs and folders, Favorites, themes, settings, link routes and Effects stay the same on each computer. History, Today tabs, Duet chats, page zoom, site permissions and proxies stay on each one.
+  - Pick the folder, and choose a passphrase. Everything Chord puts there is encrypted with it, and you type it once on each computer. Lose it and the synced copy can't be opened; what's on each computer stays.
+  - On another computer, pick the same folder and enter the passphrase. A new Chord takes your synced setup; one with chords of its own asks whether to use the synced setup (with Undo) or keep both.
+  - A change on one computer reaches the others a few seconds after your sync app delivers it. If two computers change the same thing, the later change wins; changes to different things both stay.
+  - Settings lists your computers. Remove one or turn sync off, each with Undo first, pause it, or change the passphrase. Your data on each computer stays whatever you do.
+  - What comes from the folder is treated as untrusted, as a file is: tabs don't load until you open them, Effects are checked again, a chord never changes its sign-ins or proxy, and sync never carries permissions or Duet chats.
 
 ## 0.5.0 · preview · 2026-10-26
 

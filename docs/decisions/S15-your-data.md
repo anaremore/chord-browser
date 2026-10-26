@@ -1,6 +1,6 @@
 # S15: Your data — export, import and sync
 
-*2026-10-25 · ROADMAP.md 0.5 · decision D14 (ARCHITECTURE.md §16) · **reviewed and decided 2026-10-25:** the maintainer took all ten recommendations in §10. **Step 1, Export, built 2026-10-26** (ARCHITECTURE.md §9 *Your data: export*, DESIGN.md §8.8, [docs/data-format.md](../data-format.md)): what it decided and found is in §11, and marked *as built* where it lands. **Step 2, Import, built 2026-10-26** (ARCHITECTURE.md §9 *Your data: import*, DESIGN.md §8.8): what it decided and found is in §12. Sync isn't built yet.*
+*2026-10-25 · ROADMAP.md 0.5 · decision D14 (ARCHITECTURE.md §16) · **reviewed and decided 2026-10-25:** the maintainer took all ten recommendations in §10. **Step 1, Export, built 2026-10-26** (ARCHITECTURE.md §9 *Your data: export*, DESIGN.md §8.8, [docs/data-format.md](../data-format.md)): what it decided and found is in §11, and marked *as built* where it lands. **Step 2, Import, built 2026-10-26** (ARCHITECTURE.md §9 *Your data: import*, DESIGN.md §8.8): what it decided and found is in §12. **Step 3, Sync, built 2026-10-26** (ARCHITECTURE.md §9 *Your data: sync*, DESIGN.md §8.8, [docs/data-format.md](../data-format.md#syncs-folder)): what it decided and found, and what's left, is in §13.*
 
 **In short.** Export and sync use one record format. Export ships first, then import, then sync.
 
@@ -349,7 +349,7 @@ Main only routes, as performance rule 1 asks.
 - **Effects** go to main's Effects service, which sends each through its sanitizer worker.
 
 **Sync runs beside chord-data.**
-- **The folder work** (watching, reading, writing, scrypt, AES) runs in a worker thread in chord-data's process. A slow cloud folder or a big snapshot never touches the thread that answers searches, and nothing runs while sync is off. ⚠ Worker threads inside a utility process are untried in Chord. The fallback is a utility process of its own with a port to chord-data, as import has.
+- **The folder work** (watching, reading, writing, scrypt, AES) runs in a worker thread in chord-data's process. A slow cloud folder or a big snapshot never touches the thread that answers searches, and nothing runs while sync is off. ~~⚠ Worker threads inside a utility process are untried in Chord. The fallback is a utility process of its own with a port to chord-data, as import has.~~ *Checked 2026-10-26* (§13): they work, `node:sqlite` in them too, so the fallback wasn't needed.
 - **chord-data's own thread owns the sync tables.** It stamps your changes in `write()`, in the same transaction, and merges what the worker read in slices of a few milliseconds.
 - **Things whose winning value changed go to main as one push.** Main applies them as a `sync.apply` command: no Undo toast, and nothing written to the log. A quiet toast appears only when something you're looking at goes away, such as the chord on screen.
 
@@ -448,7 +448,7 @@ As the maintainer prefers: a few journey E2Es, which run in the Linux container 
   - Export, then import into a new profile. Check the sidebar, Favorites, a site's Effects applied, history in the command bar and a Duet chat. Then Undo removes it all.
   - Once more, into a profile with data.
 
-**3. Sync** (two to three weeks)
+**3. Sync** (two to three weeks) · **built 2026-10-26** (§13)
 - **What's built:** migration 19 (it was 17, then 18), the stamping hook, the worker, the folder protocol, and Settings.
 - **Unit tables:**
   - the clock: behind, ahead, equal, the counter;
@@ -566,6 +566,58 @@ Step 2 is built as §5, §7 and §8 say, apart from what's here. ARCHITECTURE.md
 - **⚠ The Flatpak:** a file chosen outside Downloads comes through the document portal, which allows reading the file chosen; not tried in a Flatpak.
 - **⚠ Big files:** reading is linear, a megabyte at a time, and the setup kept is capped (above); measured to 3.1 MB. A 2 GB file of images wasn't tried.
 
+## 13. Building sync: what it decided and found (2026-10-26)
+
+Step 3 is built as §4, §6, §7 and §8 say, apart from what's here. ARCHITECTURE.md §9 *Your data: sync* has the flow, and a table of where each rule about untrusted input is enforced; DESIGN.md §8.8 has the card; [docs/data-format.md](../data-format.md#syncs-folder) has the folder's format.
+
+### Decided
+
+- **The worker thread, in chord-data's process, as §7 has it.** Checked first (below), so §7's fallback, a utility process of its own, wasn't needed. The worker does the folder work; chord-data's thread owns the tables, merges a slice at a time, and pushes what changed to main.
+- **`sync_record` keeps three things per thing:** each field's value and its stamp (§7's fields and stamps), and `local`, what this computer last wrote of it. The stamping hook compares the model with `local`, not with the merged value, so it stamps only what you changed. Main marks the writes of what another computer changed (`WriteOp.sync`, from `sync.apply`); the hook takes those as `local` only, so another computer's change never goes into this computer's log (§4), even if this computer's checks tidy it differently. A change of yours to the same thing, still waiting to be written, keeps its own mark, and wins.
+- **A change of yours waiting puts off another computer's to the same thing.** Main doesn't apply the incoming one over it; once yours is written and stamped, main asks chord-data for the thing again (`sync.repush`). Otherwise an edit made in the 250 ms before a push could be lost.
+- **Equal stamps:** the larger value (its JSON with keys in order) wins, so the merge stays commutative even for a log that repeats a stamp. **Icons are facts:** the first copy of an id stays, and any stamp on one is dropped.
+- **A stamp more than a year ahead is refused.** §4 says a clock far ahead can't be corrected when reading; a year bounds a broken or hostile clock that would otherwise drag every computer's clock with it (and its counter past 32 bits). Two computers whose clocks differ by about a year could disagree about a stamp right at the edge; no other.
+- **A chord you have keeps its sign-ins,** as import decided (§12). `profile` is carried and merged, but applied only to a chord that's new here, and then only if no chord here has those sign-ins; a chord here never changes its sign-ins, or its proxy, through sync.
+- **Joining asks for the passphrase by how many computers sync, not their names:** the names are inside the encryption, so §8's *Austin's MacBook and Austin's Desktop* can't show before it opens. They show in the list once it does.
+- **Joining, decided:**
+  - a clearly fresh Chord (import's rule, `isFreshSetup`) takes the synced setup without asking, and its first-run chord makes way without a toast;
+  - *Use the synced setup:* this computer's chords, and what's pinned in them, go, kept for Undo this session (`sync.replace`; the window's toast's Undo is `sync.unreplace`), their Today tabs to the top of the first synced chord's Today; its Favorites, themes, routes and Effects join; its settings count as older than any synced one;
+  - *Keep both:* everything joins, each thing with its row's stamp. A setting still at its default counts as never set (stamped older than anything), as an import's does (§12), so a new computer's defaults don't overrule your synced settings for being written at its first launch.
+- **The first computer's things** go in the same way, by their rows' stamps, and its first segment is a snapshot (so is every computer's first in a generation).
+- **Turn off and Remove happen when their Undo runs out** (6 s), as §8 says: main holds them; the window's toast and Settings' card both offer Undo. Turning off writes this computer's `removed`, written to the folder before it stops.
+- **Problems:** one card at a time in Settings, and a toast once per kind per session, with *Sync settings* to open it. *Missing* (the folder isn't there) keeps looking at every poll and focus.
+- **Moving to a new generation** (the passphrase changed elsewhere) is a folder operation of its own: no read of the old generation runs meanwhile. As first built, a read of the old generation found the new one, stopped the worker, and the snapshot being written under the new one never was; the E2E journey found it.
+- **A copied id:** this computer takes a new id and writes a snapshot under it. The old id isn't marked removed: it's the other computer's now.
+- **Limits** (`SYNC_LIMITS`, core's sync.ts): per type, in all, and per thing, sized far past S15 §2's realistic profile; a pass reads at most 64 computers and the newest 1,000 segments of each, at most 16 MB a step.
+- **The folder on the disk** reads only regular files (a pipe under a segment's name would hold a read up for ever) and writes, appends and removes nothing that resolves outside `Chord sync` or goes through a link (a link planted in a shared folder could send Chord's writes elsewhere on the disk).
+- **A pinned tab here off its home keeps its own title and icon** when another computer changes them: they're of the home page, which this one isn't showing.
+- **A computer's name** starts as the computer's own (`os.hostname()`), and can be changed in the list.
+- **Settings' *Change passphrase…*** asks for the new one twice, as Export does, and says the other computers pause until they have it.
+
+### Found
+
+- **⚠ Worker threads inside a utility process: work.** `spikes/s15-sync-worker` (Electron 45.0.0, Node 24.22.0, the Linux container): a worker thread in a utility process opened `node:sqlite` on the same file (read-only), ran scrypt at N=2¹⁷ in 530 ms, sealed 8 MiB with AES-256-GCM in 17 ms, deflated 4 MiB in 15 ms, and `fs.watch` fired, while the utility process's own thread answered a query every 2 ms, never more than 1.3 ms late. The process grew by 13 MB with the worker; built into Chord, chord-data's private memory went from 22.7 MB to 33.6 MB with sync on, and to 30.7 MB once it was off again.
+- **Performance** (`perf.spec.ts`, the Linux container on 4 CPUs). One change costs `write()` 0.1 ms more (the hook 0.12 ms, worst 0.39), and its frame 4.6 ms on the worker. The first version of *keystrokes during a large merge* missed: history's results waited up to 62 ms, because:
+  1. main's writes of what it had applied (300 sidebar nodes) were one transaction of up to 56 ms, and every search waited for them, since a search flushed pending writes first;
+  2. reading what changed back for main was one task (9 ms for 300 things, and more for more);
+  3. checkpoints on chord-data's thread took 10–70 ms;
+  4. main applied parts of 200 back to back, and the shell took each in one frame.
+
+  What fixed it: the hook skips reading what's merged for sync's own writes; searches and the archive flush only history's happenings (visits, picks, the archive), never the sidebar's writes, and a big flush goes 100 entities a transaction, chords first; what changed is read back 100 at a time, parents first, merged 100 records a transaction; while sync is busy, checkpoints run on the worker thread's own connection (passive ones), never on chord-data's (§12's *next* step, done for sync); main applies parts of 50, two frames apart. After: every keystroke's results within 16 ms (10.6 ms worst while joining, 10.5 during frames of 300 changes, 7.9 typing alone), chord-data's tasks at most 6 ms, main's longest task 4.4 ms, its busiest 30 ms 8.3 ms while joining and 17 ms during back-to-back frames of 300 changes, a frame a few times a second, far more often than a computer writes (every 3 s at most). ARCHITECTURE.md has all the numbers.
+- **The shell takes a part of new chords in one task of up to 18 ms** while joining, mounting their sidebar, as an import's restore does (§12). The store's and the shell's cost per change grows with the nodes (ARCHITECTURE.md §9, *Known limit: very big imports*).
+- **The journeys pass on X11 and Wayland** (`sync.spec.ts`): two Chords, one folder, set up, join, edit on both, a wrong passphrase, one removed; a passphrase changed, the other paused and moved, and in the container, which has no keyring, a relaunch asking for the passphrase again (§3).
+
+### Not done here
+
+- **By hand with real sync apps:** iCloud Drive, Dropbox, OneDrive and Syncthing, between Windows, macOS and Linux, from the checklist in [docs/testing/sync.md](../testing/sync.md). Not run: how each uploads, holds online-only files (and iCloud's `.icloud` placeholders on older macOS, which Chord doesn't ask for) and delivers half-written ones is still ⚠ untried, as is watching cloud folders.
+- **Windows and macOS:** the journeys ran only in the Linux container; CI runs them on every OS. `safeStorage` with a real keychain (DPAPI, the Keychain, a Linux secret service) wasn't tried: the container has none.
+- **⚠ The Flatpak:** a folder chosen through the document portal; not tried.
+- ***Choose folder…*** on the missing-folder card (§8), for a folder that moved: the card has no button; turning sync off and on again picks a folder.
+- ***Start over*** for a lost passphrase (§6): not built; turning sync off on each computer and setting it up again in a new folder does it.
+- ***Remember on this computer anyway*** (question 6's option) for Linux without a keyring: not built; such a computer asks after each launch.
+- **Each computer's own *last synced*** isn't shown for this one, and a removed computer leaves the list.
+- **Effects' Duet patches get new ids each time another computer's change to their site is applied** (records carry none), as for an import.
+
 ## What was checked, and what wasn't
 
 **Checked:**
@@ -575,11 +627,10 @@ Step 2 is built as §5, §7 and §8 say, apart from what's here. ARCHITECTURE.md
 - OWASP: N=2¹⁷, r=8, p=1 is its minimum for scrypt.
 - The model, tables and functions named here, in the code as of `cd27baf`.
 
-**Checked since, building export (2026-10-26, §11):** a read-only second connection to the live database from another process; `node:sqlite` in a second utility process; SQLite's time to read 50,000 visits, and the whole export's; decrypting a file with Python. **Building import (§12):** reading a file as it comes; importing and undoing 50,000 visits while typing; SQLite's checkpoints' cost at 1,000 and 250 pages.
+**Checked since, building export (2026-10-26, §11):** a read-only second connection to the live database from another process; `node:sqlite` in a second utility process; SQLite's time to read 50,000 visits, and the whole export's; decrypting a file with Python. **Building import (§12):** reading a file as it comes; importing and undoing 50,000 visits while typing; SQLite's checkpoints' cost at 1,000 and 250 pages. **Building sync (§13):** worker threads (with `node:sqlite`) inside a utility process; a change's cost from stamp to frame; chord-data's memory with the worker on and off; keystrokes while joining a realistic setup and during frames of 300 changes; checkpoints from a second connection on another thread.
 
 **Not checked (⚠ above):**
 - the sizes, which come from generated data (export's measured ones are generated too);
-- worker threads (with `node:sqlite`) inside a utility process;
 - how each sync app uploads, holds online-only files and delivers half-written ones;
 - folder watching on cloud folders;
 - `application/jsonl`'s registration status (from secondary sources);
