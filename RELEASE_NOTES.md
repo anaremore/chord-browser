@@ -2,9 +2,7 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
-## Next · preview (unreleased)
-
-What's built since 0.4.0; it gets its version when it's released.
+## 0.5.0 · preview · 2026-10-26
 
 - **Export everything in Chord to one file**, in Settings → Your data: your chords, pinned and Today tabs, folders, Favorites, themes, settings, link routes, Effects, and if you like, your history and Duet chats. Keep it as a backup, read it, or bring it to another computer.
   - It's plain text anyone can read (JSON Lines), and [docs/data-format.md](docs/data-format.md) says what every line means, so it never depends on Chord.
