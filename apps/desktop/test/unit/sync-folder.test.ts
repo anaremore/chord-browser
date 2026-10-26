@@ -44,6 +44,32 @@ describe('sync’s folder on the disk', () => {
     expect(existsSync(join(root, '1', '00000000000000aa'))).toBe(true);
   });
 
+  it('refuses every write when `Chord sync` itself is a link or a junction', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'chord-sync-'));
+    const elsewhere = mkdtempSync(join(tmpdir(), 'chord-elsewhere-'));
+    const root = join(parent, 'Chord sync');
+    symlinkSync(elsewhere, root, process.platform === 'win32' ? 'junction' : 'dir');
+    const fs = new NodeFolder(root);
+    await expect(fs.mkdir('')).rejects.toThrow();
+    await expect(fs.mkdir('1/00000000000000aa')).rejects.toThrow();
+    await expect(fs.create('sync-1.json', bytes('{}'), true)).rejects.toThrow();
+    await expect(fs.create('x.chordlog', bytes('x'))).rejects.toThrow();
+    await expect(fs.remove('1')).rejects.toThrow();
+    expect(readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it('renames a file in place of another, inside the folder only', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'chord-sync-'));
+    const fs = new NodeFolder(root);
+    await fs.mkdir('1/00000000000000aa');
+    await fs.create('1/00000000000000aa/000002.chordlog.part-1a2b', bytes('whole'));
+    await fs.create('1/00000000000000aa/000002.chordlog', bytes('junk'));
+    await fs.rename('1/00000000000000aa/000002.chordlog.part-1a2b', '1/00000000000000aa/000002.chordlog');
+    expect(readdirSync(join(root, '1', '00000000000000aa'))).toEqual(['000002.chordlog']);
+    expect(readFileSync(join(root, '1', '00000000000000aa', '000002.chordlog'), 'utf8')).toBe('whole');
+    await expect(fs.rename('1/00000000000000aa/000002.chordlog', '../outside.chordlog')).rejects.toThrow();
+  });
+
   it.skipIf(process.platform === 'win32')('reads nothing from what isn’t a file (a pipe under a segment’s name)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'chord-sync-'));
     mkdirSync(join(root, '1', '00000000000000aa'), { recursive: true });

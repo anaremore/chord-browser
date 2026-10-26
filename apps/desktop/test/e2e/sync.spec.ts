@@ -199,6 +199,7 @@ test('a passphrase changed on one computer pauses the other until it has it; wit
 
     // The laptop pauses, and says who changed it; the old passphrase no longer opens it, the new one does.
     await hooks(laptop.app, 'syncRead');
+    // It names the desk: the desk said so in its log under the old passphrase, before it moved.
     await expect(laptop.settings.getByText(/The passphrase was changed on .+\. Enter the new one to keep syncing\./)).toBeVisible({ timeout: 20_000 });
     await laptop.settings.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
     await laptop.settings.getByRole('button', { name: 'Unlock' }).click();
@@ -236,7 +237,8 @@ test('a passphrase changed on one computer pauses the other until it has it; wit
     expect(readdirSync(join(folder, 'Chord sync'))).toEqual(expect.arrayContaining(['3', 'sync-3.json']));
     expect(readdirSync(join(folder, 'Chord sync', '3'))).toHaveLength(1);
     await hooks(desk.app, 'syncRead');
-    await expect(desk.settings.getByText(/The passphrase was changed on .+\. Enter the new one to keep syncing\./)).toBeVisible({ timeout: 20_000 });
+    // Started over without the old passphrase, the laptop couldn't say so under it: the desk names no one.
+    await expect(desk.settings.getByText('Sync was started again in this folder with a new passphrase. Enter it to keep syncing.')).toBeVisible({ timeout: 20_000 });
 
     // Remember the key anyway, behind its warning: the next launch carries on without asking.
     await expect(again.settings.getByText(/This computer has no safe place for the key, so Chord asks for the passphrase after each launch\./)).toBeVisible();

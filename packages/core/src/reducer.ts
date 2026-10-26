@@ -939,24 +939,121 @@ function putBack(draft: Draft<State>, undo: Draft<MergeUndo>, ctx: Context, effe
   undo.restored = true;
 }
 
-/** A chord goes, with its tabs, as chord.delete takes one, but kept nowhere: another computer deleted it (sync). Never the last one. */
-function dropChord(draft: Draft<State>, chordId: ChordId, ctx: Context, effects: Effect[]): void {
-  const order = sortedChords(draft as State);
-  const index = order.findIndex((c) => c.id === chordId);
-  if (index < 0 || order.length < 2 || draft.chords[chordId]?.private) return;
-  const neighbor = (order[index + 1] ?? order[index - 1])!;
+/**
+ * A chord makes way for another (`to`): another computer deleted it (sync), or
+ * it's this computer's and joining takes the synced setup. What's only this
+ * computer's moves to the top of `to`'s Today, in its order: its Today tabs
+ * (a split with its panes), and any pinned tab that's open, which stops being
+ * pinned (it no longer syncs). Windows on it go to `to`, showing what they
+ * showed if it moved. The rest (pinned folders, splits and tabs not open)
+ * goes, kept with the chord for Undo this session (`sync.unreplace` puts it
+ * back, and what moved too), as chord.delete keeps one.
+ */
+function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Context, effects: Effect[], keep = MAX_DELETED_CHORDS): void {
+  const chord = draft.chords[chordId];
+  const target = draft.chords[to];
+  if (!chord || !target || chord.private || target.private || chordId === to) return;
+  const today = children(draft as State, chordId, 'today', null);
+  const open = Object.values(draft.nodes)
+    .filter((n) => n.chordId === chordId && n.kind === 'tab' && n.section === 'pinned' && draft.live[n.id])
+    .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
+  const going = [...today, ...open];
+  const ranks = generateNKeysBetween(null, children(draft as State, to, 'today', null)[0]?.rank ?? null, going.length);
+  const resign = chord.profileId !== target.profileId;
+  const moved = new Set<NodeId>();
+  const before: SidebarNode[] = [];
+  const carry = (node: Draft<SidebarNode>) => {
+    before.push(copy(node));
+    node.chordId = to;
+    moved.add(node.id);
+    // A page can't change sign-ins: it closes, and loads again in its new session when it's shown.
+    if (resign && draft.live[node.id]) {
+      delete draft.live[node.id];
+      effects.push({ e: 'view.destroy', nodeId: node.id });
+    }
+  };
+  going.forEach((n, i) => {
+    const node = draft.nodes[n.id]!;
+    carry(node);
+    node.rank = ranks[i]!;
+    if (node.section === 'pinned') {
+      node.section = 'today';
+      node.parentId = null;
+      if (node.kind === 'tab') node.pinnedUrl = null;
+    }
+    // A split in Today brings its panes.
+    if (node.kind === 'split') for (const inner of Object.values(draft.nodes)) if (inner.parentId === node.id && inner.chordId === chordId) carry(inner);
+  });
+  // Windows on it go to `to`, showing what they showed if it moved.
   for (const win of Object.values(draft.windows)) {
-    if (win.activeChordId === chordId) switchChord(draft, win.id, neighbor.id, ctx, effects);
+    const shown = win.activeTab[chordId] ?? null;
     delete win.activeTab[chordId];
+    if (win.activeChordId !== chordId) continue;
+    win.activeChordId = to;
+    const show = shown && moved.has(shown) ? shown : null;
+    win.activeTab[to] = show;
+    if (show && !draft.live[show]) {
+      draft.live[show] = { ...IDLE_LIVE, loading: true };
+      effects.push({ e: 'view.ensure', nodeId: show });
+    }
+    effects.push({ e: 'view.show', windowId: win.id, nodeId: show });
   }
-  for (const node of Object.values(draft.nodes)) {
-    if (node.chordId !== chordId) continue;
+  // The rest goes with it, kept for Undo this session.
+  const rest = Object.values(draft.nodes).filter((n) => n.chordId === chordId);
+  draft.deletedChords.unshift({ chord: copy(chord), nodes: rest.map((n) => copy(n)), deletedAt: ctx.now, moved: before });
+  if (draft.deletedChords.length > keep) draft.deletedChords.length = keep;
+  for (const node of rest) {
     if (node.kind === 'tab' && draft.live[node.id]) effects.push({ e: 'view.destroy', nodeId: node.id });
     delete draft.nodes[node.id];
     delete draft.live[node.id];
   }
-  for (const [host, route] of Object.entries(draft.linkRoutes)) if (route.chordId === chordId) delete draft.linkRoutes[host];
   delete draft.chords[chordId];
+}
+
+/** A chord another computer deleted (sync): it makes way for its neighbour, never losing what's only this computer's. Never the last one. */
+function dropChord(draft: Draft<State>, chordId: ChordId, ctx: Context, effects: Effect[]): void {
+  const order = sortedChords(draft as State).filter((c) => !c.private);
+  const index = order.findIndex((c) => c.id === chordId);
+  if (index < 0 || order.length < 2) return;
+  const neighbor = (order[index + 1] ?? order[index - 1])!;
+  giveWay(draft, chordId, neighbor.id, ctx, effects);
+  for (const [host, route] of Object.entries(draft.linkRoutes)) if (route.chordId === chordId) delete draft.linkRoutes[host];
+}
+
+/**
+ * `sync.unreplace`: chords that made way (for the synced setup, or deleted on
+ * another computer) come back as they were, and what moved out of them goes
+ * back where it was, if it's still where it went. A chord sync brought back
+ * meanwhile stays as it is; its tabs still go back to it.
+ */
+function unreplace(draft: Draft<State>, windowId: WindowId, chordIds: readonly ChordId[], ctx: Context, effects: Effect[]): void {
+  const back: ChordId[] = [];
+  for (const chordId of chordIds) {
+    const index = draft.deletedChords.findIndex((d) => d.chord.id === chordId);
+    if (index < 0) continue;
+    const [deleted] = draft.deletedChords.splice(index, 1);
+    if (!draft.chords[chordId]) {
+      draft.chords[chordId] = deleted!.chord;
+      for (const node of deleted!.nodes) if (!draft.nodes[node.id]) draft.nodes[node.id] = node;
+      back.push(chordId);
+    }
+    const moves = new Map<NodeId, ChordId>();
+    for (const was of deleted!.moved ?? []) {
+      const node = draft.nodes[was.id];
+      if (node && node.kind === was.kind && node.chordId !== was.chordId && draft.chords[was.chordId]) moves.set(was.id, node.chordId);
+    }
+    const land = moving(draft, moves, ctx, effects);
+    for (const was of deleted!.moved ?? []) {
+      const node = draft.nodes[was.id];
+      if (!node || !moves.has(was.id)) continue;
+      const put = copy(was);
+      if (put.parentId !== null && draft.nodes[put.parentId]?.chordId !== put.chordId) put.parentId = null;
+      // A tab keeps where it's got to since (its page, title and icon); it goes back to its place, and its pinned home.
+      draft.nodes[was.id] = node.kind === 'tab' && put.kind === 'tab' ? { ...put, url: node.url, title: node.title, favicon: node.favicon, lastActiveAt: node.lastActiveAt } : put;
+    }
+    land();
+  }
+  if (back[0]) switchChord(draft, windowId, back[0], ctx, effects);
 }
 
 /**
@@ -1078,6 +1175,8 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
   // What went. A tab another computer unpinned or deleted: an open one moves to the top of Today here, an unloaded one
   // goes. A folder: what's still in it (moved in meanwhile) goes to the top of its section. A split: its panes stay, where it was.
   const gone = cmd.gone ?? {};
+  // Chords first: each makes way, with everything in it kept for Undo, and what's only this computer's moved to another.
+  for (const chordId of gone.chords ?? []) dropChord(draft, chordId, ctx, effects);
   const goneNodes = new Set((gone.nodes ?? []).filter(({ id, kind }) => draft.nodes[id]?.kind === kind && !draft.chords[draft.nodes[id]!.chordId]?.private).map(({ id }) => id));
   const leaving = new Set([...goneNodes].filter((id) => draft.nodes[id]?.kind === 'tab' && !draft.live[id]));
   const landGone = landWindows(draft, leaving, ctx, effects);
@@ -1114,57 +1213,11 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
     for (const chord of Object.values(draft.chords)) if (chord.theme.themeId === id) chord.theme.themeId = null;
   }
   for (const host of gone.routes ?? []) if (draft.linkRoutes[host]) delete draft.linkRoutes[host];
-  for (const chordId of gone.chords ?? []) dropChord(draft, chordId, ctx, effects);
 }
 
-/** `sync.replace`: this computer's own chords make way for the synced setup (joining with *Use the synced setup*). */
+/** `sync.replace`: this computer's own chords make way for the synced setup (joining with *Use the synced setup*), each kept for Undo. */
 function replaceChords(draft: Draft<State>, chordIds: readonly ChordId[], to: ChordId, ctx: Context, effects: Effect[]): void {
-  const target = draft.chords[to];
-  if (!target || target.private) return;
-  for (const chordId of chordIds) {
-    const chord = draft.chords[chordId];
-    if (!chord || chord.private || chordId === to) continue;
-    // Its Today tabs go to the top of the synced chord's Today, in their order; an open one in other sign-ins loads again there.
-    const today = children(draft as State, chordId, 'today', null);
-    const ranks = generateNKeysBetween(null, children(draft as State, to, 'today', null)[0]?.rank ?? null, today.length);
-    const resign = chord.profileId !== target.profileId;
-    const moved = new Set<NodeId>();
-    today.forEach((n, i) => {
-      const node = draft.nodes[n.id]!;
-      node.chordId = to;
-      node.rank = ranks[i]!;
-      moved.add(node.id);
-      for (const inner of Object.values(draft.nodes)) if (inner.parentId === node.id) inner.chordId = to;
-      if (resign && draft.live[node.id]) {
-        delete draft.live[node.id];
-        effects.push({ e: 'view.destroy', nodeId: node.id });
-      }
-    });
-    // Windows on it go to the synced chord, showing what they showed if it moved.
-    for (const win of Object.values(draft.windows)) {
-      const shown = win.activeTab[chordId] ?? null;
-      delete win.activeTab[chordId];
-      if (win.activeChordId !== chordId) continue;
-      win.activeChordId = to;
-      const keep = shown && moved.has(shown) ? shown : null;
-      win.activeTab[to] = keep;
-      if (keep && !draft.live[keep]) {
-        draft.live[keep] = { ...IDLE_LIVE, loading: true };
-        effects.push({ e: 'view.ensure', nodeId: keep });
-      }
-      effects.push({ e: 'view.show', windowId: win.id, nodeId: keep });
-    }
-    // The rest goes with it, kept for Undo this session as a deleted chord is.
-    const rest = Object.values(draft.nodes).filter((n) => n.chordId === chordId);
-    draft.deletedChords.unshift({ chord: { ...chord }, nodes: rest.map((n) => ({ ...n })), deletedAt: ctx.now });
-    if (draft.deletedChords.length > MAX_DELETED_CHORDS + chordIds.length) draft.deletedChords.length = MAX_DELETED_CHORDS + chordIds.length;
-    for (const node of rest) {
-      if (node.kind === 'tab' && draft.live[node.id]) effects.push({ e: 'view.destroy', nodeId: node.id });
-      delete draft.nodes[node.id];
-      delete draft.live[node.id];
-    }
-    delete draft.chords[chordId];
-  }
+  for (const chordId of chordIds) giveWay(draft, chordId, to, ctx, effects, MAX_DELETED_CHORDS + chordIds.length);
 }
 
 function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[]): void {
@@ -2324,17 +2377,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       replaceChords(draft, cmd.chordIds, cmd.to, ctx, effects);
       return;
 
-    case 'sync.unreplace': {
-      const back = cmd.chordIds.filter((id) => !draft.chords[id] && draft.deletedChords.some((d) => d.chord.id === id));
-      for (const chordId of back) {
-        const index = draft.deletedChords.findIndex((d) => d.chord.id === chordId);
-        const [deleted] = draft.deletedChords.splice(index, 1);
-        draft.chords[chordId] = deleted!.chord;
-        for (const node of deleted!.nodes) if (!draft.nodes[node.id]) draft.nodes[node.id] = node;
-      }
-      if (back[0]) switchChord(draft, cmd.windowId, back[0], ctx, effects);
+    case 'sync.unreplace':
+      unreplace(draft, cmd.windowId, cmd.chordIds, ctx, effects);
       return;
-    }
 
     case 'import.undo': {
       const record = draft.imports[cmd.importId];

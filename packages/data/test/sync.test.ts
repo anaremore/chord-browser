@@ -5,11 +5,12 @@
  * when it turns sync on; and merging another computer's records: checked,
  * capped, field by field, into what main applies.
  */
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { apply, seedState, SYNC_LIMITS, thingKey, type Command, type Context, type DataRecord, type Stamp, type State } from '@chord/core';
+import { apply, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, seedState, SYNC_LIMITS, thingKey, type Command, type Context, type DataRecord, type Stamp, type State } from '@chord/core';
 import { ChordDatabase } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
 import { opsForState, opsFromPatches, type WriteOp } from '../src';
@@ -201,6 +202,86 @@ describe('merging another computer’s records', () => {
     const removedAt = Date.now() + 10_000;
     const result = db.atomically(() => db.sync.merge([{ type: 'device', id: db.device(), at: [removedAt, 0, OTHER], set: { removed: true } }], Date.now()));
     expect(result.removed).toBe(removedAt);
+  });
+
+  it('a change made here beats a value whose stamp is far ahead, and the clock stays near the time', () => {
+    const state = setUp();
+    const id = chordId(state);
+    const far: Stamp = [Date.now() + 300 * 86_400_000, MAX_COUNTER, OTHER];
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: far, set: { name: 'From a wrong clock' } }], Date.now()));
+    drive(state, [{ t: 'chord.update', chordId: id, name: 'Mine' }]);
+    const mine = outbox().at(-1)!;
+    expect(compareStamps(mine.at!, far)).toBeGreaterThan(0);
+    expect(isStamp(mine.at)).toBe(true);
+    expect(db.sync.snapshot().filter((r) => r.type === 'chord' && r.id === id && 'name' in r.set).at(-1)!.set['name']).toBe('Mine');
+    // The clock moved no further than a minute past the wall clock: the next change elsewhere is stamped by the time.
+    drive(state, [{ t: 'settings.set', settings: { searchEngine: 'duckduckgo' } }]);
+    expect(outbox().at(-1)!.at![0]).toBeLessThanOrEqual(Date.now() + CLOCK_DRIFT_MS);
+  });
+
+  it('every thing grows only so far, and the copy as a whole: changes to things it has count, not only new things', () => {
+    setUp();
+    const blob = (n: number) => 'x'.repeat(n);
+    const small = Array.from({ length: 40 }, (_, i): DataRecord => ({ type: 'widget', id: `w${i}`, at: at(1), set: { blob: blob(10) } }));
+    expect(db.atomically(() => db.sync.merge(small, Date.now())).capped).toBe(0);
+    // Each grows to nearly what one thing may be: together, past what the copy keeps.
+    const grown = small.map((r): DataRecord => ({ ...r, at: at(2), set: { blob: blob(SYNC_LIMITS.thingChars - 100) } }));
+    let capped = 0;
+    for (let i = 0; i < grown.length; i += 5) capped += db.atomically(() => db.sync.merge(grown.slice(i, i + 5), Date.now())).capped;
+    expect(capped).toBeGreaterThan(0);
+    const total = db.sync.snapshot().reduce((n, r) => n + JSON.stringify(r.set).length, 0);
+    expect(total).toBeLessThanOrEqual(SYNC_LIMITS.chars);
+    // And one thing grows no further than one thing may, field by field.
+    const wide = db.atomically(() => db.sync.merge([{ type: 'widget', id: 'w0', at: at(3), set: { more: blob(SYNC_LIMITS.thingChars - 100) } }], Date.now()));
+    expect(wide.capped).toBe(1);
+  });
+
+  it('an icon whose bytes aren’t what its id says is left out', () => {
+    setUp();
+    const data = Buffer.from('a picture').toString('base64');
+    const id = `sha256-${createHash('sha256').update(Buffer.from('a picture')).digest('hex')}`;
+    const result = db.atomically(() =>
+      db.sync.merge(
+        [
+          { type: 'icon', id: `sha256-${'0'.repeat(64)}`, set: { mime: 'image/png', data } },
+          { type: 'icon', id, set: { mime: 'image/png', data } },
+        ],
+        Date.now(),
+      ),
+    );
+    expect(result.dropped).toBe(1);
+    expect(db.sync.snapshot().filter((r) => r.type === 'icon').map((r) => r.id)).toEqual([id]);
+  });
+
+  it.each([
+    ['changed here after another computer deleted it: it stays, for everyone', -1000, false],
+    ['deleted elsewhere after it was last changed here: it goes', 1000, true],
+  ])('joining again with Keep both, a thing %s', (_what, offset, goes) => {
+    const state = setUp();
+    const id = chordId(state);
+    const row = db.sync.localThings().find((r) => r.type === 'chord' && r.id === id)!.at![0];
+    // Sync off, then on again: the folder has a tombstone from another computer.
+    db.sync.clear();
+    db.sync.setMeta({ on: true, folder: '/sync', generation: 1, name: 'Desk', joining: true });
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: [row + offset, 0, OTHER], set: { deleted: true } }], Date.now()));
+    const changes = db.atomically(() => db.sync.addLocal('all'));
+    const plan = db.sync.planFor(db.sync.everything());
+    expect(plan.gone.chords.includes(id)).toBe(goes);
+    expect(db.sync.snapshot().some((r) => r.type === 'chord' && r.id === id && r.set['deleted'] === false && r.at![2] === db.device())).toBe(!goes);
+    void changes;
+  });
+
+  it('a snapshot goes a page at a time, icons first; changes stamped while it’s written stay in the outbox to follow it', () => {
+    let state = setUp();
+    const id = chordId(state);
+    const pages = [...db.sync.snapshotPages(20)];
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.flat()).toEqual(db.sync.snapshot());
+    state = drive(state, [{ t: 'chord.update', chordId: id, name: 'Before' }]);
+    const mark = db.sync.outboxMark();
+    drive(state, [{ t: 'chord.update', chordId: id, name: 'While it was written' }]);
+    db.atomically(() => db.sync.snapshotted({ generation: 1, device: db.device(), segment: 1, size: 1, frames: 1 }, Date.now(), mark));
+    expect(outbox().map((r) => r.set['name'])).toEqual(['While it was written']);
   });
 
   it('a value it applies comes back as a sync write: nothing goes into this computer’s log', () => {

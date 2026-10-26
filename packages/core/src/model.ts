@@ -656,6 +656,8 @@ export interface DeletedChord {
   chord: Chord;
   nodes: SidebarNode[];
   deletedAt: number;
+  /** What moved out of it to another chord's Today as it went (sync, S15 §13), as it was: Undo puts it back. */
+  moved?: SidebarNode[];
 }
 
 export const emptyState = (): State => ({

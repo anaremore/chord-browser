@@ -21,6 +21,7 @@ import { createHash } from 'node:crypto';
 import type { StatementSync } from 'node:sqlite';
 import {
   checkSyncRecord,
+  compareStamps,
   defaultFields,
   isFreshSetup,
   isGone,
@@ -41,6 +42,7 @@ import {
   rowStamp,
   same,
   seenStamp,
+  stampAbove,
   SYNC_LIMITS,
   syncKind,
   thingKey,
@@ -125,9 +127,15 @@ export interface MergeResult {
 interface Loaded {
   thing: SyncThing;
   local: SyncValues | null;
+  /** Its values as saved (JSON): what it counts for against SYNC_LIMITS.chars. */
+  chars: number;
 }
 
 const ICON_CACHE = 500;
+/** A snapshot is read for the worker a page at a time: about this many characters, so a big one is never held whole. */
+const PAGE_CHARS = 1024 * 1024;
+/** An icon's id is its bytes' SHA-256 (core's iconId): what another computer's icon must be. */
+const iconHash = (base64: string): string => createHash('sha256').update(Buffer.from(base64, 'base64')).digest('hex');
 /** Things main applies apart from chords and sidebar nodes. */
 const SYNC_TYPES_APPLIED: ReadonlySet<string> = new Set(['favorite', 'theme', 'route', 'settings', 'effects']);
 
@@ -228,27 +236,28 @@ export class SyncStore {
     const stamps = parseJson<Record<string, Stamp>>(row['stamps'], {});
     const fields: SyncThing['fields'] = {};
     for (const [name, v] of Object.entries(values)) fields[name] = { v, at: stamps[name] ?? [0, 0, ''] };
-    return { thing: { type, id, fields }, local: row['local'] === null || row['local'] === undefined ? null : parseJson<SyncValues | null>(row['local'], null) };
+    return { thing: { type, id, fields }, local: row['local'] === null || row['local'] === undefined ? null : parseJson<SyncValues | null>(row['local'], null), chars: typeof row['fields'] === 'string' ? row['fields'].length : 0 };
   }
 
-  private save(thing: SyncThing, local: SyncValues | null | undefined): void {
+  private save(thing: SyncThing, local: SyncValues | null | undefined, valuesJson?: string): void {
     const values: Record<string, unknown> = {};
     const stamps: Record<string, Stamp> = {};
     for (const [name, field] of Object.entries(thing.fields)) {
       values[name] = field.v;
       stamps[name] = field.at;
     }
+    const fields = valuesJson ?? JSON.stringify(values);
     if (local === undefined) {
       this.sql(`INSERT INTO sync_record (type, id, fields, stamps) VALUES (?, ?, ?, ?) ON CONFLICT(type, id) DO UPDATE SET fields = excluded.fields, stamps = excluded.stamps`).run(
         thing.type,
         thing.id,
-        JSON.stringify(values),
+        fields,
         JSON.stringify(stamps),
       );
     } else {
       this.sql(
         `INSERT INTO sync_record (type, id, fields, stamps, local) VALUES (?, ?, ?, ?, ?) ON CONFLICT(type, id) DO UPDATE SET fields = excluded.fields, stamps = excluded.stamps, local = excluded.local`,
-      ).run(thing.type, thing.id, JSON.stringify(values), JSON.stringify(stamps), local === null ? null : JSON.stringify(local));
+      ).run(thing.type, thing.id, fields, JSON.stringify(stamps), local === null ? null : JSON.stringify(local));
     }
   }
 
@@ -256,10 +265,21 @@ export class SyncStore {
     this.sql('UPDATE sync_record SET local = ? WHERE type = ? AND id = ?').run(local === null ? null : JSON.stringify(local), type, id);
   }
 
-  /** A change made here, stamped: merged into the copy and queued for the log. */
+  /**
+   * A change made here, stamped: merged into the copy and queued for the log.
+   * Its stamp is the clock's, or just above the stamp of any field it replaces
+   * that's ahead of it (another computer's clock was ahead), so a change made
+   * here always beats the value it replaces. The clock itself stays near the
+   * time (core's seenStamp).
+   */
   private record(type: string, id: string, set: SyncValues, now: number, local: SyncValues | null | undefined): void {
-    const record: DataRecord = { type, id, at: this.tick(now), set };
     const had = this.load(type, id);
+    let at = this.tick(now);
+    for (const name of Object.keys(set)) {
+      const field = had?.thing.fields[name];
+      if (field && compareStamps(at, field.at) <= 0) at = stampAbove(field.at, this.device());
+    }
+    const record: DataRecord = { type, id, at, set };
     this.save(mergeRecord(had?.thing, record).thing, local);
     this.sql('INSERT INTO sync_outbox (record) VALUES (?)').run(JSON.stringify(record));
     this.pending++;
@@ -469,13 +489,17 @@ export class SyncStore {
    * This computer's things into the merged copy, each as what it wrote last
    * (`local`): all of them (setting up, or joining with *Keep both*), or all
    * but its chords and what's pinned in them (*Use the synced setup*, whose
-   * chords make way), with its settings older than any synced one.
+   * chords make way), with its settings older than any synced one. Each thing
+   * here says it's here (`deleted: false`) at its row's stamp, so one changed
+   * here after another computer deleted it stays, for everyone, and one that
+   * wasn't goes (S15 §13).
    */
   addLocal(mode: 'all' | 'synced-setup'): Map<string, Set<string>> {
     const changes = new Map<string, Set<string>>();
     for (const record of this.localThings()) {
       if (mode === 'synced-setup' && (record.type === 'chord' || NODE_TYPES.has(record.type))) continue;
-      const r = mode === 'synced-setup' && record.type === 'settings' ? { ...record, at: [0, 0, this.device()] as Stamp } : record;
+      const here = record.type === 'settings' || record.type === 'icon' ? record : { ...record, set: { ...record.set, deleted: false } };
+      const r = mode === 'synced-setup' && here.type === 'settings' ? { ...here, at: [0, 0, this.device()] as Stamp } : here;
       const had = this.load(r.type, r.id);
       const merged = mergeRecord(had?.thing, r);
       const local = { ...(had?.local && had.local['deleted'] !== true ? had.local : {}), ...r.set };
@@ -491,13 +515,15 @@ export class SyncStore {
   }
 
   /** This computer's `device` record, stamped now: on joining (live again, if it had been removed), and when renamed. */
-  stampDevice(fields: { name?: string; os?: string; app?: string; removed?: boolean }, id = this.device(), now = Date.now()): void {
+  stampDevice(fields: { name?: string; os?: string; app?: string; removed?: boolean; rekeyed?: number }, id = this.device(), now = Date.now()): void {
     const set: SyncValues = {};
     if (fields.name !== undefined || fields.os !== undefined || fields.app !== undefined) Object.assign(set, localDeviceFields({ name: fields.name ?? '', os: fields.os ?? '', app: fields.app ?? '' }));
     if (fields.name === undefined) delete set['name'];
     if (fields.os === undefined) delete set['os'];
     if (fields.app === undefined) delete set['app'];
     if (fields.removed !== undefined) set['removed'] = fields.removed;
+    // Said under the old passphrase before this computer moves to a new one: the others name it (S15 §13).
+    if (fields.rekeyed !== undefined) set['rekeyed'] = fields.rekeyed;
     if (Object.keys(set).length > 0) this.record('device', id, set, now, undefined);
     this.saveClock();
   }
@@ -522,7 +548,7 @@ export class SyncStore {
     let counts: Map<string, number> | null = null;
     let chars = -1;
     for (const raw of records) {
-      const r = checkSyncRecord(raw, now);
+      const r = checkSyncRecord(raw, iconHash);
       if (!r) {
         result.dropped++;
         continue;
@@ -531,25 +557,34 @@ export class SyncStore {
       if (!had) {
         // A new thing: within each type's limit, and the copy's.
         counts ??= new Map((this.sql('SELECT type, COUNT(*) AS n FROM sync_record GROUP BY type').all() as Row[]).map((row) => [str(row['type']), num(row['n'])]));
-        if (chars < 0) chars = num((this.sql('SELECT COALESCE(SUM(length(fields)), 0) AS n FROM sync_record').get() as Row)['n']);
         const type = syncKind(r.type) === 'unknown' ? '?' : r.type;
         const count = type === '?' ? [...counts].filter(([t]) => syncKind(t) === 'unknown').reduce((n, [, c]) => n + c, 0) : (counts.get(type) ?? 0);
         const limit = type === '?' ? SYNC_LIMITS.unknown : (SYNC_LIMITS.byType[type] ?? 0);
         const total = [...counts.values()].reduce((n, c) => n + c, 0);
-        if (count >= limit || total >= SYNC_LIMITS.things || chars >= SYNC_LIMITS.chars) {
+        if (count >= limit || total >= SYNC_LIMITS.things) {
           result.capped++;
           continue;
         }
-        counts.set(r.type, (counts.get(r.type) ?? 0) + 1);
-        chars += JSON.stringify(r.set).length;
       }
       const merged = mergeRecord(had?.thing, r);
-      // A thing that's here grows only so far, however many records add fields to it.
-      if (had && (Object.keys(merged.thing.fields).length > SYNC_LIMITS.fields || JSON.stringify(merged.thing.fields).length > 2 * SYNC_LIMITS.thingChars)) {
+      // Every thing, new or old, grows only so far (fields, and its values as JSON), and the copy as a whole no further
+      // than SYNC_LIMITS.chars, however many records add to it.
+      const values = JSON.stringify(Object.fromEntries(Object.entries(merged.thing.fields).map(([name, f]) => [name, f.v])));
+      if (Object.keys(merged.thing.fields).length > SYNC_LIMITS.fields || values.length > SYNC_LIMITS.thingChars) {
         result.capped++;
         continue;
       }
-      this.save(merged.thing, undefined);
+      const grows = values.length - (had?.chars ?? 0);
+      if (grows > 0) {
+        if (chars < 0) chars = num((this.sql('SELECT COALESCE(SUM(length(fields)), 0) AS n FROM sync_record').get() as Row)['n']);
+        if (chars + grows > SYNC_LIMITS.chars) {
+          result.capped++;
+          continue;
+        }
+      }
+      if (chars >= 0) chars += grows;
+      if (!had) counts!.set(r.type, (counts!.get(r.type) ?? 0) + 1);
+      this.save(merged.thing, undefined, values);
       if (r.at) {
         this.clock = seenStamp(this.loadClock(), r.at, now, self);
         this.clockDirty = true;
@@ -620,7 +655,8 @@ export class SyncStore {
   /**
    * Changed things in the order main applies them, so each lands in what holds
    * it whichever push it's in: chords, folders by depth, splits, tabs, the
-   * rest; what went last (a tab moved out of a chord that went stays).
+   * rest; what went last (a tab moved out of a chord that went stays), chords
+   * before the nodes they held.
    */
   orderForApply(changes: Map<string, Set<string>>): [string, Set<string>][] {
     const things = new Map<string, Loaded | null>();
@@ -641,7 +677,8 @@ export class SyncStore {
       const [type, id] = key.split('\n') as [string, string];
       const thing = get(type, id)?.thing;
       if (!thing) return 100;
-      if (isGone(thing)) return type === 'chord' ? 90 : 80;
+      // A chord that went goes before its nodes' tombstones: it takes them with it, kept for Undo here, rather than one by one.
+      if (isGone(thing)) return type === 'chord' ? 80 : 90;
       if (type === 'chord') return 0;
       if (type === 'folder') return 10 + depth(thing);
       if (type === 'split') return 40;
@@ -717,15 +754,50 @@ export class SyncStore {
     return num((this.sql('SELECT COUNT(*) AS n FROM sync_outbox').get() as Row)['n']);
   }
 
-  /** Everything the copy holds, as records: a snapshot. Icons first, so a reader has each before what names it. */
+  /** Everything the copy holds, as records: a snapshot, whole (tests; the worker takes it a page at a time, `snapshotPages`). */
   snapshot(): DataRecord[] {
-    const icons: DataRecord[] = [];
-    const rest: DataRecord[] = [];
-    for (const row of this.sql('SELECT type, id, fields, stamps, local FROM sync_record ORDER BY type, id').iterate() as Iterable<Row>) {
-      const { thing } = this.loaded(str(row['type']), str(row['id']), row);
-      (thing.type === 'icon' ? icons : rest).push(...thingRecords(thing));
+    return [...this.snapshotPages()].flat();
+  }
+
+  /**
+   * Everything the copy holds, as records, a page of about PAGE_CHARS at a
+   * time, each read when the worker asks for it: a snapshot is never held
+   * whole, here or there. Icons first, so a reader has each before what names
+   * it. Pages go by key, so changes meanwhile don't upset them: a thing
+   * changed after its page went is in the outbox, which outlives the snapshot.
+   */
+  *snapshotPages(pageChars = PAGE_CHARS): Generator<DataRecord[]> {
+    for (const icons of [true, false]) {
+      let after: { type: string; id: string } = { type: '', id: '' };
+      for (;;) {
+        const rows = (
+          icons
+            ? this.sql(`SELECT type, id, fields, stamps, local FROM sync_record WHERE type = 'icon' AND id > ? ORDER BY id`).iterate(after.id)
+            : this.sql(`SELECT type, id, fields, stamps, local FROM sync_record WHERE type <> 'icon' AND (type > ? OR (type = ? AND id > ?)) ORDER BY type, id`).iterate(after.type, after.type, after.id)
+        ) as IterableIterator<Row>;
+        const page: DataRecord[] = [];
+        let chars = 0;
+        let full = false;
+        for (const row of rows) {
+          const { thing, chars: size } = this.loaded(str(row['type']), str(row['id']), row);
+          page.push(...thingRecords(thing));
+          chars += size;
+          after = { type: thing.type, id: thing.id };
+          if (chars >= pageChars) {
+            full = true;
+            break;
+          }
+        }
+        rows.return?.();
+        if (page.length > 0) yield page;
+        if (!full) break;
+      }
     }
-    return [...icons, ...rest];
+  }
+
+  /** The newest change in the outbox: a snapshot started now covers it and everything before. */
+  outboxMark(): number {
+    return num((this.sql('SELECT COALESCE(MAX(seq), 0) AS n FROM sync_outbox').get() as Row)['n']);
   }
 
   /** How big a snapshot is, about: what compaction weighs a computer's segments against. */
@@ -733,10 +805,14 @@ export class SyncStore {
     return num((this.sql('SELECT COALESCE(SUM(length(fields) + length(stamps)), 0) AS n FROM sync_record').get() as Row)['n']);
   }
 
-  /** The snapshot went out: the outbox it covers goes too, and counting starts again. */
-  snapshotted(own: OwnSegment, now: number): void {
-    this.sql('DELETE FROM sync_outbox').run();
-    this.pending = 0;
+  /**
+   * The snapshot went out: the outbox it covers (up to `mark`, taken when it
+   * started) goes too, and counting starts again. Changes stamped while it was
+   * written stay, to be appended after it.
+   */
+  snapshotted(own: OwnSegment, now: number, mark = Number.MAX_SAFE_INTEGER): void {
+    this.sql('DELETE FROM sync_outbox WHERE seq <= ?').run(mark);
+    this.pending = this.outboxSize();
     this.setMeta({ own, compactedAt: now, framesSince: 0, bytesSince: 0 });
   }
 

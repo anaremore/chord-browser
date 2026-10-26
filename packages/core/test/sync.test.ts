@@ -11,6 +11,14 @@ import { describe, expect, it } from 'vitest';
 import {
   apply,
   checkSyncRecord,
+  CLOCK_DRIFT_MS,
+  compareStamps,
+  isStamp,
+  MAX_COUNTER,
+  MAX_STAMP_MS,
+  nextStamp,
+  seenStamp,
+  stampAbove,
   defaultSettings,
   emptyState,
   isGone,
@@ -46,6 +54,12 @@ const THEME = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: '
 const at = (ms: number, device = A, counter = 0): Stamp => [NOW - 1_000_000 + ms, counter, device];
 
 const rec = (type: string, id: string, stamp: Stamp | undefined, set: Record<string, unknown>): DataRecord => (stamp ? { type, id, at: stamp, set } : { type, id, set });
+const DAY = 86_400_000;
+/** As late as a stamp gets in these tests: a year short of the end of 9999, so a change can always be stamped above it. */
+const LATE = MAX_STAMP_MS - 365 * DAY;
+/** An icon's id is its bytes' SHA-256: chord-data hashes them (its tests check the real one); here, a stand-in that's the same for the same bytes. */
+const iconHash = (base64: string) => Array.from({ length: 64 }, (_, i) => (base64.charCodeAt(i % base64.length) % 16).toString(16)).join('');
+const ICON = `sha256-${iconHash('AAAA')}`;
 
 /** Every record merged in order into a map of things, as chord-data's sync_record holds them. */
 function mergeAll(records: readonly DataRecord[], into = new Map<string, SyncThing>()): Map<string, SyncThing> {
@@ -68,7 +82,9 @@ describe('what another computer’s log may hold', () => {
     ['zoom: this computer’s display', rec('zoom', 'docs.test', at(1), { factor: 1.25 }), false],
     ['a permission: never synced, not even a block', rec('permission', 'https://meet.test', at(1), { camera: 'allow' }), false],
     ['a chord without a stamp', rec('chord', 'work', undefined, { name: 'Work' }), false],
-    ['a stamp more than a year ahead', rec('chord', 'work', [NOW + SYNC_LIMITS.aheadMs + 1, 0, A], { name: 'Work' }), false],
+    ['a stamp far ahead of any clock: taken, since whether a stamp is one depends only on it', rec('chord', 'work', [NOW + 300 * DAY, MAX_COUNTER, A], { name: 'Work' }), true],
+    ['a stamp past the year 9999', rec('chord', 'work', [MAX_STAMP_MS + 1, 0, A], { name: 'Work' }), false],
+    ['a counter past its top', rec('chord', 'work', [NOW, 0xffff_ffff, A], { name: 'Work' }), false],
     ['an id that isn’t one', rec('tab', '../../etc', at(1), { title: 'x' }), false],
     ['a route whose id isn’t its own key', rec('route', 'https://GitHub.com/acme/', at(1), { chord: 'work' }), false],
     ['settings under another id', rec('settings', 'other', at(1), { searchEngine: 'google' }), false],
@@ -77,18 +93,20 @@ describe('what another computer’s log may hold', () => {
     ['too many fields', rec('chord', 'work', at(1), Object.fromEntries(Array.from({ length: SYNC_LIMITS.fields + 1 }, (_, i) => [`f${i}`, i]))), false],
     ['too big', rec('effects', 'news.test', at(1), { css: 'x'.repeat(SYNC_LIMITS.thingChars + 1) }), false],
     ['a newer Chord’s type: kept', rec('widget', 'w1', at(1), { size: 3 }), true],
-    ['an icon that isn’t one', rec('icon', `sha256-${'0'.repeat(64)}`, undefined, { mime: 'text/html', data: 'AAAA' }), false],
+    ['an icon that isn’t one', rec('icon', ICON, undefined, { mime: 'text/html', data: 'AAAA' }), false],
+    ['an icon whose bytes aren’t what its id says', rec('icon', `sha256-${'0'.repeat(64)}`, undefined, { mime: 'image/png', data: 'AAAA' }), false],
+    ['an icon whose bytes are what its id says', rec('icon', ICON, undefined, { mime: 'image/png', data: 'AAAA' }), true],
   ])('%s', (_what, record, kept) => {
-    expect(checkSyncRecord(record, NOW) !== null).toBe(kept);
+    expect(checkSyncRecord(record, iconHash) !== null).toBe(kept);
   });
 
   it('an icon loses any stamp it came with: it’s a fact', () => {
-    expect(checkSyncRecord(rec('icon', `sha256-${'a'.repeat(64)}`, at(1), { mime: 'image/png', data: 'AAAA' }), NOW)).toEqual({ type: 'icon', id: `sha256-${'a'.repeat(64)}`, set: { mime: 'image/png', data: 'AAAA' } });
+    expect(checkSyncRecord(rec('icon', ICON, at(1), { mime: 'image/png', data: 'AAAA' }), iconHash)).toEqual({ type: 'icon', id: ICON, set: { mime: 'image/png', data: 'AAAA' } });
   });
 
   it('a `deleted` that isn’t true or false is left out', () => {
-    expect(checkSyncRecord(rec('chord', 'work', at(1), { deleted: 'yes', name: 'Work' }), NOW)?.set).toEqual({ name: 'Work' });
-    expect(checkSyncRecord(rec('chord', 'work', at(1), { deleted: 1 }), NOW)).toBeNull();
+    expect(checkSyncRecord(rec('chord', 'work', at(1), { deleted: 'yes', name: 'Work' }), iconHash)?.set).toEqual({ name: 'Work' });
+    expect(checkSyncRecord(rec('chord', 'work', at(1), { deleted: 1 }), iconHash)).toBeNull();
   });
 });
 
@@ -136,6 +154,104 @@ describe('the field merge', () => {
   });
 });
 
+describe('the clock', () => {
+  const WALL = NOW;
+  it.each<[string, () => Stamp, Stamp]>([
+    ['a change: the wall clock, past the last stamp', () => nextStamp([WALL - 5, 3, A], WALL, A), [WALL, 0, A]],
+    ['a change with the clock set back: the last stamp’s millisecond, the counter one up', () => nextStamp([WALL + 5, 3, A], WALL, A), [WALL + 5, 4, A]],
+    ['at the counter’s top, the clock steps a millisecond', () => nextStamp([WALL + 5, MAX_COUNTER, A], WALL, A), [WALL + 6, 0, A]],
+    ['another computer’s stamp a little ahead moves the clock to it', () => seenStamp(null, [WALL + 1000, 7, B], WALL, A), [WALL + 1000, 8, A]],
+    ['one far ahead moves it only so far past the wall clock', () => seenStamp(null, [WALL + 300 * DAY, 9, B], WALL, A), [WALL + CLOCK_DRIFT_MS, 1, A]],
+    ['one at the counter’s top: the next millisecond, never a counter past it', () => seenStamp(null, [WALL + 10, MAX_COUNTER, B], WALL, A), [WALL + 11, 0, A]],
+    ['just above a stamp: the counter one up', () => stampAbove([WALL + 300 * DAY, 4, B], A), [WALL + 300 * DAY, 5, A]],
+    ['just above one at the counter’s top: the next millisecond', () => stampAbove([WALL + 300 * DAY, MAX_COUNTER, B], A), [WALL + 300 * DAY + 1, 0, A]],
+  ])('%s', (_what, make, expected) => {
+    const stamp = make();
+    expect(stamp).toEqual(expected);
+    expect(isStamp(stamp)).toBe(true);
+  });
+
+  it('a stamp past any reader’s counter, or past the year 9999, isn’t one', () => {
+    expect(isStamp([WALL, MAX_COUNTER + 1, A])).toBe(false);
+    expect(isStamp([WALL, 0xffff_ffff, A])).toBe(false);
+    expect(isStamp([MAX_STAMP_MS + 1, 0, A])).toBe(false);
+  });
+
+  it('just above a stamp as late as a year short of the end is still a stamp, and above it', () => {
+    const latest: Stamp = [LATE, MAX_COUNTER, B];
+    expect(isStamp(stampAbove(latest, A))).toBe(true);
+    expect(compareStamps(stampAbove(latest, A), latest)).toBeGreaterThan(0);
+  });
+});
+
+describe('a property: one wrong clock, or a hostile one, carries no clock with it, and a change made here beats what it replaces', () => {
+  const random = (seed: number) => () => ((seed = (seed * 1_103_515_245 + 12_345) & 0x7fffffff) / 0x7fffffff);
+  const DEVICES = [A, B, C] as const;
+  const IDS = ['x0', 'x1', 'x2'] as const;
+  const FIELDS = ['name', 'icon', 'deleted'] as const;
+
+  it.each(Array.from({ length: 40 }, (_, i) => i + 1))('seed %i', (seed) => {
+    const rnd = random(seed);
+    let wall = NOW;
+    const logs = new Map<string, DataRecord[]>(DEVICES.map((d) => [d, []]));
+    const copies = new Map<string, Map<string, SyncThing>>(DEVICES.map((d) => [d, new Map()]));
+    const clocks = new Map<string, Stamp | null>(DEVICES.map((d) => [d, null]));
+    const read = new Map<string, number>();
+    for (let step = 0; step < 120; step++) {
+      wall += Math.floor(rnd() * 2000);
+      const device = DEVICES[Math.floor(rnd() * DEVICES.length)]!;
+      const copy = copies.get(device)!;
+      if (rnd() < 0.4) {
+        // It reads everything new in the others' logs: each record checked as every computer checks it, then merged.
+        for (const other of DEVICES) {
+          if (other === device) continue;
+          const log = logs.get(other)!;
+          const key = `${device}<${other}`;
+          for (const r of log.slice(read.get(key) ?? 0)) {
+            const checked = checkSyncRecord(r, iconHash);
+            if (!checked) continue;
+            mergeAll([checked], copy);
+            clocks.set(device, seenStamp(clocks.get(device)!, checked.at!, wall, device));
+          }
+          read.set(key, log.length);
+        }
+        // Its clock stays near its wall clock, whatever it read.
+        expect(clocks.get(device)?.[0] ?? 0).toBeLessThanOrEqual(wall + CLOCK_DRIFT_MS);
+        continue;
+      }
+      const id = IDS[Math.floor(rnd() * IDS.length)]!;
+      const field = FIELDS[Math.floor(rnd() * FIELDS.length)]!;
+      const value = field === 'deleted' ? rnd() < 0.5 : `${field}-${step}`;
+      let at: Stamp;
+      if (device === C && rnd() < 0.5) {
+        // C's clock is wrong, or C is hostile: far ahead, at the counter's top, or as late as sync takes.
+        const pick = rnd();
+        at = pick < 0.4 ? [wall + Math.floor(rnd() * 300) * DAY, Math.floor(rnd() * 3), C] : pick < 0.8 ? [wall + Math.floor(rnd() * 5) * DAY, MAX_COUNTER, C] : [LATE, MAX_COUNTER, C];
+      } else {
+        // As chord-data stamps a change: the clock, or just above the stamp of the value it replaces.
+        at = nextStamp(clocks.get(device)!, wall, device);
+        clocks.set(device, at);
+        const had = copy.get(thingKey('chord', id))?.fields[field];
+        if (had && compareStamps(at, had.at) <= 0) at = stampAbove(had.at, device);
+      }
+      const record = rec('chord', id, at, { [field]: value });
+      logs.get(device)!.push(record);
+      mergeAll([record], copy);
+      // A change made here always beats the value it replaced.
+      if (device !== C) expect(copy.get(thingKey('chord', id))!.fields[field]!.v).toEqual(value);
+      expect(isStamp(at)).toBe(true);
+    }
+    // Once everyone has read everything, every computer has the same.
+    const all = [...logs.values()].flat().map((r) => checkSyncRecord(r, iconHash)).filter((r) => r !== null);
+    const expected = canonical(mergeAll(all));
+    for (const device of DEVICES) {
+      const copy = copies.get(device)!;
+      mergeAll(all, copy);
+      expect(canonical(copy)).toBe(expected);
+    }
+  });
+});
+
 describe('a property: any set of logs, merged in any order and any number of times, gives the same result', () => {
   /** A small seeded generator, so a failure can be run again. */
   const random = (seed: number) => () => ((seed = (seed * 1_103_515_245 + 12_345) & 0x7fffffff) / 0x7fffffff);
@@ -153,15 +269,21 @@ describe('a property: any set of logs, merged in any order and any number of tim
           if (rnd() < 0.4) set[field] = field === 'deleted' ? rnd() < 0.5 : field === 'pos' ? { chord: `c${Math.floor(rnd() * 2)}`, rank: `a${Math.floor(rnd() * 3)}` } : `${field}-${Math.floor(rnd() * 3)}`;
         }
         if (Object.keys(set).length === 0) set['name'] = 'n';
-        // Few distinct times, so equal stamps (other devices) and equal values happen often.
-        return rec(type, id, [Math.floor(rnd() * 6), Math.floor(rnd() * 2), device], set);
+        // Few distinct times, so equal stamps (other devices) and equal values happen often; some far ahead, at the
+        // counter's top, or as late as sync takes, as a wrong clock or a hostile computer writes.
+        const pick = rnd();
+        const stamp: Stamp =
+          pick < 0.1 ? [NOW + Math.floor(rnd() * 3) * 300 * 86_400_000, MAX_COUNTER, device] : pick < 0.15 ? [LATE, Math.floor(rnd() * 2) ? MAX_COUNTER : 0, device] : [Math.floor(rnd() * 6), Math.floor(rnd() * 2), device];
+        return rec(type, id, stamp, set);
       }),
     );
   }
 
   it.each(Array.from({ length: 60 }, (_, i) => i + 1))('seed %i', (seed) => {
     const rnd = random(seed);
-    const all = logs(rnd);
+    // Every computer checks each record the same way, whatever its own clock says.
+    const all = logs(rnd).map((log) => log.filter((r) => checkSyncRecord(r, iconHash) !== null));
+    expect(all.flat().every((r) => isStamp(r.at))).toBe(true);
     const expected = canonical(mergeAll(all.flat()));
     for (let trial = 0; trial < 8; trial++) {
       // Every record at least once, some twice, all shuffled; logs read whole or in pieces.
@@ -415,5 +537,71 @@ describe('sync.apply in the store', () => {
     const windowId = Object.keys(joined.windows)[0] ?? 'w1';
     const undone = apply({ ...joined, windows: { [windowId]: { id: windowId, activeChordId: 'w', activeTab: {}, sidebar: 'docked', sidebarWidth: 248, bounds: null } } }, { t: 'sync.unreplace', windowId, chordIds: [home] }, ctx).state;
     expect(undone.chords[home]).toBeDefined();
+    expect(undone.nodes[today]).toMatchObject({ chordId: home, section: 'today' });
+  });
+
+  /** A chord with a Today tab and an open pinned tab, shown in a window: what only this computer has. */
+  function withLocalTabs(): { s: State; home: string; windowId: string } {
+    const s = state();
+    const home = Object.keys(s.chords).find((id) => id !== 'w')!;
+    const windowId = Object.keys(s.windows)[0]!;
+    s.nodes['d'] = tab('d', 'w', { section: 'today', pinnedUrl: null, url: 'https://draft.test/', title: 'Draft' });
+    s.windows[windowId] = { ...s.windows[windowId]!, activeChordId: 'w', activeTab: { ...s.windows[windowId]!.activeTab, w: 't' } };
+    return { s, home, windowId };
+  }
+
+  it('a chord another computer deleted never takes what only this computer has: its Today tabs and open tabs move, and Undo puts everything back', () => {
+    const { s, home, windowId } = withLocalTabs();
+    const gone = apply(s, { t: 'sync.apply', gone: { chords: ['w'] } }, ctx).state;
+    expect(gone.chords['w']).toBeUndefined();
+    // The Today tab, and the open pinned one (no longer pinned: it doesn't sync), move to the top of the neighbour's Today.
+    expect(gone.nodes['d']).toMatchObject({ chordId: home, section: 'today' });
+    expect(gone.nodes['t']).toMatchObject({ chordId: home, section: 'today', pinnedUrl: null, url: 'https://t.test/inbox' });
+    // The window that showed it goes there, still showing the tab it showed.
+    expect(gone.windows[windowId]).toMatchObject({ activeChordId: home });
+    expect(gone.windows[windowId]!.activeTab[home]).toBe('t');
+    // The unloaded pinned tab goes, kept for Undo with the chord.
+    expect(gone.nodes['u']).toBeUndefined();
+    expect(gone.deletedChords[0]).toMatchObject({ chord: { id: 'w' }, nodes: [expect.objectContaining({ id: 'u' })] });
+    const undone = apply(gone, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
+    expect(undone.chords['w']).toMatchObject({ name: 'w' });
+    expect(undone.nodes['u']).toMatchObject({ chordId: 'w', section: 'pinned' });
+    expect(undone.nodes['t']).toMatchObject({ chordId: 'w', section: 'pinned', pinnedUrl: 'https://t.test/', url: 'https://t.test/inbox' });
+    expect(undone.nodes['d']).toMatchObject({ chordId: 'w', section: 'today' });
+    expect(undone.windows[windowId]!.activeChordId).toBe('w');
+  });
+
+  it('the chord’s own tombstone goes before its tabs’, so Undo has them all', () => {
+    const { s, windowId } = withLocalTabs();
+    const gone = apply(s, { t: 'sync.apply', gone: { chords: ['w'], nodes: [{ id: 'u', kind: 'tab' }, { id: 't', kind: 'tab' }] } }, ctx).state;
+    expect(gone.nodes['t']).toMatchObject({ section: 'today' });
+    const undone = apply(gone, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
+    expect(undone.nodes['u']).toMatchObject({ chordId: 'w' });
+  });
+
+  it('deleted elsewhere, then brought back there before Undo here: the chord comes back by sync, and Undo still brings its tabs home', () => {
+    const { s, home, windowId } = withLocalTabs();
+    const gone = apply(s, { t: 'sync.apply', gone: { chords: ['w'] } }, ctx).state;
+    // The other computer undid its delete: the chord and its pinned tab come back through sync.
+    const back = apply(gone, { t: 'sync.apply', chords: [chord('w', { rank: 'b0' })], nodes: [tab('u', 'w', { rank: 'a1' })] }, ctx).state;
+    expect(back.nodes['d']).toMatchObject({ chordId: home });
+    const undone = apply(back, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
+    expect(undone.nodes['d']).toMatchObject({ chordId: 'w', section: 'today' });
+    expect(undone.nodes['t']).toMatchObject({ chordId: 'w', section: 'pinned' });
+  });
+
+  it('joining with the synced setup: a chord of this computer’s that another computer deleted makes way with the rest, so the one Undo covers it', () => {
+    const { s, home, windowId } = withLocalTabs();
+    // Main's order: the synced chords first, then this computer's make way (all of them), then the rest, which deletes 'w'.
+    let joined = apply(s, { t: 'sync.apply', chords: [chord('synced', { rank: 'c0' })] }, ctx).state;
+    joined = apply(joined, { t: 'sync.replace', chordIds: [home, 'w'], to: 'synced' }, ctx).state;
+    joined = apply(joined, { t: 'sync.apply', gone: { chords: ['w'] } }, ctx).state;
+    expect(Object.keys(joined.chords)).toEqual(['synced']);
+    expect(joined.nodes['d']).toMatchObject({ chordId: 'synced', section: 'today' });
+    const undone = apply(joined, { t: 'sync.unreplace', windowId, chordIds: [home, 'w'] }, ctx).state;
+    expect(undone.chords['w']).toBeDefined();
+    expect(undone.chords[home]).toBeDefined();
+    expect(undone.nodes['u']).toMatchObject({ chordId: 'w' });
+    expect(undone.nodes['d']).toMatchObject({ chordId: 'w', section: 'today' });
   });
 });

@@ -16,7 +16,7 @@
  */
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { applyIsEmpty, CLOCK_AHEAD_MS, emptyApply, SYNC_OFF, type FolderInspection, type SyncApply, type SyncProblem, type SyncStatus } from '@chord/core';
+import { applyIsEmpty, CLOCK_AHEAD_MS, emptyApply, SYNC_OFF, type DataRecord, type FolderInspection, type SyncApply, type SyncProblem, type SyncStatus } from '@chord/core';
 import type { DataPush, SyncInfo, SyncReply, SyncRequest } from '@chord/data';
 import type { ChordDatabase } from '@chord/data/db';
 import type { FromWorker, ToWorker } from './sync-worker';
@@ -40,6 +40,10 @@ const COMPACT_FRAMES = 500;
 /** An old generation's file goes this long after this computer moved past it. */
 const RETIRE_MS = 30 * 86_400_000;
 
+/** A worker's failure as Settings' steps say it: one about writing this computer's log is the folder's. */
+const stepProblem = (problem: Extract<FromWorker, { t: 'failed' }>['problem']): NonNullable<SyncReply['problem']> =>
+  problem === 'copied' || problem === 'gone' || problem === 'full' ? 'io' : problem;
+
 type Ask = { kinds: ReadonlySet<FromWorker['t']>; for: ToWorker['t']; resolve(message: FromWorker): void };
 
 export class SyncController {
@@ -57,7 +61,16 @@ export class SyncController {
   private problem: SyncProblem | null = null;
   private changedBy: string | null = null;
   private capped = 0;
+  /** Frames of other computers' logs passed over (too big to read), this session. */
+  private refused = 0;
+  /** The last pass found more computers than sync reads. */
+  private tooMany = false;
+  /** Removed computers whose folders went: not looked at again. */
+  private readonly pruned = new Set<string>();
   private passDone: (() => void) | null = null;
+  /** Snapshots being written: their pages, read as the worker asks for each. */
+  private readonly streams = new Map<number, Iterator<DataRecord[]>>();
+  private nextStream = 1;
   /** Merges one batch at a time, in order. */
   private merging: Promise<void> = Promise.resolve();
   /** Checkpoints are small while sync is busy (BUSY_MS). */
@@ -105,6 +118,12 @@ export class SyncController {
       return;
     }
     switch (message.t) {
+      case 'pull':
+        this.page(message.stream);
+        return;
+      case 'pruned':
+        this.pruned.add(message.device);
+        return;
       case 'records':
         this.merging = this.merging.then(() => this.merge(message));
         return;
@@ -125,8 +144,43 @@ export class SyncController {
     }
   }
 
+  /** A snapshot's next page, for the worker; `lost` once there's no such snapshot (it stopped), so nothing partial is put in place. */
+  private page(stream: number): void {
+    const pages = this.streams.get(stream);
+    let next: IteratorResult<DataRecord[]> | null = null;
+    try {
+      next = pages ? pages.next() : null;
+    } catch (error) {
+      console.error('Sync couldn’t read its snapshot:', error);
+    }
+    if (!next || next.done) this.streams.delete(stream);
+    this.worker?.postMessage({ t: 'chunk', stream, records: next && !next.done ? next.value : [], done: !next || Boolean(next.done), ...(next ? {} : { lost: true }) } satisfies ToWorker);
+  }
+
+  /**
+   * A snapshot of the copy for the worker to write: its pages as it asks for
+   * them, this computer's `device` record for its first frame, and the outbox
+   * it covers (`mark`): changes stamped while it's written stay to follow it.
+   */
+  private snapshotOf(db: ChordDatabase): { snapshot: { stream: number; device: DataRecord[] }; mark: number } {
+    const stream = this.nextStream++;
+    this.streams.set(stream, db.sync.snapshotPages());
+    return { snapshot: { stream, device: db.sync.deviceRecords() }, mark: db.sync.outboxMark() };
+  }
+
+  /** A snapshot of the copy as this computer's newest segment (compaction, a new id, a log put back). */
+  private async snapshotNow(db: ChordDatabase): Promise<boolean> {
+    const { snapshot, mark } = this.snapshotOf(db);
+    const reply = await this.ask({ t: 'snapshot', snapshot }, ['snapshotted']);
+    this.streams.delete(snapshot.stream);
+    if (reply.t !== 'snapshotted') return false;
+    db.atomically(() => db.sync.snapshotted(reply.own, Date.now(), mark));
+    return true;
+  }
+
   private stopWorker(): void {
     clearTimeout(this.writeTimer);
+    this.streams.clear();
     // Checkpoints go back to chord-data's own connection.
     this.quiet();
     const worker = this.worker;
@@ -167,6 +221,7 @@ export class SyncController {
     try {
       if (!db) return;
       if (message.records.length > 0) this.busyFor(db);
+      this.refused += message.refused;
       const { generation } = db.sync.meta;
       const now = Date.now();
       for (let at = 0; at === 0 || at < message.records.length; at += SLICE) {
@@ -203,18 +258,27 @@ export class SyncController {
     const db = this.db();
     if (!db) return;
     for (const [device, at] of Object.entries(message.seen)) this.seen.set(device, at);
+    this.tooMany = message.tooMany;
     const look = message.look;
+    const was = this.problem;
     if (look.state === 'ok') {
       if (this.problem !== 'newer') this.problem = null;
     } else if (look.state === 'changed') {
       this.problem = 'changed';
-      this.changedBy = db.sync.devices().find((d) => d.id === look.by)?.name ?? null;
+      // Named only when that computer said so in this generation's log, sealed, before it moved: never from the new
+      // generation's file, which anyone who can write to the folder could put there. Otherwise no one is named.
+      this.changedBy = db.sync.devices().find((d) => d.rekeyed === look.generation)?.name ?? null;
     } else this.problem = look.state;
     if (this.problem === 'conflict' || this.problem === 'changed' || this.problem === 'newer') this.stopWorker();
     const done = this.passDone;
     this.passDone = null;
-    if (!db.sync.meta.joining) await this.pushChanges();
+    if (!db.sync.meta.joining) {
+      await this.pushChanges();
+      this.prune(db);
+    }
     this.retire();
+    // The folder is back (the sync app runs again): what waited in the outbox goes now.
+    if (was === 'missing' && this.problem === null && db.sync.outboxSize() > 0) this.scheduleWrite(0);
     this.pushStatus();
     done?.();
   }
@@ -310,6 +374,8 @@ export class SyncController {
   }
 
   private async writeNow(): Promise<void> {
+    // A log put back that's gone again at once isn't put back for ever: the changes wait for the next try.
+    let putBack = 0;
     for (;;) {
       const db = this.db();
       const meta = db?.sync.meta;
@@ -327,54 +393,77 @@ export class SyncController {
         this.pushStatus();
         continue;
       }
-      if (reply.t === 'failed' && reply.problem === 'copied') {
-        await this.newId();
+      const problem = reply.t === 'failed' ? reply.problem : 'io';
+      if (problem === 'copied' || problem === 'full') {
+        // Another computer writes under this one's id (a copied profile), or its segments reached the top: a new id.
+        await this.newId(problem === 'full');
         continue;
       }
-      // The folder isn't there (the sync app isn't running): the changes wait in the outbox for the next try.
+      if (problem === 'gone' && putBack++ < 2) {
+        // This computer's log isn't there, though the folder is (someone deleted it, or a computer that took it for
+        // removed): a fresh snapshot puts it back, and what's waiting goes after it.
+        if (await this.snapshotNow(db)) continue;
+      }
+      // The folder isn't there (the sync app isn't running): the changes wait in the outbox, and go once a look finds it.
       this.problem = 'missing';
       this.pushStatus();
       return;
     }
   }
 
-  /** Another computer writes under this one's id (a copied profile): this one takes a new id, and starts its log again. */
-  private async newId(): Promise<void> {
+  /**
+   * A new id for this computer, and its log starts again from a snapshot:
+   * another computer writes under the old one (a copied profile: the old id is
+   * its now), or the old one's segments reached the top (`retireOld`: the old
+   * id is this computer's, and it's marked removed).
+   */
+  private async newId(retireOld = false): Promise<void> {
     const db = this.db();
     if (!db) return;
+    const old = db.device();
     db.newDevice();
     db.atomically(() => {
       db.sync.forgetOwn();
+      if (retireOld) db.sync.stampDevice({ removed: true }, old);
       db.sync.stampDevice({ ...this.info, removed: false });
     });
     this.stopWorker();
     this.startWorker();
-    const reply = await this.ask({ t: 'snapshot', records: db.sync.snapshot() }, ['snapshotted']);
-    if (reply.t === 'snapshotted') db.atomically(() => db.sync.snapshotted(reply.own, Date.now()));
+    await this.snapshotNow(db);
   }
 
-  /** At most daily, once this computer's segments outgrow a snapshot: one snapshot replaces them, and removed computers' folders go. */
+  /** At most daily, once this computer's segments outgrow a snapshot: one snapshot replaces them. */
   private async compact(force = false): Promise<void> {
     const db = this.db();
     if (!db) return;
     const meta = db.sync.meta;
     const due = Date.now() - meta.compactedAt >= COMPACT_MS && (meta.bytesSince > 2 * db.sync.snapshotChars() || meta.framesSince > COMPACT_FRAMES);
     if (!force && !due) return;
-    const reply = await this.ask({ t: 'snapshot', records: db.sync.snapshot() }, ['snapshotted']);
-    if (reply.t !== 'snapshotted') return;
-    db.atomically(() => db.sync.snapshotted(reply.own, Date.now()));
-    // Once removed, and with a snapshot written since, a computer's folder may go (S15 §6).
+    await this.snapshotNow(db);
+  }
+
+  /**
+   * Removed computers' folders, once this one has compacted since (S15 §6),
+   * judged after a pass (with everything it read merged): the worker removes
+   * one only if everything real in it has been read here and nothing in it was
+   * made after its removal (it joined again, and that isn't read yet).
+   */
+  private prune(db: ChordDatabase): void {
+    const meta = db.sync.meta;
+    const self = db.device();
     for (const device of db.sync.devices()) {
-      if (device.removed !== null && device.id !== db.device()) this.worker?.postMessage({ t: 'remove', path: `${meta.generation}/${device.id}` } satisfies ToWorker);
+      if (device.removed === null || device.id === self || this.pruned.has(device.id) || device.removed >= meta.compactedAt) continue;
+      this.worker?.postMessage({ t: 'prune', device: device.id, removedAt: device.removed } satisfies ToWorker);
     }
   }
 
-  /** The generation this computer moved past by changing the passphrase: its file goes after 30 days. */
+  /** The generation this computer moved past by changing the passphrase: its file, and this computer's folder in it, go after 30 days. */
   private retire(): void {
     const db = this.db();
     const retired = db?.sync.meta.retired;
     if (!db || !retired || Date.now() - retired.at < RETIRE_MS) return;
     this.worker?.postMessage({ t: 'remove', path: `sync-${retired.generation}.json` } satisfies ToWorker);
+    this.worker?.postMessage({ t: 'remove', path: `${retired.generation}/${db.device()}` } satisfies ToWorker);
     db.sync.setMeta({ retired: null });
   }
 
@@ -410,6 +499,8 @@ export class SyncController {
       changedBy: this.problem === 'changed' ? this.changedBy : null,
       removedAt: null,
       capped: this.capped,
+      refused: this.refused,
+      tooMany: this.tooMany,
       choosing: meta.joining ? { here: (db.sync.localThings().filter((r) => r.type === 'chord').length), synced: db.sync.syncedChords().length } : null,
     };
   }
@@ -513,13 +604,15 @@ export class SyncController {
       db.sync.addLocal('all');
       db.sync.stampDevice({ ...info, removed: false });
     });
-    const reply = await this.ask({ t: 'setup', folder, generation: inspection.generation, passphrase, device: db.device(), app: info.app, records: db.sync.snapshot() }, ['set-up']);
+    const { snapshot, mark } = this.snapshotOf(db);
+    const reply = await this.ask({ t: 'setup', folder, generation: inspection.generation, passphrase, device: db.device(), app: info.app, snapshot }, ['set-up']);
+    this.streams.delete(snapshot.stream);
     if (reply.t !== 'set-up') {
       db.sync.clear();
       this.stopWorker();
       return { problem: reply.t === 'failed' && reply.problem === 'conflict' ? 'conflict' : 'io' };
     }
-    db.atomically(() => db.sync.snapshotted(reply.own, Date.now()));
+    db.atomically(() => db.sync.snapshotted(reply.own, Date.now(), mark));
     this.key = reply.key;
     this.problem = null;
     this.startWorker();
@@ -534,7 +627,7 @@ export class SyncController {
     const opened = await this.ask({ t: 'unlock', folder, passphrase }, ['unlocked']);
     if (opened.t !== 'unlocked') {
       if (!db.sync.meta.on) this.stopWorker();
-      return { problem: opened.t === 'failed' ? (opened.problem === 'copied' ? 'io' : opened.problem) : 'io' };
+      return { problem: opened.t === 'failed' ? stepProblem(opened.problem) : 'io' };
     }
     this.info = info;
     this.stopWorker();
@@ -579,8 +672,7 @@ export class SyncController {
     }
     const synced = db.sync.syncedChords();
     const replace = mode === 'synced' && synced[0] ? { to: synced[0], keep: synced } : null;
-    const reply = await this.ask({ t: 'snapshot', records: db.sync.snapshot() }, ['snapshotted']);
-    if (reply.t === 'snapshotted') db.atomically(() => db.sync.snapshotted(reply.own, Date.now()));
+    await this.snapshotNow(db);
     this.pushStatus();
     return { apply, replace, status: this.status() };
   }
@@ -590,24 +682,23 @@ export class SyncController {
     const meta = db.sync.meta;
     if (!meta.on || !meta.folder) return { problem: 'missing' };
     const opened = await this.ask({ t: 'unlock', folder: meta.folder, passphrase }, ['unlocked']);
-    if (opened.t !== 'unlocked') return { problem: opened.t === 'failed' && opened.problem !== 'copied' ? opened.problem : 'io' };
+    if (opened.t !== 'unlocked') return { problem: opened.t === 'failed' ? stepProblem(opened.problem) : 'io' };
     this.key = opened.key;
     this.problem = null;
     if (opened.generation > meta.generation) {
       // The passphrase changed on another computer: this one moves to the new generation, with a snapshot there, and its old folder goes.
       // No read runs meanwhile: the worker reads again only once this computer is in the new generation.
       this.stopWorker();
-      const moved = await this.ask(
-        { t: 'move', folder: meta.folder, from: meta.generation, to: opened.generation, device: db.device(), key: opened.key, app: this.info.app, records: db.sync.snapshot() },
-        ['moved'],
-      );
+      const { snapshot, mark } = this.snapshotOf(db);
+      const moved = await this.ask({ t: 'move', folder: meta.folder, from: meta.generation, to: opened.generation, device: db.device(), key: opened.key, app: this.info.app, snapshot }, ['moved']);
+      this.streams.delete(snapshot.stream);
       if (moved.t !== 'moved') {
         this.key = null;
         return { problem: 'io' };
       }
       db.atomically(() => {
         db.sync.setMeta({ generation: opened.generation });
-        db.sync.snapshotted(moved.own, Date.now());
+        db.sync.snapshotted(moved.own, Date.now(), mark);
       });
     }
     this.startWorker();
@@ -638,11 +729,13 @@ export class SyncController {
     const meta = db.sync.meta;
     if (!meta.on || meta.joining || !meta.folder) return { problem: 'missing' };
     this.stopWorker();
-    const reply = await this.ask({ t: 'restart', folder: meta.folder, from: meta.generation, passphrase, device: db.device(), app: this.info.app, records: db.sync.snapshot() }, ['restarted']);
+    const { snapshot, mark } = this.snapshotOf(db);
+    const reply = await this.ask({ t: 'restart', folder: meta.folder, from: meta.generation, passphrase, device: db.device(), app: this.info.app, snapshot }, ['restarted']);
+    this.streams.delete(snapshot.stream);
     if (reply.t !== 'restarted') return { problem: 'io' };
     db.atomically(() => {
       db.sync.setMeta({ generation: reply.generation, retired: { generation: meta.generation, at: Date.now() } });
-      db.sync.snapshotted(reply.own, Date.now());
+      db.sync.snapshotted(reply.own, Date.now(), mark);
     });
     this.key = reply.key;
     this.problem = null;
@@ -650,18 +743,30 @@ export class SyncController {
     return { key: reply.key, status: this.status() };
   }
 
-  /** A new passphrase (S15 §6): the next generation, with this computer's snapshot; the others pause until they have it. */
+  /**
+   * A new passphrase (S15 §6): the next generation's file; then this computer
+   * says so in its log under the old one (sealed, so the others can name it
+   * when they pause), then its snapshot under the new one. Its old folder stays
+   * until the old file goes (30 days), so the others can read what it said.
+   */
   private async rekey(db: ChordDatabase, passphrase: string): Promise<SyncReply> {
     const meta = db.sync.meta;
     if (!meta.on || !this.key || !this.worker) return { problem: 'missing' };
-    const reply = await this.ask({ t: 'rekey', passphrase, records: db.sync.snapshot() }, ['rekeyed']);
-    if (reply.t !== 'rekeyed') return { problem: 'io' };
+    const filed = await this.ask({ t: 'rekey-file', passphrase }, ['rekey-filed']);
+    if (filed.t !== 'rekey-filed') return { problem: 'io' };
+    db.atomically(() => db.sync.stampDevice({ rekeyed: filed.generation }));
+    clearTimeout(this.writeTimer);
+    await this.write();
+    const { snapshot, mark } = this.snapshotOf(db);
+    const moved = await this.ask({ t: 'rekey-move', generation: filed.generation, key: filed.key, snapshot }, ['rekeyed']);
+    this.streams.delete(snapshot.stream);
+    if (moved.t !== 'rekeyed') return { problem: 'io' };
     db.atomically(() => {
-      db.sync.setMeta({ generation: reply.generation, retired: { generation: meta.generation, at: Date.now() } });
-      db.sync.snapshotted(reply.own, Date.now());
+      db.sync.setMeta({ generation: filed.generation, retired: { generation: meta.generation, at: Date.now() } });
+      db.sync.snapshotted(moved.own, Date.now(), mark);
     });
-    this.key = reply.key;
-    return { key: reply.key, status: this.status() };
+    this.key = filed.key;
+    return { key: filed.key, status: this.status() };
   }
 
   /** Turning off removes this computer, from itself (S15 §6): its device record says so, written before it stops. Its data stays. */
@@ -675,6 +780,9 @@ export class SyncController {
     this.key = null;
     this.problem = null;
     this.changes.clear();
+    this.capped = this.refused = 0;
+    this.tooMany = false;
+    this.pruned.clear();
     db.sync.clear();
   }
 

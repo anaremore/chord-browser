@@ -337,7 +337,15 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
       <Row label="Sync" description={onText(view, now)} control={null} />
       {view.state === 'locked' && !startingOver && <PassphraseField text="Sync is paused. Enter your passphrase." button="Unlock" problem={problem} onSubmit={unlock} />}
       {view.state === 'problem' && view.problem === 'changed' && !startingOver && (
-        <PassphraseField text={`The passphrase was changed on ${view.changedBy ?? 'another computer'}. Enter the new one to keep syncing.`} button="Unlock" problem={problem} onSubmit={unlock} />
+        <PassphraseField
+          text={
+            // Named only when that computer said so under the old passphrase: anyone who can write to the folder could put a new file there.
+            view.changedBy ? `The passphrase was changed on ${view.changedBy}. Enter the new one to keep syncing.` : 'Sync was started again in this folder with a new passphrase. Enter it to keep syncing.'
+          }
+          button="Unlock"
+          problem={problem}
+          onSubmit={unlock}
+        />
       )}
       {asking && startingOver && (
         <>
@@ -366,6 +374,8 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
         <p key={a.name} className={local.note}>{`${a.name}’s clock is ${aheadBy(a.ms)} ahead. Its changes may win over newer ones.`}</p>
       ))}
       {view.capped > 0 && <p className={local.note}>{`${plural(view.capped, 'thing')} from another computer went past what sync keeps, and stayed out.`}</p>}
+      {view.refused > 0 && <p className={local.note}>{`${plural(view.refused, 'part')} of another computer’s changes went past what sync reads, and stayed out.`}</p>}
+      {view.tooMany && <p className={local.note}>More than 64 computers sync through this folder. Chord reads 64 of them; remove the ones you don’t use.</p>}
       <ul className={local.computers} aria-label="Computers that sync">
         {view.computers.map((c) => (
           <li key={c.id} className={styles.row}>

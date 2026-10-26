@@ -13,14 +13,16 @@
  *   Effects through their service and its sanitizer), putting off anything
  *   with a change of yours still waiting to be written, and asking for it
  *   again once it's written;
- * - puts a quiet toast in a window only when what it shows goes away, and a
- *   toast once for a problem that needs you;
+ * - puts a quiet toast in a window when a chord another computer deleted was
+ *   on screen there or had tabs only this computer has (they move to another
+ *   chord), with Undo, and a toast once for a problem that needs you;
  * - holds *Turn off* and *Remove* for their toast's Undo (6 s), so Undo has
  *   nothing to write.
  */
 import { randomBytes } from 'node:crypto';
 import { basename } from 'node:path';
 import {
+  emptyApply,
   sortedChords,
   syncParts,
   uuidv7,
@@ -178,7 +180,7 @@ export class SyncService {
   /* ---------- where it stands ---------- */
 
   view(): SyncView {
-    const status = this.status ?? { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, choosing: null };
+    const status = this.status ?? { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, choosing: null };
     return {
       ...status,
       folderName: status.folder ? basename(status.folder) : null,
@@ -264,8 +266,12 @@ export class SyncService {
     await this.options.data.flush();
     const answer = await this.options.data.sync({ type: 'sync.choose', mode });
     if (answer.problem) return this.stepResult(answer);
-    if (answer.apply) await this.apply(answer.apply, true);
-    if (answer.replace) {
+    const apply = answer.apply;
+    if (answer.replace && apply) {
+      // The synced chords first, so there's one to make way for; then every chord of this computer's that isn't the
+      // synced setup's makes way, kept for Undo (one another computer deleted too, so the Undo covers everything);
+      // then the rest of the synced setup.
+      await this.apply({ ...emptyApply(), chords: apply.chords }, true);
       const keep = new Set(answer.replace.keep);
       const state = this.options.state();
       const mine = sortedChords(state).filter((c) => !c.private && !keep.has(c.id));
@@ -282,7 +288,8 @@ export class SyncService {
           });
         }
       }
-    }
+      await this.apply({ ...apply, chords: [] }, true);
+    } else if (apply) await this.apply(apply, true);
     return this.stepResult(answer);
   }
 
@@ -439,9 +446,13 @@ export class SyncService {
       const checked = ImportedSettings.safeParse(filtered.settings);
       filtered.settings = checked.success ? checked.data : null;
     }
-    // What each window shows, to tell it if it goes.
+    // What each window shows, and what's only this computer's in each chord that may go (its Today tabs, and any open
+    // tab), to say where it went.
     const before = this.options.state();
-    const shown = Object.values(before.windows).map((w) => ({ windowId: w.id, chordId: w.activeChordId, name: before.chords[w.activeChordId]?.name ?? '' }));
+    const shown = Object.values(before.windows).map((w) => ({ windowId: w.id, chordId: w.activeChordId }));
+    const going = filtered.gone.chords
+      .filter((id) => before.chords[id])
+      .map((id) => ({ id, name: before.chords[id]!.name, local: Object.values(before.nodes).filter((n) => n.chordId === id && n.kind === 'tab' && (n.section === 'today' || before.live[n.id])).map((n) => n.id) }));
     // Input and painting go first between parts, two frames apart, the first too (not in the task that brought the push). Nothing here is urgent.
     for (const part of syncParts(filtered)) {
       await new Promise((resolve) => setTimeout(resolve, PART_GAP_MS));
@@ -449,9 +460,19 @@ export class SyncService {
     }
     if (filtered.effects.length > 0 || filtered.gone.effects.length > 0) await this.options.effects.syncSites(filtered.effects, filtered.gone.effects);
     const after = this.options.state();
-    for (const { windowId, chordId, name } of shown) {
-      if (after.chords[chordId] || !after.windows[windowId]) continue;
-      this.options.toast(windowId, { id: `sync:gone:${chordId}`, message: `“${name}” was deleted on another computer` });
+    // A chord another computer deleted: a quiet toast where it was on screen, or wherever its tabs went, with Undo.
+    for (const gone of going) {
+      if (after.chords[gone.id]) continue;
+      const moved = gone.local.filter((id) => after.nodes[id]);
+      const to = moved[0] ? after.chords[after.nodes[moved[0]]!.chordId]?.name : undefined;
+      const windowId = shown.find((s) => s.chordId === gone.id && after.windows[s.windowId])?.windowId ?? (moved.length > 0 ? this.options.lastWindow() : null);
+      if (!windowId) continue;
+      const tabs = moved.length === 1 ? 'Its tab' : `Its ${moved.length} tabs`;
+      this.options.toast(windowId, {
+        id: `sync:gone:${gone.id}`,
+        message: to ? `“${gone.name}” was deleted on another computer. ${tabs} moved to “${to}”.` : `“${gone.name}” was deleted on another computer`,
+        action: { label: 'Undo', command: { t: 'sync.unreplace', windowId, chordIds: [gone.id] } },
+      });
     }
     if (later.size > 0) {
       await this.options.data.flush();
@@ -462,7 +483,7 @@ export class SyncService {
 
 const PROBLEM_TOASTS: Record<string, string> = {
   locked: 'Sync is paused. Enter your passphrase to keep syncing.',
-  changed: 'The passphrase was changed on another computer. Enter the new one to keep syncing.',
+  changed: 'Sync has a new passphrase. Enter it to keep syncing.',
   missing: 'Chord can’t find the sync folder. Is your sync app running?',
   newer: 'Another computer has a newer Chord. Update this one to keep syncing.',
   removed: 'This computer was removed from sync.',

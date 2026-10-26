@@ -45,7 +45,7 @@ import {
 } from './records';
 import { restoreSettings } from './restore';
 import type { Platform } from './shortcuts';
-import { compareStamps, isDeviceId, type Stamp } from './stamps';
+import { compareStamps, isDeviceId, isStamp, type Stamp } from './stamps';
 
 /* ---------- Things ---------- */
 
@@ -95,10 +95,8 @@ export const SYNC_LIMITS = {
   chars: 64 * 1024 * 1024,
   fields: 256,
   fieldName: 100,
-  /** One thing, as JSON: an icon's base64 is at most 1.4 MB (records.ts). */
+  /** One thing, as JSON: an icon's base64 is at most 1.4 MB (records.ts). A merged thing's values are held to it too. */
   thingChars: 2 * 1024 * 1024,
-  /** A stamp further ahead of this computer's clock than this is refused: a clock can be wrong, not a year wrong. */
-  aheadMs: 365 * 86_400_000,
   byType: {
     chord: 500,
     folder: 4_000,
@@ -153,20 +151,26 @@ function goodId(type: string, id: string): boolean {
 /**
  * Another computer's record as sync takes it, or null: a type sync never
  * carries, an id its type can't have, a stamp missing (only icons have none)
- * or more than a year ahead, too many fields or too big. A field `deleted`
- * that isn't true or false is left out. An icon must be one (records.ts), and
- * loses any stamp it came with.
+ * or not one (core's isStamp: within the counter's and the year 9999's
+ * bounds), too many fields or too big. A field `deleted` that isn't true or
+ * false is left out. An icon must be one (records.ts) whose bytes are what its
+ * id says (`iconHash`: the hex SHA-256 of its base64's bytes), and loses any
+ * stamp it came with. Nothing here depends on the reader's clock, so every
+ * computer takes or refuses the same records: a stamp far ahead is taken, and
+ * a change made here still beats it (`stampAbove`).
  */
-export function checkSyncRecord(r: DataRecord, now: number): DataRecord | null {
+export function checkSyncRecord(r: DataRecord, iconHash: (base64: string) => string): DataRecord | null {
   const kind = syncKind(r.type);
   if (kind === 'drop' || !goodId(r.type, r.id)) return null;
   const names = Object.keys(r.set);
   if (names.length === 0 || names.length > SYNC_LIMITS.fields || !names.every((n) => FIELD_NAME.test(n))) return null;
   if (FACTS.has(r.type)) {
     const icon = iconFromRecord({ type: r.type, id: r.id, set: r.set });
-    return icon ? { type: 'icon', id: icon.id, set: { mime: icon.mime, data: icon.data } } : null;
+    // An icon's id is its bytes' hash: one that isn't would stick (the first copy of a fact stays) and differ between computers.
+    if (!icon || icon.data.length === 0 || `sha256-${iconHash(icon.data)}` !== icon.id) return null;
+    return { type: 'icon', id: icon.id, set: { mime: icon.mime, data: icon.data } };
   }
-  if (!r.at || r.at[0] > now + SYNC_LIMITS.aheadMs) return null;
+  if (!r.at || !isStamp(r.at)) return null;
   if (JSON.stringify(r.set).length > SYNC_LIMITS.thingChars) return null;
   if ('deleted' in r.set && typeof r.set['deleted'] !== 'boolean') {
     const { deleted: _deleted, ...rest } = r.set;
@@ -275,6 +279,8 @@ export interface SyncDevice {
   app: string;
   /** When it was removed (the stamp's time), or null. */
   removed: number | null;
+  /** The generation it moved to by changing the passphrase, as it said in its log under the old one before it went. */
+  rekeyed: number | null;
 }
 
 export const localDeviceFields = (d: { name: string; os: string; app: string }): SyncValues => ({ name: d.name.slice(0, 100), os: d.os.slice(0, 40), app: d.app.slice(0, 40) });
@@ -289,6 +295,7 @@ export function deviceOf(thing: SyncThing): SyncDevice | null {
     os: text(thing.fields['os']?.v, 40),
     app: text(thing.fields['app']?.v, 40),
     removed: removed?.v === true ? removed.at[0] : null,
+    rekeyed: Number.isSafeInteger(thing.fields['rekeyed']?.v) ? (thing.fields['rekeyed']!.v as number) : null,
   };
 }
 
@@ -362,17 +369,24 @@ export interface SyncStatus {
   pending: number;
   /** Computers whose clocks run more than five minutes ahead: their changes may win over newer ones (S15 §4). */
   ahead: { name: string; ms: number }[];
-  /** Who changed the passphrase, when that's the problem. */
+  /**
+   * Who changed the passphrase, when that's the problem, as the old generation's log says (an authenticated record):
+   * null when nothing there says so (*Start over*, or a file someone else put there), and Settings names no one.
+   */
   changedBy: string | null;
   /** When this computer was removed, when that's the problem. */
   removedAt: number | null;
   /** Things another computer wrote past what sync keeps (SYNC_LIMITS), left out. */
   capped: number;
+  /** Parts of other computers' logs passed over: a frame too big to read, or one that can't be told from the next. */
+  refused: number;
+  /** More computers write to the folder than sync reads (64): the rest are left out. */
+  tooMany: boolean;
   /** While choosing: this computer's chords, and the synced setup's. */
   choosing: { here: number; synced: number } | null;
 }
 
-export const SYNC_OFF: SyncStatus = { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, choosing: null };
+export const SYNC_OFF: SyncStatus = { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, choosing: null };
 
 /** A clock more than this far ahead of this computer's is named in Settings (S15 §4). */
 export const CLOCK_AHEAD_MS = 5 * 60_000;

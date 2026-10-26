@@ -13,7 +13,7 @@
  * a budget. How to run it and read the report: docs/testing/performance.md.
  */
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { availableParallelism, cpus, release, tmpdir, totalmem } from 'node:os';
@@ -1578,6 +1578,7 @@ function diskFolder(root: string): SyncFs {
     },
     create: async (path, bytes, exclusive) => writeFileSync(at(path), bytes, { flag: exclusive ? 'wx' : 'w' }),
     append: async (path, bytes) => appendFileSync(at(path), bytes),
+    rename: async (from, to) => renameSync(at(from), at(to)),
     mkdir: async (path) => void mkdirSync(at(path), { recursive: true }),
     remove: async (path) => rmSync(at(path), { recursive: true, force: true }),
   };
@@ -1755,7 +1756,7 @@ test('sync: keystrokes during a large merge', async () => {
     ...Array.from({ length: 30 }, (_, i): DataRecord => ({ type: 'route', id: `route${i}.test`, at: stamp(), set: { chord: `c${i % 12}`, created: 1 } })),
     ...Array.from({ length: 40 }, (_, i): DataRecord => ({ type: 'effects', id: `fx${i}.test`, at: stamp(), set: { wet: true, css: `h1 { color: rgb(${i}, 0, 0) }`, cssOn: true, hidden: [], presets: [], duet: [] } })),
   ];
-  let own: OwnSegment = await writeSnapshot(fs, { generation: 1, device: OTHER }, setup, root, { app: '0.5.0' }, nodeCrypto);
+  let own: OwnSegment = await writeSnapshot(fs, { generation: 1, device: OTHER }, [setup], root, { app: '0.5.0', device: [setup[0]!] }, nodeCrypto);
   let generation = 0;
   /** That computer renames every folder and tab: one frame of 300 records. */
   const renameAll = async () => {

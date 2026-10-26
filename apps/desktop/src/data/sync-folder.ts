@@ -2,7 +2,8 @@
  * Sync's folder on the disk (core's `SyncFs`), for its worker thread
  * (sync-worker.ts): each new file made under a temp name and renamed into
  * place, appends flushed, reads only of regular files, and no write that
- * resolves outside `Chord sync`.
+ * resolves outside `Chord sync`, nor any write at all when `Chord sync`
+ * itself is a link or a junction.
  */
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, open, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
@@ -53,6 +54,9 @@ export class NodeFolder implements SyncFs {
    */
   private async writable(path: string): Promise<string> {
     const target = this.full(path);
+    // `Chord sync` itself a link (or, on Windows, a junction): realpath would follow it wherever it points.
+    const own = await lstat(this.root);
+    if (own.isSymbolicLink() || !own.isDirectory()) throw new Error('Sync won’t write through a link');
     const root = await realpath(this.root);
     const folder = await realpath(dirname(target));
     if (folder !== root && !folder.startsWith(`${root}${sep}`)) throw new Error('Sync won’t write outside its folder');
@@ -94,7 +98,14 @@ export class NodeFolder implements SyncFs {
     }
   }
 
+  async rename(from: string, to: string): Promise<void> {
+    const source = await this.writable(from);
+    await rename(source, await this.writable(to));
+  }
+
   async mkdir(path: string): Promise<void> {
+    // `Chord sync` itself is made only where nothing is: a link someone put there is never written through.
+    if ((await lstat(this.root).catch(() => null))?.isSymbolicLink()) throw new Error('Sync won’t write through a link');
     await mkdir(this.full(path), { recursive: true });
     if (path) await this.writable(`${path}/.`);
   }
