@@ -34,7 +34,15 @@ type Waiting = Map<string, () => void>;
  */
 function usePause(waiting: Waiting, key: string): (send: (() => void) | null) => void {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => waiting.get(key)?.(), [waiting, key]);
+  useEffect(
+    () => () => {
+      // Going: what's waiting is sent now. What was dropped (its item removed) isn't sent later either.
+      const send = waiting.get(key);
+      clearTimeout(timer.current);
+      send?.();
+    },
+    [waiting, key],
+  );
   return useCallback(
     (send) => {
       clearTimeout(timer.current);
@@ -462,7 +470,12 @@ export function EffectsCard({ opened }: { opened: number }) {
                     editing={editing === `hidden:${key}`}
                     onEdit={(open) => openEditor(`hidden:${key}`, open)}
                     onRemove={() => {
-                      if (editing === `hidden:${key}`) setEditing(null);
+                      if (editing === `hidden:${key}`) {
+                        // An edit still waiting out its pause goes with the element: sent first, it would change the
+                        // selector this remove names.
+                        waiting.delete('hidden');
+                        setEditing(null);
+                      }
                       run({ do: 'unhide', selector: h.selector });
                     }}
                     editor={(done) => <HiddenEditor item={h} taken={takenBy} waiting={waiting} onSent={rekey} done={done} />}
