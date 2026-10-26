@@ -38,6 +38,8 @@ const nodeOp = (id: string): WriteOp => ({ k: 'node', id, value: null }) as Writ
 const settingOp = (id: string): WriteOp => ({ k: 'setting', id, value: 1 }) as WriteOp;
 const FULL: Answer = { ok: false, error: 'Error: database or disk is full', passing: true };
 const seed = () => seedState({ now: 1, newId: (() => { let n = 0; return () => `id-${++n}`; })(), theme: THEME, homeUrl: 'https://home.test/' });
+/** Another computer's change applied here (`sync.apply`): what `unsaved` counts, when refused. */
+const applied = (persistence: Awaited<ReturnType<typeof Persistence.open>>['persistence'], state = seed()) => persistence.record([{ path: ['chords'] }, { path: ['nodes'] }], state, 'sync');
 
 beforeEach(() => {
   child = new FakeChild();
@@ -54,7 +56,7 @@ describe('a write chord-data refused', () => {
     persistence.onTrouble((failing) => trouble.push(failing));
     let full = 3;
     child.answer = () => (full-- > 0 ? FULL : { ok: true });
-    persistence.recordAll(seed());
+    applied(persistence);
     await persistence.flush();
     expect(persistence.unsaved).toBeGreaterThan(0);
     const sent = child.writes[0]!.length;
@@ -93,7 +95,7 @@ describe('a write chord-data refused', () => {
     const { persistence } = await Persistence.open('/profile/chord.db');
     let tries = 0;
     child.answer = () => (tries++ === 0 ? FULL : { ok: false, error: 'Error: NOT NULL constraint failed', passing: false });
-    persistence.recordAll(seed());
+    applied(persistence);
     await persistence.flush();
     expect(persistence.unsaved).toBeGreaterThan(0);
     await vi.advanceTimersByTimeAsync(2_000);
@@ -106,12 +108,12 @@ describe('a write chord-data refused', () => {
     const { persistence } = await Persistence.open('/profile/chord.db');
     let full = true;
     child.answer = () => (full ? FULL : { ok: true });
-    persistence.recordAll(seed());
+    applied(persistence);
     await persistence.flush();
     const unsaved = persistence.unsaved;
     expect(unsaved).toBeGreaterThan(0);
-    // The same things changed again meanwhile: still unsaved, the same ones.
-    persistence.recordAll(seed());
+    // The same things applied again meanwhile: still unsaved, the same ones.
+    applied(persistence);
     expect(persistence.unsaved).toBe(unsaved);
     full = false;
     await vi.advanceTimersByTimeAsync(2_000);
@@ -127,12 +129,70 @@ describe('a write chord-data refused', () => {
     persistence.history(visit);
     await persistence.search('visited', null);
     expect(child.events).toHaveLength(1);
-    expect(persistence.unsaved).toBe(1);
+    // History isn't sync's: never counted as what sync applied that isn't saved.
+    expect(persistence.unsaved).toBe(0);
     full = false;
     await vi.advanceTimersByTimeAsync(2_000);
     expect(child.events).toHaveLength(2);
     expect(child.events[1]).toContain(visit);
+  });
+
+  it('your own changes refused are kept and sent again, but never counted as what sync applied that isn’t saved', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { persistence } = await Persistence.open('/profile/chord.db');
+    let full = true;
+    child.answer = () => (full ? FULL : { ok: true });
+    persistence.recordAll(seed());
+    await persistence.flush();
     expect(persistence.unsaved).toBe(0);
+    // Sync's apply refused too, then a change of yours to the same chords: yours takes its place, and it no longer counts.
+    const state = seed();
+    applied(persistence, state);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(persistence.unsaved).toBeGreaterThan(0);
+    persistence.record([{ path: ['chords'] }, { path: ['nodes'] }], state, 'user');
+    expect(persistence.unsaved).toBe(0);
+    full = false;
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(child.writes.at(-1)!.every((op) => op.origin === undefined)).toBe(true);
+  });
+
+  it('history in a batch being written, refused, never lands after what a search sent later: the search waits for it, and the order holds', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { persistence } = await Persistence.open('/profile/chord.db');
+    let full = true;
+    child.answer = (request) => (full && request.type === 'write' ? FULL : { ok: true });
+    const archive = { k: 'archive', at: 1 } as unknown as HistoryEvent;
+    const unarchive = { k: 'unarchive', at: 2 } as unknown as HistoryEvent;
+    persistence.history(archive);
+    const writing = persistence.flush();
+    persistence.history(unarchive);
+    const searching = persistence.search('x', null);
+    await writing;
+    await searching;
+    full = false;
+    await vi.advanceTimersByTimeAsync(2_000);
+    const written = child.events.at(-1)!;
+    expect(written.indexOf(archive)).toBeLessThan(written.indexOf(unarchive));
+    expect(written).toContain(unarchive);
+  });
+
+  it('a change of yours waiting, then sync’s or tidying’s to the same entity: both written, yours first, so yours is stamped and theirs isn’t', async () => {
+    const { persistence } = await Persistence.open('/profile/chord.db');
+    const state = seed();
+    const chordId = Object.keys(state.chords)[0]!;
+    persistence.record([{ path: ['chords', chordId] }], state, 'user');
+    persistence.record([{ path: ['chords', chordId] }], { ...state, chords: {} }, 'tidy');
+    await persistence.flush();
+    expect(child.writes[0]!.map((op) => [op.id, op.origin ?? 'user', op.value === null])).toEqual([
+      [chordId, 'user', false],
+      [chordId, 'tidy', true],
+    ]);
+    // Theirs, then yours: yours takes its place.
+    persistence.record([{ path: ['chords', chordId] }], state, 'sync');
+    persistence.record([{ path: ['chords', chordId] }], state, 'user');
+    await persistence.flush();
+    expect(child.writes[1]!.map((op) => op.origin ?? 'user')).toEqual(['user']);
   });
 });
 

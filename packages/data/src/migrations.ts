@@ -308,4 +308,13 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE IF NOT EXISTS sync_junk (path TEXT PRIMARY KEY, seen TEXT NOT NULL) STRICT;
   `,
+  // 21: who last wrote each synced row (S15 §13): `user` (something you did), `sync` (another computer's change applied)
+  // or `tidy` (this computer adjusting on its own), by the write's kind and id (`chord`, `node`, `favorite`, `linkRoute`,
+  // `effect`, `setting`). Sync's drift check stamps only what you wrote. A row written before this has none: who wrote
+  // it isn't known. And a write too big for one transaction (a chord with thousands of tabs going), as what it will do,
+  // so a stop partway is finished at the next open (`write_intent`).
+  `
+  CREATE TABLE IF NOT EXISTS row_origin (k TEXT NOT NULL, id TEXT NOT NULL, origin TEXT NOT NULL, PRIMARY KEY (k, id)) STRICT;
+  CREATE TABLE IF NOT EXISTS write_intent (id TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0) STRICT;
+  `,
 ];

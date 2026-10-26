@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import type { ArchiveReason, DuetThread, ExportCounts, PersistedState, SavedEffects, State } from '@chord/core';
 import {
   opKey,
+  opOrigin,
   opsForState,
   opsFromPatches,
   type ArchiveEntry,
@@ -21,6 +22,7 @@ import {
   type HistoryEvent,
   type NavState,
   type OpenTiming,
+  type Origin,
   type PathPatch,
   type SearchResult,
   type SyncReply,
@@ -84,6 +86,14 @@ export function nextBatch(ops: readonly WriteOp[], chunk: number): WriteOp[] {
   return [...kept, ...nodes, ...others.slice(0, Math.max(0, chunk - kept.length - nodes.length - gone.length)), ...gone];
 }
 
+/**
+ * The queue's key for a write: its entity, and whether it's yours. A change of
+ * yours is never folded into another's: sync's or tidying's write to the same
+ * entity after it waits behind it (`#auto`), so yours is written, and stamped,
+ * first. Yours after theirs takes their place: it's the latest, and has it.
+ */
+const queueKey = (op: WriteOp): string => (opOrigin(op) === 'user' ? opKey(op) : `${opKey(op)}#auto`);
+
 /** Runs `attempt` until it succeeds, fails for a reason that won't pass, or the waits run out. */
 export async function withRetries(
   attempt: () => Promise<DataResponse>,
@@ -106,11 +116,14 @@ export class Persistence {
   private child!: UtilityProcess;
   private nextId = 1;
   private readonly waiting = new Map<number, { resolve(r: DataResponse): void; reject(e: Error): void }>();
-  private readonly pending = new Map<string, WriteOp>();
+  /** Writes waiting, by `queueKey`, in the order they're sent. */
+  private pending = new Map<string, WriteOp>();
   private inFlight: WriteOp[] = [];
   /** History happenings, written in order with the next batch; never coalesced. */
   private events: HistoryEvent[] = [];
   private inFlightEvents: HistoryEvent[] = [];
+  /** The batch being written, answered or not. */
+  private inFlightDone: Promise<unknown> = Promise.resolve();
   /** History's happenings sent ahead of the queue for a search (`flushEvents`), until written. */
   private sideEvents: HistoryEvent[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -121,9 +134,11 @@ export class Persistence {
   private retry: ReturnType<typeof setTimeout> | undefined;
   private retryMs = 0;
   private refusals = 0;
-  /** What was refused for now and isn't written yet (entities by `opKey`, and history's happenings): `unsaved`. */
-  private readonly retained = new Set<string>();
-  private readonly retainedEvents = new Set<HistoryEvent>();
+  /** Writes refused for now and not written yet, by `queueKey`, with who they're from: sync's are `unsaved`. */
+  private readonly retained = new Map<string, Origin>();
+  /** History's happenings in the order they happened, so a batch put back never goes ahead of a later one (an `unarchive` before its `archive`). */
+  private readonly eventOrder = new WeakMap<HistoryEvent, number>();
+  private eventCount = 0;
   private trouble: (failing: boolean) => void = () => undefined;
   /** What chord-data says unasked (sync's changes to apply, and where it stands), and that it started again after a crash. */
   private pushed: (push: DataPush) => void = () => undefined;
@@ -161,9 +176,9 @@ export class Persistence {
       this.waiting.clear();
       if (this.closed) return;
       // Put the interrupted batch back, unless a newer write for the same entity is already queued.
-      for (const op of this.inFlight) if (!this.pending.has(opKey(op))) this.pending.set(opKey(op), op);
+      this.requeue(this.inFlight);
       this.inFlight = [];
-      this.events = [...this.inFlightEvents, ...this.sideEvents, ...this.events];
+      this.events = this.inOrder([...this.inFlightEvents, ...this.sideEvents, ...this.events]);
       this.inFlightEvents = [];
       this.sideEvents = [];
       if (this.restarts++ >= MAX_RESTARTS) {
@@ -187,21 +202,46 @@ export class Persistence {
   }
 
   /**
-   * Queue the entities a change touched. `sync`: another computer's change
-   * (`sync.apply`), saved without a stamp so it never goes back into this
-   * computer's log. A change of yours to the same entity still waiting keeps
-   * its own mark: it's stamped, so it wins, as it was made later.
+   * Queue the entities a change touched, as from `origin` (S15 §13): yours
+   * (`user`) are stamped; another computer's applied (`sync`) and this
+   * computer's tidying (`tidy`) never are. `before`: the state before the
+   * change, so what you took out of a list written whole is known.
    */
-  record(patches: readonly PathPatch[], state: State, origin: 'sync' | 'here' = 'here'): void {
+  record(patches: readonly PathPatch[], state: State, origin: Origin = 'user', before?: State): void {
     if (this.closed) return;
-    for (const op of opsFromPatches(patches, state)) this.put(op, origin === 'sync');
+    for (const op of opsFromPatches(patches, state, before)) this.put(origin === 'user' ? op : { ...op, origin });
     if (this.pending.size > 0) this.schedule();
   }
 
-  private put(op: WriteOp, fromSync: boolean): void {
+  private put(op: WriteOp): void {
     const key = opKey(op);
+    if (opOrigin(op) !== 'user') {
+      this.pending.set(`${key}#auto`, op);
+      return;
+    }
+    // Yours takes the place of sync's or tidying's waiting: it's later, and has what they wrote (or took away).
+    this.pending.delete(`${key}#auto`);
+    this.retained.delete(`${key}#auto`);
     const waiting = this.pending.get(key);
-    this.pending.set(key, fromSync && !(waiting && !waiting.sync) ? { ...op, sync: true } : op);
+    // The themes you took out, since the last write of them, all of them: unless one is back.
+    if (op.k === 'setting' && op.id === 'themes' && waiting?.removed) {
+      const back = new Set((Array.isArray(op.value) ? (op.value as { id?: unknown }[]) : []).map((t) => t.id));
+      const removed = [...new Set([...waiting.removed, ...(op.removed ?? [])])].filter((id) => !back.has(id));
+      op = removed.length > 0 ? { ...op, removed } : (({ removed: _removed, ...rest }) => rest as WriteOp)(op);
+    }
+    this.pending.set(key, op);
+  }
+
+  /** A batch back in the queue, ahead of what came since, in its own order; an entity written again meanwhile keeps the newer write. */
+  private requeue(ops: readonly WriteOp[]): void {
+    const back = ops.filter((op) => !this.pending.has(queueKey(op)));
+    if (back.length === 0) return;
+    this.pending = new Map([...back.map((op): [string, WriteOp] => [queueKey(op), op]), ...this.pending]);
+  }
+
+  /** History's happenings in the order they happened. */
+  private inOrder(events: HistoryEvent[]): HistoryEvent[] {
+    return events.sort((a, b) => (this.eventOrder.get(a) ?? 0) - (this.eventOrder.get(b) ?? 0));
   }
 
   /**
@@ -210,9 +250,8 @@ export class Persistence {
    * another computer's to it until it's written and stamped (main/sync.ts).
    */
   waitingHere(key: string): boolean {
-    const waiting = this.pending.get(key);
-    if (waiting && !waiting.sync) return true;
-    return this.inFlight.some((op) => !op.sync && opKey(op) === key);
+    if (this.pending.has(key)) return true;
+    return this.inFlight.some((op) => opOrigin(op) === 'user' && opKey(op) === key);
   }
 
   /** Sync's requests to chord-data. Throws if it can't answer. */
@@ -232,7 +271,7 @@ export class Persistence {
 
   /** Queue a whole state (a brand-new profile's first save). */
   recordAll(state: State): void {
-    for (const op of opsForState(state)) this.pending.set(opKey(op), op);
+    for (const op of opsForState(state)) this.pending.set(queueKey(op), op);
     this.schedule();
   }
 
@@ -244,16 +283,17 @@ export class Persistence {
     this.schedule();
   }
 
-  /** A site's Effects (never a private window's: the caller checks), or null when the site has none any more; `fromSync` as `record`'s. */
+  /** A site's Effects (never a private window's: the caller checks), or null when the site has none any more; `fromSync`: another computer's, applied. */
   effect(host: string, value: SavedEffects | null, fromSync = false): void {
     if (this.closed) return;
-    this.put({ k: 'effect', id: host, value }, fromSync);
+    this.put({ k: 'effect', id: host, value, ...(fromSync ? { origin: 'sync' as const } : {}) });
     this.schedule();
   }
 
   /** A visit, a late title, a command bar pick, or a tab going to (or leaving) the archive. */
   history(event: HistoryEvent): void {
     if (this.closed) return;
+    this.eventOrder.set(event, ++this.eventCount);
     this.events.push(event);
     this.schedule();
   }
@@ -344,28 +384,29 @@ export class Persistence {
   }
 
   /**
-   * How many things chord-data refused for now are still waiting to be
-   * written (entities, and history's happenings): what's in memory isn't all
-   * in chord.db yet. Each counts until a write of it lands, or is dropped.
+   * How many of another computer's changes, applied here, chord-data refused
+   * for now and are still waiting to be written: what sync applied that isn't
+   * in chord.db yet (S15 §13). Your own refused changes aren't counted: they're
+   * yours, kept and sent again all the same, and the window says when writes
+   * keep failing. Each counts until a write of it lands, is dropped, or is
+   * taken over by a change of yours.
    */
   get unsaved(): number {
-    return this.retained.size + this.retainedEvents.size;
+    let n = 0;
+    for (const origin of this.retained.values()) if (origin === 'sync') n++;
+    return n;
   }
 
   /** A batch is in, or was dropped for what's in it: none of it waits any more. */
-  private settled(ops: readonly WriteOp[], events: readonly HistoryEvent[]): void {
-    for (const op of ops) this.retained.delete(opKey(op));
-    for (const event of events) this.retainedEvents.delete(event);
+  private settled(ops: readonly WriteOp[]): void {
+    for (const op of ops) this.retained.delete(queueKey(op));
   }
 
   /** A batch refused for now: back in the queue (unless a newer write of an entity is), and waiting until written. */
   private retain(ops: readonly WriteOp[], events: readonly HistoryEvent[]): void {
-    for (const op of ops) {
-      this.retained.add(opKey(op));
-      if (!this.pending.has(opKey(op))) this.pending.set(opKey(op), op);
-    }
-    for (const event of events) this.retainedEvents.add(event);
-    this.events = [...events, ...this.events];
+    for (const op of ops) if (!this.pending.has(queueKey(op))) this.retained.set(queueKey(op), opOrigin(op));
+    this.requeue(ops);
+    this.events = this.inOrder([...events, ...this.events]);
   }
 
   /** Writes keep failing (`true`, after WRITE_TROUBLE tries), or they're in again (`false`): the app says so. */
@@ -381,6 +422,10 @@ export class Persistence {
    */
   private flushEvents(): Promise<void> {
     if (this.events.length === 0) return Promise.resolve();
+    // History in a batch being written goes first: these wait for it, never ahead of it (were it refused, they'd land
+    // before it). Nor do they go while writes are refused: they'd only be refused too, and put back.
+    if (this.inFlightEvents.length > 0) return this.inFlightDone.then(() => this.flushEvents());
+    if (this.retry !== undefined) return Promise.resolve();
     const events = this.events;
     this.events = [];
     this.sideEvents.push(...events);
@@ -388,13 +433,12 @@ export class Persistence {
       (response) => {
         this.sideEvents = this.sideEvents.filter((e) => !events.includes(e));
         if (!response.ok && refusalPasses(response)) {
-          // Refused for now (a full disk): back at the front of the queue, sent again with the next try.
+          // Refused for now (a full disk): back in the queue, in their place, sent again with the next try.
           this.retain([], events);
           this.refused(response.error);
           return;
         }
         if (!response.ok) console.error('chord-data refused a write:', response.error);
-        this.settled([], events);
       },
       // The process died mid-write; the exit handler has requeued them.
       () => undefined,
@@ -415,13 +459,15 @@ export class Persistence {
       this.retry = undefined;
       while (this.pending.size > 0 || this.events.length > 0) {
         const all = [...this.pending.values()];
-        const ops = nextBatch(all, all.some((op) => op.sync) ? SYNC_WRITE_CHUNK : WRITE_CHUNK);
-        for (const op of ops) this.pending.delete(opKey(op));
+        const ops = nextBatch(all, all.some((op) => opOrigin(op) !== 'user') ? SYNC_WRITE_CHUNK : WRITE_CHUNK);
+        for (const op of ops) this.pending.delete(queueKey(op));
         this.inFlight = ops;
         this.inFlightEvents = this.events;
         this.events = [];
         try {
-          const response = await this.request({ type: 'write', ops: this.inFlight, events: this.inFlightEvents });
+          const sent = this.request({ type: 'write', ops: this.inFlight, events: this.inFlightEvents });
+          this.inFlightDone = sent.catch(() => undefined);
+          const response = await sent;
           if (!response.ok && refusalPasses(response)) {
             // Refused for now (a full disk): put back, unless a newer write for the same entity is queued, and sent again later.
             this.retain(this.inFlight, this.inFlightEvents);
@@ -433,7 +479,7 @@ export class Persistence {
           // A batch the database refuses for what's in it would fail for ever if retried; report it and move on.
           if (!response.ok) console.error('chord-data refused a write:', response.error);
           else this.saved();
-          this.settled(this.inFlight, this.inFlightEvents);
+          this.settled(this.inFlight);
           this.inFlight = [];
           this.inFlightEvents = [];
         } catch {

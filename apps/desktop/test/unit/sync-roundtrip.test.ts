@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apply, MAX_FAVORITES, restoreState, seedState, type Command, type DataRecord, type SegmentCursor, type State } from '@chord/core';
 import { ChordDatabase } from '@chord/data/db';
-import { opKey, opsForState, opsFromPatches, type DataPush, type WriteOp } from '@chord/data';
+import { opKey, opOrigin, opsForState, opsFromPatches, originOf, type DataPush, type WriteOp } from '@chord/data';
 import { SyncController, type WorkerLike } from '../../src/data/sync';
 import type { FromWorker, ToWorker } from '../../src/data/sync-worker';
 
@@ -112,15 +112,19 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
     // The store: the reducer, then what changed written by chord-data (marked as sync's when it came from sync, as
     // persistence does), or refused, as chord-data refuses a batch on a full disk.
     dispatch: (command: Command) => {
+      const before = state;
       const result = apply(state, command, ctx);
       state = result.state;
-      const ops = opsFromPatches(result.patches, result.state).map((op): WriteOp => (command.t === 'sync.apply' ? { ...op, sync: true } : op));
+      const origin = originOf(command);
+      const ops = opsFromPatches(result.patches, result.state, before).map((op): WriteOp => (origin === 'user' ? op : { ...op, origin }));
       if (ops.length === 0) return;
       if (held) {
-        // Persistence's queue: a change of yours to an entity replaces sync's waiting one (and keeps its own mark).
+        // Persistence's queue: a change of yours to an entity takes the place of sync's waiting one; theirs after yours waits behind it.
         for (const op of ops) {
-          const waiting = held.get(opKey(op));
-          held.set(opKey(op), op.sync && !(waiting && !waiting.sync) ? op : { ...op, sync: op.sync && waiting?.sync ? true : undefined });
+          if (opOrigin(op) === 'user') {
+            held.delete(`${opKey(op)}#auto`);
+            held.set(opKey(op), op);
+          } else held.set(`${opKey(op)}#auto`, op);
         }
         return;
       }
@@ -142,7 +146,7 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
     folder: () => dir,
   });
   release = () => {
-    const ops = [...(held?.values() ?? [])].map((op): WriteOp => (op.sync ? op : (({ sync: _sync, ...rest }) => rest as WriteOp)(op)));
+    const ops = [...(held?.values() ?? [])];
     held = null;
     if (ops.length === 0) return;
     db.write(ops);
@@ -317,7 +321,11 @@ describe('a deletion made before its apply is written', { timeout: 20_000 }, () 
     await vi.waitFor(() => expect(state.favorites['fav-1']).toBeDefined());
     const result = apply(state, { t: 'favorite.remove', favoriteId: 'fav-1' }, ctx);
     state = result.state;
-    for (const op of opsFromPatches(result.patches, result.state)) held!.set(opKey(op), op);
+    for (const op of opsFromPatches(result.patches, result.state)) {
+      // As persistence's queue has it: yours takes the place of sync's waiting write.
+      held!.delete(`${opKey(op)}#auto`);
+      held!.set(opKey(op), op);
+    }
     expect([...held!.values()]).toEqual([{ k: 'favorite', id: 'fav-1', value: null }]);
     release();
     expect(db.sync.outbox().records.some((r) => r.type === 'favorite' && r.id === 'fav-1' && r.set['deleted'] === true)).toBe(true);

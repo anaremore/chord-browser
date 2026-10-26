@@ -101,6 +101,9 @@ export function errorPasses(error: unknown): boolean {
   return typeof code === 'number' && PASSING_CODES.has(code & 0xff);
 }
 
+/** The kinds of write whose rows say who wrote them (`row_origin`): the synced ones. */
+const ORIGIN_KINDS = new Set(['chord', 'node', 'favorite', 'linkRoute', 'effect', 'setting']);
+
 export class ChordDatabase {
   private readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
@@ -300,6 +303,12 @@ export class ChordDatabase {
                updated_at = CASE WHEN value = excluded.value THEN updated_at ELSE excluded.updated_at END`,
           ).run(op.id, JSON.stringify(op.value), now);
       }
+      // Who wrote each synced row (S15 §13), whether sync is on or off: the drift check stamps only what you wrote.
+      for (const op of ops) {
+        if (!ORIGIN_KINDS.has(op.k)) continue;
+        if (op.value === null) this.sql('DELETE FROM row_origin WHERE k = ? AND id = ?').run(op.k, op.id);
+        else this.sql('INSERT INTO row_origin (k, id, origin) VALUES (?, ?, ?) ON CONFLICT(k, id) DO UPDATE SET origin = excluded.origin').run(op.k, op.id, op.origin ?? 'user');
+      }
       // Histories last: a tab's row may be made in this same batch. A tab that's gone takes its history with it.
       for (const op of ops) {
         // The column is a BLOB (migration 1): the JSON goes in as UTF-8 bytes.
@@ -311,8 +320,8 @@ export class ChordDatabase {
         this.sync.stamp(ops, now);
         this.sync.timed('stamp', performance.now() - at);
       } else if (ops.length > 0 && this.sync.meta.on) this.sync.noteUnstamped(ops);
-      // Off, with the merged copy kept (S15 §13): what sync applied, now in, noted, so the copy can go once all of it is.
-      else if (this.sync.meta.kept) this.sync.stamp(ops.filter((op) => op.sync === true), now);
+      // Off, with the merged copy kept (S15 §13): what sync applied, now in, and what you changed since, noted.
+      else if (ops.length > 0 && this.sync.meta.kept) this.sync.keptWrite(ops, now);
     });
   }
 
@@ -824,6 +833,7 @@ export class ChordDatabase {
   private writeChord(id: string, chord: Chord | null, now: number): void {
     if (!chord) {
       // Hard delete until chords can be deleted (and restored) in M1.3.
+      this.sql("DELETE FROM row_origin WHERE k = 'node' AND id IN (SELECT id FROM node WHERE chord_id = ?)").run(id);
       this.sql('DELETE FROM node WHERE chord_id = ?').run(id);
       this.sql('DELETE FROM chord WHERE id = ?').run(id);
       return;

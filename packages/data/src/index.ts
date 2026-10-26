@@ -28,10 +28,22 @@ import type { DuetOp, DuetResult } from './duet';
 import type { SyncTimings } from './sync';
 
 /**
- * The latest value of one saved entity, or null to delete it. `sync`: the
- * value came from another computer (`sync.apply`): it's saved, and never
- * stamped as a change made here (S15 §4), so it never goes back into this
- * computer's log.
+ * Who a write is from (S15 §13), the one thing sync's stamping goes by:
+ * `user`, something you did here, stamped; `sync`, the merged copy applied
+ * (`sync.apply`), never stamped, so it never goes back into this computer's
+ * log (S15 §4); `tidy`, this computer adjusting on its own (its chords making
+ * way for the synced setup), never stamped either, and never a deletion of
+ * anything the merged copy has: that comes back.
+ */
+export type Origin = 'user' | 'sync' | 'tidy';
+
+/** A command's writes, by who they're from: another computer's changes applied are sync's, making way for the synced setup is tidying. */
+export const originOf = (command: { t: string } | undefined): Origin => (command?.t === 'sync.apply' ? 'sync' : command?.t === 'sync.replace' ? 'tidy' : 'user');
+
+/**
+ * The latest value of one saved entity, or null to delete it, and who it's
+ * from (`origin`, `user` when not said). `removed`: for the themes' list,
+ * the themes you took out of it (it's written whole): only those are deleted.
  */
 export type WriteOp = (
   | { k: 'chord'; id: string; value: Chord | null }
@@ -51,7 +63,9 @@ export type WriteOp = (
   | { k: 'effect'; id: string; value: SavedEffects | null }
   /** An open tab's back/forward history, by node id: what brings it back where it was after a restart or a crash. */
   | { k: 'nav'; id: string; value: NavState | null }
-) & { sync?: true };
+) & { origin?: Origin; removed?: string[] };
+
+export const opOrigin = (op: WriteOp): Origin => op.origin ?? 'user';
 
 /**
  * A tab's back/forward history as Electron gives it (`navigationHistory`):
@@ -284,7 +298,7 @@ function isPrivate(op: WriteOp, state: State): boolean {
  * change. Live engine state, recently closed tabs, the version and anything
  * from a private window are never persisted.
  */
-export function opsFromPatches(patches: readonly PathPatch[], state: State): WriteOp[] {
+export function opsFromPatches(patches: readonly PathPatch[], state: State, before?: State): WriteOp[] {
   const ops = new Map<string, WriteOp>();
   const add = (op: WriteOp) => {
     if (!isPrivate(op, state)) ops.set(opKey(op), op);
@@ -323,7 +337,11 @@ export function opsFromPatches(patches: readonly PathPatch[], state: State): Wri
     }
     if (collection === 'settings') {
       const keys = id === undefined ? (Object.keys(state.settings) as (keyof Settings)[]) : [String(id) as keyof Settings];
-      for (const key of keys) add({ k: 'setting', id: key, value: state.settings[key] ?? null });
+      for (const key of keys) {
+        // The themes' list is written whole: what was taken out of it is said, so only that is deleted (S15 §13).
+        const removed = key === 'themes' && before ? before.settings.themes.filter((t) => !state.settings.themes.some((n) => n.id === t.id)).map((t) => t.id) : [];
+        add({ k: 'setting', id: key, value: state.settings[key] ?? null, ...(removed.length > 0 ? { removed } : {}) });
+      }
       continue;
     }
     if (collection !== 'chords' && collection !== 'nodes' && collection !== 'windows') continue;

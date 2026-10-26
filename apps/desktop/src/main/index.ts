@@ -48,6 +48,7 @@ import { memoryLow } from './memory';
 import { applySpellcheck, setDictionarySource } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
+import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveDuetImages, serveReaderImages } from './protocol';
@@ -789,7 +790,8 @@ if (!app.requestSingleInstanceLock()) {
       // CHORD_ON_BATTERY=1 (development and tests only) acts as if the computer were on battery.
       onBattery: () => (!app.isPackaged && process.env['CHORD_ON_BATTERY'] === '1') || powerMonitor.isOnBatteryPower(),
       // Another computer's changes (sync.apply) are saved marked as sync's: never stamped, never back into this computer's log.
-      onChange: (change) => store.record(change.patches, change.state, change.command?.t === 'sync.apply' ? 'sync' : 'here'),
+      // Who each change is from (S15 §13): yours are stamped; another computer's applied, and tidying, never are.
+      onChange: (change) => store.record(change.patches, change.state, originOf(change.command), change.before),
       windowFocused: () => syncService?.focused(),
       // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).
       windowBlurred: () => setTimeout(() => (BaseWindow.getFocusedWindow() ? undefined : syncService?.blurred()), 250),

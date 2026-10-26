@@ -87,7 +87,7 @@ function on(plan: Record<string, string[]>, makeWorker: () => WorkerLike = worke
 /** Main applying what it was pushed, and writing it back as what it applied. */
 function mainApplies(state: State, apply_: Extract<DataPush, { push: 'sync.apply' }>['apply']): State {
   const result = apply(state, { t: 'sync.apply', ...apply_ }, ctx);
-  db.write(opsFromPatches(result.patches, result.state).map((op): WriteOp => ({ ...op, sync: true })));
+  db.write(opsFromPatches(result.patches, result.state, state).map((op): WriteOp => ({ ...op, origin: 'sync' })));
   return result.state;
 }
 
