@@ -115,6 +115,10 @@ async function clickInReader(app: ElectronApplication, selector: string, modifie
 
 /** A custom property of the reader view's document (its theme and type are set there). */
 const readerVar = (reader: Page, name: string) => reader.evaluate((n) => document.documentElement.style.getPropertyValue(n), name);
+/** Esc closes reader view as the key goes down, which can close its page before Playwright hears the key went down. */
+const escapeCloses = (reader: Page) => reader.keyboard.down('Escape').catch((error: unknown) => {
+  if (!reader.isClosed()) throw error;
+});
 
 test('offers reader view on an article only; opening and closing it keeps the page where it was', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/article` });
@@ -135,7 +139,7 @@ test('offers reader view on an article only; opening and closing it keeps the pa
     await reader.keyboard.press('PageDown');
     await expect.poll(() => reader.evaluate(() => window.scrollY)).toBeGreaterThan(0);
     // Esc closes it: the page is back, scrolled where it was. (It goes as the key goes down.)
-    await reader.keyboard.down('Escape');
+    await escapeCloses(reader);
     await expect.poll(() => reader.isClosed()).toBe(true);
     await expect(readerButton(shell)).toHaveAttribute('aria-pressed', 'false');
     expect(await page.evaluate(() => window.scrollY)).toBe(scrolled);
@@ -266,7 +270,7 @@ test('remembers its text controls, for every page and after a restart', async ()
     // The zoom keys change the text size in reader view.
     await runAction(shell, 'view.zoomOut');
     await expect.poll(() => readerVar(reader, '--reader-body')).toContain('21px');
-    await reader.keyboard.down('Escape');
+    await escapeCloses(reader);
     await expect.poll(() => reader.isClosed()).toBe(true);
   } finally {
     await app.close();
