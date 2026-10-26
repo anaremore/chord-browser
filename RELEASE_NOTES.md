@@ -2,6 +2,17 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## Next · preview (unreleased)
+
+What's built since 0.4.0; it gets its version when it's released.
+
+- **Export everything in Chord to one file**, in Settings → Your data: your chords, pinned and Today tabs, folders, Favorites, themes, settings, link routes, Effects, and if you like, your history and Duet chats. Keep it as a backup, read it, or bring it to another computer.
+  - It's plain text anyone can read (JSON Lines), and [docs/data-format.md](docs/data-format.md) says what every line means, so it never depends on Chord.
+  - Or turn on **Encrypt with a passphrase**: at least 12 characters, or *Suggest one* for five random words. Chord remembers the switch, never the passphrase, and can't open the file without it.
+  - Passwords, cookies, extensions, downloads, the archive, private windows and what you typed into pages never go in.
+  - Bringing a file back into Chord comes next, then sync.
+- **Settings → Import is now part of Settings → Your data**, as *From another browser*. It works as before.
+
 ## 0.4.0 · preview · 2026-10-26
 
 - **Duet fills in forms you ask it to**, on the tab you're on: "fill this in with my work address", say. It reads what the form asks for, never what's already typed in it, and shows each field with the value it suggests in a card in its panel, where you can change a value or leave a field out. Nothing goes into the page until you press **Fill**, and Chord never sends a form: you press the page's own button. Undo puts every field back.
