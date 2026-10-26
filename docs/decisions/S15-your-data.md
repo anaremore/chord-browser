@@ -593,6 +593,9 @@ Step 3 is built as §4, §6, §7 and §8 say, apart from what's here. ARCHITECTU
 - **A pinned tab here off its home keeps its own title and icon** when another computer changes them: they're of the home page, which this one isn't showing.
 - **A computer's name** starts as the computer's own (`os.hostname()`), and can be changed in the list.
 - **Settings' *Change passphrase…*** asks for the new one twice, as Export does, and says the other computers pause until they have it.
+- ***Start over*** (a lost passphrase, §6) is *Lost it? Start over…* under the passphrase field, whenever sync is asking for one (after a launch with no key kept, or after it changed elsewhere). It's a passphrase change made without the old key: the next generation in the same folder, under a new passphrase, with this computer's snapshot; its old folder goes, and the others pause as for any change. Nothing under the old generation is read: it can't be.
+- ***Choose folder…*** (a folder that moved, §8) takes a folder only if it's this sync's: its generation's `sync-<n>.json` opens with the key this computer has, or a newer generation is there (then sync pauses for the new passphrase as usual). Anything else gets *That isn't this sync's folder.*, and nothing changes. The cursors and this computer's segment are relative to the folder, so reading carries on where it was.
+- ***Remember the key on this computer*** (question 6): on Linux without a keyring the card has a switch, off, saying the passphrase is asked after each launch, and that remembered anyway any program you run could read it. On, the key is kept with `safeStorage`'s `basic_text` and the note says *Kept without a keyring*; it stays so across launches until turned off, or sync is. With a keyring there's no switch: the key is always kept.
 
 ### Found
 
@@ -605,16 +608,13 @@ Step 3 is built as §4, §6, §7 and §8 say, apart from what's here. ARCHITECTU
 
   What fixed it: the hook skips reading what's merged for sync's own writes; searches and the archive flush only history's happenings (visits, picks, the archive), never the sidebar's writes, and a big flush goes 100 entities a transaction, chords first; what changed is read back 100 at a time, parents first, merged 100 records a transaction; while sync is busy, checkpoints run on the worker thread's own connection (passive ones), never on chord-data's (§12's *next* step, done for sync); main applies parts of 50, two frames apart. After: every keystroke's results within 16 ms (10.6 ms worst while joining, 10.5 during frames of 300 changes, 7.9 typing alone), chord-data's tasks at most 6 ms, main's longest task 4.4 ms, its busiest 30 ms 8.3 ms while joining and 17 ms during back-to-back frames of 300 changes, a frame a few times a second, far more often than a computer writes (every 3 s at most). ARCHITECTURE.md has all the numbers.
 - **The shell takes a part of new chords in one task of up to 18 ms** while joining, mounting their sidebar, as an import's restore does (§12). The store's and the shell's cost per change grows with the nodes (ARCHITECTURE.md §9, *Known limit: very big imports*).
-- **The journeys pass on X11 and Wayland** (`sync.spec.ts`): two Chords, one folder, set up, join, edit on both, a wrong passphrase, one removed; a passphrase changed, the other paused and moved, and in the container, which has no keyring, a relaunch asking for the passphrase again (§3).
+- **The journeys pass on X11 and Wayland** (`sync.spec.ts`): two Chords, one folder, set up, join, edit on both, a wrong passphrase, one removed; a passphrase changed, the other paused and moved, and in the container, which has no keyring, a relaunch asking for the passphrase again (§3); then *Start over* from there (the other pauses), *Remember the key on this computer* (the next launch doesn't ask), and the folder moved on the disk (*Chord can't find the sync folder*, then *Choose folder…*).
 
 ### Not done here
 
 - **By hand with real sync apps:** iCloud Drive, Dropbox, OneDrive and Syncthing, between Windows, macOS and Linux, from the checklist in [docs/testing/sync.md](../testing/sync.md). Not run: how each uploads, holds online-only files (and iCloud's `.icloud` placeholders on older macOS, which Chord doesn't ask for) and delivers half-written ones is still ⚠ untried, as is watching cloud folders.
 - **Windows and macOS:** the journeys ran only in the Linux container; CI runs them on every OS. `safeStorage` with a real keychain (DPAPI, the Keychain, a Linux secret service) wasn't tried: the container has none.
 - **⚠ The Flatpak:** a folder chosen through the document portal; not tried.
-- ***Choose folder…*** on the missing-folder card (§8), for a folder that moved: the card has no button; turning sync off and on again picks a folder.
-- ***Start over*** for a lost passphrase (§6): not built; turning sync off on each computer and setting it up again in a new folder does it.
-- ***Remember on this computer anyway*** (question 6's option) for Linux without a keyring: not built; such a computer asks after each launch.
 - **Each computer's own *last synced*** isn't shown for this one, and a removed computer leaves the list.
 - **Effects' Duet patches get new ids each time another computer's change to their site is applied** (records carry none), as for an import.
 

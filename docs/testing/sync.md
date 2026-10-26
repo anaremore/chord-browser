@@ -1,6 +1,6 @@
 # Sync: checking by hand
 
-E2E covers Chord's part in the Linux container (`test/e2e/sync.spec.ts`): two Chords with profiles of their own share one temp folder, set sync up, join, edit on both and agree, try a wrong passphrase, remove one, change the passphrase, and relaunch with no keyring. Unit tests cover the folder protocol against an in-memory folder: a frame half there, a shorter file, conflicted copies, compaction in the middle of a read, a copied id, a newer format and a changed passphrase (ARCHITECTURE.md §9, *Your data: sync*).
+E2E covers Chord's part in the Linux container (`test/e2e/sync.spec.ts`): two Chords with profiles of their own share one temp folder, set sync up, join, edit on both and agree, try a wrong passphrase, remove one, change the passphrase, relaunch with no keyring, start over, remember the key anyway, and find a folder that moved. Unit tests cover the folder protocol against an in-memory folder: a frame half there, a shorter file, conflicted copies, compaction in the middle of a read, a copied id, a newer format and a changed passphrase (ARCHITECTURE.md §9, *Your data: sync*).
 
 What they can't reach is real sync apps and real keychains: how each app uploads a file that grows, delivers one half-written, keeps files online only, makes conflicted copies, and whether Chord's folder watch fires. Check these by hand before the release that ships sync, and when a sync app changes how it works.
 
@@ -32,6 +32,8 @@ Run these for each app, between two systems at least. A change counts as arrived
 | Remove the second computer from the first | After 6 s (with Undo before), the second says *This computer was removed from sync* and keeps what it has |
 | Turn sync off on one | Its Undo; then it leaves the other's list. Its data stays |
 | *Change passphrase…* on one | The other says *The passphrase was changed on <name>*; the old passphrase doesn't open it, the new one does; then changes cross again. In the folder: `sync-2.json` and `2/`, and each computer's `1/<id>` folder goes once it has moved |
+| *Lost it? Start over…* on one, while it asks for the passphrase | It goes on under the new passphrase; the other says *The passphrase was changed on <name>* and takes the new one. In the folder: the next `sync-<n>.json` |
+| Quit the sync app, move the synced folder elsewhere on the disk, start the app again | *Chord can’t find the sync folder.* **Choose folder…**, the folder where it is now: sync carries on, nothing doubles. Another folder: *That isn’t this sync’s folder.* |
 | Set sync up on two computers at once, in a new folder, before the app syncs | The second to find the other's file stops: *Sync was set up in this folder from two computers at once.* |
 
 ## Each app's own ways
@@ -55,7 +57,7 @@ Run these for each app, between two systems at least. A change counts as arrived
 | Windows | Quit and relaunch Chord | Sync carries on without asking (DPAPI keeps the key) |
 | macOS | Quit and relaunch; then a build signed differently | Carries on without asking (the Keychain); the Keychain may ask once for a differently signed build |
 | Linux with GNOME's keyring or KWallet | Quit and relaunch | Carries on without asking |
-| Linux without a keyring (`--password-store=basic`, or a desktop with none) | Quit and relaunch | *Sync is paused. Enter your passphrase.*, a toast once; the card says *This computer has no safe place for the key, so Chord asks for the passphrase after each launch.* |
+| Linux without a keyring (`--password-store=basic`, or a desktop with none) | Quit and relaunch | *Sync is paused. Enter your passphrase.*, a toast once; the card says *This computer has no safe place for the key, so Chord asks for the passphrase after each launch.* Then *Remember the key on this computer* on, quit and relaunch: carries on without asking, and the note says *Kept without a keyring* |
 
 ## Afterwards
 
