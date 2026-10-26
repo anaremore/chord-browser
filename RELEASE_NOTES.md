@@ -6,6 +6,11 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.3.0; it gets its version when it's released.
 
+- **Proxies:** one for every chord, or one for a chord of its own. In Settings → Privacy → Proxy, choose the system's (as before), none, a proxy server (HTTP, HTTPS or SOCKS5) or an automatic configuration file. Private windows and Chord's own requests, like update checks, use it too.
+  - A chord can have its own, from Settings, its right-click menu or the command bar. It comes with the chord's own sign-ins, so a chord that shares yours is signed out of sites, and Chord says so before it does it. Undo puts both back.
+  - Nothing goes out the old way: a page waits until its proxy is set, connections opened before a change are closed, and video calls can't go around it. A proxy that's down shows why in the tab, and the page doesn't load without it.
+  - If an HTTP proxy asks for a password, Chord asks you over the page and forgets it when you quit. Chord can't sign in to a SOCKS5 proxy that needs one.
+
 - **What Duet can read is one button at the top of its panel**, saying what the chat does now (*Reads this tab*, for example). It opens the four choices, each with what it lets Duet read. The row of four buttons it replaces didn't fit the panel.
 
 - **Fixed: Effects not coming back after reloading a busy page.** On a site that keeps the page busy as it loads, like Reddit, an Effect could stop showing after a reload, though the card still said it was on. Chord stopped waiting for the page to take the styles, and took them out when they arrived late. Now they stay.
