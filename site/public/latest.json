@@ -1,48 +1,48 @@
 {
-  "version": "0.2.1",
-  "tag": "v0.2.1",
-  "url": "https://github.com/anaremore/chord-browser/releases/tag/v0.2.1",
-  "published": "2026-10-25T21:17:45Z",
+  "version": "0.3.0",
+  "tag": "v0.3.0",
+  "url": "https://github.com/anaremore/chord-browser/releases/tag/v0.3.0",
+  "published": "2026-10-26T02:32:53Z",
   "files": {
     "win-x64": {
-      "name": "Chord-0.2.1-win-x64-setup.exe",
-      "size": 136922344
+      "name": "Chord-0.3.0-win-x64-setup.exe",
+      "size": 137130040
     },
     "win-arm64": {
-      "name": "Chord-0.2.1-win-arm64-setup.exe",
-      "size": 131039464
+      "name": "Chord-0.3.0-win-arm64-setup.exe",
+      "size": 131247272
     },
     "mac-arm64": {
-      "name": "Chord-0.2.1-mac-arm64.dmg",
-      "size": 125676684
+      "name": "Chord-0.3.0-mac-arm64.dmg",
+      "size": 125705097
     },
     "mac-x64": {
-      "name": "Chord-0.2.1-mac-x64.dmg",
-      "size": 132994699
+      "name": "Chord-0.3.0-mac-x64.dmg",
+      "size": 133047779
     },
     "deb-amd64": {
-      "name": "Chord-0.2.1-linux-amd64.deb",
-      "size": 106058704
+      "name": "Chord-0.3.0-linux-amd64.deb",
+      "size": 106108308
     },
     "deb-arm64": {
-      "name": "Chord-0.2.1-linux-arm64.deb",
-      "size": 100994256
+      "name": "Chord-0.3.0-linux-arm64.deb",
+      "size": 101042064
     },
     "rpm-x86_64": {
-      "name": "Chord-0.2.1-linux-x86_64.rpm",
-      "size": 94639781
+      "name": "Chord-0.3.0-linux-x86_64.rpm",
+      "size": 94671029
     },
     "rpm-aarch64": {
-      "name": "Chord-0.2.1-linux-aarch64.rpm",
-      "size": 89688041
+      "name": "Chord-0.3.0-linux-aarch64.rpm",
+      "size": 89740237
     },
     "appimage-x86_64": {
-      "name": "Chord-0.2.1-linux-x86_64.AppImage",
-      "size": 123091090
+      "name": "Chord-0.3.0-linux-x86_64.AppImage",
+      "size": 123140471
     },
     "appimage-arm64": {
-      "name": "Chord-0.2.1-linux-arm64.AppImage",
-      "size": 123333146
+      "name": "Chord-0.3.0-linux-arm64.AppImage",
+      "size": 123382523
     },
     "checksums": {
       "name": "SHA256SUMS.txt",
