@@ -164,6 +164,8 @@ export type SyncRequest =
   | { type: 'sync.pause'; paused: boolean }
   /** Chord came to the front: look at the folder now. */
   | { type: 'sync.check' }
+  /** A Chord window is in front, or none is: on Windows the folder is watched only while one is (a watch holds it, and it couldn't be renamed). */
+  | { type: 'sync.front'; front: boolean }
   /** Quitting: what's waiting is written now. */
   | { type: 'sync.flush' }
   /** Things main put off applying while a change of its own to them waited (`chord:<id>`, `node:<id>`…): again, now it's written. */

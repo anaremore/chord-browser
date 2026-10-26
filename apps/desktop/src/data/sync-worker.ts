@@ -12,6 +12,11 @@
  * read, so a big log is merged a slice at a time with searches in between. A
  * snapshot comes the same way, a page at a time as this thread asks for it
  * (`pull`), and is written as it comes: neither thread holds it whole.
+ *
+ * Folder work goes one operation at a time, each begun and ended out loud
+ * (`busy`, `idle`), so chord-data can give the one under way a deadline: a
+ * file call that never returns (a stalled network drive) and chord-data lets
+ * this worker go (`abandon`), and nothing more is done in the folder here.
  */
 import { watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
@@ -29,12 +34,15 @@ import {
   mayPrune,
   nextGeneration,
   readComputers,
+  removeStaleTemps,
+  settleAppend,
   SegmentsFull,
   setUp,
   SYNC_FOLDER,
   syncFileName,
   unlockNewest,
   writeSnapshot,
+  type Appending,
   type DataRecord,
   type FolderInspection,
   type FolderLook,
@@ -43,7 +51,7 @@ import {
   type SegmentCursor,
 } from '@chord/core';
 import { nodeCrypto } from '@chord/data/crypto';
-import { NodeFolder } from './sync-folder';
+import { abandonFolder, NodeFolder } from './sync-folder';
 
 /** A snapshot to write: chord-data sends its records a page at a time when asked (`pull` → `chunk`), and this computer's `device` records for its first frame. */
 interface Snapshot {
@@ -56,7 +64,21 @@ export type ToWorker =
   | { t: 'inspect'; folder: string }
   | ({ t: 'setup'; folder: string; generation: number; passphrase: string; device: string; app: string } & { snapshot: Snapshot })
   | { t: 'unlock'; folder: string; passphrase: string }
-  | { t: 'start'; folder: string; generation: number; device: string; key: Uint8Array; own: OwnSegment | null; cursors: { device: string; segment: number; cursor: SegmentCursor }[]; app: string; junk: [string, string][] }
+  /** `appending`: what this computer was writing to its log when it last stopped without an answer (chord-data keeps it). */
+  | {
+      t: 'start';
+      folder: string;
+      generation: number;
+      device: string;
+      key: Uint8Array;
+      own: OwnSegment | null;
+      cursors: { device: string; segment: number; cursor: SegmentCursor }[];
+      app: string;
+      junk: [string, string][];
+      appending: Appending | null;
+      /** Whether a Chord window is in front (`front`). */
+      front: boolean;
+    }
   | { t: 'read' }
   /** A step merged (`ok`), so the worker moves its cursor on; or not, and the pass stops there, to read it again later. */
   /** A batch of records (`id`) merged, or not: an answer that comes too late is never taken for the next batch's. */
@@ -80,6 +102,10 @@ export type ToWorker =
   | { t: 'remove'; path: string }
   /** A passive checkpoint of chord.db, on this thread's own connection: chord-data's runs none while sync is busy. */
   | { t: 'checkpoint'; database: string }
+  /** chord-data let this worker go (a file call held it past its deadline): once that call returns, nothing more is done. */
+  | { t: 'abandon' }
+  /** A Chord window came to the front, or none is: on Windows the folder is watched only while one is (WATCH_IN_FRONT). */
+  | { t: 'front'; front: boolean }
   | { t: 'stop' };
 
 /** The worker → chord-data. */
@@ -123,7 +149,12 @@ export type FromWorker =
    */
   | { t: 'failed'; problem: 'wrong' | 'conflict' | 'newer' | 'damaged' | 'missing' | 'copied' | 'gone' | 'full' | 'io'; for: ToWorker['t'] }
   /** The folder changed (a watch fired): chord-data may ask for a read. */
-  | { t: 'changed' };
+  | { t: 'changed' }
+  /** A folder operation begun (what was asked, or a pass), and ended: chord-data's deadline runs for the one under way only. */
+  | { t: 'busy'; op: ToWorker['t'] | 'pass' | 'tidy' }
+  | { t: 'idle' }
+  /** About to write to this computer's log: chord-data keeps it until the write is answered. */
+  | { t: 'appending'; appending: Appending };
 
 /** Looks this often, whatever the watch says: watching cloud and network folders isn't reliable (S15 §6). */
 const POLL_MS = 5 * 60_000;
@@ -149,11 +180,22 @@ interface Running {
   app: string;
   /** Junk remembered, and where looking for computers not known yet got to: never forgotten while it's needed (core's MAX_JUNK bounds it). */
   memory: FolderMemory;
+  /** What it's writing to its log, until answered: a write of its own that landed though it failed is its own, not another writer's. */
+  appending: Appending | null;
 }
 
 let running: Running | null = null;
 let watcher: FSWatcher | null = null;
 let poll: ReturnType<typeof setInterval> | undefined;
+/**
+ * On Windows a watch holds a handle inside the folder (ReadDirectoryChangesW),
+ * and Windows won't rename or move a folder something holds: the folder that
+ * holds `Chord sync` couldn't be renamed while Chord ran. So there it's watched
+ * only while a Chord window is in front; behind, the five-minute look and the
+ * look when Chord comes to the front still find what changed.
+ */
+const WATCH_IN_FRONT = process.platform === 'win32';
+let front = true;
 let settle: ReturnType<typeof setTimeout> | undefined;
 let reading = false;
 let again = false;
@@ -161,10 +203,18 @@ let next: ReturnType<typeof setTimeout> | undefined;
 /** The batch of records waiting for its answer, and the last batch's number. */
 let acked: { id: number; resolve(ok: boolean): void } | null = null;
 let batches = 0;
-/** One folder operation at a time: a write never interleaves with a snapshot, a read with a new generation. */
+/** One folder operation at a time: a write never interleaves with a snapshot, a read with a new generation. Each says when it begins and ends. */
 let chain: Promise<void> = Promise.resolve();
-const serial = (work: () => Promise<void>) => {
-  chain = chain.then(work, work);
+const serial = (op: Extract<FromWorker, { t: 'busy' }>['op'], work: () => Promise<void>) => {
+  const run = async () => {
+    send({ t: 'busy', op });
+    try {
+      await work();
+    } finally {
+      send({ t: 'idle' });
+    }
+  };
+  chain = chain.then(run, run);
   return chain;
 };
 
@@ -219,7 +269,13 @@ async function pass(): Promise<void> {
   let failed = false;
   try {
     look = await lookAtFolder(r.fs, r.generation, r.key, nodeCrypto);
+    // Not there (deleted, moved, the sync app not running): a watch of where it was watches nothing, and holds nothing.
+    if (look.state === 'missing') unwatch();
     if (look.state === 'ok' && r.own && r.own.generation === r.generation && r.own.device === r.device) {
+      // A write of its own that landed though it failed, or was cut short, is settled first: never taken for another writer.
+      await settleOwn(r);
+      // The folder is there: watched again if a watch failed (it was deleted or moved, and is back).
+      if (running === r) watchOnly(r);
       const intact = await ownIntact(r.fs, r.own, nodeCrypto);
       if (intact === 'other' || intact === 'gone') send({ t: 'own-changed' });
     }
@@ -284,37 +340,64 @@ async function pass(): Promise<void> {
   // junk is looked through at the usual times only; a pass that failed is tried again by chord-data, later and later.
   if (unfinished && !cluttered && !failed) {
     clearTimeout(next);
-    next = setTimeout(() => void serial(pass), NEXT_PASS_MS);
+    next = setTimeout(() => void serial('pass', pass), NEXT_PASS_MS);
   }
   if (again) {
     again = false;
-    void serial(pass);
+    void serial('pass', pass);
   }
 }
 
+/** A write of this computer's that may have landed (`appending`): its own if it did, cut back if it was cut short. */
+async function settleOwn(r: Running): Promise<void> {
+  if (!r.own || !r.appending) return;
+  const settled = await settleAppend(r.fs, r.own, r.appending);
+  if (settled.settled === 'landed') r.own = settled.own;
+  if (settled.settled) r.appending = null;
+}
+
+/** The folder changed, or it's time to look: a read, once the burst settles. */
+function later(): void {
+  clearTimeout(settle);
+  settle = setTimeout(() => send({ t: 'changed' }), SETTLE_MS);
+}
+
+/** Watching `r`'s folder (again), and looking every five minutes whatever the watch says. */
 function watchFolder(r: Running): void {
   stopWatching();
-  const later = () => {
-    clearTimeout(settle);
-    settle = setTimeout(() => send({ t: 'changed' }), SETTLE_MS);
-  };
+  watchOnly(r);
+  poll = setInterval(later, POLL_MS);
+}
+
+/**
+ * The watch alone, when it's wanted and not there: recursive where the OS has
+ * it. A folder that can't be watched (it's gone, it moved, a cloud folder) is
+ * looked at every five minutes and when Chord comes to the front, and watched
+ * again once a look finds it.
+ */
+function watchOnly(r: Running): void {
+  if (watcher || (WATCH_IN_FRONT && !front)) return;
   try {
-    // Recursive where the OS has it; a folder that can't be watched is looked at every five minutes, and when Chord comes to the front.
     watcher = watch(join(r.folder, SYNC_FOLDER), { recursive: true }, (_event, name) => {
       // This computer's own writes aren't news.
       if (typeof name === 'string' && name.replaceAll('\\', '/').startsWith(`${deviceFolder(r.generation, r.device)}/`)) return;
       later();
     });
-    watcher.on('error', () => stopWatching());
+    // A watch that fails (its folder deleted or moved) is closed; the looks go on, and a look that finds the folder watches it again.
+    watcher.on('error', () => unwatch());
   } catch {
     watcher = null;
   }
-  poll = setInterval(later, POLL_MS);
+}
+
+/** The watch closed; the five-minute look goes on. */
+function unwatch(): void {
+  watcher?.close();
+  watcher = null;
 }
 
 function stopWatching(): void {
-  watcher?.close();
-  watcher = null;
+  unwatch();
   clearInterval(poll);
   clearTimeout(settle);
 }
@@ -355,20 +438,44 @@ async function handle(message: ToWorker): Promise<void> {
         cursors: new Map(message.cursors.map((c) => [cursorKey(c.device, c.segment), c.cursor])),
         app: message.app,
         memory: { ...folderMemory(), junk: new Map(message.junk) },
+        appending: message.appending,
       };
+      front = message.front;
       watchFolder(running);
-      void serial(pass);
+      const r = running;
+      // What a write that was stopped left in this computer's own folder (temp names, older than a minute), first.
+      void serial('tidy', async () => {
+        await removeStaleTemps(r.fs, { generation: r.generation, device: r.device }, Date.now()).catch(() => 0);
+      });
+      void serial('pass', pass);
       return;
     }
     case 'read':
-      void serial(pass);
+      void serial('pass', pass);
       return;
     case 'write': {
       const r = running;
       if (!r?.own) return failed('write', 'gone');
-      const result = await appendRecords(r.fs, r.own, message.records, r.key, { app: r.app, device: message.device, memory: r.memory }, nodeCrypto);
+      await settleOwn(r);
+      const result = await appendRecords(
+        r.fs,
+        r.own,
+        message.records,
+        r.key,
+        {
+          app: r.app,
+          device: message.device,
+          memory: r.memory,
+          onAppend: (appending) => {
+            r.appending = appending;
+            send({ t: 'appending', appending });
+          },
+        },
+        nodeCrypto,
+      );
       if (!result.ok) return failed('write', result.problem);
       r.own = result.own;
+      r.appending = null;
       send({ t: 'written', upto: message.upto, own: result.own, frames: result.frames, bytes: result.bytes });
       return;
     }
@@ -380,11 +487,13 @@ async function handle(message: ToWorker): Promise<void> {
         const own = await snapshotTo(r.fs, { generation: r.generation, device: message.as }, message.snapshot, r.key, r.app);
         r.device = message.as;
         r.own = own;
+        r.appending = null;
         watchFolder(r);
         send({ t: 'snapshotted', own });
         return;
       }
       // Compaction: past its newest segment, covering what it wrote; another writer under this id stops it (`copied`).
+      await settleOwn(r);
       const mine = r.own && r.own.generation === r.generation && r.own.device === r.device ? r.own : null;
       r.own = await writeSnapshot(
         r.fs,
@@ -394,6 +503,7 @@ async function handle(message: ToWorker): Promise<void> {
         { app: r.app, device: message.snapshot.device, covers: coversOf(mine), memory: r.memory, ...(mine ? { after: mine.segment } : {}) },
         nodeCrypto,
       );
+      r.appending = null;
       send({ t: 'snapshotted', own: r.own });
       return;
     }
@@ -457,6 +567,20 @@ async function handle(message: ToWorker): Promise<void> {
       }
       return;
     }
+    case 'front':
+      front = message.front;
+      if (WATCH_IN_FRONT && !front) unwatch();
+      else if (running) watchOnly(running);
+      return;
+    case 'abandon':
+      // Let go: the call that held it returns some day, and then nothing more is done in the folder (NodeFolder refuses).
+      abandonFolder();
+      stopWatching();
+      clearTimeout(next);
+      running = null;
+      for (const resolve of pulls.values()) resolve({ records: [], done: true, lost: true });
+      pulls.clear();
+      return;
     case 'stop':
       stopWatching();
       clearTimeout(next);
@@ -504,7 +628,7 @@ port.on('message', (message: ToWorker) => {
     resolve?.({ records: message.records, done: message.done, ...(message.lost ? { lost: true } : {}) });
     return;
   }
-  if (message.t === 'read' || message.t === 'start' || message.t === 'stop') {
+  if (message.t === 'read' || message.t === 'start' || message.t === 'stop' || message.t === 'abandon' || message.t === 'front') {
     void handle(message).catch((error: unknown) => {
       console.error('Sync failed:', error);
       failed(message.t, problemOf(error));
@@ -512,7 +636,7 @@ port.on('message', (message: ToWorker) => {
     return;
   }
   // Folder work, one at a time.
-  void serial(() =>
+  void serial(message.t, () =>
     handle(message).catch((error: unknown) => {
       console.error('Sync failed:', error);
       failed(message.t, problemOf(error));

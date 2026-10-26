@@ -139,6 +139,8 @@ export interface BrowserOptions {
   onChange?(change: Change): void;
   /** A Chord window came to the front (sync looks at its folder then, S15 §6). */
   windowFocused?(): void;
+  /** A Chord window lost the focus (sync's watch, on Windows, follows whether any is in front). */
+  windowBlurred?(): void;
   /** Open tabs' back/forward histories as chord-data saved them, by node id. */
   histories?: Record<string, NavState>;
   /** Save an open tab's back/forward history (never a private window's). */
@@ -899,6 +901,7 @@ export class Browser {
       this.settingsWindow?.update(this.settingsSnapshot());
       this.options.windowFocused?.();
     });
+    w.window.on('blur', () => this.options.windowBlurred?.());
     for (const contents of [w.shell.webContents, w.overlay.webContents]) {
       attachShortcuts(contents, this.keyboard);
       attachContextMenu(contents, {

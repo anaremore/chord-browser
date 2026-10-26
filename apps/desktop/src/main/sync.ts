@@ -25,6 +25,7 @@ import {
   emptyApply,
   sortedChords,
   syncParts,
+  syncWaiting,
   uuidv7,
   type FolderInspection,
   type SiteEffects,
@@ -52,6 +53,8 @@ export interface SyncServiceOptions {
   data: {
     sync(request: SyncRequest): Promise<SyncReply>;
     flush(): Promise<void>;
+    /** Writes chord-data refused, or never answered (it exited mid-write), so far: what was applied is confirmed only with none more. */
+    failures(): number;
     /** Whether a change of yours to this entity (`node:<id>`) is waiting to be written, or being written. */
     waiting(key: string): boolean;
     onPush(listener: (push: DataPush) => void): void;
@@ -70,6 +73,13 @@ export interface SyncServiceOptions {
   folder(): string;
   /** Tests only (never when packaged): safeStorage taken as having no keyring behind it, as Linux's `basic_text`, on any system. */
   noKeyring?: boolean;
+}
+
+/** What an apply did: what it put off for a change of yours, what waits on something not here yet, and whether chords or folders came. */
+interface Applied {
+  later: Set<string>;
+  waiting: string[];
+  grew: boolean;
 }
 
 interface Pending {
@@ -94,6 +104,8 @@ export class SyncService {
   private pending: Pending | null = null;
   private readonly toasted = new Set<string>();
   private lastFocus = 0;
+  /** Whether a Chord window is in front, as chord-data last heard it. */
+  private front = true;
   /** Pushes are applied one at a time, in order. */
   private applying: Promise<void> = Promise.resolve();
   private reconcileMs = 0;
@@ -104,8 +116,10 @@ export class SyncService {
       if (push.push === 'sync.status') this.setStatus(push.status);
       else
         this.applying = this.applying
-          .then(() => this.apply(push.apply))
-          .then((later) => this.confirm(push.versions, later))
+          .then(async () => {
+            const failures = this.options.data.failures();
+            await this.confirm(push.versions, await this.apply(push.apply), failures);
+          })
           .then(() => {
             this.reconcileMs = 0;
           })
@@ -171,15 +185,24 @@ export class SyncService {
 
   /**
    * Applied, and written back: chord-data hears which versions, so it never
-   * pushes them again, even what this computer keeps differently (tidied,
-   * refused, or placed otherwise here). Only once the store's writes are in,
-   * so a quit before then leaves them to be pushed again. What was put off for
-   * a change of yours waiting (`later`) comes again anyway.
+   * pushes them again, even what this computer will always keep otherwise
+   * (tidied, refused, or put at the top for a cycle). Not what waits on
+   * something not here yet (`waiting`: a tab whose chord or folder comes
+   * later), nor what was put off for a change of yours (`later`): those come
+   * again. Only once every write of the store's since the apply began is in,
+   * acknowledged by chord-data: one it refused (a full disk), or one its crash
+   * cut off, confirms nothing, and the apply is asked for again later. Then,
+   * chords or folders having come, what waited on them is pushed again.
    */
-  private async confirm(versions: Record<string, string> | undefined, later: Set<string>): Promise<void> {
-    if (!versions || Object.keys(versions).length === 0) return;
-    await this.options.data.flush();
-    await this.options.data.sync({ type: 'sync.applied', versions, later: [...later] });
+  private async confirm(versions: Record<string, string> | undefined, outcome: Applied, failures: number): Promise<void> {
+    const waiting = new Set(outcome.waiting);
+    const confirmed = Object.fromEntries(Object.entries(versions ?? {}).filter(([key]) => !waiting.has(key)));
+    if (Object.keys(confirmed).length > 0) {
+      await this.options.data.flush();
+      if (this.options.data.failures() !== failures) throw new Error('A write of what sync applied didn’t land');
+      await this.options.data.sync({ type: 'sync.applied', versions: confirmed, later: [...outcome.later] });
+    }
+    if (outcome.grew) await this.options.data.sync({ type: 'sync.reconcile' });
   }
 
   /** chord-data pushes again what it merged but this computer hasn't applied: later and later after each failure. */
@@ -328,11 +351,13 @@ export class SyncService {
     const answer = await this.options.data.sync({ type: 'sync.choose', mode });
     if (answer.problem) return this.stepResult(answer);
     const apply = answer.apply;
+    const failures = this.options.data.failures();
+    const outcomes: Applied[] = [];
     if (answer.replace && apply) {
       // The synced chords first, so there's one to make way for; then every chord of this computer's that isn't the
       // synced setup's makes way, kept for Undo (one another computer deleted too, so the Undo covers everything);
       // then the rest of the synced setup.
-      await this.apply({ ...emptyApply(), chords: apply.chords }, true);
+      outcomes.push(await this.apply({ ...emptyApply(), chords: apply.chords }, true));
       const keep = new Set(answer.replace.keep);
       const state = this.options.state();
       const mine = sortedChords(state).filter((c) => !c.private && !keep.has(c.id));
@@ -349,10 +374,11 @@ export class SyncService {
           });
         }
       }
-      await this.apply({ ...apply, chords: [] }, true);
-    } else if (apply) await this.apply(apply, true);
-    // Joining holds nothing back: all of it was applied.
-    if (apply) await this.confirm(answer.versions, new Set()).catch((error: unknown) => console.error('Sync couldn’t confirm what it applied:', error));
+      outcomes.push(await this.apply({ ...apply, chords: [] }, true));
+    } else if (apply) outcomes.push(await this.apply(apply, true));
+    // Joining holds nothing back for a change of yours; what waits on something not here yet (a chord no computer has) comes again.
+    const outcome: Applied = { later: new Set(outcomes.flatMap((o) => [...o.later])), waiting: outcomes.flatMap((o) => o.waiting), grew: outcomes.some((o) => o.grew) };
+    if (apply) await this.confirm(answer.versions, outcome, failures).catch((error: unknown) => console.error('Sync couldn’t confirm what it applied:', error));
     return this.stepResult(answer);
   }
 
@@ -448,7 +474,20 @@ export class SyncService {
   }
 
   /** Chord came to the front: look at the folder (at most every 30 s). */
+  /** No Chord window is in front any more (one lost focus, and none took it). */
+  blurred(): void {
+    this.inFront(false);
+  }
+
+  /** chord-data hears when Chord comes to the front or goes behind, once each way: the folder's watch follows on Windows. */
+  private inFront(front: boolean): void {
+    if (this.front === front) return;
+    this.front = front;
+    if (this.status && this.status.state !== 'off') void this.options.data.sync({ type: 'sync.front', front }).catch(() => undefined);
+  }
+
   focused(): void {
+    this.inFront(true);
     if (this.status?.state !== 'on' || Date.now() - this.lastFocus < FOCUS_MS) return;
     this.lastFocus = Date.now();
     void this.options.data.sync({ type: 'sync.check' }).catch(() => undefined);
@@ -468,7 +507,7 @@ export class SyncService {
    * A thing with a change of yours still waiting to be written is put off: its
    * write gets its stamp first, then chord-data sends what's merged again.
    */
-  private async apply(apply: SyncApply, joining = false): Promise<Set<string>> {
+  private async apply(apply: SyncApply, joining = false): Promise<Applied> {
     const isWaiting = this.options.data.waiting;
     // A split goes with its panes: one of them put off puts off the lot, or the store would settle the split without it.
     const groups = new Map<string, string[]>();
@@ -528,6 +567,9 @@ export class SyncService {
     }
     if (filtered.effects.length > 0 || filtered.gone.effects.length > 0) await this.options.effects.syncSites(filtered.effects, filtered.gone.effects);
     const after = this.options.state();
+    // What couldn't apply as it came, for something not here yet (the reducer's own rule): not confirmed, so it comes again.
+    const outstanding = syncWaiting(after, filtered);
+    const grew = filtered.chords.some((c) => !before.chords[c.id] && after.chords[c.id]) || filtered.nodes.some((n) => n.kind !== 'tab' && !before.nodes[n.id] && after.nodes[n.id]);
     // Pinned tabs and folders another computer took away (their chord stays): a quiet toast, with Undo.
     const undoBefore = new Set(before.syncUndo.map((e) => e.id));
     const removed = after.syncUndo.filter((e) => e.nodesOnly && !undoBefore.has(e.id) && e.nodes.length > 0);
@@ -560,7 +602,7 @@ export class SyncService {
       await this.options.data.flush();
       await this.options.data.sync({ type: 'sync.repush', keys: [...later] }).catch(() => undefined);
     }
-    return later;
+    return { later, waiting: outstanding, grew };
   }
 }
 

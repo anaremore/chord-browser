@@ -5,11 +5,12 @@
  * hold a read up with something that isn't a file.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { NodeFolder } from '../../src/data/sync-folder';
+import { describe, expect, it, vi } from 'vitest';
+import { abandonFolder, NodeFolder, ShortWrite } from '../../src/data/sync-folder';
 
 const bytes = (text: string) => new TextEncoder().encode(text);
 
@@ -77,5 +78,47 @@ describe('sync’s folder on the disk', () => {
     const fs = new NodeFolder(root);
     expect(await fs.read('1/00000000000000aa/000001.chordlog', 0, 100)).toEqual(new Uint8Array(0));
     expect(await fs.stat('1/00000000000000aa/000001.chordlog')).toBeNull();
+  });
+});
+
+describe('a write the disk didn’t finish', () => {
+  it('a short write (a full disk) throws, never taken as done; the segment is cut back to where it was', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'chord-sync-'));
+    try {
+      const fs = new NodeFolder(root);
+      await fs.mkdir('1/00000000000000aa');
+      await fs.create('1/00000000000000aa/000001.chordlog', bytes('head\n'));
+      // The next write takes only three of the bytes, as a full disk can.
+      const probe = await open(join(root, 'probe'), 'w');
+      const handle = Object.getPrototypeOf(probe) as { write(buffer: Uint8Array): Promise<{ bytesWritten: number }> };
+      await probe.close();
+      const original = handle.write;
+      const short = vi.spyOn(handle, 'write').mockImplementationOnce(function (this: unknown, buffer: Uint8Array) {
+        return original.call(this, buffer.subarray(0, 3));
+      });
+      await expect(fs.append('1/00000000000000aa/000001.chordlog', bytes('frame'))).rejects.toBeInstanceOf(ShortWrite);
+      short.mockRestore();
+      expect(readFileSync(join(root, '1', '00000000000000aa', '000001.chordlog'), 'utf8')).toBe('head\nfra');
+      await fs.truncate('1/00000000000000aa/000001.chordlog', 5);
+      expect(readFileSync(join(root, '1', '00000000000000aa', '000001.chordlog'), 'utf8')).toBe('head\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Last in this file: once a worker is let go, its folder does nothing more, for good.
+  it('a worker let go: when the call that held it returns, nothing more is done in the folder', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'chord-sync-'));
+    try {
+      const fs = new NodeFolder(root);
+      await fs.mkdir('1/00000000000000aa');
+      abandonFolder();
+      await expect(fs.create('1/00000000000000aa/000001.chordlog', bytes('x'))).rejects.toThrow('let this worker go');
+      await expect(fs.append('1/00000000000000aa/000001.chordlog', bytes('x'))).rejects.toThrow();
+      await expect(fs.remove('1')).rejects.toThrow();
+      expect(existsSync(join(root, '1', '00000000000000aa', '000001.chordlog'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

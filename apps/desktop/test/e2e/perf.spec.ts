@@ -13,7 +13,7 @@
  * a budget. How to run it and read the report: docs/testing/performance.md.
  */
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { availableParallelism, cpus, release, tmpdir, totalmem } from 'node:os';
@@ -1587,6 +1587,7 @@ function diskFolder(root: string): SyncFs {
     rename: async (from, to) => renameSync(at(from), at(to)),
     mkdir: async (path) => void mkdirSync(at(path), { recursive: true }),
     remove: async (path) => rmSync(at(path), { recursive: true, force: true }),
+    truncate: async (path, size) => truncateSync(at(path), size),
   };
 }
 

@@ -61,7 +61,7 @@ import { restoreChord, validTheme } from './restore';
 import { cleanProxy, sameProxy, type ProxySettings } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
-import type { SyncApply, SyncGone } from './sync';
+import { thingKey, type SyncApply, type SyncGone } from './sync';
 import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
 
@@ -1068,6 +1068,44 @@ function unreplace(draft: Draft<State>, windowId: WindowId, chordIds: readonly C
   if (back[0]) switchChord(draft, windowId, back[0], ctx, effects);
 }
 
+/** Whether `parent` can hold `node` here (syncIn's rule): of its chord, in Pinned, a folder (or a split, for a tab), never inside it. */
+function holds(state: State, parent: SidebarNode | undefined, node: SidebarNode): boolean {
+  return Boolean(
+    parent &&
+      parent.id !== node.id &&
+      parent.chordId === node.chordId &&
+      parent.section === 'pinned' &&
+      (parent.kind === 'folder' || (parent.kind === 'split' && node.kind === 'tab')) &&
+      !isWithin(state, parent.id, node.id),
+  );
+}
+
+/**
+ * What `sync.apply` couldn't apply as it came because something it depends on
+ * isn't here yet, judged from the state after it (and after any other part of
+ * the same push), by thing (`thingKey`): a node or a route whose chord isn't
+ * here, and a node whose folder (or split) isn't, or is in another chord, or
+ * came after it and holds it now. Main doesn't confirm these, so they're pushed
+ * again once what they wait on comes (S15 §13). Everything else was applied as
+ * it came, or as this computer always will have it (refused for good, tidied,
+ * put at the top for a cycle): confirmed, so never pushed again for nothing.
+ */
+export function syncWaiting(state: State, apply: SyncApply): string[] {
+  const out: string[] = [];
+  for (const node of apply.nodes) {
+    if (!state.chords[node.chordId]) {
+      out.push(thingKey(node.kind, node.id));
+      continue;
+    }
+    const here = state.nodes[node.id];
+    if (!here || node.parentId === null || here.parentId === node.parentId) continue;
+    const parent = state.nodes[node.parentId];
+    if (!parent || parent.chordId !== node.chordId || holds(state, parent, here)) out.push(thingKey(node.kind, node.id));
+  }
+  for (const route of apply.routes) if (!state.chords[route.chordId]) out.push(thingKey('route', route.host));
+  return out;
+}
+
 /**
  * `sync.apply`: what other computers changed, checked again here (main's
  * boundary) as `data.merge` checks a file's, then what they took away. Things
@@ -1139,15 +1177,7 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
   for (const id of placed) {
     const node = draft.nodes[id]!;
     if (node.parentId === null) continue;
-    const parent = draft.nodes[node.parentId];
-    const fits =
-      parent &&
-      parent.id !== node.id &&
-      parent.chordId === node.chordId &&
-      parent.section === 'pinned' &&
-      (parent.kind === 'folder' || (parent.kind === 'split' && node.kind === 'tab')) &&
-      !isWithin(draft as State, parent.id, node.id);
-    if (!fits) node.parentId = null;
+    if (!holds(draft as State, draft.nodes[node.parentId], node)) node.parentId = null;
   }
   land();
 

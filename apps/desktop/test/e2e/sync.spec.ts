@@ -189,9 +189,10 @@ async function syncedPair(folder: string): Promise<{ desk: Computer; laptop: Com
   return { desk: { ...deskApp, settings: deskSettings, profile: deskProfile }, laptop: { ...laptopApp, settings: laptopSettings, profile } };
 }
 
-/** A computer quit and launched again on its profile, with Settings open at sync. */
-async function relaunchComputer(computer: Computer, folder: string, options: { keyring?: boolean } = {}): Promise<Computer> {
+/** A computer quit and launched again on its profile, with Settings open at sync; `meanwhile` runs while it isn't running. */
+async function relaunchComputer(computer: Computer, folder: string, options: { keyring?: boolean; meanwhile?: () => void } = {}): Promise<Computer> {
   await computer.app.close();
+  options.meanwhile?.();
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1', ...(options.keyring === false ? { CHORD_E2E_NO_KEYRING: '1' } : {}) }, { profile: computer.profile });
   const shell = await pageWhere(app, isShell);
   return { app, shell, settings: await openSync(app, shell, folder), profile: computer.profile };
@@ -277,9 +278,12 @@ test('a passphrase changed on one computer pauses the other until it has it; wit
     await expect(again.settings.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 20_000 });
     await expect(again.settings.getByText('Sync is paused. Enter your passphrase.')).toBeHidden();
 
-    // The folder moved: Chord can't find it, and *Choose folder…* picks where it is now.
+    // The folder moved while Chord wasn't running (on Windows a running Chord's watch of it can hold it, and a folder
+    // something holds can't be renamed there): relaunched, Chord can't find it, and *Choose folder…* picks where it is now.
+    await desk.app.close();
     const moved = `${folder}-moved`;
-    renameSync(folder, moved);
+    again = await relaunchComputer(again, folder, { keyring: false, meanwhile: () => renameSync(folder, moved) });
+    relaunched.app = again.app;
     await hooks(again.app, 'syncRead');
     await expect(again.settings.getByText('Chord can’t find the sync folder. Is your sync app running?')).toBeVisible({ timeout: 20_000 });
     await again.app.evaluate(({ dialog }, path) => {
@@ -291,6 +295,17 @@ test('a passphrase changed on one computer pauses the other until it has it; wit
     // A pass reads from where it is now, and finds nothing wrong.
     await hooks(again.app, 'syncRead');
     await expect(again.settings.getByText('Chord can’t find the sync folder. Is your sync app running?')).toBeHidden();
+    // Where a watch doesn't hold the folder (macOS, Linux), it moves while Chord runs too, and comes back: the watch and the looks
+    // go on through both, and the next look finds it where it was.
+    if (process.platform !== 'win32') {
+      renameSync(moved, folder);
+      await hooks(again.app, 'syncRead');
+      await expect(again.settings.getByText('Chord can’t find the sync folder. Is your sync app running?')).toBeVisible({ timeout: 20_000 });
+      renameSync(folder, moved);
+      await hooks(again.app, 'syncRead');
+      await expect(again.settings.getByText('Chord can’t find the sync folder. Is your sync app running?')).toBeHidden({ timeout: 20_000 });
+      await expect(again.settings.getByRole('button', { name: 'Pause' })).toBeVisible();
+    }
   } finally {
     await desk.app.close().catch(() => undefined);
     await relaunched.app?.close();

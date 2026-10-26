@@ -348,78 +348,222 @@ describe('kept here other than another computer wrote it', () => {
   });
 });
 
+/** Workers as the controller starts them, each a stand-in, and which were stopped. */
+function workerLog() {
+  const workers: FakeWorker[] = [];
+  const terminated: FakeWorker[] = [];
+  const make = (): WorkerLike => {
+    const w = new FakeWorker();
+    w.terminate = () => {
+      terminated.push(w);
+      return Promise.resolve(0);
+    };
+    workers.push(w);
+    return w as unknown as WorkerLike;
+  };
+  return { workers, terminated, make };
+}
+/** A worker's folder operation, begun and ended as the real one says. */
+const busy = (w: FakeWorker, op: Extract<FromWorker, { t: 'busy' }>['op']) => w.say({ t: 'busy', op });
+const idle = (w: FakeWorker) => w.say({ t: 'idle' });
+/** A pass from start to end, nothing in it. */
+const quietPass = (w: FakeWorker) => {
+  busy(w, 'pass');
+  w.say(passDone());
+  idle(w);
+};
+const writeOf = (w: FakeWorker) => w.posted.find((m) => m.t === 'write') as Extract<ToWorker, { t: 'write' }> | undefined;
+
 describe('a folder that stops answering', () => {
-  it('a write that never returns: Settings says the folder isn’t answering, the changes wait, the worker starts again later, and writing goes on once the folder answers', async () => {
+  it('a write that never returns, the watch firing every 40 s meanwhile: the write’s own deadline passes; Settings says so, the changes wait, and writing goes on once the folder answers', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
-      const workers: FakeWorker[] = [];
-      const terminated: FakeWorker[] = [];
-      const { state } = on({}, () => {
-        const w = new FakeWorker();
-        w.terminate = () => {
-          terminated.push(w);
-          return Promise.resolve(0);
-        };
-        workers.push(w);
-        return w as unknown as WorkerLike;
-      });
+      const { workers, terminated, make } = workerLog();
+      const { state } = on({}, make);
       await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
-      workers[0]!.say(passDone());
+      quietPass(workers[0]!);
       await settle();
       rename(state, 'Waiting');
-      // The folder never answers the write: a stalled network drive.
       const flushing = controller!.handle({ type: 'sync.flush' });
       await settle();
-      expect(workers[0]!.posted.some((m) => m.t === 'write')).toBe(true);
-      vi.advanceTimersByTime(59_000);
+      expect(writeOf(workers[0]!)).toBeDefined();
+      busy(workers[0]!, 'write');
+      // The watch fires every 40 s; each asks for a read. None of it is progress on the write.
+      for (let t = 0; t < 59_000; t += 1_000) {
+        if (t % 40_000 === 0 && t > 0) workers[0]!.say({ t: 'changed' });
+        vi.advanceTimersByTime(1_000);
+      }
       expect(controller!.status().problem).toBeNull();
       vi.advanceTimersByTime(1_000);
       await flushing;
       expect(controller!.status()).toMatchObject({ state: 'problem', problem: 'stalled', pending: 1 });
       expect(db.sync.outboxSize()).toBe(1);
-      expect(terminated).toEqual([workers[0]]);
-      // Started again 30 s later; the folder answers now.
+      // Let go, not stopped: its stuck call holds a file thread until it returns.
+      expect(workers[0]!.posted.at(-1)).toEqual({ t: 'abandon' });
+      expect(terminated).toEqual([]);
+      // Another, 30 s later; the folder answers it.
       vi.advanceTimersByTime(30_000);
       await settle();
       expect(workers).toHaveLength(2);
-      // Its first write, at once.
       vi.advanceTimersByTime(1);
       await settle();
-      expect(workers[1]!.posted[0]).toMatchObject({ t: 'start' });
-      const write = workers[1]!.posted.find((m) => m.t === 'write') as Extract<ToWorker, { t: 'write' }> | undefined;
+      quietPass(workers[1]!);
+      const write = writeOf(workers[1]!);
       expect(write).toBeDefined();
+      busy(workers[1]!, 'write');
       workers[1]!.say({ t: 'written', upto: write!.upto, own: { generation: 1, device: db.device(), segment: 1, size: 300, frames: 2 }, frames: 1, bytes: 100 });
-      workers[1]!.say(passDone());
+      idle(workers[1]!);
       await settle();
       expect(db.sync.outboxSize()).toBe(0);
       expect(controller!.status()).toMatchObject({ state: 'on', problem: null });
+      // The first one's call returns at last: then it's stopped.
+      idle(workers[0]!);
+      expect(terminated).toEqual([workers[0]]);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('still not answering: started again later and later, and Settings goes on saying so', async () => {
+  it('two calls stuck: no third worker until one returns, so two of the four file threads stay free; Settings goes on saying so', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
-      const workers: FakeWorker[] = [];
-      on({}, () => {
-        const w = new FakeWorker();
-        workers.push(w);
-        return w as unknown as WorkerLike;
-      });
-      // Not even a pass ends.
+      const { workers, terminated, make } = workerLog();
+      on({}, make);
       await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+      busy(workers[0]!, 'pass');
       vi.advanceTimersByTime(60_000);
-      expect(controller!.status().problem).toBe('stalled');
       vi.advanceTimersByTime(30_000);
       expect(workers).toHaveLength(2);
-      vi.advanceTimersByTime(60_000 + 59_000);
-      expect(workers).toHaveLength(2);
-      vi.advanceTimersByTime(1_000);
-      expect(workers).toHaveLength(3);
+      busy(workers[1]!, 'pass');
+      vi.advanceTimersByTime(60_000);
       expect(controller!.status().problem).toBe('stalled');
+      // Two stuck: nothing more is started, however long.
+      vi.advanceTimersByTime(60 * 60_000);
+      expect(workers).toHaveLength(2);
+      expect(controller!.status().problem).toBe('stalled');
+      // One returns: it's stopped, and another starts at once.
+      idle(workers[0]!);
+      expect(terminated).toEqual([workers[0]]);
+      vi.advanceTimersByTime(0);
+      expect(workers).toHaveLength(3);
+      quietPass(workers[2]!);
+      await settle();
+      expect(controller!.status().problem).toBeNull();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('later and later: the wait before another worker doubles with each timeout, and starts over only after ten minutes with none', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { workers, make } = workerLog();
+      on({}, make);
+      await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+      /** The newest worker hangs in a prune (no pass): its call returns as soon as it's let go, so none stays stuck. */
+      const hang = () => {
+        const w = workers.at(-1)!;
+        busy(w, 'prune');
+        vi.advanceTimersByTime(60_000);
+        idle(w);
+      };
+      /** How long until the next worker starts. */
+      const wait = () => {
+        const before = workers.length;
+        let ms = 0;
+        while (workers.length === before && ms < 60 * 60_000) {
+          vi.advanceTimersByTime(1_000);
+          ms += 1_000;
+        }
+        return ms;
+      };
+      hang();
+      expect(wait()).toBe(30_000);
+      hang();
+      expect(wait()).toBe(60_000);
+      hang();
+      expect(wait()).toBe(120_000);
+      // Ten minutes healthy (a pass every minute), then a hang: back to the shortest wait.
+      for (let i = 0; i < 11; i++) {
+        quietPass(workers.at(-1)!);
+        vi.advanceTimersByTime(60_000);
+      }
+      hang();
+      expect(wait()).toBe(30_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('a worker stopped or let go', () => {
+  it('a step it read and the controller merged after it went is never answered to the one started after it, nor is anything it says taken as that one’s', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { workers, make } = workerLog();
+      const { state } = on({}, make);
+      await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+      const id = Object.keys(state.chords)[0]!;
+      // A big step: merged over several slices.
+      const step = Array.from({ length: 160 }, (_, i): DataRecord => ({ type: 'chord', id: i === 0 ? id : `other-${i}`, at: [Date.now() + 1000, 0, OTHER], set: { name: `Step ${i}` } }));
+      busy(workers[0]!, 'pass');
+      workers[0]!.say(records(1, step));
+      // It crashes while its step is merged; another starts 10 s later.
+      workers[0]!.emit('error', new Error('gone'));
+      vi.advanceTimersByTime(10_000);
+      expect(workers).toHaveLength(2);
+      await settle();
+      expect(workers[1]!.acks()).toEqual([]);
+      expect(workers[0]!.acks()).toEqual([]);
+      // What the first one says late (an answer to a write, say) is never taken as the second's.
+      rename(state, 'Waiting');
+      const flushing = controller!.handle({ type: 'sync.flush' });
+      await settle();
+      const write = writeOf(workers[1]!);
+      expect(write).toBeDefined();
+      workers[0]!.say({ t: 'failed', problem: 'copied', for: 'write' });
+      await settle();
+      expect(db.sync.meta.newIds).toEqual([]);
+      workers[1]!.say({ t: 'written', upto: write!.upto, own: { generation: 1, device: db.device(), segment: 1, size: 300, frames: 2 }, frames: 1, bytes: 100 });
+      await flushing;
+      expect(db.sync.outboxSize()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('what it was writing is kept until it’s answered, and handed to the next one, which settles it', async () => {
+    const { workers, make } = workerLog();
+    on({}, make);
+    await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+    const expect_ = { generation: 1, device: db.device(), segment: 1, size: 160, frames: 2 };
+    workers[0]!.say({ t: 'appending', appending: { expect: expect_, at: 100, bytes: Uint8Array.from([1, 2, 3]) } });
+    expect(db.sync.meta.appending).toEqual({ expect: expect_, at: 100, bytes: 'AQID' });
+    // Chord quits before the answer; at the next launch, the worker is handed it.
+    controller!.close();
+    const next = workerLog();
+    controller = new SyncController(() => db, () => undefined, next.make);
+    await controller.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+    expect(next.workers[0]!.posted[0]).toMatchObject({ t: 'start', appending: { expect: expect_, at: 100, bytes: Uint8Array.from([1, 2, 3]) } });
+    // Answered: no longer kept.
+    db.atomically(() => db.sync.written(0, expect_, 1, 3));
+    expect(db.sync.meta.appending).toBeNull();
+  });
+});
+
+describe('an error taking in what the worker said', () => {
+  it('a full disk as this computer is told another writes under its id: chord-data goes on, says so, and the next pass tries again', async () => {
+    const w = fake();
+    on({}, w.make);
+    await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+    vi.spyOn(db.sync, 'setMeta').mockImplementationOnce(() => {
+      throw new Error('database or disk is full');
+    });
+    expect(() => w.worker.say({ t: 'own-changed' })).not.toThrow();
+    expect(controller!.status()).toMatchObject({ state: 'problem', problem: 'unreadable' });
+    expect(db.sync.meta.rebind).toBe(false);
+    // The next pass finds it again, and this time it's kept.
+    w.worker.say({ t: 'own-changed' });
+    expect(db.sync.meta.rebind).toBe(true);
   });
 });

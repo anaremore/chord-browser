@@ -57,6 +57,8 @@ export interface SyncFs {
   mkdir(path: string): Promise<void>;
   /** A file, or a folder and everything in it. */
   remove(path: string): Promise<void>;
+  /** A file cut back to its first `size` bytes: only ever this computer's own segment, after a write of its own cut short. */
+  truncate(path: string, size: number): Promise<void>;
 }
 
 export const SYNC_FOLDER = 'Chord sync';
@@ -601,6 +603,79 @@ export async function ownIntact(fs: SyncFs, own: OwnSegment, c: DataCrypto): Pro
   return 'ok';
 }
 
+/**
+ * What this computer is writing to its log (S15 §13): the bytes, where they go
+ * (`at`; 0 for a new segment, made whole by a rename), and its segment as it
+ * will be once they're there. Kept until the write is answered (chord-data
+ * keeps it across a restart of the worker, or of Chord), so a write of its own
+ * is never taken for another writer's: one whose bytes landed though the call
+ * failed (a flush or a close that threw, the worker stopped mid-flush) is its,
+ * and one cut short (a full disk) is cut back and written again.
+ */
+export interface Appending {
+  expect: OwnSegment;
+  at: number;
+  bytes: Uint8Array;
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((byte, i) => byte === b[i]);
+
+/**
+ * A write of this computer's that may have landed, settled before anything
+ * judges its segment (`ownIntact`, a new segment past it): `landed`, all its
+ * bytes are there, exactly, and the segment is as it expected; `cut`, only
+ * the first of them were (a short write), so the segment is cut back to where
+ * it was, and the write goes again. Anything else there (more bytes, or
+ * other ones) isn't settled: it's another writer's, as before.
+ */
+export async function settleAppend(fs: SyncFs, own: OwnSegment, appending: Appending | null | undefined): Promise<{ own: OwnSegment; settled: 'landed' | 'cut' | null }> {
+  const none = { own, settled: null };
+  if (!appending || appending.expect.generation !== own.generation || appending.expect.device !== own.device) return none;
+  const { expect, at, bytes } = appending;
+  const fresh = expect.segment !== own.segment;
+  if (fresh ? expect.segment < own.segment || at !== 0 : at !== own.size) return none;
+  const path = `${deviceFolder(expect.generation, expect.device)}/${segmentName(expect.segment)}`;
+  const stat = await fs.stat(path);
+  if (!stat || stat.size <= at) return none;
+  const extra = stat.size - at;
+  if (extra > bytes.length) return none;
+  const got = await fs.read(path, at, extra);
+  if (!sameBytes(got, bytes.subarray(0, extra))) return none;
+  if (extra === bytes.length) return { own: expect, settled: 'landed' };
+  // A new segment is never seen half made (it's renamed into place whole): a part of one isn't this computer's.
+  if (fresh) return none;
+  await fs.truncate(path, at);
+  return { own, settled: 'cut' };
+}
+
+/** A name this computer's own writing leaves for a moment: a segment made under a temp name, a snapshot written as `.part-`. */
+const TEMP_NAME = /^\d{6}\.chordlog(?:\.part-[0-9a-f]{8})?(?:\.tmp-[0-9a-f]{8})?$/;
+/** Older than this, a temp name in this computer's own folder is one a write left when it stopped (the worker let go, Chord quit). */
+export const STALE_TEMP_MS = 60_000;
+
+/**
+ * This computer's own temp files a write left when it stopped, removed: only
+ * in its own folder, only names its writing makes (`NNNNNN.chordlog.part-…`,
+ * `….tmp-…`), only regular files (never through a link: the folder's `remove`
+ * refuses one), and only once they're older than STALE_TEMP_MS. How many went.
+ */
+export async function removeStaleTemps(fs: SyncFs, where: { generation: number; device: string }, now: number): Promise<number> {
+  const folder = deviceFolder(where.generation, where.device);
+  let removed = 0;
+  for (const name of (await fs.list(folder)) ?? []) {
+    if (!TEMP_NAME.test(name) || !/\.(?:part|tmp)-[0-9a-f]{8}$/.test(name)) continue;
+    const stat = await fs.stat(`${folder}/${name}`);
+    if (!stat || now - stat.mtime < STALE_TEMP_MS) continue;
+    try {
+      await fs.remove(`${folder}/${name}`);
+      removed++;
+    } catch {
+      // A link, or something that can't go: left as it is.
+    }
+  }
+  return removed;
+}
+
 /** What a computer's next snapshot covers: the segments it closed since its last, and its newest as it left it. */
 export const coversOf = (own: OwnSegment | null): Cover[] => (own ? [...(own.closed ?? []), [own.segment, own.size, own.frames] as Cover].slice(-MAX_COVERS) : []);
 
@@ -670,15 +745,27 @@ export async function writeSegment(
   opts: { snapshot: boolean; app: string; device: readonly DataRecord[]; now?: number },
   c: DataCrypto,
 ): Promise<OwnSegment> {
+  const sealed = sealSegment(where, records, root, opts, c);
   await fs.mkdir(deviceFolder(where.generation, where.device));
+  await fs.create(`${deviceFolder(where.generation, where.device)}/${segmentName(where.segment)}`, sealed.bytes);
+  return sealed.own;
+}
+
+/** A whole segment's bytes, sealed, and the segment as it will be once they're in place. */
+function sealSegment(
+  where: { generation: number; device: string; segment: number },
+  records: readonly DataRecord[],
+  root: Uint8Array,
+  opts: { snapshot: boolean; app: string; device: readonly DataRecord[]; now?: number },
+  c: DataCrypto,
+): { bytes: Uint8Array; own: OwnSegment } {
   const head = newHead(where, opts.snapshot, opts.app, root, c, opts.now ?? Date.now());
   const first = frames(opts.device, head.key, head.hash, 0, c, true);
   const rest = frames(records, head.key, head.hash, first.count, c);
   head.key.fill(0);
   const bytes = envelope.concat([head.bytes, ...first.bytes, ...rest.bytes]);
-  await fs.create(`${deviceFolder(where.generation, where.device)}/${segmentName(where.segment)}`, bytes);
   const tail = tailOf(rest.bytes.at(-1) ?? first.bytes.at(-1), bytes.length, c);
-  return { ...where, size: bytes.length, frames: first.count + rest.count, closed: [], ...(tail ? { tail } : {}) };
+  return { bytes, own: { ...where, size: bytes.length, frames: first.count + rest.count, closed: [], ...(tail ? { tail } : {}) } };
 }
 
 /** Another computer writes under this one's id: what a snapshot's check finds, and `copied` says. */
@@ -739,14 +826,16 @@ export type AppendResult =
  * under its id: no real segment past its own, and its own exactly as it left
  * it, ending with its own last frame (`ownIntact`). Anything else is another
  * writer (`copied`), bytes someone added included: past SEGMENT_CLOSE a new
- * segment starts.
+ * segment starts. A write of this computer's own that may have landed is
+ * settled first, by the caller (`settleAppend`); `onAppend` hears what this
+ * one writes, before it's written, to keep until it's answered.
  */
 export async function appendRecords(
   fs: SyncFs,
   own: OwnSegment,
   records: readonly DataRecord[],
   root: Uint8Array,
-  opts: { app: string; device: readonly DataRecord[]; now?: number; memory?: FolderMemory },
+  opts: { app: string; device: readonly DataRecord[]; now?: number; memory?: FolderMemory; onAppend?(appending: Appending): void },
   c: DataCrypto,
 ): Promise<AppendResult> {
   const folder = deviceFolder(own.generation, own.device);
@@ -767,17 +856,24 @@ export async function appendRecords(
     } catch {
       return { ok: false, problem: 'full' };
     }
-    const next = await writeSegment(fs, { generation: own.generation, device: own.device, segment: n }, records, root, { snapshot: false, app: opts.app, device: opts.device, ...(opts.now ? { now: opts.now } : {}) }, c);
+    const where = { generation: own.generation, device: own.device, segment: n };
+    const segment = sealSegment(where, records, root, { snapshot: false, app: opts.app, device: opts.device, ...(opts.now ? { now: opts.now } : {}) }, c);
     // The one it closes is its, as it left it: its next snapshot covers it.
-    return { ok: true, own: { ...next, closed: [...(own.closed ?? []), [own.segment, own.size, own.frames] as Cover] }, frames: next.frames, bytes: next.size };
+    const expect: OwnSegment = { ...segment.own, closed: [...(own.closed ?? []), [own.segment, own.size, own.frames] as Cover] };
+    opts.onAppend?.({ expect, at: 0, bytes: segment.bytes });
+    await fs.mkdir(folder);
+    await fs.create(`${folder}/${segmentName(n)}`, segment.bytes);
+    return { ok: true, own: expect, frames: expect.frames, bytes: expect.size };
   }
   const sealed = frames(records, opened.opened.key, opened.opened.hash, own.frames, c);
   opened.opened.key.fill(0);
   const bytes = envelope.concat(sealed.bytes);
-  await fs.append(path, bytes);
   const size = own.size + bytes.length;
   const tail = tailOf(sealed.bytes.at(-1), size, c) ?? own.tail;
-  return { ok: true, own: { ...own, size, frames: own.frames + sealed.count, ...(tail ? { tail } : {}) }, frames: sealed.count, bytes: bytes.length };
+  const expect: OwnSegment = { ...own, size, frames: own.frames + sealed.count, ...(tail ? { tail } : {}) };
+  opts.onAppend?.({ expect, at: own.size, bytes });
+  await fs.append(path, bytes);
+  return { ok: true, own: expect, frames: sealed.count, bytes: bytes.length };
 }
 
 /** Keys are 32 bytes: the root key as main keeps it (safeStorage) and hands it back. */

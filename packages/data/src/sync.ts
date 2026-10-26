@@ -104,12 +104,19 @@ export interface SyncMeta {
    * been read of it is exactly that.
    */
   coveredReads: Record<string, string>;
+  /**
+   * What the worker is writing to this computer's log, kept until it's
+   * answered (core's `Appending`, its bytes as base64): after a write that
+   * failed, or a worker let go mid-write, the next worker takes those bytes as
+   * this computer's own if they're there, and never as another writer's.
+   */
+  appending: { expect: OwnSegment; at: number; bytes: string } | null;
 }
 
 /** A thing's version in the copy: a short hash of its merged fields and stamps, as stored. */
 const versionOf = (row: Row): string => createHash('sha256').update(String(row['fields'])).update('\n').update(String(row['stamps'])).digest('base64url').slice(0, 22);
 
-const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null, newIds: [], rebind: false, coveredReads: {} };
+const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null, newIds: [], rebind: false, coveredReads: {}, appending: null };
 
 /**
  * Sync's costs, as chord-data measures them: a whole write() with sync on and
@@ -862,6 +869,8 @@ export class SyncStore {
    */
   *unappliedPages(size = 200): Generator<Map<string, Set<string>>> {
     const never: Record<string, readonly string[]> = { chord: ['profile'], effects: ['duet'] };
+    const brief = this.briefs();
+    const live = (type: string, id: unknown) => typeof id === 'string' && brief(type, id) !== null && !brief(type, id)!.gone;
     let after = { type: '', id: '' };
     for (;;) {
       const rows = this.sql(`SELECT type, id, fields, stamps, local, applied FROM sync_record WHERE type > ? OR (type = ? AND id > ?) ORDER BY type, id LIMIT ?`).all(after.type, after.type, after.id, size) as Row[];
@@ -876,6 +885,12 @@ export class SyncStore {
         };
         const gone = isGone(thing);
         const goneHere = local?.['deleted'] === true;
+        // What can't apply here yet waits, unpushed, for what it depends on: main asks again once chords or folders come.
+        if (!gone && (NODE_TYPES.has(thing.type) || thing.type === 'route')) {
+          const pos = (thing.type === 'route' ? { chord: thing.fields['chord']?.v } : thing.fields['pos']?.v) as { chord?: unknown; parent?: unknown } | undefined;
+          if (!live('chord', pos?.chord)) continue;
+          if (local && !goneHere && typeof pos?.parent === 'string' && !live('folder', pos.parent) && !live('split', pos.parent)) continue;
+        }
         if (!local || goneHere) {
           if (!gone) differs(new Set(Object.keys(thing.fields)));
           continue;
@@ -997,7 +1012,7 @@ export class SyncStore {
     this.sql('DELETE FROM sync_outbox WHERE seq <= ?').run(upto);
     this.pending = this.outboxSize();
     const meta = this.meta;
-    this.setMeta({ own, framesSince: meta.framesSince + frames, bytesSince: meta.bytesSince + bytes });
+    this.setMeta({ own, framesSince: meta.framesSince + frames, bytesSince: meta.bytesSince + bytes, appending: null });
   }
 
   outboxSize(): number {
@@ -1063,7 +1078,7 @@ export class SyncStore {
   snapshotted(own: OwnSegment, now: number, mark = Number.MAX_SAFE_INTEGER, reads?: Record<string, string>): void {
     this.sql('DELETE FROM sync_outbox WHERE seq <= ?').run(mark);
     this.pending = this.outboxSize();
-    this.setMeta({ own, compactedAt: now, framesSince: 0, bytesSince: 0, ...(reads ? { coveredReads: reads } : {}) });
+    this.setMeta({ own, compactedAt: now, framesSince: 0, bytesSince: 0, appending: null, ...(reads ? { coveredReads: reads } : {}) });
   }
 
   /* ---------- devices ---------- */

@@ -23,7 +23,7 @@ import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { hostname } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { app, clipboard, nativeTheme, net, powerMonitor, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, clipboard, nativeTheme, net, powerMonitor, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import type { ImportEnv } from '../import/detect';
 import { AdBlocking } from './ad-blocking/service';
 import { FILTER_LISTS } from './ad-blocking/lists';
@@ -788,6 +788,8 @@ if (!app.requestSingleInstanceLock()) {
       // Another computer's changes (sync.apply) are saved marked as sync's: never stamped, never back into this computer's log.
       onChange: (change) => store.record(change.patches, change.state, change.command?.t === 'sync.apply' ? 'sync' : 'here'),
       windowFocused: () => syncService?.focused(),
+      // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).
+      windowBlurred: () => setTimeout(() => (BaseWindow.getFocusedWindow() ? undefined : syncService?.blurred()), 250),
       proxyReady: (ses) => proxies.ready(ses),
       releaseProfile,
       devtoolsSession,
@@ -930,7 +932,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     // Your data's sync (S15 §6–§8): chord-data's thread and its worker do the work; main keeps the key and applies what comes in.
     syncService = new SyncService({
-      data: { sync: (request) => store.sync(request), flush: () => store.flush(), waiting: (key) => store.waitingHere(key), onPush: (listener) => store.onPush(listener) },
+      data: { sync: (request) => store.sync(request), flush: () => store.flush(), failures: () => store.writeFailures, waiting: (key) => store.waitingHere(key), onPush: (listener) => store.onPush(listener) },
       state: () => browser!.store.state,
       dispatch: (command) => browser!.store.dispatch(command),
       effects: { syncSites: (sites, gone) => browser!.effects.syncSites(sites, gone) },

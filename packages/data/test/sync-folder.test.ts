@@ -35,6 +35,9 @@ import {
   readComputers,
   readSegment,
   recordLine,
+  removeStaleTemps,
+  settleAppend,
+  STALE_TEMP_MS,
   SegmentsFull,
   segmentName,
   segmentsOf,
@@ -44,6 +47,7 @@ import {
   writeSegment,
   writeSnapshot,
   writeSyncFile,
+  type Appending,
   type DataRecord,
   type FolderMemory,
   type OwnSegment,
@@ -109,6 +113,10 @@ class MemoryFolder implements SyncFs {
   async remove(path: string): Promise<void> {
     for (const file of [...this.files.keys()]) if (file === path || file.startsWith(`${path}/`)) this.files.delete(file);
     for (const dir of [...this.dirs]) if (dir === path || dir.startsWith(`${path}/`)) this.dirs.delete(dir);
+  }
+  async truncate(path: string, size: number): Promise<void> {
+    const file = this.files.get(path)!;
+    this.files.set(path, { bytes: file.bytes.slice(0, size), mtime: this.clock++ });
   }
   /** A file as a sync app might deliver it: cut to its first `n` bytes. */
   cut(path: string, n: number): void {
@@ -859,4 +867,132 @@ describe('6,000 junk names in one folder', () => {
     const reader = new Reader(fs, B, root);
     expect(ids(await reader.pass())).toEqual(expect.arrayContaining(['work', 'late']));
   }, 120_000);
+});
+
+describe('a write of this computer’s own that failed after its bytes landed', () => {
+  /** Appends that land, then fail as `fail` says: the flush or the close throwing (`after`), or a short write on a full disk (`short`). */
+  class Flaky extends MemoryFolder {
+    fail: 'after' | 'short' | null = null;
+    override async append(path: string, bytes: Uint8Array): Promise<void> {
+      const fail = this.fail;
+      this.fail = null;
+      if (fail === 'short') {
+        await super.append(path, bytes.subarray(0, Math.floor(bytes.length / 2)));
+        throw new Error('Only some of the bytes were written');
+      }
+      await super.append(path, bytes);
+      if (fail === 'after') throw new Error('EIO: fsync failed');
+    }
+  }
+  async function computer() {
+    const fs = new Flaky();
+    const set = await setUp(fs, 1, PASS, A, nodeCrypto, FAST);
+    if (!set.ok) throw new Error('setup failed');
+    const own = await snapshot(fs, { generation: 1, device: A }, [chord('work', 'Work', 1)], set.root);
+    return { fs, root: set.root, own };
+  }
+  /** One write as the worker makes it: what it's appending kept (`onAppend`), and the write's error caught. */
+  async function write(fs: SyncFs, own: OwnSegment, records: DataRecord[], root: Uint8Array) {
+    let appending: Appending | null = null;
+    try {
+      const result = await appendRecords(fs, own, records, root, { app: '0.5.0', device: [], onAppend: (a) => (appending = a) }, nodeCrypto);
+      return { result, appending: appending as Appending | null, error: null };
+    } catch (error) {
+      return { result: null, appending: appending as Appending | null, error };
+    }
+  }
+
+  it('the flush or the close throws after the bytes landed: the next write takes them as its own (the same id), and readers read everything once', async () => {
+    const { fs, root, own } = await computer();
+    fs.fail = 'after';
+    const first = await write(fs, own, [chord('a', 'A', 2)], root);
+    expect(first.error).toBeTruthy();
+    // Without what it was writing, its segment looks like another writer's.
+    expect(await ownIntact(fs, own, nodeCrypto)).toBe('other');
+    const settled = await settleAppend(fs, own, first.appending);
+    expect(settled.settled).toBe('landed');
+    expect(await ownIntact(fs, settled.own, nodeCrypto)).toBe('ok');
+    const second = await write(fs, settled.own, [chord('b', 'B', 3)], root);
+    expect(second.result).toMatchObject({ ok: true });
+    const reader = new Reader(fs, B, root);
+    expect(ids(await reader.pass())).toEqual([A, 'work', 'a', 'b']);
+  });
+
+  it('the worker let go mid-flush: what it was writing, kept by chord-data, settles it in the next worker the same way', async () => {
+    const { fs, root, own } = await computer();
+    fs.fail = 'after';
+    const first = await write(fs, own, [chord('a', 'A', 2)], root);
+    // As chord-data keeps it (bytes as base64) and hands it to the next worker.
+    const kept = JSON.parse(JSON.stringify({ ...first.appending!, bytes: Buffer.from(first.appending!.bytes).toString('base64') })) as { expect: OwnSegment; at: number; bytes: string };
+    const handed: Appending = { ...kept, bytes: new Uint8Array(Buffer.from(kept.bytes, 'base64')) };
+    const settled = await settleAppend(fs, own, handed);
+    expect(settled).toEqual({ own: first.appending!.expect, settled: 'landed' });
+  });
+
+  it('a short write on a full disk: its part is cut back, and the write goes again whole; readers never see the part', async () => {
+    const { fs, root, own } = await computer();
+    fs.fail = 'short';
+    const first = await write(fs, own, [chord('a', 'A', 2)], root);
+    expect(first.error).toBeTruthy();
+    const path = `1/${A}/${segmentName(own.segment)}`;
+    expect((await fs.stat(path))!.size).toBeGreaterThan(own.size);
+    const settled = await settleAppend(fs, own, first.appending);
+    expect(settled).toEqual({ own, settled: 'cut' });
+    expect((await fs.stat(path))!.size).toBe(own.size);
+    const second = await write(fs, own, [chord('a', 'A', 2)], root);
+    expect(second.result).toMatchObject({ ok: true });
+    expect(ids(await new Reader(fs, B, root).pass())).toEqual([A, 'work', 'a']);
+  });
+
+  it('a new segment renamed into place before the write failed: its own, not another writer’s', async () => {
+    const { fs, root } = await computer();
+    // Its segment full: the next write starts a new one.
+    const filler = Array.from({ length: 4 }, (_, i): DataRecord => ({ type: 'widget', id: `w${i}`, at: [1_800_000_000_000, 0, A], set: { blob: Buffer.from(nodeCrypto.random(300_000)).toString('base64') } }));
+    const full = await writeSegment(fs, { generation: 1, device: A, segment: 2 }, filler, root, { snapshot: false, app: '0.5.0', device: [] }, nodeCrypto);
+    let appending: Appending | null = null;
+    const result = await appendRecords(fs, full, [chord('a', 'A', 2)], root, { app: '0.5.0', device: [], onAppend: (a) => (appending = a) }, nodeCrypto);
+    expect(result).toMatchObject({ ok: true, own: { segment: 3 } });
+    // As if the answer never came: the next write, from the old segment, settles it first.
+    const settled = await settleAppend(fs, full, appending);
+    expect(settled.settled).toBe('landed');
+    expect(settled.own).toMatchObject({ segment: 3 });
+  });
+
+  it('bytes that aren’t the ones it wrote, or more than it wrote, are another writer’s still', async () => {
+    const { fs, root, own } = await computer();
+    fs.fail = 'after';
+    const first = await write(fs, own, [chord('a', 'A', 2)], root);
+    const path = `1/${A}/${segmentName(own.segment)}`;
+    await fs.append(path, Uint8Array.from([1, 2, 3]));
+    expect((await settleAppend(fs, own, first.appending)).settled).toBeNull();
+    const other = await computer();
+    other.fs.fail = 'after';
+    const mine = await write(other.fs, other.own, [chord('a', 'A', 2)], other.root);
+    const bytes = new Uint8Array(other.fs.files.get(path)!.bytes);
+    bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 0xff;
+    other.fs.plant(path, bytes);
+    expect((await settleAppend(other.fs, other.own, mine.appending)).settled).toBeNull();
+    expect(await appendRecords(other.fs, other.own, [chord('b', 'B', 3)], other.root, { app: '0.5.0', device: [] }, nodeCrypto)).toEqual({ ok: false, problem: 'copied' });
+  });
+});
+
+describe('temp files a stopped write left', () => {
+  it('this computer’s own, older than a minute, go; fresh ones, other names, and other computers’ stay', async () => {
+    const fs = new MemoryFolder();
+    const now = 10 * STALE_TEMP_MS;
+    const old = (path: string) => fs.files.set(path, { bytes: Uint8Array.from([1]), mtime: 1 });
+    const fresh = (path: string) => fs.files.set(path, { bytes: Uint8Array.from([1]), mtime: now - 1_000 });
+    old(`1/${A}/000002.chordlog.part-0123abcd`);
+    old(`1/${A}/000002.chordlog.part-0123abcd.tmp-89abcdef`);
+    old(`1/${A}/000003.chordlog.tmp-89abcdef`);
+    fresh(`1/${A}/000004.chordlog.part-00112233`);
+    old(`1/${A}/000001.chordlog`);
+    old(`1/${A}/000005.chordlog.part-xyz`);
+    old(`1/${A}/notes.txt.tmp-89abcdef`);
+    old(`1/${B}/000002.chordlog.part-0123abcd`);
+    expect(await removeStaleTemps(fs, { generation: 1, device: A }, now)).toBe(3);
+    expect([...fs.files.keys()].sort()).toEqual(
+      [`1/${A}/000001.chordlog`, `1/${A}/000004.chordlog.part-00112233`, `1/${A}/000005.chordlog.part-xyz`, `1/${A}/notes.txt.tmp-89abcdef`, `1/${B}/000002.chordlog.part-0123abcd`].sort(),
+    );
+  });
 });

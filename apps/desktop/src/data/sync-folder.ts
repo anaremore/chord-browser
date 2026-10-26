@@ -10,10 +10,42 @@ import { lstat, mkdir, open, readdir, realpath, rename, rm, stat } from 'node:fs
 import { dirname, join, sep } from 'node:path';
 import type { SyncFs } from '@chord/core';
 
+/**
+ * Set once chord-data has let this worker go (a file call that never returned
+ * held it a minute): when that call does return, nothing more is done in the
+ * folder, so the worker started in its place is the only one writing.
+ */
+let abandoned = false;
+export const abandonFolder = (): void => {
+  abandoned = true;
+};
+
+export class Abandoned extends Error {
+  constructor() {
+    super('Sync let this worker go');
+    this.name = 'Abandoned';
+  }
+}
+
+/** A write the disk took only part of (a full disk): never taken as done. */
+export class ShortWrite extends Error {
+  constructor(written: number, length: number) {
+    super(`Only ${written} of ${length} bytes were written`);
+    this.name = 'ShortWrite';
+  }
+}
+
+/** Every byte of `bytes` through `handle`, or a ShortWrite. */
+async function writeAll(handle: { write(buffer: Uint8Array): Promise<{ bytesWritten: number }> }, bytes: Uint8Array): Promise<void> {
+  const { bytesWritten } = await handle.write(bytes);
+  if (bytesWritten !== bytes.length) throw new ShortWrite(bytesWritten, bytes.length);
+}
+
 export class NodeFolder implements SyncFs {
   constructor(readonly root: string) {}
 
   private full(path: string): string {
+    if (abandoned) throw new Abandoned();
     return path ? join(this.root, ...path.split('/')) : this.root;
   }
 
@@ -69,7 +101,7 @@ export class NodeFolder implements SyncFs {
     if (exclusive) {
       const handle = await open(target, 'wx');
       try {
-        await handle.write(bytes);
+        await writeAll(handle, bytes);
         await handle.sync();
       } finally {
         await handle.close();
@@ -80,18 +112,30 @@ export class NodeFolder implements SyncFs {
     const temp = `${target}.tmp-${randomBytes(4).toString('hex')}`;
     const handle = await open(temp, 'w');
     try {
-      await handle.write(bytes);
+      await writeAll(handle, bytes);
       await handle.sync();
     } finally {
       await handle.close();
     }
+    if (abandoned) throw new Abandoned();
     await rename(temp, target);
   }
 
+  /** The bytes at the end, flushed; a write the disk took only part of throws (`ShortWrite`), and the caller cuts it back. */
   async append(path: string, bytes: Uint8Array): Promise<void> {
     const handle = await open(await this.writable(path), 'a');
     try {
-      await handle.write(bytes);
+      await writeAll(handle, bytes);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async truncate(path: string, size: number): Promise<void> {
+    const handle = await open(await this.writable(path), 'r+');
+    try {
+      await handle.truncate(size);
       await handle.sync();
     } finally {
       await handle.close();
