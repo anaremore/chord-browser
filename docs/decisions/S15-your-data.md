@@ -43,7 +43,7 @@
 | `theme` | UUIDv7 | `name`, `stops`, `grain` | `settings.themes` | ✓ | ✓ |
 | `settings` | `settings` | one field per setting, with dotted names (`adBlocking.offSites`) | `setting` | the portable ones | the portable ones |
 | `route` | the route key (`github.com/acme`) | `chord`, `created` | `link_route` | ✓ | ✓ |
-| `effects` | the site (`nytimes.com`) | `wet`, `css`, `hidden` (`[{selector, label}]`), `presets`, `duet` (`[{ask, summary, css}]`) | `effect` | ✓ | ✓ |
+| `effects` | the site (`nytimes.com`) | `wet`, `css`, `cssOn`, `hidden` (`[{selector, label, on}]`), `presets`, `duet` (`[{ask, summary, css, on}]`) | `effect` | ✓ | ✓ |
 | `icon` | `sha256-` and the hex of its bytes | `mime`, `data` (base64) | `favicon`, but only icons used by a record above | ✓ | ✓ |
 | `zoom` | host | `factor` | `site_zoom` | ✓ | — |
 | `permission` | origin | one field per permission: `allow` or `block` | `site_permission` | ✓ | — |
@@ -55,7 +55,7 @@
 
 - **A pinned tab syncs its home, not where you've browsed to.** Sync leaves out `url`. A new copy on another computer opens at `pinnedUrl`, and `title` and `icon` are written only while the tab is on its pinned address. Browsing in a pinned tab is activity, not setup (D14).
 - **Leaving Pinned counts as a deletion for sync.** If you unpin a tab, sync writes its tombstone. On another computer the tab leaves Pinned too: an open copy moves to that computer's Today, and an unloaded one goes. Pinning it again writes the whole record, with `deleted: false`.
-- **Effects:** `EffectsRecord` in `core/effects.ts` already anticipates this, and it changes a little now, before any file exists. Its fields become the `effects` record's fields, its `version: 1` moves to the file header, and its `updatedAt` becomes the stamp. Every record read is still checked by `effectsFromRecord` and then the sanitizer worker.
+- **Effects:** `EffectsRecord` in `core/effects.ts` already anticipates this, and it changes a little now, before any file exists. Its fields become the `effects` record's fields, its `version: 1` moves to the file header, and its `updatedAt` becomes the stamp. Each item's own switch is in it (2026-10-25), and one that isn't there reads as on, so a record written before the switches loads with everything on. Your CSS's switch is a field of its own, `cssOn`, next to `css`; a hidden element's and a patch's (`on`) are inside `hidden` and `duet`, so each of those lists merges as one field, switches and all (§4). Every record read is still checked by `effectsFromRecord` and then the sanitizer worker.
 - **Unused columns aren't exported:** `chord.duet_enabled` (Duet's off chords are in settings) and `tab.zoom` (zoom is per site).
 
 ### Which settings travel
@@ -247,7 +247,7 @@ Tombstones are kept forever in v1. Each is about 90 bytes, and setup is deleted 
 
 - **Into a new profile,** everything in the file comes in: it's a restore. A profile that has only its first-run chord counts as new, and that chord makes way.
 - **Into a profile with data, import adds what's missing and updates what's older. It never deletes.**
-  - **Things compare field by field:** the file's stamp against this computer's. With sync on, this computer's stamps are sync's own (§7). Without sync, they're the rows' `updated_at`. Migration 15 adds `updated_at` to `setting`, `favorite` and `link_route`, which lack it, so an old export can't overwrite yesterday's edit.
+  - **Things compare field by field:** the file's stamp against this computer's. With sync on, this computer's stamps are sync's own (§7). Without sync, they're the rows' `updated_at`. Migration 16 adds `updated_at` to `setting`, `favorite` and `link_route`, which lack it, so an old export can't overwrite yesterday's edit.
   - **With sync on, what an import brings keeps the file's stamps,** so it can't overrule a newer change another computer made. Only something brought back from deletion gets a new stamp.
   - **Tombstones in a file are ignored,** though exports have none anyway.
   - **Something you deleted here comes back** if the file has it: importing it is the choice.
@@ -353,10 +353,10 @@ Main only routes, as performance rule 1 asks.
 - **Things whose winning value changed go to main as one push.** Main applies them as a `sync.apply` command: no Undo toast, and nothing written to the log. A quiet toast appears only when something you're looking at goes away, such as the chord on screen.
 
 **The change to packages/data is moderate, and additive.**
-- **Migration 15 (with export):** `updated_at` on `setting`, `favorite` and `link_route`, set on every write, plus a small `meta` table for the device id.
+- **Migration 16 (with export; 15 is Effects' switches):** `updated_at` on `setting`, `favorite` and `link_route`, set on every write, plus a small `meta` table for the device id.
 - **`export.ts`:** turns rows into records over a read-only connection, for the export process.
 - **Import:** `importHistory` learns to skip visits it already has. A new `duet.import` op adds threads, messages and images, with Undo bookkeeping like `import_page`'s.
-- **Migration 16 (with sync):**
+- **Migration 17 (with sync):**
   - `sync_record` (type, id, fields JSON, stamps JSON): the merged copy;
   - `sync_outbox`;
   - `sync_cursor`: how far each segment has been read;
@@ -429,7 +429,7 @@ As the maintainer prefers: a few journey E2Es, which run in the Linux container 
 **1. Export** (about a week)
 - **What's built:**
   - in core: the record codecs, the clock (for stamps from rows) and the encrypted container;
-  - migration 15, `export.ts` and the export process;
+  - migration 16, `export.ts` and the export process;
   - Settings' card and `docs/data-format.md`.
 - **Unit tables:**
   - model → record → model for every type, including the fields that must never appear: back/forward state, live state, private chords;
@@ -447,7 +447,7 @@ As the maintainer prefers: a few journey E2Es, which run in the Linux container 
   - Once more, into a profile with data.
 
 **3. Sync** (two to three weeks)
-- **What's built:** migration 16, the stamping hook, the worker, the folder protocol, and Settings.
+- **What's built:** migration 17, the stamping hook, the worker, the folder protocol, and Settings.
 - **Unit tables:**
   - the clock: behind, ahead, equal, the counter;
   - the field merge: concurrent edits, edit against delete, bringing a thing back, the same tab moved twice, a cycle, equal ranks, settings that conflict, unknown types kept and written back;
