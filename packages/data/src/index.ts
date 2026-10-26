@@ -26,8 +26,13 @@ import type {
 import type { ExportCounts } from '@chord/core';
 import type { DuetOp, DuetResult } from './duet';
 
-/** The latest value of one saved entity, or null to delete it. */
-export type WriteOp =
+/**
+ * The latest value of one saved entity, or null to delete it. `sync`: the
+ * value came from another computer (`sync.apply`): it's saved, and never
+ * stamped as a change made here (S15 §4), so it never goes back into this
+ * computer's log.
+ */
+export type WriteOp = (
   | { k: 'chord'; id: string; value: Chord | null }
   | { k: 'node'; id: string; value: SidebarNode | null }
   | { k: 'window'; id: string; value: WindowModel | null }
@@ -44,7 +49,8 @@ export type WriteOp =
   /** A site's Effects, by host (main/effects: they never pass through the store). */
   | { k: 'effect'; id: string; value: SavedEffects | null }
   /** An open tab's back/forward history, by node id: what brings it back where it was after a restart or a crash. */
-  | { k: 'nav'; id: string; value: NavState | null };
+  | { k: 'nav'; id: string; value: NavState | null }
+) & { sync?: true };
 
 /**
  * A tab's back/forward history as Electron gives it (`navigationHistory`):

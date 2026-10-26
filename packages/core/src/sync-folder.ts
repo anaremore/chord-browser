@@ -424,7 +424,7 @@ export async function writeSegment(
   return { ...where, size: bytes.length, frames: sealed.count };
 }
 
-export type AppendResult = { ok: true; own: OwnSegment } | { ok: false; problem: 'copied' | 'missing' };
+export type AppendResult = { ok: true; own: OwnSegment; frames: number; bytes: number } | { ok: false; problem: 'copied' | 'missing' };
 
 /**
  * Records appended to this computer's newest segment as one frame (or more,
@@ -433,7 +433,7 @@ export type AppendResult = { ok: true; own: OwnSegment } | { ok: false; problem:
  * same id (a profile folder copied to a new computer), and nothing is written.
  * A segment past SEGMENT_CLOSE is left as it is, and a new one starts.
  */
-export async function appendRecords(fs: SyncFs, own: OwnSegment, records: readonly DataRecord[], root: Uint8Array, opts: { app: string; device: DataRecord; now?: number }, c: DataCrypto): Promise<AppendResult> {
+export async function appendRecords(fs: SyncFs, own: OwnSegment, records: readonly DataRecord[], root: Uint8Array, opts: { app: string; device: readonly DataRecord[]; now?: number }, c: DataCrypto): Promise<AppendResult> {
   const folder = deviceFolder(own.generation, own.device);
   const path = `${folder}/${segmentName(own.segment)}`;
   const stat = await fs.stat(path);
@@ -442,8 +442,8 @@ export async function appendRecords(fs: SyncFs, own: OwnSegment, records: readon
   const newest = (await segmentsOf(fs, own.generation, own.device)).at(-1) ?? own.segment;
   if (newest > own.segment) return { ok: false, problem: 'copied' };
   if (own.size >= SEGMENT_CLOSE) {
-    const next = await writeSegment(fs, { generation: own.generation, device: own.device, segment: own.segment + 1 }, [opts.device, ...records], root, { snapshot: false, app: opts.app, ...(opts.now ? { now: opts.now } : {}) }, c);
-    return { ok: true, own: next };
+    const next = await writeSegment(fs, { generation: own.generation, device: own.device, segment: own.segment + 1 }, [...opts.device, ...records], root, { snapshot: false, app: opts.app, ...(opts.now ? { now: opts.now } : {}) }, c);
+    return { ok: true, own: next, frames: next.frames, bytes: next.size };
   }
   const head = await fs.read(path, 0, DATA_HEAD);
   const first = head.indexOf(0x0a);
@@ -462,8 +462,183 @@ export async function appendRecords(fs: SyncFs, own: OwnSegment, records: readon
   key.fill(0);
   const bytes = envelope.concat(sealed.bytes);
   await fs.append(path, bytes);
-  return { ok: true, own: { ...own, size: own.size + bytes.length, frames: own.frames + sealed.count } };
+  return { ok: true, own: { ...own, size: own.size + bytes.length, frames: own.frames + sealed.count }, frames: sealed.count, bytes: bytes.length };
 }
 
 /** Keys are 32 bytes: the root key as main keeps it (safeStorage) and hands it back. */
 export const isRootKey = (key: Uint8Array): boolean => key.length === KEY;
+
+/* ---------- The folder as a whole ---------- */
+
+/** What a folder you picked holds, before any passphrase: nothing of Chord's yet, one to join, or one Chord can't use. */
+export type FolderInspection =
+  | { state: 'new'; generation: number }
+  | { state: 'join'; generation: number; computers: number }
+  | { state: 'conflict' }
+  | { state: 'newer' }
+  | { state: 'damaged' };
+
+/**
+ * A folder you picked, looked at (`Chord sync` in it): its newest
+ * generation's file, and how many computers sync through it. Their names are
+ * inside the encryption, so they show once the passphrase opens it. Two
+ * `sync-<n>.json` of one generation (a sync app's conflicted copy: two
+ * computers set it up at once) can't be joined.
+ */
+export async function inspectFolder(fs: SyncFs): Promise<FolderInspection> {
+  const found = await generations(fs);
+  if (!found || found.generations.length === 0) {
+    // Folders left from something else start no generation of their own: a new one goes past them.
+    const names = (await fs.list('')) ?? [];
+    const past = names.filter((n) => /^\d{1,6}$/.test(n)).map(Number);
+    return found?.conflicted ? { state: 'conflict' } : { state: 'new', generation: Math.max(0, ...past) + 1 };
+  }
+  if (found.conflicted) return { state: 'conflict' };
+  const generation = found.generations.at(-1)!;
+  const file = await readSyncFile(fs, generation);
+  if (!file.ok) return { state: file.problem === 'newer' ? 'newer' : 'damaged' };
+  return { state: 'join', generation, computers: (await devicesIn(fs, generation)).length };
+}
+
+/**
+ * Sync set up on this computer, in a folder with nothing of Chord's: the
+ * first generation's file (never over another's), then a look for a second
+ * one a sync app delivered meanwhile (S15 §6: the second to set it up stops).
+ */
+export async function setUp(fs: SyncFs, generation: number, passphrase: string, self: string, c: DataCrypto, params: ScryptParams = SCRYPT): Promise<{ ok: true; root: Uint8Array } | { ok: false; problem: 'conflict' }> {
+  await fs.mkdir('');
+  let root: Uint8Array;
+  try {
+    root = await writeSyncFile(fs, generation, passphrase, self, c, params);
+  } catch {
+    return { ok: false, problem: 'conflict' };
+  }
+  const found = await generations(fs);
+  if (!found || found.conflicted || found.generations.some((g) => g > generation)) {
+    root.fill(0);
+    return { ok: false, problem: 'conflict' };
+  }
+  return { ok: true, root };
+}
+
+/** What a look at the folder found, before reading anyone's log. */
+export type FolderLook =
+  | { state: 'ok' }
+  /** `Chord sync`, or this generation's file, isn't there: the sync app isn't running, or the folder moved. */
+  | { state: 'missing' }
+  /** A newer Chord's file, or a key derivation this one can't run. */
+  | { state: 'newer' }
+  /** A newer generation: the passphrase was changed, on `by`. */
+  | { state: 'changed'; generation: number; by: string }
+  /** This generation's file doesn't open with this computer's key: two computers set the folder up at once, and the other's won. */
+  | { state: 'conflict' };
+
+export async function lookAtFolder(fs: SyncFs, generation: number, root: Uint8Array, c: DataCrypto): Promise<FolderLook> {
+  const found = await generations(fs);
+  if (!found || found.generations.length === 0) return { state: 'missing' };
+  const newest = found.generations.at(-1)!;
+  if (newest > generation) {
+    const file = await readSyncFile(fs, newest);
+    if (file.ok) return { state: 'changed', generation: newest, by: file.file.by };
+    if (file.problem === 'newer') return { state: 'newer' };
+  }
+  const file = await readSyncFile(fs, generation);
+  if (!file.ok) return { state: file.problem === 'newer' ? 'newer' : 'missing' };
+  return keyOpens(file.file, root, c) ? { state: 'ok' } : { state: 'conflict' };
+}
+
+/** One step of reading the other computers' logs. */
+export type ReadEvent =
+  | { kind: 'records'; device: string; segment: number; records: DataRecord[]; cursor: SegmentCursor; bad: number }
+  /** A computer whose log a newer Chord wrote: nothing more of it is read. */
+  | { kind: 'newer'; device: string }
+  /** When a computer last wrote (its newest segment's time), for Settings' list. */
+  | { kind: 'seen'; device: string; at: number };
+
+/**
+ * Every other computer's log, from where this one has read to: for each, its
+ * newest snapshot and what came after (earlier segments are passed over: the
+ * snapshot holds them), a segment at a time, at most `budget` bytes a step.
+ * Each step is yielded for the caller to merge (and save its cursor) before
+ * the next is read. A segment that isn't whole yet is read again next time.
+ */
+export async function* readComputers(
+  fs: SyncFs,
+  opts: { generation: number; self: string; root: Uint8Array; cursor(device: string, segment: number): SegmentCursor | null; budget?: number },
+  c: DataCrypto,
+): AsyncGenerator<ReadEvent> {
+  for (const device of await devicesIn(fs, opts.generation)) {
+    if (device === opts.self) continue;
+    const segments = await segmentsOf(fs, opts.generation, device);
+    if (segments.length === 0) continue;
+    // The newest snapshot: everything before it is in it.
+    let start = segments[0]!;
+    let newer = false;
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const known = opts.cursor(device, segments[i]!);
+      const header = known ? null : await segmentHeader(fs, { generation: opts.generation, device, segment: segments[i]! }, opts.root, c);
+      if (header === 'newer') {
+        newer = true;
+        break;
+      }
+      if (known?.snapshot || (header && header.snapshot)) {
+        start = segments[i]!;
+        break;
+      }
+    }
+    if (newer) {
+      yield { kind: 'newer', device };
+      continue;
+    }
+    for (const segment of segments) {
+      if (segment < start) continue;
+      for (;;) {
+        const read = await readSegment(fs, { generation: opts.generation, device, segment }, opts.root, opts.cursor(device, segment), c, opts.budget);
+        if (read.stopped === 'newer') {
+          newer = true;
+          break;
+        }
+        yield { kind: 'records', device, segment, records: read.records, cursor: read.cursor, bad: read.bad };
+        if (!read.more) break;
+      }
+      if (newer) break;
+    }
+    if (newer) {
+      yield { kind: 'newer', device };
+      continue;
+    }
+    const last = await fs.stat(`${deviceFolder(opts.generation, device)}/${segmentName(segments.at(-1)!)}`);
+    if (last) yield { kind: 'seen', device, at: last.mtime };
+  }
+}
+
+/**
+ * A snapshot as this computer's first segment in a generation (joining,
+ * setting up, a new passphrase, a new id) or as compaction: after every
+ * segment it has there, and then those earlier ones go, since the snapshot
+ * holds them.
+ */
+export async function writeSnapshot(fs: SyncFs, where: { generation: number; device: string }, records: readonly DataRecord[], root: Uint8Array, opts: { app: string; now?: number }, c: DataCrypto): Promise<OwnSegment> {
+  const before = await segmentsOf(fs, where.generation, where.device);
+  const own = await writeSegment(fs, { ...where, segment: (before.at(-1) ?? 0) + 1 }, records, root, { snapshot: true, app: opts.app, ...(opts.now ? { now: opts.now } : {}) }, c);
+  for (const n of before) await fs.remove(`${deviceFolder(where.generation, where.device)}/${segmentName(n)}`).catch(() => undefined);
+  return own;
+}
+
+/** A new passphrase (S15 §6): the next generation's file. This computer's snapshot goes under it next (`writeSnapshot`). */
+export async function nextGeneration(fs: SyncFs, passphrase: string, self: string, c: DataCrypto, params: ScryptParams = SCRYPT): Promise<{ generation: number; root: Uint8Array }> {
+  const found = await generations(fs);
+  const generation = Math.max(0, ...(found?.generations ?? [])) + 1;
+  return { generation, root: await writeSyncFile(fs, generation, passphrase, self, c, params) };
+}
+
+/** The newest generation's root key from a passphrase (joining, or after it changed): null when it doesn't open it. */
+export async function unlockNewest(fs: SyncFs, passphrase: string, c: DataCrypto): Promise<{ ok: true; generation: number; root: Uint8Array } | { ok: false; problem: 'wrong' | 'missing' | 'newer' | 'damaged' }> {
+  const found = await generations(fs);
+  if (!found || found.generations.length === 0) return { ok: false, problem: 'missing' };
+  const generation = found.generations.at(-1)!;
+  const file = await readSyncFile(fs, generation);
+  if (!file.ok) return { ok: false, problem: file.problem };
+  const root = await unlock(file.file, passphrase, c);
+  return root ? { ok: true, generation, root } : { ok: false, problem: 'wrong' };
+}

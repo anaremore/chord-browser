@@ -35,6 +35,7 @@ import {
   type InstalledExtension,
   type LinkRoute,
   type PersistedState,
+  type Platform,
   type SavedEffects,
   type SidebarNode,
   type SitePermissions,
@@ -45,6 +46,7 @@ import { runDuet, threadOf, type DuetOp, type DuetResult } from './duet';
 import { exportCounts } from './export';
 import { MIGRATIONS } from './migrations';
 import { chordOf, favoriteOf, iconOf, nodeOf, nodeSelect, num, parseJson, siteEffectsOf, str, strOrNull, type Row } from './rows';
+import { SyncStore } from './sync';
 
 /** The profile every chord belongs to until "Keep sign-ins separate" exists. */
 const DEFAULT_PROFILE = 'default';
@@ -99,11 +101,17 @@ export class ChordDatabase {
   private writingImports = 0;
   /** The largest history_visit id an import has had this session: the next import's visits go above it (`importTables`). */
   private importedUpto = 0;
+  /** Sync's tables (sync.ts): write() stamps your changes through it while sync is on. */
+  readonly sync: SyncStore;
 
-  constructor(readonly file: string) {
+  constructor(
+    readonly file: string,
+    platform: Platform = process.platform === 'darwin' || process.platform === 'win32' ? process.platform : 'linux',
+  ) {
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
     this.migrate();
+    this.sync = new SyncStore((text) => this.sql(text), () => this.device(), platform);
     // Archived tabs past their keep-by date, icons nothing uses any more, and picks unused for their lifetime.
     this.db.prepare('DELETE FROM archive_item WHERE archived_at < ?').run(Date.now() - ARCHIVE_KEEP_MS);
     this.db.exec(
@@ -282,7 +290,18 @@ export class ChordDatabase {
         // The column is a BLOB (migration 1): the JSON goes in as UTF-8 bytes.
         if (op.k === 'nav') this.sql('UPDATE tab SET nav_state = ? WHERE node_id = ?').run(op.value ? Buffer.from(JSON.stringify(op.value)) : null, op.id);
       }
+      // Sync's stamping hook (S15 §7), in the same transaction: what you changed of synced things gets a stamp. Off, it isn't called.
+      if (this.sync.stamping) this.sync.stamp(ops, now);
     });
+  }
+
+  /** Work in one transaction (sync's merge and its cursor, a slice at a time). */
+  atomically<T>(work: () => T): T {
+    let out!: T;
+    this.transaction(() => {
+      out = work();
+    });
+    return out;
   }
 
   /** Open tabs' saved back/forward histories, by node id. */

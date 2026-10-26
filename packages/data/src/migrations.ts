@@ -285,4 +285,22 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE duet_thread ADD COLUMN imported_at INTEGER;
   `,
+  // 19: sync (docs/decisions/S15-your-data.md §6, §7). sync_record is the merged copy of every synced thing: each field's
+  // value (fields) and the stamp of the change that set it (stamps), as JSON objects by field; local is what this
+  // computer last wrote of it ({"deleted":true} once it's gone here; NULL, never), which write() compares the model with
+  // to stamp only what you changed. sync_outbox holds your stamped changes until the sync worker has appended them to
+  // this computer's log; sync_cursor, how far each computer's segments have been read. The clock, the folder, the
+  // generation and this computer's own segment are in meta (sync.*). Empty, and untouched by write(), while sync is off.
+  `
+  CREATE TABLE IF NOT EXISTS sync_record (
+    type TEXT NOT NULL, id TEXT NOT NULL, fields TEXT NOT NULL, stamps TEXT NOT NULL, local TEXT,
+    PRIMARY KEY (type, id)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS sync_outbox (seq INTEGER PRIMARY KEY, record TEXT NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS sync_cursor (
+    generation INTEGER NOT NULL, device TEXT NOT NULL, segment INTEGER NOT NULL,
+    head TEXT NOT NULL, offset INTEGER NOT NULL, frame INTEGER NOT NULL, snapshot INTEGER NOT NULL,
+    PRIMARY KEY (generation, device, segment)
+  ) STRICT;
+  `,
 ];
