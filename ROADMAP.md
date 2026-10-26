@@ -59,7 +59,7 @@ A milestone is done when all of these hold:
 | **4 · Deeper** | — | Mar 2027 + | install signed builds that update themselves on every OS |
 | **After 0.1** | 0.1.x | Nov 2026 | sign in to sites that ask for a password in a box, and trust that a force-quit loses nothing |
 | | 0.2 · Cleaner pages | Dec 2026 | browse without ads or trackers, and bring your bookmarks and history from Chrome, Edge, Brave, Firefox or Safari |
-| | 0.3 · Effects | next, after the performance plan (moved up 2026-10-25); Effects built 2026-10-25 | restyle a site by hand or by asking Duet, with a Dry/Wet switch; then Duet fills forms |
+| | 0.3 · Effects | next, after the performance plan (moved up 2026-10-25); Effects and Duet fills forms built 2026-10-25 | restyle a site by hand or by asking Duet, with a Dry/Wet switch; have Duet fill a form you check first |
 | | 0.4 · Your data | right after Effects (moved up 2026-10-25) | export everything, and sync your setup through a folder you already sync, end-to-end encrypted |
 
 ## Where we are (updated 2026-10-25)
@@ -72,9 +72,9 @@ Released: **0.1.0** (2026-10-24) and **0.2.1** (2026-10-25), both previews; 0.2.
 | Phase 2 | Duet, split view, mini window, Peek, hover previews | | Duet's slide-in; Codex's live-turn checks (S5, after its usage limit resets Nov 16); Electron 46 (2027-01-05) |
 | Phase 3 | link routes, in-app updates (live since 0.2.1), Google-free mode, D7 Safe Browsing, a Flatpak built from source, the apt/dnf upload workflow (off until Cloudsmith is set up), the 72-hour runbook | | yours: the Flathub manifest and submission, the Cloudsmith repository and key, Safe Browsing checked by hand |
 | Phase 4 | Windows signing (live since 0.2.1); macOS signing and notarization, built and off | | yours: an Apple Developer account, then Mac in-app updates; a Store submission; Electron 47 |
-| After 0.1 | 0.1.x's gaps, 0.2's cleaner pages, Effects, Chord Player (waiting on its secrets and hand checks), DevTools in the window, counts on tabs, battery, CI checks for launch time and memory | the P0 performance pass: a lighter launch; the design for Your data | Clear Today's slow frames; the back/forward cache (Electron upstream); Duet fills forms; Your data |
+| After 0.1 | 0.1.x's gaps, 0.2's cleaner pages, Effects, Duet fills forms, Chord Player (waiting on its secrets and hand checks), DevTools in the window, counts on tabs, battery, CI checks for launch time and memory | the P0 performance pass: a lighter launch; the design for Your data | Clear Today's slow frames; the back/forward cache (Electron upstream); Your data |
 
-**Next, in order:** finish the performance pass, then release 0.3 (tagged when you say), then Duet fills forms, then Your data (export, then sync). Electron 46 comes first whenever it lands, on the 72-hour clock.
+**Next, in order:** finish the performance pass, then release 0.3 (tagged when you say), with Duet fills forms, then Your data (export, then sync). Electron 46 comes first whenever it lands, on the 72-hour clock.
 
 ---
 
@@ -415,6 +415,8 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
   - *Not yet:* one set of Effects for a site and all its subdomains; a back/forward cache will need the stylesheet put back on a restored page.
 
 - **P1 Duet fills forms** (D16, decided 2026-10-24): "fill only, you submit". Only when you ask, on the tab on screen; a review card of each field's value, then Chord fills them, with Undo; never submits, never passwords, cards, one-time codes or hidden fields. After Effects, sharing its safety review of writing into pages.
+  - **Built 2026-10-25** (ARCHITECTURE.md §11.6, DESIGN.md §7.8). Ask Duet to fill the form on the tab on screen: it reads the fields' structure (labels, kinds, names, autocomplete hints, choices, required; never what's in them) under the chat's reading scope, and shows its values in a card in the panel. Each field is editable and can be left out; nothing goes in until you press Fill. Chord fills from its isolated world with the native setter and the events React, Vue and Angular listen for, outlines each field for a moment and scrolls to the first, and Undo puts back what was there. Chord's ids for the fields are checked again at Fill against the field as it was read, so a page that changed fills nothing and says so. Never a password, payment, one-time-code, ID-number, hidden or off-screen field, a frame, a private window, a Never site, or anything when Duet reads nothing; never a button pressed or a form submitted. Tests: two journeys in `duet.spec.ts` (on X11 and Wayland), a timed read of a page of 5,000 fields, and the classification and mapping tables in `core/test/duet-forms.test.ts`.
+  - *Not yet:* forms inside frames (even the same site's), multiple-choice lists and rich-text editors; an "about me" note Duet could fill from (D16); a hand check on real sign-up and checkout pages on each OS.
 
 ### 0.4 · Your data · right after Effects (moved up 2026-10-25)
 - **Design, decided 2026-10-25:** [docs/decisions/S15-your-data.md](docs/decisions/S15-your-data.md): one record format for export and sync, encryption, merging, import, the sync folder, and the build order. The maintainer took all ten of its recommendations: a plain export by default, settings from a file only when you turn them on, permissions imported as blocks only, one *Your data* page in Settings, scrypt and AES-256-GCM, and the rest in §10.
