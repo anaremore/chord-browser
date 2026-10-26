@@ -137,6 +137,25 @@ export const runAction = (shell: Page, action: string) => shell.evaluate((a) => 
 
 export const dispatch = (shell: Page, command: unknown) => shell.evaluate((c) => (window as unknown as ChordGlobal).chord.state.dispatch(c), command);
 
+/** Minimal mode's peek is off by default (DESIGN.md §3.3): Settings turns it on, then closes. */
+export async function turnOnSidebarPeek(app: ElectronApplication, shell: Page): Promise<void> {
+  await runAction(shell, 'app.settings');
+  const settings = await pageWhere(app, isSettings);
+  await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ sidebarPeek: true }));
+  await expect
+    .poll(() => shell.evaluate(async () => ((await (window as unknown as ChordGlobal).chord.state.snapshot()).state as { settings?: { sidebarPeek?: boolean } }).settings?.sidebarPeek))
+    .toBe(true);
+  await closeSettings(app);
+}
+
+/** Close the Settings window, so the browser window is the only one again. */
+export const closeSettings = (app: ElectronApplication) =>
+  app.evaluate(({ BaseWindow, WebContentsView }) => {
+    for (const w of BaseWindow.getAllWindows()) {
+      if (w.contentView.children.some((v) => v instanceof WebContentsView && v.webContents.getURL().includes('settings'))) w.close();
+    }
+  });
+
 /** The window's id, its active chord, and the active tab's id. */
 export async function where(shell: Page): Promise<{ windowId: string; chordId: string; tabId: string | null }> {
   return shell.evaluate(async () => {

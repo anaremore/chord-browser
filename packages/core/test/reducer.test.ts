@@ -185,15 +185,19 @@ describe('reducer', () => {
     expect(t.run({ t: 'settings.set', settings: { motion: { sidebar: false } } }).patches).toHaveLength(0);
   });
 
-  // Switches that start on: search suggestions, update checks, and minimal mode's peek on pointing.
-  it.each(['searchSuggestions', 'checkForUpdates', 'sidebarPeek'] as const)('turns %s off and on', (key) => {
+  // Switches that start on (search suggestions, update checks) and one that starts off (minimal mode's peek on pointing).
+  it.each([
+    ['searchSuggestions', true],
+    ['checkForUpdates', true],
+    ['sidebarPeek', false],
+  ] as const)('turns %s over from its default (%s) and back', (key, initial) => {
     const t = setup();
-    expect(t.state.settings[key]).toBe(true);
-    t.run({ t: 'settings.set', settings: { [key]: false } });
-    expect(t.state.settings[key]).toBe(false);
-    expect(t.run({ t: 'settings.set', settings: { [key]: false } }).patches).toHaveLength(0);
-    t.run({ t: 'settings.set', settings: { [key]: true } });
-    expect(t.state.settings[key]).toBe(true);
+    expect(t.state.settings[key]).toBe(initial);
+    t.run({ t: 'settings.set', settings: { [key]: !initial } });
+    expect(t.state.settings[key]).toBe(!initial);
+    expect(t.run({ t: 'settings.set', settings: { [key]: !initial } }).patches).toHaveLength(0);
+    t.run({ t: 'settings.set', settings: { [key]: initial } });
+    expect(t.state.settings[key]).toBe(initial);
   });
 
   it('Google-free mode never searches with Google, and keeps a non-Google choice', () => {

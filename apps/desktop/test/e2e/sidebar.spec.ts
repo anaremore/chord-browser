@@ -10,6 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { closeSettings } from './a11y-kit';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -494,21 +495,51 @@ const countPeeks = (shell: Page) =>
   });
 const peeks = (shell: Page) => shell.evaluate(() => (window as unknown as { peeks: number }).peeks);
 
-test('minimal mode peeks the sidebar over the page from the left edge or the toggle, without the bar’s controls twice; Settings turns that off, for good', async () => {
+test('minimal mode: off by default, the window’s edge does nothing; turned on in Settings, the edge or the toggle shows the sidebar itself over the page, for good', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   let app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_USER_DATA: profile });
   const peekSwitch = (settings: Page) => settings.getByRole('switch', { name: 'Show the sidebar when you point at the window’s edge' });
+  /** The sidebar's place on screen, rounded: docked and peeking, it's the same. */
+  const box = async (sidebar: Locator) => {
+    const b = (await sidebar.boundingBox())!;
+    return { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) };
+  };
   try {
     const shell = await pageWhere(app, isShell);
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
     await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    const docked = await box(sidebar);
     await countPeeks(shell);
     await shell.getByRole('button', { name: 'Hide sidebar' }).click();
     await expect(sidebar).toBeHidden();
     // The page sits right above the shell…
     await expect.poll(async () => (await views(app))[1]!.url).toBe(`${site.origin}/`);
 
-    // …until the pointer reaches the window's left edge: the sidebar slides in over the page.
+    // …and off by default, neither the window's edge nor resting on the toggle shows the sidebar.
+    const show = shell.getByRole('button', { name: 'Show sidebar' });
+    const restOnToggle = async () => {
+      await show.hover();
+      await shell.mouse.move(700, 300);
+      await show.hover();
+    };
+    await shell.mouse.move(300, 300);
+    await shell.mouse.move(1, 300, { steps: 6 });
+    await shell.waitForTimeout(800);
+    await restOnToggle();
+    await shell.waitForTimeout(800);
+    expect(await peeks(shell)).toBe(0);
+    await expect(sidebar).toBeHidden();
+
+    // Settings → Appearance turns it on.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Appearance' }).click();
+    await expect(peekSwitch(settings)).toHaveAttribute('aria-checked', 'false');
+    await peekSwitch(settings).click();
+    await expect(peekSwitch(settings)).toHaveAttribute('aria-checked', 'true');
+    await closeSettings(app);
+
+    // The pointer reaching the window's left edge: the sidebar slides in over the page.
     await shell.mouse.move(300, 300);
     await shell.mouse.move(1, 300, { steps: 6 });
     await expect(sidebar).toBeVisible();
@@ -519,55 +550,35 @@ test('minimal mode peeks the sidebar over the page from the left edge or the tog
     await shell.mouse.move(60, 300, { steps: 4 });
     await shell.waitForTimeout(800);
     await expect(sidebar).toBeVisible();
-    // Its tabs, under the bar that has the toggle, back, forward, reload and the address: each shows once.
+    // It's the sidebar itself, where it is when it's showing, with its toggle, buttons and address.
+    expect(await box(sidebar)).toEqual(docked);
     await expect(sidebar.getByRole('tree', { name: 'Today' })).toContainText('First page');
-    for (const name of ['Show sidebar', 'Back', 'Forward', 'Reload']) await expect(shell.getByRole('button', { name, exact: true })).toHaveCount(1);
-    await expect(shell.getByRole('button', { name: /^Address/ })).toHaveCount(1);
-    await expect(sidebar.getByRole('button', { name: /^(Show sidebar|Back|Forward|Reload|Address)/ })).toHaveCount(0);
-    await expect(sidebar.locator('header')).toBeHidden();
+    for (const name of ['Show sidebar', 'Back', 'Forward', 'Reload']) await expect(sidebar.getByRole('button', { name, exact: true })).toBeVisible();
+    await expect(sidebar.getByRole('button', { name: /^Address/ })).toBeVisible();
 
     // Pointing back at the page puts it away, and the shell goes back under the page.
     await shell.mouse.move(700, 300, { steps: 6 });
     await expect(sidebar).toBeHidden();
     await expect.poll(async () => (await views(app))[1]!.url).toBe(`${site.origin}/`);
     // Resting on the toggle peeks it too, once the pointer has left it since the sidebar was hidden.
-    const show = shell.getByRole('button', { name: 'Show sidebar' });
-    const restOnToggle = async () => {
-      await show.hover();
-      await shell.mouse.move(700, 300);
-      await show.hover();
-    };
-    let before = await peeks(shell);
+    const before = await peeks(shell);
     await restOnToggle();
     await expect.poll(() => peeks(shell)).toBeGreaterThan(before);
+    // The peeking sidebar's own toggle docks it. (In the test, the window's real cursor sits mid-window, and lifting
+    // the shell sends a move from there, which puts a peek from the toggle away: on a desk the cursor is on the toggle.)
     await shell.mouse.move(700, 300, { steps: 6 });
     await expect(sidebar).toBeHidden();
-
-    // Settings → Appearance turns it off.
-    await runAction(shell, 'app.settings');
-    const settings = await pageWhere(app, isSettings);
-    await settings.getByRole('button', { name: 'Appearance' }).click();
-    await expect(peekSwitch(settings)).toHaveAttribute('aria-checked', 'true');
-    await peekSwitch(settings).click();
-    await expect(peekSwitch(settings)).toHaveAttribute('aria-checked', 'false');
-    // Neither the edge nor resting on the toggle peeks now…
-    before = await peeks(shell);
     await shell.mouse.move(1, 300, { steps: 6 });
-    await shell.waitForTimeout(800);
-    await restOnToggle();
-    await shell.waitForTimeout(800);
-    expect(await peeks(shell)).toBe(before);
-    await expect(sidebar).toBeHidden();
-    // …and clicking it still docks the sidebar, with its own toggle, buttons and address.
-    await show.click();
     await expect(sidebar).toBeVisible();
+    await shell.mouse.move(60, 300, { steps: 4 });
+    await sidebar.getByRole('button', { name: 'Show sidebar', exact: true }).click();
     await expect(sidebar.getByRole('button', { name: 'Hide sidebar' })).toBeVisible();
-    await expect(sidebar.getByRole('button', { name: /^Address/ })).toBeVisible();
+    await expect.poll(async () => (await views(app))[1]!.x).toBeGreaterThan(4);
   } finally {
     await app.close();
   }
 
-  // After a relaunch it's still off.
+  // After a relaunch it's still on.
   app = await launch({ CHORD_USER_DATA: profile });
   try {
     const shell = await pageWhere(app, isShell);
@@ -576,14 +587,15 @@ test('minimal mode peeks the sidebar over the page from the left edge or the tog
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
     await settings.getByRole('button', { name: 'Appearance' }).click();
-    await expect(peekSwitch(settings)).toHaveAttribute('aria-checked', 'false');
+    await expect(peekSwitch(settings)).toHaveAttribute('aria-checked', 'true');
+    await closeSettings(app);
     await countPeeks(shell);
     await shell.getByRole('button', { name: 'Hide sidebar' }).click();
     await expect(sidebar).toBeHidden();
     await shell.mouse.move(300, 300);
     await shell.mouse.move(1, 300, { steps: 6 });
-    await shell.waitForTimeout(800);
-    expect(await peeks(shell)).toBe(0);
+    await expect(sidebar).toBeVisible();
+    expect(await peeks(shell)).toBeGreaterThan(0);
   } finally {
     await app.close();
   }

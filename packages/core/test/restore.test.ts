@@ -128,10 +128,10 @@ describe('restoreState', () => {
   });
 
   it.each<[string, Record<string, unknown>, boolean]>([
-    ['on for a new profile, and for one saved before the setting', {}, true],
+    ['off for a new profile, and for one saved before the setting', {}, false],
     ['off as saved', { sidebarPeek: false }, false],
     ['on as saved', { sidebarPeek: true }, true],
-    ['anything but a boolean: on', { sidebarPeek: 'no' }, true],
+    ['anything but a boolean: off', { sidebarPeek: 'yes' }, false],
   ])('restores minimal mode’s peek on pointing: %s', (_name, settings, expected) => {
     expect(restoreState({ chords: [chord('c1', 'a0')], nodes: [], windows: [], settings }, seed).settings.sidebarPeek).toBe(expected);
   });

@@ -374,7 +374,7 @@ export interface Settings {
   pagePreviews: boolean;
   /** Presenting mode collapses each window's sidebar, and docks it again when it ends (ARCHITECTURE.md §9). */
   presentingHidesSidebar: boolean;
-  /** Minimal mode: pointing at the window's left edge, or resting on the sidebar button, shows the hidden sidebar over the page (DESIGN.md §3.3). */
+  /** Minimal mode: pointing at the window's left edge, or resting on the sidebar button, shows the hidden sidebar over the page (DESIGN.md §3.3). Off unless you turn it on. */
   sidebarPeek: boolean;
   /** Recent screenshots are kept in `<userData>/Screenshots/` for the downloads panel's list (DESIGN.md §7.12); off deletes them. */
   keepScreenshots: boolean;
@@ -497,7 +497,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoPipDefaultOff: true,
   pagePreviews: true,
   presentingHidesSidebar: false,
-  sidebarPeek: true,
+  sidebarPeek: false,
   keepScreenshots: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},

@@ -576,7 +576,7 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
       <div className={settingsStyles.group}>
         <Row
           label="Show the sidebar when you point at the window’s edge"
-          description={`With the sidebar hidden, pointing at the window’s left edge or resting on the sidebar button shows it over the page. Off, it appears only when you click that button${toggleKeys ? ` or press ${toggleKeys}` : ''}.`}
+          description={`With the sidebar hidden, pointing at the window’s left edge or resting on the sidebar button shows it over the page, as it is when it’s showing. Off, it appears only when you click that button${toggleKeys ? ` or press ${toggleKeys}` : ''}.`}
           changed={settings.sidebarPeek !== DEFAULT_SETTINGS.sidebarPeek}
           onReset={() => void api.settings.set({ sidebarPeek: DEFAULT_SETTINGS.sidebarPeek })}
           control={

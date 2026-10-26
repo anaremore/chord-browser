@@ -39,6 +39,7 @@ import {
   tabIdByTitle,
   where,
   THEMES,
+  turnOnSidebarPeek,
   type Finding,
   type ThemeName,
 } from './a11y-kit';
@@ -143,13 +144,21 @@ for (const mode of APPEARANCES) {
         await runAction(shell, 'split.separate');
         await expect(shell.getByRole('separator', { name: 'Resize split panes' })).toHaveCount(0);
 
-        // The minimal bar, and the sidebar peeking over the page.
+        // The minimal bar, and the sidebar peeking over the page (turned on in Settings: it's off by default).
+        await turnOnSidebarPeek(app, shell);
+        // Docked and peeking, the sidebar should look the same (design QA: test-results/captures).
+        await shell.screenshot({ path: resolve(capturesDir, `sidebar-docked-${mode}.png`) });
         await runAction(shell, 'view.toggleSidebar');
         await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
         findings.push(...(await audit(shell, 'minimal bar', { appearance: mode })));
         await shell.mouse.move(2, 300);
         await expect(shell.locator('[data-peek]')).toBeVisible();
+        // Into the sidebar, which keeps it: the test's real cursor sits mid-window, over the page.
+        await shell.mouse.move(60, 300, { steps: 3 });
         findings.push(...(await audit(shell, 'peek', { appearance: mode })));
+        await expect(shell.locator('[data-peek]')).toBeVisible();
+        await shell.waitForTimeout(400);
+        await shell.screenshot({ path: resolve(capturesDir, `sidebar-peek-${mode}.png`) });
         await shell.mouse.move(700, 400);
         await runAction(shell, 'view.toggleSidebar');
 

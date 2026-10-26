@@ -451,8 +451,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const [liveWidth, setLiveWidth] = useState<number | null>(null);
   const sidebarWidth = liveWidth ?? win?.sidebarWidth ?? SIDEBAR_WIDTH.default;
 
-  // Minimal mode's peek: the sidebar slides in over the page and away once the pointer leaves.
-  // Settings → Appearance can turn it off: then neither the edge nor the toggle listens for it.
+  // Minimal mode's peek, when Settings → Appearance turns it on: the sidebar, as it is when it's showing,
+  // slides in over the page and away once the pointer leaves. Off, neither the edge nor the toggle listens for it.
   const pointPeeks = state.settings.sidebarPeek;
   const [peek, setPeek] = useState(false);
   const peekTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -474,9 +474,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const hoverToggle = (over: boolean) => {
     if (!over) {
       peekArmed.current = true;
-      if (peek) schedulePeek(false, PEEK_DELAY_MS);
-      else keepPeek();
-    } else if (peekArmed.current) {
+      // Once it peeks, the sidebar covers this toggle with its own, so leaving it is the sidebar's to handle.
+      if (!peek) keepPeek();
+    } else if (peekArmed.current && !peek) {
       schedulePeek(true, PEEK_DELAY_MS);
     }
   };
@@ -564,7 +564,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
             aria-hidden={(collapsed && !peeking) || undefined}
             onPointerEnter={() => peeking && keepPeek()}
             onPointerMove={() => peeking && keepPeek()}
-            onPointerLeave={() => peeking && schedulePeek(false, PEEK_DELAY_MS)}
+            // Lifting the shell above the page tells it the pointer left, though it never moved (no element it went to):
+            // only a real move out of the sidebar, onto the bar or the page, puts it away.
+            onPointerLeave={(e) => peeking && e.relatedTarget !== null && schedulePeek(false, PEEK_DELAY_MS)}
             onKeyDown={(e) => {
               if (peeking && e.key === 'Escape') setPeek(false);
             }}
@@ -652,7 +654,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                 })}
               </div>
 
-              {(!collapsed || peeking) && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} undoKeys={!collapsed} mac={info.platform === 'darwin'} />}
+              {/* Collapsed, toasts show in the bar, a peek included: the sidebar would show them twice. */}
+              {!collapsed && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} undoKeys mac={info.platform === 'darwin'} />}
 
               {/* Presenting mode is on, and how to turn it off (DESIGN.md §7.13). */}
               <PresentingCard presenting={presenting} keys={presentingKeys} enter={spring('overlay', 'sidebar')} />

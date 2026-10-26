@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 import { paneRects } from '@chord/core';
 import { springCurve, springs } from '@chord/tokens';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { turnOnSidebarPeek } from './a11y-kit';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -403,6 +404,7 @@ test('peeking the sidebar while the page glides brings the page back at once, un
   const app = await launch();
   try {
     const { shell } = await ready(app);
+    await turnOnSidebarPeek(app, shell);
     await setMotion(app, shell, true);
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
     // The picture glides slowly here, so the peek surely comes while it does.
