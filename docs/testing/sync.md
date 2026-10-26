@@ -34,6 +34,7 @@ Run these for each app, between two systems at least. A change counts as arrived
 | *Change passphrase…* on one | The other says *The passphrase was changed on <name>*; the old passphrase doesn't open it, the new one does; then changes cross again. In the folder: `sync-2.json` and `2/`; the others' `1/<id>` folders go once they've moved, and the changer's after 30 days |
 | *Lost it? Start over…* on one, while it asks for the passphrase | It goes on under the new passphrase; the other says *Sync was started again in this folder with a new passphrase.* (naming no one) and takes the new one. In the folder: the next `sync-<n>.json` |
 | Quit the sync app, move the synced folder elsewhere on the disk, start the app again | *Chord can’t find the sync folder.* **Choose folder…**, the folder where it is now: sync carries on, nothing doubles. Another folder: *That isn’t this sync’s folder.* |
+| On Windows, with Chord running behind Explorer, rename the folder that holds `Chord sync` | It's renamed; Chord, back in front, says *Chord can’t find the sync folder.* (While a Chord window is in front, its watch holds the folder, and Windows refuses a rename, from a sync app say. On macOS and Linux it's renamed either way) |
 | Set sync up on two computers at once, in a new folder, before the app syncs | The second to find the other's file stops: *Sync was set up in this folder from two computers at once.* |
 
 ## Each app's own ways
