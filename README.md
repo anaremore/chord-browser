@@ -6,7 +6,7 @@ A calm, colorful, open-source browser built around a vertical sidebar. Tabs live
 
 Windows, macOS, and Linux (X11 and Wayland) are all first-class.
 
-> **Status: preview.** Chord 0.2.1 is on [chordbrowser.com](https://chordbrowser.com) and [Releases](https://github.com/anaremore/chord-browser/releases), for Windows, macOS and Linux. The Windows builds are signed, and Windows and the AppImage update themselves. See the [roadmap](ROADMAP.md) for what's next.
+> **Status: preview.** The latest preview is on [chordbrowser.com](https://chordbrowser.com) and [Releases](https://github.com/anaremore/chord-browser/releases), for Windows, macOS and Linux; [RELEASE_NOTES.md](RELEASE_NOTES.md) says what's in each. The Windows builds are signed, and Windows and the AppImage update themselves. See the [roadmap](ROADMAP.md) for what's next.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="site/public/images/chord-dark-2880.webp">
@@ -41,10 +41,10 @@ Everything here works on `main` today and comes with the latest preview.
 
 Download the file for your system from the latest [release](https://github.com/anaremore/chord-browser/releases). `arm64` builds (`aarch64` for the `.rpm`) are for Apple silicon Macs and ARM PCs; `x64` (`amd64` or `x86_64` on Linux) for Intel and AMD.
 
-Previews aren't code-signed yet, so Windows and macOS warn you before the first launch; the steps below get you past that. Once releases are signed (each release's notes say whether it is), the Gatekeeper and SmartScreen steps go away. Each release lists the files' SHA-256 checksums in `SHA256SUMS.txt`. From 0.2.1, Chord on Windows and the AppImage updates itself: it downloads each new version in the background and installs it when you restart. Earlier versions, macOS, and the `.deb` and `.rpm` only say a new version is out (you can turn that off in Settings → About); download it and install it over the old one. Your tabs and settings stay.
+The Windows builds are signed. The macOS builds aren't yet, so macOS warns you before the first launch; the steps below get you past that. Each release lists the files' SHA-256 checksums in `SHA256SUMS.txt`, and [chordbrowser.com/install](https://chordbrowser.com/install) has these steps too. From 0.2.1, Chord on Windows and the AppImage updates itself: it downloads each new version in the background and installs it when you restart. Earlier versions, macOS, and the `.deb` and `.rpm` only say a new version is out (you can turn that off in Settings → About); download it and install it over the old one. Your tabs and settings stay.
 
 **Windows 10 and 11:** run `Chord-<version>-win-<arch>-setup.exe`. It installs for your account only, with no admin prompt.
-- If SmartScreen says *Windows protected your PC*, click **More info**, then **Run anyway**. Signed releases don't need this, though SmartScreen may still warn about a new release for its first few days.
+- If SmartScreen says *Windows protected your PC*, click **More info**, then **Run anyway**. The installer is signed, but SmartScreen can still warn about a new publisher's first releases.
 
 **macOS:** open `Chord-<version>-mac-<arch>.dmg` and drag Chord to Applications. A signed release just opens. Until then, the first time you open it, macOS says it can't verify Chord. Click **Done**, then:
 - **macOS 15 and later:** open **System Settings → Privacy & Security**, scroll to *Security*, click **Open Anyway** next to Chord, and confirm with your password.
