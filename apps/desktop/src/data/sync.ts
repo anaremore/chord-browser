@@ -68,6 +68,8 @@ export class SyncController {
   /** Removed computers whose folders went: not looked at again. */
   private readonly pruned = new Set<string>();
   private passDone: (() => void) | null = null;
+  /** The generation this computer is moving to by changing the passphrase, until it has: a look that finds it isn't a reason to pause. */
+  private moving: number | null = null;
   /** Snapshots being written: their pages, read as the worker asks for each. */
   private readonly streams = new Map<number, Iterator<DataRecord[]>>();
   private nextStream = 1;
@@ -263,7 +265,8 @@ export class SyncController {
     this.tooMany = message.tooMany;
     const look = message.look;
     const was = this.problem;
-    if (look.state === 'ok') {
+    // A newer generation that's this computer's own (it's moving there, or a look from before it moved): no reason to pause.
+    if (look.state === 'ok' || (look.state === 'changed' && (look.generation === this.moving || look.generation <= db.sync.meta.generation))) {
       if (this.problem !== 'newer') this.problem = null;
     } else if (look.state === 'changed') {
       this.problem = 'changed';
@@ -756,12 +759,21 @@ export class SyncController {
     if (!meta.on || !this.key || !this.worker) return { problem: 'missing' };
     const filed = await this.ask({ t: 'rekey-file', passphrase }, ['rekey-filed']);
     if (filed.t !== 'rekey-filed') return { problem: 'io' };
-    db.atomically(() => db.sync.stampDevice({ rekeyed: filed.generation }));
-    clearTimeout(this.writeTimer);
-    await this.write();
-    const { snapshot, mark } = this.snapshotOf(db);
-    const moved = await this.ask({ t: 'rekey-move', generation: filed.generation, key: filed.key, snapshot }, ['rekeyed']);
-    this.streams.delete(snapshot.stream);
+    // Until it has moved, a look that finds the new generation finds this computer's own: not a reason to pause.
+    this.moving = filed.generation;
+    let moved: FromWorker;
+    let mark = 0;
+    try {
+      db.atomically(() => db.sync.stampDevice({ rekeyed: filed.generation }));
+      clearTimeout(this.writeTimer);
+      await this.write();
+      const { snapshot, mark: taken } = this.snapshotOf(db);
+      mark = taken;
+      moved = await this.ask({ t: 'rekey-move', generation: filed.generation, key: filed.key, snapshot }, ['rekeyed']);
+      this.streams.delete(snapshot.stream);
+    } finally {
+      this.moving = null;
+    }
     if (moved.t !== 'rekeyed') return { problem: 'io' };
     db.atomically(() => {
       db.sync.setMeta({ generation: filed.generation, retired: { generation: meta.generation, at: Date.now() } });

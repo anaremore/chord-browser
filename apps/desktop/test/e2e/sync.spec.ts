@@ -194,6 +194,8 @@ test('a passphrase changed on one computer pauses the other until it has it; wit
     await desk.settings.getByLabel('Passphrase', { exact: true }).fill(NEW);
     await desk.settings.getByLabel('Again').fill(NEW);
     await desk.settings.getByRole('button', { name: 'Change passphrase', exact: true }).click();
+    // Looks at the folder meanwhile (a watch or a poll can come at any moment) find the new generation, which is the desk's own: no pause.
+    for (let i = 0; i < 5; i++) await hooks(desk.app, 'syncRead');
     await expect(desk.settings.getByRole('button', { name: 'Change passphrase…' })).toBeVisible({ timeout: 30_000 });
     expect(readdirSync(join(folder, 'Chord sync')).sort()).toEqual(['1', '2', 'sync-1.json', 'sync-2.json']);
 
