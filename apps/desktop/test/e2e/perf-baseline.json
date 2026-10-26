@@ -1,32 +1,32 @@
 {
   "linux-arm64-x11": {
-    "from": "CI run 40242168101",
-    "date": "2026-10-25",
-    "launch": 5.1,
+    "from": "CI run 40246180234",
+    "date": "2026-10-26",
+    "launch": 3.66,
     "memoryMb": {
-      "main": 85,
-      "shell": 35.1,
-      "command bar": 27.6,
-      "popover": 25.3,
-      "hover preview": 22,
+      "main": 85.1,
+      "shell": 34.6,
+      "command bar": 26.9,
+      "popover": 25.1,
+      "hover preview": 21.9,
       "page": 19.2,
       "GPU": 34.5,
       "chord-data": 20.3
     }
   },
   "linux-x64-wayland": {
-    "from": "CI run 40242168101",
-    "date": "2026-10-25",
-    "launch": 4.72,
+    "from": "CI run 40246180234",
+    "date": "2026-10-26",
+    "launch": 3.57,
     "memoryMb": {
-      "main": 86.6,
-      "shell": 35,
-      "command bar": 27.3,
-      "popover": 26.4,
-      "hover preview": 22.1,
-      "page": 19,
+      "main": 85,
+      "shell": 35.6,
+      "command bar": 27,
+      "popover": 25.9,
+      "hover preview": 23.2,
+      "page": 20.7,
       "GPU": 32.3,
-      "chord-data": 22.2
+      "chord-data": 20.3
     }
   },
   "linux-x64-wayland, container, 4 CPUs": {
@@ -45,18 +45,18 @@
     }
   },
   "linux-x64-x11": {
-    "from": "CI run 40242168101",
-    "date": "2026-10-25",
-    "launch": 5.26,
+    "from": "CI run 40246180234",
+    "date": "2026-10-26",
+    "launch": 3.91,
     "memoryMb": {
-      "main": 86.3,
-      "shell": 36,
-      "command bar": 28.7,
-      "popover": 26.1,
-      "hover preview": 22.8,
+      "main": 85.7,
+      "shell": 35.2,
+      "command bar": 27.9,
+      "popover": 26.2,
+      "hover preview": 22.9,
       "page": 20.8,
       "GPU": 34.1,
-      "chord-data": 22.2
+      "chord-data": 20.3
     }
   },
   "linux-x64-x11, container, 4 CPUs": {
@@ -75,33 +75,33 @@
     }
   },
   "win32-arm64": {
-    "from": "CI run 40242168101",
-    "date": "2026-10-25",
-    "launch": 4.2,
+    "from": "CI run 40246180234",
+    "date": "2026-10-26",
+    "launch": 3.16,
     "memoryMb": {
-      "main": 137.4,
-      "shell": 50.5,
-      "command bar": 41,
-      "popover": 38.6,
-      "hover preview": 31.5,
-      "page": 27.5,
-      "GPU": 21.7,
-      "chord-data": 27.4
+      "main": 138.3,
+      "shell": 49.6,
+      "command bar": 41.1,
+      "popover": 36.2,
+      "hover preview": 31.6,
+      "page": 27,
+      "GPU": 23.9,
+      "chord-data": 27.5
     }
   },
   "win32-x64": {
-    "from": "CI run 40242168101",
-    "date": "2026-10-25",
-    "launch": 4.53,
+    "from": "CI run 40246180234",
+    "date": "2026-10-26",
+    "launch": 3.64,
     "memoryMb": {
-      "main": 135.7,
-      "shell": 52,
-      "command bar": 39.1,
-      "popover": 33.8,
-      "hover preview": 29,
-      "page": 23.5,
-      "GPU": 22.8,
-      "chord-data": 23.8
+      "main": 135.1,
+      "shell": 51.2,
+      "command bar": 36.8,
+      "popover": 31,
+      "hover preview": 28.5,
+      "page": 25.9,
+      "GPU": 20.5,
+      "chord-data": 26
     }
   }
 }
