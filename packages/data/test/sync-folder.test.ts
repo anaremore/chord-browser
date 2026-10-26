@@ -5,6 +5,9 @@
  * file, conflicted copies, compaction in the middle of a read, a copied id, a
  * newer format, a changed passphrase, and what a hostile folder can't do.
  */
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   appendRecords,
@@ -28,6 +31,7 @@ import {
   type SyncFs,
 } from '@chord/core';
 import { nodeCrypto } from '../src/crypto';
+import { ChordDatabase } from '../src/db';
 
 /** scrypt at its smallest, so each test derives keys in a moment; the readers' bounds are tested on their own. */
 const FAST = { N: 2 ** 10, r: 8, p: 1 };
@@ -252,6 +256,36 @@ describe('what a sync app leaves in the folder', () => {
     fs.files.set(`1/${B.replace('b', 'c')}/${segmentName(1)}`, fs.files.get(`1/${A}/${segmentName(1)}`)!);
     const got = await reader.pass();
     expect(got.map((r) => r.id)).toEqual([A, 'work']);
+  });
+});
+
+describe('a removed computer', () => {
+  it('its removal is in the remover’s log, read like any change; it notices; and once the remover compacts, its folder can go', async () => {
+    const { fs, root, reader, append, setOwn } = await twoComputers();
+    // B (the reader) has written a log of its own too.
+    await writeSnapshot(fs, { generation: 1, device: B }, [device(B, 'Laptop')], root, { app: '0.5.0' }, nodeCrypto);
+    await reader.pass();
+    // A removes B: a `device` record in A's own log, never in B's folder.
+    const removedAt = 1_800_000_000_500;
+    await append([{ type: 'device', id: B, at: [removedAt, 0, A], set: { removed: true } }]);
+    const got = await reader.pass();
+    expect(got).toEqual([{ type: 'device', id: B, at: [removedAt, 0, A], set: { removed: true } }]);
+    // B merges it as chord-data does, and knows it was removed, and when.
+    const dir = mkdtempSync(join(tmpdir(), 'chord-sync-removed-'));
+    const db = new ChordDatabase(join(dir, 'chord.db'), 'linux');
+    try {
+      db.newDevice();
+      const self = db.device();
+      const result = db.atomically(() => db.sync.merge(got.map((r) => (r.type === 'device' ? { ...r, id: self } : r)), 1_800_000_001_000));
+      expect(result.removed).toBe(removedAt);
+    } finally {
+      db.close();
+    }
+    // A compacts, then the removed computer's folder goes: a third computer reads only A's.
+    setOwn(await writeSnapshot(fs, { generation: 1, device: A }, [device(A, 'Desk'), chord('work', 'Work', 1), { type: 'device', id: B, at: [removedAt, 0, A], set: { removed: true } }], root, { app: '0.5.0' }, nodeCrypto));
+    await fs.remove(`1/${B}`);
+    const third = new Reader(fs, '00000000000000cc', reader.root);
+    expect((await third.pass()).map((r) => `${r.type}:${r.id}`).sort()).toEqual([`chord:work`, `device:${A}`, `device:${B}`]);
   });
 });
 
