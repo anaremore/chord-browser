@@ -1552,6 +1552,8 @@ interface SyncTimings {
   frameBytes: number[];
   merge: number[];
   plan: number[];
+  /** Pages of a snapshot, read for the worker as it writes them. */
+  page: number[];
 }
 const syncHook = <T>(app: ElectronApplication, name: string) => app.evaluate((_electron, hook) => (globalThis as unknown as { chordTestHooks: Record<string, () => Promise<unknown>> }).chordTestHooks[hook]!(), name) as Promise<T>;
 const SYNC_PASSPHRASE = 'harbor lantern quietly orbit maple';
@@ -1833,7 +1835,7 @@ test('sync: keystrokes during a large merge', async () => {
     const joinMerges = before.merge;
     const merges = after.merge.slice(before.merge.length);
     for (const [label, main, extra] of [
-      ['while joining', joining, { joinMs: round(joinMs), mergeSliceMs: { median: round(median(joinMerges)), worst: round(max(joinMerges)), slices: joinMerges.length }, planMs: { worst: round(max(before.plan)) }, writeMs: { worst: round(max(before.write)) } }],
+      ['while joining', joining, { joinMs: round(joinMs), mergeSliceMs: { median: round(median(joinMerges)), worst: round(max(joinMerges)), slices: joinMerges.length }, planMs: { worst: round(max(before.plan)) }, writeMs: { worst: round(max(before.write)) }, snapshotPageMs: { worst: round(max(before.page)), pages: before.page.length } }],
       [
         'during frames of 300 changes',
         during,

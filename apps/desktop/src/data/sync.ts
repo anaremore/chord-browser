@@ -148,8 +148,10 @@ export class SyncController {
   private page(stream: number): void {
     const pages = this.streams.get(stream);
     let next: IteratorResult<DataRecord[]> | null = null;
+    const started = performance.now();
     try {
       next = pages ? pages.next() : null;
+      if (pages) this.db()?.sync.timed('page', performance.now() - started);
     } catch (error) {
       console.error('Sync couldn’t read its snapshot:', error);
     }

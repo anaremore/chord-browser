@@ -109,6 +109,8 @@ export interface SyncTimings {
   frameBytes: number[];
   merge: number[];
   plan: number[];
+  /** A page of a snapshot, read for the worker. */
+  page: number[];
 }
 
 /** A merge's outcome: what changed (for main), what was left out, and whether this computer was removed. */
@@ -133,7 +135,7 @@ interface Loaded {
 
 const ICON_CACHE = 500;
 /** A snapshot is read for the worker a page at a time: about this many characters, so a big one is never held whole. */
-const PAGE_CHARS = 1024 * 1024;
+const PAGE_CHARS = 256 * 1024;
 /** An icon's id is its bytes' SHA-256 (core's iconId): what another computer's icon must be. */
 const iconHash = (base64: string): string => createHash('sha256').update(Buffer.from(base64, 'base64')).digest('hex');
 /** Things main applies apart from chords and sidebar nodes. */
@@ -158,7 +160,7 @@ export class SyncStore {
   /** Changes stamped since the worker last took the outbox: chord-data writes them about 3 s after the last. */
   pending = 0;
   /** How long sync's steps took on chord-data's thread (ms), the last few hundred of each: perf.spec.ts reads them. */
-  readonly timings: SyncTimings = { write: [], writeOff: [], stamp: [], frame: [], frameBytes: [], merge: [], plan: [] };
+  readonly timings: SyncTimings = { write: [], writeOff: [], stamp: [], frame: [], frameBytes: [], merge: [], plan: [], page: [] };
 
   timed(what: keyof SyncTimings, ms: number): void {
     const list = this.timings[what];
