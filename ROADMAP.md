@@ -421,6 +421,16 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
 - **P1 Export everything:** chords, tabs, folders, Favorites, themes, settings, routes, Effects, history and Duet chats, in the format sync uses.
 - **P1 Sync** through a folder you already sync, end-to-end encrypted with your passphrase (D14). Setup only in its first version: no history, no open tabs. One log per device, merged on every device.
 
+### After Your data (planned 2026-10-25)
+- **P2 Duet reads a page's problems** (asked 2026-10-25, after the maintainer asked Duet whether it could use DevTools). A read-only tool, `page_diagnostics`, for "why is this page broken?": the tab on screen's console errors and warnings, uncaught exceptions, and requests that failed (address, status or network error, resource type), never their headers, cookies or bodies.
+  - **Why not DevTools' *Give your agent access to DevTools*:** that's Chrome's link to `chrome-devtools-mcp`, which drives the browser over a remote-debugging connection. Chord never opens one: any program on the computer could then control every tab and read every sign-in.
+  - **How:** only when Duet calls the tool, main attaches the tab's own debugger (`webContents.debugger`), asks once and detaches. Nothing listens before, so pages pay nothing. Chromium keeps a page's log for the asking: `Log.enable` "sends the entries collected so far" (checked in the protocol's definition, 2026-10-25), and its entries include the `network` ones Chrome prints for failed loads, so errors from before you asked are there. ⚠ Unverified: that `Runtime.enable` also replays earlier `console.error` calls and exceptions (the protocol says only that it collects them, `Runtime.discardConsoleEntries`); if it doesn't, the tool reads the log alone.
+  - **Bounded:** the newest 200 entries, each cut to 500 characters; addresses without their query or fragment, which often carry tokens; stack traces as file, line and function only.
+  - **Duet's rules apply:** the tab on screen only; the chat's reading scope (*Ask every time* asks first, *Nothing* has no such tool); never a *Never read* site, a private window or Chord's own pages.
+  - **Tests:** a journey with the fake Claude on a local page that logs an error, throws, and fails a request (404 and a refused connection), checking what reaches the tool and what never does (a query string, a cookie, a header), and that a page Duet didn't ask about is never attached.
+  - **Later, if it proves useful:** a *Reload and watch* button for problems that only show while a page loads, still read-only.
+- **To scope: Tampermonkey's user scripts** (asked 2026-10-25). Tampermonkey on Manifest V3 runs scripts through Chrome's `chrome.userScripts` API, which Electron doesn't have, so it says *Please enable the "Allow User Scripts" extension setting* and runs nothing. Chord could implement the API itself. Scoping is under way in docs/decisions/S16-user-scripts.md.
+
 ### Electron 46 · January 5, 2027
 - **P0** The first major upgrade, on the 72-hour clock, whatever else is under way.
 
