@@ -57,6 +57,17 @@ describe('IPC contract', () => {
     expect(RendererCommand.safeParse({ t: 'chord.proxy', chordId: 'c', proxy: null, profileId: '../evil' }).success).toBe(false);
   });
 
+  it('gives Your data’s export to Settings alone: what goes in and a passphrase, never where it goes', () => {
+    for (const channel of ['export:counts', 'export:run', 'export:show'] as const) expect(invokeChannels[channel].roles).toEqual(['internal']);
+    const run = invokeChannels['export:run'].request;
+    expect(run.safeParse({ history: true, duet: false, passphrase: null }).success).toBe(true);
+    expect(run.safeParse({ history: true, duet: true, passphrase: 'harbor tulip velvet' }).success).toBe(true);
+    // At least 12 characters, as Settings says.
+    expect(run.safeParse({ history: true, duet: true, passphrase: 'too short' }).success).toBe(false);
+    // Main asks where with the system's save dialog: a renderer can't name a path.
+    expect(run.safeParse({ history: true, duet: true, passphrase: null, path: '/etc/cron.d/x' }).success).toBe(false);
+  });
+
   it('lets Settings open only https links', () => {
     const open = invokeChannels['settings:openUrl'].request;
     expect(open.safeParse({ url: 'https://github.com/anaremore/chord-browser' }).success).toBe(true);

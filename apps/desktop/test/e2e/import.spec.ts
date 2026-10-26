@@ -1,6 +1,6 @@
 /**
  * Import from other browsers (ARCHITECTURE.md §9, DESIGN.md §8.7): first run's
- * step and Settings → Import. Detection is pointed at synthetic profiles
+ * step and Settings → Your data. Detection is pointed at synthetic profiles
  * (test/fixtures/browsers.ts) through CHORD_IMPORT_ROOT, a development-only
  * variable; no test ever reads a real browser's files.
  */
@@ -126,14 +126,14 @@ test('Settings: Firefox’s folders, open tabs and history land in the window be
     await newPage(app, isShell, [shell]);
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
-    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Import' }).click();
+    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Your data' }).click();
     await settings.getByRole('radiogroup', { name: 'Import from' }).getByRole('radio', { name: 'Firefox' }).click();
     await expect(settings.getByText('4 bookmarks in 2 folders · 2 pages of history · 2 open tabs')).toBeVisible();
     const where = settings.getByRole('list', { name: 'Where they go' });
     await expect(where.getByRole('combobox', { name: 'Where Reading goes' })).toHaveValue('new');
     await expect(where.getByRole('combobox', { name: 'Where open tabs go' })).toHaveValue(`chord:${personal}`);
     await where.getByRole('combobox', { name: 'Where Mozilla Firefox goes' }).selectOption('skip');
-    expectClean(await audit(settings, 'Settings → Import', { appearance: 'dark' }));
+    expectClean(await audit(settings, 'Settings → Your data', { appearance: 'dark' }));
 
     await settings.getByRole('main').getByRole('button', { name: 'Import', exact: true }).click();
     await expect(settings.getByText('Imported 2 tabs, 3 bookmarks and 2 pages of history.')).toBeVisible();
@@ -172,7 +172,7 @@ test('a big import comes in parts while history streams, and the toast’s Undo 
     const shell = await pageWhere(app, isShell);
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
-    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Import' }).click();
+    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Your data' }).click();
     await settings.getByRole('radiogroup', { name: 'Import from' }).getByRole('radio', { name: 'Chrome · Alex' }).click();
     await expect(settings.getByText('3,005 bookmarks in 4 folders · 6,002 pages of history')).toBeVisible();
     await settings.getByRole('main').getByRole('button', { name: 'Import', exact: true }).click();

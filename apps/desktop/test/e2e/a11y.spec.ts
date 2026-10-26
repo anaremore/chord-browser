@@ -296,7 +296,7 @@ for (const mode of APPEARANCES) {
         await runAction(shell, 'app.settings');
         const settings = await pageWhere(app, isSettings);
         const nav = settings.getByRole('navigation', { name: 'Settings sections' });
-        for (const name of ['General', 'Appearance', 'Motion', 'Privacy', 'Effects', 'Site permissions', 'Extensions', 'Import', 'Duet', 'Keyboard shortcuts', 'About']) {
+        for (const name of ['General', 'Appearance', 'Motion', 'Privacy', 'Effects', 'Site permissions', 'Extensions', 'Your data', 'Duet', 'Keyboard shortcuts', 'About']) {
           await nav.getByRole('button', { name }).click();
           await expect(settings.getByRole('heading', { level: 1 }).first()).toBeVisible();
           await settings.waitForTimeout(250);

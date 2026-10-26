@@ -48,11 +48,51 @@ export interface Frame {
   kinds?: { name: string; ms: number }[];
 }
 
-/** A renderer's main-thread events, in order. */
-function mainThread(events: readonly TraceEvent[], pid: number): TraceEvent[] {
-  const main = events.find((e) => e.ph === 'M' && e.name === 'thread_name' && e.pid === pid && e.args?.name === 'CrRendererMain')?.tid;
+/** A renderer's main-thread events, in order; or, with `CrBrowserMain`, main's (the browser process's UI thread). */
+function mainThread(events: readonly TraceEvent[], pid: number, thread: 'CrRendererMain' | 'CrBrowserMain' = 'CrRendererMain'): TraceEvent[] {
+  const main = events.find((e) => e.ph === 'M' && e.name === 'thread_name' && e.pid === pid && e.args?.name === thread)?.tid;
   return main === undefined ? [] : events.filter((e) => e.pid === pid && e.tid === main).sort((a, b) => a.ts - b.ts);
 }
+
+/**
+ * What took the time inside a thread's longest task: its nested events by name, longest first (with
+ * CHORD_PERF_PROFILE=1's categories, IPC and Mojo messages and V8 among them). For main, whose JS has no FunctionCall events.
+ */
+export function insideLongestTask(events: readonly TraceEvent[], pid: number, thread: 'CrRendererMain' | 'CrBrowserMain'): string[] {
+  const mine = mainThread(events, pid, thread);
+  const longest = topLevelTasks(mine).reduce<TraceEvent | null>((a, t) => (!a || t.dur! > a.dur! ? t : a), null);
+  if (!longest) return [];
+  const end = longest.ts + longest.dur!;
+  const byName = new Map<string, number>();
+  for (const e of mine) {
+    if (e.ph !== 'X' || e.dur === undefined || e === longest || e.ts < longest.ts || e.ts >= end) continue;
+    const name = e.args?.data?.['functionName'] ? `${e.name} ${String(e.args.data['functionName'])}` : e.name;
+    byName.set(name, (byName.get(name) ?? 0) + e.dur / 1000);
+  }
+  return [...byName]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, ms]) => `${name} ${Math.round(ms * 10) / 10} ms`);
+}
+
+/**
+ * A thread's busiest stretch: the most task time inside any `windowMs`, and the tasks that made
+ * it (longest first). A run of short tasks delays a timer as one long task would.
+ */
+export function busiestWindow(events: readonly TraceEvent[], pid: number, thread: 'CrRendererMain' | 'CrBrowserMain', windowMs: number): { ms: number; tasks: number[] } {
+  const tasks = topLevelTasks(mainThread(events, pid, thread));
+  let best = { ms: 0, tasks: [] as number[] };
+  for (let i = 0; i < tasks.length; i++) {
+    const end = tasks[i]!.ts + windowMs * 1000;
+    const inside = tasks.slice(i).filter((t) => t.ts < end);
+    const ms = inside.reduce((n, t) => n + Math.min(t.dur!, end - t.ts) / 1000, 0);
+    if (ms > best.ms) best = { ms, tasks: inside.map((t) => Math.round(t.dur! / 100) / 10).sort((a, b) => b - a).slice(0, 8) };
+  }
+  return { ms: Math.round(best.ms * 10) / 10, tasks: best.tasks };
+}
+
+/** Main's (the browser process's) pid in a trace, from its UI thread's name. */
+export const browserPid = (events: readonly TraceEvent[]): number | undefined => events.find((e) => e.ph === 'M' && e.name === 'thread_name' && e.args?.name === 'CrBrowserMain')?.pid;
 
 /** Top-level tasks only: one nested in another (a nested run loop) is already counted. */
 function topLevelTasks(mine: readonly TraceEvent[]): TraceEvent[] {
@@ -71,8 +111,8 @@ function topLevelTasks(mine: readonly TraceEvent[]): TraceEvent[] {
  * work, this doesn't depend on how often the display asks for frames: a task
  * longer than 16 ms drops a frame at 60 Hz on any display.
  */
-export function longestTask(events: readonly TraceEvent[], pid: number): { ms: number; calls: { name: string; ms: number }[] } {
-  const mine = mainThread(events, pid);
+export function longestTask(events: readonly TraceEvent[], pid: number, thread: 'CrRendererMain' | 'CrBrowserMain' = 'CrRendererMain'): { ms: number; calls: { name: string; ms: number }[] } {
+  const mine = mainThread(events, pid, thread);
   const longest = topLevelTasks(mine).reduce<TraceEvent | null>((a, t) => (!a || t.dur! > a.dur! ? t : a), null);
   if (!longest) return { ms: 0, calls: [] };
   const end = longest.ts + longest.dur!;

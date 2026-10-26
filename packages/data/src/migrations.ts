@@ -269,4 +269,14 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE chord ADD COLUMN proxy TEXT;
   `,
+  // 17: Your data's export (docs/decisions/S15-your-data.md §7). Each exported record carries a stamp, which without sync is
+  // its row's updated_at: setting, favorite and link_route gain theirs, set when a row's value changes. A row from before
+  // has 0, older than anything, since when it last changed isn't known. meta holds this computer's id (64 random bits),
+  // made the first time an export needs it and never exported as data.
+  `
+  ALTER TABLE setting ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE favorite ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE link_route ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+  `,
 ];

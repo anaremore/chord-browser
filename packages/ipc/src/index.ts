@@ -16,6 +16,8 @@ import {
   SEARCH_ENGINES,
   SHORTCUTS,
   UI_SCALES,
+  PASSPHRASE_MAX,
+  passphraseProblem,
   DUET_FORM_AREA_MAX,
   DUET_FORM_MAX_FIELDS,
   DUET_SCOPES,
@@ -32,6 +34,7 @@ import {
   type DuetContextUsage,
   type DuetTabName,
   type EffectPresetId,
+  type ExportCounts,
   type DuetHit,
   type DuetMessage,
   type DuetProvider,
@@ -287,6 +290,8 @@ export const SettingsPatch = z.strictObject({
   effects: z.strictObject({ wet: z.boolean() }).partial().optional(),
   // Settings → Privacy → Proxy: the proxy for every chord, whole.
   proxy: ProxySettingsSchema.optional(),
+  // Settings → Your data → Export: whether the card starts with Encrypt with a passphrase on.
+  encryptExports: z.boolean().optional(),
   duet: z
     .strictObject({
       enabled: z.boolean(),
@@ -1125,9 +1130,51 @@ const _choicesMatch = (c: z.infer<typeof ImportChoicesSchema>): ImportChoices =>
 void _choicesMatch;
 const importKey = z.string().regex(/^[0-9a-f]{16}$/);
 
+/* ---------- Your data: export (docs/decisions/S15-your-data.md §7–§8) ---------- */
+
+/** Why an export stopped: Chord couldn't write where you chose (`write`), or couldn't read its own data (`read`). */
+export type ExportProblem = 'write' | 'read';
+
+/** `cancelled`: the save dialog was closed; `busy`: another export is still being written. */
+export type ExportRunResult = { ok: true; exportId: string; name: string } | { ok: false; problem: 'cancelled' | 'busy' };
+
+/** How an export is going, pushed to Settings (`export:progress`). */
+export interface ExportProgress {
+  exportId: string;
+  /**
+   * `key` while the passphrase becomes the file's key, then each part as it's
+   * written (setup, Today tabs and icons, history, Duet), then `done` or `failed`.
+   */
+  phase: 'key' | 'setup' | 'today' | 'history' | 'duet' | 'done' | 'failed';
+  /** History's pages, or Duet's chats, written so far, of `total`. */
+  done: number;
+  total: number;
+  /** How much of the whole is written, 0 to 1: the bar. */
+  share: number;
+  /** The file's name, without its folder. */
+  name: string;
+  /** Its size, once saved. */
+  bytes?: number;
+  /** Things left out for being bigger than a file's line may be (32 MB): a huge image, say. */
+  skipped?: number;
+  problem?: ExportProblem;
+}
+
+/** What goes in, and how (a passphrase only when Encrypt with a passphrase is on). Main checks the passphrase's length again. */
+export const ExportRequestSchema = z.strictObject({
+  history: z.boolean(),
+  duet: z.boolean(),
+  passphrase: z
+    .string()
+    .max(PASSPHRASE_MAX * 4)
+    .refine((p) => passphraseProblem(p) === null)
+    .nullable(),
+});
+export type ExportRequest = z.infer<typeof ExportRequestSchema>;
+
 /** Renderer → main requests (`ipcRenderer.invoke`). */
 export const invokeChannels = {
-  // Import from other browsers: first run's step (shell) and Settings → Import. Never from a private window.
+  // Import from other browsers: first run's step (shell) and Settings → Your data. Never from a private window.
   'import:sources': { roles: ['shell', 'internal'], request: z.void(), response: z.custom<ImportSource[]>() },
   'import:preview': { roles: ['shell', 'internal'], request: z.strictObject({ key: importKey }), response: z.custom<ImportPreviewResult>() },
   'import:run': { roles: ['shell', 'internal'], request: z.strictObject({ key: importKey, choices: ImportChoicesSchema }), response: z.custom<ImportRunResult>() },
@@ -1135,6 +1182,11 @@ export const invokeChannels = {
   'import:undo': { roles: ['internal'], request: z.strictObject({ importId: id }), response: z.void() },
   /** macOS: System Settings → Privacy & Security → Full Disk Access, which Safari's files need. */
   'import:openAccess': { roles: ['shell', 'internal'], request: z.void(), response: z.void() },
+  // Your data: Settings' Export card. Main shows the save dialog and starts the export process, which reads and writes
+  // everything itself; Settings hears only how far it's got (export:progress) and can show the saved file in its folder.
+  'export:counts': { roles: ['internal'], request: z.void(), response: z.custom<ExportCounts>() },
+  'export:run': { roles: ['internal'], request: ExportRequestSchema, response: z.custom<ExportRunResult>() },
+  'export:show': { roles: ['internal'], request: z.strictObject({ exportId: id }), response: z.void() },
   'duet:view': { roles: ['shell'], request: z.void(), response: z.custom<DuetView>() },
   'duet:do': { roles: ['shell'], request: DuetAction, response: z.void() },
   /** The command bar's @duet. */
@@ -1439,6 +1491,8 @@ export interface EventPayloads {
   'frame:snapshot': FrameSnapshotEvent;
   /** An import from another browser, to the view that started it. */
   'import:progress': ImportProgress;
+  /** An export of your data, to Settings. */
+  'export:progress': ExportProgress;
   /** Tabs in the window's chords playing media (or paused a moment ago), newest first, when that changes. */
   'media:state': NowPlaying[];
   /** A reader view's look changed: its chord's colors, its controls, reduced motion. */
@@ -1584,7 +1638,7 @@ export interface ShellApi {
   imports: ImportApi;
 }
 
-/** Import from other browsers: first run's step and Settings → Import (ARCHITECTURE.md §9). */
+/** Import from other browsers: first run's step and Settings → Your data (ARCHITECTURE.md §9). */
 export interface ImportApi {
   sources(): Promise<ImportSource[]>;
   /** Read a profile (copies of its files, off main) and count what it holds. */
@@ -1668,8 +1722,20 @@ export interface SettingsApi {
     options(profileId: string, id: string): Promise<void>;
     update(): Promise<number>;
   };
-  /** Settings → Import. */
+  /** Settings → Your data → From another browser. */
   imports: ImportApi;
+  /** Settings → Your data → Export. */
+  exports: ExportApi;
+}
+
+/** Your data's export (Settings → Your data, docs/decisions/S15-your-data.md §8). */
+export interface ExportApi {
+  counts(): Promise<ExportCounts>;
+  /** The save dialog, then the export, which goes on by itself and reports through `onProgress`. */
+  run(request: ExportRequest): Promise<ExportRunResult>;
+  /** The saved file, selected in the system's file manager. */
+  show(exportId: string): Promise<void>;
+  onProgress(listener: (progress: ExportProgress) => void): () => void;
 }
 
 /** `window.chord` in a mini window's bar. */

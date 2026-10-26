@@ -2,7 +2,7 @@
  * Import from another browser (DESIGN.md §8.7): pick a browser, see what it
  * holds, say where each top-level folder goes (a new chord named after it, a
  * chord you have, or Favorites for the bookmarks bar's own links), and watch
- * it come in. First run's step and Settings → Import share it; each puts its
+ * it come in. First run's step and Settings → Your data share it; each puts its
  * own buttons around it. Main does the reading, off main's own thread.
  */
 import { IMPORT_BROWSER_NAMES, type ImportChoices, type ImportTarget } from '@chord/core';
@@ -319,27 +319,47 @@ export function ImportDetails({ flow, chords, onOpenAccess }: { flow: ImportFlow
   );
 }
 
-function ImportProgressLine({ progress }: { progress: ImportProgress }) {
-  const share = progress.phase === 'history' && progress.total > 0 ? Math.min(1, progress.done / progress.total) : progress.phase === 'bookmarks' ? 0 : 1;
-  const going = progress.phase === 'bookmarks' || progress.phase === 'history';
+/** A 4 px accent bar that fills as work goes (import, export), with what's happening in words under it. */
+export function ProgressLine({ label, share, now, max, going, text }: { label: string; share: number; now: number; max: number; going: boolean; text: string }) {
   return (
     <div className={styles.progress}>
       {going && (
-        <div
-          className={styles.bar}
-          role="progressbar"
-          aria-label="Import"
-          aria-valuemin={0}
-          aria-valuemax={Math.max(1, progress.total)}
-          aria-valuenow={progress.phase === 'history' ? progress.done : 0}
-        >
-          <span className={styles.fill} style={{ transform: `scaleX(${share})` }} />
+        <div className={styles.bar} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={Math.max(1, max)} aria-valuenow={now}>
+          <span className={styles.fill} style={{ transform: `scaleX(${Math.min(1, Math.max(0, share))})` }} />
         </div>
       )}
       <p className={styles.status} aria-live="polite">
-        {progressText(progress)}
+        {text}
       </p>
     </div>
+  );
+}
+
+/** What went wrong, in a soft card, with one way on. */
+export function ProblemCard({ text, action }: { text: string; action?: { label: string; run(): void } }) {
+  return (
+    <div className={styles.problem} role="status">
+      <p>{text}</p>
+      {action && (
+        <button type="button" className={styles.button} onClick={action.run}>
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ImportProgressLine({ progress }: { progress: ImportProgress }) {
+  const share = progress.phase === 'history' && progress.total > 0 ? progress.done / progress.total : progress.phase === 'bookmarks' ? 0 : 1;
+  return (
+    <ProgressLine
+      label="Import"
+      share={share}
+      now={progress.phase === 'history' ? progress.done : 0}
+      max={progress.total}
+      going={progress.phase === 'bookmarks' || progress.phase === 'history'}
+      text={progressText(progress)}
+    />
   );
 }
 

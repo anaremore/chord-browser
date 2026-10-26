@@ -7,12 +7,14 @@
  * per site and everywhere, over whatever each one's says.
  *
  * What's here is pure: the site key, the presets, limits, what goes into a
- * site's stylesheet, checking saved and imported data, the export record
- * (0.4), and what Duet is told and answers.
+ * site's stylesheet, checking saved and imported data, Your data's record,
+ * and what Duet is told and answers.
  * The sanitizer, which every stylesheet goes through before it's used, lives
  * with its worker in main (`main/effects/sanitize.ts`).
  */
 import type { DuetToolSpec } from './duet';
+import type { DataRecord } from './records';
+import type { Stamp } from './stamps';
 
 // Core compiles without DOM types; URL is a global in Node and every browser.
 declare const URL: new (url: string) => { protocol: string; host: string; origin: string; pathname: string };
@@ -255,58 +257,46 @@ export function cleanSiteEffects(raw: unknown, now = Date.now()): SiteEffects | 
   };
 }
 
-/* ---------- The export record (0.4 · Your data, decision D14) ---------- */
+/* ---------- The record (Your data, S15 §1) ---------- */
 
 /**
- * One site's Effects in the export and sync format: one record per site,
- * replaced whole (last writer wins, by `updatedAt`), with each item's own
- * switch (`cssOn`, `on`; one that isn't there reads as on). What main inserts
- * is left out: an imported record is sanitized again before anything of it is
- * used, so a file that was changed by hand can't add a fetch.
+ * One site's Effects as a record of Your data's format (records.ts): the site
+ * is its id, `updatedAt` its stamp, and each item's own switch is in it
+ * (`cssOn`, `on`; one that isn't there reads as on). `hidden` and `duet` are a
+ * field each, switches and all, so each list merges whole. What main inserts
+ * is left out: a record read back is sanitized again before anything of it is
+ * used, so a file changed by hand can't add a fetch.
  */
-export interface EffectsRecord {
-  type: 'effects';
-  version: 1;
-  site: string;
-  wet: boolean;
-  css: string;
-  cssOn: boolean;
-  hidden: { selector: string; label: string; on: boolean }[];
-  presets: EffectPresetId[];
-  duet: { ask: string; summary: string; css: string; on: boolean }[];
-  updatedAt: number;
-}
-
-export function effectsRecord(site: SiteEffects): EffectsRecord {
+export function effectsRecord(site: SiteEffects, at: Stamp): DataRecord {
   return {
     type: 'effects',
-    version: 1,
-    site: site.host,
-    wet: site.wet,
-    css: site.css,
-    cssOn: site.cssOn,
-    hidden: site.hidden.map(({ selector, label, on }) => ({ selector, label, on })),
-    presets: [...site.presets],
-    duet: site.duet.map(({ ask, summary, css, on }) => ({ ask, summary, css, on })),
-    updatedAt: site.updatedAt,
+    id: site.host,
+    at,
+    set: {
+      wet: site.wet,
+      css: site.css,
+      cssOn: site.cssOn,
+      hidden: site.hidden.map(({ selector, label, on }) => ({ selector, label, on })),
+      presets: [...site.presets],
+      duet: site.duet.map(({ ask, summary, css, on }) => ({ ask, summary, css, on })),
+    },
   };
 }
 
-/** A record read back (an export, another device's log), checked; null if it isn't one. Duet's patches get new ids. */
-export function effectsFromRecord(raw: unknown, newId: () => string, now = Date.now()): SiteEffects | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const r = raw as Record<string, unknown>;
-  if (r['type'] !== 'effects' || r['version'] !== 1) return null;
-  const updatedAt = time(r['updatedAt'], now);
+/** A record read back (an export, another computer's log), checked; null if it isn't one. Duet's patches get new ids. */
+export function effectsFromRecord(r: DataRecord, newId: () => string, now = Date.now()): SiteEffects | null {
+  if (r.type !== 'effects') return null;
+  const updatedAt = r.at && r.at[0] > 0 ? r.at[0] : now;
+  const s = r.set;
   return cleanSiteEffects(
     {
-      host: r['site'],
-      wet: r['wet'],
-      css: r['css'],
-      cssOn: r['cssOn'],
-      hidden: Array.isArray(r['hidden']) ? r['hidden'].map((h) => ({ ...(h as object), at: updatedAt })) : [],
-      presets: r['presets'],
-      duet: Array.isArray(r['duet']) ? r['duet'].map((d) => ({ ...(d as object), id: newId(), at: updatedAt })) : [],
+      host: r.id,
+      wet: s['wet'],
+      css: s['css'],
+      cssOn: s['cssOn'],
+      hidden: Array.isArray(s['hidden']) ? s['hidden'].map((h) => ({ ...(h as object), at: updatedAt })) : [],
+      presets: s['presets'],
+      duet: Array.isArray(s['duet']) ? s['duet'].map((d) => ({ ...(d as object), id: newId(), at: updatedAt })) : [],
       createdAt: updatedAt,
       updatedAt,
     },

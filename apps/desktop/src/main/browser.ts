@@ -1695,6 +1695,11 @@ export class Browser {
     Menu.setApplicationMenu(this.appMenu);
   }
 
+  /** The Settings window, when `contents` is its page: what its dialogs belong to. */
+  settingsWindowOf(contents: WebContents): BaseWindow | null {
+    return contents === this.settingsWindow?.view.webContents ? this.settingsWindow.window : null;
+  }
+
   /** Settings is (or stops) recording a shortcut in this contents. Only the Settings view may ask. */
   setRecordingShortcut(contents: WebContents, recording: boolean): void {
     this.recordingIn = recording && contents === this.settingsWindow?.view.webContents ? contents : null;

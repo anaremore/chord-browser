@@ -7,13 +7,14 @@ import { existsSync, rmSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
   addDecay,
-  cleanSiteEffects,
   ARCHIVE_KEEP_MS,
   dayOf,
   decayOfVisits,
   foldChoiceText,
   frecencyOn,
   HALF_LIFE_DAYS,
+  isDeviceId,
+  newDeviceId,
   pickedAgain,
   placeKey,
   profilePartition,
@@ -23,25 +24,24 @@ import {
   type ArchivedTab,
   type ArchiveReason,
   type Chord,
-  type ChordThemeSpec,
   type Choice,
   type Download,
+  type ExportCounts,
   type Favorite,
   type ImportedPage,
   type InstalledExtension,
   type LinkRoute,
-  type FolderNode,
-  type SplitNode,
   type PersistedState,
   type SavedEffects,
   type SidebarNode,
   type SitePermissions,
-  type TabNode,
   type WindowModel,
 } from '@chord/core';
 import type { ArchiveEntry, ArchivePage, HistoryEvent, NavState, SearchResult, WriteOp } from './index';
 import { runDuet, type DuetOp, type DuetResult } from './duet';
+import { exportCounts } from './export';
 import { MIGRATIONS } from './migrations';
+import { chordOf, favoriteOf, iconOf, nodeOf, nodeSelect, num, parseJson, siteEffectsOf, str, strOrNull, type Row } from './rows';
 
 /** The profile every chord belongs to until "Keep sign-ins separate" exists. */
 const DEFAULT_PROFILE = 'default';
@@ -55,21 +55,6 @@ const CHOICE_LIFETIME_MS = 90 * 86_400_000;
 /** What's left of a page's frecency after an import's Undo, as a share of what it had, below which it's rounding. */
 const ROUNDING = 1e-9;
 
-type Row = Record<string, unknown>;
-
-const str = (value: unknown): string => (typeof value === 'string' ? value : '');
-const strOrNull = (value: unknown): string | null => (typeof value === 'string' ? value : null);
-const num = (value: unknown): number => (typeof value === 'number' ? value : typeof value === 'bigint' ? Number(value) : 0);
-
-function parseJson<T>(text: unknown, fallback: T): T {
-  if (typeof text !== 'string') return fallback;
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 /** `data:` favicon URLs are stored once each, by content hash. */
 function splitDataUrl(url: string): { key: string; mime: string; data: Uint8Array } | null {
   const match = /^data:([^;,]+)((?:;[^;,]*)*?)(;base64)?,(.*)$/s.exec(url);
@@ -78,8 +63,6 @@ function splitDataUrl(url: string): { key: string; mime: string; data: Uint8Arra
   const data = base64 ? Buffer.from(payload!, 'base64') : Buffer.from(decodeURIComponent(payload!), 'utf8');
   return { key: createHash('sha256').update(url).digest('hex'), mime: mime!, data };
 }
-
-const joinDataUrl = (mime: string, data: Uint8Array) => `data:${mime};base64,${Buffer.from(data).toString('base64')}`;
 
 /** Archive entries with their icons. */
 const ARCHIVE_SELECT = `SELECT a.*, i.mime AS icon_mime, i.data AS icon_data FROM archive_item a LEFT JOIN favicon i ON i.key = a.favicon_key`;
@@ -91,7 +74,7 @@ function archivedTab(r: Row): ArchivedTab {
     chordId: str(r['chord_id']),
     url: str(r['url']),
     title: str(r['title']),
-    favicon: typeof r['icon_mime'] === 'string' && r['icon_data'] instanceof Uint8Array ? joinDataUrl(r['icon_mime'], r['icon_data']) : null,
+    favicon: iconOf(r),
     reason: reason === 'closed' || reason === 'cleared' ? reason : 'auto',
     archivedAt: num(r['archived_at']),
   };
@@ -207,16 +190,7 @@ export class ChordDatabase {
       this.sql(
         `SELECT f.*, i.mime AS icon_mime, i.data AS icon_data FROM favorite f LEFT JOIN favicon i ON i.key = f.favicon_key`,
       ).all() as Row[]
-    ).map(
-      (r): Favorite => ({
-        id: str(r['id']),
-        url: str(r['url']),
-        title: str(r['title']),
-        favicon: typeof r['icon_mime'] === 'string' && r['icon_data'] instanceof Uint8Array ? joinDataUrl(r['icon_mime'], r['icon_data']) : null,
-        rank: str(r['rank']),
-        createdAt: num(r['created_at']),
-      }),
-    );
+    ).map((r) => favoriteOf(r, iconOf(r)));
     const extensions = (this.sql('SELECT * FROM extension').all() as Row[]).map(
       (r): InstalledExtension => ({
         id: str(r['id']),
@@ -247,64 +221,9 @@ export class ChordDatabase {
       return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads, extensions, favorites, siteZoom } : null;
     }
 
-    const chords = chordRows.map((r): Chord => {
-      // Checked by restore (core's cleanProxy), as every JSON column is at the boundary.
-      const proxy = parseJson<Chord['proxy'] | null>(r['proxy'], null);
-      return {
-        id: str(r['id']),
-        profileId: str(r['profile_id']),
-        name: str(r['name']),
-        icon: str(r['icon']),
-        theme: parseJson<ChordThemeSpec>(r['theme'], { stops: [{ l: 0.72, c: 0.12, h: 300 }], grain: 0.2, appearance: 'auto' }),
-        rank: str(r['rank']),
-        createdAt: num(r['created_at']),
-        ...(proxy ? { proxy } : {}),
-      };
-    });
-
-    const nodeRows = this.sql(
-      `SELECT n.*, t.url, t.title AS tab_title, t.pinned_url, t.custom_title, t.last_active_at, t.muted,
-              f.title AS folder_title, f.collapsed, s.layout AS split_layout, i.mime AS icon_mime, i.data AS icon_data
-         FROM node n
-         LEFT JOIN tab t ON t.node_id = n.id
-         LEFT JOIN folder f ON f.node_id = n.id
-         LEFT JOIN split s ON s.node_id = n.id
-         LEFT JOIN favicon i ON i.key = t.favicon_key
-        WHERE n.deleted_at IS NULL`,
-    ).all() as Row[];
-    const nodes: SidebarNode[] = [];
-    for (const r of nodeRows) {
-      const base = { id: str(r['id']), chordId: str(r['chord_id']), parentId: strOrNull(r['parent_id']), rank: str(r['rank']), createdAt: num(r['created_at']) };
-      if (r['kind'] === 'tab' && typeof r['url'] === 'string') {
-        const tab: TabNode = {
-          ...base,
-          kind: 'tab',
-          section: r['section'] === 'pinned' ? 'pinned' : 'today',
-          url: r['url'],
-          title: str(r['tab_title']),
-          pinnedUrl: strOrNull(r['pinned_url']),
-          customTitle: strOrNull(r['custom_title']),
-          favicon: typeof r['icon_mime'] === 'string' && r['icon_data'] instanceof Uint8Array ? joinDataUrl(r['icon_mime'], r['icon_data']) : null,
-          lastActiveAt: num(r['last_active_at']),
-          ...(num(r['muted']) === 1 ? { muted: true } : {}),
-        };
-        nodes.push(tab);
-      } else if (r['kind'] === 'folder' && typeof r['folder_title'] === 'string') {
-        const folder: FolderNode = { ...base, kind: 'folder', section: 'pinned', title: r['folder_title'], collapsed: num(r['collapsed']) === 1 };
-        nodes.push(folder);
-      } else if (r['kind'] === 'split' && typeof r['split_layout'] === 'string') {
-        // Restore checks the panes and sizes (core settleSplits); here they're just read back.
-        const layout = parseJson<{ direction?: unknown; sizes?: unknown }>(r['split_layout'], {});
-        const split: SplitNode = {
-          ...base,
-          kind: 'split',
-          section: r['section'] === 'pinned' ? 'pinned' : 'today',
-          direction: layout.direction === 'column' ? 'column' : 'row',
-          sizes: Array.isArray(layout.sizes) ? layout.sizes.filter((s): s is number => typeof s === 'number') : [],
-        };
-        nodes.push(split);
-      }
-    }
+    const chords = chordRows.map(chordOf);
+    const nodeRows = this.sql(nodeSelect(', i.mime AS icon_mime, i.data AS icon_data', '\n     LEFT JOIN favicon i ON i.key = t.favicon_key')).all() as Row[];
+    const nodes = nodeRows.map((r) => nodeOf(r, iconOf(r))).filter((n): n is SidebarNode => n !== null);
 
     const windows = (this.sql('SELECT * FROM window_state').all() as Row[]).map(
       (r): WindowModel => ({
@@ -333,11 +252,16 @@ export class ChordDatabase {
         else if (op.k === 'favorite') this.writeFavorite(op.id, op.value, now);
         else if (op.k === 'extension') this.writeExtension(op.id, op.value);
         else if (op.k === 'siteZoom') this.writeSiteZoom(op.id, op.value, now);
-        else if (op.k === 'linkRoute') this.writeLinkRoute(op.id, op.value);
+        else if (op.k === 'linkRoute') this.writeLinkRoute(op.id, op.value, now);
         else if (op.k === 'effect') this.writeEffect(op.id, op.value);
         else if (op.k === 'nav') continue;
         else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
-        else this.sql('INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(op.id, JSON.stringify(op.value));
+        else
+          // updated_at moves only when the value does: it's the setting's stamp in an export (migration 17).
+          this.sql(
+            `INSERT INTO setting (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+               updated_at = CASE WHEN value = excluded.value THEN updated_at ELSE excluded.updated_at END`,
+          ).run(op.id, JSON.stringify(op.value), now);
       }
       // Histories last: a tab's row may be made in this same batch. A tab that's gone takes its history with it.
       for (const op of ops) {
@@ -644,6 +568,24 @@ export class ChordDatabase {
     return runDuet((text) => this.sql(text), op);
   }
 
+  /**
+   * This computer's id, for Your data's header and stamps (S15 §4): 64 random
+   * bits, made the first time it's asked for and kept in `meta`.
+   */
+  device(): string {
+    const row = this.sql(`SELECT value FROM meta WHERE key = 'device'`).get() as Row | undefined;
+    const kept = row?.['value'];
+    if (isDeviceId(kept)) return kept;
+    const id = newDeviceId();
+    this.sql(`INSERT INTO meta (key, value) VALUES ('device', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(id);
+    return id;
+  }
+
+  /** What an export would hold, for Settings' card: a few counts, read in a millisecond or two (export.ts). */
+  exportCounts(): ExportCounts {
+    return exportCounts((text) => this.sql(text));
+  }
+
   /** One entry, with the history it needs to come back. */
   archiveGet(id: string): ArchiveEntry | null {
     const row = this.sql(`${ARCHIVE_SELECT} WHERE a.id = ?`).get(id) as Row | undefined;
@@ -730,12 +672,13 @@ export class ChordDatabase {
     ).run(id, node.pinnedUrl, node.customTitle, node.url, node.title, iconKey, node.lastActiveAt, node.muted ? 1 : 0);
   }
 
-  private writeLinkRoute(host: string, route: LinkRoute | null): void {
+  private writeLinkRoute(host: string, route: LinkRoute | null, now: number): void {
     if (route === null) this.sql('DELETE FROM link_route WHERE host = ?').run(host);
     else
       this.sql(
-        'INSERT INTO link_route (host, chord_id, created_at) VALUES (?, ?, ?) ON CONFLICT(host) DO UPDATE SET chord_id = excluded.chord_id',
-      ).run(host, route.chordId, route.createdAt);
+        `INSERT INTO link_route (host, chord_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(host) DO UPDATE SET chord_id = excluded.chord_id,
+           updated_at = CASE WHEN chord_id = excluded.chord_id THEN updated_at ELSE excluded.updated_at END`,
+      ).run(host, route.chordId, route.createdAt, now);
   }
 
   private writeEffect(host: string, site: SavedEffects | null): void {
@@ -771,17 +714,7 @@ export class ChordDatabase {
   loadEffects(): SavedEffects[] {
     const out: SavedEffects[] = [];
     for (const r of this.sql('SELECT * FROM effect ORDER BY updated_at').all() as Row[]) {
-      const site = cleanSiteEffects({
-        host: r['host'],
-        wet: num(r['wet']) !== 0,
-        css: r['css'],
-        cssOn: num(r['css_on']) !== 0,
-        hidden: parseJson<unknown>(r['hidden'], []),
-        presets: parseJson<unknown>(r['presets'], []),
-        duet: parseJson<unknown>(r['duet'], []),
-        createdAt: num(r['created_at']),
-        updatedAt: num(r['updated_at']),
-      });
+      const site = siteEffectsOf(r);
       if (site) out.push({ ...site, compiled: str(r['compiled']), sanitizer: num(r['sanitizer']) });
     }
     return out;
@@ -855,9 +788,11 @@ export class ChordDatabase {
     }
     const iconKey = favorite.favicon ? this.storeFavicon(favorite.favicon, now) : null;
     this.sql(
-      `INSERT INTO favorite (id, url, title, favicon_key, rank, created_at) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET url = excluded.url, title = excluded.title, favicon_key = excluded.favicon_key, rank = excluded.rank`,
-    ).run(id, favorite.url, favorite.title, iconKey, favorite.rank, favorite.createdAt);
+      `INSERT INTO favorite (id, url, title, favicon_key, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET url = excluded.url, title = excluded.title, favicon_key = excluded.favicon_key, rank = excluded.rank,
+         updated_at = CASE WHEN url IS excluded.url AND title IS excluded.title AND favicon_key IS excluded.favicon_key AND rank IS excluded.rank
+                           THEN updated_at ELSE excluded.updated_at END`,
+    ).run(id, favorite.url, favorite.title, iconKey, favorite.rank, favorite.createdAt, now);
   }
 
   close(): void {

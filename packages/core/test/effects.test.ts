@@ -19,7 +19,9 @@ import {
   type DuetEffect,
   type EffectsParts,
   type HiddenElement,
+  type DataRecord,
   type SiteEffects,
+  type Stamp,
 } from '../src';
 
 describe('effectsHost', () => {
@@ -165,7 +167,9 @@ describe('cleanSiteEffects', () => {
   });
 });
 
-describe('the export record (0.4)', () => {
+describe('the record (Your data, S15 §1)', () => {
+  const at: Stamp = [1234, 0, '9f2c4e1a7b3d5c60'];
+
   it('round-trips a site with each item’s switch, without what main inserts and with new ids for Duet’s patches', () => {
     const before = site({
       wet: false,
@@ -182,28 +186,30 @@ describe('the export record (0.4)', () => {
       ],
       updatedAt: 1234,
     });
-    const record = effectsRecord(before);
+    const record = effectsRecord(before, at);
     expect(record).toEqual({
       type: 'effects',
-      version: 1,
-      site: 'news.test',
-      wet: false,
-      css: 'h1 { color: red }',
-      cssOn: false,
-      hidden: [
-        { selector: '#ad', label: 'div#ad', on: true },
-        { selector: '#promo', label: 'Promo', on: false },
-      ],
-      presets: ['reading-width'],
-      duet: [
-        { ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }', on: false },
-        { ask: 'Blue links', summary: 'Blue links', css: 'a { color: blue }', on: true },
-      ],
-      updatedAt: 1234,
+      id: 'news.test',
+      at,
+      set: {
+        wet: false,
+        css: 'h1 { color: red }',
+        cssOn: false,
+        hidden: [
+          { selector: '#ad', label: 'div#ad', on: true },
+          { selector: '#promo', label: 'Promo', on: false },
+        ],
+        presets: ['reading-width'],
+        duet: [
+          { ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }', on: false },
+          { ask: 'Blue links', summary: 'Blue links', css: 'a { color: blue }', on: true },
+        ],
+      },
     });
-    expect('compiled' in record).toBe(false);
+    expect('compiled' in record.set).toBe(false);
     let id = 0;
     const after = effectsFromRecord(JSON.parse(JSON.stringify(record)), () => `new-${++id}`, 9999);
+    // Its stamp's time is when it changed.
     expect(after).toEqual({
       ...before,
       hidden: before.hidden.map((h) => ({ ...h, at: 1234 })),
@@ -212,17 +218,18 @@ describe('the export record (0.4)', () => {
     });
   });
 
-  it('reads a record from before the switches as everything on', () => {
-    const old = {
+  it('reads a record without the switches as everything on', () => {
+    const old: DataRecord = {
       type: 'effects',
-      version: 1,
-      site: 'news.test',
-      wet: true,
-      css: 'h1 { color: red }',
-      hidden: [{ selector: '#ad', label: 'div#ad' }],
-      presets: [],
-      duet: [{ ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }' }],
-      updatedAt: 1234,
+      id: 'news.test',
+      at,
+      set: {
+        wet: true,
+        css: 'h1 { color: red }',
+        hidden: [{ selector: '#ad', label: 'div#ad' }],
+        presets: [],
+        duet: [{ ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }' }],
+      },
     };
     const after = effectsFromRecord(old, () => 'new-id')!;
     expect(after.cssOn).toBe(true);
@@ -231,10 +238,10 @@ describe('the export record (0.4)', () => {
     expect(effectsParts(after)).toEqual({ presets: [], hidden: ['#ad'], css: 'h1 { color: red }', duet: ['body { font-size: 20px }'] });
   });
 
-  it.each<[string, unknown]>([
-    ['another type', { type: 'chord', version: 1, site: 'a.test' }],
-    ['a later version', { type: 'effects', version: 2, site: 'a.test' }],
-    ['no site', { type: 'effects', version: 1 }],
+  it.each<[string, DataRecord]>([
+    ['another type', { type: 'chord', id: 'a.test', at, set: {} }],
+    ['a site that isn’t one', { type: 'effects', id: 'https://a.test/', at, set: {} }],
+    ['a site with www.', { type: 'effects', id: 'www.a.test', at, set: {} }],
   ])('refuses %s', (_what, raw) => {
     expect(effectsFromRecord(raw, () => 'x')).toBeNull();
   });

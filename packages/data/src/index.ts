@@ -21,6 +21,7 @@ import type {
   State,
   WindowModel,
 } from '@chord/core';
+import type { ExportCounts } from '@chord/core';
 import type { DuetOp, DuetResult } from './duet';
 
 /** The latest value of one saved entity, or null to delete it. */
@@ -118,6 +119,10 @@ export type DataRequest =
   | { id: number; type: 'import.port'; importId: string }
   /** Take back what an import added to history: its Undo. */
   | { id: number; type: 'import.undo'; importId: string }
+  /** This computer's id for Your data (made the first time it's asked for). */
+  | { id: number; type: 'device' }
+  /** What an export would hold, for Settings' card. The export itself reads the database in a process of its own. */
+  | { id: number; type: 'export.counts' }
   | { id: number; type: 'close' };
 
 /** The import process → chord-data, on an import's port: one batch of history, written in one transaction. */
@@ -140,7 +145,20 @@ export interface OpenTiming {
 
 export type DataResponse =
   /** `navs`, from `open`: open tabs' saved back/forward histories, by node id; `effects`: every site's Effects. */
-  | { id: number; ok: true; saved?: PersistedState | null; navs?: Record<string, NavState>; effects?: SavedEffects[]; search?: SearchResult; archive?: ArchivePage; entry?: ArchiveEntry | null; duet?: DuetResult; timing?: OpenTiming }
+  | {
+      id: number;
+      ok: true;
+      saved?: PersistedState | null;
+      navs?: Record<string, NavState>;
+      effects?: SavedEffects[];
+      search?: SearchResult;
+      archive?: ArchivePage;
+      entry?: ArchiveEntry | null;
+      duet?: DuetResult;
+      timing?: OpenTiming;
+      device?: string;
+      counts?: ExportCounts;
+    }
   | { id: number; ok: false; error: string };
 
 /** The part of an Immer patch this needs. */
@@ -250,3 +268,4 @@ export function opsForState(state: State): WriteOp[] {
 }
 
 export type { DuetOp, DuetResult } from './duet';
+export type { ExportPhase } from './export';

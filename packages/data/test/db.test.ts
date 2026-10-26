@@ -258,6 +258,61 @@ describe('chord-data', () => {
     db.close();
   });
 
+  it('upgrades a version-16 profile to 17: settings, Favorites and routes get the time they change, from 0 for rows from before', () => {
+    const v16 = new DatabaseSync(file);
+    for (const migration of MIGRATIONS.slice(0, 16)) v16.exec(migration);
+    v16.exec('PRAGMA user_version = 16');
+    v16.prepare('INSERT INTO setting (key, value) VALUES (?, ?)').run('searchEngine', '"google"');
+    v16.prepare('INSERT INTO favorite (id, url, title, rank, created_at) VALUES (?, ?, ?, ?, ?)').run('fav-old', 'https://old.test/', 'Old', 'a0', 1);
+    v16.close();
+
+    const db = new ChordDatabase(file);
+    expect(db.version).toBe(MIGRATIONS.length);
+    const stamps = () => {
+      const raw = new DatabaseSync(file, { readOnly: true });
+      try {
+        const of = (sql: string) => Object.fromEntries((raw.prepare(sql).all() as { id: string; updated_at: number }[]).map((r) => [r.id, r.updated_at]));
+        return { ...of('SELECT key AS id, updated_at FROM setting'), ...of('SELECT id, updated_at FROM favorite'), ...of('SELECT host AS id, updated_at FROM link_route') };
+      } finally {
+        raw.close();
+      }
+    };
+    // When a row from before last changed isn't known: older than anything.
+    expect(stamps()).toEqual({ searchEngine: 0, 'fav-old': 0 });
+
+    const chord = Object.values(seed().chords)[0]!;
+    const favorite = { id: 'fav-old', url: 'https://old.test/', title: 'Old', favicon: null, rank: 'a0', createdAt: 1 };
+    db.write([{ k: 'chord', id: chord.id, value: chord }], 100);
+    db.write(
+      [
+        { k: 'setting', id: 'searchEngine', value: 'google' },
+        { k: 'favorite', id: 'fav-old', value: favorite },
+        { k: 'linkRoute', id: 'news.test', value: { host: 'news.test', chordId: chord.id, createdAt: 200 } },
+      ],
+      200,
+    );
+    // Written again unchanged, the setting and the Favorite keep theirs; the new route has its own.
+    expect(stamps()).toEqual({ searchEngine: 0, 'fav-old': 0, 'news.test': 200 });
+    db.write(
+      [
+        { k: 'setting', id: 'searchEngine', value: 'kagi' },
+        { k: 'favorite', id: 'fav-old', value: { ...favorite, title: 'Renamed' } },
+        { k: 'linkRoute', id: 'news.test', value: { host: 'news.test', chordId: chord.id, createdAt: 200 } },
+      ],
+      300,
+    );
+    expect(stamps()).toEqual({ searchEngine: 300, 'fav-old': 300, 'news.test': 200 });
+
+    // The computer's id: made once, then the same.
+    const device = db.device();
+    expect(device).toMatch(/^[0-9a-f]{16}$/);
+    expect(db.device()).toBe(device);
+    db.close();
+    const again = new ChordDatabase(file);
+    expect(again.device()).toBe(device);
+    again.close();
+  });
+
   it('keeps page zoom per site across a restart, and forgets a site set back to 100%', () => {
     let db = new ChordDatabase(file);
     let state = seed();

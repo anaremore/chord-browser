@@ -924,7 +924,7 @@ A link clicked inside a pinned tab opens in Peek instead of replacing the pinned
 
 ### 8.7 Import from another browser
 
-*Built 2026-10-24* (ARCHITECTURE.md §9). Two places, one panel (`shared/ImportPanel.tsx`): first run's **Bring your bookmarks?** step (§8.1) and **Settings → Import**, between Extensions and Duet. Each wraps it in its own title and buttons.
+*Built 2026-10-24* (ARCHITECTURE.md §9). Two places, one panel (`shared/ImportPanel.tsx`): first run's **Bring your bookmarks?** step (§8.1) and **Settings → Your data → From another browser** (§8.8; until 2026-10-26 its own section, *Import*). Each wraps it in its own title and buttons.
 
 1. **Pick a browser.** A radio group, *Import from*, one row per profile: *Chrome*, or *Chrome · Work* when a browser has several profiles, *Firefox (Flatpak)* for a sandboxed copy. Safari without Full Disk Access is listed with *Needs Full Disk Access* beside it. First run starts on the first browser Chord can read; Settings waits for a pick. While Chord reads: *Reading Chrome…*.
 2. **See what it holds,** before anything is imported: one line in `text-label`, *1,204 bookmarks in 18 folders · 34,551 pages of history · 6 open tabs*. For Chrome, Edge and Brave a quieter line under it: *Open tabs stay in Chrome: Chord can't read them reliably.*
@@ -949,6 +949,26 @@ When a browser can't be read, the panel says why in plain words, in a soft card 
 | The profile has gone since Chord looked | That browser profile isn't there any more. | — |
 
 With no other browser on the computer, first run leaves the step out, and Settings says *No other browsers found. Chord looks for Chrome, Edge, Brave and Firefox* (*…, Firefox and Safari* on a Mac).
+
+### 8.8 Your data
+
+*Built 2026-10-26: Export* (ARCHITECTURE.md §9, *Your data: export*; docs/decisions/S15-your-data.md §8). One section of Settings for your data, in and out: **Your data**, between Extensions and Duet, in place of *Import* (`ArrowDownUp`). *Take everything in Chord with you in one file, or bring in what you had in another browser.* Copy is in italics.
+
+**Export**, a card:
+- The row: *Export your data*, with *Everything in Chord in one file you can keep, read, or bring to another computer.* and **Export…**, a quiet pill (`aria-expanded`). It opens the rest under the row, in the same card, divided as its rows are: no dialog.
+- *What goes in*: the counts, read when it opens: *6 chords · 214 pinned tabs in 18 folders · 31 Today tabs · 24 Favorites · 3 themes · 12 link routes · Effects for 9 sites · your settings.* (a part that's zero is left out; *Counting…* first).
+- Two switches, on to start with each time: *History* (*15,002 pages*, or *No history yet*) and *Duet chats* (*20 chats, 4 images*, or *No chats yet*). Their switches are named *Include history* and *Include Duet chats* to a screen reader.
+- *Encrypt with a passphrase*, a switch Chord remembers (`settings.encryptExports`, off by default). Off, with history or chats included, its row says *Anyone with the file can read it.* On, it says *Chord can’t open the file without it, and can’t get it back for you.*, and two fields open under it, label on the left as Settings' rows are: *Passphrase* and *Again*, password fields. Under them **Suggest one**: five words at random, put in both fields and shown, with *Five words at random. Write them down, or keep them in your password manager.* beside it; typing in either field hides them again. A field's problem shows once you've left it, in `danger` under it, with a hairline in `danger`: *At least 12 characters.* · *The two don’t match.*
+- **Choose where to save…**, a quiet pill at the card's foot, opens the system's save dialog at *Chord data 2026-11-30.jsonl* (or *.chorddata* encrypted). Pressed before the passphrase can be used, it shows the fields' problems instead.
+- While Chord writes: the 4 px accent bar (§8.7's) and a line under it: *Locking the file with your passphrase…*, *Writing your setup…*, *Writing Today tabs…*, *Writing history: 8,000 of 15,002 pages*, *Writing Duet chats: 3 of 20 chats*. The button waits meanwhile.
+- Then *Saved Chord data 2026-11-30.jsonl, 3.8 MB* and **Show in folder** beside **Choose where to save…**. The passphrase fields empty: it isn't kept. Should anything have been too big for a file's line (an image over 32 MB), the line goes on: *1 thing too big for the file (over 32 MB) stayed out.*
+- Problems, in §8.7's soft card with one button: *Chord couldn’t save there. Choose another place.* **Choose where to save…** · *Chord couldn’t read your data to write the file. Choose where to save to try again.* **Choose where to save…** · *Chord is still writing your last export. Try again when it’s done.*
+
+**Import:**
+- *From a Chord file*, a row with *Coming in a later version: bring back an export, here or on another computer.* and no button yet: S15's step 2 (Import) gives it **Choose a file…** and the preview S15 §8 sketches.
+- *From another browser*, then *What comes across*: §8.7's panel as it was, with its line about what Chord never copies.
+
+Sync (S15 §8, *Sync*) comes as a third group, later.
 
 ---
 

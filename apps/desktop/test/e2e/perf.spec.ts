@@ -20,7 +20,7 @@ import { availableParallelism, cpus, release, tmpdir, totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type CDPSession, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { grew, launchLimit, memoryLimit, runnerKey, UPDATE_COMMAND, type Baselines, type Measured } from './baselines';
-import { frameIntervals, framesOf, layoutsOf, longestTask, profile, trace, type Frame, type TraceEvent } from './frames';
+import { browserPid, busiestWindow, frameIntervals, framesOf, insideLongestTask, layoutsOf, longestTask, profile, trace, type Frame, type TraceEvent } from './frames';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -56,7 +56,7 @@ interface Check {
 }
 
 interface Row {
-  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view' | 'memory';
+  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view' | 'memory' | 'export';
   name: string;
   scenario: string;
   motion: 'on' | 'off' | null;
@@ -267,6 +267,7 @@ async function pageWhere(app: ElectronApplication, match: (url: string) => boole
 
 const isShell = (url: string) => url.startsWith('chord://shell') || url.includes('/shell/index.html');
 const isOverlay = (url: string) => url.startsWith('chord://overlay') || url.includes('/overlay/index.html');
+const isSettings = (url: string) => url.startsWith('chord://settings') || url.includes('/settings/index.html');
 
 type LaunchTimings = Partial<Record<'processStart' | 'mainEntry' | 'ready' | 'restored' | 'windowCreated' | 'shellLoaded' | 'windowShown' | 'shellReady' | 'shellPainted', number>>;
 
@@ -841,6 +842,12 @@ async function commandBarTyping(s: Session, label: string, typing: readonly stri
     await typeSlowly(overlay, text);
     await closeCommandBar(overlay);
   }
+  await recordTyping(s, label, locked);
+}
+
+/** The keystrokes typed since their measures were last taken, against the keystroke budgets. */
+async function recordTyping(s: Session, label: string, locked: boolean | null): Promise<void> {
+  const { overlay } = s;
   const keys = await takeMeasures(overlay, 'chord:keystroke');
   const history = await takeMeasures(overlay, 'chord:keystroke-history');
   const base = { group: 'command bar' as const, scenario: s.scenario, motion: s.motion, locked };
@@ -1155,3 +1162,187 @@ for (const tabs of [20, 200]) {
     });
   }
 }
+
+/* ---------- Your data's export ---------- */
+
+/** S15's profile: 50,000 visits on 15,000 pages, and a sidebar's worth of Today tabs. */
+const EXPORT = { visits: 50_000, pages: 15_000, tabs: 60 } as const;
+/** The words typed while the export runs: long enough to cover it, every keystroke searching history. */
+const EXPORT_TYPING = 'harmony cadence melody tempo chorus';
+
+/**
+ * Main while `run` runs: how late its 5 ms timer fires at worst (its event
+ * loop's delay), and the CPU time its process used, which tells main's own
+ * work from waiting for a CPU the other processes are using.
+ */
+async function mainLoad(app: ElectronApplication, run: () => Promise<void>): Promise<{ lag: number; cpuMs: number; wallMs: number }> {
+  await app.evaluate(() => {
+    const probe = { worst: 0, on: true, cpu: process.cpuUsage(), at: performance.now() };
+    (globalThis as { chordLag?: typeof probe }).chordLag = probe;
+    let last = performance.now();
+    const tick = () => {
+      const now = performance.now();
+      probe.worst = Math.max(probe.worst, now - last - 5);
+      last = now;
+      if (probe.on) setTimeout(tick, 5);
+    };
+    setTimeout(tick, 5);
+  });
+  await run();
+  return app.evaluate(() => {
+    const probe = (globalThis as { chordLag?: { worst: number; on: boolean; cpu: NodeJS.CpuUsage; at: number } }).chordLag!;
+    probe.on = false;
+    const cpu = process.cpuUsage(probe.cpu);
+    return { lag: probe.worst, cpuMs: (cpu.user + cpu.system) / 1000, wallMs: performance.now() - probe.at };
+  });
+}
+
+/**
+ * Exporting 50,000 visits while typing in the command bar (S15 §7), exports
+ * one after another so every keystroke lands during one: the export reads the
+ * database in a process of its own, so the keystroke budgets hold (history's
+ * searches go to chord-data, which the export never waits on), the shell's and
+ * command bar's frames stay in budget, and main's own work, read from the same
+ * trace, stays under a frame. Then the same profile once more, encrypted.
+ */
+test('export: 50,000 visits while typing in the command bar', async () => {
+  test.setTimeout(300_000);
+  cpuBusy = await measureCpuBusy();
+  const out = mkdtempSync(join(tmpdir(), 'chord-perf-export-'));
+  const app = await launch({ CHORD_PERF_TABS: String(EXPORT.tabs), CHORD_PERF_VISITS: String(EXPORT.visits), CHORD_PERF_PAGES: String(EXPORT.pages) });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Your data' }).click();
+    await settings.getByRole('button', { name: 'Export…' }).click();
+    // Counted once every visit is written: the seeded pages, and the home page.
+    await expect(settings.getByText('15,001 pages', { exact: true })).toBeVisible({ timeout: 60_000 });
+    const target = join(out, 'export.jsonl');
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showSaveDialog = (async () => ({ canceled: false, filePath: path })) as typeof dialog.showSaveDialog;
+    }, target);
+
+    await bringToFront(app, shell);
+    await setMotion(app, shell, overlay, true);
+    environment ??= await readEnvironment(app, shell);
+    const renderers = await app.evaluate(({ webContents }) =>
+      webContents
+        .getAllWebContents()
+        .map((c) => ({ pid: c.getOSProcessId(), name: /shell/.test(c.getURL()) ? 'shell' : /overlay/.test(c.getURL()) ? 'command bar' : '' }))
+        .filter((r) => r.name),
+    );
+    const cdp = await shell.context().newCDPSession(shell);
+    const s: Session = { app, shell, overlay, cdp, renderers, scenario: '50,000 visits', motion: 'on' };
+    /** Types EXPORT_TYPING with the command bar open, while `during` runs (until it's told typing is done). */
+    const typing = async (when: string, during?: (typed: () => boolean) => Promise<void>) => {
+      await openCommandBar(shell, overlay);
+      await takeMeasures(overlay, 'chord:keystroke');
+      await takeMeasures(overlay, 'chord:keystroke-history');
+      const locked = screenLocked();
+      let typed = false;
+      const act = async () => void (await Promise.all([during?.(() => typed), typeSlowly(overlay, EXPORT_TYPING).then(() => (typed = true))]));
+      // Main's own work, from the same trace: its longest task, what was in it, and its busiest 30 ms.
+      let task = NaN;
+      let inside: string[] = [];
+      let busiest = { ms: NaN, tasks: [] as number[] };
+      const main = await mainLoad(app, () =>
+        interaction(s, `Type in the command bar, ${when}`, [{ act }], (events) => {
+          const pid = browserPid(events);
+          if (pid === undefined) return;
+          task = longestTask(events, pid, 'CrBrowserMain').ms;
+          inside = insideLongestTask(events, pid, 'CrBrowserMain');
+          busiest = busiestWindow(events, pid, 'CrBrowserMain', 30);
+        }),
+      );
+      await recordTyping(s, when, locked);
+      await closeCommandBar(overlay);
+      return { ...main, task, inside, busiest, locked };
+    };
+    /** One export, from Settings' button as a click would: its wall time there, to *Saved*, and its size. */
+    const exportOnce = () =>
+      settings.evaluate(
+        () =>
+          new Promise<{ ms: number; bytes: number; phase: string }>((resolve) => {
+            const api = (window as unknown as { chord: { exports: { onProgress(l: (p: { phase: string; bytes?: number }) => void): () => void } } }).chord.exports;
+            const button = () => [...document.querySelectorAll('button')].find((b) => b.textContent === 'Choose where to save…');
+            const start = () => {
+              // The last export's Saved has rendered, and the button is back.
+              if (!button() || button()!.disabled) return void requestAnimationFrame(start);
+              const t0 = performance.now();
+              const off = api.onProgress((p) => {
+                if (p.phase !== 'done' && p.phase !== 'failed') return;
+                off();
+                resolve({ ms: performance.now() - t0, bytes: p.bytes ?? 0, phase: p.phase });
+              });
+              button()!.click();
+            };
+            start();
+          }),
+      );
+
+    // A first pass warms the command bar up; then typing alone, what main does without an export.
+    await openCommandBar(shell, overlay);
+    await typeSlowly(overlay, 'warm up');
+    await closeCommandBar(overlay);
+    const alone = await typing('before an export');
+    // Then the same words while exports run one after another, so every keystroke lands during one.
+    const runs: { ms: number; bytes: number; phase: string }[] = [];
+    const during = await typing('during exports', async (typed) => {
+      while (!typed()) runs.push(await exportOnce());
+    });
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs.every((r) => r.phase === 'done')).toBe(true);
+    const text = readFileSync(target, 'utf8');
+    const pages = text.split('\n').filter((line) => line.startsWith('{"type":"page"')).length;
+    expect(pages).toBe(EXPORT.pages + 1);
+    const walls = runs.map((r) => r.ms);
+    record({
+      group: 'export',
+      name: 'Export: 50,000 visits, plain',
+      scenario: s.scenario,
+      motion: null,
+      locked: during.locked,
+      checks: [
+        // Main's own work while exports run, from the trace: no task past a frame, and room to spare in any 30 ms (rule 1).
+        check('main task', during.task, BUDGET.frameMs, { locked: during.locked }),
+        check('main busiest 30 ms', during.busiest.ms, BUDGET.frameMs, { locked: during.locked }),
+        check('wall time', median(walls), 10_000, { locked: during.locked }),
+      ],
+      detail: {
+        mainTaskMs: { alone: round(alone.task), during: round(during.task), inside: during.inside },
+        mainBusiest30Ms: { alone: alone.busiest, during: during.busiest },
+        // How late a 5 ms timer in main fired at worst: reported, not held, since it varies run to run (typing alone too).
+        mainLagMs: { alone: round(alone.lag), during: round(during.lag) },
+        // Main's process CPU time (every thread, IPC and launching processes included): what each export costs it.
+        mainCpuMs: { alone: round(alone.cpuMs), during: round(during.cpuMs), perExport: round((during.cpuMs - alone.cpuMs * (during.wallMs / alone.wallMs)) / runs.length) },
+        exports: runs.length,
+        wallMs: { median: round(median(walls)), worst: round(max(walls)), runs: walls.map(round) },
+        bytes: runs.at(-1)?.bytes ?? 0,
+        pages,
+        typedMs: round(EXPORT_TYPING.length * 120 + 300),
+      },
+    });
+
+    // The same profile encrypted: scrypt's half second, then deflate and AES-GCM, all in the export's process.
+    await settings.getByRole('switch', { name: 'Encrypt with a passphrase' }).click();
+    await settings.getByRole('button', { name: 'Suggest one' }).click();
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showSaveDialog = (async () => ({ canceled: false, filePath: path })) as typeof dialog.showSaveDialog;
+    }, join(out, 'export.chorddata'));
+    const sealed = await exportOnce();
+    expect(sealed.phase).toBe('done');
+    record({
+      group: 'export',
+      name: 'Export: 50,000 visits, encrypted',
+      scenario: s.scenario,
+      motion: null,
+      locked: screenLocked(),
+      checks: [check('wall time', sealed.ms, 10_000, { locked: null })],
+      detail: { wallMs: round(sealed.ms), bytes: sealed.bytes, plainBytes: runs.at(-1)?.bytes ?? 0 },
+    });
+  } finally {
+    await app.close();
+  }
+});

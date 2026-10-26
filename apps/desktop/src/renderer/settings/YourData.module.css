@@ -1,0 +1,72 @@
+/* Settings → Your data. Tokens only; the bar and the problem card are shared/ImportPanel.module.css. */
+
+/* The Export card: rows of the group, divided as its rows are. */
+.card {
+  display: flex;
+  flex-direction: column;
+}
+
+.card > * + * {
+  box-shadow: 0 calc(var(--size-hairline) * -1) 0 var(--color-divider);
+}
+
+/* The passphrase's two fields and Suggest one, label on the left as Settings' rows are. */
+.fields {
+  display: grid;
+  grid-template-columns: calc(var(--size-slider-width) * 0.6) 1fr;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+}
+
+.field {
+  display: contents;
+}
+
+.input {
+  inline-size: auto;
+  min-inline-size: 0;
+}
+
+.input[aria-invalid] {
+  box-shadow: 0 0 0 var(--size-hairline) var(--color-danger);
+}
+
+/* What's wrong sits under its field, in the field's column. */
+.problem {
+  grid-column: 2;
+  color: var(--color-danger);
+  font: var(--text-small);
+}
+
+.suggest {
+  display: flex;
+  grid-column: 2;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.suggest > button {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* The bar and what Chord is doing, then the buttons, at the card's foot. */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+
+.buttons {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+@media (forced-colors: active) {
+  .input[aria-invalid] {
+    outline: var(--size-focus-ring) solid Mark;
+  }
+}

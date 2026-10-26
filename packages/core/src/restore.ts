@@ -250,6 +250,7 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   const effects = saved['effects'] as Record<string, unknown> | undefined;
   if (effects && typeof effects === 'object' && typeof effects['wet'] === 'boolean') settings.effects.wet = effects['wet'];
   settings.proxy = cleanProxy(saved['proxy']) ?? settings.proxy;
+  if (typeof saved['encryptExports'] === 'boolean') settings.encryptExports = saved['encryptExports'];
   return settings;
 }
 
@@ -258,7 +259,7 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
  * that keeps its own sign-ins, and only if it can be used; without one, the
  * chord uses the proxy for every chord.
  */
-function restoreChord(chord: Chord): Chord {
+export function restoreChord(chord: Chord): Chord {
   const { proxy, ...rest } = chord;
   const usable = proxy && chord.profileId !== DEFAULT_PROFILE ? cleanProxy(proxy) : null;
   return usable ? { ...rest, proxy: usable } : rest;

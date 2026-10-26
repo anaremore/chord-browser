@@ -5,7 +5,7 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, keycapFor, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { Blend, Check, EyeOff, FolderInput, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ArrowDownUp, Blend, Check, EyeOff, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { ChordMark } from '../shared/ChordMark';
 import { DuetIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
@@ -19,7 +19,6 @@ import { AppearanceSection } from './Appearance';
 import { ShortcutsSection } from './Shortcuts';
 import { RadioGroup, ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import { ExtensionsSection } from './Extensions';
-import { ImportSection } from './Import';
 import { PrivacySection } from './Privacy';
 import type { ProxyFocus } from './Proxy';
 import { EffectsSection } from './Effects';
@@ -27,6 +26,7 @@ import styles from './Settings.module.css';
 import { Links } from './Links';
 import { PlayerSettings } from './Player';
 import { SitesSection, Spelling } from './Sites';
+import { YourDataSection } from './YourData';
 
 const SECTIONS = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
@@ -36,7 +36,8 @@ const SECTIONS = [
   { id: 'effects', label: 'Effects', icon: Blend },
   { id: 'sites', label: 'Site permissions', icon: ShieldCheck },
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
-  { id: 'import', label: 'Import', icon: FolderInput },
+  // Export, and import from another browser or (next) a Chord file: one place for your data, in and out (S15 question 5).
+  { id: 'data', label: 'Your data', icon: ArrowDownUp },
   { id: 'duet', label: 'Duet', icon: DuetIcon },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
@@ -540,7 +541,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'effects' && <EffectsSection snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
-              {section === 'import' && <ImportSection snapshot={snapshot} info={info} />}
+              {section === 'data' && <YourDataSection snapshot={snapshot} info={info} />}
               {section === 'duet' && <DuetSettings snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}

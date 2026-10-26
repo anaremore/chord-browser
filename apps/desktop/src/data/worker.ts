@@ -82,6 +82,14 @@ process.parentPort.on('message', (event) => {
         db.undoImport(request.importId);
         reply({ id: request.id, ok: true });
         break;
+      case 'device':
+        if (!db) throw new Error('chord-data: device before open');
+        reply({ id: request.id, ok: true, device: db.device() });
+        break;
+      case 'export.counts':
+        if (!db) throw new Error('chord-data: export before open');
+        reply({ id: request.id, ok: true, counts: db.exportCounts() });
+        break;
       case 'close':
         db?.close();
         db = null;

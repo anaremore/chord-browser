@@ -51,6 +51,12 @@ const api: SettingsApi = {
     openAccess: () => invoke('import:openAccess'),
     onProgress: (listener) => subscribe('import:progress', listener),
   },
+  exports: {
+    counts: () => invoke('export:counts'),
+    run: (request) => invoke('export:run', request),
+    show: (exportId) => invoke('export:show', { exportId }),
+    onProgress: (listener) => subscribe('export:progress', listener),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

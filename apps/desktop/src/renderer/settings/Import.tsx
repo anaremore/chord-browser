@@ -1,25 +1,24 @@
 /**
- * Settings → Import (DESIGN.md §8.7): bookmarks, history and open tabs from
- * another browser on this computer, each top-level folder mapped to a chord.
- * It lands in the window behind Settings, which offers Undo in a toast; Undo
- * is here too, since Settings may be covering that window.
+ * Settings → Your data → From another browser (DESIGN.md §8.7): bookmarks,
+ * history and open tabs from another browser on this computer, each top-level
+ * folder mapped to a chord. It lands in the window behind Settings, which
+ * offers Undo in a toast; Undo is here too, since Settings may be covering
+ * that window.
  */
 import type { SettingsSnapshot, SystemInfo } from '@chord/ipc';
 import { ImportDetails, ImportSources, NEVER_COPIED, useImport } from '../shared/ImportPanel';
 import { api } from './api';
-import { SectionHeader } from './controls';
 import local from './Import.module.css';
 import styles from './Settings.module.css';
 
-export function ImportSection({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
+export function FromAnotherBrowser({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemInfo }) {
   const flow = useImport(api.imports);
   const looks = info.platform === 'darwin' ? 'Chrome, Edge, Brave, Firefox and Safari' : 'Chrome, Edge, Brave and Firefox';
   const phase = flow.progress?.phase;
   const finished = phase === 'done' || phase === 'failed' || phase === 'undone';
   return (
     <>
-      <SectionHeader title="Import" description="Bring bookmarks, history and open tabs from another browser on this computer. Each top-level folder can become a chord of its own." />
-      <h2 className={styles.groupTitle}>From</h2>
+      <h2 className={styles.groupTitle}>From another browser</h2>
       {flow.sources?.length === 0 ? (
         <div className={styles.group}>
           <p className={local.empty}>{`No other browsers found. Chord looks for ${looks}.`}</p>

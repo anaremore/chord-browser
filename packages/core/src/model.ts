@@ -424,6 +424,8 @@ export interface Settings {
    * The system's, as Electron does by default, unless you choose another.
    */
   proxy: ProxySettings;
+  /** Settings → Your data → Export: *Encrypt with a passphrase*, remembered for next time (the passphrase never is). */
+  encryptExports: boolean;
 }
 
 /** Settings → Effects: dry everywhere keeps every site's Effects and applies none; each site keeps its own switch too. */
@@ -527,6 +529,8 @@ export const DEFAULT_SETTINGS: Settings = {
   effects: { wet: true },
   devtools: DEFAULT_DEVTOOLS,
   proxy: { mode: 'system', server: null, pac: null },
+  // Plain by default (S15 §3): a forgotten passphrase is a worse failure for a backup than a file someone else might read.
+  encryptExports: false,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -594,6 +598,7 @@ export interface SettingsPatch {
   devtools?: Partial<DevtoolsSettings>;
   /** The whole new proxy for every chord; one that can't be used (core's cleanProxy) is ignored. */
   proxy?: ProxySettings;
+  encryptExports?: boolean;
 }
 
 /**

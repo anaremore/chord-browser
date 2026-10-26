@@ -31,6 +31,7 @@ import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { DuetService } from './duet/service';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
+import { Exporter } from './export';
 import { APP_ID, configureAppIdentity, inFlatpak } from './identity';
 import { Importer } from './import';
 import { handle, send } from './ipc';
@@ -92,6 +93,7 @@ let browser: Browser | undefined;
 let persistence: Persistence | undefined;
 let duet: DuetService | undefined;
 let importer: Importer | undefined;
+let exporter: Exporter | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
@@ -457,7 +459,7 @@ function registerIpc(): void {
   handle('archive:list', ({ query, limit }) => persistence!.archiveList(query, limit));
   handle('archive:restore', ({ archiveId }, sender) => browser!.restoreArchived(sender, archiveId));
   handle('archive:remove', ({ archiveId }) => browser!.removeArchived(archiveId));
-  // Import from other browsers: first run (the shell) and Settings → Import (the last normal window). Never a private window.
+  // Import from other browsers: first run (the shell) and Settings → Your data (the last normal window). Never a private window.
   const importWindow = (sender: WebContents) => browser!.windowFor(sender) ?? browser!.lastBrowserWindow();
   handle('import:sources', (_request, sender) => (importWindow(sender)?.isPrivate === false ? importer!.sources() : []));
   handle('import:preview', ({ key }, sender) => {
@@ -475,6 +477,10 @@ function registerIpc(): void {
     // System Settings → Privacy & Security → Full Disk Access, which Safari's folder needs.
     if (platform === 'darwin') void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
   });
+  // Your data: Settings' Export card. The save dialog belongs to the Settings window.
+  handle('export:counts', () => exporter!.counts());
+  handle('export:run', (request, sender) => exporter!.run(browser!.settingsWindowOf(sender), request, (progress) => send(sender, 'export:progress', progress)));
+  handle('export:show', ({ exportId }) => exporter!.show(exportId));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -526,8 +532,8 @@ if (!app.requestSingleInstanceLock()) {
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
-    // An import stops, and its copies of another browser's files go (at most 2 s, like the rest).
-    const imports = Promise.race([importer?.quit().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
+    // An import stops, and its copies of another browser's files go; an export stops, and its unfinished file goes (at most 2 s, like the rest).
+    const imports = Promise.race([Promise.all([importer?.quit(), exporter?.quit()]).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
     // Duet first: replies in flight are kept as interrupted, and provider processes end. Ad blocking
     // finishes a change under way (no control page may be open as Electron tears down) and ends its workers.
     // Chord Player quits by itself once Chord's channel closes: nothing to wait for.
@@ -675,7 +681,14 @@ if (!app.requestSingleInstanceLock()) {
       const perfTabs = devNumber('CHORD_PERF_TABS') ?? 0;
       const perfVisits = devNumber('CHORD_PERF_VISITS') ?? 0;
       if (perfTabs || perfVisits) {
-        seedForPerformance(initial, { tabs: perfTabs, visits: perfVisits, homeUrl: HOME_URL, newId: () => uuidv7(), history: (event) => opened.persistence.history(event) });
+        seedForPerformance(initial, {
+          tabs: perfTabs,
+          visits: perfVisits,
+          pages: devNumber('CHORD_PERF_PAGES') ?? perfVisits,
+          homeUrl: HOME_URL,
+          newId: () => uuidv7(),
+          history: (event) => opened.persistence.history(event),
+        });
       }
       persistence.recordAll(initial);
     }
@@ -851,6 +864,16 @@ if (!app.requestSingleInstanceLock()) {
     });
     // Copies of another browser's files an import left when Chord was killed go, once launch is long over.
     setTimeout(() => void importer?.sweep(), 60_000).unref();
+    // Your data's export (docs/decisions/S15-your-data.md §7): a process of its own reads the database read-only.
+    exporter = new Exporter({
+      workerPath: join(import.meta.dirname, 'export.js'),
+      database: join(app.getPath('userData'), 'chord.db'),
+      images: join(app.getPath('userData'), 'duet', 'images'),
+      app: app.getVersion(),
+      platform,
+      folder: () => app.getPath('documents'),
+      data: { flush: () => store.flush(), device: () => store.device(), counts: () => store.exportCounts() },
+    });
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu; and launch timing.

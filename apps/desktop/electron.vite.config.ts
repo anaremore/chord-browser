@@ -40,8 +40,9 @@ export default defineConfig({
     // Safe Browsing's worker thread (§14.5), ad blocking's (§9; the engine
     // stays out of main), the process that reads other browsers' files
     // for an import (§9), the worker that cleans reader view's
-    // articles (§9), the one that installs Chord Player (§9), and Effects'
-    // sanitizer (§9).
+    // articles (§9), the one that installs Chord Player (§9), Effects'
+    // sanitizer (§9), and the process that writes an export of your data
+    // (docs/decisions/S15-your-data.md §7).
     plugins: [filterLists()],
     build: {
       externalizeDeps: false,
@@ -58,6 +59,8 @@ export default defineConfig({
           reader: src('main/reader/worker.ts'),
           // Effects' sanitizer: every stylesheet an Effect applies is checked there, never on main (§9).
           effects: src('main/effects/worker.ts'),
+          // Your data's export: reads chord.db read-only and writes the file, so main never holds the data.
+          export: src('export/worker.ts'),
         },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },

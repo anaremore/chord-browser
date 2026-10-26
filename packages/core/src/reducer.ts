@@ -1244,6 +1244,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       }
       if (sidebarPeek !== undefined && draft.settings.sidebarPeek !== sidebarPeek) draft.settings.sidebarPeek = sidebarPeek;
       if (keepScreenshots !== undefined && draft.settings.keepScreenshots !== keepScreenshots) draft.settings.keepScreenshots = keepScreenshots;
+      const { encryptExports } = cmd.settings;
+      if (encryptExports !== undefined && draft.settings.encryptExports !== encryptExports) draft.settings.encryptExports = encryptExports;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
       if (cmd.settings.duet) {
         const duet = cmd.settings.duet;

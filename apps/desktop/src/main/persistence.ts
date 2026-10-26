@@ -6,7 +6,7 @@
  */
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ArchiveReason, PersistedState, SavedEffects, State } from '@chord/core';
+import type { ArchiveReason, ExportCounts, PersistedState, SavedEffects, State } from '@chord/core';
 import {
   opKey,
   opsForState,
@@ -190,6 +190,21 @@ export class Persistence {
   async undoImport(importId: string): Promise<void> {
     const response = await this.request({ type: 'import.undo', importId });
     if (!response.ok) throw new Error(response.error);
+  }
+
+  /** This computer's id, for an export's header and stamps (made the first time it's asked for). */
+  async device(): Promise<string> {
+    const response = await this.request({ type: 'device' });
+    if (!response.ok || !response.device) throw new Error(response.ok ? 'chord-data: no device id' : response.error);
+    return response.device;
+  }
+
+  /** What an export would hold, for Settings' card. Pending writes go first, so what was just added counts. */
+  async exportCounts(): Promise<ExportCounts> {
+    await this.flush();
+    const response = await this.request({ type: 'export.counts' });
+    if (!response.ok || !response.counts) throw new Error(response.ok ? 'chord-data: no counts' : response.error);
+    return response.counts;
   }
 
   /** Duet's threads and messages. Throws if chord-data can't answer, so Duet can say so. */
