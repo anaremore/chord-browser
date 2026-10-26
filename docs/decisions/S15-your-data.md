@@ -1,6 +1,6 @@
 # S15: Your data — export, import and sync
 
-*2026-10-25 · ROADMAP.md 0.5 · decision D14 (ARCHITECTURE.md §16) · **reviewed and decided 2026-10-25:** the maintainer took all ten recommendations in §10. **Step 1, Export, built 2026-10-26** (ARCHITECTURE.md §9 *Your data: export*, DESIGN.md §8.8, [docs/data-format.md](../data-format.md)): what it decided and found is in §11, and marked *as built* where it lands. Import and sync aren't built yet.*
+*2026-10-25 · ROADMAP.md 0.5 · decision D14 (ARCHITECTURE.md §16) · **reviewed and decided 2026-10-25:** the maintainer took all ten recommendations in §10. **Step 1, Export, built 2026-10-26** (ARCHITECTURE.md §9 *Your data: export*, DESIGN.md §8.8, [docs/data-format.md](../data-format.md)): what it decided and found is in §11, and marked *as built* where it lands. **Step 2, Import, built 2026-10-26** (ARCHITECTURE.md §9 *Your data: import*, DESIGN.md §8.8): what it decided and found is in §12. Sync isn't built yet.*
 
 **In short.** Export and sync use one record format. Export ships first, then import, then sync.
 
@@ -250,7 +250,7 @@ Tombstones are kept forever in v1. Each is about 90 bytes, and setup is deleted 
 - **Into a profile with data, import adds what's missing and updates what's older. It never deletes.**
   - **Things compare field by field:** the file's stamp against this computer's. With sync on, this computer's stamps are sync's own (§7). Without sync, they're the rows' `updated_at`. Migration 17 (built with export, 2026-10-26; this said 16 before Effects' switches and proxies took 15 and 16) adds `updated_at` to `setting`, `favorite` and `link_route`, which lack it, so an old export can't overwrite yesterday's edit.
   - **With sync on, what an import brings keeps the file's stamps,** so it can't overrule a newer change another computer made. Only something brought back from deletion gets a new stamp.
-  - **Tombstones in a file are ignored,** though exports have none anyway.
+  - **Tombstones in a file are ignored,** though exports have none anyway. *As built (§12):* both ways: a thing whose newest `deleted` is `true` neither comes in nor is deleted here.
   - **Something you deleted here comes back** if the file has it: importing it is the choice.
   - **Matches merge instead of doubling:** a Favorite with the same address, a route for the same site, Effects for the same site.
   - **History:** visits are matched by address and time, so importing the same file twice adds nothing. Typed counts take the larger of the two.
@@ -344,7 +344,7 @@ Main only routes, as performance rule 1 asks.
 
 **Import runs in the same kind of process,** since a file from elsewhere is untrusted work, like another browser's files.
 - It reads, decrypts and checks every line, and makes the preview's counts.
-- **Setup:** on *Import*, it asks chord-data, over a port, for this computer's stamps for the ids in the file, and decides what wins. It sends main the setup in parts of 200 things, as `data.merge` commands: like `import.add`, plus updates, with what they replaced kept for Undo.
+- **Setup:** on *Import*, it asks chord-data, over a port, for this computer's stamps for the ids in the file, and decides what wins. It sends main the setup in parts of 200 things, as `data.merge` commands: like `import.add`, plus updates, with what they replaced kept for Undo. *As built (§12):* it reads this computer's stamps itself, over a read-only connection of its own as the export process reads, so chord-data's thread does nothing for a preview or a plan.
 - **History and Duet** go straight to chord-data over a port, in batches, never through main, as browser import's history does.
 - **Effects** go to main's Effects service, which sends each through its sanitizer worker.
 
@@ -356,8 +356,8 @@ Main only routes, as performance rule 1 asks.
 **The change to packages/data is moderate, and additive.**
 - **Migration 17 (with export; Effects' switches took 15 and proxies 16, so this was 16 before):** `updated_at` on `setting`, `favorite` and `link_route`, set on every write that changes the row, plus a small `meta` table for the device id. *Built 2026-10-26.*
 - **`export.ts`:** turns rows into records over a read-only connection, for the export process. *Built 2026-10-26*, with `rows.ts` (rows as the model has them, shared with `db.ts`) and `crypto.ts` (Node's primitives for core's container).
-- **Import:** `importHistory` learns to skip visits it already has. A new `duet.import` op adds threads, messages and images, with Undo bookkeeping like `import_page`'s.
-- **Migration 18 (with sync; it was 17):**
+- **Import:** `importHistory` learns to skip visits it already has. A new `duet.import` op adds threads, messages and images, with Undo bookkeeping like `import_page`'s. *As built (§12):* `importDuet` adds threads and messages by id (temporary `import_thread` and `import_message` for Undo); the import process writes the images; migration 18 marks a chat that came from a file.
+- **Migration 19 (with sync; it was 17, then 18 until import took 18, §12):**
   - `sync_record` (type, id, fields JSON, stamps JSON): the merged copy;
   - `sync_outbox`;
   - `sync_cursor`: how far each segment has been read;
@@ -387,7 +387,7 @@ Settings → **Your data**, in place of today's Import, which moves in as a grou
 - *As built 2026-10-26* (DESIGN.md §8.8), with these additions: the two fields are *Passphrase* and *Again*; *Suggest one* puts its words in both and shows them, with *Five words at random. Write them down, or keep them in your password manager.*, and typing hides them again; a field's problem shows once you've left it (*At least 12 characters.* · *The two don’t match.*); the line under the bar says *Locking the file with your passphrase…*, *Writing your setup…*, *Writing Today tabs…* and *Writing Duet chats: 3 of 20 chats* too; two more problems: *Chord couldn’t read your data to write the file. Choose where to save to try again.* and *Chord is still writing your last export. Try again when it’s done.* The passphrase fields empty once a file is saved.
 
 **Import**
-- A row: *From a Chord file*, with *Bring back an export, here or on another computer. Nothing here is removed.* and **Choose a file…** (*Until step 2, as built:* the row says *Coming in a later version: bring back an export, here or on another computer.*, with no button.)
+- A row: *From a Chord file*, with *Bring back an export, here or on another computer. Nothing here is removed.* and **Choose a file…** (*As built 2026-10-26*, DESIGN.md §8.8: as sketched here, with the additions in §12.)
 - A row: *From another browser*: today's panel, unchanged (DESIGN.md §8.7).
 - After you choose a file:
   - *Reading Chord data 2026-11-30.chorddata…*
@@ -439,7 +439,7 @@ As the maintainer prefers: a few journey E2Es, which run in the Linux container 
 - **The journey:** a seeded profile exports plain and encrypted. The plain file's lines parse and hold what was seeded, and the encrypted file opens with the passphrase only.
 - **Performance:** the 50,000-visit export while typing in the command bar.
 
-**2. Import** (about a week)
+**2. Import** (about a week) · **built 2026-10-26** (§12)
 - **What's built:** `data.merge` and its Undo, history dedupe, `duet.import`, the import process and the preview.
 - **Unit tables:**
   - the merge planner: a new profile, a profile with data, older and newer stamps, something deleted here, tombstones in a file, duplicate Favorites, settings on and off, and `allow` permissions dropped;
@@ -449,7 +449,7 @@ As the maintainer prefers: a few journey E2Es, which run in the Linux container 
   - Once more, into a profile with data.
 
 **3. Sync** (two to three weeks)
-- **What's built:** migration 18 (it was 17), the stamping hook, the worker, the folder protocol, and Settings.
+- **What's built:** migration 19 (it was 17, then 18), the stamping hook, the worker, the folder protocol, and Settings.
 - **Unit tables:**
   - the clock: behind, ahead, equal, the counter;
   - the field merge: concurrent edits, edit against delete, bringing a thing back, the same tab moved twice, a cycle, equal ranks, settings that conflict, unknown types kept and written back;
@@ -514,8 +514,48 @@ Step 1 is built as §1–§3, §7 and §8 say, apart from what's here. [docs/dat
 ### Not done here
 
 - **⚠ The Flatpak, saving outside Downloads.** Its only folder of the user's is Downloads (`--filesystem=xdg-download`), so a file saved elsewhere comes back through the document portal, which lets Chord write the file it chose and nothing beside it. When `<name>.part` can't be made there (`EACCES`, `EPERM`), the export writes the chosen file in place. Not tried in a Flatpak.
-- `readDataFile` reads a whole file into memory; step 2's import process, which takes files up to 2 GB, should read frames as they come.
-- *From a Chord file* is a row with no button: step 2 gives it **Choose a file…** and the preview.
+- ~~`readDataFile` reads a whole file into memory; step 2's import process, which takes files up to 2 GB, should read frames as they come.~~ *Done in step 2* (§12): `openDataFile` and a stream read a file as it comes; `readDataFile` is the two at once.
+- ~~*From a Chord file* is a row with no button: step 2 gives it **Choose a file…** and the preview.~~ *Done in step 2.*
+
+## 12. Building import: what it decided and found (2026-10-26)
+
+Step 2 is built as §5, §7 and §8 say, apart from what's here. ARCHITECTURE.md §9 *Your data: import* has the flow, and a table of where each rule about untrusted input is enforced; DESIGN.md §8.8 has the card.
+
+### Decided
+
+- **This computer's side is read, not asked for.** The import process reads this computer's setup as the export process does, over a read-only connection of its own (`@chord/data/import-file`), after main writes what's pending; §7 had it ask chord-data over a port. So chord-data's thread does nothing for a preview or a plan. Both sides are records, and the merge is records against records, field by field (`core/merge.ts`, `planMerge`): the pure step sync will use.
+- **A new profile** is one chord with nothing pinned and no Favorites, themes, routes or Effects. Today tabs, history and settings don't count: first run makes them. The first-run chord makes way: its tabs (usually first run's one) go to the top of the file's first chord's Today, windows on it go there showing what they showed, and the chord goes. Undo brings it back as it was.
+- **Tombstones in a file are ignored both ways:** a thing whose newest `deleted` is `true` neither comes in nor is deleted here. Ignoring only the field would bring back what the file's own computer deleted.
+- **A setting still at its default counts as never set.** A profile writes every setting at its first save, so each has a stamp newer than any file made before it, and a file's would never win. A setting at Chord's default here takes the file's, whatever the stamps; one you've changed is weighed by its stamp. *Settings from the file* is off for a profile with data, so each change is named before it can happen.
+- **Settings are checked together:** the file's winning fields over ours, through restore's own checks (`restoreSettings`). A value Chord can't use stays out (the default restore would put in its place isn't taken for the file's), and what changes with it is named too: Google-free mode moves search off Google. Main checks the patch again with `ImportedSettings`, the schema Settings' own changes pass (with *Safe Browsing's notice answered* and reader view, which travel but which no Settings row sets alone), and `settings.set` applies it.
+- **A chord you have keeps its sign-ins.** `profile` never changes on a chord here: changing it signs the chord out of every site. A new chord whose own sign-ins share an id with a chord here gets a new one, and a private window's profile id is refused (in the codec and in the reducer).
+- **Duet** (migration 18, `duet_thread.imported_at`; sync's tables move to 19):
+  - An imported chat's earlier turns reach a provider only on its first session, or one that can't resume, at the start of your message as JSON marked untrusted (`earlierTurns`: what you and Duet said, newest kept, never tools' details). The instructions carry only Chord's own line saying what such a block is. §5 asked for exactly this; before, a chat with no session started with nothing of its past, and a failed resume put a summary in the instructions.
+  - It reads no more than a new chat would: the narrower of its scope and Settings' (a file can't make a chat read all your tabs). An approval in it grants nothing; grants live only in a session.
+  - Its links open only web pages, checked when read (`messageFromRecord`) and again where they open (a citation, a tab's name).
+  - Its images are written by the import process beside Duet's own, only if their bytes are the type they say (`imageInfo`), only for messages in the file, and never over a file that's there; Undo removes exactly the files it wrote.
+- **Every import skips visits Chord has** (the same page at the same millisecond), another browser's too: importing the same history twice adds nothing. A Chord file's `typed`, a count without times, takes the larger of the two.
+- **The preview** says *From this computer* or *From another computer*: a file's header has a computer's id, not its name (names come with sync's `device` records). A damaged or cut-short file shows what could be read, and *Import what's readable* stands where **Import** would.
+- **Proxies** are named in the preview with the settings (*Proxy for every chord: …*, *Work's own proxy: …*), and come only with *Settings from the file*, a chord's own included (§11).
+
+### Found
+
+- **⚠ A Node `Buffer`'s `slice` is a view of the same memory, not a copy** (a plain `Uint8Array`'s is a copy). The reader kept a line's first part with `slice`, and on the import process's reused `Buffer` the next read overwrote it: one record lost at each megabyte's boundary (`perf.spec.ts` counted 15,000 pages of 15,001). It copies explicitly now, and the unit tests read through a reused `Buffer`, as the process does.
+- **Performance** (`perf.spec.ts`, the Linux container on 4 CPUs; ARCHITECTURE.md has the numbers as built). The first version imported 50,000 visits in 947 ms and undid them in 661, and a keystroke's search waited up to 80 ms. What changed:
+  1. Each page's update set its title, unchanged too, and setting it fires the full-text index's trigger, which rewrites the page's search entry. Now the title is set only when an untitled page gets one, in Undo too.
+  2. Undo comes in slices of 100 pages, each a transaction, with chord-data answering searches in between (`undoImportSlice`).
+  3. History comes in batches of 50 pages or 1,000 visits: 1–2 ms each, measured directly (100 took up to about 12 ms in the container).
+  4. SQLite's checkpoints, which copy the write-ahead log into the database on chord-data's thread, took about 20 ms each at SQLite's 1,000 pages. While an import writes (its batches, its Undo) they come at 250 pages: about 10 ms each, for about half as long again in all (measured directly, on Windows).
+  5. Progress goes to main at most ten times a second, and the import process runs below normal priority.
+
+  Result, over two runs: 550–600 ms to import, 340–360 ms to undo, main's longest task 4–6 ms, the shell's and command bar's frames in budget (into a profile with data); export's own check unchanged (214 ms plain). ⚠ **Left:** during an import, up to four of 35 keystrokes' searches wait past 16 ms, at most about 20–25 (at most 10 typing alone): checkpoints, and the import process sharing 4 CPUs. Running checkpoints from the import process's own connection, off chord-data's thread, would be next. And a restore's switch to the file's chord mounts that chord's sidebar in one task (24.5 ms with 61 Today tabs), as switching to it would.
+- **The journeys pass on X11 and Wayland** (`your-data.spec.ts`), and the whole suite on X11.
+
+### Not done here
+
+- **Undo from Settings lasts while its card is open,** and the toast's while the toast shows: as browser import's (§5 says *for the rest of the session*; neither keeps the button once its view is gone).
+- **⚠ The Flatpak:** a file chosen outside Downloads comes through the document portal, which allows reading the file chosen; not tried in a Flatpak.
+- **⚠ Big files:** reading is linear, a megabyte at a time, and the setup kept is capped (100,000 records); measured to 3.1 MB. A 2 GB file of images wasn't tried.
 
 ## What was checked, and what wasn't
 
@@ -526,7 +566,7 @@ Step 1 is built as §1–§3, §7 and §8 say, apart from what's here. [docs/dat
 - OWASP: N=2¹⁷, r=8, p=1 is its minimum for scrypt.
 - The model, tables and functions named here, in the code as of `cd27baf`.
 
-**Checked since, building export (2026-10-26, §11):** a read-only second connection to the live database from another process; `node:sqlite` in a second utility process; SQLite's time to read 50,000 visits, and the whole export's; decrypting a file with Python.
+**Checked since, building export (2026-10-26, §11):** a read-only second connection to the live database from another process; `node:sqlite` in a second utility process; SQLite's time to read 50,000 visits, and the whole export's; decrypting a file with Python. **Building import (§12):** reading a file as it comes; importing and undoing 50,000 visits while typing; SQLite's checkpoints' cost at 1,000 and 250 pages.
 
 **Not checked (⚠ above):**
 - the sizes, which come from generated data (export's measured ones are generated too);
