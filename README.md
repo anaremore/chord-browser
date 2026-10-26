@@ -15,7 +15,7 @@ Windows, macOS, and Linux (X11 and Wayland) are all first-class.
 
 ## What's in it
 
-Everything here works on `main` today and comes with the first preview.
+Everything here works on `main` today and comes with the latest preview.
 
 - **Vertical sidebar:** pinned tabs that remember their home page, Today tabs that tidy themselves into an archive, nestable folders, and drag-and-drop everywhere.
 - **Chords:** separate sets of tabs, each with its own color theme and, optionally, separate sign-ins. Switch with ⌘/Ctrl+1–9 or a swipe.
@@ -26,7 +26,9 @@ Everything here works on `main` today and comes with the first preview.
 - **Chrome extensions**, including password managers.
 - **Pop-out video:** a playing video floats into picture-in-picture when you switch tabs.
 - **Safe Browsing:** a warning before suspected phishing and malware sites and downloads, from Google's lists, checked on your computer. Release builds only (it needs Chord's API key); off in Google-free mode.
-- **Duet** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. It can read the page or your tabs when you let it, cites what it read, and never sees your sign-in. Turn it off in Settings and it's gone.
+- **Duet** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. You choose what it can read, from your tabs down to nothing at all; it cites what it read, and never sees your sign-in. Turn it off in Settings and it's gone.
+- **Effects:** restyle a site your way, with your own CSS, hidden elements, presets, or styles Duet writes. Dry/Wet takes them off at once. They're styles only, and never load anything.
+- **Developer tools** dock beside the page, as in Chrome, or pop out into a window.
 
 | | |
 |---|---|

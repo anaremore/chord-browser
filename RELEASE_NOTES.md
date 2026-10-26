@@ -2,9 +2,7 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
-## Next · preview (unreleased)
-
-What's built since 0.2.1; it gets its version when it's released.
+## 0.3.0 · preview · 2026-10-25
 
 - **Choose what Duet can read**, in Settings → Duet, from least to most:
   - **Nothing:** Duet only sees what you type. It gets no way to read your tabs, pages, history or Archive, nothing can be attached, and no chat can change that.
@@ -12,7 +10,7 @@ What's built since 0.2.1; it gets its version when it's released.
   - **The tab you're on** (the default, which was called *Ask first*): the tab on screen goes with each message, as *Reading example.com*. Remove it and Duet asks first.
   - **Tabs in this chord** and **All your tabs**, as before. Each chat can pick these from the top of Duet's panel; *Nothing* is only set in Settings.
 
-- **The hidden sidebar's peek shows each button once.** With the sidebar hidden, pointing at the window's left edge (or resting on the sidebar button) shows your tabs just below the top bar, without a second sidebar button, back, forward, reload and address under the ones the bar already has. Settings → Appearance → *Show the sidebar when you point at the window's edge* turns the peek off; then the sidebar comes back only when you click its button or press its shortcut.
+- **The hidden sidebar stays hidden until you bring it back:** click its button or press Ctrl+S (⌘S on macOS). It no longer slides out when the pointer reaches the window's edge. If you liked that, turn on Settings → Appearance → *Show the sidebar when you point at the window's edge*: pointing at the edge, or resting on the sidebar button, then slides the sidebar in over the page, looking just as it does when it's showing.
 
 - **Fixed: tabs losing their site's icon.** A tab could drop to the letter tile when a page named no icon, its icon failed to load, or a navigation never arrived (a download, a cancelled link): sites that update their pages in place, like YouTube, did it most. A tab now keeps its site's icon. On a site Chord already has an icon for, it shows at once.
 
@@ -21,6 +19,7 @@ What's built since 0.2.1; it gets its version when it's released.
   - hide an element: click it on the page, and it stays hidden on the site's other pages too;
   - turn on a preset: *Reading width*, *Dark* for a site that has no dark mode, or *No sticky bars*, which lets headers scroll away and hides cookie banners;
   - or ask Duet: your Claude Code or Codex app writes the styles from an outline of the page. It never sees a private window, a site you said Duet may never read, or what's typed in a form.
+  - Each one has its own switch, so you can turn one off without losing it. Duet's styles can be renamed and their CSS edited in the card, and a hidden element's selector narrowed when it hid too much.
   - **Dry/Wet** takes a site's Effects off at once and puts them back (Ctrl+Shift+E, ⌘⇧E on macOS), and Settings → Effects does it for every site. A site with Effects shows a button beside its address.
   - Effects never load anything: whatever in a stylesheet would fetch a file is left out before it's used, and Chord says what it left out. They're styles only, never scripts, and they stay on this computer. In a private window, what you change lasts until the window closes.
   - The CSS parser Effects use is MIT-licensed; its notice ships with every build.

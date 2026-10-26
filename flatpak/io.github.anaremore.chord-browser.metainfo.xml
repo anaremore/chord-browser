@@ -75,6 +75,9 @@
 
   <!-- Newest first; one entry per release (docs/releasing/patch-runbook.md). -->
   <releases>
+    <release version="0.3.0" date="2026-10-25" type="development">
+      <url type="details">https://github.com/anaremore/chord-browser/blob/main/RELEASE_NOTES.md</url>
+    </release>
     <release version="0.2.1" date="2026-10-25" type="development">
       <url type="details">https://github.com/anaremore/chord-browser/blob/main/RELEASE_NOTES.md</url>
     </release>
