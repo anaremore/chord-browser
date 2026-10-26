@@ -1263,6 +1263,8 @@ export interface SyncView extends SyncStatus {
   keyKept: boolean;
   /** Kept with no keyring behind it, because you asked to remember it anyway: any program you run could read it. */
   keyWeak: boolean;
+  /** After launch, the key this computer kept is still being read: sync isn't asking for the passphrase (it may not need to). */
+  opening: boolean;
   /** *Turn off* or *Remove*, waiting for its Undo to run out. */
   pendingUndo: { what: 'off' | 'remove'; device?: string; token: string; until: number } | null;
 }

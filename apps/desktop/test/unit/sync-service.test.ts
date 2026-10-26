@@ -8,17 +8,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import { apply, emptyApply, seedState, SYNC_OFF, type Chord, type Command, type State, type SyncApply, type TabNode } from '@chord/core';
 import type { DataPush, SyncReply, SyncRequest } from '@chord/data';
-import type { Toast } from '@chord/ipc';
+import type { SyncView, Toast } from '@chord/ipc';
 
+/** Whether the key kept opens here: by default it was kept on another computer, and this one's keyring can't read it. */
+const keyring = vi.hoisted(() => ({ readable: false }));
 vi.mock('electron', () => ({
   dialog: {},
-  // A key kept on another computer: this one's keyring can't read it.
   safeStorage: {
     isAsyncEncryptionAvailable: async () => true,
     getSelectedStorageBackend: () => 'gnome_libsecret',
     encryptStringAsync: async (text: string) => Buffer.from(text),
     decryptStringAsync: async () => {
-      throw new Error('not this computer’s');
+      if (!keyring.readable) throw new Error('not this computer’s');
+      return { result: Buffer.alloc(32, 7).toString('base64'), shouldReEncrypt: false };
     },
   },
 }));
@@ -58,6 +60,7 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
   };
   const commands: Command[] = [];
   const toasts: Toast[] = [];
+  const views: SyncView[] = [];
   let push: ((message: DataPush) => void) | null = null;
   const dispatch = (command: Command) => {
     commands.push(command);
@@ -70,12 +73,12 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
     effects: { syncSites: async () => undefined },
     toast: (_windowId, toast) => toasts.push(toast),
     lastWindow: () => windowId,
-    notify: () => undefined,
+    notify: (view) => views.push(view),
     info: () => ({ name: 'Desk', os: 'Linux', app: '0.5.0' }),
     platform: 'linux',
     folder: () => '/home',
   });
-  return { service, home, windowId, commands, toasts, dispatch, state: () => state, push: (apply: SyncApply) => push!({ push: 'sync.apply', apply }) };
+  return { service, home, windowId, commands, toasts, views, dispatch, state: () => state, push: (apply: SyncApply) => push!({ push: 'sync.apply', apply }) };
 }
 
 describe('a chord another computer deleted', () => {
@@ -101,6 +104,35 @@ describe('a chord another computer deleted, while a change of yours to it waits'
     await vi.waitFor(() => expect(asked.some((r) => r.type === 'sync.repush')).toBe(true));
     expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
     expect(asked.find((r) => r.type === 'sync.repush')).toMatchObject({ keys: expect.arrayContaining(['chord:x', 'node:p']) });
+  });
+});
+
+describe('after a launch', () => {
+  it('with a key kept that opens here: sync carries on, and never asks for the passphrase or says it’s paused, not even while the key is read', async () => {
+    keyring.readable = true;
+    try {
+      const h = harness((request) => {
+        if (request.type === 'sync.status') return { status: { ...SYNC_OFF, state: 'locked' }, keyBlob: 'a2V5' };
+        if (request.type === 'sync.start') return { status: { ...SYNC_OFF, state: 'on' } };
+        return {};
+      });
+      expect(h.service.view()).toMatchObject({ state: 'off', opening: false });
+      await h.service.afterLaunch();
+      expect(h.views.filter((v) => v.state === 'locked').every((v) => v.opening)).toBe(true);
+      expect(h.views.at(-1)).toMatchObject({ state: 'on', opening: false, keyKept: true });
+      expect(h.toasts).toEqual([]);
+    } finally {
+      keyring.readable = false;
+    }
+  });
+
+  it('with no key kept: once that’s known, Settings asks, and a toast says so once', async () => {
+    const h = harness((request) => (request.type === 'sync.status' ? { status: { ...SYNC_OFF, state: 'locked' } } : {}));
+    await h.service.afterLaunch();
+    expect(h.views.at(-1)).toMatchObject({ state: 'locked', opening: false });
+    expect(h.toasts.map((t) => t.id)).toEqual(['sync:locked']);
+    await h.service.refresh();
+    expect(h.toasts).toHaveLength(1);
   });
 });
 

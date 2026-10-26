@@ -31,6 +31,7 @@ import {
   MAX_SEGMENT,
   mayPrune,
   nextGeneration,
+  ownIntact,
   readComputers,
   readSegment,
   recordLine,
@@ -358,13 +359,13 @@ describe('what a sync app leaves in the folder', () => {
     expect(ids(await reader.pass())).toEqual([A, 'work']);
   });
 
-  it('this computer’s segment gone, the folder there: `gone` (a snapshot puts it back); the folder gone too: `missing`', async () => {
+  it('this computer’s segment gone, the folder there: `gone`; shorter than it left it: another writer (`copied`); the folder gone too: `missing`', async () => {
     const { fs, root, own } = await twoComputers();
     await fs.remove(`1/${A}/${segmentName(1)}`);
     expect(await appendRecords(fs, own(), [chord('a', 'A', 2)], root, { app: '0.5.0', device: [] }, nodeCrypto)).toEqual({ ok: false, problem: 'gone' });
     const shorter = await twoComputers();
     shorter.fs.cut(`1/${A}/${segmentName(1)}`, shorter.own().size - 5);
-    expect(await appendRecords(shorter.fs, shorter.own(), [chord('a', 'A', 2)], shorter.root, { app: '0.5.0', device: [] }, nodeCrypto)).toEqual({ ok: false, problem: 'gone' });
+    expect(await appendRecords(shorter.fs, shorter.own(), [chord('a', 'A', 2)], shorter.root, { app: '0.5.0', device: [] }, nodeCrypto)).toEqual({ ok: false, problem: 'copied' });
     await fs.remove('sync-1.json');
     expect(await appendRecords(fs, own(), [chord('a', 'A', 2)], root, { app: '0.5.0', device: [] }, nodeCrypto)).toEqual({ ok: false, problem: 'missing' });
   });
@@ -413,15 +414,13 @@ describe('junk anyone who can write to the folder puts there, without the passph
     expect(reader.events.some((e) => e.kind === 'too-many')).toBe(true);
   });
 
-  it('bytes added after a computer’s last frame: it doesn’t take a new id, its next change starts a new segment, and readers read on there', async () => {
-    const { fs, reader, append, own } = await twoComputers();
+  it('bytes added after a computer’s last frame: as far as it can tell, another writer, so it takes a new id (seen, never silent); readers stop there', async () => {
+    const { fs, root, reader, own } = await twoComputers();
     await reader.pass();
     const path = `1/${A}/${segmentName(1)}`;
     await fs.append(path, Uint8Array.from([0x7f, 0xff, 0xff, 0xff, 1, 2, 3]));
-    await append([chord('a', 'A', 2)]);
-    expect(own().segment).toBe(2);
-    expect(ids(await reader.pass())).toEqual([A, 'a']);
-    // The first segment still stops where the junk is, and its read doesn't move.
+    expect(await appendRecords(fs, own(), [chord('a', 'A', 2)], root, { app: '0.5.0', device: [] }, nodeCrypto)).toEqual({ ok: false, problem: 'copied' });
+    // The segment still stops where the junk is, and its read doesn't move.
     const cursor = reader.cursors.get(`${A}/1`)!;
     const again = await readSegment(fs, { generation: 1, device: A, segment: 1 }, reader.root, cursor, nodeCrypto);
     expect(again.stopped).toBe('damaged');
@@ -438,9 +437,10 @@ describe('junk anyone who can write to the folder puts there, without the passph
 
   it('segment numbers at the top: a computer takes a new id (`full`), never a name no reader lists', async () => {
     const { fs, root } = await twoComputers();
-    const top = await writeSegment(fs, { generation: 1, device: A, segment: MAX_SEGMENT }, [], root, { snapshot: true, app: '0.5.0', device: [] }, nodeCrypto);
-    expect(await appendRecords(fs, { ...top, size: 2 * 1024 * 1024 }, [], root, { app: '0.5.0', device: [] }, nodeCrypto)).toMatchObject({ ok: false });
-    await fs.append(`1/${A}/${segmentName(MAX_SEGMENT)}`, Uint8Array.from([1, 2, 3, 4, 5]));
+    // A full segment (past SEGMENT_CLOSE, of what doesn't compress) at the top: there's no number past it.
+    const filler = Array.from({ length: 4 }, (_, i): DataRecord => ({ type: 'widget', id: `w${i}`, at: [1_800_000_000_000, 0, A], set: { blob: Buffer.from(nodeCrypto.random(300_000)).toString('base64') } }));
+    const top = await writeSegment(fs, { generation: 1, device: A, segment: MAX_SEGMENT }, filler, root, { snapshot: true, app: '0.5.0', device: [] }, nodeCrypto);
+    expect(top.size).toBeGreaterThan(1024 * 1024);
     expect(await appendRecords(fs, top, [chord('a', 'A', 2)], root, { app: '0.5.0', device: [] }, nodeCrypto)).toEqual({ ok: false, problem: 'full' });
     await expect(snapshot(fs, { generation: 1, device: A }, [], root, { after: MAX_SEGMENT })).rejects.toBeInstanceOf(SegmentsFull);
     expect(() => segmentName(MAX_SEGMENT + 1)).toThrow(SegmentsFull);
@@ -793,5 +793,70 @@ describe('what writing and reading cost with junk about', () => {
     let found = false;
     for (let pass = 0; pass < 10 && !found; pass++) found = ids(await reader.pass()).includes('late');
     expect(found).toBe(true);
+  }, 120_000);
+});
+
+describe('copies appending at the same time', () => {
+  it('both append to one segment, and the sync app keeps the longer: the other finds its segment isn’t as it left it, writing or not', async () => {
+    const { fs, root, own } = await twoComputers();
+    const shared = own();
+    // B appends offline to its copy of the folder; A appends more to the shared one; the sync app keeps A's, the longer.
+    const offline = new MemoryFolder();
+    for (const [path, file] of fs.files) offline.files.set(path, { ...file, bytes: new Uint8Array(file.bytes) });
+    const b = await appendRecords(offline, shared, [chord('b1', 'B1', 3)], root, { app: '0.5.0', device: [] }, nodeCrypto);
+    const a = await appendRecords(fs, shared, [chord('a1', 'A1', 4), chord('a2', 'A'.repeat(200), 5)], root, { app: '0.5.0', device: [] }, nodeCrypto);
+    if (!a.ok || !b.ok) throw new Error('append failed');
+    expect(a.own.size).toBeGreaterThan(b.own.size);
+    // B, not writing: its pass finds out.
+    expect(await ownIntact(fs, b.own, nodeCrypto)).toBe('other');
+    // B, writing: another writer, a new id; its snapshot under it carries b1.
+    expect(await appendRecords(fs, b.own, [chord('b2', 'B2', 6)], root, { app: '0.5.0', device: [] }, nodeCrypto)).toEqual({ ok: false, problem: 'copied' });
+    // And of the same length but other bytes: still not its.
+    const same = await twoComputers();
+    const one = await appendRecords(same.fs, same.own(), [chord('x', 'X', 3)], same.root, { app: '0.5.0', device: [] }, nodeCrypto);
+    const elsewhere = new MemoryFolder();
+    for (const [path, file] of same.fs.files) elsewhere.files.set(path, { ...file, bytes: new Uint8Array(file.bytes) });
+    if (!one.ok) throw new Error('append failed');
+    const path = `1/${A}/${segmentName(1)}`;
+    const bytes = new Uint8Array(same.fs.files.get(path)!.bytes);
+    bytes[bytes.length - 5] = bytes[bytes.length - 5]! ^ 0xff;
+    same.fs.plant(path, bytes);
+    expect(await ownIntact(same.fs, one.own, nodeCrypto)).toBe('other');
+    expect(await ownIntact(elsewhere, one.own, nodeCrypto)).toBe('ok');
+  });
+});
+
+describe('6,000 junk names in one folder', () => {
+  it('a computer this one reads: its folder more than a pass looks through, it’s named as slow; its next snapshot, numbered past the junk, is read at once', async () => {
+    const { fs, root, reader, own } = await twoComputers();
+    await reader.pass();
+    for (let n = 2; n < 6002; n++) fs.plant(`1/${A}/${segmentName(n)}`, junkHeader({ generation: 1, device: A, segment: n }));
+    await reader.pass();
+    expect(reader.events.some((e) => e.kind === 'blocked' && e.device === A)).toBe(true);
+    const next = await snapshot(fs, { generation: 1, device: A }, [chord('work', 'Work', 1), chord('after', 'After', 9)], root, { own: own() });
+    expect(next.segment).toBe(6002);
+    expect(ids(await reader.pass())).toContain('after');
+    // And what it appends to that snapshot, and its next segment by name, come at once too, however much junk is still unlooked at.
+    expect(await appendRecords(fs, next, [chord('more', 'More', 10)], root, { app: '0.5.0', device: [] }, nodeCrypto)).toMatchObject({ ok: true });
+    expect(ids(await reader.pass())).toContain('more');
+  }, 120_000);
+
+  it('a computer this one reads, junk at the numbers past it: its next segment, by name, first', async () => {
+    const { fs, root, reader, own } = await twoComputers();
+    await reader.pass();
+    for (let n = 1000; n < 7000; n++) fs.plant(`1/${A}/${segmentName(n)}`, junkHeader({ generation: 1, device: A, segment: n }));
+    const next = await snapshot(fs, { generation: 1, device: A }, [chord('work', 'Work', 1), chord('a', 'A', 2)], root, { own: own() });
+    expect(next.segment).toBe(2);
+    expect(ids(await reader.pass())).toContain('a');
+  }, 120_000);
+
+  it('a folder of junk doesn’t keep the pass from computers after it: each folder within its own budget, then the next', async () => {
+    const { fs, root } = await twoComputers();
+    const junky = '00000000000000ab';
+    for (let n = 1; n <= 6000; n++) fs.plant(`1/${junky}/${segmentName(n)}`, junkHeader({ generation: 1, device: junky, segment: n }));
+    const later = 'ffffffffffffff03';
+    await snapshot(fs, { generation: 1, device: later }, [chord('late', 'Late', 1, later)], root);
+    const reader = new Reader(fs, B, root);
+    expect(ids(await reader.pass())).toEqual(expect.arrayContaining(['work', 'late']));
   }, 120_000);
 });

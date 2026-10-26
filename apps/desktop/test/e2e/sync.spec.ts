@@ -71,8 +71,12 @@ async function openSync(app: ElectronApplication, shell: Page, folder: string): 
   return settings;
 }
 
-async function chordApp(profile: string): Promise<{ app: ElectronApplication; shell: Page }> {
-  const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1' }, { profile });
+/**
+ * `keyring: false`: safeStorage taken as having no keyring behind it, as on Linux without one (a development
+ * build's switch), so the key isn't kept and a relaunch asks for the passphrase, on any system.
+ */
+async function chordApp(profile: string, { keyring = true } = {}): Promise<{ app: ElectronApplication; shell: Page }> {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1', ...(keyring ? {} : { CHORD_E2E_NO_KEYRING: '1' }) }, { profile });
   const shell = await pageWhere(app, isShell);
   await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Home page');
   return { app, shell };
@@ -162,11 +166,14 @@ test('two Chords sync through one folder: set up, join, edit on both, a wrong pa
   }
 });
 
-/** Sets sync up on one Chord and joins it from another, through Settings, as the journey above does. */
-async function syncedPair(folder: string): Promise<{ desk: { app: ElectronApplication; shell: Page; settings: Page }; laptop: { app: ElectronApplication; shell: Page; settings: Page; profile: string } }> {
-  const deskApp = await chordApp(mkdtempSync(join(tmpdir(), 'chord-e2e-desk-')));
+type Computer = { app: ElectronApplication; shell: Page; settings: Page; profile: string };
+
+/** Sets sync up on one Chord and joins it from another, through Settings, as the journey above does. The laptop has no keyring. */
+async function syncedPair(folder: string): Promise<{ desk: Computer; laptop: Computer }> {
+  const deskProfile = mkdtempSync(join(tmpdir(), 'chord-e2e-desk-'));
+  const deskApp = await chordApp(deskProfile);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-laptop-'));
-  const laptopApp = await chordApp(profile);
+  const laptopApp = await chordApp(profile, { keyring: false });
   const deskSettings = await openSync(deskApp.app, deskApp.shell, folder);
   await deskSettings.getByRole('button', { name: 'Turn on sync…' }).click();
   const fields = deskSettings.getByRole('group', { name: 'Turn on sync' });
@@ -179,13 +186,23 @@ async function syncedPair(folder: string): Promise<{ desk: { app: ElectronApplic
   await laptopSettings.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
   await laptopSettings.getByRole('button', { name: 'Join' }).click();
   await expect(laptopSettings.getByText(/^On · /)).toBeVisible({ timeout: 30_000 });
-  return { desk: { ...deskApp, settings: deskSettings }, laptop: { ...laptopApp, settings: laptopSettings, profile } };
+  return { desk: { ...deskApp, settings: deskSettings, profile: deskProfile }, laptop: { ...laptopApp, settings: laptopSettings, profile } };
 }
 
-test('a passphrase changed on one computer pauses the other until it has it; with no keyring, a relaunch asks again; start over, remember the key anyway, and a folder that moved', async () => {
+/** A computer quit and launched again on its profile, with Settings open at sync. */
+async function relaunchComputer(computer: Computer, folder: string, options: { keyring?: boolean } = {}): Promise<Computer> {
+  await computer.app.close();
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1', ...(options.keyring === false ? { CHORD_E2E_NO_KEYRING: '1' } : {}) }, { profile: computer.profile });
+  const shell = await pageWhere(app, isShell);
+  return { app, shell, settings: await openSync(app, shell, folder), profile: computer.profile };
+}
+
+test('a passphrase changed on one computer pauses the other until it has it; with a keyring a relaunch carries on, with none it asks again; start over, remember the key anyway, and a folder that moved', async () => {
   test.setTimeout(240_000);
   const folder = mkdtempSync(join(tmpdir(), 'chord-e2e-sync-folder-'));
-  const { desk, laptop } = await syncedPair(folder);
+  const pair = await syncedPair(folder);
+  let desk = pair.desk;
+  const laptop = pair.laptop;
   const relaunched: { app: ElectronApplication | null } = { app: null };
   try {
     // The desk changes the passphrase: a new generation, and its snapshot under it.
@@ -219,12 +236,22 @@ test('a passphrase changed on one computer pauses the other until it has it; wit
     await carry(desk.app, laptop.app);
     await expect.poll(async () => (await synced(laptop.shell)).chords, { timeout: 20_000 }).toEqual(['After the change']);
 
-    // Linux without a keyring (this container has none): the laptop kept no key, so after a relaunch sync waits for the passphrase.
+    // With a keyring (DPAPI on Windows, the Keychain on macOS; the Linux container has none), the desk kept the new key:
+    // a relaunch carries on, never asking, not even for a moment while the key is read.
+    if (process.platform !== 'linux') {
+      desk = await relaunchComputer(desk, folder);
+      const asked = desk.settings.getByText('Sync is paused. Enter your passphrase.');
+      await expect(desk.settings.getByRole('button', { name: 'Pause' }).or(asked)).toBeVisible({ timeout: 20_000 });
+      await expect(asked).toBeHidden();
+      await expect(desk.settings.getByRole('button', { name: 'Pause' })).toBeVisible();
+    }
+
+    // Without a keyring (the laptop's, on any system): it kept no key, so after a relaunch sync waits for the passphrase.
+    let current: Computer = laptop;
     const relaunch = async () => {
-      await (relaunched.app ?? laptop.app).close();
-      relaunched.app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1' }, { profile: laptop.profile });
-      const shell = await pageWhere(relaunched.app, isShell);
-      return { app: relaunched.app, shell, settings: await openSync(relaunched.app, shell, folder) };
+      current = await relaunchComputer(current, folder, { keyring: false });
+      relaunched.app = current.app;
+      return current;
     };
     let again = await relaunch();
     await expect(again.settings.getByText('Sync is paused. Enter your passphrase.')).toBeVisible({ timeout: 20_000 });
@@ -265,7 +292,7 @@ test('a passphrase changed on one computer pauses the other until it has it; wit
     await hooks(again.app, 'syncRead');
     await expect(again.settings.getByText('Chord can’t find the sync folder. Is your sync app running?')).toBeHidden();
   } finally {
-    await desk.app.close();
+    await desk.app.close().catch(() => undefined);
     await relaunched.app?.close();
     await laptop.app.close().catch(() => undefined);
   }

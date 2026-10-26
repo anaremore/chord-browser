@@ -417,3 +417,78 @@ describe('turning sync off with changes not yet in the folder', () => {
     expect(db.sync.snapshot().some((r) => r.type === 'chord' && r.id === id && r.set['name'] === 'Unsent' && r.at![2] === db.device())).toBe(true);
   });
 });
+
+describe('what this computer hasn’t applied', () => {
+  it('merged but never applied (a quit or a crash during a pass): it differs from what this computer has, and is found again', () => {
+    let state = setUp();
+    const id = chordId(state);
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: [Date.now() + 1000, 0, OTHER], set: { name: 'Renamed elsewhere' } }], Date.now()));
+    const unapplied = () => new Map([...db.sync.unappliedPages()].flatMap((page) => [...page]));
+    expect([...(unapplied().get(thingKey('chord', id)) ?? [])]).toEqual(['name']);
+    // Applied, and written back: nothing left.
+    state = drive(state, [{ t: 'sync.apply', ...db.sync.planFor(unapplied()) }], true);
+    expect(state.chords[id]!.name).toBe('Renamed elsewhere');
+    expect(unapplied().size).toBe(0);
+  });
+
+  it('mid-apply: what main applied and wrote is done; the rest is found again', () => {
+    let state = setUp();
+    const home = chordId(state);
+    const at: Stamp = [Date.now() + 1000, 0, OTHER];
+    db.atomically(() =>
+      db.sync.merge(
+        [
+          { type: 'chord', id: home, at, set: { name: 'First part' } },
+          { type: 'chord', id: 'new-one', at, set: { name: 'Second part', icon: 'S', theme: THEME, rank: 'z0', profile: 'default', created: 1 } },
+        ],
+        Date.now(),
+      ),
+    );
+    const all = new Map([...db.sync.unappliedPages()].flatMap((page) => [...page]));
+    expect(all.size).toBe(2);
+    // Main applied the first part, then quit.
+    state = drive(state, [{ t: 'sync.apply', ...db.sync.planFor(new Map([[thingKey('chord', home), all.get(thingKey('chord', home))!]])) }], true);
+    const left = new Map([...db.sync.unappliedPages()].flatMap((page) => [...page]));
+    expect([...left.keys()]).toEqual([thingKey('chord', 'new-one')]);
+    void state;
+  });
+
+  it('what this computer never keeps or never takes isn’t a difference: a tab’s title off its home, a chord’s sign-ins', () => {
+    let state = setUp();
+    const id = chordId(state);
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: [Date.now() + 1000, 0, OTHER], set: { profile: 'their-own' } }], Date.now()));
+    state = drive(state, [{ t: 'sync.apply', ...db.sync.planFor(new Map([[thingKey('chord', id), new Set(['profile'])]])) }], true);
+    expect(new Map([...db.sync.unappliedPages()].flatMap((page) => [...page])).size).toBe(0);
+    void state;
+  });
+});
+
+describe('a chord deleted here', () => {
+  it('its tombstone goes out before its tabs’ and folders’, so a computer that reads part of it takes the chord with everything', () => {
+    let state = setUp();
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    state = drive(state, [{ t: 'tab.pin', nodeId: tab }, { t: 'chord.create', windowId: Object.keys(state.windows)[0]!, name: 'Two', icon: 'T', theme: THEME }]);
+    const first = chordId(state);
+    const before = outbox().length;
+    drive(state, [{ t: 'chord.delete', chordId: first }]);
+    const tombstones = outbox().slice(before).filter((r) => r.set['deleted'] === true);
+    expect(tombstones[0]).toMatchObject({ type: 'chord', id: first });
+    expect(tombstones.map((r) => r.id)).toContain(tab);
+  });
+});
+
+describe('pruning a removed computer’s folder', () => {
+  it('only while everything read from it is in a snapshot of this computer’s that landed: a late frame waits for the next', () => {
+    setUp();
+    const gone = '00000000000000dd';
+    const cursor = (offset: number) => ({ head: 'h', offset, frame: 2, snapshot: true });
+    db.sync.saveCursor(1, gone, 1, cursor(100));
+    db.sync.snapshotted({ generation: 1, device: db.device(), segment: 2, size: 10, frames: 1 }, Date.now(), Number.MAX_SAFE_INTEGER, db.sync.readPositions(1));
+    expect(db.sync.readCovered(gone)).toBe(true);
+    // A frame of it delivered late, read after that snapshot: in this computer's copy, but in none of its segments.
+    db.sync.saveCursor(1, gone, 1, cursor(150));
+    expect(db.sync.readCovered(gone)).toBe(false);
+    db.sync.snapshotted({ generation: 1, device: db.device(), segment: 3, size: 10, frames: 1 }, Date.now(), Number.MAX_SAFE_INTEGER, db.sync.readPositions(1));
+    expect(db.sync.readCovered(gone)).toBe(true);
+  });
+});

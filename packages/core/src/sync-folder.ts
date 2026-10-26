@@ -96,6 +96,15 @@ const MAX_GENERATION = 999_999;
 /** Segments looked into per pass to tell real ones from junk; a folder with more is looked through over several passes. */
 const MAX_PROBES = 1024;
 /**
+ * Each folder's own budget a pass: names looked at (a stat each; a known
+ * computer's more, since what's remembered is a stat), and segments looked
+ * into. A folder with more is looked through over several passes, and the
+ * pass moves on to the next.
+ */
+const FOLDER_LOOKS = 512;
+const FOLDER_LOOKS_KNOWN = 4096;
+const FOLDER_PROBES = 64;
+/**
  * Junk sync remembers (by name, size and time) before it stops looking for
  * computers it doesn't know yet, and says the folder holds files it doesn't
  * recognise. Computers it knows go on being read.
@@ -406,9 +415,19 @@ export interface FolderMemory {
   dirty?: boolean;
   /** The last unknown computer's folder looked through; the next pass goes on after it. */
   after: string;
+  /**
+   * Per computer, a folder with more than a pass's worth looked through over
+   * several: what's new of a computer this one reads, from the top down (the
+   * names from `low` to `top` looked through already)…
+   */
+  up: Map<string, { top: number; low: number }>;
+  /** …down to a computer's newest snapshot, below this… */
+  down: Map<string, number>;
+  /** …and below that snapshot, what it doesn't cover, up to this. */
+  below: Map<string, number>;
 }
 
-export const folderMemory = (): FolderMemory => ({ junk: new Map(), after: '' });
+export const folderMemory = (): FolderMemory => ({ junk: new Map(), after: '', up: new Map(), down: new Map(), below: new Map() });
 
 /**
  * What's under a segment's name, remembering junk (and pending ones, until
@@ -554,6 +573,32 @@ export interface OwnSegment {
   frames: number;
   /** Segments this computer closed since its last snapshot, as it left them: with this one, what its next snapshot covers, and all it may ever delete. */
   closed?: Cover[];
+  /** Its last frame: where it starts, and its bytes' SHA-256 (hex). The segment must still end with exactly that (`ownIntact`). */
+  tail?: { at: number; hash: string };
+}
+
+/** The tail of a segment that ends with `last`, `size` bytes long. */
+const tailOf = (last: Uint8Array | undefined, size: number, c: DataCrypto): OwnSegment['tail'] => (last ? { at: size - last.length, hash: hex(c.sha256(last)) } : undefined);
+
+/**
+ * Whether this computer's newest segment is as it left it (S15 §6): exactly
+ * its size, ending with exactly its last frame. `other`: longer, or ending
+ * otherwise (another copy of the profile appended to it, and the sync app
+ * kept that copy's version), or shorter (an older version came back): either
+ * way another computer writes under this id, and this one takes a new id,
+ * whose snapshot carries everything it knows. `gone`: not there, though the
+ * folder is. `missing`: the folder isn't there.
+ */
+export async function ownIntact(fs: SyncFs, own: OwnSegment, c: DataCrypto): Promise<'ok' | 'other' | 'gone' | 'missing'> {
+  const path = `${deviceFolder(own.generation, own.device)}/${segmentName(own.segment)}`;
+  const stat = await fs.stat(path);
+  if (!stat) return (await fs.stat(syncFileName(own.generation))) ? 'gone' : 'missing';
+  if (stat.size !== own.size) return 'other';
+  if (own.tail && own.tail.at < own.size) {
+    const bytes = await fs.read(path, own.tail.at, own.size - own.tail.at);
+    if (bytes.length !== own.size - own.tail.at || hex(c.sha256(bytes)) !== own.tail.hash) return 'other';
+  }
+  return 'ok';
 }
 
 /** What a computer's next snapshot covers: the segments it closed since its last, and its newest as it left it. */
@@ -632,7 +677,8 @@ export async function writeSegment(
   head.key.fill(0);
   const bytes = envelope.concat([head.bytes, ...first.bytes, ...rest.bytes]);
   await fs.create(`${deviceFolder(where.generation, where.device)}/${segmentName(where.segment)}`, bytes);
-  return { ...where, size: bytes.length, frames: first.count + rest.count, closed: [] };
+  const tail = tailOf(rest.bytes.at(-1) ?? first.bytes.at(-1), bytes.length, c);
+  return { ...where, size: bytes.length, frames: first.count + rest.count, closed: [], ...(tail ? { tail } : {}) };
 }
 
 /** Another computer writes under this one's id: what a snapshot's check finds, and `copied` says. */
@@ -689,9 +735,11 @@ export type AppendResult =
 
 /**
  * Records appended to this computer's newest segment as one frame (or more,
- * past FRAME_TARGET), then flushed. First it checks the segment is as this
- * computer left it. Bytes someone added after its last frame would stop every
- * reader there, so then, as past SEGMENT_CLOSE, a new segment starts.
+ * past FRAME_TARGET), then flushed. First it checks no other computer writes
+ * under its id: no real segment past its own, and its own exactly as it left
+ * it, ending with its own last frame (`ownIntact`). Anything else is another
+ * writer (`copied`), bytes someone added included: past SEGMENT_CLOSE a new
+ * segment starts.
  */
 export async function appendRecords(
   fs: SyncFs,
@@ -706,22 +754,12 @@ export async function appendRecords(
   // First, another computer under this id: a real segment past this one's (another copy of the profile, which compacted
   // or closed a segment), or one being delivered.
   if (await othersAbove(fs, own.generation, own.device, own.segment, root, c, opts.memory)) return { ok: false, problem: 'copied' };
-  const stat = await fs.stat(path);
-  if (!stat) return { ok: false, problem: (await fs.stat(syncFileName(own.generation))) ? 'gone' : 'missing' };
-  if (stat.size < own.size) return { ok: false, problem: 'gone' };
+  const intact = await ownIntact(fs, own, c);
+  if (intact === 'missing' || intact === 'gone') return { ok: false, problem: intact };
+  if (intact === 'other') return { ok: false, problem: 'copied' };
   const opened = await openSegment(fs, path, own.generation, own.device, own.segment, root, c);
-  if (!opened.ok) return { ok: false, problem: 'gone' };
-  let fresh = own.size >= SEGMENT_CLOSE;
-  if (stat.size > own.size) {
-    // Past where this computer left off: another computer's frame under its id, or bytes someone added.
-    const plain = await openFrame(fs, path, own.size, own.frames, opened.opened, MAX_FRAME, c);
-    if (plain) {
-      opened.opened.key.fill(0);
-      return { ok: false, problem: 'copied' };
-    }
-    fresh = true;
-  }
-  if (fresh) {
+  if (!opened.ok) return { ok: false, problem: 'copied' };
+  if (own.size >= SEGMENT_CLOSE) {
     opened.opened.key.fill(0);
     let n: number;
     try {
@@ -737,7 +775,9 @@ export async function appendRecords(
   opened.opened.key.fill(0);
   const bytes = envelope.concat(sealed.bytes);
   await fs.append(path, bytes);
-  return { ok: true, own: { ...own, size: own.size + bytes.length, frames: own.frames + sealed.count }, frames: sealed.count, bytes: bytes.length };
+  const size = own.size + bytes.length;
+  const tail = tailOf(sealed.bytes.at(-1), size, c) ?? own.tail;
+  return { ok: true, own: { ...own, size, frames: own.frames + sealed.count, ...(tail ? { tail } : {}) }, frames: sealed.count, bytes: bytes.length };
 }
 
 /** Keys are 32 bytes: the root key as main keeps it (safeStorage) and hands it back. */
@@ -846,7 +886,9 @@ export type ReadEvent =
   /** The pass looked into as many segments as it may: the next goes on from there (`FolderMemory.after`). */
   | { kind: 'unfinished' }
   /** The folder holds more junk than sync remembers (MAX_JUNK): looking goes on, a budget a pass, and Settings says so. */
-  | { kind: 'cluttered' };
+  | { kind: 'cluttered' }
+  /** A computer this one reads whose folder holds more than a pass looks through: its new segments may be slow to come, and Settings names it. */
+  | { kind: 'blocked'; device: string };
 
 /**
  * Every other computer's log, from where this one has read to, one bounded
@@ -860,13 +902,21 @@ export type ReadEvent =
  *   there). Another copy of the profile may have written either, and a sync
  *   app may bring a deleted one back with its edits.
  * - **Computers already read** (`known`: segments with a cursor past their first
- *   frame) come first. **Computers not known yet** come after, from where the
- *   last pass got to (`memory.after`), at most MAX_PROBES segments looked into
- *   a pass.
+ *   frame) come first: what's new past where this one read.
+ *   **Computers not known yet** come after, from where the last pass got to
+ *   (`memory.after`), newest first down to a snapshot.
+ * - **Each folder is looked through within a budget of its own** (FOLDER_LOOKS
+ *   names, FOLDER_PROBES looked into), and the pass within MAX_PROBES: a folder
+ *   with more is looked through over several passes (`memory.up`,
+ *   `memory.down`, `memory.below`), and the pass moves on. A known computer's
+ *   next segment is looked for by name first (the next number past the newest
+ *   read), then from the top down, since it numbers its next past whatever is
+ *   there. A known computer whose folder holds more than a pass looks through
+ *   says so (`blocked`): what another copy of it wrote may be slow to come.
  * - **Junk** under a segment's or a computer's name is remembered by name,
  *   size and time (`memory.junk`, which the caller keeps across launches), so
  *   each is looked into once. Past MAX_JUNK of it, more isn't remembered, and
- *   the pass says so (`cluttered`); looking goes on, at most MAX_PROBES a pass.
+ *   the pass says so (`cluttered`).
  */
 export async function* readComputers(
   fs: SyncFs,
@@ -883,7 +933,6 @@ export async function* readComputers(
 ): AsyncGenerator<ReadEvent> {
   const { generation, memory } = opts;
   let probes = 0;
-  const probe = () => probes++ < MAX_PROBES;
   const devices = (await devicesIn(fs, generation)).filter((d) => d !== opts.self);
   const listed = new Set(devices);
   // Junk in folders that have gone, or of another generation, is forgotten.
@@ -893,56 +942,122 @@ export async function* readComputers(
     memory.junk.delete(path);
     memory.dirty = true;
   }
+  for (const map of [memory.up, memory.down, memory.below]) for (const device of [...map.keys()]) if (!listed.has(device)) map.delete(device);
   let computers = 0;
   let unfinished = false;
 
   type Read = { segment: number; from: SegmentCursor | null };
+  type Budget = { look(): boolean; probe(): boolean };
+  /** A folder's own budget for this pass, within the pass's. */
+  const folderBudget = (looks: number): Budget => {
+    let looked = 0;
+    let probed = 0;
+    return {
+      look: () => looked++ < looks,
+      probe: () => {
+        if (probed >= FOLDER_PROBES || probes >= MAX_PROBES) return false;
+        probed++;
+        probes++;
+        return true;
+      },
+    };
+  };
+  const look = (where: { generation: number; device: string; segment: number }, budget: Budget): Promise<SegmentKind | 'stopped' | null> =>
+    budget.look() ? lookAt(fs, where, opts.root, c, memory, () => budget.probe()) : Promise.resolve('stopped');
 
-  /** A computer's segments to read, in order; whether a newer Chord wrote one; whether looking stopped short (the pass's budget). */
+  /** A computer's segments to read, in order; whether a newer Chord wrote one; whether its budget ran out before looking through all of it. */
   async function plan(device: string): Promise<{ reads: Read[]; newer: boolean; stopped: boolean }> {
     const names = await segmentsOf(fs, generation, device);
-    const above: number[] = [];
-    let snapshot: { segment: number; covers: Cover[] } | null = null;
+    const known = [...opts.known(device)].sort((a, b) => a - b);
+    const budget = folderBudget(known.length > 0 ? FOLDER_LOOKS_KNOWN : FOLDER_LOOKS);
+    const real = new Map<number, { snapshot: boolean; covers: Cover[] | null }>(known.map((s) => [s, { snapshot: opts.cursor(device, s)?.snapshot ?? false, covers: null }]));
+    const newestSnapshot = () => Math.max(-1, ...[...real].filter(([, r]) => r.snapshot).map(([s]) => s));
     let stopped = false;
-    // Newest first, back to the newest real snapshot.
-    for (let i = names.length - 1; i >= 0 && !snapshot; i--) {
-      const segment = names[i]!;
-      const where = { generation, device, segment };
-      const cursor = opts.cursor(device, segment);
-      if (cursor && cursor.frame > 0) {
-        above.push(segment);
-        if (cursor.snapshot) snapshot = { segment, covers: (await headerOf(fs, where, opts.root, c, cursor.head))?.header.covers ?? [] };
-        continue;
+    if (known.length > 0) {
+      // Its next segment by name: the next number past the newest read, and on while there's one, whatever else the folder holds.
+      const listedNames = new Set(names);
+      for (let segment = known.at(-1)! + 1; segment <= MAX_SEGMENT && listedNames.has(segment) && !real.has(segment); segment++) {
+        const found = await look({ generation, device, segment }, budget);
+        if (found === 'stopped' || !found || found.kind !== 'real') break;
+        if (found.newer) return { reads: [], newer: true, stopped };
+        real.set(segment, { snapshot: found.header.snapshot, covers: found.header.covers });
       }
-      if (stopped) continue;
-      const found = await lookAt(fs, where, opts.root, c, memory, probe);
-      if (found === 'stopped') {
-        stopped = true;
-        continue;
+      // Then what's new past its newest snapshot read, from the top down (a computer numbers its next segment past whatever is
+      // there), to a snapshot: what's new since the last pass first, then on from where that one stopped.
+      const floor = Math.max(newestSnapshot(), known[0]! - 1);
+      const sweep = memory.up.get(device);
+      const top = names.at(-1) ?? floor;
+      const order = names.filter((n) => n > floor && !real.has(n) && !(sweep && n >= sweep.low && n <= sweep.top)).reverse();
+      let done = false;
+      for (const segment of order) {
+        const found = await look({ generation, device, segment }, budget);
+        if (found === 'stopped') {
+          stopped = true;
+          // Looked through: from here up, and what an earlier pass did, if this one got past it.
+          memory.up.set(device, { top: Math.max(top, sweep?.top ?? top), low: segment + 1 });
+          break;
+        }
+        if (!found || found.kind !== 'real') continue;
+        if (found.newer) return { reads: [], newer: true, stopped };
+        real.set(segment, { snapshot: found.header.snapshot, covers: found.header.covers });
+        if (found.header.snapshot) {
+          done = true;
+          break;
+        }
       }
-      if (!found || found.kind !== 'real') continue;
-      if (found.newer) return { reads: [], newer: true, stopped };
-      above.push(segment);
-      if (found.header.snapshot) snapshot = { segment, covers: found.header.covers };
+      if (done || !stopped) memory.up.delete(device);
     }
+    // No snapshot yet: down from the lowest it has (or the top), from where the last pass left off, to the newest real one.
+    if (newestSnapshot() < 0 && !stopped) {
+      const from = Math.min(known[0] ?? Number.POSITIVE_INFINITY, memory.down.get(device) ?? Number.POSITIVE_INFINITY);
+      for (let i = names.length - 1; i >= 0; i--) {
+        const segment = names[i]!;
+        if (segment >= from || real.has(segment)) continue;
+        const found = await look({ generation, device, segment }, budget);
+        if (found === 'stopped') {
+          stopped = true;
+          memory.down.set(device, segment + 1);
+          break;
+        }
+        if (!found || found.kind !== 'real') continue;
+        if (found.newer) return { reads: [], newer: true, stopped };
+        real.set(segment, { snapshot: found.header.snapshot, covers: found.header.covers });
+        if (found.header.snapshot) break;
+      }
+      if (!stopped) memory.down.delete(device);
+    }
+    const snapshot = newestSnapshot();
+    const above = [...real.keys()].filter((s) => s >= snapshot).sort((a, b) => a - b);
     // Below the newest snapshot: what it doesn't cover.
     const below: Read[] = [];
-    if (snapshot) {
-      const covered = new Map(snapshot.covers.map(([n, size, frames]) => [n, { size, frames }]));
+    if (snapshot >= 0) {
+      const info = real.get(snapshot)!;
+      const covers = info.covers ?? (await headerOf(fs, { generation, device, segment: snapshot }, opts.root, c, opts.cursor(device, snapshot)?.head))?.header.covers ?? [];
+      const covered = new Map(covers.map(([n, size, frames]) => [n, { size, frames }]));
+      // Segments read already are read on, every pass; the rest are looked through within the budget, on from where the last pass stopped.
+      const looked = memory.below.get(device) ?? 0;
+      let resume: number | null = null;
       for (const segment of names) {
-        if (segment >= snapshot.segment) break;
+        if (segment >= snapshot) break;
+        const cursor = opts.cursor(device, segment);
+        const read = cursor !== null && cursor.frame > 0;
+        if (!read) {
+          if (segment <= looked || resume !== null) continue;
+          if (!budget.look()) {
+            resume = segment;
+            continue;
+          }
+        }
         const where = { generation, device, segment };
         const stat = await fs.stat(`${deviceFolder(generation, device)}/${segmentName(segment)}`);
         if (!stat) continue;
         const cover = covered.get(segment);
         if (cover && stat.size <= cover.size) continue;
-        const cursor = opts.cursor(device, segment);
-        if (cursor && cursor.frame > 0 && cursor.offset >= stat.size) continue;
-        if (!(cursor && cursor.frame > 0)) {
-          if (stopped) continue;
-          const found = await lookAt(fs, where, opts.root, c, memory, probe);
+        if (read && cursor.offset >= stat.size) continue;
+        if (!read) {
+          const found = await lookAt(fs, where, opts.root, c, memory, () => budget.probe());
           if (found === 'stopped') {
-            stopped = true;
+            resume = segment;
             continue;
           }
           if (!found || found.kind !== 'real' || found.newer) continue;
@@ -951,8 +1066,13 @@ export async function* readComputers(
         const head = cover ? await headerOf(fs, where, opts.root, c) : null;
         below.push({ segment, from: cover && head ? { head: head.head, offset: cover.size, frame: cover.frames, snapshot: false } : null });
       }
+      if (resume === null) memory.below.delete(device);
+      else {
+        stopped = true;
+        memory.below.set(device, resume - 1);
+      }
     }
-    return { reads: [...below, ...above.reverse().map((segment) => ({ segment, from: null }))], newer: false, stopped };
+    return { reads: [...below, ...above.map((segment) => ({ segment, from: null }))], newer: false, stopped };
   }
 
   /** A computer's segments, read in order: each step yielded. Whether a newer Chord wrote one, and when it says it made the newest. */
@@ -983,7 +1103,7 @@ export async function* readComputers(
     if (last) yield { kind: 'seen', device, at: last.mtime, wrote: result.wrote };
   }
 
-  // Computers already read first: they're read whatever the budget, only looking for what's new in their folders within it.
+  // Computers already read first: what they've read is read on whatever the budget; what's new, within it.
   for (const device of devices) {
     if (opts.known(device).length === 0) continue;
     if (++computers > MAX_COMPUTERS) {
@@ -991,20 +1111,25 @@ export async function* readComputers(
       return;
     }
     const planned = await plan(device);
-    if (planned.stopped) unfinished = true;
+    if (planned.stopped) {
+      unfinished = true;
+      yield { kind: 'blocked', device };
+    }
     yield* finish(device, planned.reads, planned.newer);
   }
 
-  // Computers not known yet, from where the last pass got to.
+  // Computers not known yet, from where the last pass got to: each within its own budget, then the next.
   const unknown = devices.filter((d) => opts.known(d).length === 0);
   const from = unknown.findIndex((d) => d > memory.after);
   const order = from < 0 ? unknown : [...unknown.slice(from), ...unknown.slice(0, from)];
+  let finishedAll = true;
   for (const device of order) {
-    const planned = await plan(device);
-    if (planned.stopped) {
-      unfinished = true;
+    if (probes >= MAX_PROBES) {
+      finishedAll = false;
       break;
     }
+    const planned = await plan(device);
+    if (planned.stopped) unfinished = true;
     memory.after = device;
     if (!planned.newer && planned.reads.length === 0) continue;
     // Only computers with a real log count towards the most sync reads.
@@ -1014,7 +1139,8 @@ export async function* readComputers(
     }
     yield* finish(device, planned.reads, planned.newer);
   }
-  if (!unfinished) memory.after = '';
+  if (finishedAll && !unfinished) memory.after = '';
+  if (!finishedAll) unfinished = true;
   if (memory.junk.size >= MAX_JUNK) yield { kind: 'cluttered' };
   if (unfinished) yield { kind: 'unfinished' };
 }
@@ -1090,12 +1216,14 @@ export async function writeSnapshot(
   const head = newHead({ ...where, segment: n }, true, opts.app, root, c, opts.now ?? Date.now(), covers);
   let size: number;
   let index: number;
+  let last: Uint8Array | undefined;
   try {
     const first = frames(opts.device, head.key, head.hash, 0, c, true);
     const start = envelope.concat([head.bytes, ...first.bytes]);
     await fs.create(temp, start);
     size = start.length;
     index = first.count;
+    last = first.bytes.at(-1);
     for await (const chunk of records) {
       const sealed = frames(chunk, head.key, head.hash, index, c);
       if (sealed.count === 0) continue;
@@ -1103,6 +1231,7 @@ export async function writeSnapshot(
       await fs.append(temp, bytes);
       size += bytes.length;
       index += sealed.count;
+      last = sealed.bytes.at(-1);
     }
     await fs.rename(temp, `${folder}/${name}`);
   } catch (error) {
@@ -1123,7 +1252,8 @@ export async function writeSnapshot(
     }
     await fs.remove(path).catch(() => kept.push(cover));
   }
-  return { ...where, segment: n, size, frames: index, closed: kept };
+  const tail = tailOf(last, size, c);
+  return { ...where, segment: n, size, frames: index, closed: kept, ...(tail ? { tail } : {}) };
 }
 
 /** A new passphrase (S15 §6): the next generation's file. This computer's snapshot goes under it next (`writeSnapshot`). */

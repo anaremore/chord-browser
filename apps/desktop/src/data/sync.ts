@@ -23,15 +23,20 @@ import type { FromWorker, ToWorker } from './sync-worker';
 
 /** Changes are written this long after the last one (S15 §6), so a burst of them is one frame. */
 const WRITE_MS = 3000;
-/** Records merged per transaction, and changed things read back for main per push: a few milliseconds each, with searches answered between them. */
-const SLICE = 100;
+/**
+ * Records merged per transaction, and changed things read back for main per
+ * push: 2 to 4 ms each, with searches answered between them. A search can wait
+ * behind one of these and a write of what main applied, so each is kept to a
+ * few milliseconds (100 took up to 8).
+ */
+const SLICE = 50;
 /**
  * Characters of things read and written per merged slice: a slice of tiny
  * changes to a thing of 2 MB is one rewrite of it, not a hundred, and a slice
  * stops once it has rewritten about this much.
  */
 const SLICE_CHARS = 512 * 1024;
-const PLAN_SLICE = 100;
+const PLAN_SLICE = 50;
 /**
  * SQLite's checkpoints, which copy the write-ahead log into the database and
  * took 10–70 ms on this thread, run on the worker's thread instead while sync
@@ -53,6 +58,14 @@ const MAX_NEW_IDS = 3;
 const DAY_MS = 86_400_000;
 /** Passes a join waits for while there's more of the folder to look through. */
 const JOIN_PASSES = 20;
+/** Reading that failed (a merge, a pass's end) is tried again after this long, doubling up to READ_RETRY_MAX. */
+const READ_RETRY_MS = 10_000;
+const READ_RETRY_MAX = 10 * 60_000;
+/** How long turning off waits for what's waiting to be written: past that it goes on, and the changes stay in the outbox. */
+const OFF_WRITE_MS = 10_000;
+
+/** What starts sync's worker thread: a real one, or a stand-in in tests. */
+export type WorkerLike = Pick<Worker, 'postMessage' | 'on' | 'unref' | 'terminate'>;
 
 /** A worker's failure as Settings' steps say it: one about writing this computer's log is the folder's. */
 const stepProblem = (problem: Extract<FromWorker, { t: 'failed' }>['problem']): NonNullable<SyncReply['problem']> =>
@@ -61,7 +74,7 @@ const stepProblem = (problem: Extract<FromWorker, { t: 'failed' }>['problem']): 
 type Ask = { kinds: ReadonlySet<FromWorker['t']>; for: ToWorker['t']; resolve(message: FromWorker): void };
 
 export class SyncController {
-  private worker: Worker | null = null;
+  private worker: WorkerLike | null = null;
   private key: Uint8Array | null = null;
   private info: SyncInfo = { name: '', os: '', app: '' };
   private readonly asks: Ask[] = [];
@@ -78,6 +91,14 @@ export class SyncController {
   private cluttered = false;
   /** Things a change made here couldn't win (a stamp at the very last there can be): named in Settings. */
   private readonly stuck = new Map<string, string>();
+  /** Computers this one reads whose folders hold more junk than a pass looks through: named in Settings. */
+  private readonly blocked = new Set<string>();
+  /** Reading's own problem (a merge or a pass's end failed): it's tried again, later and later, and Settings says so. */
+  private readProblem: 'unreadable' | null = null;
+  private readRetryMs = 0;
+  private readRetry: ReturnType<typeof setTimeout> | undefined;
+  /** The worker went without being stopped (it crashed): it's started again with the next try. */
+  private died = false;
   private problem: SyncProblem | null = null;
   /** Writing's own problem (it couldn't write, or keeps finding another computer writing as this one): a look that finds the folder doesn't clear it. */
   private writeProblem: 'unwritable' | 'copies' | null = null;
@@ -106,23 +127,89 @@ export class SyncController {
   constructor(
     private readonly db: () => ChordDatabase | null,
     private readonly push: (message: DataPush) => void,
-    private readonly workerPath = join(import.meta.dirname, 'sync.js'),
+    private readonly makeWorker: () => WorkerLike = () => new Worker(join(import.meta.dirname, 'sync.js'), { name: 'Sync' }),
   ) {}
+
+  /**
+   * One more link in reading's chain (merges, a pass's end, pushes): whatever
+   * it throws is caught, said in Settings, and reading tried again later, so
+   * one failure never stops the links after it.
+   */
+  private chain(work: () => Promise<void>): void {
+    this.merging = this.merging.then(work).catch((error: unknown) => {
+      console.error('Sync couldn’t take in what it read:', error);
+      this.readFailed();
+    });
+  }
+
+  /** A step of sync's on chord-data's thread, timed by name (`SyncTimings.steps`): perf.spec.ts reads the slowest. */
+  private step<T>(db: ChordDatabase, what: string, work: () => T): T {
+    const started = performance.now();
+    try {
+      return work();
+    } finally {
+      db.sync.stepped(what, performance.now() - started);
+    }
+  }
+
+  /** Reading failed: tried again later and later, and said in Settings. */
+  private readFailed(): void {
+    this.readProblem = 'unreadable';
+    this.readRetryMs = Math.min(READ_RETRY_MAX, Math.max(READ_RETRY_MS, this.readRetryMs * 2));
+    clearTimeout(this.readRetry);
+    this.readRetry = setTimeout(() => {
+      if (this.died && !this.worker) {
+        this.died = false;
+        this.startWorker();
+      } else this.read();
+      void this.reconcile().catch(() => this.readFailed());
+    }, this.readRetryMs);
+    this.readRetry.unref?.();
+    this.pushStatus();
+  }
+
+  private readOk(): void {
+    if (this.readProblem === null) return;
+    this.readProblem = null;
+    this.readRetryMs = 0;
+    clearTimeout(this.readRetry);
+  }
+
+  /**
+   * What's merged but not on this computer's screen (`unappliedPages`), pushed
+   * to main again: after a launch, and after a failed apply or merge. Main's
+   * writes of what it applied are what mark a thing applied (`local`), so a
+   * quit or a crash during a pass or an apply never leaves a change off screen.
+   */
+  async reconcile(): Promise<void> {
+    const db = this.db();
+    if (!db?.sync.meta.on || db.sync.meta.joining) return;
+    const pages = db.sync.unappliedPages();
+    for (let page = this.step(db, 'unapplied', () => pages.next()); !page.done; page = this.step(db, 'unapplied', () => pages.next())) {
+      for (const [key, names] of page.value) this.changes.set(key, new Set([...(this.changes.get(key) ?? []), ...names]));
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    if (this.changes.size > 0) this.chain(() => this.pushChanges());
+  }
 
   /* ---------- the worker ---------- */
 
-  private ensureWorker(): Worker {
+  private ensureWorker(): WorkerLike {
     if (this.worker) return this.worker;
-    const worker = new Worker(this.workerPath, { name: 'Sync' });
+    const worker = this.makeWorker();
     worker.on('message', (message: FromWorker) => this.heard(message));
-    worker.on('error', (error) => {
-      console.error('Sync worker failed:', error);
+    // Gone without being stopped (it crashed): whatever waited for it is answered, so nothing waits for ever; Settings
+    // says so, and it's started again later.
+    const died = (error?: unknown) => {
+      if (this.worker !== worker) return;
+      console.error('Sync worker failed:', error ?? 'it exited');
       this.worker = null;
+      this.died = true;
       for (const ask of this.asks.splice(0)) ask.resolve({ t: 'failed', problem: 'io', for: ask.for });
-    });
-    worker.on('exit', () => {
-      if (this.worker === worker) this.worker = null;
-    });
+      this.readFailed();
+    };
+    worker.on('error', died);
+    worker.on('exit', () => died());
     // It never keeps chord-data's process alive on its own.
     worker.unref();
     this.worker = worker;
@@ -152,13 +239,20 @@ export class SyncController {
         this.pruned.add(message.device);
         return;
       case 'records':
-        this.merging = this.merging.then(() => this.merge(message));
+        this.chain(() => this.merge(message));
         return;
+      case 'own-changed': {
+        // This computer's segment isn't as it left it (another copy of the profile wrote to it): a new id, before it writes.
+        const db = this.db();
+        if (db?.sync.meta.on && !db.sync.meta.rebind) db.sync.setMeta({ rebind: true });
+        this.scheduleWrite(0);
+        return;
+      }
       case 'newer':
         this.problem = 'newer';
         return;
       case 'pass-done':
-        this.merging = this.merging.then(() => this.passed(message));
+        this.chain(() => this.passed(message));
         return;
       case 'changed':
         this.read();
@@ -191,24 +285,27 @@ export class SyncController {
    * them, this computer's `device` record for its first frame, and the outbox
    * it covers (`mark`): changes stamped while it's written stay to follow it.
    */
-  private snapshotOf(db: ChordDatabase, device: DataRecord[] = db.sync.deviceRecords()): { snapshot: { stream: number; device: DataRecord[] }; mark: number } {
+  private snapshotOf(db: ChordDatabase, device: DataRecord[] = db.sync.deviceRecords()): { snapshot: { stream: number; device: DataRecord[] }; mark: number; reads: Record<string, string> } {
     const stream = this.nextStream++;
+    // What it has read so far is in it: what's merged by now, it holds (its pages are read after).
+    const reads = this.step(db, 'reads', () => db.sync.readPositions(db.sync.meta.generation));
     this.streams.set(stream, db.sync.snapshotPages());
-    return { snapshot: { stream, device }, mark: db.sync.outboxMark() };
+    return { snapshot: { stream, device }, mark: db.sync.outboxMark(), reads };
   }
 
   /** A snapshot of the copy as this computer's newest segment (compaction, or its first): true once it's there; `copied` when another computer writes under this id. */
   private async snapshotNow(db: ChordDatabase): Promise<true | 'copied' | false> {
-    const { snapshot, mark } = this.snapshotOf(db);
+    const { snapshot, mark, reads } = this.snapshotOf(db);
     const reply = await this.ask({ t: 'snapshot', snapshot }, ['snapshotted']);
     this.streams.delete(snapshot.stream);
     if (reply.t !== 'snapshotted') return reply.t === 'failed' && reply.problem === 'copied' ? 'copied' : false;
-    db.atomically(() => db.sync.snapshotted(reply.own, Date.now(), mark));
+    db.atomically(() => db.sync.snapshotted(reply.own, Date.now(), mark, reads));
     return true;
   }
 
   private stopWorker(): void {
     clearTimeout(this.writeTimer);
+    this.died = false;
     this.streams.clear();
     // Checkpoints go back to chord-data's own connection.
     this.quiet();
@@ -246,8 +343,15 @@ export class SyncController {
 
   /* ---------- reading ---------- */
 
+  /**
+   * A step the worker read, merged a slice at a time; the cursor is saved in
+   * the same transaction as the last slice. The worker moves its cursor on only
+   * when this says the step is in (`ack` ok): a step that failed is read again
+   * later, and Settings says so.
+   */
   private async merge(message: Extract<FromWorker, { t: 'records' }>): Promise<void> {
     const db = this.db();
+    let ok = false;
     try {
       if (!db) return;
       if (message.records.length > 0) this.busyFor(db);
@@ -278,21 +382,38 @@ export class SyncController {
         // A slice is a few milliseconds: the command bar's searches, and anything else waiting, go between them.
         if (!last) await new Promise((resolve) => setImmediate(resolve));
       }
+      ok = true;
     } catch (error) {
       console.error('Sync couldn’t merge what it read:', error);
+      this.readFailed();
     } finally {
-      this.worker?.postMessage({ t: 'ack' } satisfies ToWorker);
+      this.worker?.postMessage({ t: 'ack', id: message.id, ok } satisfies ToWorker);
     }
   }
 
+  /** A pass's end: whatever goes wrong here, a join waiting for it hears it ended. */
   private async passed(message: Extract<FromWorker, { t: 'pass-done' }>): Promise<void> {
+    const done = this.passDone;
+    this.passDone = null;
+    try {
+      await this.takePass(message);
+    } finally {
+      done?.();
+    }
+  }
+
+  private async takePass(message: Extract<FromWorker, { t: 'pass-done' }>): Promise<void> {
     const db = this.db();
     if (!db) return;
     for (const [device, at] of Object.entries(message.seen)) this.seen.set(device, at);
     this.tooMany = message.tooMany;
     this.cluttered = message.cluttered;
     this.unfinished = message.unfinished;
-    if (message.junk) db.sync.saveJunk(message.junk);
+    this.blocked.clear();
+    for (const device of message.blocked) this.blocked.add(device);
+    if (message.failed) this.readFailed();
+    else this.readOk();
+    if (message.junk) this.step(db, 'junk', () => db.sync.saveJunk(message.junk!));
     for (const [device, at] of Object.entries(message.wrote)) this.wrote.set(device, Math.max(at, this.wrote.get(device) ?? 0));
     const look = message.look;
     const was = this.problem;
@@ -306,17 +427,14 @@ export class SyncController {
       this.changedBy = db.sync.devices().find((d) => d.rekeyed === look.generation)?.name ?? null;
     } else this.problem = look.state;
     if (this.problem === 'conflict' || this.problem === 'changed' || this.problem === 'newer') this.stopWorker();
-    const done = this.passDone;
-    this.passDone = null;
     if (!db.sync.meta.joining) {
       await this.pushChanges();
-      this.prune(db);
+      this.step(db, 'prune', () => this.prune(db));
     }
     this.retire();
     // The folder is back (the sync app runs again): what waited in the outbox goes now.
     if (was === 'missing' && this.problem === null && db.sync.outboxSize() > 0) this.scheduleWrite(0);
     this.pushStatus();
-    done?.();
   }
 
   /**
@@ -329,7 +447,8 @@ export class SyncController {
     const db = this.db();
     if (!db || this.changes.size === 0) return;
     // A chord that went goes in one push with every node of it that went, so it takes them, kept for its Undo.
-    const slices = db.sync.pushSlices(this.changes, PLAN_SLICE);
+    const changes = this.changes;
+    const slices = this.step(db, 'order', () => db.sync.pushSlices(changes, PLAN_SLICE));
     this.changes = new Map();
     for (const [at, slice] of slices.entries()) {
       const started = performance.now();
@@ -402,7 +521,7 @@ export class SyncController {
         this.changes.set(key, new Set([...(this.changes.get(key) ?? []), ...names]));
         this.stuck.set(key, db.sync.describe(key));
       }
-      this.merging = this.merging.then(() => this.pushChanges());
+      this.chain(() => this.pushChanges());
       this.pushStatus();
     }
   }
@@ -414,9 +533,15 @@ export class SyncController {
 
   /** The outbox, appended to this computer's log as a frame, then cleared up to what was written. */
   private write(): Promise<void> {
-    this.writing ??= this.writeNow().finally(() => {
-      this.writing = null;
-    });
+    this.writing ??= this.writeNow()
+      .catch((error: unknown) => {
+        // Whatever it threw, the changes stay in the outbox, and it's tried again.
+        console.error('Sync couldn’t write:', error);
+        this.writeFailed();
+      })
+      .finally(() => {
+        this.writing = null;
+      });
     return this.writing;
   }
 
@@ -508,7 +633,7 @@ export class SyncController {
     }
     const fresh = newDeviceId();
     const device: DataRecord[] = [{ type: 'device', id: fresh, at: [now, 0, fresh], set: { ...localDeviceFields(this.info), removed: false } }];
-    const { snapshot, mark } = this.snapshotOf(db, device);
+    const { snapshot, mark, reads } = this.snapshotOf(db, device);
     const reply = await this.ask({ t: 'snapshot', snapshot, as: fresh }, ['snapshotted']);
     this.streams.delete(snapshot.stream);
     if (reply.t !== 'snapshotted') return false;
@@ -516,7 +641,7 @@ export class SyncController {
     db.atomically(() => {
       db.adoptDevice(fresh);
       db.sync.setMeta({ newIds: [...today, now], rebind: false });
-      db.sync.snapshotted(reply.own, now, mark);
+      db.sync.snapshotted(reply.own, now, mark, reads);
       if (retireOld) db.sync.stampDevice({ removed: true }, old);
       db.sync.stampDevice({ ...this.info, removed: false });
     });
@@ -548,6 +673,9 @@ export class SyncController {
     const self = db.device();
     for (const device of db.sync.devices()) {
       if (device.removed === null || device.id === self || this.pruned.has(device.id) || device.removed >= meta.compactedAt) continue;
+      // Only while everything read from it is in a snapshot of this computer's that landed: read more since (a late
+      // delivery), and it waits for the next one, or computers that hadn't read that would never get it.
+      if (!db.sync.readCovered(device.id)) continue;
       this.worker?.postMessage({ t: 'prune', device: device.id, removedAt: device.removed } satisfies ToWorker);
     }
   }
@@ -584,7 +712,7 @@ export class SyncController {
     }
     // A clock ahead, from what each computer says of itself (when it made its newest segment), never from stamps a change was bumped to.
     const ahead = [...this.wrote].filter(([device, at]) => device !== self && at > now + CLOCK_AHEAD_MS).map(([device, at]) => ({ name: devices.find((d) => d.id === device)?.name ?? 'Another computer', ms: at - now }));
-    const problem = this.problem ?? this.writeProblem;
+    const problem = this.problem ?? this.writeProblem ?? this.readProblem;
     const state: SyncStatus['state'] = meta.joining ? 'choosing' : meta.paused ? 'paused' : !this.key ? 'locked' : problem ? 'problem' : 'on';
     return {
       state,
@@ -601,12 +729,14 @@ export class SyncController {
       tooMany: this.tooMany,
       cluttered: this.cluttered,
       stuck: [...this.stuck.values()],
+      blocked: [...this.blocked].map((device) => devices.find((d) => d.id === device)?.name ?? 'Another computer'),
       choosing: meta.joining ? { here: db.sync.chordsHere(), synced: db.sync.syncedChords().length } : null,
     };
   }
 
   private pushStatus(): void {
-    this.push({ push: 'sync.status', status: this.status() });
+    const db = this.db();
+    this.push({ push: 'sync.status', status: db ? this.step(db, 'status', () => this.status()) : this.status() });
   }
 
   /* ---------- requests from main ---------- */
@@ -616,7 +746,7 @@ export class SyncController {
     if (!db) throw new Error('chord-data: sync before open');
     switch (request.type) {
       case 'sync.status':
-        return { status: this.status(), keyBlob: db.sync.keyBlob() };
+        return { status: this.step(db, 'status', () => this.status()), keyBlob: db.sync.keyBlob() };
       case 'sync.inspect':
         return { inspection: await this.inspect(request.folder) };
       case 'sync.setup':
@@ -630,6 +760,10 @@ export class SyncController {
         this.info = request.info;
         this.startWorker();
         return { status: this.status() };
+      case 'sync.reconcile':
+        // After a launch (or chord-data starting again), and after main couldn't apply something: what's merged but not applied, again.
+        void this.reconcile().catch(() => this.readFailed());
+        return {};
       case 'sync.unlock':
         this.info = request.info;
         // Its key couldn't be read here: this profile may be a copy of another computer's, so it takes a new id before it writes.
@@ -671,7 +805,7 @@ export class SyncController {
       case 'sync.repush':
         for (const [key, names] of db.sync.thingsFor(request.keys)) this.changes.set(key, names);
         // After any merge under way, in order with it.
-        this.merging = this.merging.then(() => this.pushChanges());
+        this.chain(() => this.pushChanges());
         return {};
       case 'sync.timings':
         return { timings: db.sync.timings };
@@ -755,32 +889,35 @@ export class SyncController {
       this.key = null;
       return { problem: problem === 'changed' ? 'wrong' : problem === 'removed' ? 'io' : problem };
     }
-    return { key: opened.key, fresh: db.sync.fresh(), status: this.status() };
+    return { key: opened.key, fresh: this.step(db, 'fresh', () => db.sync.fresh()), status: this.status() };
   }
 
   /** Joining, decided: this computer's setup joins the synced one (`both`), or makes way for it (`synced`); then its first segment, a snapshot. */
   private async choose(db: ChordDatabase, mode: 'synced' | 'both'): Promise<SyncReply> {
     if (!db.sync.meta.joining) return { problem: 'busy' };
     // This computer's things into the copy, a slice at a time, searches answered between (still joining: nothing's stamped meanwhile).
-    const local = db.sync.localThings();
+    const local = this.step(db, 'local', () => db.sync.localThings());
     for (let at = 0; at < local.length; at += PLAN_SLICE) {
-      db.atomically(() => db.sync.addLocal(mode === 'synced' ? 'synced-setup' : 'all', local.slice(at, at + PLAN_SLICE)));
+      this.step(db, 'add', () => db.atomically(() => db.sync.addLocal(mode === 'synced' ? 'synced-setup' : 'all', local.slice(at, at + PLAN_SLICE))));
       await new Promise((resolve) => setImmediate(resolve));
     }
-    db.atomically(() => {
-      db.sync.readmitOutbox();
-      db.sync.stampDevice({ ...this.info, removed: false });
-      db.sync.setMeta({ joining: false });
-    });
+    this.step(db, 'joined', () =>
+      db.atomically(() => {
+        db.sync.readmitOutbox();
+        db.sync.stampDevice({ ...this.info, removed: false });
+        db.sync.setMeta({ joining: false });
+      }),
+    );
     this.changes.clear();
     // Everything the synced setup has, read back a slice at a time, searches answered between, as one apply.
     const apply = emptyApply();
     const all = new Map<string, Set<string>>();
-    for (const page of db.sync.everythingPages()) {
-      for (const [key, names] of page) all.set(key, names);
+    const everything = db.sync.everythingPages();
+    for (let page = this.step(db, 'everything', () => everything.next()); !page.done; page = this.step(db, 'everything', () => everything.next())) {
+      for (const [key, names] of page.value) all.set(key, names);
       await new Promise((resolve) => setImmediate(resolve));
     }
-    const ordered = db.sync.orderForApply(all);
+    const ordered = this.step(db, 'order', () => db.sync.orderForApply(all));
     for (let at = 0; at < ordered.length; at += PLAN_SLICE) {
       const started = performance.now();
       const part = db.sync.planFor(new Map(ordered.slice(at, at + PLAN_SLICE)));
@@ -790,9 +927,11 @@ export class SyncController {
       if (part.settings) apply.settings = { ...apply.settings, ...part.settings };
       if (at + PLAN_SLICE < ordered.length) await new Promise((resolve) => setImmediate(resolve));
     }
-    const synced = db.sync.syncedChords();
+    const synced = this.step(db, 'synced', () => db.sync.syncedChords());
     const replace = mode === 'synced' && synced[0] ? { to: synced[0], keep: synced } : null;
     await this.snapshotNow(db);
+    // Main writes all of it back next: checkpoints stay on the worker's connection meanwhile, never chord-data's thread.
+    this.busyFor(db);
     this.pushStatus();
     return { apply, replace, status: this.status() };
   }
@@ -824,7 +963,8 @@ export class SyncController {
     this.startWorker();
     // A profile that may be a copy of another computer's takes a new id now, writing or not: under its own id, it reads
     // the other's log as another computer's. Should that fail, its next write tries again first.
-    if (db.sync.meta.rebind && !(await this.newId())) this.writeFailed();
+    // Through writing's own queue, so a write already under way doesn't take a second new id.
+    if (db.sync.meta.rebind) await this.write();
     return { key: opened.key, status: this.status() };
   }
 
@@ -906,7 +1046,8 @@ export class SyncController {
     if (db.sync.meta.on && !db.sync.meta.joining && this.key) {
       db.atomically(() => db.sync.stampDevice({ removed: true }));
       clearTimeout(this.writeTimer);
-      await this.write();
+      // At most a few seconds: what doesn't reach the folder stays in the outbox, and goes when sync is on again.
+      await Promise.race([this.write(), new Promise((resolve) => setTimeout(resolve, OFF_WRITE_MS).unref?.())]);
     }
     this.stopWorker();
     this.key = null;
@@ -916,6 +1057,8 @@ export class SyncController {
     this.tooMany = this.cluttered = this.unfinished = false;
     this.writeProblem = null;
     this.retryMs = 0;
+    this.readOk();
+    this.blocked.clear();
     this.pruned.clear();
     this.stuck.clear();
     this.wrote.clear();
@@ -924,6 +1067,7 @@ export class SyncController {
 
   /** chord-data is closing: the worker goes, with the key. */
   close(): void {
+    clearTimeout(this.readRetry);
     this.stopWorker();
     this.key?.fill(0);
     this.key = null;

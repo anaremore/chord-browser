@@ -593,6 +593,22 @@ describe('sync.apply in the store', () => {
     expect(undone.nodes['u']).toMatchObject({ chordId: 'w', section: 'pinned' });
   });
 
+  it('pinned tabs and a folder another computer took away, their chord staying here (its tombstone in a later frame, or never): kept for Undo, and Undo puts them back where they were', () => {
+    const s = state();
+    const windowId = Object.keys(s.windows)[0]!;
+    s.nodes['f'] = { kind: 'folder', id: 'f', chordId: 'w', section: 'pinned', parentId: null, rank: 'a5', title: 'Reading', collapsed: false, createdAt: 1 } as SidebarNode;
+    s.nodes['inside'] = tab('inside', 'w', { parentId: 'f', rank: 'a0' });
+    const gone = apply(s, { t: 'sync.apply', gone: { nodes: [{ id: 'u', kind: 'tab' }, { id: 'f', kind: 'folder' }] } }, ctx).state;
+    expect(gone.nodes['u']).toBeUndefined();
+    expect(gone.nodes['f']).toBeUndefined();
+    expect(gone.nodes['inside']).toMatchObject({ parentId: null });
+    expect(gone.syncUndo[0]).toMatchObject({ chord: { id: 'w' }, nodesOnly: true });
+    const undone = apply(gone, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
+    expect(undone.nodes['u']).toMatchObject({ chordId: 'w', section: 'pinned' });
+    expect(undone.nodes['f']).toMatchObject({ chordId: 'w', kind: 'folder' });
+    expect(undone.nodes['inside']).toMatchObject({ parentId: 'f' });
+  });
+
   it('what sync took away is kept apart: deleting chords here never pushes it out of reach of its Undo', () => {
     const { s, windowId } = withLocalTabs();
     let state = apply(s, { t: 'sync.apply', gone: { chords: ['w'] } }, ctx).state;

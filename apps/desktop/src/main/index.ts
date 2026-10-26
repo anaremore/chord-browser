@@ -940,6 +940,8 @@ if (!app.requestSingleInstanceLock()) {
       info: () => ({ name: hostname().slice(0, 100) || 'This computer', os: platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : 'Linux', app: app.getVersion() }),
       platform,
       folder: () => app.getPath('home'),
+      // Tests only (development builds): no keyring, on any system, so a relaunch asks for the passphrase again.
+      noKeyring: devEnv('CHORD_E2E_NO_KEYRING') === '1',
     });
     store.onRespawn(() => void syncService?.restarted());
     // The key is read once launch is over: safeStorage can ask the OS's keychain, which mustn't hold up the first page.

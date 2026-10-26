@@ -23,6 +23,7 @@ import {
   checkSyncRecord,
   compareStamps,
   defaultFields,
+  FRESH_PAGES,
   isFreshSetup,
   isGone,
   localChanges,
@@ -96,9 +97,16 @@ export interface SyncMeta {
   newIds: number[];
   /** This profile may be a copy (its key couldn't be read here): it takes a new id before it writes. */
   rebind: boolean;
+  /**
+   * How far this computer had read each other computer's folder when its last
+   * snapshot started (`readPositions`): everything read from one up to there is
+   * in a snapshot of its own. A removed computer's folder goes only while what's
+   * been read of it is exactly that.
+   */
+  coveredReads: Record<string, string>;
 }
 
-const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null, newIds: [], rebind: false };
+const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null, newIds: [], rebind: false, coveredReads: {} };
 
 /**
  * Sync's costs, as chord-data measures them: a whole write() with sync on and
@@ -115,6 +123,8 @@ export interface SyncTimings {
   plan: number[];
   /** A page of a snapshot, read for the worker. */
   page: number[];
+  /** Sync's other steps on chord-data's thread (joining's slices, Settings' status, pruning), each named: the slowest few hundred. */
+  steps: { what: string; ms: number }[];
 }
 
 /** A merge's outcome: what changed (for main), what was left out, and whether this computer was removed. */
@@ -178,12 +188,18 @@ export class SyncStore {
   /** Changes stamped since the worker last took the outbox: chord-data writes them about 3 s after the last. */
   pending = 0;
   /** How long sync's steps took on chord-data's thread (ms), the last few hundred of each: perf.spec.ts reads them. */
-  readonly timings: SyncTimings = { write: [], writeOff: [], stamp: [], frame: [], frameBytes: [], merge: [], plan: [], page: [] };
+  readonly timings: SyncTimings = { write: [], writeOff: [], stamp: [], frame: [], frameBytes: [], merge: [], plan: [], page: [], steps: [] };
 
-  timed(what: keyof SyncTimings, ms: number): void {
+  timed(what: Exclude<keyof SyncTimings, 'steps'>, ms: number): void {
     const list = this.timings[what];
     list.push(Math.round(ms * 1000) / 1000);
     if (list.length > 500) list.shift();
+  }
+
+  /** One of sync's other steps on chord-data's thread, by name. */
+  stepped(what: string, ms: number): void {
+    this.timings.steps.push({ what, ms: Math.round(ms * 1000) / 1000 });
+    if (this.timings.steps.length > 500) this.timings.steps.shift();
   }
 
   constructor(
@@ -413,7 +429,10 @@ export class SyncStore {
    * at; history, windows, downloads and the rest never are.
    */
   stamp(ops: readonly WriteOp[], now: number): void {
-    for (const op of ops) {
+    // A chord's tombstone goes before its tabs' and folders' (and into the same frame where it fits): a computer that
+    // reads it first takes the chord with everything in it, kept for its Undo, rather than its tabs one by one.
+    const chordsGone = ops.filter((op) => op.k === 'chord' && !op.value);
+    for (const op of chordsGone.length > 0 ? [...chordsGone, ...ops.filter((op) => !chordsGone.includes(op))] : ops) {
       const fromSync = op.sync === true;
       switch (op.k) {
         case 'chord':
@@ -558,8 +577,12 @@ export class SyncStore {
 
   /** Whether this computer is a clearly fresh Chord (core's isFreshSetup): joining replaces its setup without asking. */
   fresh(): boolean {
+    const here = amountsHere(this.sql, FRESH_PAGES + 1);
+    // Most aren't, and say so by what's here alone (history, chats, more than one chord): nothing else is read.
+    if (here.chats > 0 || here.pages > FRESH_PAGES) return false;
+    if (Number((this.sql('SELECT COUNT(*) AS n FROM chord WHERE deleted_at IS NULL').get() as { n: number }).n) !== 1) return false;
     const local = localRecords(this.sql, { device: this.device(), platform: this.platform, sha256: (bytes) => createHash('sha256').update(bytes).digest('hex') });
-    return isFreshSetup(local, amountsHere(this.sql, 21), this.platform);
+    return isFreshSetup(local, here, this.platform);
   }
 
   /**
@@ -768,29 +791,20 @@ export class SyncStore {
    * rest; what went last (a tab moved out of a chord that went stays), chords
    * before the nodes they held.
    */
-  orderForApply(changes: Map<string, Set<string>>): [string, Set<string>][] {
-    const things = new Map<string, Loaded | null>();
-    const get = (type: string, id: string) => {
-      const key = thingKey(type, id);
-      if (!things.has(key)) things.set(key, this.load(type, id));
-      return things.get(key) ?? null;
-    };
-    const depth = (thing: SyncThing): number => {
+  orderForApply(changes: Map<string, Set<string>>, brief = this.briefs()): [string, Set<string>][] {
+    const depth = (parent: string | null): number => {
       let n = 0;
-      for (let parent = (thing.fields['pos']?.v as { parent?: unknown } | undefined)?.parent; typeof parent === 'string' && n <= 16; n++) {
-        const up = get('folder', parent)?.thing;
-        parent = up ? (up.fields['pos']?.v as { parent?: unknown } | undefined)?.parent : null;
-      }
+      for (; parent !== null && n <= 16; n++) parent = brief('folder', parent)?.parent ?? null;
       return n;
     };
     const rank = (key: string): number => {
       const [type, id] = key.split('\n') as [string, string];
-      const thing = get(type, id)?.thing;
+      const thing = brief(type, id);
       if (!thing) return 100;
       // A chord that went goes before its nodes' tombstones: it takes them with it, kept for Undo here, rather than one by one.
-      if (isGone(thing)) return type === 'chord' ? 80 : 90;
+      if (thing.gone) return type === 'chord' ? 80 : 90;
       if (type === 'chord') return 0;
-      if (type === 'folder') return 10 + depth(thing);
+      if (type === 'folder') return 10 + depth(thing.parent);
       if (type === 'split') return 40;
       if (type === 'tab') return 50;
       return SYNC_TYPES_APPLIED.has(type) ? 60 : 70;
@@ -799,12 +813,89 @@ export class SyncStore {
     return [...changes].sort(([a], [b]) => ranks.get(a)! - ranks.get(b)!);
   }
 
+  /**
+   * What ordering what changed needs of each thing (whether it went, and where
+   * it is), read by SQLite from the merged copy without loading the thing,
+   * once each: a few microseconds a thing, so ordering a push stays well
+   * under a keystroke's budget.
+   */
+  private briefs(): (type: string, id: string) => { gone: boolean; parent: string | null; chord: string | null } | null {
+    const seen = new Map<string, { gone: boolean; parent: string | null; chord: string | null } | null>();
+    const statement = this.sql(
+      `SELECT json_extract(fields, '$.deleted') AS deleted, json_extract(fields, '$.pos.parent') AS parent, json_extract(fields, '$.pos.chord') AS chord
+       FROM sync_record WHERE type = ? AND id = ?`,
+    );
+    return (type, id) => {
+      const key = thingKey(type, id);
+      if (seen.has(key)) return seen.get(key)!;
+      const row = statement.get(type, id) as Row | undefined;
+      const out = row ? { gone: row['deleted'] === 1, parent: typeof row['parent'] === 'string' ? row['parent'] : null, chord: typeof row['chord'] === 'string' ? row['chord'] : null } : null;
+      seen.set(key, out);
+      return out;
+    };
+  }
+
   /** Every thing whose merged value differs from what this computer has (or never had): what a join applies. */
   everything(): Map<string, Set<string>> {
     return new Map([...this.everythingPages()].flatMap((page) => [...page]));
   }
 
   /** The same, `size` things at a time, by key: a join reads it with searches answered between. */
+  /**
+   * What this computer hasn't applied of the copy, by thing, a page at a time:
+   * main's writes of what it applied are what set `local`, so after a quit or
+   * a crash during a pass or an apply (or an apply that failed), what's merged
+   * but not on screen differs from it, and is pushed again. A thing never
+   * applied here; one gone in the copy but not here, or the other way round;
+   * and a field this computer keeps whose value differs. Fields it never keeps
+   * (a tab's title off its home, another platform's shortcuts) and ones it
+   * never takes (a chord's sign-ins, Effects' Duet ids) aren't differences.
+   */
+  *unappliedPages(size = 200): Generator<Map<string, Set<string>>> {
+    const never: Record<string, readonly string[]> = { chord: ['profile'], effects: ['duet'] };
+    let after = { type: '', id: '' };
+    for (;;) {
+      const rows = this.sql(`SELECT type, id, fields, stamps, local FROM sync_record WHERE type > ? OR (type = ? AND id > ?) ORDER BY type, id LIMIT ?`).all(after.type, after.type, after.id, size) as Row[];
+      const out = new Map<string, Set<string>>();
+      for (const row of rows) {
+        const { thing, local } = this.loaded(str(row['type']), str(row['id']), row);
+        after = { type: thing.type, id: thing.id };
+        if (thing.type === 'icon' || thing.type === 'device' || syncKind(thing.type) !== 'sync') continue;
+        const key = thingKey(thing.type, thing.id);
+        const gone = isGone(thing);
+        const goneHere = local?.['deleted'] === true;
+        if (!local || goneHere) {
+          if (!gone) out.set(key, new Set(Object.keys(thing.fields)));
+          continue;
+        }
+        if (gone) {
+          out.set(key, new Set(['deleted']));
+          continue;
+        }
+        const skip = never[thing.type] ?? [];
+        const names = Object.keys(thing.fields).filter((name) => name !== 'deleted' && name in local && !skip.includes(name) && !same(thing.fields[name]!.v, local[name]));
+        if (names.length > 0) out.set(key, new Set(names));
+      }
+      yield out;
+      if (rows.length < size) return;
+    }
+  }
+
+  /** How far this computer has read each other computer's folder in this generation: its cursors, as one string each. */
+  readPositions(generation: number): Record<string, string> {
+    const out: Record<string, string[]> = {};
+    for (const r of this.sql('SELECT device, segment, offset FROM sync_cursor WHERE generation = ? ORDER BY device, segment').all(generation) as Row[]) {
+      (out[str(r['device'])] ??= []).push(`${num(r['segment'])}:${num(r['offset'])}`);
+    }
+    return Object.fromEntries(Object.entries(out).map(([device, list]) => [device, list.join(',')]));
+  }
+
+  /** Whether everything read from a computer's folder is in a snapshot of this computer's that landed: read since, it isn't. */
+  readCovered(device: string): boolean {
+    const meta = this.meta;
+    return (this.readPositions(meta.generation)[device] ?? '') === (meta.coveredReads[device] ?? '');
+  }
+
   *everythingPages(size = 200): Generator<Map<string, Set<string>>> {
     let after = { type: '', id: '' };
     for (;;) {
@@ -936,10 +1027,10 @@ export class SyncStore {
    * started) goes too, and counting starts again. Changes stamped while it was
    * written stay, to be appended after it.
    */
-  snapshotted(own: OwnSegment, now: number, mark = Number.MAX_SAFE_INTEGER): void {
+  snapshotted(own: OwnSegment, now: number, mark = Number.MAX_SAFE_INTEGER, reads?: Record<string, string>): void {
     this.sql('DELETE FROM sync_outbox WHERE seq <= ?').run(mark);
     this.pending = this.outboxSize();
-    this.setMeta({ own, compactedAt: now, framesSince: 0, bytesSince: 0 });
+    this.setMeta({ own, compactedAt: now, framesSince: 0, bytesSince: 0, ...(reads ? { coveredReads: reads } : {}) });
   }
 
   /* ---------- devices ---------- */
@@ -995,15 +1086,16 @@ export class SyncStore {
    * than a later push deleting them one by one.
    */
   pushSlices(changes: Map<string, Set<string>>, size: number): Map<string, Set<string>>[] {
-    const ordered = this.orderForApply(changes);
-    const goneChords = new Set(ordered.filter(([key]) => key.startsWith('chord\n') && isGone(this.load('chord', key.slice(6))?.thing)).map(([key]) => key.slice(6)));
+    const brief = this.briefs();
+    const ordered = this.orderForApply(changes, brief);
+    const goneChords = new Set(ordered.filter(([key]) => key.startsWith('chord\n') && brief('chord', key.slice(6))?.gone).map(([key]) => key.slice(6)));
     const withChord = new Map<string, [string, Set<string>][]>();
     const rest: [string, Set<string>][] = [];
     for (const entry of ordered) {
       const [type, id] = entry[0].split('\n') as [string, string];
-      const thing = NODE_TYPES.has(type) ? this.load(type, id)?.thing : undefined;
-      const chord = thing && isGone(thing) ? (thing.fields['pos']?.v as { chord?: unknown } | undefined)?.chord : undefined;
-      if (typeof chord === 'string' && goneChords.has(chord)) withChord.set(chord, [...(withChord.get(chord) ?? []), entry]);
+      const thing = NODE_TYPES.has(type) ? brief(type, id) : null;
+      const chord = thing?.gone ? thing.chord : null;
+      if (chord !== null && goneChords.has(chord)) withChord.set(chord, [...(withChord.get(chord) ?? []), entry]);
       else rest.push(entry);
     }
     const slices: Map<string, Set<string>>[] = [];

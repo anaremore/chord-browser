@@ -1002,7 +1002,7 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
   }
   // The rest goes with it, kept for Undo this session.
   const rest = Object.values(draft.nodes).filter((n) => n.chordId === chordId);
-  draft.syncUndo.unshift({ chord: copy(chord), nodes: rest.map((n) => copy(n)), deletedAt: ctx.now, moved: before });
+  draft.syncUndo.unshift({ id: ctx.newId(), chord: copy(chord), nodes: rest.map((n) => copy(n)), deletedAt: ctx.now, moved: before });
   if (draft.syncUndo.length > MAX_SYNC_UNDO) draft.syncUndo.length = MAX_SYNC_UNDO;
   for (const node of rest) {
     if (node.kind === 'tab' && draft.live[node.id]) effects.push({ e: 'view.destroy', nodeId: node.id });
@@ -1036,8 +1036,18 @@ function unreplace(draft: Draft<State>, windowId: WindowId, chordIds: readonly C
     const [deleted] = draft.syncUndo.splice(index, 1);
     if (!draft.chords[chordId]) {
       draft.chords[chordId] = deleted!.chord;
-      for (const node of deleted!.nodes) if (!draft.nodes[node.id]) draft.nodes[node.id] = node;
       back.push(chordId);
+    }
+    // What it held comes back where it was, in it (a folder before what it held, whatever order they were kept in).
+    const restored: NodeId[] = [];
+    for (const node of deleted!.nodes) {
+      if (draft.nodes[node.id] || !draft.chords[node.chordId]) continue;
+      draft.nodes[node.id] = copy(node);
+      restored.push(node.id);
+    }
+    for (const id of restored) {
+      const node = draft.nodes[id]!;
+      if (node.parentId !== null && draft.nodes[node.parentId]?.chordId !== node.chordId) node.parentId = null;
     }
     const moves = new Map<NodeId, ChordId>();
     for (const was of deleted!.moved ?? []) {
@@ -1047,7 +1057,7 @@ function unreplace(draft: Draft<State>, windowId: WindowId, chordIds: readonly C
     const land = moving(draft, moves, ctx, effects);
     for (const was of deleted!.moved ?? []) {
       const node = draft.nodes[was.id];
-      if (!node || !moves.has(was.id)) continue;
+      if (!node || node.kind !== was.kind || !draft.chords[was.chordId]) continue;
       const put = copy(was);
       if (put.parentId !== null && draft.nodes[put.parentId]?.chordId !== put.chordId) put.parentId = null;
       // A tab keeps where it's got to since (its page, title and icon); it goes back to its place, and its pinned home.
@@ -1189,9 +1199,17 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
   );
   const leaving = new Set([...goneNodes].filter((id) => draft.nodes[id]?.kind === 'tab' && !openBefore.has(id)));
   const landGone = landWindows(draft, leaving, ctx, effects);
+  // Nothing pinned goes without Undo: what's taken away, and what moves because of it, kept per chord in sync's list.
+  const kept = new Map<ChordId, { nodes: SidebarNode[]; moved: SidebarNode[] }>();
+  const keep = (node: Draft<SidebarNode>, what: 'nodes' | 'moved') => {
+    const entry = kept.get(node.chordId) ?? { nodes: [], moved: [] };
+    entry[what].push(copy(node));
+    kept.set(node.chordId, entry);
+  };
   for (const id of goneNodes) {
     const node = draft.nodes[id]!;
     if (node.kind === 'tab') {
+      keep(node, openBefore.has(id) ? 'moved' : 'nodes');
       if (openBefore.has(id)) {
         const top = topOfToday(draft, node.chordId);
         node.section = 'today';
@@ -1202,6 +1220,8 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
       continue;
     }
     const inside = Object.values(draft.nodes).filter((n) => n.parentId === id && !goneNodes.has(n.id));
+    keep(node, 'nodes');
+    for (const child of inside) keep(child, 'moved');
     if (node.kind === 'split') {
       const siblings = children(draft as State, node.chordId, node.section, node.parentId);
       const at = siblings.findIndex((n) => n.id === node.id);
@@ -1214,6 +1234,12 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
     delete draft.nodes[id];
   }
   landGone();
+  for (const [chordId, entry] of kept) {
+    const chord = draft.chords[chordId];
+    if (!chord) continue;
+    draft.syncUndo.unshift({ id: ctx.newId(), chord: copy(chord), nodes: entry.nodes, moved: entry.moved, deletedAt: ctx.now, nodesOnly: true });
+  }
+  if (draft.syncUndo.length > MAX_SYNC_UNDO) draft.syncUndo.length = MAX_SYNC_UNDO;
   for (const id of gone.favorites ?? []) if (draft.favorites[id]) delete draft.favorites[id];
   for (const id of gone.themes ?? []) {
     const index = draft.settings.themes.findIndex((t) => t.id === id);

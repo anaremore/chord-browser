@@ -44,6 +44,9 @@ const UNDO_MS = 6000;
 const FOCUS_MS = 30_000;
 /** Between two parts of what another computer changed: two frames at 60 Hz, so main and the renderers each take one part at a time with room to spare. */
 const PART_GAP_MS = 33;
+/** After an apply that failed, chord-data is asked for what isn't applied again after this long, doubling up to RECONCILE_MAX. */
+const RECONCILE_MS = 5000;
+const RECONCILE_MAX = 5 * 60_000;
 
 export interface SyncServiceOptions {
   data: {
@@ -65,6 +68,8 @@ export interface SyncServiceOptions {
   platform: NodeJS.Platform;
   /** Where the folder picker starts. */
   folder(): string;
+  /** Tests only (never when packaged): safeStorage taken as having no keyring behind it, as Linux's `basic_text`, on any system. */
+  noKeyring?: boolean;
 }
 
 interface Pending {
@@ -81,6 +86,8 @@ export class SyncService {
   /** Kept with no keyring behind it (`basic_text`), because you asked to remember it anyway. */
   private keyWeak = false;
   private anyway = false;
+  /** Until the key kept here has been read after launch, sync isn't asking for the passphrase, and doesn't say it is. */
+  private opening = true;
   /** The key kept here couldn't be read: this profile may be a copy of another computer's, so unlocking takes a new id. */
   private unbound = false;
   private chosen: { id: string; path: string } | null = null;
@@ -89,11 +96,23 @@ export class SyncService {
   private lastFocus = 0;
   /** Pushes are applied one at a time, in order. */
   private applying: Promise<void> = Promise.resolve();
+  private reconcileMs = 0;
+  private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: SyncServiceOptions) {
     options.data.onPush((push) => {
       if (push.push === 'sync.status') this.setStatus(push.status);
-      else this.applying = this.applying.then(() => this.apply(push.apply)).catch((error: unknown) => console.error('Sync couldn’t apply a change:', error));
+      else
+        this.applying = this.applying
+          .then(() => this.apply(push.apply))
+          .then(() => {
+            this.reconcileMs = 0;
+          })
+          .catch((error: unknown) => {
+            // Nothing's lost: what isn't applied stays different from what chord-data merged, and it's asked for again.
+            console.error('Sync couldn’t apply a change:', error);
+            this.reconcileLater();
+          });
     });
   }
 
@@ -101,6 +120,7 @@ export class SyncService {
 
   /** Whether this computer can keep the key: safeStorage with a real store behind it, not Linux's `basic_text`. */
   private async keyring(): Promise<boolean> {
+    if (this.options.noKeyring) return false;
     try {
       if (!(await safeStorage.isAsyncEncryptionAvailable())) return false;
       return this.options.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text';
@@ -148,14 +168,35 @@ export class SyncService {
     return this.view();
   }
 
+  /** chord-data pushes again what it merged but this computer hasn't applied: later and later after each failure. */
+  private reconcileLater(): void {
+    this.reconcileMs = Math.min(RECONCILE_MAX, Math.max(RECONCILE_MS, this.reconcileMs * 2));
+    clearTimeout(this.reconcileTimer);
+    this.reconcileTimer = setTimeout(() => void this.options.data.sync({ type: 'sync.reconcile' }).catch(() => this.reconcileLater()), this.reconcileMs);
+  }
+
   /**
    * After launch (after the first page): where sync stands, and the key handed
    * to chord-data if this computer kept one. Without one, sync waits for the
-   * passphrase, and says so once.
+   * passphrase, and says so once. Until then it says nothing of a passphrase:
+   * with a key kept, it needs none.
    */
   async afterLaunch(): Promise<void> {
+    this.opening = true;
+    try {
+      await this.openKept();
+    } finally {
+      this.opening = false;
+      // Still locked (no key kept, or one that couldn't be read): now Settings asks, and the toast says so.
+      if (this.status) this.setStatus(this.status);
+    }
+  }
+
+  private async openKept(): Promise<void> {
     const answer = await this.options.data.sync({ type: 'sync.status' }).catch(() => ({}) as SyncReply);
     if (answer.status) this.setStatus(answer.status);
+    // What was merged but never applied (a quit or a crash during a pass or an apply): pushed now, key or not.
+    if (answer.status && answer.status.state !== 'off') void this.options.data.sync({ type: 'sync.reconcile' }).catch(() => this.reconcileLater());
     if (answer.status?.state !== 'locked' || !answer.keyBlob) return;
     try {
       const opened = await safeStorage.decryptStringAsync(Buffer.from(answer.keyBlob, 'base64'));
@@ -185,12 +226,13 @@ export class SyncService {
   /* ---------- where it stands ---------- */
 
   view(): SyncView {
-    const status = this.status ?? { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, cluttered: false, stuck: [], choosing: null };
+    const status = this.status ?? { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, cluttered: false, stuck: [], blocked: [], choosing: null };
     return {
       ...status,
       folderName: status.folder ? basename(status.folder) : null,
       keyKept: this.keyKept,
       keyWeak: this.keyWeak,
+      opening: this.opening && status.state === 'locked',
       pendingUndo: this.pending ? { what: this.pending.what, token: this.pending.token, until: this.pending.until, ...(this.pending.device ? { device: this.pending.device } : {}) } : null,
     };
   }
@@ -204,8 +246,8 @@ export class SyncService {
   private setStatus(status: SyncStatus): void {
     this.status = status;
     this.options.notify(this.view());
-    // A problem that needs you gets a toast, once (S15 §8).
-    const kind = status.state === 'locked' ? 'locked' : status.state === 'problem' ? status.problem : null;
+    // A problem that needs you gets a toast, once (S15 §8). Locked only once the key kept here, if any, has been tried.
+    const kind = status.state === 'locked' ? (this.opening ? null : 'locked') : status.state === 'problem' ? status.problem : null;
     if (!kind || this.toasted.has(kind)) return;
     this.toasted.add(kind);
     const windowId = this.options.lastWindow();
@@ -470,6 +512,20 @@ export class SyncService {
     }
     if (filtered.effects.length > 0 || filtered.gone.effects.length > 0) await this.options.effects.syncSites(filtered.effects, filtered.gone.effects);
     const after = this.options.state();
+    // Pinned tabs and folders another computer took away (their chord stays): a quiet toast, with Undo.
+    const undoBefore = new Set(before.syncUndo.map((e) => e.id));
+    const removed = after.syncUndo.filter((e) => e.nodesOnly && !undoBefore.has(e.id) && e.nodes.length > 0);
+    const removedCount = removed.reduce((n, e) => n + e.nodes.length, 0);
+    const toastTo = this.options.lastWindow();
+    if (removedCount > 0 && toastTo) {
+      const only = removedCount === 1 ? removed[0]!.nodes[0]! : null;
+      const name = only ? (only.kind === 'tab' ? only.customTitle || only.title : only.kind === 'folder' ? only.title : '') : '';
+      this.options.toast(toastTo, {
+        id: `sync:removed:${removed[0]!.id}`,
+        message: name ? `“${name}” was removed on another computer` : `${removedCount} pinned tabs and folders were removed on another computer`,
+        action: { label: 'Undo', command: { t: 'sync.unreplace', windowId: toastTo, chordIds: [...new Set(removed.map((e) => e.chord.id))] } },
+      });
+    }
     // A chord another computer deleted: a quiet toast where it was on screen, or wherever its tabs went, with Undo.
     for (const gone of going) {
       if (after.chords[gone.id]) continue;
@@ -497,6 +553,7 @@ const PROBLEM_TOASTS: Record<string, string> = {
   missing: 'Chord can’t find the sync folder. Is your sync app running?',
   unwritable: 'Chord couldn’t write to the sync folder. Your changes wait here, and it tries again.',
   copies: 'Another computer keeps writing to the sync folder as this one. Sync stopped writing here.',
+  unreadable: 'Chord couldn’t take in changes from the sync folder. It tries again in a few minutes.',
   newer: 'Another computer has a newer Chord. Update this one to keep syncing.',
   removed: 'This computer was removed from sync.',
   conflict: 'Sync was set up on two computers at once. Set it up on one, then join from the others.',

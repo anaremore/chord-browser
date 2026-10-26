@@ -20,6 +20,7 @@ import { parentPort } from 'node:worker_threads';
 import {
   AnotherWriter,
   appendRecords,
+  ownIntact,
   coversOf,
   deviceFolder,
   folderMemory,
@@ -57,7 +58,9 @@ export type ToWorker =
   | { t: 'unlock'; folder: string; passphrase: string }
   | { t: 'start'; folder: string; generation: number; device: string; key: Uint8Array; own: OwnSegment | null; cursors: { device: string; segment: number; cursor: SegmentCursor }[]; app: string; junk: [string, string][] }
   | { t: 'read' }
-  | { t: 'ack' }
+  /** A step merged (`ok`), so the worker moves its cursor on; or not, and the pass stops there, to read it again later. */
+  /** A batch of records (`id`) merged, or not: an answer that comes too late is never taken for the next batch's. */
+  | { t: 'ack'; id: number; ok: boolean }
   /** A page of a snapshot; `lost`: chord-data has no such snapshot (it stopped), and nothing is put in place. */
   | { t: 'chunk'; stream: number; records: DataRecord[]; done: boolean; lost?: boolean }
   | { t: 'write'; upto: number; records: DataRecord[]; device: DataRecord[] }
@@ -84,11 +87,26 @@ export type FromWorker =
   | { t: 'inspected'; inspection: FolderInspection }
   | { t: 'set-up'; key: Uint8Array; own: OwnSegment }
   | { t: 'unlocked'; key: Uint8Array; generation: number }
-  | { t: 'records'; device: string; segment: number; records: DataRecord[]; cursor: SegmentCursor; refused: number }
+  | { t: 'records'; id: number; device: string; segment: number; records: DataRecord[]; cursor: SegmentCursor; refused: number }
   | { t: 'newer'; device: string }
   /** `seen`: when each computer last wrote here; `wrote`: when each says it made its newest segment read (its own clock). */
   /** `junk`: what the reader remembers of junk, when it changed (chord-data keeps it across launches). */
-  | { t: 'pass-done'; look: FolderLook; seen: Record<string, number>; wrote: Record<string, number>; tooMany: boolean; cluttered: boolean; unfinished: boolean; junk?: [string, string][] }
+  | {
+      t: 'pass-done';
+      look: FolderLook;
+      seen: Record<string, number>;
+      wrote: Record<string, number>;
+      tooMany: boolean;
+      cluttered: boolean;
+      unfinished: boolean;
+      /** Computers whose folders hold more than a pass looks through. */
+      blocked: string[];
+      /** A step wasn't merged (or its answer never came): the pass stopped there. */
+      failed?: boolean;
+      junk?: [string, string][];
+    }
+  /** This computer's own segment isn't as it left it: another copy of the profile writes to it. */
+  | { t: 'own-changed' }
   | { t: 'pull'; stream: number }
   | { t: 'written'; upto: number; own: OwnSegment; frames: number; bytes: number }
   | { t: 'snapshotted'; own: OwnSegment }
@@ -113,6 +131,8 @@ const POLL_MS = 5 * 60_000;
 const SETTLE_MS = 1000;
 /** A pass that looked into as many segments as it may goes on after this long: never back to back. */
 const NEXT_PASS_MS = 2000;
+/** How long a pass waits for chord-data to say a step is merged: past that the pass stops, and the step is read again later. */
+const ACK_MS = 120_000;
 
 const port = parentPort!;
 const send = (message: FromWorker) => port.postMessage(message);
@@ -138,7 +158,9 @@ let settle: ReturnType<typeof setTimeout> | undefined;
 let reading = false;
 let again = false;
 let next: ReturnType<typeof setTimeout> | undefined;
-let acked: (() => void) | null = null;
+/** The batch of records waiting for its answer, and the last batch's number. */
+let acked: { id: number; resolve(ok: boolean): void } | null = null;
+let batches = 0;
 /** One folder operation at a time: a write never interleaves with a snapshot, a read with a new generation. */
 let chain: Promise<void> = Promise.resolve();
 const serial = (work: () => Promise<void>) => {
@@ -172,6 +194,12 @@ async function* pages(stream: number): AsyncGenerator<DataRecord[]> {
  * Reads every other computer's log from where it got to, each batch answered
  * before the next. When the passphrase changed, this generation's logs are
  * still read first: a computer that changed it says so here before it moves.
+ *
+ * A step's cursor moves on only when chord-data says it's merged (`ack` ok);
+ * one that wasn't, or whose answer doesn't come within ACK_MS, stops the pass
+ * there (`failed`), to be read again later: the serial chain is never held
+ * for ever. First, this computer's own segment is checked to be as it left it
+ * (`ownIntact`): a copy of the profile that stopped writing still finds out.
  */
 async function pass(): Promise<void> {
   const r = running;
@@ -181,13 +209,20 @@ async function pass(): Promise<void> {
     return;
   }
   reading = true;
+  let look: FolderLook = { state: 'missing' };
+  const seen: Record<string, number> = {};
+  const wrote: Record<string, number> = {};
+  const blocked: string[] = [];
+  let tooMany = false;
+  let cluttered = false;
+  let unfinished = false;
+  let failed = false;
   try {
-    const look = await lookAtFolder(r.fs, r.generation, r.key, nodeCrypto);
-    const seen: Record<string, number> = {};
-    const wrote: Record<string, number> = {};
-    let tooMany = false;
-    let cluttered = false;
-    let unfinished = false;
+    look = await lookAtFolder(r.fs, r.generation, r.key, nodeCrypto);
+    if (look.state === 'ok' && r.own && r.own.generation === r.generation && r.own.device === r.device) {
+      const intact = await ownIntact(r.fs, r.own, nodeCrypto);
+      if (intact === 'other' || intact === 'gone') send({ t: 'own-changed' });
+    }
     if (look.state === 'ok' || look.state === 'changed') {
       // The segments of each computer read past their first frame: a computer known to have a real log.
       const known = new Map<string, number[]>();
@@ -210,33 +245,50 @@ async function pass(): Promise<void> {
         else if (event.kind === 'too-many') tooMany = true;
         else if (event.kind === 'unfinished') unfinished = true;
         else if (event.kind === 'cluttered') cluttered = true;
+        else if (event.kind === 'blocked') blocked.push(event.device);
         else {
-          r.cursors.set(cursorKey(event.device, event.segment), event.cursor);
-          await new Promise<void>((resolve) => {
-            acked = resolve;
-            send({ t: 'records', device: event.device, segment: event.segment, records: event.records, cursor: event.cursor, refused: event.refused });
+          const id = ++batches;
+          const merged = await new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => {
+              acked = null;
+              resolve(false);
+            }, ACK_MS);
+            acked = {
+              id,
+              resolve: (ok) => {
+                clearTimeout(timer);
+                resolve(ok);
+              },
+            };
+            send({ t: 'records', id, device: event.device, segment: event.segment, records: event.records, cursor: event.cursor, refused: event.refused });
           });
+          if (!merged) {
+            failed = true;
+            break;
+          }
+          r.cursors.set(cursorKey(event.device, event.segment), event.cursor);
         }
       }
     }
-    const junk = r.memory.dirty ? [...r.memory.junk] : undefined;
-    r.memory.dirty = false;
-    send({ t: 'pass-done', look, seen, wrote, tooMany, cluttered, unfinished, ...(junk ? { junk } : {}) });
-    // More to look through: the next pass goes on from there, a little later, never straight after. A folder full of
-    // junk is looked through at the usual times only.
-    if (unfinished && !cluttered && running === r) {
-      clearTimeout(next);
-      next = setTimeout(() => void serial(pass), NEXT_PASS_MS);
-    }
   } catch (error) {
     console.error('Sync couldn’t read the folder:', error);
-    send({ t: 'pass-done', look: { state: 'missing' }, seen: {}, wrote: {}, tooMany: false, cluttered: false, unfinished: false });
+    failed = true;
   } finally {
     reading = false;
-    if (again && running === r) {
-      again = false;
-      void serial(pass);
-    }
+  }
+  if (running !== r) return;
+  const junk = r.memory.dirty ? [...r.memory.junk] : undefined;
+  r.memory.dirty = false;
+  send({ t: 'pass-done', look, seen, wrote, tooMany, cluttered, unfinished, blocked, ...(failed ? { failed } : {}), ...(junk ? { junk } : {}) });
+  // More to look through: the next pass goes on from there, a little later, never straight after. A folder full of
+  // junk is looked through at the usual times only; a pass that failed is tried again by chord-data, later and later.
+  if (unfinished && !cluttered && !failed) {
+    clearTimeout(next);
+    next = setTimeout(() => void serial(pass), NEXT_PASS_MS);
+  }
+  if (again) {
+    again = false;
+    void serial(pass);
   }
 }
 
@@ -440,9 +492,10 @@ port.on('message', (message: ToWorker) => {
     database = null;
   }
   if (message.t === 'ack') {
-    const resolve = acked;
+    if (acked?.id !== message.id) return;
+    const { resolve } = acked;
     acked = null;
-    resolve?.();
+    resolve(message.ok);
     return;
   }
   if (message.t === 'chunk') {

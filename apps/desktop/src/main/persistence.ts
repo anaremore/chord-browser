@@ -32,6 +32,12 @@ import { MessageChannelMain, utilityProcess, type MessagePortMain, type UtilityP
 const FLUSH_MS = 250;
 /** Entities per write past which a flush goes in several, each a transaction of a few milliseconds. */
 const WRITE_CHUNK = 100;
+/**
+ * Fewer when they're what another computer changed: each also marks the thing
+ * applied in sync's copy, so 100 took up to 9 ms, and a search that came in
+ * behind one, and behind a merged slice, waited for both.
+ */
+const SYNC_WRITE_CHUNK = 50;
 const CLOSE_TIMEOUT_MS = 2000;
 const MAX_RESTARTS = 3;
 
@@ -327,7 +333,8 @@ export class Persistence {
     this.chain = this.chain.then(async () => {
       while (this.pending.size > 0 || this.events.length > 0) {
         let ops = [...this.pending.values()];
-        if (ops.length > WRITE_CHUNK) ops = [...ops.filter((op) => op.k === 'chord'), ...ops.filter((op) => op.k !== 'chord')].slice(0, WRITE_CHUNK);
+        const chunk = ops.some((op) => op.sync) ? SYNC_WRITE_CHUNK : WRITE_CHUNK;
+        if (ops.length > chunk) ops = [...ops.filter((op) => op.k === 'chord'), ...ops.filter((op) => op.k !== 'chord')].slice(0, chunk);
         for (const op of ops) this.pending.delete(opKey(op));
         this.inFlight = ops;
         this.inFlightEvents = this.events;

@@ -172,6 +172,8 @@ export type SyncRequest =
   | { type: 'sync.keyBlob'; blob: string | null }
   /** How long sync's steps took on chord-data's thread (development builds' test hooks: perf.spec.ts). */
   | { type: 'sync.timings' }
+  /** What's merged but not applied here (a quit or a crash during a pass or an apply, or an apply that failed), pushed again. */
+  | { type: 'sync.reconcile' }
   /** The folder moved: this one, if it's this sync's (its generation opens with this computer's key). */
   | { type: 'sync.relocate'; folder: string }
   /** A lost passphrase (S15 §6, *Start over*): the next generation under a new one; the other computers pause until they have it. */

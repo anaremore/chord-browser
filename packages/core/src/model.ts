@@ -664,6 +664,10 @@ export interface DeletedChord {
   deletedAt: number;
   /** What moved out of it to another chord's Today as it went (sync, S15 §13), as it was: Undo puts it back. */
   moved?: SidebarNode[];
+  /** Sync's: which entry it is, for the toast that offers its Undo. */
+  id?: string;
+  /** Sync took some of its pinned tabs and folders away, not the chord (another computer deleted them): Undo puts them back in it. */
+  nodesOnly?: boolean;
 }
 
 export const emptyState = (): State => ({

@@ -17,7 +17,7 @@ parentPort.on('message', (message) => {
       device = message.device;
       return;
     case 'read':
-      parentPort.postMessage({ t: 'pass-done', look: { state: 'ok' }, seen: {}, wrote: {}, tooMany: false, cluttered: false, unfinished: false });
+      parentPort.postMessage({ t: 'pass-done', look: { state: 'ok' }, seen: {}, wrote: {}, tooMany: false, cluttered: false, unfinished: false, blocked: [] });
       return;
     case 'unlock':
       parentPort.postMessage({ t: 'unlocked', key: new Uint8Array(32).fill(7), generation: 1 });

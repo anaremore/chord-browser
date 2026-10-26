@@ -334,11 +334,13 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
   };
   const pending = view.pendingUndo;
   const self = view.computers.find((c) => c.self);
-  const asking = view.state === 'locked' || (view.state === 'problem' && view.problem === 'changed');
+  // Just after launch, the key kept here is still being read: nothing asks for the passphrase yet.
+  const locked = view.state === 'locked' && !view.opening;
+  const asking = locked || (view.state === 'problem' && view.problem === 'changed');
   return (
     <div className={styles.group}>
       <Row label="Sync" description={onText(view, now)} control={null} />
-      {view.state === 'locked' && !startingOver && <PassphraseField text="Sync is paused. Enter your passphrase." button="Unlock" problem={problem} onSubmit={unlock} />}
+      {locked && !startingOver && <PassphraseField text="Sync is paused. Enter your passphrase." button="Unlock" problem={problem} onSubmit={unlock} />}
       {view.state === 'problem' && view.problem === 'changed' && !startingOver && (
         <PassphraseField
           text={
@@ -368,6 +370,11 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
           <ProblemCard text={`Chord couldn’t write to the sync folder. It tries again every few minutes; ${view.pending > 0 ? `${plural(view.pending, 'change')} wait here` : 'your changes wait here'}.`} />
         </div>
       )}
+      {view.state === 'problem' && view.problem === 'unreadable' && (
+        <div className={local.actions}>
+          <ProblemCard text="Chord couldn’t take in changes from the sync folder. It tries again in a few minutes; nothing’s lost meanwhile." />
+        </div>
+      )}
       {view.state === 'problem' && view.problem === 'copies' && (
         <div className={local.actions}>
           <ProblemCard text="Another computer keeps writing to the sync folder as this one, so sync stopped writing here. Your changes wait. Turn sync off and on again on this computer." action={{ label: 'Turn off', run: () => void api.sync.off() }} />
@@ -391,6 +398,9 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
       {view.tooMany && <p className={local.note}>More than 64 computers sync through this folder. Chord reads 64 of them; remove the ones you don’t use.</p>}
       {view.cluttered && (
         <p className={local.note}>The sync folder holds files Chord doesn’t recognise, so it stops looking there for computers it doesn’t know yet. Remove them, or start sync again in a new folder.</p>
+      )}
+      {view.blocked.length > 0 && (
+        <p className={local.note}>{`Changes from ${view.blocked.slice(0, 3).join(', ')} are slow to come: ${view.blocked.length === 1 ? 'its folder holds' : 'their folders hold'} files Chord doesn’t recognise.`}</p>
       )}
       {view.stuck.length > 0 && <p className={local.note}>{`Another computer’s clock is set far ahead, so some changes here can’t sync: ${view.stuck.slice(0, 3).join(', ')}${view.stuck.length > 3 ? ', and more' : ''}.`}</p>}
       <ul className={local.computers} aria-label="Computers that sync">

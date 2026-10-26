@@ -342,7 +342,7 @@ export function localChanges(merged: SyncThing | undefined, before: SyncValues |
  * couldn't write and tries again (`unwritable`), or another computer keeps
  * writing as this one (`copies`).
  */
-export type SyncProblem = 'missing' | 'changed' | 'newer' | 'removed' | 'conflict' | 'unwritable' | 'copies';
+export type SyncProblem = 'missing' | 'changed' | 'newer' | 'removed' | 'conflict' | 'unwritable' | 'copies' | 'unreadable';
 
 export interface SyncComputer {
   id: string;
@@ -388,11 +388,13 @@ export interface SyncStatus {
   cluttered: boolean;
   /** Things changes made here couldn't win (another computer's stamp is the very last there can be), as Settings names them. */
   stuck: string[];
+  /** Computers whose folders hold more junk than a pass looks through: their changes may be slow to come. */
+  blocked: string[];
   /** While choosing: this computer's chords, and the synced setup's. */
   choosing: { here: number; synced: number } | null;
 }
 
-export const SYNC_OFF: SyncStatus = { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, cluttered: false, stuck: [], choosing: null };
+export const SYNC_OFF: SyncStatus = { state: 'off', problem: null, folder: null, computers: [], lastChange: null, pending: 0, ahead: [], changedBy: null, removedAt: null, capped: 0, refused: 0, tooMany: false, cluttered: false, stuck: [], blocked: [], choosing: null };
 
 /** A clock more than this far ahead of this computer's is named in Settings (S15 §4). */
 export const CLOCK_AHEAD_MS = 5 * 60_000;

@@ -1554,7 +1554,11 @@ interface SyncTimings {
   plan: number[];
   /** Pages of a snapshot, read for the worker as it writes them. */
   page: number[];
+  /** Sync's other steps on chord-data's thread, by name. */
+  steps: { what: string; ms: number }[];
 }
+/** The slowest of sync's other steps on chord-data's thread: what they were, and how long. */
+const slowest = (steps: { what: string; ms: number }[], n = 3) => [...steps].sort((a, b) => b.ms - a.ms).slice(0, n).map((s) => `${s.what} ${round(s.ms)}`);
 const syncHook = <T>(app: ElectronApplication, name: string) => app.evaluate((_electron, hook) => (globalThis as unknown as { chordTestHooks: Record<string, () => Promise<unknown>> }).chordTestHooks[hook]!(), name) as Promise<T>;
 const SYNC_PASSPHRASE = 'harbor lantern quietly orbit maple';
 /** scrypt at its smallest for a folder the test writes itself: the cost measured is sync's, not the key's. */
@@ -1835,7 +1839,7 @@ test('sync: keystrokes during a large merge', async () => {
     const joinMerges = before.merge;
     const merges = after.merge.slice(before.merge.length);
     for (const [label, main, extra] of [
-      ['while joining', joining, { joinMs: round(joinMs), mergeSliceMs: { median: round(median(joinMerges)), worst: round(max(joinMerges)), slices: joinMerges.length }, planMs: { worst: round(max(before.plan)) }, writeMs: { worst: round(max(before.write)) }, snapshotPageMs: { worst: round(max(before.page)), pages: before.page.length } }],
+      ['while joining', joining, { joinMs: round(joinMs), mergeSliceMs: { median: round(median(joinMerges)), worst: round(max(joinMerges)), slices: joinMerges.length }, planMs: { worst: round(max(before.plan)) }, writeMs: { worst: round(max(before.write)) }, snapshotPageMs: { worst: round(max(before.page)), pages: before.page.length }, otherStepsMs: slowest(before.steps) }],
       [
         'during frames of 300 changes',
         during,
@@ -1847,6 +1851,7 @@ test('sync: keystrokes during a large merge', async () => {
           // chord-data's other work for each frame: what changed, read back for main (its pushes); main's writes of what it applied.
           planMs: { median: round(median(after.plan.slice(before.plan.length))), worst: round(max(after.plan.slice(before.plan.length))) },
           writeMs: { median: round(median(after.write.slice(before.write.length))), worst: round(max(after.write.slice(before.write.length))) },
+          otherStepsMs: slowest(after.steps.slice(before.steps.length)),
         },
       ],
     ] as const) {
