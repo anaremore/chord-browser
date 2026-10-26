@@ -44,6 +44,7 @@ import {
   type ImportOverview,
   type ImportTarget,
   type ImportedCounts,
+  type MergeCapped,
   type MergeCounts,
   type ReaderArticle,
   type SettingChange,
@@ -1206,7 +1207,7 @@ export interface FileImportPreview {
   /** When it was exported (ISO 8601), and by which Chord. */
   created: string;
   app: string;
-  /** Only a first-run chord here: everything in the file comes in, and Settings from the file starts on. */
+  /** A clearly fresh Chord here (core's planMerge): everything in the file comes in, and Settings from the file starts on. */
   newProfile: boolean;
   /** Setup that's new, and newer than yours; everything else is here already. */
   counts: { new: MergeCounts; newer: MergeCounts };
@@ -1218,6 +1219,8 @@ export interface FileImportPreview {
   settings: SettingChange[];
   /** Things from a newer Chord, passed over. */
   skipped: number;
+  /** New chords, tabs and folders past what one import brings (core's IMPORT_LIMITS), left out; folders nested too deep, moved up. */
+  capped: MergeCapped;
   /** Part of the file is damaged or cut short: what's counted is what could be read. */
   damaged: boolean;
 }

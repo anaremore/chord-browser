@@ -28,6 +28,18 @@ export function pagesHere(sql: Sql): (url: string) => boolean {
   };
 }
 
+/**
+ * How many pages of history and Duet chats are here, each counted no further
+ * than `upto`: what says whether this is a fresh Chord (core's planMerge).
+ */
+export function amountsHere(sql: Sql, upto: number): { pages: number; chats: number } {
+  const count = (statement: StatementSync, ...params: (string | number)[]) => Number((statement.get(...params) as { n: number }).n);
+  return {
+    pages: count(sql('SELECT COUNT(*) AS n FROM (SELECT 1 FROM history_url WHERE profile_id = ? LIMIT ?)'), DEFAULT_PROFILE, upto),
+    chats: count(sql('SELECT COUNT(*) AS n FROM (SELECT 1 FROM duet_thread LIMIT ?)'), upto),
+  };
+}
+
 /** The Duet chats here already, by id. */
 export function chatsHere(sql: Sql): Set<string> {
   return new Set((sql('SELECT id FROM duet_thread').all() as { id: string }[]).map((r) => r.id));

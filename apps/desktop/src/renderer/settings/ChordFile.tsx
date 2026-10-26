@@ -7,7 +7,7 @@
  * one Undo takes it all back. Main reads the file in a process of its own;
  * this page only says how it's going.
  */
-import { importedText, type MergeCounts } from '@chord/core';
+import { IMPORT_LIMITS, importedText, type MergeCapped, type MergeCounts } from '@chord/core';
 import type { FileImportChoices, FileImportPreview, FileImportProblem, FileImportProgress } from '@chord/ipc';
 import { useEffect, useId, useRef, useState } from 'react';
 import { plural, ProblemCard, ProgressLine } from '../shared/ImportPanel';
@@ -43,6 +43,25 @@ export function whatComesIn(preview: FileImportPreview, effects: boolean): strin
   if (preview.newProfile && preview.counts.new.chords > 0) parts.push('The chord Chord started with makes way.');
   else parts.push('Everything else is here already.');
   return parts.join(' ');
+}
+
+const numbers = new Intl.NumberFormat('en-US');
+const andList = (items: readonly string[]) => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : (items[0] ?? ''));
+
+/**
+ * The preview's small print on what one import's limits leave out: "3 chords
+ * and 40 tabs will be left out: one import brings at most 100 new chords,
+ * 10,000 tabs and 2,000 folders." Empty when nothing is.
+ */
+export function cappedText(capped: MergeCapped): string {
+  const left = [capped.chords ? plural(capped.chords, 'chord') : '', capped.tabs ? plural(capped.tabs, 'tab') : '', capped.folders ? plural(capped.folders, 'folder') : ''].filter(Boolean);
+  const lines: string[] = [];
+  if (left.length > 0) {
+    const limits = andList([`${numbers.format(IMPORT_LIMITS.chords)} new chords`, `${numbers.format(IMPORT_LIMITS.tabs)} tabs`, `${numbers.format(IMPORT_LIMITS.folders)} folders`]);
+    lines.push(`${andList(left)} will be left out: one import brings at most ${limits}.`);
+  }
+  if (capped.deep > 0) lines.push(`${plural(capped.deep, 'folder')} nested more than ${IMPORT_LIMITS.depth} deep will come in at the top of ${capped.deep === 1 ? 'its' : 'their'} section.`);
+  return lines.join(' ');
 }
 
 /** "From this computer, exported Nov 30, 2026." */
@@ -273,6 +292,7 @@ function Preview({
       <div className={local.actions}>
         <p className={local.small}>Tabs stay unloaded until you open them. Sites you’d allowed to use your camera, microphone or location ask again.</p>
         {preview.skipped > 0 && <p className={local.small}>{`${plural(preview.skipped, 'item')} from a newer Chord will be skipped.`}</p>}
+        {cappedText(preview.capped) && <p className={local.small}>{cappedText(preview.capped)}</p>}
         {progress && <ProgressLine label="Import" share={progress.phase === 'history' && progress.total > 0 ? progress.done / progress.total : progress.phase === 'setup' ? 0 : 1} now={progress.done} max={progress.total} going={!finished && progress.phase !== 'undone'} text={importText(progress)} />}
         {!progress && preview.damaged && (
           <ProblemCard text={`Part of this file is damaged. Chord can bring in what it read${readable ? `: ${readable}` : ''}.`} action={{ label: 'Import what’s readable', run: onStart }} />

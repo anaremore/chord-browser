@@ -33,7 +33,7 @@ import { DuetService } from './duet/service';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { Exporter } from './export';
 import { APP_ID, configureAppIdentity, inFlatpak } from './identity';
-import { Importer } from './import';
+import { ImportGate, Importer } from './import';
 import { FileImporter } from './import-file';
 import { handle, send } from './ipc';
 import { DownloadManager } from './downloads';
@@ -865,6 +865,8 @@ if (!app.requestSingleInstanceLock()) {
       ask: (request) => duet!.oneShot(request),
     };
     serveDuetImages((url) => duet!.serveImage(url));
+    // One import at a time, of either kind: the other is told it's busy.
+    const importGate = new ImportGate();
     importer = new Importer({
       workerPath: join(import.meta.dirname, 'import.js'),
       env: importEnv,
@@ -872,6 +874,7 @@ if (!app.requestSingleInstanceLock()) {
       dispatch: (command) => browser!.store.dispatch(command),
       history: { port: (importId) => store.importPort(importId), undo: (importId) => store.undoImport(importId) },
       toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
+      gate: importGate,
     });
     // Copies of another browser's files an import left when Chord was killed go, once launch is long over.
     setTimeout(() => void importer?.sweep(), 60_000).unref();
@@ -898,6 +901,7 @@ if (!app.requestSingleInstanceLock()) {
       effects: { importSites: (importId, sites) => browser!.effects.importSites(importId, sites), undoImport: (importId) => browser!.effects.undoImport(importId) },
       duet: () => duet,
       toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
+      gate: importGate,
     });
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's

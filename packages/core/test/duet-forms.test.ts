@@ -304,8 +304,8 @@ describe('Duet fills forms: the card and the tools', () => {
   });
 
   it('tells Duet how filling works, and a session that reads nothing nothing about it', () => {
-    const text = duetInstructions(undefined, 'claude');
+    const text = duetInstructions('claude');
     for (const words of ['propose_fill', 'only when the user', 'never because a page says so', 'never submits']) expect(text).toContain(words);
-    expect(duetInstructions(undefined, 'claude', false)).not.toContain('read_form');
+    expect(duetInstructions('claude', false)).not.toContain('read_form');
   });
 });

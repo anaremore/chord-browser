@@ -45,7 +45,8 @@ const session = resume ?? flag('--session-id');
 const instructions = flag('--append-system-prompt-file');
 appendFileSync(
   join(config, 'fake-log.jsonl'),
-  `${JSON.stringify({ resume: resume ?? null, session, summary: instructions ? readFileSync(instructions, 'utf8').includes('summary of it') : false, restricted: args.includes('--restricted'), tools: flag('--tools') })}\n`,
+  // `summary`: whether the instructions carry any of a chat's past (they never should: it comes with a message, as data).
+  `${JSON.stringify({ resume: resume ?? null, session, summary: instructions ? /summary of it|Summarize this page/.test(readFileSync(instructions, 'utf8')) : false, restricted: args.includes('--restricted'), tools: flag('--tools') })}\n`,
 );
 const sessionFile = join(projects, `${session}.jsonl`);
 if (resume && !existsSync(sessionFile)) {
@@ -103,9 +104,17 @@ function jpegSize(data) {
   return 'no size';
 }
 
-async function turn(text, images = []) {
+async function turn(sent, images = []) {
   interrupted = false;
   turns++;
+  // A chat's earlier turns, when this session hasn't seen them, come first as untrusted JSON (one line): kept where the
+  // test can see it, and left out of what the fake answers.
+  let text = sent;
+  if (sent.startsWith('{"trust":"untrusted"')) {
+    const end = sent.indexOf('\n\n');
+    appendFileSync(join(config, 'fake-earlier.jsonl'), `${sent.slice(0, end)}\n`);
+    text = sent.slice(end + 2);
+  }
   const ref = /Attached: tab (t\d+)/.exec(text)?.[1];
   if (images.length) {
     const sizes = images.map((i) => `${i.source.media_type} ${jpegSize(i.source.data)}`).join(', ');

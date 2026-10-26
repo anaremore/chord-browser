@@ -4,27 +4,28 @@
  * of pieces, the records' codecs, the merge planner), and what would reach the
  * store, Effects' sanitizer, chord-data or Duet's images folder is checked.
  */
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
   DATA_HEAD,
   dataHeader,
   effectsParts,
   encryptedWriter,
   imageFromRecord,
+  IMPORT_LIMITS,
   MAX_LINE,
   messageFromRecord,
   openDataFile,
   planMerge,
   plainWriter,
+  setupRecord,
   type DataRecord,
   type DataFileProblem,
-  type DuetImage,
 } from '@chord/core';
 import { nodeCrypto } from '@chord/data/crypto';
-import { writeImage } from '../../src/import-file/images';
+import { IMAGE_FILE, writeImage } from '../../src/import-file/images';
 import { compileEffects } from '../../src/main/effects/sanitize';
 import { fetches, HOSTILE } from './fixtures/hostile-css';
 
@@ -120,9 +121,30 @@ describe('a hostile Chord file', () => {
       id,
       set: { mime, width: 1, height: 1, data: Buffer.from(data).toString('base64'), thumb: thumb ? Buffer.from(thumb).toString('base64') : null, prompt: null },
     });
-    const write = (r: DataRecord, dir = mkdtempSync(join(tmpdir(), 'images-'))) => {
+    const dirs: string[] = [];
+    afterAll(() => {
+      for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    });
+    const folder = () => {
+      const dir = mkdtempSync(join(tmpdir(), 'chord-images-'));
+      dirs.push(dir);
+      return dir;
+    };
+    /** As the import process writes it, with main's side of it: every file named before it's written, and what wasn't after all. */
+    const write = async (r: DataRecord, dir = folder(), before: (files: string[]) => void = () => undefined) => {
+      const named: string[] = [];
+      const unwritten: string[] = [];
       const image = imageFromRecord(r);
-      return { dir, written: image ? writeImage(image, dir) : null };
+      const written = image
+        ? await writeImage(image, dir, {
+            writing: async (files) => {
+              named.push(...files);
+              before(files);
+            },
+            unwritten: (files) => unwritten.push(...files),
+          })
+        : [];
+      return { dir, written, named, unwritten };
     };
 
     it.each<[string, DataRecord]>([
@@ -131,24 +153,53 @@ describe('a hostile Chord file', () => {
       ['a PNG that says it’s a JPEG', record('image/jpeg', PNG)],
       ['an SVG', record('image/svg+xml', Buffer.from('<svg onload="alert(1)"/>'))],
       ['a name that isn’t an image id', record('image/png', PNG, null, '../../settings')],
-    ])('isn’t written: %s', (_what, r) => {
-      const { dir, written } = write(r);
-      expect(written).toBeNull();
+    ])('isn’t written: %s', async (_what, r) => {
+      const { dir, written, named } = await write(r);
+      expect(written).toEqual([]);
+      expect(named).toEqual([]);
       expect(existsSync(join(dir, 'abcdefabcdefabcdefabcdef.png'))).toBe(false);
       expect(existsSync(join(dir, 'abcdefabcdefabcdefabcdef.jpg'))).toBe(false);
     });
 
-    it('is written when it’s really the picture it says, with a thumbnail only if that’s really a JPEG, and never over one that’s here', () => {
-      const { dir, written } = write(record('image/png', PNG, Buffer.from('not a jpeg')));
-      expect(written).toMatchObject<Partial<DuetImage>>({ id: 'abcdefabcdefabcdefabcdef', mime: 'image/png' });
+    it('is written when it’s really the picture it says, with a thumbnail only if that’s really a JPEG; each file named first', async () => {
+      const { dir, written, named } = await write(record('image/png', PNG, Buffer.from('not a jpeg')));
+      expect(written).toEqual(['abcdefabcdefabcdefabcdef.png']);
+      expect(named).toEqual(written);
       expect(readFileSync(join(dir, 'abcdefabcdefabcdefabcdef.png'))).toEqual(PNG);
       expect(existsSync(join(dir, 'abcdefabcdefabcdefabcdef.thumb.jpg'))).toBe(false);
-      writeFileSync(join(dir, 'abcdefabcdefabcdefabcdef.png'), 'mine');
-      expect(write(record('image/png', PNG, JPEG), dir).written).toBeNull();
-      expect(readFileSync(join(dir, 'abcdefabcdefabcdefabcdef.png'), 'utf8')).toBe('mine');
-      const second = write(record('image/png', PNG, JPEG, 'bbbbbbbbbbbbbbbbbbbbbbbb'), dir);
-      expect(second.written).not.toBeNull();
+      const second = await write(record('image/png', PNG, JPEG, 'bbbbbbbbbbbbbbbbbbbbbbbb'), dir);
+      // The picture and its thumbnail apart: Undo deletes exactly these.
+      expect(second.written).toEqual(['bbbbbbbbbbbbbbbbbbbbbbbb.png', 'bbbbbbbbbbbbbbbbbbbbbbbb.thumb.jpg']);
       expect(readFileSync(join(dir, 'bbbbbbbbbbbbbbbbbbbbbbbb.thumb.jpg'))).toEqual(JPEG);
+    });
+
+    it.each([
+      ['its picture, of the same type', 'abcdefabcdefabcdefabcdef.png'],
+      ['its picture, of another type', 'abcdefabcdefabcdefabcdef.jpg'],
+      ['its thumbnail', 'abcdefabcdefabcdefabcdef.thumb.jpg'],
+    ])('isn’t written, nor anything of it, when an image here already has its id: %s', async (_what, mine) => {
+      const dir = folder();
+      writeFileSync(join(dir, mine), 'mine');
+      const { written, named } = await write(record('image/png', PNG, JPEG), dir);
+      expect(written).toEqual([]);
+      expect(named).toEqual([]);
+      expect(readFileSync(join(dir, mine), 'utf8')).toBe('mine');
+      expect(readdirSync(dir)).toEqual([mine]);
+    });
+
+    it('a file that appears between being named and written is someone else’s: not written over, and said to be unwritten', async () => {
+      const dir = folder();
+      const { written, named, unwritten } = await write(record('image/png', PNG, JPEG), dir, () => writeFileSync(join(dir, 'abcdefabcdefabcdefabcdef.png'), 'theirs'));
+      expect(named).toEqual(['abcdefabcdefabcdefabcdef.png', 'abcdefabcdefabcdefabcdef.thumb.jpg']);
+      expect(written).toEqual([]);
+      expect(unwritten).toEqual(named);
+      expect(readFileSync(join(dir, 'abcdefabcdefabcdefabcdef.png'), 'utf8')).toBe('theirs');
+    });
+
+    it('main deletes only image files it was told of: a name, never a path', () => {
+      for (const ok of ['abcdefabcdefabcdefabcdef.png', 'abcdefabcdefabcdefabcdef.jpg', 'abcdefabcdefabcdefabcdef.webp', 'abcdefabcdefabcdefabcdef.thumb.jpg']) expect(IMAGE_FILE.test(ok)).toBe(true);
+      for (const bad of ['../chord.db', 'abcdefabcdefabcdefabcdef.png/../../x', 'ABCDEFABCDEFABCDEFABCDEF.png', 'abcdef.png', 'abcdefabcdefabcdefabcdef.thumb.png', 'abcdefabcdefabcdefabcdef.svg', 'abcdefabcdefabcdefabcdef.png\n'])
+        expect(IMAGE_FILE.test(bad)).toBe(false);
     });
   });
 
@@ -204,10 +255,21 @@ describe('a hostile Chord file', () => {
     const stream = opened.records()!;
     const records = [...stream.push(bytes.subarray(opened.start)), ...stream.end()];
     expect(stream.problem).toBe('damaged');
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.length).toBeLessThan(chords.length);
+    expect(records.map((r) => r.id)).toContain('c899');
+    // Planned like any file's, within what one import brings.
     const p = plan(records);
-    expect(p.chords.length).toBeGreaterThan(0);
-    expect(p.chords.length).toBeLessThan(chords.length);
-    expect(p.chords.map((c) => c.id)).toContain('c899');
+    expect(p.chords).toHaveLength(Math.min(records.length, IMPORT_LIMITS.chords));
+    expect(p.capped.chords).toBe(records.length - p.chords.length);
+  });
+
+  it('a record’s fields Chord doesn’t read are dropped as it’s read, so a file can’t fill memory with them until the plan', async () => {
+    const padded: DataRecord = { ...chord, set: { ...chord.set, padding: 'x'.repeat(1_000_000), nested: { more: 'y'.repeat(1_000_000) } } };
+    const { records } = await read(file([padded]));
+    const kept = setupRecord(records[0]!, 'linux')!;
+    expect(JSON.stringify(kept).length).toBeLessThan(1000);
+    expect(plan([kept]).chords.map((c) => c.name)).toEqual(['Work']);
   });
 
   it('cut short, it reads what’s there and says so', async () => {

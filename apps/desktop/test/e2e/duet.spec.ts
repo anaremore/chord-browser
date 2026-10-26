@@ -362,7 +362,14 @@ test('Duet: a lost session continues from a summary; after the idle window a fre
     await send(panel, 'hello');
     await expect(panel.getByText('Continued with a summary')).toBeVisible();
     await expect(panel.getByText('Hello from the fake.')).toBeVisible();
-    expect(fakeLog(setup).at(-1)).toMatchObject({ resume: null, summary: true });
+    // The chat so far comes with the message, as untrusted data, never in the instructions: Duet's replies can carry what pages said.
+    expect(fakeLog(setup).at(-1)).toMatchObject({ resume: null, summary: false });
+    const earlier = readFileSync(join(setup.config, 'fake-earlier.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { trust: string; turns: { role: string; text: string }[] });
+    expect(earlier.at(-1)!.trust).toBe('untrusted');
+    expect(earlier.at(-1)!.turns.map((t) => [t.role, t.text.trim()])).toEqual([
+      ['user', 'Summarize this page'],
+      ['duet', 'Here is the gist.'],
+    ]);
   } finally {
     await app.close();
   }

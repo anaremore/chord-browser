@@ -1366,19 +1366,27 @@ interface ImportRun {
   importMs: number;
   undoMs: number;
   pages: number;
+  /** The preview said it was a new profile: a restore. */
+  newProfile: boolean;
 }
 
 /** S15's profile, each launch a fresh one: 50,000 visits on 15,000 pages and a sidebar's worth of Today tabs. */
 const SEEDED = { CHORD_PERF_TABS: String(EXPORT.tabs), CHORD_PERF_VISITS: String(EXPORT.visits), CHORD_PERF_PAGES: String(EXPORT.pages) };
+/**
+ * A new profile: first run's one tab, and no more history than a clearly fresh
+ * Chord has (core's FRESH_PAGES, the home page's with these): enough to search
+ * as you type, though most of what's found arrives with the import.
+ */
+const FRESH = { CHORD_PERF_TABS: '0', CHORD_PERF_VISITS: '15', CHORD_PERF_PAGES: '15' };
 
 /** Settings → Your data, once every seeded visit is written (the Export card counts them). */
-async function yourData(app: ElectronApplication): Promise<{ shell: Page; settings: Page }> {
+async function yourData(app: ElectronApplication, pages = '15,001 pages'): Promise<{ shell: Page; settings: Page }> {
   const shell = await pageWhere(app, isShell);
   await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
   const settings = await pageWhere(app, isSettings);
   await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Your data' }).click();
   await settings.getByRole('button', { name: 'Export…' }).click();
-  await expect(settings.getByText('15,001 pages', { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(settings.getByText(pages, { exact: true })).toBeVisible({ timeout: 60_000 });
   return { shell, settings };
 }
 
@@ -1420,11 +1428,11 @@ for (const into of ['a profile with data', 'a new profile'] as const) {
     test.setTimeout(400_000);
     const file = await fileToImport();
     cpuBusy = await measureCpuBusy();
-    // A new profile is first run's: one tab, but history enough to search as you type.
-    const app = await launch(into === 'a new profile' ? { ...SEEDED, CHORD_PERF_TABS: '0' } : SEEDED);
+    const fresh = into === 'a new profile';
+    const app = await launch(fresh ? FRESH : SEEDED);
     try {
       const overlay = await pageWhere(app, isOverlay);
-      const { shell, settings } = await yourData(app);
+      const { shell, settings } = await yourData(app, fresh ? '16 pages' : '15,001 pages');
       if (into === 'a profile with data') {
         // Something pinned: the profile keeps its chord, and the file's comes in beside it.
         const tab = await shell.evaluate(async () => {
@@ -1448,7 +1456,7 @@ for (const into of ['a profile with data', 'a new profile'] as const) {
               chord: {
                 files: {
                   choose(): Promise<{ ok: boolean; fileId?: string }>;
-                  open(fileId: string, passphrase: null): Promise<{ ok: boolean }>;
+                  open(fileId: string, passphrase: null): Promise<{ ok: true; preview: { newProfile: boolean } } | { ok: false }>;
                   run(fileId: string, choices: Record<string, boolean>): Promise<{ ok: boolean; importId?: string }>;
                   undo(importId: string): Promise<void>;
                   onProgress(listener: (p: Progress) => void): () => void;
@@ -1466,18 +1474,18 @@ for (const into of ['a profile with data', 'a new profile'] as const) {
             });
           const t0 = performance.now();
           const chosen = await api.choose();
-          const opened = chosen.ok ? await api.open(chosen.fileId!, null) : { ok: false };
-          if (!opened.ok) return { phase: 'unread', readMs: 0, importMs: 0, undoMs: 0, pages: 0 };
+          const opened = chosen.ok ? await api.open(chosen.fileId!, null) : { ok: false as const };
+          if (!opened.ok) return { phase: 'unread', readMs: 0, importMs: 0, undoMs: 0, pages: 0, newProfile: false };
           const t1 = performance.now();
           const finished = next(['done', 'failed']);
           const run = await api.run(chosen.fileId!, { history: true, duet: true, effects: true, settings: false });
-          if (!run.ok) return { phase: 'refused', readMs: t1 - t0, importMs: 0, undoMs: 0, pages: 0 };
+          if (!run.ok) return { phase: 'refused', readMs: t1 - t0, importMs: 0, undoMs: 0, pages: 0, newProfile: opened.preview.newProfile };
           const done = await finished;
           const t2 = performance.now();
           const undone = next(['undone']);
           await api.undo(run.importId!);
           await undone;
-          return { phase: done.phase, readMs: t1 - t0, importMs: t2 - t1, undoMs: performance.now() - t2, pages: done.counts.pages };
+          return { phase: done.phase, readMs: t1 - t0, importMs: t2 - t1, undoMs: performance.now() - t2, pages: done.counts.pages, newProfile: opened.preview.newProfile };
         });
 
       // A first pass warms the command bar up; then typing alone, what main does without an import.
@@ -1492,6 +1500,8 @@ for (const into of ['a profile with data', 'a new profile'] as const) {
       });
       expect(runs.length).toBeGreaterThan(0);
       expect(runs.every((r) => r.phase === 'done')).toBe(true);
+      // A restore only into a clearly fresh Chord: every import, since each is undone before the next.
+      expect(runs.map((r) => r.newProfile)).toEqual(runs.map(() => fresh));
       // Every page was here, visited at other times: each one's visits came in.
       expect(runs.map((r) => r.pages)).toEqual(runs.map(() => EXPORT.pages + 1));
       const imports = runs.map((r) => r.importMs);

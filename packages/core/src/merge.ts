@@ -2,16 +2,17 @@
  * Importing a Chord file (docs/decisions/S15-your-data.md §5): this
  * computer's setup and the file's, both as records, merged field by field.
  * The newer stamp wins, so an import adds what's missing and updates what's
- * older, and it never deletes. Into a new profile (its first-run chord and
- * nothing pinned) everything in the file comes in, as a restore, and the
- * first-run chord makes way.
+ * older, and it never deletes. Into a clearly fresh Chord (`isNewProfile`)
+ * everything in the file comes in, as a restore, and the first-run chord
+ * makes way.
  *
  * Everything from a file is untrusted. Each thing is read back through its
  * record's codec (records.ts), which checks it as restore checks saved data;
  * a reference to a chord or folder that isn't anywhere is repaired or the
- * thing is left out; permissions come in as blocks only; a chord's proxy and
- * Settings' come in only with *Settings from the file*; Effects only with
- * their switch, and main's sanitizer checks every stylesheet again.
+ * thing is left out; no more than `IMPORT_LIMITS` comes in; permissions come
+ * in as blocks only; a chord's proxy and Settings' come in only with
+ * *Settings from the file*; Effects only with their switch, and main's
+ * sanitizer checks every stylesheet again.
  *
  * Pure: the import process plans with this, reading this computer's records
  * from chord.db as an export would, and main applies the plan a part at a
@@ -36,7 +37,7 @@ import {
   type SitePermission,
   type SitePermissions,
 } from './model';
-import { proxyLabel, type ProxySettings } from './proxy';
+import { cleanProxy, proxyLabel, sameProxy, type ProxySettings } from './proxy';
 import {
   chordFromRecord,
   favoriteFromRecord,
@@ -52,7 +53,9 @@ import {
   themeFromRecord,
   zoomFromRecord,
   type DataRecord,
+  type PageFacts,
 } from './records';
+import type { ImportedPage } from './import';
 import { restoreSettings } from './restore';
 import type { Platform } from './shortcuts';
 import { compareStamps, type Stamp } from './stamps';
@@ -91,8 +94,12 @@ export interface SettingChange {
 
 /** One part of the plan, for one `data.merge`: things to put, each whole, by id. */
 export interface MergePart {
+  /** Never with a proxy: a chord's own proxy comes only in `proxies`. */
   chords?: Chord[];
-  /** Parents before what's in them, in this part or an earlier one. */
+  /**
+   * Parents before what's in them, in this part or an earlier one; a split
+   * always in the same part as its tabs, so no part leaves one empty.
+   */
   nodes?: SidebarNode[];
   favorites?: Favorite[];
   themes?: CustomTheme[];
@@ -102,13 +109,41 @@ export interface MergePart {
   /** Permissions the file blocks, by origin: never an allow (S15 §5). */
   blocks?: Record<string, SitePermission[]>;
   settings?: SettingsPatch;
+  /**
+   * Chords' own proxies, by chord (null: the proxy for every chord). Only
+   * with *Settings from the file*: a chord's proxy decides where its pages
+   * load, so nothing else in a part changes one.
+   */
+  proxies?: Record<ChordId, ProxySettings | null>;
   /** A new profile's first-run chord, which makes way for the file's: its tabs move to `to`, and it goes (Undo brings it back). */
   makeWay?: { chordId: ChordId; to: ChordId };
 }
 
+/**
+ * The most one import brings, past what any profile has, so a file can't
+ * fill memory or the sidebar: chords, tabs and folders that are new (one
+ * already here is updated whatever the count), in the file's order. A folder
+ * or split nested deeper than `depth` comes in at its section's top level.
+ */
+export const IMPORT_LIMITS = { chords: 100, tabs: 10_000, folders: 2_000, depth: 16 } as const;
+
+/** What the limits left out, or (`deep`) moved to their section's top level: the preview's small print says so. */
+export interface MergeCapped {
+  chords: number;
+  tabs: number;
+  folders: number;
+  deep: number;
+}
+
+/**
+ * History a fresh Chord may have: a few pages looked at before the import.
+ * More, and it's a profile with data (S15 §5).
+ */
+export const FRESH_PAGES = 20;
+
 /** What an import does to the store, and what the preview says of it. */
 export interface MergePlan {
-  /** Only a first-run chord here, and nothing pinned: the file's things all win, as a restore. */
+  /** A clearly fresh Chord (`isNewProfile`): the file's things all win, as a restore. */
   newProfile: boolean;
   counts: { new: MergeCounts; newer: MergeCounts };
   chords: Chord[];
@@ -120,6 +155,8 @@ export interface MergePlan {
   blocks: Record<string, SitePermission[]>;
   /** Null unless *Settings from the file* is on and something changes. */
   settings: SettingsPatch | null;
+  /** Chords' own proxies that change: empty unless *Settings from the file* is on. */
+  proxies: Record<ChordId, ProxySettings | null>;
   /** Every setting the file would change, named, whether the switch is on or not: the preview lists them. */
   changes: SettingChange[];
   /** Sites with Effects that are new or newer, whether their switch is on or not; `effects` holds them only when it's on. */
@@ -132,6 +169,8 @@ export interface MergePlan {
   unreadable: number;
   /** Favorites past the row's limit (48), left out. */
   favoritesFull: number;
+  /** What `IMPORT_LIMITS` left out or moved. */
+  capped: MergeCapped;
   /** The chords there'll be once it's in: a Duet chat whose chord isn't among them goes to the chord you're in. */
   chordIds: ChordId[];
 }
@@ -141,6 +180,12 @@ export interface MergeInput {
   local: readonly DataRecord[];
   /** The file's setup, Today tabs and icons. */
   file: readonly DataRecord[];
+  /**
+   * How much history and how many Duet chats are here (chord.db's, not
+   * setup): a fresh Chord has next to none. Without it, this is a profile
+   * with data.
+   */
+  here?: { pages: number; chats: number };
   choices: MergeChoices;
   platform: Platform;
   now: number;
@@ -231,13 +276,36 @@ function merged(file: Thing, mine: Thing | undefined, won: Map<string, Field>, i
 
 const zero = (): MergeCounts => ({ chords: 0, pinnedTabs: 0, todayTabs: 0, folders: 0, favorites: 0, themes: 0, routes: 0, effects: 0, zoom: 0, blocks: 0 });
 
-/** Only the chord first run made, and nothing pinned, no Favorites, themes, routes or Effects: a profile that counts as new (S15 §5). */
-function isNewProfile(local: Map<string, Thing>): boolean {
-  const chords = ofType(local, 'chord');
-  if (chords.length !== 1) return false;
+/** Settings first run changes: the Safe Browsing notice's answer, and pop-out videos switched off once. */
+const FIRST_RUN_SETTINGS: ReadonlySet<string> = new Set(['safeBrowsing', 'safeBrowsingAsked', 'autoPip']);
+/** Things a fresh Chord has none of: anything of these is something you made or chose. */
+const USED_TYPES: ReadonlySet<string> = new Set(['favorite', 'theme', 'route', 'effects', 'zoom', 'permission', 'folder', 'split']);
+
+/**
+ * A clearly fresh Chord, which a file restores (S15 §5): only the chord first
+ * run made, with no more Today tabs than first run opens (one) and nothing
+ * pinned; nothing of `USED_TYPES`; no Duet chats; at most `FRESH_PAGES` of
+ * history; and every setting at its default but those first run sets. In
+ * doubt (`here` unknown), it's a profile with data: nothing makes way, and
+ * *Settings from the file* starts off.
+ */
+function isNewProfile(local: Map<string, Thing>, here: MergeInput['here'], platform: Platform): boolean {
+  if (!here || here.chats > 0 || here.pages > FRESH_PAGES) return false;
+  if (ofType(local, 'chord').length !== 1) return false;
+  let today = 0;
   for (const thing of local.values()) {
-    if (thing.type === 'favorite' || thing.type === 'theme' || thing.type === 'route' || thing.type === 'effects') return false;
-    if (NODE_TYPES.has(thing.type) && (thing.fields.get('pos')?.value as { section?: unknown } | undefined)?.section === 'pinned') return false;
+    if (USED_TYPES.has(thing.type)) return false;
+    if (thing.type !== 'tab') continue;
+    if ((thing.fields.get('pos')?.value as { section?: unknown } | undefined)?.section !== 'today' || ++today > 1) return false;
+  }
+  const settings = local.get('settings\nsettings');
+  if (!settings) return true;
+  const defaults = defaultFields(platform);
+  for (const [name, field] of settings.fields) {
+    if (FIRST_RUN_SETTINGS.has(name)) continue;
+    // A field Chord has no default for (another system's shortcuts): only an empty one is as first run left it.
+    const fallback = defaults.has(name) ? defaults.get(name) : field.value && typeof field.value === 'object' && Object.keys(field.value).length === 0 ? field.value : null;
+    if (!same(field.value, fallback)) return false;
   }
   return true;
 }
@@ -378,6 +446,66 @@ function settingsMerge(file: Thing, mine: Thing | undefined, restore: boolean, p
   return { patch: patch as SettingsPatch, changes };
 }
 
+/* ---------- What's kept of a file ---------- */
+
+/**
+ * A page's visits that come in from a file: its newest, far past what years
+ * of daily use makes. A line can hold millions; more would be a long write
+ * and a pile of memory, and what's left out is old and counts for next to
+ * nothing in frecency.
+ */
+export const MAX_PAGE_VISITS = 10_000;
+
+/**
+ * A page from a Chord file as history batches take it: its newest
+ * `MAX_PAGE_VISITS` visits, `per` at a time, so no batch (one transaction on
+ * chord-data's thread) is ever bigger, however many a line holds. How often
+ * it was typed goes with the first share only: chord-data adds what's past
+ * its own count once.
+ */
+export function pageShares(page: PageFacts, per: number, max = MAX_PAGE_VISITS): ImportedPage[] {
+  const newest = page.visits.slice(-max);
+  const shares: ImportedPage[] = [];
+  for (let at = 0; at < newest.length; at += per) {
+    shares.push({ url: page.url, title: page.title, visits: newest.slice(at, at + per), typed: [], ...(at === 0 ? { typedCount: page.typed } : {}) });
+  }
+  return shares;
+}
+
+/** The fields each setup record's codec (records.ts) reads, and `deleted`, a tombstone's. */
+const SETUP_FIELDS: Record<string, readonly string[]> = {
+  chord: ['name', 'icon', 'theme', 'rank', 'profile', 'created', 'proxy', 'deleted'],
+  folder: ['pos', 'title', 'collapsed', 'created', 'deleted'],
+  split: ['pos', 'direction', 'sizes', 'created', 'deleted'],
+  tab: ['pos', 'url', 'pinnedUrl', 'title', 'customTitle', 'icon', 'muted', 'created', 'deleted'],
+  favorite: ['url', 'title', 'icon', 'rank', 'created', 'deleted'],
+  theme: ['name', 'stops', 'grain', 'deleted'],
+  route: ['chord', 'created', 'deleted'],
+  effects: ['wet', 'css', 'cssOn', 'hidden', 'presets', 'duet', 'deleted'],
+  icon: ['mime', 'data'],
+  zoom: ['factor', 'deleted'],
+  permission: [...PERMISSIONS, 'deleted'],
+};
+
+const settingNames = new Map<Platform, readonly string[]>();
+
+/**
+ * A file's setup record as an import keeps it until the plan: only the fields
+ * planMerge reads (for `settings`, the settings Chord knows), so nothing else
+ * a file carries stays in memory. Null for a type that isn't setup.
+ */
+export function setupRecord(r: DataRecord, platform: Platform): DataRecord | null {
+  let names = SETUP_FIELDS[r.type];
+  if (r.type === 'settings') {
+    names = settingNames.get(platform);
+    if (!names) settingNames.set(platform, (names = [...defaultFields(platform).keys(), `shortcuts.${shortcutFamily(platform)}`, 'deleted']));
+  }
+  if (!names) return null;
+  const set: Record<string, unknown> = {};
+  for (const name of names) if (Object.hasOwn(r.set, name)) set[name] = r.set[name];
+  return r.at ? { type: r.type, id: r.id, at: r.at, set } : { type: r.type, id: r.id, set };
+}
+
 /* ---------- The plan ---------- */
 
 /** An icon record as a `data:` URL, the way the model keeps a tab's or a Favorite's. */
@@ -390,10 +518,10 @@ function iconUrls(file: Map<string, Thing>): Map<string, string> {
   return out;
 }
 
-export function planMerge({ local: localRecords, file: fileRecords, choices, platform, now, newId }: MergeInput): MergePlan {
+export function planMerge({ local: localRecords, file: fileRecords, here, choices, platform, now, newId }: MergeInput): MergePlan {
   const local = gather(localRecords);
   const file = gather(fileRecords);
-  const newProfile = isNewProfile(local);
+  const newProfile = isNewProfile(local, here, platform);
   const restore = newProfile;
   const counts = { new: zero(), newer: zero() };
   const count = (fresh: boolean, key: keyof MergeCounts) => counts[fresh ? 'new' : 'newer'][key]++;
@@ -408,6 +536,7 @@ export function planMerge({ local: localRecords, file: fileRecords, choices, pla
     zoom: {},
     blocks: {},
     settings: null,
+    proxies: {},
     changes: [],
     effectsSites: [],
     effects: [],
@@ -415,6 +544,7 @@ export function planMerge({ local: localRecords, file: fileRecords, choices, pla
     skipped: 0,
     unreadable: 0,
     favoritesFull: 0,
+    capped: { chords: 0, tabs: 0, folders: 0, deep: 0 },
     chordIds: [],
   };
   for (const thing of file.values()) if (!(RECORD_TYPES as readonly string[]).includes(thing.type)) plan.skipped++;
@@ -423,8 +553,9 @@ export function planMerge({ local: localRecords, file: fileRecords, choices, pla
   const icons = iconUrls(file);
 
   // Chords. One you have keeps its sign-ins (an import never signs a chord out); a new one keeps its own if it had
-  // them, under a profile no chord here uses. A chord's own proxy decides whether its pages load: like settings, it
-  // comes in only with Settings from the file, and is named in the preview either way.
+  // them, under a profile no chord here uses. A chord's own proxy decides where its pages load: like settings, it's
+  // named in the preview either way, and comes in only with Settings from the file, apart (`proxies`), so nothing
+  // else of a chord, nor the proxy as a file holds it (never a password), ever changes the one it has.
   const localChords = ofType(local, 'chord');
   const chordsAfter = new Set(localChords.map((t) => t.id));
   const profilesHere = new Map<string, string>();
@@ -433,18 +564,38 @@ export function planMerge({ local: localRecords, file: fileRecords, choices, pla
     if (typeof profile === 'string' && profile !== DEFAULT_PROFILE) profilesHere.set(profile, t.id);
   }
   const profiles = new Map<string, string>();
+  let newChords = 0;
+  const cappedChords = new Set<string>();
   for (const thing of things('chord')) {
     const mine = mineOf(thing);
     const won = winners(thing, mine, restore);
     if (mine) won.delete('profile');
-    if (won.has('proxy')) {
-      const name = String(won.get('name')?.value ?? mine?.fields.get('name')?.value ?? 'A chord');
-      const describe = (v: unknown) => (v && typeof v === 'object' ? proxyLabel(v as ProxySettings) : 'The proxy for every chord');
-      if (!same(won.get('proxy')!.value, null) || mine) plan.changes.push({ field: `chord.${thing.id}.proxy`, label: `${name}’s own proxy`, from: describe(mine?.fields.get('proxy')?.value ?? null), to: describe(won.get('proxy')!.value) });
-      if (!choices.settings) won.delete('proxy');
+    const proxyWon = won.get('proxy');
+    won.delete('proxy');
+    // Its own proxy needs sign-ins of its own: the ones it has here, or the file's for a new one.
+    const ownSignIns = (mine ?? thing).fields.get('profile')?.value !== DEFAULT_PROFILE;
+    let proxy: { to: ProxySettings | null } | null = null;
+    if (proxyWon && ownSignIns) {
+      const to = proxyWon.value === null ? null : cleanProxy(proxyWon.value);
+      const from = mine ? cleanProxy(mine.fields.get('proxy')?.value) : null;
+      if ((to || proxyWon.value === null) && (to || mine) && !sameProxy(to, from)) {
+        const name = String(won.get('name')?.value ?? mine?.fields.get('name')?.value ?? 'A chord');
+        const describe = (v: ProxySettings | null) => (v ? proxyLabel(v) : 'The proxy for every chord');
+        plan.changes.push({ field: `chord.${thing.id}.proxy`, label: `${name}’s own proxy`, from: describe(from), to: describe(to) });
+        if (choices.settings) proxy = { to };
+      }
     }
-    if (mine && won.size === 0) continue;
+    if (!mine && newChords >= IMPORT_LIMITS.chords) {
+      plan.capped.chords++;
+      cappedChords.add(thing.id);
+      continue;
+    }
+    if (mine && won.size === 0) {
+      if (proxy) plan.proxies[thing.id] = proxy.to;
+      continue;
+    }
     const record = merged(thing, mine, won);
+    delete record.set['proxy'];
     const profile = record.set['profile'];
     if (!mine && typeof profile === 'string' && profile !== DEFAULT_PROFILE) {
       const owner = profilesHere.get(profile);
@@ -460,6 +611,8 @@ export function planMerge({ local: localRecords, file: fileRecords, choices, pla
     }
     plan.chords.push(chord);
     chordsAfter.add(chord.id);
+    if (!mine) newChords++;
+    if (proxy && chord.profileId !== DEFAULT_PROFILE) plan.proxies[chord.id] = proxy.to;
     count(!mine, 'chords');
   }
   // The first-run chord makes way for the file's: its tabs go to the first of them, and it goes (Undo brings it back).
@@ -483,6 +636,10 @@ export function planMerge({ local: localRecords, file: fileRecords, choices, pla
     const won = winners(thing, mine, restore);
     if (mine && won.size === 0) continue;
     const read = nodeFromRecord(merged(thing, mine, won), now);
+    if (read && cappedChords.has(read.node.chordId)) {
+      plan.capped[read.node.kind === 'folder' ? 'folders' : 'tabs']++;
+      continue;
+    }
     if (!read || !chordsAfter.has(read.node.chordId)) {
       plan.unreadable++;
       continue;
@@ -491,6 +648,17 @@ export function planMerge({ local: localRecords, file: fileRecords, choices, pla
     // A tab's icon comes from the file's icon records; one whose icon didn't change keeps the one it has (null).
     if (node.kind === 'tab') node.favicon = mine && !won.has('icon') ? null : read.icon ? (icons.get(read.icon) ?? null) : null;
     planned.set(node.id, { node, isNew: !mine });
+  }
+  // What's new, within the limits, in the file's order: folders, then splits and tabs (a split counts as one of its tabs).
+  const room = { tabs: IMPORT_LIMITS.tabs, folders: IMPORT_LIMITS.folders };
+  for (const [id, { node, isNew }] of planned) {
+    if (!isNew) continue;
+    const kind = node.kind === 'folder' ? 'folders' : 'tabs';
+    if (room[kind] > 0) room[kind]--;
+    else {
+      planned.delete(id);
+      plan.capped[kind]++;
+    }
   }
   const localPos = (id: string) => localNodes.get(id)?.fields.get('pos')?.value as { chord?: string; section?: string; parent?: string | null } | undefined;
   const kindOf = (id: string) => planned.get(id)?.node.kind ?? localNodes.get(id)?.type;
@@ -520,18 +688,48 @@ export function planMerge({ local: localRecords, file: fileRecords, choices, pla
   for (const { node } of planned.values()) {
     if (node.kind === 'tab') node.pinnedUrl = node.section === 'pinned' ? (node.pinnedUrl ?? node.url) : null;
   }
-  // Parents before what's in them, so any prefix of the list is whole trees.
+  // Depth first, parents before what's in them: any prefix of the list is whole trees, and a split's tabs follow it
+  // at once (mergeParts keeps them in its part). A folder or split nested deeper than the limit comes in at its
+  // section's top level, with what's in it.
+  const inside = new Map<NodeId, NodeId[]>();
+  const tops: NodeId[] = [];
+  for (const [id, { node }] of planned) {
+    if (node.parentId === null || !planned.has(node.parentId)) tops.push(id);
+    else if (inside.has(node.parentId)) inside.get(node.parentId)!.push(id);
+    else inside.set(node.parentId, [id]);
+  }
+  const ancestors = (parentId: NodeId | null): number => {
+    let n = 0;
+    for (let up = parentId; up !== null && n <= IMPORT_LIMITS.depth; up = parentOf(up)) n++;
+    return n;
+  };
   const placed = new Set<NodeId>();
-  let waiting = [...planned.values()];
-  while (waiting.length > 0) {
-    const ready = waiting.filter(({ node }) => node.parentId === null || !planned.has(node.parentId) || placed.has(node.parentId));
-    for (const entry of ready) {
+  const place = (id: NodeId, depth: number) => {
+    const stack: [NodeId, number][] = [[id, depth]];
+    while (stack.length > 0) {
+      const [next, deep] = stack.pop()!;
+      if (placed.has(next)) continue;
+      const entry = planned.get(next)!;
+      let level = deep;
+      if (entry.node.kind !== 'tab' && level >= IMPORT_LIMITS.depth) {
+        entry.node.parentId = null;
+        level = 0;
+        plan.capped.deep++;
+      }
       plan.nodes.push(entry.node);
-      placed.add(entry.node.id);
+      placed.add(next);
       if (entry.node.kind === 'folder') count(entry.isNew, 'folders');
       else if (entry.node.kind === 'tab') count(entry.isNew, entry.node.section === 'pinned' ? 'pinnedTabs' : 'todayTabs');
+      const children = inside.get(next) ?? [];
+      for (let i = children.length - 1; i >= 0; i--) stack.push([children[i]!, level + 1]);
     }
-    waiting = waiting.filter(({ node }) => !placed.has(node.id));
+  };
+  for (const id of tops) place(id, ancestors(planned.get(id)!.node.parentId));
+  // Nothing is left over once folders inside each other are undone (above); were anything, it would come in at the top level.
+  for (const [id, { node }] of planned) {
+    if (placed.has(id)) continue;
+    node.parentId = null;
+    place(id, 0);
   }
 
   // Favorites: one with an address you have is that Favorite, so a file never doubles one.
@@ -646,8 +844,10 @@ export const MERGE_PART = 200;
 
 /**
  * The plan as `data.merge` parts: chords first, then folders and tabs (parents
- * first), then the rest; Settings and the first-run chord making way come last,
- * once everything they point at is in.
+ * first, a split with its tabs in one part: the store settles splits after
+ * every part, and one without its tabs would go), then the rest; Settings,
+ * chords' own proxies and the first-run chord making way come last, once
+ * everything they point at is in.
  */
 export function mergeParts(plan: MergePlan, size = MERGE_PART): MergePart[] {
   const parts: MergePart[] = [];
@@ -674,13 +874,27 @@ export function mergeParts(plan: MergePlan, size = MERGE_PART): MergePart[] {
     }
   };
   add('chords', plan.chords);
-  add('nodes', plan.nodes);
+  // A split's tabs follow it in the plan (depth first): together, they start a part of their own if they don't fit.
+  for (let i = 0; i < plan.nodes.length; ) {
+    const first = plan.nodes[i]!;
+    let end = i + 1;
+    if (first.kind === 'split') while (end < plan.nodes.length && plan.nodes[end]!.parentId === first.id) end++;
+    if (things > 0 && things + (end - i) > size) {
+      parts.push(part);
+      part = {};
+      things = 0;
+    }
+    (part.nodes ??= []).push(...plan.nodes.slice(i, end));
+    things += end - i;
+    i = end;
+  }
   add('favorites', plan.favorites);
   add('themes', plan.themes);
   add('routes', plan.routes);
   map('zoom', plan.zoom);
   map('blocks', plan.blocks);
   if (plan.settings) part.settings = plan.settings;
+  if (Object.keys(plan.proxies).length > 0) part.proxies = plan.proxies;
   if (plan.makeWay) part.makeWay = plan.makeWay;
   if (Object.keys(part).length > 0) parts.push(part);
   return parts;

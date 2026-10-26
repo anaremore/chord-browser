@@ -59,6 +59,8 @@ const CHOICE_LIFETIME_MS = 90 * 86_400_000;
 const ROUNDING = 1e-9;
 /** History pages an import's Undo puts back per transaction: a few milliseconds' work, so searches get in between. */
 const UNDO_SLICE = 100;
+/** Visit ids an import's Undo takes back per transaction, as many as a Chord file's batch writes. */
+const UNDO_VISITS = 1000;
 /** Pages of write-ahead log before SQLite checkpoints: its own default, and while an import writes (`importing`). */
 const DEFAULT_CHECKPOINT = 1000;
 const IMPORT_CHECKPOINT = 250;
@@ -95,6 +97,8 @@ export class ChordDatabase {
   private readonly undoneImports = new Set<string>();
   /** Imports writing now (their batches, or their Undo): while any is, checkpoints come smaller (`importing`). */
   private writingImports = 0;
+  /** The largest history_visit id an import has had this session: the next import's visits go above it (`importTables`). */
+  private importedUpto = 0;
 
   constructor(readonly file: string) {
     this.db = new DatabaseSync(file);
@@ -450,16 +454,20 @@ export class ChordDatabase {
   /**
    * What imports changed in history, for their Undo: temporary tables, which
    * last as long as this connection (an import's Undo is offered for a moment,
-   * never after a restart). `import_batch` holds the history_visit ids an
-   * import's visits fall between (imports run one at a time, so the ranges
-   * never overlap); `import_page` each page it touched, what it added there
+   * never after a restart). `import_range` holds, for each of an import's
+   * batches, the history_visit ids its visits took: a batch is one
+   * transaction on this one connection, and its visits take the ids just
+   * above both the largest there is and the largest any import has had
+   * (`importedUpto`), so no other visit, Chord's or another import's, is ever
+   * among them, even with two imports at once or one's Undo freeing ids
+   * meanwhile; `import_page` each page it touched, what it added there
    * (visits, typed visits, and its frecency as a decay day), and the page's
    * title and last visit before.
    */
   private importTables(): void {
     this.db.exec(`
-      CREATE TEMP TABLE IF NOT EXISTS import_batch (
-        import_id TEXT PRIMARY KEY, visit_floor INTEGER NOT NULL, visit_ceiling INTEGER NOT NULL
+      CREATE TEMP TABLE IF NOT EXISTS import_range (
+        import_id TEXT NOT NULL, above INTEGER NOT NULL, upto INTEGER NOT NULL, PRIMARY KEY (import_id, upto)
       ) STRICT;
       CREATE TEMP TABLE IF NOT EXISTS import_page (
         import_id TEXT NOT NULL, url_id INTEGER NOT NULL, created INTEGER NOT NULL,
@@ -478,7 +486,7 @@ export class ChordDatabase {
    * frecency as if Chord had seen it, but a visit Chord has already (the same
    * page at the same moment) isn't added again, so importing a file twice adds
    * nothing (S15 §5). A page Chord knows keeps its own title. Returns the pages
-   * that gained visits.
+   * that gained visits and hadn't from this import before.
    */
   importHistory(importId: string, pages: readonly ImportedPage[], now = Date.now()): number {
     // A batch still on its way when the import was undone stays out.
@@ -486,7 +494,9 @@ export class ChordDatabase {
     this.importTables();
     let added = 0;
     this.transaction(() => {
-      this.sql('INSERT OR IGNORE INTO import_batch (import_id, visit_floor, visit_ceiling) SELECT ?, COALESCE(MAX(id), 0), COALESCE(MAX(id), 0) FROM history_visit').run(importId);
+      // Its visits take ids above any visit's, and any an import has had: never one an Undo has just freed.
+      const above = Math.max(num((this.sql('SELECT COALESCE(MAX(id), 0) AS id FROM history_visit').get() as Row)['id']), this.importedUpto);
+      let upto = above;
       for (const page of pages) {
         const place = placeKey(page.url);
         if (!place) continue;
@@ -537,10 +547,12 @@ export class ChordDatabase {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(importId, urlId, created ? 1 : 0, visits.length, typedAdded, decay, row ? num(row['last_visit_at']) : 0, titleBefore, row && !titleBefore && page.title ? page.title : null);
         }
-        for (const at of visits) this.sql(`INSERT INTO history_visit (url_id, visited_at, transition) VALUES (?, ?, 'import')`).run(urlId, at);
-        added++;
+        for (const at of visits) this.sql(`INSERT INTO history_visit (id, url_id, visited_at, transition) VALUES (?, ?, ?, 'import')`).run(++upto, urlId, at);
+        // A page counts once however many batches (or addresses) bring it visits.
+        if (!noted) added++;
       }
-      this.sql('UPDATE import_batch SET visit_ceiling = (SELECT COALESCE(MAX(id), 0) FROM history_visit) WHERE import_id = ?').run(importId);
+      if (upto > above) this.sql('INSERT INTO import_range (import_id, above, upto) VALUES (?, ?, ?)').run(importId, above, upto);
+      this.importedUpto = Math.max(this.importedUpto, upto);
     });
     return added;
   }
@@ -549,9 +561,12 @@ export class ChordDatabase {
    * One batch of a Chord file's Duet chats (S15 §5), all or nothing: threads
    * and messages are added by id, never replaced, so what's here stays as it
    * is and a file imported twice adds nothing. A message goes only into a
-   * thread that's here. Each thread comes marked as imported, with no
-   * provider session: nothing is sent anywhere until you write in it. Returns
-   * the threads and the number of messages it added.
+   * thread this import added: never into a chat that was here, which a file
+   * could otherwise fill with turns you never had (a chat continued on
+   * another computer gains its new turns by sync, not by import). Each thread
+   * comes marked as imported, with no provider session: nothing is sent
+   * anywhere until you write in it. Returns the threads and the number of
+   * messages it added.
    */
   importDuet(importId: string, threads: readonly DuetThread[], messages: readonly DuetMessage[]): { threads: string[]; messages: number } {
     const added = { threads: [] as string[], messages: 0 };
@@ -568,7 +583,7 @@ export class ChordDatabase {
         added.threads.push(t.id);
       }
       for (const m of messages) {
-        if (!this.sql('SELECT 1 FROM duet_thread WHERE id = ?').get(m.threadId)) continue;
+        if (!this.sql('SELECT 1 FROM import_thread WHERE import_id = ? AND thread_id = ?').get(importId, m.threadId)) continue;
         const result = this.sql('INSERT INTO duet_message (id, thread_id, role, text, body, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING').run(
           m.id,
           m.threadId,
@@ -606,8 +621,8 @@ export class ChordDatabase {
    * One slice of an import's Undo, in a transaction of its own, so chord-data
    * answers the command bar's searches between slices (a big import's Undo is
    * thousands of pages; chord-data's worker yields between them): its chats
-   * first, then `pages` of the history pages it touched at a time. `done` once
-   * nothing of it is left.
+   * first, then its visits a batch's ids at a time, then `pages` of the
+   * history pages it touched at a time. `done` once nothing of it is left.
    */
   undoImportSlice(importId: string, now = Date.now(), pages = UNDO_SLICE): { done: boolean; threads: DuetThread[] } {
     this.undoneImports.add(importId);
@@ -622,8 +637,21 @@ export class ChordDatabase {
       });
       return { done: false, threads };
     }
-    const batch = this.sql('SELECT visit_floor, visit_ceiling FROM import_batch WHERE import_id = ?').get(importId) as Row | undefined;
-    if (!batch) return { done: true, threads: [] };
+    // Its visits, `UNDO_VISITS` ids at a time: the ids its batches took, read straight off the table's key. No other
+    // visit is among them (`importTables`); an `import` visit, so never one of Chord's own should a later Chord have
+    // reused an id.
+    const range = this.sql('SELECT above, upto FROM import_range WHERE import_id = ? ORDER BY upto LIMIT 1').get(importId) as Row | undefined;
+    if (range) {
+      const upto = num(range['upto']);
+      const to = Math.min(upto, num(range['above']) + UNDO_VISITS);
+      this.transaction(() => {
+        this.sql(`DELETE FROM history_visit WHERE id > ? AND id <= ? AND transition = 'import'`).run(num(range['above']), to);
+        if (to >= upto) this.sql('DELETE FROM import_range WHERE import_id = ? AND upto = ?').run(importId, upto);
+        else this.sql('UPDATE import_range SET above = ? WHERE import_id = ? AND upto = ?').run(to, importId, upto);
+      });
+      return { done: false, threads: [] };
+    }
+    if (!this.sql('SELECT 1 FROM import_page WHERE import_id = ? LIMIT 1').get(importId)) return { done: true, threads: [] };
     let done = true;
     this.transaction(() => {
       const touched = this.sql('SELECT * FROM import_page WHERE import_id = ? LIMIT ?').all(importId, pages + 1) as Row[];
@@ -631,8 +659,7 @@ export class ChordDatabase {
       for (const page of touched.slice(0, pages)) {
         const urlId = num(page['url_id']);
         this.sql('DELETE FROM import_page WHERE import_id = ? AND url_id = ?').run(importId, urlId);
-        // Its visits, by their page (an index), within the import's range of visits.
-        this.sql(`DELETE FROM history_visit WHERE url_id = ? AND id > ? AND id <= ? AND transition = 'import'`).run(urlId, num(batch['visit_floor']), num(batch['visit_ceiling']));
+        // Its visits are gone already: what's left on the page is everyone else's.
         const row = this.sql('SELECT visit_count, typed_count, decay_day FROM history_url WHERE id = ?').get(urlId) as Row | undefined;
         if (!row) continue;
         const left = this.sql('SELECT COUNT(*) AS n, MAX(visited_at) AS last FROM history_visit WHERE url_id = ?').get(urlId) as Row;
@@ -660,7 +687,6 @@ export class ChordDatabase {
         const titleSet = strOrNull(page['title_set']);
         if (titleSet !== null) this.sql('UPDATE history_url SET title = ? WHERE id = ? AND title = ?').run(str(page['title_before']), urlId, titleSet);
       }
-      if (done) this.sql('DELETE FROM import_batch WHERE import_id = ?').run(importId);
     });
     return { done, threads: [] };
   }

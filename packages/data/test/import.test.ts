@@ -104,6 +104,34 @@ describe('importing history', () => {
     expect(db.search('shared', null, t0).history).toEqual([]);
   });
 
+  it('one import’s Undo never takes another’s visits: not with their batches interleaved, nor with ids an Undo has just freed', () => {
+    // Two imports whose batches take turns (another browser's and a Chord file's, say), on the same page.
+    db.importHistory('a', [page('https://shared.test/', 'Shared', [t0 - 4 * DAY])], t0);
+    db.importHistory('b', [page('https://shared.test/', 'Shared', [t0 - 3 * DAY])], t0);
+    db.importHistory('a', [page('https://shared.test/', 'Shared', [t0 - 2 * DAY])], t0);
+    db.importHistory('b', [page('https://shared.test/', 'Shared', [t0 - DAY])], t0);
+    db.undoImport('a', t0);
+    expect(db.search('shared', null, t0).history[0]).toMatchObject({ visitCount: 2, lastVisitAt: t0 - DAY });
+    // D's Undo and then C's, a slice at a time, free the largest ids while E imports onto the same pages: E's visits
+    // never take them, and C's later slices leave E's visits there.
+    db.importHistory('c', [page('https://other.test/', 'Other', [t0 - 10 * DAY]), page('https://shared.test/', 'Shared', [t0 - 10 * DAY])], t0);
+    db.importHistory('d', [page('https://shared.test/', 'Shared', [t0 - 9 * DAY])], t0);
+    db.undoImport('d', t0);
+    expect(db.undoImportSlice('c', t0, 1).done).toBe(false);
+    db.importHistory('e', [page('https://other.test/', 'Other', [t0 - 8 * DAY]), page('https://shared.test/', 'Shared', [t0 - 8 * DAY])], t0);
+    db.undoImport('c', t0);
+    expect(db.search('shared', null, t0).history[0]).toMatchObject({ visitCount: 3 });
+    expect(db.search('other', null, t0).history[0]).toMatchObject({ visitCount: 1, lastVisitAt: t0 - 8 * DAY });
+    // B's two visits and E's two, every one still there.
+    expect(visitRows()).toHaveLength(4);
+  });
+
+  it('counts a page once however many batches bring it visits', () => {
+    expect(db.importHistory('i1', [page('https://busy.test/', 'Busy', [t0 - 3 * DAY]), page('https://busy.test/', 'Busy', [t0 - 2 * DAY])], t0)).toBe(1);
+    expect(db.importHistory('i1', [page('https://busy.test/', 'Busy', [t0 - DAY])], t0)).toBe(0);
+    expect(db.search('busy', null, t0).history[0]).toMatchObject({ visitCount: 3 });
+  });
+
   it('undoes a big import quickly', () => {
     const pages = Array.from({ length: 10_000 }, (_, i) => page(`https://many.test/${i}`, `Page ${i}`, [0, 1, 2, 3, 4].map((k) => t0 - (i % 60) * DAY - k * 3_600_000)));
     for (let at = 0; at < pages.length; at += 500) db.importHistory('big', pages.slice(at, at + 500), t0);

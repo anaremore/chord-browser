@@ -8,15 +8,18 @@
  * only while it lives. Everything in the file is untrusted, and checked here
  * first, record by record, by the codecs restore uses.
  *
- * - **Open:** one pass counts it. Setup, Today tabs and icons are kept (they're
- *   small); history and chats are only counted, against what's here, over a
+ * - **Open:** one pass counts it. Setup, Today tabs and icons are kept, only
+ *   the fields the plan reads of each and no more than `MAX_SETUP` of them;
+ *   history and chats are only counted, against what's here, over a
  *   read-only connection to chord.db of its own, as the export process reads.
  * - **Plan:** on *Import*, this computer's setup is read again (main has
  *   written what was pending) and weighed against the file's (core's
  *   planMerge); main asks for the plan a part at a time and applies each.
  * - **The rest:** a second pass sends history and chats straight to
- *   chord-data, a batch at a time over a port, each once the last is written,
- *   and writes the chats' images, each checked to be the picture it says.
+ *   chord-data, a batch at a time over a port, each once the last is written
+ *   (a page's visits split over batches, its newest kept), and writes the
+ *   chats' images, each checked to be the picture it says and each file
+ *   named to main before it's written.
  *
  * Main ends the process after, or when you let the file go.
  */
@@ -26,12 +29,15 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   DATA_HEAD,
   DUET_SCOPES,
+  FRESH_PAGES,
   imageFromRecord,
   mergeParts,
   messageFromRecord,
   openDataFile,
   pageFromRecord,
+  pageShares,
   planMerge,
+  setupRecord,
   threadFromRecord,
   uuidv7,
   type DataFileOpen,
@@ -48,10 +54,10 @@ import {
 } from '@chord/core';
 import type { ImportBatch, ImportBatchReply } from '@chord/data';
 import { nodeCrypto, sha256Hex } from '@chord/data/crypto';
-import { chatsHere, localRecords, pagesHere } from '@chord/data/import-file';
+import { amountsHere, chatsHere, localRecords, pagesHere } from '@chord/data/import-file';
 import type { FileImportChoices, FileImportCounts, FileImportPreview, FileImportProblem } from '@chord/ipc';
 import type { MessagePortMain } from 'electron';
-import { writeImage } from './images';
+import { writeImage, type ImageWriter } from './images';
 
 export interface FileJob {
   /** The file you chose. */
@@ -73,7 +79,9 @@ export type FileRequest =
   /** The plan's next part. */
   | { type: 'more' }
   /** History and chats to chord-data, over the port that comes with this request. */
-  | { type: 'rest' };
+  | { type: 'rest' }
+  /** Main has kept the files named (`writing`) for Undo: they may be written. */
+  | { type: 'write' };
 
 export type FileReply =
   /** Still reading a long file: main waits on. */
@@ -88,8 +96,17 @@ export type FileReply =
   | { type: 'planned' }
   /** A batch of history is written: `added` pages gained visits, `done` of the file's pages are through. */
   | { type: 'pages'; added: number; done: number }
-  /** Chats chord-data added, and images written, for Undo. */
-  | { type: 'chats'; threads: string[]; images: DuetImage[] }
+  /** Chats chord-data added. */
+  | { type: 'chats'; threads: string[] }
+  /**
+   * A chat's image files (`<id>.<ext>`, `<id>.thumb.jpg`), named before
+   * they're written, which waits for main's `write`: main keeps them for Undo
+   * as they arrive, so it knows every file written, even if the import stops
+   * between naming and writing.
+   */
+  | { type: 'writing'; files: string[] }
+  /** Files named that weren't written after all: one was there by then, so isn't the import's. */
+  | { type: 'unwritten'; files: string[] }
   | { type: 'done' }
   | { type: 'error' };
 
@@ -110,8 +127,14 @@ const PROGRESS_MS = 100;
 const CHATS_PER_BATCH = 200;
 /** Effects' sites per part: each up to 64 KB of CSS. */
 const SITES_PER_PART = 25;
-/** The most setup a file may bring (records): far past any profile, and what keeps a hostile one from filling memory. */
+/**
+ * The most setup a file may bring, kept from opening it to its plan: records,
+ * and their characters once only what the plan reads of each is kept (core's
+ * setupRecord). Far past any profile (icons are most of it), and what keeps a
+ * hostile file from filling memory; past either, the rest isn't read.
+ */
 const MAX_SETUP = 100_000;
+const MAX_SETUP_CHARS = 64 * 1024 * 1024;
 const SETUP: ReadonlySet<string> = new Set(['chord', 'folder', 'tab', 'split', 'favorite', 'theme', 'settings', 'route', 'effects', 'icon', 'zoom', 'permission']);
 /** Types a file has that an import passes over without counting them as a newer Chord's: sync's. */
 const QUIET: ReadonlySet<string> = new Set(['page', 'thread', 'message', 'image', 'device']);
@@ -139,6 +162,8 @@ let opened: { job: FileJob; file: DataFileOpen; setup: DataRecord[]; pages: numb
 let planned: { parts: FileReply[]; at: number; chordIds: Set<string>; chordId: string; choices: FileImportChoices; scope: DuetScope } | null = null;
 
 const yieldNow = () => new Promise((resolve) => setImmediate(resolve));
+/** An image's files named to main (`writing`), waiting for its `write`. */
+let allowWrite: (() => void) | null = null;
 
 /** Every record from the file's `start` on, a chunk at a time; `each` may wait (chord-data's answer), so records never pile up. */
 async function readRecords(file: DataFileOpen, path: string, each: (records: DataRecord[]) => void | Promise<void>): Promise<DataFileProblem | null> {
@@ -213,8 +238,9 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
   const file = await openDataFile(head, size, passphrase, nodeCrypto);
   if (file.problem || !file.header) return { type: 'problem', problem: PROBLEMS[file.problem ?? 'not-chord'] };
 
-  // One pass: setup kept, history and chats counted against what's here.
+  // One pass: setup kept (only what the plan reads of it), history and chats counted against what's here.
   const setup: DataRecord[] = [];
+  let chars = 0;
   const history = { pages: 0, newPages: 0 };
   const duet = { chats: 0, newChats: 0, images: 0 };
   let unknown = 0;
@@ -236,7 +262,10 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
           if (!chats.has(thread.id)) duet.newChats++;
         } else if (r.type === 'image') duet.images++;
         else if (SETUP.has(r.type)) {
-          if (setup.length < MAX_SETUP) setup.push(r);
+          const kept = tooMuch ? null : setupRecord(r, job.platform);
+          if (!kept) continue;
+          chars += r.id.length + JSON.stringify(kept.set).length;
+          if (setup.length < MAX_SETUP && chars <= MAX_SETUP_CHARS) setup.push(kept);
           else tooMuch = true;
         } else if (!QUIET.has(r.type)) unknown++;
       }
@@ -247,6 +276,7 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
     planMerge({
       local: localRecords(sql, { device: job.device, platform: job.platform, sha256: sha256Hex }),
       file: setup,
+      here: amountsHere(sql, FRESH_PAGES + 1),
       choices: { effects: true, settings: true },
       platform: job.platform,
       now: Date.now(),
@@ -269,6 +299,7 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
       effects: plan.effectsSites,
       settings: plan.changes,
       skipped: unknown + plan.skipped,
+      capped: plan.capped,
       damaged,
     },
   };
@@ -282,6 +313,7 @@ async function plan(request: Extract<FileRequest, { type: 'plan' }>): Promise<Fi
     planMerge({
       local: localRecords(sql, { device: job.device, platform: job.platform, sha256: sha256Hex }),
       file: setup,
+      here: amountsHere(sql, FRESH_PAGES + 1),
       choices: { effects: request.choices.effects, settings: request.choices.settings },
       platform: job.platform,
       now: Date.now(),
@@ -302,7 +334,8 @@ async function plan(request: Extract<FileRequest, { type: 'plan' }>): Promise<Fi
       favorites: both('favorites'),
       other: both('folders') + both('themes') + both('routes') + both('zoom') + both('blocks'),
       effects: result.effects.length,
-      settings: result.settings ? result.changes.length : 0,
+      // Settings and chords' own proxies: every change named comes in with the switch, none without.
+      settings: request.choices.settings ? result.changes.length : 0,
       pages: 0,
       chats: 0,
     },
@@ -336,7 +369,9 @@ async function rest(port: MessagePortMain): Promise<void> {
 
   let pages: ImportedPage[] = [];
   let visits = 0;
+  // The file's pages through: a page split over batches counts once its last share is written.
   let done = 0;
+  let queued = 0;
   // How far it's got, at most ten times a second: main passes each report on to Settings.
   let added = 0;
   let reported = 0;
@@ -350,7 +385,8 @@ async function rest(port: MessagePortMain): Promise<void> {
     if (pages.length === 0) return;
     const answer = await send({ pages });
     if (!answer.ok) throw new Error(answer.error);
-    done += pages.length;
+    done += queued;
+    queued = 0;
     added += answer.added;
     report();
     pages = [];
@@ -363,9 +399,17 @@ async function rest(port: MessagePortMain): Promise<void> {
     if (threads.length === 0 && messages.length === 0) return;
     const answer = await send({ duet: { threads, messages } });
     if (!answer.ok) throw new Error(answer.error);
-    reply({ type: 'chats', threads: answer.threads ?? [], images: [] });
+    reply({ type: 'chats', threads: answer.threads ?? [] });
     threads = [];
     messages = [];
+  };
+  const writer: ImageWriter = {
+    writing: (files) =>
+      new Promise<void>((resolve) => {
+        allowWrite = resolve;
+        reply({ type: 'writing', files });
+      }),
+    unwritten: (files) => reply({ type: 'unwritten', files }),
   };
   const now = Date.now();
   try {
@@ -374,9 +418,14 @@ async function rest(port: MessagePortMain): Promise<void> {
         if (r.type === 'page' && choices.history) {
           const page = pageFromRecord(r);
           if (!page) continue;
-          pages.push({ url: page.url, title: page.title, visits: page.visits, typed: [], typedCount: page.typed });
-          visits += page.visits.length;
-          if (pages.length >= PAGES_PER_BATCH || visits >= VISITS_PER_BATCH) await flushPages();
+          // Its newest visits, a batch's worth at a time: no write is ever more than a batch, however many a line holds.
+          const shares = pageShares(page, VISITS_PER_BATCH);
+          for (const [i, share] of shares.entries()) {
+            pages.push(share);
+            visits += share.visits.length;
+            if (i === shares.length - 1) queued++;
+            if (pages.length >= PAGES_PER_BATCH || visits >= VISITS_PER_BATCH) await flushPages();
+          }
         } else if (r.type === 'thread' && choices.duet) {
           await flushPages();
           const thread = threadFromRecord(r);
@@ -393,8 +442,7 @@ async function rest(port: MessagePortMain): Promise<void> {
         } else if (r.type === 'image' && choices.duet) {
           const image = imageFromRecord(r);
           if (!image || !wanted.has(image.image.id)) continue;
-          const written = writeImage(image, job.images);
-          if (written) reply({ type: 'chats', threads: [], images: [written] });
+          await writeImage(image, job.images, writer);
         }
       }
     });
@@ -434,6 +482,12 @@ process.parentPort.on('message', (event) => {
         console.error('Import failed:', error);
         reply({ type: 'error' });
       });
+      return;
+    }
+    case 'write': {
+      const allow = allowWrite;
+      allowWrite = null;
+      allow?.();
       return;
     }
   }

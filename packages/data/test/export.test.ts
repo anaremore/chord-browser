@@ -30,7 +30,7 @@ import { opsForState } from '../src';
 import { sha256Hex } from '../src/crypto';
 import { ChordDatabase } from '../src/db';
 import { exportCounts, exportRecords, type ExportItem, type ExportOptions } from '../src/export';
-import { chatsHere, localRecords, pagesHere } from '../src/import-file';
+import { amountsHere, chatsHere, localRecords, pagesHere } from '../src/import-file';
 
 let dir: string;
 let file: string;
@@ -294,6 +294,10 @@ describe('an import’s view of what’s here (import-file.ts)', () => {
       const here = pagesHere(sql);
       expect([here('https://news.test/a'), here('https://www.news.test/a'), here('https://news.test/c'), here('javascript:alert(1)')]).toEqual([true, true, false, false]);
       expect(chatsHere(sql)).toEqual(new Set(['th']));
+      // How much history and how many chats, counted no further than asked: whether this is a fresh Chord.
+      const pages = (ro.prepare('SELECT COUNT(*) AS n FROM history_url').get() as { n: number }).n;
+      expect(amountsHere(sql, 100)).toEqual({ pages, chats: 1 });
+      expect(amountsHere(sql, 1)).toEqual({ pages: Math.min(pages, 1), chats: 1 });
     } finally {
       ro.close();
     }

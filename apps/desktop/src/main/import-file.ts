@@ -9,16 +9,18 @@
  * store (`data.merge`, which checks every part again) and hands Effects to
  * their service, which sanitizes each stylesheet. History and chats go from
  * the process straight to chord-data over a port; main hears only how far
- * it's got. One import runs at a time, and one Undo, from the window's toast
- * or Settings, takes all of it back.
+ * it's got. One import of either kind runs at a time (`ImportGate`), and one
+ * Undo, from the window's toast or Settings, takes all of it back: the chats'
+ * image files too, exactly the ones it wrote, each named here before it was.
  */
 import { rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { importedText, sortedChords, uuidv7, type Command, type DuetImage, type DuetThread, type MergePart, type Platform, type SiteEffects, type State, type WindowId } from '@chord/core';
+import { importedText, sortedChords, uuidv7, type Command, type DuetThread, type MergePart, type Platform, type SiteEffects, type State, type WindowId } from '@chord/core';
 import { ImportedSettings, type FileChooseResult, type FileImportChoices, type FileImportCounts, type FileImportProgress, type FileOpenResult, type FileRunResult, type Toast } from '@chord/ipc';
 import { dialog, type BaseWindow, type MessagePortMain, type OpenDialogOptions } from 'electron';
+import { IMAGE_FILE } from '../import-file/images';
 import type { FileJob, FileReply, FileRequest } from '../import-file/worker';
-import { ImportProcess, within } from './import';
+import { ImportProcess, within, type ImportGate } from './import';
 
 /** A read that says nothing for this long has stopped: a long one says it's still reading every second. */
 const READ_STALL_MS = 60_000;
@@ -30,7 +32,6 @@ const IDLE_MS = 10 * 60_000;
 const UNDO_PART = 200;
 const MAX_UNDO_PARTS = 10_000;
 
-const EXTENSIONS: Record<DuetImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const NONE: FileImportCounts = { chords: 0, tabs: 0, favorites: 0, other: 0, effects: 0, settings: 0, pages: 0, chats: 0 };
 
 export interface FileImporterOptions {
@@ -50,6 +51,8 @@ export interface FileImporterOptions {
   /** Duet's lists follow chats that came in or went; ones that went end their sessions. */
   duet(): { importChanged(removed?: readonly DuetThread[]): Promise<void> } | undefined;
   toast(windowId: WindowId, toast: Toast): void;
+  /** Shared with another browser's importer: one import at a time. */
+  gate: ImportGate;
 }
 
 type FileProcess = ImportProcess<FileRequest, FileReply>;
@@ -76,8 +79,8 @@ export class FileImporter {
   private running: Running | null = null;
   private choosing = false;
   private readonly processes = new Set<FileProcess>();
-  /** Each import this session, for its Undo: where it reports, and the chats' images it wrote. */
-  private readonly imports = new Map<string, { notify(progress: FileImportProgress): void; images: DuetImage[] }>();
+  /** Each import this session, for its Undo: where it reports, and the image files it writes (names in Duet's images folder). */
+  private readonly imports = new Map<string, { notify(progress: FileImportProgress): void; files: Set<string> }>();
   /** The last folder a file came from: the dialog opens there next time. */
   private folder: string | null = null;
 
@@ -97,7 +100,7 @@ export class FileImporter {
 
   /** The system's open dialog; the file is then the one this session reads. */
   async choose(parent: BaseWindow | null): Promise<FileChooseResult> {
-    if (this.running || this.choosing) return { ok: false, problem: 'busy' };
+    if (this.running || this.choosing || this.options.gate.busy) return { ok: false, problem: 'busy' };
     this.choosing = true;
     try {
       const options: OpenDialogOptions = {
@@ -128,7 +131,7 @@ export class FileImporter {
   async open(fileId: string, passphrase: string | null): Promise<FileOpenResult> {
     const session = this.session?.fileId === fileId ? this.session : null;
     if (!session) return { ok: false, problem: 'missing' };
-    if (this.running) return { ok: false, problem: 'busy' };
+    if (this.running || this.options.gate.busy) return { ok: false, problem: 'busy' };
     clearTimeout(session.idle);
     session.ready = false;
     // What's waiting to be written goes first, so what's here is counted as it is.
@@ -153,32 +156,53 @@ export class FileImporter {
 
   /** Import the file read last into `windowId`'s Chord (never a private window's), reporting to `notify`. Returns at once; the import goes on. */
   run(fileId: string, choices: FileImportChoices, windowId: WindowId, notify: (progress: FileImportProgress) => void): FileRunResult {
-    if (this.running) return { ok: false, problem: 'busy' };
+    if (this.running || this.options.gate.busy) return { ok: false, problem: 'busy' };
     const session = this.session?.fileId === fileId && this.session.ready ? this.session : null;
     const win = this.options.state().windows[windowId];
     if (!session || !win || win.private) return { ok: false, problem: 'missing' };
+    const importId = uuidv7();
+    if (!this.options.gate.take(importId)) return { ok: false, problem: 'busy' };
     // The run owns the process from here.
     clearTimeout(session.idle);
     this.session = null;
-    const importId = uuidv7();
-    this.imports.set(importId, { notify, images: [] });
+    const record = { notify, files: new Set<string>() };
+    this.imports.set(importId, record);
     const running: Running = { importId, process: session.process, cancelled: false, finished: Promise.resolve() };
+    // Image files are named before they're written: kept here as they arrive, whatever the import is doing (even
+    // stopping), and only then let through, never once it's stopped. So Undo knows every file written.
+    session.process.tap = (reply) => {
+      if (reply.type === 'writing') {
+        for (const name of reply.files) if (IMAGE_FILE.test(name)) record.files.add(name);
+        if (!running.cancelled && reply.files.every((name) => IMAGE_FILE.test(name))) session.process.send({ type: 'write' });
+        return true;
+      }
+      if (reply.type === 'unwritten') {
+        for (const name of reply.files) record.files.delete(name);
+        return true;
+      }
+      return false;
+    };
     running.finished = this.work(running, session.name, choices, windowId)
       .catch((error: unknown) => console.error('Import failed:', error))
       .finally(() => {
         session.process.end();
         if (this.running === running) this.running = null;
+        this.options.gate.letGo(importId);
       });
     this.running = running;
     return { ok: true, importId };
   }
 
-  /** A part as the store takes it: Settings from the file pass the schema Settings' own changes do; the reducer checks the rest. */
-  private checked(part: MergePart): MergePart {
-    if (!part.settings) return part;
-    const settings = ImportedSettings.safeParse(part.settings);
-    const { settings: _unchecked, ...rest } = part;
-    return settings.success ? { ...rest, settings: settings.data } : rest;
+  /**
+   * A part as the store takes it: Settings from the file pass the schema
+   * Settings' own changes do, and neither they nor chords' own proxies come
+   * without that switch on, whatever the plan says; the reducer checks the rest.
+   */
+  private checked(part: MergePart, choices: FileImportChoices): MergePart {
+    const { settings: unchecked, proxies, ...rest } = part;
+    if (!choices.settings) return rest;
+    const settings = unchecked ? ImportedSettings.safeParse(unchecked) : null;
+    return { ...rest, ...(settings?.success ? { settings: settings.data } : {}), ...(proxies ? { proxies } : {}) };
   }
 
   private async work(running: Running, name: string, choices: FileImportChoices, windowId: WindowId): Promise<void> {
@@ -203,7 +227,7 @@ export class FileImporter {
       // A part at a time, each its own store change; asking for the next lets input and painting go first.
       let part = await process.ask({ type: 'more' }, STEP_TIMEOUT_MS);
       while (!running.cancelled && (part?.type === 'part' || part?.type === 'effects')) {
-        if (part.type === 'part') this.options.dispatch({ t: 'data.merge', importId, ...this.checked(part.part) });
+        if (part.type === 'part') this.options.dispatch({ t: 'data.merge', importId, ...this.checked(part.part, choices) });
         else await this.options.effects.importSites(importId, part.sites);
         part = await process.ask({ type: 'more' }, STEP_TIMEOUT_MS);
       }
@@ -224,7 +248,6 @@ export class FileImporter {
           }
           if (reply?.type === 'chats') {
             counts.chats += reply.threads.length;
-            record.images.push(...reply.images);
             report('duet');
             continue;
           }
@@ -267,12 +290,8 @@ export class FileImporter {
     const removed = await within(this.options.data.undo(importId), STEP_TIMEOUT_MS).catch(() => [] as DuetThread[]);
     await this.options.duet()?.importChanged(removed);
     await this.options.effects.undoImport(importId);
-    await Promise.all(
-      record.images.flatMap((image) => [
-        rm(join(this.options.images, `${image.id}.${EXTENSIONS[image.mime] ?? 'jpg'}`), { force: true }),
-        rm(join(this.options.images, `${image.id}.thumb.jpg`), { force: true }),
-      ]),
-    ).catch(() => undefined);
+    // The image files it wrote, each checked again to be one (a name, never a path), and nothing else.
+    await Promise.all([...record.files].filter((name) => IMAGE_FILE.test(name)).map((name) => rm(join(this.options.images, name), { force: true }))).catch(() => undefined);
     record.notify({ importId, phase: 'undone', done: 0, total: 0, counts: { ...NONE } });
     this.imports.delete(importId);
   }

@@ -166,11 +166,12 @@ sys.stdout.buffer.write(decrypt(open(sys.argv[1], "rb").read(), sys.argv[2]))
 
 Settings → Your data → *From a Chord file* brings a file back. What Chord does with one, so a file you write by hand does what you expect:
 
-- **Field by field, the newer stamp wins** over the same field here (each row's `updated_at` stands in for Chord's own stamps). A value equal to Chord's changes nothing. Into a profile with nothing but its first chord, every field of the file wins, and that chord makes way for the file's.
+- **Field by field, the newer stamp wins** over the same field here (each row's `updated_at` stands in for Chord's own stamps). A value equal to Chord's changes nothing. Into a clearly fresh Chord (only its first chord and that chord's one tab, no other setup, no Duet chats, at most 20 pages of history, settings as first run left them), every field of the file wins, and that chord makes way for the file's.
+- **One import brings at most** 100 new chords, 10,000 new tabs and 2,000 new folders, in the file's order, folders at most 16 deep (one deeper comes in at its section's top level), and a page's newest 10,000 visits. Fields a record has that Chord doesn't read are dropped as it's read.
 - **Nothing is deleted.** A thing whose newest `deleted` is `true` is passed over: it neither comes in nor goes. Something deleted here comes back if the file has it.
 - **Matches merge:** a `favorite` at an address Chord has is that Favorite; `route`, `effects`, `zoom` and `permission` by their ids, a site or an origin.
 - **Permissions:** only `block`. **Settings**, and a chord's own `proxy`, only when you turn on *Settings from the file*. **A chord Chord has keeps its sign-ins** (`profile`).
-- **`page`:** a visit Chord has (the same address at the same millisecond) isn't added again; `typed` takes the larger count. **`thread`, `message`:** added by id, never replaced; a chat comes with no session, reads no more than a new chat would, and its turns go to Claude Code or Codex only as data, never as instructions. **`image`:** only if its bytes are the PNG, JPEG or WebP its `mime` says.
+- **`page`:** a visit Chord has (the same address at the same millisecond) isn't added again; `typed` takes the larger count. **`thread`, `message`:** added by id, never replaced; a message only into a chat the same file brings, never one Chord has; a chat comes with no session, reads no more than a new chat would, and its turns go to Claude Code or Codex only as data, never as instructions. **`image`:** only if its bytes are the PNG, JPEG or WebP its `mime` says, and no image of that id is here.
 - Every record is checked as Chord checks its own saved data. One that doesn't read, or points at a chord or folder that isn't there, is left out or put at its section's root.
 
 ## Versions

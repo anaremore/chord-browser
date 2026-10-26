@@ -3,7 +3,8 @@
  * Chord's tools with their tiers, scope and approvals, and what each window's
  * panel shows. Chord's transcript (chord-data, migration 9) is the source of
  * truth; a provider's session is a cache that's resumed when it still works
- * and replaced, primed with a summary, when it doesn't.
+ * and replaced when it doesn't, the new one given the chat's newest turns as
+ * untrusted data with the next message.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -42,7 +43,6 @@ import {
   threadTitle,
   threadToShow,
   toolResult,
-  transcriptSummary,
   userTurnText,
   uuidv7,
   type DuetAttachment,
@@ -913,7 +913,7 @@ export class DuetService {
     state.thread.model = model;
     state.context = null;
     if (switched) {
-      // A different provider can't resume the other's session: it starts primed with a summary.
+      // A different provider can't resume the other's session: its new one gets the chat's newest turns with the next message.
       this.close(state);
       state.thread.providerSessionId = null;
       state.pendingDivider = `Switched to ${provider === 'claude' ? 'Claude Code' : 'Codex'}`;
@@ -988,8 +988,9 @@ export class DuetService {
     state.streaming = { id: uuidv7(), threadId: thread.id, createdAt: Date.now(), body: { role: 'assistant', text: '', citations: [], status: 'streaming' } };
     state.startedAt = Date.now();
     this.schedulePush();
-    // A chat from a file, to a provider that hasn't seen it: its earlier turns go first, as untrusted data (S15 §5).
-    const unseen = Boolean(thread.importedAt) && !thread.providerSessionId && !this.live.get(thread.id)?.session.alive;
+    // A session that hasn't seen this chat (the other provider's after a switch, or a chat from a file):
+    // its earlier turns go first, as untrusted data, never in the instructions (S15 §5).
+    const unseen = !thread.providerSessionId && !this.live.get(thread.id)?.session.alive;
     const session = await this.sessionFor(state);
     if (!session) {
       await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Duet couldn't start. Check Settings → Duet." } });
@@ -1016,7 +1017,7 @@ export class DuetService {
     return ref;
   }
 
-  private async sessionFor(state: ThreadState, summary?: string): Promise<DuetSession | null> {
+  private async sessionFor(state: ThreadState): Promise<DuetSession | null> {
     const thread = state.thread!;
     const existing = this.live.get(thread.id);
     if (existing?.session.alive) {
@@ -1041,10 +1042,10 @@ export class DuetService {
     const making: DuetImageMaking = thread.provider === 'codex' ? (images ? 'codex' : 'codex-off') : 'claude';
     // Settings' "Nothing": no tools at all, so the model has no way to ask for a page (ARCHITECTURE.md §11.3).
     const readsPages = !this.settings.readsNothing;
-    const instructions = duetInstructions(summary, making, readsPages, Boolean(thread.importedAt));
+    const instructions = duetInstructions(making, readsPages);
     const instructionsFile = join(this.root, 'instructions', `${thread.id}.md`);
     await writeFile(instructionsFile, instructions, { encoding: 'utf8', mode: 0o600 });
-    const resumeId = summary ? null : thread.providerSessionId;
+    const resumeId = thread.providerSessionId;
     const options = {
       launch,
       cwd: join(this.root, 'empty'),
@@ -1099,7 +1100,7 @@ export class DuetService {
     return session;
   }
 
-  /** The stored session is gone (deleted, CLI upgraded, other provider): start again from a summary. */
+  /** The stored session is gone (deleted, CLI upgraded, other provider): start again, with the chat's newest turns as data. */
   private async fallBack(state: ThreadState): Promise<void> {
     const thread = state.thread!;
     thread.providerSessionId = null;
@@ -1114,11 +1115,10 @@ export class DuetService {
       state.messages.splice(index, 0, divider);
       await this.persistence.duet({ op: 'saveMessage', message: divider }).catch(() => undefined);
     }
-    // A chat from a file never has its turns in the instructions: they go with the message, as untrusted data (S15 §5).
-    const imported = Boolean(thread.importedAt);
-    const session = await this.sessionFor(state, imported ? undefined : transcriptSummary(earlier) || undefined);
-    const before = imported ? earlierTurns(earlier) : '';
-    if (session && lastUser?.body.role === 'user') session.send(before + userTurnText(lastUser.body.text, lastUser.body.attachments), await this.imagesToSend(lastUser.body.images ?? [], []));
+    // A chat's turns never go in the instructions: they go with the message, as untrusted data. A file can say anything,
+    // and Duet's own replies can carry what pages said (S15 §5).
+    const session = await this.sessionFor(state);
+    if (session && lastUser?.body.role === 'user') session.send(earlierTurns(earlier) + userTurnText(lastUser.body.text, lastUser.body.attachments), await this.imagesToSend(lastUser.body.images ?? [], []));
     else if (!session) await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Duet couldn't start." } });
   }
 

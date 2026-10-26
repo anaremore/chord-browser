@@ -52,6 +52,8 @@ export interface ImporterOptions {
   /** chord-data: a port for an import's history batches, and an import's Undo. */
   history: { port(importId: string): Promise<MessagePortMain>; undo(importId: string): Promise<unknown> };
   toast(windowId: WindowId, toast: Toast): void;
+  /** Shared with the Chord file's importer: one import at a time. */
+  gate: ImportGate;
 }
 
 /** A profile's handle for renderers: its folder, hashed. */
@@ -110,6 +112,8 @@ export class ImportProcess<Request = ImportRequest, Reply = ImportReply> {
   private waiting: ((reply: Reply | null) => void) | null = null;
   private exited = false;
   readonly closed: Promise<void>;
+  /** Sees every reply the moment it arrives, before anyone asks for it; one it returns true for is its alone. */
+  tap: ((reply: Reply) => boolean) | null = null;
 
   private constructor(
     path: string,
@@ -117,6 +121,7 @@ export class ImportProcess<Request = ImportRequest, Reply = ImportReply> {
   ) {
     this.child = utilityProcess.fork(path, [], { serviceName: 'Chord Import', stdio: 'ignore' });
     this.child.on('message', (reply: Reply) => {
+      if (this.tap?.(reply)) return;
       if (this.waiting) this.settle(reply);
       else this.inbox.push(reply);
     });
@@ -169,6 +174,31 @@ export class ImportProcess<Request = ImportRequest, Reply = ImportReply> {
 
   end(): void {
     this.child.kill();
+  }
+}
+
+/**
+ * One import at a time, of either kind (another browser's, or a Chord
+ * file's): the Importer and the FileImporter share one, and either answers
+ * `busy` while the other's runs. Each import's history then stands alone in
+ * chord-data, for its own Undo.
+ */
+export class ImportGate {
+  private holder: string | null = null;
+
+  get busy(): boolean {
+    return this.holder !== null;
+  }
+
+  /** Whether `importId` may run now: then it holds the gate until it lets go. */
+  take(importId: string): boolean {
+    if (this.holder !== null) return false;
+    this.holder = importId;
+    return true;
+  }
+
+  letGo(importId: string): void {
+    if (this.holder === importId) this.holder = null;
   }
 }
 
@@ -235,7 +265,7 @@ export class Importer {
     const profile = this.profiles.get(key);
     if (!profile) return { ok: false, problem: 'missing' };
     if (profile.denied) return { ok: false, problem: 'denied' };
-    if (this.running) return { ok: false, problem: 'busy' };
+    if (this.running || this.options.gate.busy) return { ok: false, problem: 'busy' };
     const process = await this.start();
     // Whatever was read before, or started reading meanwhile, is let go: one kept profile at a time.
     this.letGo();
@@ -259,14 +289,15 @@ export class Importer {
    * window), reporting to `notify`. Returns at once; the import goes on.
    */
   run(key: string, choices: ImportChoices, windowId: WindowId, notify: (progress: ImportProgress) => void): ImportRunResult {
-    if (this.running) return { ok: false, problem: 'busy' };
+    if (this.running || this.options.gate.busy) return { ok: false, problem: 'busy' };
     const session = this.session?.key === key && this.session.ready ? this.session : null;
     const win = this.options.state().windows[windowId];
     if (!session || !win || win.private) return { ok: false, problem: 'missing' };
+    const importId = uuidv7();
+    if (!this.options.gate.take(importId)) return { ok: false, problem: 'busy' };
     // The run owns the process from here.
     clearTimeout(session.idle);
     this.session = null;
-    const importId = uuidv7();
     this.notifiers.set(importId, notify);
     const running: Running = { importId, process: session.process, cancelled: false, finished: Promise.resolve() };
     running.finished = this.work(running, session, choices, windowId)
@@ -274,6 +305,7 @@ export class Importer {
       .finally(() => {
         session.process.end();
         if (this.running === running) this.running = null;
+        this.options.gate.letGo(importId);
       });
     this.running = running;
     return { ok: true, importId };

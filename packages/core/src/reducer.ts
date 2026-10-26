@@ -647,10 +647,12 @@ function mergeIn(draft: Draft<State>, cmd: Extract<Command, { t: 'data.merge' }>
   const undo = (record.merged ??= emptyMergeUndo());
   if (undo.restored) return;
 
-  // Chords: a new one is added; one you have takes the file's name, icon, colors, place and proxy, never other sign-ins.
+  // Chords: a new one is added; one you have takes the file's name, icon, colors and place, never other sign-ins.
+  // Neither takes a proxy from here: only `proxies` sets one, which comes only with Settings from the file.
   for (const incoming of cmd.chords ?? []) {
     if (incoming.private || isPrivateProfile(incoming.profileId)) continue;
-    const chord = restoreChord({ ...incoming, name: incoming.name.trim().slice(0, MAX_CHORD_NAME) || 'Chord' });
+    const { proxy: _proxy, ...plain } = incoming;
+    const chord = restoreChord({ ...plain, name: incoming.name.trim().slice(0, MAX_CHORD_NAME) || 'Chord' });
     const existing = draft.chords[chord.id];
     if (!existing) {
       draft.chords[chord.id] = chord;
@@ -663,8 +665,15 @@ function mergeIn(draft: Draft<State>, cmd: Extract<Command, { t: 'data.merge' }>
     existing.icon = chord.icon;
     existing.theme = chord.theme;
     existing.rank = chord.rank;
-    if (chord.proxy && existing.profileId !== DEFAULT_PROFILE) existing.proxy = chord.proxy;
-    else delete existing.proxy;
+  }
+  // A chord's own proxy, as chord.proxy sets one: only with sign-ins of its own, and only one that can be used.
+  for (const [chordId, value] of Object.entries(cmd.proxies ?? {})) {
+    const chord = draft.chords[chordId];
+    const proxy = value === null ? null : cleanProxy(value);
+    if (!chord || chord.private || chord.profileId === DEFAULT_PROFILE || (value !== null && !proxy) || sameProxy(chord.proxy, proxy)) continue;
+    if (!(chordId in undo.chords) && !record.chordIds.includes(chordId)) undo.chords[chordId] = copy(chord);
+    if (proxy) chord.proxy = proxy;
+    else delete chord.proxy;
   }
 
   // Folders, tabs and splits, parents first. Each in a chord that's there, in a folder (or, for a tab, a split) of the same chord, never inside itself; otherwise at its section's root.

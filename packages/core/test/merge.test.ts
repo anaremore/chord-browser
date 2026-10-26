@@ -3,6 +3,7 @@
  * stamps, into a new profile and one with data; then the plan applied through
  * `data.merge` a part at a time, and one Undo putting everything back.
  */
+import { generateNKeysBetween } from 'fractional-indexing';
 import { describe, expect, it } from 'vitest';
 import {
   apply,
@@ -11,14 +12,19 @@ import {
   effectsRecord,
   emptyState,
   favoriteRecord,
+  FRESH_PAGES,
+  IMPORT_LIMITS,
   importedText,
+  MAX_PAGE_VISITS,
   mergeParts,
   nodeRecord,
+  pageShares,
   permissionRecord,
   planMerge,
   routeRecord,
   seedState,
   settingsRecords,
+  setupRecord,
   themeRecord,
   zoomRecord,
   type Chord,
@@ -105,7 +111,11 @@ function used(): State {
   return state;
 }
 
-const plan = (local: DataRecord[], file: DataRecord[], choices = ALL): MergePlan => planMerge({ local, file, choices, platform: 'linux', now: NOW, newId });
+/** What chord.db says is here besides setup: by default, no history and no chats, as on a first run. */
+const NOTHING = { pages: 0, chats: 0 };
+/** `here` null: chord.db's amounts unknown. */
+const plan = (local: DataRecord[], file: DataRecord[], choices = ALL, here: { pages: number; chats: number } | null = NOTHING): MergePlan =>
+  planMerge({ local, file, ...(here ? { here } : {}), choices, platform: 'linux', now: NOW, newId });
 
 /** The plan through the reducer, a part at a time, as main applies it. */
 function applyPlan(state: State, p: MergePlan, importId = 'imp'): State {
@@ -305,9 +315,36 @@ describe('the merge planner', () => {
     // Its own sign-ins, but not Work's here: a profile of its own.
     expect(lab.profileId).not.toBe('mine');
     expect(lab.proxy).toBeUndefined();
+    expect(off.proxies).toEqual({});
+    expect(mergeParts(off).some((part) => part.proxies)).toBe(false);
+    // On: apart from the chords, which never carry one.
     const on = plan(local, recordsOf(there, late));
-    expect(on.chords.find((c) => c.id === 'work')).toMatchObject({ profileId: 'mine', proxy });
-    expect(on.chords.find((c) => c.id === 'lab')).toMatchObject({ proxy });
+    expect(on.chords.find((c) => c.id === 'work')).toBeUndefined();
+    expect(on.chords.find((c) => c.id === 'lab')!.proxy).toBeUndefined();
+    expect(on.proxies).toEqual({ work: proxy, lab: proxy });
+    expect(mergeParts(on).at(-1)!.proxies).toEqual(on.proxies);
+  });
+
+  it('with Settings from the file off, a chord here keeps its own proxy, password and all, though its name changes', () => {
+    const before = used();
+    const secret = { mode: 'pac' as const, server: null, pac: 'https://me:hunter2@proxy.corp.test/proxy.pac' };
+    before.chords['work'] = chord('work', { name: 'Work', profileId: 'mine', proxy: secret as never });
+    const there = used();
+    there.chords['work'] = chord('work', { name: 'Work, renamed', profileId: 'mine', proxy: { mode: 'server', server: { scheme: 'http', host: 'evil.test', port: 8080, bypass: [] }, pac: null } });
+    // This computer's records hold its proxy as an export would: without the password.
+    const p = plan(recordsOf(before, old), recordsOf(there, late), { effects: true, settings: false });
+    expect(p.chords).toEqual([expect.objectContaining({ id: 'work', name: 'Work, renamed' })]);
+    expect(p.chords[0]).not.toHaveProperty('proxy');
+    const after = applyPlan(before, p);
+    expect(after.chords['work']).toMatchObject({ name: 'Work, renamed', proxy: before.chords['work']!.proxy });
+    // Nor does a chord that comes in a part carry one: only `proxies` sets it.
+    const sneaky = apply(before, { t: 'data.merge', importId: 'imp2', chords: [chord('work', { name: 'W', profileId: 'mine', proxy: { mode: 'none' } as never }), chord('new', { profileId: 'own', proxy: { mode: 'none' } as never, rank: 'z0' })] }, { now: NOW, newId }).state;
+    expect(sneaky.chords['work']!.proxy).toEqual(before.chords['work']!.proxy);
+    expect(sneaky.chords['new']).not.toHaveProperty('proxy');
+    // With it on, `proxies` sets it, and Undo puts the one before back.
+    const on = applyPlan(before, plan(recordsOf(before, old), recordsOf(there, late)), 'imp3');
+    expect(on.chords['work']!.proxy).toMatchObject({ mode: 'server', server: { host: 'evil.test' } });
+    expect(undo(on, 'imp3').chords['work']!.proxy).toEqual(before.chords['work']!.proxy);
   });
 
   it('Effects: listed with or without their switch; a merge that would leave a site empty leaves it alone', () => {
@@ -359,6 +396,108 @@ describe('the merge planner', () => {
     expect(parts[0]!.chords).toHaveLength(2);
     expect(parts.at(-1)!.makeWay).toEqual(p.makeWay);
     expect(parts.flatMap((part) => part.nodes ?? [])).toHaveLength(453);
+  });
+
+  it('a split comes in whole, past a part’s 200 things, and never as an empty split, wherever an import stops', () => {
+    // The repro: a chord with 250 Today tabs and a split of 2 more, into a new profile.
+    const there = emptyState();
+    there.chords['big'] = chord('big', { name: 'Big' });
+    const ranks = generateNKeysBetween(null, null, 251);
+    for (let i = 0; i < 250; i++) there.nodes[`t${i}`] = tab(`t${i}`, 'big', { section: 'today', pinnedUrl: null, rank: ranks[i]! });
+    there.nodes['split'] = { kind: 'split', id: 'split', chordId: 'big', section: 'today', parentId: null, rank: ranks[250]!, direction: 'row', sizes: [0.5, 0.5], createdAt: 1 };
+    there.nodes['left'] = tab('left', 'big', { section: 'today', pinnedUrl: null, parentId: 'split', rank: 'a0' });
+    there.nodes['right'] = tab('right', 'big', { section: 'today', pinnedUrl: null, parentId: 'split', rank: 'b0' });
+    const p = plan(recordsOf(fresh(), mid), recordsOf(there, old));
+    expect(p.newProfile).toBe(true);
+    const parts = mergeParts(p);
+    expect(parts.length).toBeGreaterThan(1);
+    const holding = parts.filter((part) => part.nodes?.some((n) => n.id === 'split' || n.parentId === 'split'));
+    expect(holding).toHaveLength(1);
+    expect(holding[0]!.nodes!.filter((n) => n.id === 'split' || n.parentId === 'split').map((n) => n.id)).toEqual(['split', 'left', 'right']);
+    const after = applyPlan(fresh(), p);
+    expect(after.nodes['split']).toMatchObject({ kind: 'split', sizes: [0.5, 0.5] });
+    expect([after.nodes['left']!.parentId, after.nodes['right']!.parentId]).toEqual(['split', 'split']);
+    // Stopped after any part (Undo cancels it): no split without its tabs.
+    let s = fresh();
+    const ctx = { now: NOW, newId };
+    for (const part of parts) {
+      s = apply(s, { t: 'data.merge', importId: 'imp', ...part }, ctx).state;
+      for (const node of Object.values(s.nodes)) if (node.kind === 'split') expect(Object.values(s.nodes).filter((n) => n.parentId === node.id).length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('brings at most so many new chords, tabs and folders, and folders only so deep, and says what it left out', () => {
+    const there = emptyState();
+    for (let i = 0; i < IMPORT_LIMITS.chords + 3; i++) there.chords[`c${i}`] = chord(`c${i}`, { rank: `a${String(i).padStart(4, '0')}` });
+    // Tabs of a chord past the limit are left out with it.
+    there.nodes['lost'] = tab('lost', `c${IMPORT_LIMITS.chords + 1}`);
+    for (let i = 0; i < IMPORT_LIMITS.tabs + 5; i++) there.nodes[`t${i}`] = tab(`t${i}`, 'c0', { section: 'today', pinnedUrl: null, rank: `a${String(i).padStart(6, '0')}` });
+    for (let i = 0; i < IMPORT_LIMITS.folders + 2; i++) there.nodes[`f${i}`] = { kind: 'folder', id: `f${i}`, chordId: 'c1', section: 'pinned', parentId: null, rank: `a${String(i).padStart(5, '0')}`, title: `F${i}`, collapsed: false, createdAt: 1 };
+    // One already here is updated whatever the count, though it comes after.
+    const p = plan(recordsOf(used(), mid), [...recordsOf(there, old), { type: 'chord', id: 'work', at: late, set: { name: 'Work, renamed' } }]);
+    expect(p.chords).toHaveLength(IMPORT_LIMITS.chords + 1);
+    expect(p.chords.at(-1)).toMatchObject({ id: 'work', name: 'Work, renamed' });
+    expect(p.counts.new.todayTabs).toBe(IMPORT_LIMITS.tabs);
+    expect(p.counts.new.folders).toBe(IMPORT_LIMITS.folders);
+    // The first of each, in the file's order; a chord's tabs go with it.
+    expect(p.nodes.some((n) => n.id === 't0') && !p.nodes.some((n) => n.id === `t${IMPORT_LIMITS.tabs}`)).toBe(true);
+    expect(p.nodes.some((n) => n.id === 'lost')).toBe(false);
+    expect(p.capped).toEqual({ chords: 3, tabs: 5 + 1, folders: 2, deep: 0 });
+    expect(p.unreadable).toBe(0);
+  });
+
+  it('nests folders no deeper than the limit, moving a deeper one up with what’s in it', () => {
+    const there = used();
+    for (let i = 0; i < IMPORT_LIMITS.depth + 3; i++) there.nodes[`d${i}`] = { kind: 'folder', id: `d${i}`, chordId: 'home', section: 'pinned', parentId: i === 0 ? null : `d${i - 1}`, rank: 'a0', title: `D${i}`, collapsed: false, createdAt: 1 };
+    there.nodes['deepest'] = tab('deepest', 'home', { parentId: `d${IMPORT_LIMITS.depth + 2}` });
+    const p = plan(recordsOf(used(), mid), recordsOf(there, old));
+    const parentOf = (id: string) => p.nodes.find((n) => n.id === id)!.parentId;
+    expect(p.capped.deep).toBe(1);
+    expect(parentOf(`d${IMPORT_LIMITS.depth - 1}`)).toBe(`d${IMPORT_LIMITS.depth - 2}`);
+    expect(parentOf(`d${IMPORT_LIMITS.depth}`)).toBeNull();
+    expect(parentOf(`d${IMPORT_LIMITS.depth + 1}`)).toBe(`d${IMPORT_LIMITS.depth}`);
+    expect(parentOf('deepest')).toBe(`d${IMPORT_LIMITS.depth + 2}`);
+    const order = p.nodes.map((n) => n.id);
+    for (const node of p.nodes) if (node.parentId && order.includes(node.parentId)) expect(order.indexOf(node.parentId)).toBeLessThan(order.indexOf(node.id));
+  });
+
+  it.each<[string, (s: State) => void, { pages: number; chats: number } | null, Record<string, unknown>, boolean]>([
+    ['a first run, as it is', () => undefined, NOTHING, {}, true],
+    ['a first run that answered Safe Browsing’s notice and looked at a few pages', () => undefined, { pages: FRESH_PAGES, chats: 0 }, { safeBrowsing: false, safeBrowsingAsked: true, autoPip: false }, true],
+    ['nothing known of history or chats', () => undefined, null, {}, false],
+    ['a Duet chat', () => undefined, { pages: 0, chats: 1 }, {}, false],
+    ['more history than a few pages', () => undefined, { pages: FRESH_PAGES + 1, chats: 0 }, {}, false],
+    ['a second Today tab', (s) => void (s.nodes['two'] = tab('two', 'first', { section: 'today', pinnedUrl: null, rank: 'b0' })), NOTHING, {}, false],
+    ['a pinned tab', (s) => void (s.nodes['pin'] = tab('pin', 'first')), NOTHING, {}, false],
+    ['a page zoom', (s) => void (s.siteZoom['a.test'] = 1.5), NOTHING, {}, false],
+    ['a blocked permission', (s) => void (s.sitePermissions['https://a.test'] = { camera: 'block' }), NOTHING, {}, false],
+    ['a second chord', (s) => void (s.chords['two'] = chord('two', { rank: 'b0' })), NOTHING, {}, false],
+    ['a setting changed', () => undefined, NOTHING, { searchEngine: 'duckduckgo' }, false],
+    ['a keyboard shortcut changed', () => undefined, NOTHING, { shortcuts: { 'tab.new': ['Ctrl+J'] } }, false],
+  ])('a fresh Chord, restored from a file, is only a clearly fresh one: %s', (_what, change, here, settings, fresh_) => {
+    const state = fresh();
+    change(state);
+    const p = plan(recordsOf(state, mid, { settings }), recordsOf(used(), old), ALL, here);
+    expect(p.newProfile).toBe(fresh_);
+    expect(p.makeWay === null).toBe(!fresh_);
+  });
+
+  it('keeps of a file’s setup only the fields it reads', () => {
+    const junk = 'x'.repeat(100_000);
+    const r = setupRecord({ type: 'chord', id: 'c1', at: old, set: { name: 'Work', icon: 'W', rank: 'a0', profile: 'default', junk, extra: { deep: junk } } }, 'linux');
+    expect(r).toEqual({ type: 'chord', id: 'c1', at: old, set: { name: 'Work', icon: 'W', rank: 'a0', profile: 'default' } });
+    expect(setupRecord({ type: 'settings', id: 'settings', set: { searchEngine: 'kagi', 'shortcuts.other': {}, 'shortcuts.mac': { x: 1 }, made_up: junk } }, 'linux')!.set).toEqual({ searchEngine: 'kagi', 'shortcuts.other': {} });
+    expect(setupRecord({ type: 'page', id: 'https://a.test/', set: {} }, 'linux')).toBeNull();
+  });
+
+  it('brings a page’s newest visits, a batch’s worth at a time, however many a line holds', () => {
+    const visits = Array.from({ length: 2_000_000 }, (_, i) => i + 1);
+    const shares = pageShares({ url: 'https://a.test/', title: 'A', visits, typed: 7 }, 1000);
+    expect(shares).toHaveLength(MAX_PAGE_VISITS / 1000);
+    expect(shares.every((s) => s.visits.length === 1000)).toBe(true);
+    expect(shares[0]!.visits[0]).toBe(2_000_000 - MAX_PAGE_VISITS + 1);
+    expect(shares.at(-1)!.visits.at(-1)).toBe(2_000_000);
+    expect(shares.map((s) => s.typedCount)).toEqual([7, ...Array.from({ length: shares.length - 1 }, () => undefined)]);
   });
 });
 
