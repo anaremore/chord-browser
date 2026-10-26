@@ -24,6 +24,7 @@ import { session as electronSession, type OnBeforeRequestListenerDetails, type S
 import { access, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
+import { proxies } from '../proxy';
 import { requestDispatcher } from '../requests';
 import { BlockerExtension } from './extension';
 import { backoffMs, DEFAULT_REFRESH_MS, FILTER_LISTS, isNewer, setVersion, type CompiledInfo, type ListId } from './lists';
@@ -496,14 +497,18 @@ export class AdBlocking {
     this.scheduleRefresh(Math.max(next, MINUTE));
   }
 
-  /** In memory, no cache, no cookies: the lists' host sees an address and a time, nothing else of yours. */
-  private session(): Session {
+  /**
+   * In memory, no cache, no cookies: the lists' host sees an address and a time, nothing else of yours.
+   * Through the proxy for every chord, once it's in place.
+   */
+  private async session(): Promise<Session> {
     if (!this.ses) {
       this.ses = electronSession.fromPartition('chord-ad-blocking', { cache: false });
       this.ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
       this.ses.setPermissionCheckHandler(() => false);
       this.ses.setSpellCheckerEnabled(false);
     }
+    await proxies.ready(this.ses);
     return this.ses;
   }
 
@@ -513,7 +518,7 @@ export class AdBlocking {
     const headers: Record<string, string> = { accept: 'text/plain' };
     if (known?.etag) headers['if-none-match'] = known.etag;
     if (known?.lastModified) headers['if-modified-since'] = known.lastModified;
-    const response = await this.session().fetch(url, { credentials: 'omit', cache: 'no-store', headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const response = await (await this.session()).fetch(url, { credentials: 'omit', cache: 'no-store', headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (response.status === 304 && known) return { id, bytes: null, etag: known.etag, lastModified: known.lastModified };
     if (!response.ok) throw new Error(`${id}: HTTP ${response.status}`);
     return { id, bytes: new Uint8Array(await response.arrayBuffer()), etag: response.headers.get('etag'), lastModified: response.headers.get('last-modified') };

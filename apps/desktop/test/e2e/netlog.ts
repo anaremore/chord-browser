@@ -59,3 +59,21 @@ export function contactedHosts(file: string): Map<string, Set<string>> {
 
 /** Google's own domains, as the Google-free test means them. */
 export const GOOGLE_HOST = /(^|\.)(google|gstatic|googleapis|gvt1|gvt2|googleusercontent|googlevideo|ggpht|withgoogle|doubleclick|googlesyndication|google-analytics|googletagmanager|youtube|ytimg)\.[a-z.]+$/;
+
+/**
+ * Hosts a run asked a DNS server about: those with a resolver job, which
+ * only starts when the answer isn't on this computer already (a literal
+ * address, the hosts file, the cache). Chromium also asks its resolver
+ * locally for other reasons, such as whether a host is private, without a job.
+ */
+export function lookedUpHosts(file: string): Set<string> {
+  const log = parse(readFileSync(file, 'utf8'));
+  const names = new Map(Object.entries(log.constants.logEventTypes).map(([name, id]) => [id, name]));
+  const hosts = new Set<string>();
+  for (const event of log.events) {
+    if (names.get(event.type) !== 'HOST_RESOLVER_MANAGER_JOB') continue;
+    const host = hostOf(event.params?.['host']);
+    if (host && !LOCAL.has(host)) hosts.add(host);
+  }
+  return hosts;
+}

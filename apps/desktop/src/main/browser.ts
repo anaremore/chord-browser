@@ -22,6 +22,8 @@ import {
   isPrivateChord,
   isPrivateProfile,
   privateWindowOf,
+  proxyLabel,
+  sameProxy,
   keycapFor,
   markdownLink,
   mediaVisibleTo,
@@ -44,6 +46,7 @@ import {
   type LiveTab,
   type SavedEffects,
   type NodeId,
+  type ProxySettings,
   type State,
   type TabNode,
   type WindowId,
@@ -141,11 +144,16 @@ export interface BrowserOptions {
   /** A private window closed: drop its session (cookies, storage, cache) and anything kept for it. */
   releaseProfile(profileId: string): void;
   /**
-   * The session developer tools load in (DESIGN.md §7.16): Chord's own,
-   * persistent one, or for a private window's tab (its profile id) an
-   * in-memory one of that window's. Never a profile's.
+   * What a session's next request waits for while its proxy is being set (ARCHITECTURE.md §9, Proxies);
+   * null, almost always, when it's in place. Pages wait for it before they load.
    */
-  devtoolsSession(privateProfileId: string | null): Session;
+  proxyReady(session: Session): Promise<void> | null;
+  /**
+   * The session developer tools load in (DESIGN.md §7.16): Chord's own,
+   * persistent one, or with a profile id an in-memory one of its own: a
+   * private window's, or a chord's with its own proxy (through it). Never a profile's.
+   */
+  devtoolsSession(profileId: string | null): Session;
   /** Safe Browsing (ARCHITECTURE.md §14.5): checks pages while it's on, and whether to offer turning it on. */
   safeBrowsing: {
     enabled(): boolean;
@@ -338,6 +346,7 @@ export class Browser {
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       sessionFor: (node) => options.profileSession(this.store.state.chords[node.chordId]?.profileId ?? 'default'),
+      proxyReady: (session) => options.proxyReady(session),
       // The archive is Chord's only page shown as a tab so far.
       createInternalView: () => createUiView(options.uiSession, 'archive'),
       windowFor: (nodeId) => this.windowShowing(nodeId),
@@ -517,8 +526,9 @@ export class Browser {
       page: (nodeId) => this.tabs.get(nodeId)?.webContents,
       sessionFor: (nodeId) => {
         const node = this.store.state.nodes[nodeId];
-        const profileId = node ? this.store.state.chords[node.chordId]?.profileId : undefined;
-        return options.devtoolsSession(profileId && isPrivateProfile(profileId) ? profileId : null);
+        const chord = node ? this.store.state.chords[node.chordId] : undefined;
+        // What DevTools fetch (source maps) goes to the page's site: a private window's stays in its memory, and a chord's own proxy carries it.
+        return options.devtoolsSession(chord && (isPrivateProfile(chord.profileId) || chord.proxy) ? chord.profileId : null);
       },
       uiSession: options.uiSession,
       settings: () => this.store.state.settings.devtools,
@@ -1069,9 +1079,12 @@ export class Browser {
     if (now - (this.preconnected.get(key) ?? -Infinity) < PRECONNECT_EVERY_MS) return;
     // Forget the oldest once the list is long: it only stops repeats.
     if (this.preconnected.size >= 256) this.preconnected.delete(this.preconnected.keys().next().value!);
+    const session = this.options.profileSession(profileId);
+    // Only through the proxy the page will load through: while it's being set, no connection ahead.
+    if (this.options.proxyReady(session)) return;
     this.preconnected.delete(key);
     this.preconnected.set(key, now);
-    this.options.profileSession(profileId).preconnect({ url: origin, numSockets: 1 });
+    session.preconnect({ url: origin, numSockets: 1 });
   }
 
   /**
@@ -1346,8 +1359,15 @@ export class Browser {
     const request = imageSearchRequest(engine, image, app.isPackaged ? undefined : process.env['CHORD_IMAGE_SEARCH_ORIGIN'] || undefined);
     const contents = where === 'current' ? w.activeTabContents : this.openTabFor(w, request.home, where === 'background');
     if (!contents || contents.isDestroyed()) return;
-    contents.loadURL(request.url, { postData: [{ type: 'rawData', bytes: request.body }], extraHeaders: `Content-Type: ${request.contentType}
+    const upload = () => {
+      if (contents.isDestroyed()) return;
+      contents.loadURL(request.url, { postData: [{ type: 'rawData', bytes: request.body }], extraHeaders: `Content-Type: ${request.contentType}
 ` }).catch(() => {});
+    };
+    // A tab just made in a session whose proxy is still being set (a private window's first) waits for it, as its page does.
+    const pending = this.options.proxyReady(contents.session);
+    if (pending) void pending.then(upload);
+    else upload();
   }
 
   /** A new tab in the window, on `url` for now, and its page, so main can load into it (an upload, say). */
@@ -1661,7 +1681,7 @@ export class Browser {
       settings: state.settings,
       chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
       extensions: this.extensions.infos(),
-      chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId })),
+      chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId, ...(c.proxy ? { proxy: c.proxy } : {}) })),
       sitePermissions: state.sitePermissions,
       spellcheckLanguages: spellcheckLanguages(),
       linkRoutes: Object.values(state.linkRoutes).sort((a, b) => a.host.localeCompare(b.host)),
@@ -2143,6 +2163,9 @@ export class Browser {
         },
         separateSignIns: chord.profileId !== DEFAULT_PROFILE,
         toggleSeparateSignIns: () => this.toggleSeparateSignIns(w, chordId),
+        ownProxy: chord.proxy ? proxyLabel(chord.proxy) : null,
+        sameProxyAsAll: () => this.setChordProxy(chordId, null, w),
+        editProxy: () => this.openProxySettings(w, chordId),
         delete: onlyChord ? null : () => this.deleteChord(w, chordId),
       }),
       { ...at, width: 0, height: 0 },
@@ -2231,20 +2254,54 @@ export class Browser {
 
   /**
    * "Keep sign-ins separate": the chord gets a profile of its own (its tabs
-   * reload in it, signed out), or shares the default one again. Undo goes
-   * back to the sign-ins it had, which stay on disk until the next launch.
+   * reload in it, signed out), or shares the default one again, and with it
+   * the proxy for every chord. Undo goes back to the sign-ins it had, which
+   * stay on disk until the next launch, and to its own proxy if it had one.
    */
   setSeparateSignIns(chordId: string, separate: boolean, w = this.lastNormalWindow()): void {
     const chord = this.store.state.chords[chordId];
     if (!chord || chord.private || (chord.profileId !== DEFAULT_PROFILE) === separate) return;
     const previous = chord.profileId;
+    const ownProxy = chord.proxy ?? null;
     this.store.dispatch({ t: 'chord.profile', chordId, profileId: separate ? uuidv7() : DEFAULT_PROFILE });
     if (!w) return;
+    const shared = ownProxy ? `“${chord.name}” shares sign-ins with your other chords again, and their proxy.` : `“${chord.name}” shares sign-ins with your other chords again.`;
     w.toast({
       id: `chord-signins:${chordId}`,
-      message: separate ? `“${chord.name}” keeps its own sign-ins now. Its tabs reloaded, signed out.` : `“${chord.name}” shares sign-ins with your other chords again.`,
-      action: { label: 'Undo', command: { t: 'chord.profile', chordId, profileId: previous } },
+      message: separate ? `“${chord.name}” keeps its own sign-ins now. Its tabs reloaded, signed out.` : shared,
+      action: { label: 'Undo', command: ownProxy ? { t: 'chord.proxy', chordId, proxy: ownProxy, profileId: previous } : { t: 'chord.profile', chordId, profileId: previous } },
     });
+  }
+
+  /**
+   * A chord's own proxy, or (null) the proxy for every chord again
+   * (ARCHITECTURE.md §9, Proxies). Electron sets proxies per session, so a
+   * chord sharing sign-ins gets its own with it: its tabs reload, signed out,
+   * as Settings said before you chose. Undo puts back the proxy and the sign-ins it had.
+   */
+  setChordProxy(chordId: string, proxy: ProxySettings | null, w = this.lastNormalWindow()): void {
+    const chord = this.store.state.chords[chordId];
+    if (!chord || chord.private || sameProxy(chord.proxy, proxy)) return;
+    const previous = { proxy: chord.proxy ?? null, profileId: chord.profileId };
+    const separate = proxy !== null && chord.profileId === DEFAULT_PROFILE;
+    this.store.dispatch({ t: 'chord.proxy', chordId, proxy, ...(separate ? { profileId: uuidv7() } : {}) });
+    const now = this.store.state.chords[chordId];
+    if (!w || !now || sameProxy(now.proxy, previous.proxy)) return;
+    w.toast({
+      id: `chord-proxy:${chordId}`,
+      message: separate
+        ? `“${chord.name}” keeps its own sign-ins and proxy now. Its tabs reloaded, signed out.`
+        : proxy
+          ? `“${chord.name}” uses its own proxy now.`
+          : `“${chord.name}” uses the proxy for all chords again.`,
+      action: { label: 'Undo', command: { t: 'chord.proxy', chordId, ...previous } },
+    });
+  }
+
+  /** Settings → Privacy → Proxy, with this chord's own proxy open to change. */
+  private openProxySettings(w: AppWindow, chordId: string): void {
+    this.lastWindowId = w.id;
+    this.openSettings(`privacy/proxy/${chordId}`);
   }
 
   /** `source`: the contents the key or click came from (F6 starts there; Esc on the command bar goes back there). */
@@ -2450,6 +2507,12 @@ export class Browser {
       case 'chord.separateSignIns': {
         const chordId = this.store.state.windows[w.id]?.activeChordId;
         if (chordId) this.toggleSeparateSignIns(w, chordId);
+        return true;
+      }
+      case 'chord.proxy': {
+        // A private window's chord has no proxy of its own: it uses the one for every chord, shown with the rest.
+        const chord = this.store.state.chords[this.store.state.windows[w.id]?.activeChordId ?? ''];
+        if (chord) this.openProxySettings(w, chord.private ? '' : chord.id);
         return true;
       }
       case 'chord.next':

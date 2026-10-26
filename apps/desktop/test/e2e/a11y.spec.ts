@@ -316,6 +316,15 @@ for (const mode of APPEARANCES) {
             findings.push(...(await audit(settings, 'Settings → Appearance → import', { appearance: mode })));
             await settings.getByRole('button', { name: 'Cancel' }).click();
           }
+          if (name === 'Privacy') {
+            // The proxy's fields with a problem in one, and a chord's own with what it means for its sign-ins (nothing applied).
+            await settings.getByRole('radiogroup', { name: 'Proxy for every chord' }).getByRole('radio', { name: /^A proxy server/ }).click();
+            await settings.getByLabel('Proxy for every chord: port', { exact: true }).fill('70000');
+            await settings.getByRole('button', { name: /, proxy for Personal$/ }).click();
+            await settings.getByRole('radiogroup', { name: 'Proxy for Personal' }).getByRole('radio', { name: /^No proxy/ }).click();
+            await expect(settings.getByText('Personal will be signed out of every site')).toBeVisible();
+            findings.push(...(await audit(settings, 'Settings → Privacy → Proxy (its fields, a chord’s own)', { appearance: mode })));
+          }
           if (name === 'Keyboard shortcuts') {
             // Recording a new key.
             await settings.locator('[data-action="view.find"]').getByRole('button', { name: /^Add another key/ }).click();

@@ -34,6 +34,11 @@ export interface TabManagerDeps {
   state(): State;
   dispatch(command: Command): void;
   sessionFor(node: TabNode): Session;
+  /**
+   * While a session's proxy is being set, what its pages wait for before they load (ARCHITECTURE.md §9,
+   * Proxies): a page never starts the old way. Null, almost always, when it's in place.
+   */
+  proxyReady(session: Session): Promise<void> | null;
   /** A view for one of Chord's own pages (`chord://archive`), on Chord's UI session with its own preload. */
   createInternalView(url: string): WebContentsView;
   /** The window a tab belongs to, for opening links from it. */
@@ -79,6 +84,15 @@ export class TabManager {
   private readonly siteIcons = new WeakMap<Session, Map<string, string>>();
 
   constructor(private readonly deps: TabManagerDeps) {}
+
+  /** Load in `contents` once its session's proxy is in place: at once when it is (no proxy, or set long ago). */
+  private whenProxied(contents: WebContents, load: () => void): void {
+    const pending = this.deps.proxyReady(contents.session);
+    if (!pending) return load();
+    void pending.then(() => {
+      if (!contents.isDestroyed()) load();
+    });
+  }
 
   /** Keep a site's icon, the newest first out of `SITE_ICONS` (a few KB each). */
   private rememberIcon(session: Session, url: string, icon: string): void {
@@ -185,16 +199,19 @@ export class TabManager {
     const contents = view.webContents;
     // Muted stays muted: after sleeping, a restart, or a move to other sign-ins (a new page each time).
     if (node.muted) contents.setAudioMuted(true);
-    if (nav) {
-      // Back where it was: same page, same back/forward list, same scroll position.
-      contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
-        if (!contents.isDestroyed() && contents.navigationHistory.length() === 0) void contents.loadURL(node.url).catch(() => {});
-      });
-    } else {
-      void contents.loadURL(node.url).catch(() => {
-        // Load failures surface through did-fail-load; nothing to do here.
-      });
-    }
+    const url = node.url;
+    this.whenProxied(contents, () => {
+      if (nav) {
+        // Back where it was: same page, same back/forward list, same scroll position.
+        contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
+          if (!contents.isDestroyed() && contents.navigationHistory.length() === 0) void contents.loadURL(url).catch(() => {});
+        });
+      } else {
+        void contents.loadURL(url).catch(() => {
+          // Load failures surface through did-fail-load; nothing to do here.
+        });
+      }
+    });
     return view;
   }
 
@@ -211,8 +228,10 @@ export class TabManager {
     this.floating.set(nodeId, { view, private: isPrivate });
     this.wire(nodeId, view.webContents, false);
     this.deps.onContentsCreated(view.webContents, nodeId);
-    void view.webContents.loadURL(url).catch(() => {
-      // Load failures show in the page itself, as they would in a tab.
+    this.whenProxied(view.webContents, () => {
+      void view.webContents.loadURL(url).catch(() => {
+        // Load failures show in the page itself, as they would in a tab.
+      });
     });
     return view;
   }
@@ -253,7 +272,7 @@ export class TabManager {
       this.ensure(nodeId);
       return;
     }
-    if (!isInternalUrl(url)) void view.webContents.loadURL(url).catch(() => {});
+    if (!isInternalUrl(url)) this.whenProxied(view.webContents, () => void view.webContents.loadURL(url).catch(() => {}));
   }
 
   /** Silence the tab's page, or let it be heard. A tab without a page is silenced when it gets one (ensure). */

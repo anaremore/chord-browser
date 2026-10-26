@@ -187,6 +187,7 @@ const ACTIONS: { action: ActionId; title: string; words: string; when?: (state: 
   { action: 'app.devtoolsWindow', title: 'Dock developer tools in the window', words: 'dock developer tools devtools back in window attach', when: devtoolsAre('window') },
   { action: 'chord.delete', title: 'Delete this chord', words: 'delete remove chord space' },
   { action: 'chord.separateSignIns', title: 'Keep sign-ins separate for this chord', words: 'sign ins separate accounts cookies profile login' },
+  { action: 'chord.proxy', title: 'Proxy for this chord…', words: 'proxy socks socks5 http server pac network ip address vpn' },
   { action: 'app.settings', title: 'Settings', words: 'settings preferences options' },
   { action: 'app.shortcuts', title: 'Keyboard shortcuts', words: 'keyboard shortcuts hotkeys keys cheat sheet' },
 ];

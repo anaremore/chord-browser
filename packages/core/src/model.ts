@@ -8,6 +8,7 @@ import { DEFAULT_DEVTOOLS, type DevtoolsPlace, type DevtoolsSettings } from './d
 import type { DuetKeep, DuetProvider, DuetScope } from './duet';
 import type { ImportRecord } from './import';
 import { DEFAULT_READER, type ReaderSettings } from './reader';
+import type { ProxySettings } from './proxy';
 import type { PageThreat, ThreatKind } from './safe-browsing';
 import type { ActionId, ShortcutOverrides } from './shortcuts';
 
@@ -87,6 +88,12 @@ export interface Chord {
   private?: boolean;
   /** A private window's chord only: sites its page menu turned ad blocking off for, on top of Settings' list, forgotten with the window. */
   blockingOff?: string[];
+  /**
+   * A proxy of its own (ARCHITECTURE.md §9, Proxies); absent, it uses
+   * Settings' proxy for every chord. Only a chord that keeps its own sign-ins
+   * has one: Electron sets proxies per session.
+   */
+  proxy?: ProxySettings;
 }
 
 /** How a private window's chord looks: quiet graphite, always dark. */
@@ -411,6 +418,12 @@ export interface Settings {
   effects: EffectsSettings;
   /** Developer tools: the side and size docked ones take, and whether new ones open in a window (DESIGN.md §7.16). */
   devtools: DevtoolsSettings;
+  /**
+   * The proxy for every chord (Settings → Privacy → Proxy): private windows'
+   * and Chord's own requests too, and every chord without one of its own.
+   * The system's, as Electron does by default, unless you choose another.
+   */
+  proxy: ProxySettings;
 }
 
 /** Settings → Effects: dry everywhere keeps every site's Effects and applies none; each site keeps its own switch too. */
@@ -513,6 +526,7 @@ export const DEFAULT_SETTINGS: Settings = {
   reader: DEFAULT_READER,
   effects: { wet: true },
   devtools: DEFAULT_DEVTOOLS,
+  proxy: { mode: 'system', server: null, pac: null },
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -529,6 +543,7 @@ export const defaultSettings = (): Settings => ({
   reader: { ...DEFAULT_SETTINGS.reader },
   effects: { ...DEFAULT_SETTINGS.effects },
   devtools: { ...DEFAULT_SETTINGS.devtools },
+  proxy: { mode: 'system', server: null, pac: null },
 });
 
 /**
@@ -577,6 +592,8 @@ export interface SettingsPatch {
   effects?: Partial<EffectsSettings>;
   /** Sizes are clamped to their side's minimum and DEVTOOLS.max. */
   devtools?: Partial<DevtoolsSettings>;
+  /** The whole new proxy for every chord; one that can't be used (core's cleanProxy) is ignored. */
+  proxy?: ProxySettings;
 }
 
 /**

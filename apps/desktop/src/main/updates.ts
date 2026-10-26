@@ -13,6 +13,7 @@
 import type { UpdateStatus } from '@chord/ipc';
 import { app, session, type Session } from 'electron';
 import { inFlatpak } from './identity';
+import { proxies } from './proxy';
 import { newerRelease, type Release } from './releases';
 
 /** What updates.ts needs from update-installer.ts (an interface, so tests can stand in for it). */
@@ -126,7 +127,7 @@ export class UpdateChecker {
   private async check(): Promise<UpdateStatus> {
     this.last = { state: 'checking' };
     try {
-      const response = await this.session().fetch(this.feed!, {
+      const response = await (await this.session()).fetch(this.feed!, {
         credentials: 'omit',
         signal: AbortSignal.timeout(TIMEOUT_MS),
         headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
@@ -145,9 +146,10 @@ export class UpdateChecker {
     return this.last;
   }
 
-  /** In memory: the check keeps nothing between runs. */
-  private session(): Session {
+  /** In memory: the check keeps nothing between runs. Through the proxy for every chord, once it's in place. */
+  private async session(): Promise<Session> {
     this.ses ??= session.fromPartition('chord-updates', { cache: false });
+    await proxies.ready(this.ses);
     return this.ses;
   }
 }

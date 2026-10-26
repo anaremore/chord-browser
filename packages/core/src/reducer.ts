@@ -53,6 +53,7 @@ import {
   type WindowModel,
 } from './model';
 import { routeFor, routeKey } from './links';
+import { cleanProxy, sameProxy, type ProxySettings } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
 import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
@@ -158,8 +159,20 @@ export type Command =
   /** ⌘1–⌘8 go to that chord; ⌘9 always goes to the last one, as tab shortcuts do in Chrome. */
   | { t: 'chord.goto'; windowId: WindowId; index: number }
   | { t: 'chord.update'; chordId: ChordId; name?: string; icon?: string }
-  /** Which sign-ins a chord uses: DEFAULT_PROFILE to share, or a profile of its own. Its open tabs reload into it. */
+  /**
+   * Which sign-ins a chord uses: DEFAULT_PROFILE to share, or a profile of its
+   * own. Its open tabs reload into it. Sharing them again drops its own proxy.
+   */
   | { t: 'chord.profile'; chordId: ChordId; profileId: ProfileId }
+  /**
+   * A chord's own proxy, or (null) Settings' proxy for every chord. With
+   * `profileId` the chord moves to those sign-ins first, as chord.profile
+   * does: a proxy of its own needs sign-ins of its own (Electron sets proxies
+   * per session), so one for a chord sharing sign-ins comes with a new
+   * profile, and Undo puts both back. A proxy for shared sign-ins, or one that
+   * can't be used, changes nothing.
+   */
+  | { t: 'chord.proxy'; chordId: ChordId; proxy: ProxySettings | null; profileId?: ProfileId }
   /** Removes a chord and its tabs, kept for Undo. The last chord can't be deleted. */
   | { t: 'chord.delete'; chordId: ChordId }
   /** Undo a deletion: the chord and its tabs come back, and this window switches to it. */
@@ -563,6 +576,27 @@ function switchChord(draft: Draft<State>, windowId: WindowId, chordId: ChordId, 
   let tabId = win.activeTab[chordId] ?? null;
   if (!tabId || draft.nodes[tabId]?.kind !== 'tab' || shownByOther(draft, tabId, windowId)) tabId = recentFree(draft, chordId, windowId);
   activate(draft, windowId, tabId, ctx, effects);
+}
+
+/**
+ * A chord moves to other sign-ins. A page can't change session: every open tab in the chord closes its
+ * page, and the one a window shows comes straight back in the new session. The rest load when you visit
+ * them. Shared sign-ins mean the shared session, and so the proxy for every chord: its own goes.
+ */
+function changeProfile(draft: Draft<State>, chord: Draft<Chord>, profileId: ProfileId, effects: Effect[]): void {
+  chord.profileId = profileId;
+  if (profileId === DEFAULT_PROFILE) delete chord.proxy;
+  for (const node of Object.values(draft.nodes)) {
+    if (node.kind !== 'tab' || node.chordId !== chord.id || !draft.live[node.id]) continue;
+    delete draft.live[node.id];
+    effects.push({ e: 'view.destroy', nodeId: node.id });
+  }
+  for (const win of Object.values(draft.windows)) {
+    const shown = win.activeChordId === chord.id ? win.activeTab[chord.id] : null;
+    if (!shown) continue;
+    draft.live[shown] = { ...IDLE_LIVE, loading: true };
+    effects.push({ e: 'view.ensure', nodeId: shown }, { e: 'view.show', windowId: win.id, nodeId: shown });
+  }
 }
 
 function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[]): void {
@@ -1259,6 +1293,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (current.height !== next.height) current.height = next.height;
         if (current.window !== next.window) current.window = next.window;
       }
+      // The proxy for every chord: the whole of it, or nothing if it can't be used.
+      const proxy = cmd.settings.proxy === undefined ? null : cleanProxy(cmd.settings.proxy);
+      if (proxy && !sameProxy(draft.settings.proxy, proxy)) draft.settings.proxy = proxy;
       const { spellcheck } = cmd.settings;
       if (spellcheck?.enabled !== undefined && draft.settings.spellcheck.enabled !== spellcheck.enabled) draft.settings.spellcheck.enabled = spellcheck.enabled;
       if (spellcheck?.language !== undefined && draft.settings.spellcheck.language !== spellcheck.language) draft.settings.spellcheck.language = spellcheck.language;
@@ -1364,20 +1401,19 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'chord.profile': {
       const chord = draft.chords[cmd.chordId];
       if (!chord || chord.private || chord.profileId === cmd.profileId) return;
-      chord.profileId = cmd.profileId;
-      // A page can't change session: every open tab in the chord closes its page, and the one
-      // a window shows comes straight back in the new session. The rest load when you visit them.
-      for (const node of Object.values(draft.nodes)) {
-        if (node.kind !== 'tab' || node.chordId !== cmd.chordId || !draft.live[node.id]) continue;
-        delete draft.live[node.id];
-        effects.push({ e: 'view.destroy', nodeId: node.id });
-      }
-      for (const win of Object.values(draft.windows)) {
-        const shown = win.activeChordId === cmd.chordId ? win.activeTab[cmd.chordId] : null;
-        if (!shown) continue;
-        draft.live[shown] = { ...IDLE_LIVE, loading: true };
-        effects.push({ e: 'view.ensure', nodeId: shown }, { e: 'view.show', windowId: win.id, nodeId: shown });
-      }
+      changeProfile(draft, chord, cmd.profileId, effects);
+      return;
+    }
+
+    case 'chord.proxy': {
+      const chord = draft.chords[cmd.chordId];
+      if (!chord || chord.private) return;
+      const proxy = cmd.proxy === null ? null : cleanProxy(cmd.proxy);
+      const profileId = cmd.profileId ?? chord.profileId;
+      if ((cmd.proxy !== null && !proxy) || (proxy && profileId === DEFAULT_PROFILE)) return;
+      if (profileId !== chord.profileId) changeProfile(draft, chord, profileId, effects);
+      if (proxy && !sameProxy(chord.proxy, proxy)) chord.proxy = proxy;
+      else if (!proxy && chord.proxy) delete chord.proxy;
       return;
     }
 

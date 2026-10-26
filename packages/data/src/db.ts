@@ -247,8 +247,10 @@ export class ChordDatabase {
       return anything ? { chords: [], nodes: [], windows: [], settings, sitePermissions, downloads, extensions, favorites, siteZoom } : null;
     }
 
-    const chords = chordRows.map(
-      (r): Chord => ({
+    const chords = chordRows.map((r): Chord => {
+      // Checked by restore (core's cleanProxy), as every JSON column is at the boundary.
+      const proxy = parseJson<Chord['proxy'] | null>(r['proxy'], null);
+      return {
         id: str(r['id']),
         profileId: str(r['profile_id']),
         name: str(r['name']),
@@ -256,8 +258,9 @@ export class ChordDatabase {
         theme: parseJson<ChordThemeSpec>(r['theme'], { stops: [{ l: 0.72, c: 0.12, h: 300 }], grain: 0.2, appearance: 'auto' }),
         rank: str(r['rank']),
         createdAt: num(r['created_at']),
-      }),
-    );
+        ...(proxy ? { proxy } : {}),
+      };
+    });
 
     const nodeRows = this.sql(
       `SELECT n.*, t.url, t.title AS tab_title, t.pinned_url, t.custom_title, t.last_active_at, t.muted,
@@ -683,10 +686,10 @@ export class ChordDatabase {
       );
     }
     this.sql(
-      `INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO chord (id, profile_id, name, icon, theme, rank, proxy, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET profile_id = excluded.profile_id, name = excluded.name, icon = excluded.icon,
-         theme = excluded.theme, rank = excluded.rank, updated_at = excluded.updated_at`,
-    ).run(id, profileId, chord.name, chord.icon, JSON.stringify(chord.theme), chord.rank, chord.createdAt, now);
+         theme = excluded.theme, rank = excluded.rank, proxy = excluded.proxy, updated_at = excluded.updated_at`,
+    ).run(id, profileId, chord.name, chord.icon, JSON.stringify(chord.theme), chord.rank, chord.proxy ? JSON.stringify(chord.proxy) : null, chord.createdAt, now);
   }
 
   private writeNode(id: string, node: SidebarNode | null, now: number): void {

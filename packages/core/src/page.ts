@@ -31,7 +31,8 @@ export function markdownLink(title: string, url: string): string {
 }
 
 export interface LoadErrorCopy {
-  kind: 'offline' | 'not-found' | 'unreachable' | 'insecure' | 'blocked' | 'failed';
+  /** `proxy`: the proxy Chord sends pages through failed (the frame offers its settings too). */
+  kind: 'offline' | 'not-found' | 'unreachable' | 'insecure' | 'blocked' | 'proxy' | 'failed';
   title: string;
   body: string;
   /** Certificate errors offer a way back, not a retry: retrying an insecure connection doesn't make it safe. */
@@ -51,6 +52,37 @@ export function describeLoadError(code: number, host: string): LoadErrorCopy & {
   }
   if (code === -105 || code === -137) {
     return { kind: 'not-found', name, title: `Can’t find ${site}.`, body: 'Check the address for a typo, or search for it instead.', action: 'retry' };
+  }
+  // The proxy (ARCHITECTURE.md §9, Proxies): its own failures, never a reason to load the page without it.
+  if (code === -130) {
+    return { kind: 'proxy', name, title: 'Can’t reach the proxy.', body: 'Chord sends this page through a proxy, and the proxy isn’t answering. Check that it’s running, or change it in Proxy settings.', action: 'retry' };
+  }
+  if (code === -111 || code === -120 || code === -121 || code === -186) {
+    return { kind: 'proxy', name, title: `The proxy couldn’t reach ${host || 'this site'}.`, body: 'The proxy answered, but couldn’t connect to the site. The site may be down, or the proxy may not allow it.', action: 'retry' };
+  }
+  if (code === -336) {
+    return { kind: 'proxy', name, title: 'Chord can’t use this proxy.', body: 'It isn’t a kind of proxy Chord can connect to. Check it in Proxy settings.', action: 'retry' };
+  }
+  if (code === -131 || code === -327 || code === -367) {
+    return {
+      kind: 'proxy',
+      name,
+      title: 'Can’t load the proxy’s configuration file.',
+      body: 'Chord finds its proxy in a file it couldn’t load, so it didn’t open the page without one. Check the file’s address in Proxy settings.',
+      action: 'retry',
+    };
+  }
+  if (code === -136) {
+    return { kind: 'proxy', name, title: 'The proxy’s certificate isn’t valid.', body: 'Someone could be reading or changing what goes through it, so Chord didn’t connect.', action: 'back' };
+  }
+  if (code === -115 || code === -127 || code === -364) {
+    return {
+      kind: 'proxy',
+      name,
+      title: 'The proxy needs you to sign in.',
+      body: code !== -115 ? 'Try again, and sign in when the proxy asks.' : 'It asks for a kind of sign-in Chord can’t do. Try another proxy, or ask whoever runs it.',
+      action: 'retry',
+    };
   }
   if (code <= -200 && code > -300) {
     return {
@@ -82,8 +114,17 @@ const NET_ERROR_NAMES: Record<number, string> = {
   [-105]: 'ERR_NAME_NOT_RESOLVED',
   [-106]: 'ERR_INTERNET_DISCONNECTED',
   [-109]: 'ERR_ADDRESS_UNREACHABLE',
+  [-111]: 'ERR_TUNNEL_CONNECTION_FAILED',
+  [-115]: 'ERR_PROXY_AUTH_UNSUPPORTED',
   [-118]: 'ERR_CONNECTION_TIMED_OUT',
+  [-120]: 'ERR_SOCKS_CONNECTION_FAILED',
+  [-121]: 'ERR_SOCKS_CONNECTION_HOST_UNREACHABLE',
+  [-127]: 'ERR_PROXY_AUTH_REQUESTED',
+  [-130]: 'ERR_PROXY_CONNECTION_FAILED',
+  [-131]: 'ERR_MANDATORY_PROXY_CONFIGURATION_FAILED',
+  [-136]: 'ERR_PROXY_CERTIFICATE_INVALID',
   [-137]: 'ERR_NAME_RESOLUTION_FAILED',
+  [-186]: 'ERR_PROXY_UNABLE_TO_CONNECT_TO_DESTINATION',
   [-200]: 'ERR_CERT_COMMON_NAME_INVALID',
   [-201]: 'ERR_CERT_DATE_INVALID',
   [-202]: 'ERR_CERT_AUTHORITY_INVALID',
@@ -91,4 +132,8 @@ const NET_ERROR_NAMES: Record<number, string> = {
   [-301]: 'ERR_DISALLOWED_URL_SCHEME',
   [-312]: 'ERR_UNSAFE_PORT',
   [-324]: 'ERR_EMPTY_RESPONSE',
+  [-327]: 'ERR_PAC_SCRIPT_FAILED',
+  [-336]: 'ERR_NO_SUPPORTED_PROXIES',
+  [-364]: 'ERR_PROXY_AUTH_REQUESTED_WITH_NO_CONNECTION',
+  [-367]: 'ERR_PAC_SCRIPT_TERMINATED',
 };

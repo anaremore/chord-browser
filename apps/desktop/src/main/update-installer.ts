@@ -13,9 +13,11 @@
  */
 import { existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { app } from 'electron';
+import { app, session } from 'electron';
 import { autoUpdater, Provider, type AppUpdater, type ProgressInfo, type ResolvedUpdateFileInfo, type UpdateInfo } from 'electron-updater';
+import { NET_SESSION_NAME } from 'electron-updater/out/electronHttpExecutor';
 import { parseUpdateInfo, resolveFiles, type ProviderRuntimeOptions } from 'electron-updater/out/providers/Provider';
+import { proxies } from './proxy';
 import type { Release } from './releases';
 import { UPDATE_PUBLIC_KEY } from './update-key';
 import { RELEASE_DOWNLOADS, downloadsFor, manifestFor, signatureFile, verifyManifest } from './update-signing';
@@ -86,6 +88,9 @@ export class UpdateInstaller {
     const progress = (info: ProgressInfo) => onProgress(Math.round(info.percent));
     updater.on('download-progress', progress);
     try {
+      // electron-updater downloads through a session of its own, made here first so the proxy for every chord is in
+      // place before its first request (otherwise it would make it lazily, and ask at once).
+      await proxies.ready(session.fromPartition(NET_SESSION_NAME, { cache: false }));
       const result = await updater.checkForUpdates();
       if (!result?.isUpdateAvailable || !result.downloadPromise) throw new Error(`Release ${release.tag} has no update for this build`);
       await result.downloadPromise;

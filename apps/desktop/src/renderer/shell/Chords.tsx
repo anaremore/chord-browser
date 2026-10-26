@@ -7,7 +7,7 @@ import { DEFAULT_PROFILE, chordsFor, chordsWithCounts, firstGrapheme, keycapFor,
 import type { SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
 import { useDroppable } from '@dnd-kit/react';
-import { EyeOff, KeyRound, Plus } from 'lucide-react';
+import { EyeOff, KeyRound, Network, Plus } from 'lucide-react';
 import { motion, useIsPresent, type MotionValue, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { useRestoreFocus, useRoving } from '../shared/a11y';
@@ -283,6 +283,11 @@ export function ChordHeader({
       {chord && chord.profileId !== DEFAULT_PROFILE && (
         <span className={styles.signIns} role="img" aria-label="Keeps its own sign-ins" title="Keeps its own sign-ins">
           <KeyRound size={12} strokeWidth={2} aria-hidden />
+        </span>
+      )}
+      {chord?.proxy && (
+        <span className={styles.signIns} role="img" aria-label="Uses its own proxy" title="Uses its own proxy">
+          <Network size={12} strokeWidth={2} aria-hidden />
         </span>
       )}
     </div>

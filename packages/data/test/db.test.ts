@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { apply, restoreState, seedState, type Command, type Context, type State, type TabNode } from '@chord/core';
+import { apply, restoreState, seedState, type Command, type Context, type ProxySettings, type State, type TabNode } from '@chord/core';
 import { ChordDatabase } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
 import { opsForState, opsFromPatches } from '../src';
@@ -210,6 +210,52 @@ describe('chord-data', () => {
     expect(db.pruneProfiles()).toEqual([]);
     db.close();
     expect(count('profile')).toBe(1);
+  });
+
+  it('upgrades a version-15 profile to 16, and keeps the proxy for every chord and a chord’s own across a restart', () => {
+    const v15 = new DatabaseSync(file);
+    for (const migration of MIGRATIONS.slice(0, 15)) v15.exec(migration);
+    v15.exec('PRAGMA user_version = 15');
+    v15.prepare('INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      'c-old',
+      'default',
+      'Old',
+      '✦',
+      JSON.stringify({ stops: [{ l: 0.7, c: 0.1, h: 200 }], grain: 0.2, appearance: 'auto' }),
+      'a0',
+      1,
+      1,
+    );
+    v15.close();
+
+    let db = new ChordDatabase(file);
+    expect(db.version).toBe(MIGRATIONS.length);
+    // A chord from before has none of its own: it uses the proxy for every chord.
+    expect(db.load()!.chords[0]).not.toHaveProperty('proxy');
+    db.close();
+
+    db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const chordId = Object.keys(state.chords)[0]!;
+    const all: ProxySettings = { mode: 'server', server: { scheme: 'http', host: '10.0.0.2', port: 3128, bypass: ['<local>'] }, pac: null };
+    const own: ProxySettings = { mode: 'server', server: { scheme: 'socks5', host: 'proxy.example', port: 1080, bypass: [] }, pac: null };
+    state = drive(db, state, [
+      { t: 'settings.set', settings: { proxy: all } },
+      { t: 'chord.proxy', chordId, proxy: own, profileId: 'lab-1' },
+    ]);
+    db.close();
+    db = new ChordDatabase(file);
+    const saved = db.load()!;
+    const restored = restoreState(saved, { now: 0, newId: ctx.newId, theme: state.chords[chordId]!.theme, homeUrl: 'https://home.test/' });
+    expect(restored.settings.proxy).toEqual(all);
+    expect(restored.chords[chordId]).toMatchObject({ profileId: 'lab-1', proxy: own });
+    // Back to the proxy for every chord: the column empties.
+    drive(db, state, [{ t: 'chord.proxy', chordId, proxy: null }]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect(db.load()!.chords.find((c) => c.id === chordId)).not.toHaveProperty('proxy');
+    db.close();
   });
 
   it('keeps page zoom per site across a restart, and forgets a site set back to 100%', () => {

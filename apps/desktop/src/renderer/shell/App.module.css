@@ -262,7 +262,7 @@ kbd {
   font: var(--text-label);
 }
 
-/* Shown when the chord keeps its own sign-ins. */
+/* Shown when the chord keeps its own sign-ins, and when it has its own proxy. */
 .signIns {
   display: grid;
   flex: none;

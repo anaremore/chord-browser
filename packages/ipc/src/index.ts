@@ -7,6 +7,8 @@ import {
   ARCHIVE_AFTER_MS,
   EFFECT_PRESET_IDS,
   EFFECTS_LIMITS,
+  MAX_PROXY_BYPASS,
+  PROXY_SCHEMES,
   READER_FONTS,
   READER_SIZES,
   READER_THEMES,
@@ -47,6 +49,7 @@ import {
   type SitePermission,
   type SitePermissions,
   type ChordThemeSpec,
+  type ProxySettings as CoreProxySettings,
   type State,
 } from '@chord/core';
 import { z } from 'zod';
@@ -94,6 +97,28 @@ const ChordTheme = z.strictObject({
   appearance: z.enum(['light', 'dark', 'auto']),
   themeId: z.string().max(64).nullable().optional(),
 });
+
+/**
+ * A proxy (Settings → Privacy → Proxy), for every chord or a chord's own.
+ * Its shape only: core's cleanProxy checks the host, port, addresses and file
+ * the way Chromium reads them, and drops a proxy it can't use.
+ */
+const proxyServer = z.strictObject({
+  scheme: z.enum(PROXY_SCHEMES),
+  host: z.string().min(1).max(260),
+  port: z.number().int().min(1).max(65_535),
+  bypass: z.array(z.string().min(1).max(260)).max(MAX_PROXY_BYPASS),
+});
+const proxyPac = z.string().min(1).max(8192);
+export const ProxySettingsSchema = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('system'), server: proxyServer.nullable(), pac: proxyPac.nullable() }),
+  z.strictObject({ mode: z.literal('none'), server: proxyServer.nullable(), pac: proxyPac.nullable() }),
+  z.strictObject({ mode: z.literal('server'), server: proxyServer, pac: proxyPac.nullable() }),
+  z.strictObject({ mode: z.literal('pac'), server: proxyServer.nullable(), pac: proxyPac }),
+]);
+// Compile-time check: the schema is core's type.
+const _proxyMatch = (p: z.infer<typeof ProxySettingsSchema>): CoreProxySettings => p;
+void _proxyMatch;
 
 /** A theme in the library (Settings → Appearance). */
 export const CustomThemeSchema = z.strictObject({
@@ -163,6 +188,8 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('settings.set'), settings: z.strictObject({ onboarded: z.literal(true) }) }),
   // Undo for "Keep sign-ins separate": back to shared sign-ins, or to the chord's own (Chord's IDs are UUIDs).
   z.object({ t: z.literal('chord.profile'), chordId: id, profileId: z.union([z.literal('default'), z.uuid()]) }),
+  // Undo for a chord's own proxy: the proxy it had, and the sign-ins it had with it.
+  z.object({ t: z.literal('chord.proxy'), chordId: id, proxy: ProxySettingsSchema.nullable(), profileId: z.union([z.literal('default'), z.uuid()]).optional() }),
   // Split view (DESIGN.md §8.4): drop a tab on the page, drag a divider, drag a pane out, Undo for separating, ⌘⌥[ / ⌘⌥].
   z.object({
     t: z.literal('split.add'),
@@ -258,6 +285,8 @@ export const SettingsPatch = z.strictObject({
     .optional(),
   // Settings → Effects: dry or wet everywhere.
   effects: z.strictObject({ wet: z.boolean() }).partial().optional(),
+  // Settings → Privacy → Proxy: the proxy for every chord, whole.
+  proxy: ProxySettingsSchema.optional(),
   duet: z
     .strictObject({
       enabled: z.boolean(),
@@ -324,8 +353,8 @@ export type DefaultBrowserStatus = z.infer<typeof DefaultBrowserStatus>;
 export interface SettingsSnapshot {
   settings: Settings;
   chord: Pick<Chord, 'id' | 'name' | 'icon' | 'theme'> | null;
-  /** Every chord in switcher order, for Settings → General → Sign-ins. */
-  chords: Pick<Chord, 'id' | 'name' | 'icon' | 'profileId'>[];
+  /** Every chord in switcher order, for Settings → General → Sign-ins and Privacy → Proxy. */
+  chords: Pick<Chord, 'id' | 'name' | 'icon' | 'profileId' | 'proxy'>[];
   extensions: ExtensionInfo[];
   /** What you allowed or blocked, by site (Settings → Site permissions). */
   sitePermissions: SitePermissions;
@@ -1283,6 +1312,8 @@ export const invokeChannels = {
   // While Settings records a shortcut, main lets every key through to it (⌘T mustn't open a tab).
   'settings:recordingShortcut': { roles: ['internal'], request: z.strictObject({ recording: z.boolean() }), response: z.void() },
   'settings:chordSignIns': { roles: ['internal'], request: z.strictObject({ chordId: id, separate: z.boolean() }), response: z.void() },
+  // A chord's own proxy, or (null) the proxy for every chord; one for a chord sharing sign-ins gives it its own (main offers Undo).
+  'settings:chordProxy': { roles: ['internal'], request: z.strictObject({ chordId: id, proxy: ProxySettingsSchema.nullable() }), response: z.void() },
   // Also the shell's, for first run's "Open links in Chord?".
   'settings:defaultBrowser': { roles: ['internal', 'shell'], request: z.void(), response: DefaultBrowserStatus },
   'settings:makeDefaultBrowser': { roles: ['internal', 'shell'], request: z.void(), response: DefaultBrowserStatus },
@@ -1598,6 +1629,11 @@ export interface SettingsApi {
     recordingShortcut(recording: boolean): Promise<void>;
     /** Keep a chord's sign-ins separate, or share them again (its tabs reload; the window offers Undo). */
     chordSignIns(chordId: string, separate: boolean): Promise<void>;
+    /**
+     * A chord's own proxy, or (null) the proxy for every chord. A chord sharing sign-ins gets its own with it:
+     * its tabs reload, signed out, and the window offers Undo.
+     */
+    chordProxy(chordId: string, proxy: CoreProxySettings | null): Promise<void>;
     /** Whether Chord opens web links from other apps; `unavailable` in development builds. */
     /** Change one remembered decision for a site (null asks again), or forget the site entirely. */
     sitePermission(origin: string, permission: SitePermission, decision: 'allow' | 'block' | null): Promise<void>;

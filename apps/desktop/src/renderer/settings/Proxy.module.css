@@ -1,0 +1,136 @@
+/* Settings → Privacy → Proxy. Tokens only. */
+
+/* The choices are rows of the card, divided as its rows are. */
+.choices,
+.radios {
+  display: flex;
+  flex-direction: column;
+}
+
+.radios > * + * {
+  box-shadow: 0 calc(var(--size-hairline) * -1) 0 var(--color-divider);
+}
+
+/* A server's or a file's fields, under the choices. */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+
+.field {
+  display: grid;
+  grid-template-columns: calc(var(--size-slider-width) * 0.6) 1fr;
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+}
+
+/* What's wrong, or a note, sits under the control. */
+.field > :nth-child(3) {
+  grid-column: 2;
+}
+
+.controls {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  min-inline-size: 0;
+}
+
+.host,
+.port,
+.wide {
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+}
+
+.host,
+.wide {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.port {
+  inline-size: calc(var(--size-icon-button) * 2.5);
+}
+
+.host:focus-visible,
+.port:focus-visible,
+.wide:focus-visible {
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+}
+
+.host[aria-invalid],
+.port[aria-invalid],
+.wide[aria-invalid] {
+  box-shadow: 0 0 0 var(--size-hairline) var(--color-danger);
+}
+
+.colon {
+  color: var(--color-fg-muted);
+}
+
+.problem {
+  color: var(--color-danger);
+  font: var(--text-small);
+}
+
+/* What the button will do, and the button, at the card's foot. */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-end;
+  padding: var(--space-3) var(--space-4);
+}
+
+.notice {
+  align-self: stretch;
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.primary {
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font: var(--text-label);
+  transition: opacity var(--duration-fade-fast) var(--ease-standard);
+}
+
+.primary:disabled {
+  opacity: 0.4;
+}
+
+/* A chord's row, and its editor when open, set in a little. */
+.chord {
+  display: flex;
+  flex-direction: column;
+}
+
+.chordEditor {
+  background: var(--color-item-hover);
+}
+
+@media (forced-colors: active) {
+  .host[aria-invalid],
+  .port[aria-invalid],
+  .wide[aria-invalid] {
+    outline: var(--size-focus-ring) solid Mark;
+  }
+
+  .primary {
+    border: var(--size-hairline) solid ButtonText;
+  }
+}

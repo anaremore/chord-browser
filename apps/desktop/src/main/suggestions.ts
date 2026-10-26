@@ -4,10 +4,12 @@
  * no cookies, so what comes back isn't tied to anyone's accounts. Typed
  * addresses never go out (core's suggestUrl). A newer question from the same
  * command bar cancels the one before it, and failures just mean no
- * suggestions.
+ * suggestions. They go through the proxy for every chord, or, typed in a
+ * chord with a proxy of its own, through that one (a session each).
  */
 import { parseSuggestions, suggestUrl, type SearchEngineId } from '@chord/core';
 import { app, session, type Session } from 'electron';
+import { proxies } from './proxy';
 
 const TIMEOUT_MS = 2000;
 
@@ -18,14 +20,18 @@ export interface SuggestionsOptions {
 
 export class Suggestions {
   private readonly inFlight = new Map<number, AbortController>();
-  private ses: Session | null = null;
+  /** By the sign-ins whose own proxy they go through; null for the proxy for every chord. */
+  private readonly sessions = new Map<string | null, Session>();
   /** Development and E2E only: one local endpoint for every engine, so tests need no network. */
   private readonly override = app.isPackaged ? undefined : process.env['CHORD_SUGGEST_URL'];
 
   constructor(private readonly options: SuggestionsOptions) {}
 
-  /** `askerId` identifies the command bar asking, so its newer question replaces its older one. */
-  async suggest(askerId: number, query: string, engine?: SearchEngineId): Promise<string[]> {
+  /**
+   * `askerId` identifies the command bar asking, so its newer question replaces its older one. `ownProxy`:
+   * the sign-ins of the asking window's chord, when it has a proxy of its own.
+   */
+  async suggest(askerId: number, query: string, engine?: SearchEngineId, ownProxy: string | null = null): Promise<string[]> {
     this.inFlight.get(askerId)?.abort();
     this.inFlight.delete(askerId);
     if (!this.options.enabled()) return [];
@@ -36,7 +42,9 @@ export class Suggestions {
     this.inFlight.set(askerId, controller);
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-      const response = await this.session().fetch(url, {
+      const ses = this.session(ownProxy);
+      await proxies.ready(ses);
+      const response = await ses.fetch(url, {
         credentials: 'omit',
         signal: controller.signal,
         headers: { accept: 'application/x-suggestions+json, application/json' },
@@ -58,11 +66,13 @@ export class Suggestions {
   }
 
   /** Not `persist:`: nothing it receives outlives the run, and no page ever uses it. */
-  private session(): Session {
-    if (!this.ses) {
-      this.ses = session.fromPartition('chord-suggest', { cache: false });
-      this.ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  private session(ownProxy: string | null): Session {
+    let ses = this.sessions.get(ownProxy);
+    if (!ses) {
+      ses = proxies.make(ownProxy, () => session.fromPartition(ownProxy ? `chord-suggest-${ownProxy}` : 'chord-suggest', { cache: false }));
+      ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+      this.sessions.set(ownProxy, ses);
     }
-    return this.ses;
+    return ses;
   }
 }

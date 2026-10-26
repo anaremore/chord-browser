@@ -38,6 +38,25 @@ describe('IPC contract', () => {
     expect(theme.safeParse({ chordId: 'c', theme: { stops: [] } }).success).toBe(false);
   });
 
+  it('takes a proxy whole, with the server or file its mode needs, and never a password', () => {
+    const set = invokeChannels['settings:set'].request;
+    const server = { scheme: 'socks5', host: '10.0.0.2', port: 1080, bypass: ['<local>'] };
+    expect(set.safeParse({ proxy: { mode: 'server', server, pac: null } }).success).toBe(true);
+    expect(set.safeParse({ proxy: { mode: 'none', server, pac: null } }).success).toBe(true);
+    expect(set.safeParse({ proxy: { mode: 'server', server: null, pac: null } }).success).toBe(false);
+    expect(set.safeParse({ proxy: { mode: 'pac', server: null, pac: null } }).success).toBe(false);
+    expect(set.safeParse({ proxy: { mode: 'server', server: { ...server, scheme: 'socks4' }, pac: null } }).success).toBe(false);
+    expect(set.safeParse({ proxy: { mode: 'server', server: { ...server, password: 'secret' }, pac: null } }).success).toBe(false);
+    expect(set.safeParse({ proxy: { mode: 'server', server: { ...server, port: 70_000 }, pac: null } }).success).toBe(false);
+    const chord = invokeChannels['settings:chordProxy'];
+    expect(chord.roles).toEqual(['internal']);
+    expect(chord.request.safeParse({ chordId: 'c', proxy: null }).success).toBe(true);
+    expect(chord.request.safeParse({ chordId: 'c', proxy: { mode: 'system', server: null, pac: null } }).success).toBe(true);
+    // A toast's Undo: the proxy a chord had, and its sign-ins.
+    expect(RendererCommand.safeParse({ t: 'chord.proxy', chordId: 'c', proxy: null, profileId: 'default' }).success).toBe(true);
+    expect(RendererCommand.safeParse({ t: 'chord.proxy', chordId: 'c', proxy: null, profileId: '../evil' }).success).toBe(false);
+  });
+
   it('lets Settings open only https links', () => {
     const open = invokeChannels['settings:openUrl'].request;
     expect(open.safeParse({ url: 'https://github.com/anaremore/chord-browser' }).success).toBe(true);

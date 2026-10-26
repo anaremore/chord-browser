@@ -21,6 +21,7 @@ import { RadioGroup, ResetButton, Row, SectionHeader, Segmented, Switch } from '
 import { ExtensionsSection } from './Extensions';
 import { ImportSection } from './Import';
 import { PrivacySection } from './Privacy';
+import type { ProxyFocus } from './Proxy';
 import { EffectsSection } from './Effects';
 import styles from './Settings.module.css';
 import { Links } from './Links';
@@ -43,10 +44,14 @@ const SECTIONS = [
 type SectionId = (typeof SECTIONS)[number]['id'];
 
 const isSection = (value: string): value is SectionId => SECTIONS.some((s) => s.id === value);
-/** A section, or `appearance/colors`: Appearance with the chord's colors open in the theme editor. */
-const parseSection = (value: string): { section: SectionId; colors: boolean } | null => {
-  const [id, sub] = value.split('/');
-  return id && isSection(id) ? { section: id, colors: id === 'appearance' && sub === 'colors' } : null;
+/**
+ * A section, `appearance/colors` (Appearance with the chord's colors open in the theme editor), or
+ * `privacy/proxy/<chord id>` (Privacy at its Proxy group, with that chord's own open; none for just the group).
+ */
+const parseSection = (value: string): { section: SectionId; colors: boolean; proxy: string | null } | null => {
+  const [id, sub, chordId] = value.split('/');
+  if (!id || !isSection(id)) return null;
+  return { section: id, colors: id === 'appearance' && sub === 'colors', proxy: id === 'privacy' && sub === 'proxy' ? (chordId ?? '') : null };
 };
 const initialHash = () => parseSection(decodeURIComponent(location.hash.slice(1)));
 const initialSection = (): SectionId => initialHash()?.section ?? 'general';
@@ -130,13 +135,15 @@ function SignIns({ snapshot }: { snapshot: SettingsSnapshot }) {
             <Row
               key={chord.id}
               label={`${chord.icon}  ${chord.name}`}
-              description={separate ? 'Keeps its own sign-ins.' : 'Shares sign-ins with your other chords.'}
+              description={separate ? (chord.proxy ? 'Keeps its own sign-ins and proxy.' : 'Keeps its own sign-ins.') : 'Shares sign-ins with your other chords.'}
               control={<Switch label={`Keep sign-ins separate for ${chord.name}`} checked={separate} onChange={(value) => void api.settings.chordSignIns(chord.id, value)} />}
             />
           );
         })}
       </div>
-      <p className={styles.groupNote}>Changing a chord reloads its tabs. A chord on its own starts signed out; Undo brings its old sign-ins back.</p>
+      <p className={styles.groupNote}>
+        Changing a chord reloads its tabs. A chord on its own starts signed out; Undo brings its old sign-ins back. Sharing them again means sharing the proxy for all chords too.
+      </p>
     </>
   );
 }
@@ -459,8 +466,12 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
   const info = useLive(infoSource);
   const snapshot = useLive(snapshotSource);
   const [section, setSection] = useState<SectionId>(initialSection);
-  // Each "Edit colors…" from a chord's menu is a new request to open the editor.
+  // Each "Edit colors…" from a chord's menu is a new request to open the editor; each "Its own…" proxy, to open the chord's.
   const [editColors, setEditColors] = useState(() => (initialHash()?.colors ? 1 : 0));
+  const [proxyFocus, setProxyFocus] = useState<ProxyFocus | null>(() => {
+    const proxy = initialHash()?.proxy;
+    return proxy === null || proxy === undefined ? null : { n: 1, chordId: proxy || null };
+  });
   useEffect(
     () =>
       api.settings.onSection((value) => {
@@ -468,6 +479,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
         if (!parsed) return;
         setSection(parsed.section);
         if (parsed.colors) setEditColors((n) => n + 1);
+        if (parsed.proxy !== null) setProxyFocus((last) => ({ n: (last?.n ?? 0) + 1, chordId: parsed.proxy || null }));
       }),
     [],
   );
@@ -498,6 +510,8 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
                 aria-current={current ? 'page' : undefined}
                 onClick={() => {
                   setSection(s.id);
+                  // Coming back to Privacy by hand starts at its top.
+                  setProxyFocus(null);
                   history.replaceState(null, '', `#${s.id}`);
                 }}
               >
@@ -522,7 +536,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'general' && <General snapshot={snapshot} info={info} />}
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} editColors={editColors} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
-              {section === 'privacy' && <PrivacySection snapshot={snapshot} />}
+              {section === 'privacy' && <PrivacySection snapshot={snapshot} proxyFocus={proxyFocus} />}
               {section === 'effects' && <EffectsSection snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}

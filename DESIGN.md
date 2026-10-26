@@ -990,6 +990,42 @@ With no other browser on the computer, first run leaves the step out, and Settin
 - **A page's right-click menu**, at the end of its page section: *Block ads on this site*, a checkmark item, checked while blocking applies there. Unchecking it reloads the site's pages on screen once the change is in, with ads, and a toast offers Undo. Left out when blocking is off or the page isn't a web page. In a private window, turning a site off lasts as long as the window.
 - **A site** is its registrable domain, subdomains included: turning it off on `cooking.nytimes.com` turns it off on `nytimes.com`.
 
+**Proxies** (ARCHITECTURE.md §9; *built 2026-10-25*). The system's proxy until you choose another, for every chord at once; a chord can have one of its own, which needs sign-ins of its own, and Chord says so before it does anything.
+- **Settings → Privacy → Proxy**, after Safe Browsing: one card of choices, each a row with a line under its name and ✓ on the one in use (*In use* to a screen reader):
+  - *Use the system’s proxy*: "Your computer’s network settings decide, as they do for other apps." The default.
+  - *No proxy*: "Pages connect to sites directly."
+  - *A proxy server*: "HTTP, HTTPS or SOCKS5, at an address you give."
+  - *An automatic configuration file*: "A PAC file that picks the proxy for each address."
+- **Choosing is two steps:** the choice, then a button at the card's foot that says what happens (*Use this proxy*, *Use the system’s proxy*, *Connect directly*), shown only while the choice differs from what's in use. Arrow keys move through the choices without changing anything: a change closes every connection open the old way. ↺ on the group's title goes back to the system's.
+- **A proxy server** opens its fields under the choices, label on the left, as Settings' rows are:
+  - *Type*: HTTP · HTTPS · SOCKS5 (segmented). Under it, what that means: for HTTP, "If the proxy asks for a password, Chord asks you over the page and forgets it when you quit."; for SOCKS5, "The proxy looks up sites’ names too, so they don’t go to your network’s DNS. Chord can’t sign in to a SOCKS5 proxy that needs a password."
+  - *Server*: the address, a colon, and the port (its placeholder the type's usual one: 8080, 443, 1080). A whole address typed or pasted in the first box (`socks5://10.0.0.2:1080`) goes to the fields it belongs in when you leave it.
+  - *Don't use it for*: addresses separated by commas, with "Separate addresses with commas. <local> covers names without a dot, like intranet."
+  - Each field is checked as you type: its problem replaces the note under it, in `danger`, read with the field, and the field gets a hairline in `danger`. "Just the address, without http:// or socks5://. Choose the type above." · "Put the port in the box beside it." · "Just the address. Chord never keeps a proxy’s password: if the proxy asks for one, Chord asks you." · "Chord connects to SOCKS proxies with SOCKS5, so the proxy looks up the sites’ names. Choose SOCKS5 above." · "A port is a whole number from 1 to 65535." · "Chord can’t read “x”. Use names like *.example.com, addresses like 10.0.0.0/8, or <local>." The button stays disabled until everything can be used.
+- **An automatic configuration file**: *File address*, with "If Chord can’t load the file, pages wait until it can. They never go out without it."
+- **Under the card:** "Every chord without a proxy of its own uses it, and so do private windows and Chord’s own requests: update checks, ad-blocking lists, Safe Browsing and search suggestions. A change applies at once, and connections open the old way are closed."
+- **Each chord**, the group after it: a row per chord, its icon and name over *Same as all chords* or *Its own: SOCKS5 proxy at 10.0.0.2:1080*, and *Its own…* (or *Change…*; *Done* while open) opening its editor under the row, on `item-hover`: the same choices, with *Same as all chords* first, its line saying what that is now.
+  - **A chord that shares sign-ins** is told before the button, above it: "Work shares sign-ins with your other chords. A proxy of its own needs sign-ins of its own: Work will be signed out of every site, and its tabs will reload. Your other chords stay signed in." The button says it too: *Keep sign-ins separate and use this proxy* (or *…and connect directly*). Nothing changes until it's pressed; then the window offers Undo, which puts back both.
+  - *Same as all chords* on a chord with its own: "Work keeps its own sign-ins." over *Use the proxy for all chords*.
+  - Under the group: "A chord’s own proxy comes with its own sign-ins: Chord sets proxies by sign-ins, and the same cookies through another proxy would tell sites it’s you anyway."
+- **Elsewhere:**
+  - The chord's right-click menu, after *Keep sign-ins separate*: *Proxy* ▸ *Same as all chords* · *Its own…* (radio items; checked, *Its own: HTTP proxy at proxy.example:8080…*). *Same as all chords* applies at once, with Undo; *Its own…* opens its editor in Settings.
+  - The command bar: *Proxy for this chord…* does the same.
+  - Settings → General → Sign-ins: *Keeps its own sign-ins and proxy.* Turning that switch off shares the proxy for all chords again, and the toast says so.
+  - The sidebar: a chord with its own proxy has a 12 px `network` glyph in `fg-subtle` after its name in the chord header (*Uses its own proxy*), beside the key for its own sign-ins.
+- **Private windows** use the proxy for every chord; they have none of their own.
+- **A proxy that asks for a password** gets the sign-in box over the tab (§7.1 `AuthCard`: *The proxy 10.0.0.2:3128 needs you to sign in*), once for each set of sign-ins (yours, a chord's own, a private window), until you quit. Chord keeps nothing.
+- **A proxy that fails** never lets the page out without it. The frame explains, with *Proxy settings* (the quiet button, opening this chord's proxy in Settings) beside *Try again*:
+
+| Error | Title | Body |
+|---|---|---|
+| `ERR_PROXY_CONNECTION_FAILED` | Can’t reach the proxy. | Chord sends this page through a proxy, and the proxy isn’t answering. Check that it’s running, or change it in Proxy settings. |
+| `ERR_TUNNEL_CONNECTION_FAILED`, the SOCKS ones | The proxy couldn’t reach example.com. | The proxy answered, but couldn’t connect to the site. The site may be down, or the proxy may not allow it. |
+| `ERR_NO_SUPPORTED_PROXIES` | Chord can’t use this proxy. | It isn’t a kind of proxy Chord can connect to. Check it in Proxy settings. |
+| `ERR_MANDATORY_PROXY_CONFIGURATION_FAILED`, the PAC ones | Can’t load the proxy’s configuration file. | Chord finds its proxy in a file it couldn’t load, so it didn’t open the page without one. Check the file’s address in Proxy settings. |
+| `ERR_PROXY_CERTIFICATE_INVALID` | The proxy’s certificate isn’t valid. | Someone could be reading or changing what goes through it, so Chord didn’t connect. (*Go back*, not *Try again*) |
+| `ERR_PROXY_AUTH_REQUESTED`, `ERR_PROXY_AUTH_UNSUPPORTED` | The proxy needs you to sign in. | Try again, and sign in when the proxy asks. · It asks for a kind of sign-in Chord can’t do. Try another proxy, or ask whoever runs it. |
+
 **Toast copy:**
 - "Tab closed · Undo"
 - "Archived 4 tabs · Undo"
@@ -999,6 +1035,7 @@ With no other browser on the computer, first run leaves the step out, and Settin
 - "Not blocking ads on nytimes.com · Undo" · "Blocking ads on nytimes.com again · Undo"
 - "Moved to Work (sign-ins differ, so it reloaded and is no longer shared) · Undo" · "Stopped sharing “Slides”: it moved to other sign-ins, so it loaded again" (these two show in presenting mode too, §7.13)
 - "Filled 5 fields on example.com · Undo" (Duet's fill card, §7.8)
+- "“Work” keeps its own sign-ins and proxy now. Its tabs reloaded, signed out. · Undo" · "“Work” uses its own proxy now. · Undo" · "“Work” uses the proxy for all chords again. · Undo" · "“Work” shares sign-ins with your other chords again, and their proxy. · Undo" (Proxies, above)
 
 Empty states get a small abstract illustration in the chord's own colors (three soft shapes echoing the mark), animated once with `gentle`. They never look like stock art.
 

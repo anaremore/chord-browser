@@ -14,6 +14,8 @@
  *
  * Ad and tracker blocking (ARCHITECTURE.md §9): on by default, with what the
  * lists' host sees beside the switch, and the sites it's off for.
+ *
+ * Proxy (Proxy.tsx): the proxy for every chord, and each chord's own.
  */
 import { AD_BLOCKING_NOTICE, blockingSite, DEFAULT_SETTINGS, SAFE_BROWSING_NOTICE, SEARCH_ENGINES } from '@chord/core';
 import type { AdBlockingStatus, SafeBrowsingStatus, SettingsSnapshot } from '@chord/ipc';
@@ -21,6 +23,7 @@ import { Check, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { RadioGroup, Row, SectionHeader, Switch } from './controls';
+import { ProxySection, type ProxyFocus } from './Proxy';
 import styles from './Settings.module.css';
 
 const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
@@ -158,7 +161,7 @@ function SafeBrowsing({ snapshot }: { snapshot: SettingsSnapshot }) {
   );
 }
 
-export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
+export function PrivacySection({ snapshot, proxyFocus }: { snapshot: SettingsSnapshot; proxyFocus: ProxyFocus | null }) {
   const { googleFree, searchEngine } = snapshot.settings;
   return (
     <>
@@ -224,6 +227,7 @@ export function PrivacySection({ snapshot }: { snapshot: SettingsSnapshot }) {
       )}
       <AdBlocking snapshot={snapshot} />
       <SafeBrowsing snapshot={snapshot} />
+      <ProxySection snapshot={snapshot} focus={proxyFocus} />
       {/* What Chord keeps on this computer that you might not expect (DESIGN.md §7.6). */}
       <h2 className={styles.groupTitle}>On this computer</h2>
       <div className={styles.group}>

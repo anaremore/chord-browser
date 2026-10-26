@@ -55,18 +55,30 @@ function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadErro
   const copy = describeLoadError(error.code, displayHost(error.url));
   const back = () =>
     void (canGoBack ? api.nav.command('back') : api.state.dispatch({ t: 'tab.close', windowId, nodeId: tabId }));
+  const main =
+    copy.action === 'retry' ? (
+      <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
+        Try again
+      </button>
+    ) : (
+      <button type="button" className={styles.emptyButton} onClick={back}>
+        {canGoBack ? 'Go back' : 'Close tab'}
+      </button>
+    );
   return (
     <div className={styles.empty} role="alert" data-kind={copy.kind} data-page-state>
       <p className={styles.emptyTitle}>{copy.title}</p>
       <p className={styles.emptyBody}>{copy.body}</p>
-      {copy.action === 'retry' ? (
-        <button type="button" className={styles.emptyButton} onClick={() => void api.nav.command('reload')}>
-          Try again
-        </button>
+      {copy.kind === 'proxy' ? (
+        // The proxy failed: where it's set (this chord's own, beside the one for every chord) is a click away.
+        <div className={styles.emptyActions}>
+          <button type="button" className={styles.emptySecondary} onClick={() => void api.action.run('chord.proxy')}>
+            Proxy settings
+          </button>
+          {main}
+        </div>
       ) : (
-        <button type="button" className={styles.emptyButton} onClick={back}>
-          {canGoBack ? 'Go back' : 'Close tab'}
-        </button>
+        main
       )}
       <p className={styles.errorCode}>{copy.name}</p>
     </div>

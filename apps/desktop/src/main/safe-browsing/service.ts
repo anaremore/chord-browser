@@ -16,6 +16,7 @@ import type { SafeBrowsingStatus } from '@chord/ipc';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { session, type Session } from 'electron';
+import { proxies } from '../proxy';
 import type { Purpose, Verdict } from './database';
 import type { CheckResult, DueResult, OpenResult, SearchedResult, UpdateResult, WorkerReply, WorkerRequest } from './protocol';
 
@@ -198,20 +199,21 @@ export class SafeBrowsing {
 
   /* ---------- The network ---------- */
 
-  /** In memory, no cache, no cookies: nothing here is about you, and nothing is kept. */
-  private session(): Session {
+  /** In memory, no cache, no cookies: nothing here is about you, and nothing is kept. Through the proxy for every chord. */
+  private async session(): Promise<Session> {
     if (!this.ses) {
       this.ses = session.fromPartition('chord-safe-browsing', { cache: false });
       this.ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
       this.ses.setPermissionCheckHandler(() => false);
       this.ses.setSpellCheckerEnabled(false);
     }
+    await proxies.ready(this.ses);
     return this.ses;
   }
 
   private async get(path: string, params: URLSearchParams, timeoutMs: number): Promise<{ body: Uint8Array; json: boolean }> {
     const endpoint = this.config.endpoint!;
-    const response = await this.session().fetch(`${endpoint.base}${path}?${params}`, {
+    const response = await (await this.session()).fetch(`${endpoint.base}${path}?${params}`, {
       credentials: 'omit',
       cache: 'no-store',
       signal: AbortSignal.timeout(timeoutMs),

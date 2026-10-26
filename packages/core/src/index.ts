@@ -13,6 +13,7 @@ export * from './links';
 export * from './media';
 export * from './model';
 export * from './page';
+export * from './proxy';
 export * from './rank';
 export * from './reader';
 export * from './reducer';

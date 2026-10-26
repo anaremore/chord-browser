@@ -245,6 +245,11 @@ export interface ChordMenuActions {
   /** Whether the chord keeps its own sign-ins (a profile of its own). */
   separateSignIns: boolean;
   toggleSeparateSignIns(): void;
+  /** Its own proxy in a few words (core's proxyLabel); null when it uses the proxy for every chord. */
+  ownProxy: string | null;
+  sameProxyAsAll(): void;
+  /** Settings → Privacy → Proxy, with this chord's own open. */
+  editProxy(): void;
   /** Null when this is the only chord, which can't be deleted. */
   delete: (() => void) | null;
 }
@@ -257,6 +262,14 @@ export function buildChordMenu(a: ChordMenuActions): Menu {
     { label: 'Edit colors…', click: a.editColors },
     { type: 'separator' },
     { label: 'Keep sign-ins separate', type: 'checkbox', checked: a.separateSignIns, click: a.toggleSeparateSignIns },
+    // Its own proxy is chosen in Settings, which says first what it means for a chord sharing sign-ins.
+    {
+      label: 'Proxy',
+      submenu: [
+        { label: 'Same as all chords', type: 'radio', checked: a.ownProxy === null, click: a.sameProxyAsAll },
+        { label: a.ownProxy ? `Its own: ${a.ownProxy}…` : 'Its own…', type: 'radio', checked: a.ownProxy !== null, click: a.editProxy },
+      ],
+    },
     { type: 'separator' },
     { label: 'Delete chord', enabled: a.delete !== null, click: () => a.delete?.() },
   ]);

@@ -19,6 +19,7 @@ const api: SettingsApi = {
     copyText: (text) => invoke('settings:copyText', { text }),
     recordingShortcut: (recording) => invoke('settings:recordingShortcut', { recording }),
     chordSignIns: (chordId, separate) => invoke('settings:chordSignIns', { chordId, separate }),
+    chordProxy: (chordId, proxy) => invoke('settings:chordProxy', { chordId, proxy }),
     sitePermission: (origin, permission, decision) => invoke('settings:sitePermission', { origin, permission, decision }),
     forgetSite: (origin) => invoke('settings:forgetSite', { origin }),
     linkRoute: (host, chordId) => invoke('settings:linkRoute', { host, chordId }),

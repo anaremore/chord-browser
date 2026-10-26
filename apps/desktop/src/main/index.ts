@@ -13,6 +13,7 @@ import {
   isPrivateWindow,
   privateWindowOf,
   profilePartition,
+  proxyFor,
   restoreState,
   uuidv7,
   type Command,
@@ -54,6 +55,7 @@ import { Suggestions } from './suggestions';
 import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
 import { PasskeyBroker } from './passkeys';
+import { proxies } from './proxy';
 import { Screenshots } from './screenshots/service';
 import { DiskShots } from './screenshots/store';
 import { mark, watchLaunch } from './launch-timeline';
@@ -182,8 +184,12 @@ const playerInstaller = new PlayerInstaller({
   feed: app.isPackaged ? 'https://api.github.com/repos/anaremore/chord-browser/releases?per_page=30' : (devEnv('CHORD_PLAYER_FEED') ?? null),
   downloads: app.isPackaged ? RELEASE_DOWNLOADS : (devEnv('CHORD_PLAYER_DOWNLOADS') ?? null),
   publicKey: app.isPackaged ? UPDATE_PUBLIC_KEY : (devEnv('CHORD_PLAYER_PUBLIC_KEY') ?? ''),
-  // Its own in-memory session: no cookies sent, nothing kept.
-  fetch: (url, init) => (playerFetchSession ??= session.fromPartition('chord-player-updates', { cache: false })).fetch(url, init),
+  // Its own in-memory session: no cookies sent, nothing kept. Through the proxy for every chord, once it's in place.
+  fetch: async (url, init) => {
+    playerFetchSession ??= session.fromPartition('chord-player-updates', { cache: false });
+    await proxies.ready(playerFetchSession);
+    return playerFetchSession.fetch(url, init);
+  },
   workerPath: join(import.meta.dirname, 'player-unpack.js'),
   changed: () => browser?.playerChanged(),
 });
@@ -220,6 +226,13 @@ function senderWindow(sender: WebContents) {
 /** The chord the sender's window shows: command bar searches and picks are per chord. */
 function activeChordOf(sender: WebContents): string | null {
   return browser!.store.state.windows[senderWindow(sender).id]?.activeChordId ?? null;
+}
+
+/** The sign-ins whose own proxy the sender's window's chord uses; null for the proxy for every chord. */
+function ownProxyOf(sender: WebContents): string | null {
+  const chordId = activeChordOf(sender);
+  const chord = chordId ? browser!.store.state.chords[chordId] : undefined;
+  return chord?.proxy ? chord.profileId : null;
 }
 
 /** A private window's command bar neither reads history and the archive nor teaches them anything. */
@@ -284,7 +297,8 @@ function registerIpc(): void {
     return presenting() ? nothing : found;
   });
   handle('search:image', ({ engine, image, where }, sender) => browser!.searchByImage(senderWindow(sender), engine, image, where));
-  handle('search:suggest', ({ query, engine }, sender) => suggestions.suggest(sender.id, query, engine));
+  // What you type in a chord with its own proxy goes out through that proxy, as its pages do.
+  handle('search:suggest', ({ query, engine }, sender) => suggestions.suggest(sender.id, query, engine, ownProxyOf(sender)));
   handle('history:choose', ({ text, destination, address }, sender) => {
     const chordId = activeChordOf(sender);
     if (chordId && !fromPrivateWindow(sender)) persistence!.history({ k: 'choice', chordId, text, destination, address: address ?? null, at: Date.now() });
@@ -376,6 +390,7 @@ function registerIpc(): void {
   handle('extensions:options', ({ profileId, id }) => browser!.extensions.openOptions(profileId, id));
   handle('extensions:update', () => browser!.extensions.checkForUpdates());
   handle('settings:chordSignIns', ({ chordId, separate }) => browser!.setSeparateSignIns(chordId, separate));
+  handle('settings:chordProxy', ({ chordId, proxy }) => browser!.setChordProxy(chordId, proxy));
   handle('settings:defaultBrowser', () => defaultBrowserStatus());
   handle('settings:updateStatus', () => updates.status());
   handle('settings:checkForUpdates', () => updates.checkNow());
@@ -476,6 +491,10 @@ if (!app.requestSingleInstanceLock()) {
     if (urls.length > 0) openUrls(urls);
     else browser?.focusFirstWindow();
   });
+  // Every session gets its proxy as it's made, before anything can use it, and every page behind one
+  // keeps WebRTC to it (proxy.ts). Registered before any session exists: they fire from session.fromPartition on.
+  app.on('session-created', (ses) => proxies.created(ses));
+  app.on('web-contents-created', (_event, contents) => proxies.contentsCreated(contents));
   // A site or proxy asking for a username and password: Chord's own box over the tab, or cancelled.
   app.on('login', (event, contents, details, info, callback) => {
     if (httpAuth.login(contents, details, info, callback)) event.preventDefault();
@@ -557,7 +576,8 @@ if (!app.requestSingleInstanceLock()) {
     profileSession = (profileId: string) => {
       let ses = profiles.get(profileId);
       if (!ses) {
-        ses = session.fromPartition(profilePartition(profileId));
+        // Its proxy (its chord's own, or the one for every chord) is set as it's made.
+        ses = proxies.make(profileId, () => session.fromPartition(profilePartition(profileId)));
         // A private window's session keeps its answers and downloads to itself.
         const priv = isPrivateProfile(profileId);
         permissions.attach(ses, priv ? profileId : null);
@@ -588,15 +608,17 @@ if (!app.requestSingleInstanceLock()) {
     /**
      * Developer tools' sessions (DESIGN.md §7.16): Chord's own persistent one,
      * and an in-memory one per private window, so what DevTools fetch for a
-     * private page (source maps) never reaches the disk. Never a profile's:
-     * DevTools are Chord's, not a site's. They ask for nothing and spell-check nothing.
+     * private page (source maps) never reaches the disk. A chord with its own
+     * proxy gets an in-memory one through that proxy, since what they fetch
+     * goes to the page's site. Never a profile's own session: DevTools are
+     * Chord's, not a site's. They ask for nothing and spell-check nothing.
      */
     const devtoolsSessions = new Map<string, Session>();
-    const devtoolsSession = (privateProfileId: string | null) => {
-      const partition = privateProfileId ? `chord-devtools-${privateProfileId}` : 'persist:chord-devtools';
+    const devtoolsSession = (profileId: string | null) => {
+      const partition = profileId ? `chord-devtools-${profileId}` : 'persist:chord-devtools';
       let ses = devtoolsSessions.get(partition);
       if (!ses) {
-        ses = session.fromPartition(partition);
+        ses = proxies.make(profileId, () => session.fromPartition(partition));
         configureUiSession(ses);
         devtoolsSessions.set(partition, ses);
       }
@@ -609,6 +631,7 @@ if (!app.requestSingleInstanceLock()) {
       const tools = devtoolsSessions.get(`chord-devtools-${profileId}`);
       if (tools) {
         devtoolsSessions.delete(`chord-devtools-${profileId}`);
+        proxies.forget(tools);
         void tools
           .clearStorageData()
           .then(() => tools.clearCache())
@@ -618,8 +641,11 @@ if (!app.requestSingleInstanceLock()) {
       adBlocking.detach(profileId);
       if (!ses) return;
       profiles.delete(profileId);
+      proxies.forget(ses);
+      // Its connections (to sites, or a proxy) end with it too.
       void ses
-        .clearStorageData()
+        .closeAllConnections()
+        .then(() => ses.clearStorageData())
         .then(() => ses.clearCache())
         .catch(() => {});
     };
@@ -653,6 +679,10 @@ if (!app.requestSingleInstanceLock()) {
       }
       persistence.recordAll(initial);
     }
+    // Proxies (ARCHITECTURE.md §9): the sessions made so far (Chord's UI, Electron's default) get theirs now, before
+    // any of them can download a dictionary; every one made from here on gets its own as it's made.
+    proxies.created(session.defaultSession);
+    proxies.start({ proxyFor: (owner) => proxyFor(browser?.store.state ?? initial, owner), contents: () => webContents.getAllWebContents() });
     setDictionarySource(initial.settings.googleFree);
     const profilesInUse = new Set(Object.values(initial.chords).map((c) => c.profileId));
     // Sign-ins a chord kept separately, once no chord uses them, are deleted once launch is over, with their copies of
@@ -709,6 +739,7 @@ if (!app.requestSingleInstanceLock()) {
       // CHORD_ON_BATTERY=1 (development and tests only) acts as if the computer were on battery.
       onBattery: () => (!app.isPackaged && process.env['CHORD_ON_BATTERY'] === '1') || powerMonitor.isOnBatteryPower(),
       onChange: (change) => store.record(change.patches, change.state),
+      proxyReady: (ses) => proxies.ready(ses),
       releaseProfile,
       devtoolsSession,
       adBlocking: {
@@ -750,7 +781,10 @@ if (!app.requestSingleInstanceLock()) {
         root: join(app.getPath('userData'), 'Extensions'),
         preloadPath: join(import.meta.dirname, '../preload/extensions.cjs'),
         webStore: new WebStore({
-          fetch: (url, init) => net.fetch(url, init),
+          fetch: async (url, init) => {
+            await proxies.ready(session.defaultSession);
+            return net.fetch(url, init);
+          },
           prodversion: process.versions.chrome,
           ...(dev('CHORD_WEBSTORE_UPDATE_URL') ? { updateUrl: dev('CHORD_WEBSTORE_UPDATE_URL')! } : {}),
         }),
@@ -780,6 +814,10 @@ if (!app.requestSingleInstanceLock()) {
       if (change.state.settings.googleFree && change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'googleFree')) void browser!.player.close();
       // Counts on tabs follow their switch and the sites they're hidden for.
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'tabCounts')) browser!.tabs.refreshCounts();
+      // Proxies follow the proxy for every chord, chords' own, and which sign-ins each chord has.
+      if (change.patches.some((p) => (p.path[0] === 'settings' && p.path[1] === 'proxy') || (p.path[0] === 'chords' && (p.path.length <= 2 || p.path[2] === 'proxy' || p.path[2] === 'profileId')))) {
+        proxies.sync();
+      }
       // Ad blocking follows its switch and the sites it's off for (a private window's own list lives on its chord).
       if (change.patches.some((p) => (p.path[0] === 'settings' && p.path[1] === 'adBlocking') || (p.path[0] === 'chords' && p.path[2] === 'blockingOff'))) adBlocking.sync();
     });
@@ -849,6 +887,10 @@ if (!app.requestSingleInstanceLock()) {
         },
       };
     }
+    // Every session's proxy is in place before anything loads in it, extensions' own pages and workers too.
+    // (Nothing is pending unless a proxy is set: Electron's sessions already use the system's.)
+    const proxied = proxies.settled();
+    if (proxied) await proxied;
     // Extensions load before any page does, so their content scripts reach restored tabs; Chord's blocker
     // too, so its rules cover their first requests and no page starts loading while it's being added.
     mark('extensions and ad blocking loading');

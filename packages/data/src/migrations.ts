@@ -264,4 +264,9 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE effect ADD COLUMN css_on INTEGER NOT NULL DEFAULT 1;
   `,
+  // 16: a chord's own proxy (ARCHITECTURE.md §9, Proxies), as JSON; NULL uses the proxy for every chord, which lives in
+  // settings. Only a chord with its own sign-ins has one; restore drops any other. Never a password: Chord keeps none.
+  `
+  ALTER TABLE chord ADD COLUMN proxy TEXT;
+  `,
 ];

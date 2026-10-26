@@ -7,6 +7,7 @@
  */
 import { isDuetScope } from './duet';
 import {
+  DEFAULT_PROFILE,
   defaultSettings,
   type ArchiveAfter,
   emptyState,
@@ -37,6 +38,7 @@ import { cleanDevtoolsSettings } from './devtools';
 import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
 import { routeKey } from './links';
+import { cleanProxy } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { seedState, type SeedOptions } from './seed';
 import { sortedChords } from './select';
@@ -247,7 +249,19 @@ function restoreSettings(saved: Record<string, unknown>, platform?: Platform): S
   settings.reader = cleanReaderSettings(settings.reader, saved['reader']);
   const effects = saved['effects'] as Record<string, unknown> | undefined;
   if (effects && typeof effects === 'object' && typeof effects['wet'] === 'boolean') settings.effects.wet = effects['wet'];
+  settings.proxy = cleanProxy(saved['proxy']) ?? settings.proxy;
   return settings;
+}
+
+/**
+ * A saved chord as it may come back. A proxy of its own stays only on a chord
+ * that keeps its own sign-ins, and only if it can be used; without one, the
+ * chord uses the proxy for every chord.
+ */
+function restoreChord(chord: Chord): Chord {
+  const { proxy, ...rest } = chord;
+  const usable = proxy && chord.profileId !== DEFAULT_PROFILE ? cleanProxy(proxy) : null;
+  return usable ? { ...rest, proxy: usable } : rest;
 }
 
 /**
@@ -279,7 +293,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   state.extensions = restoreExtensions(saved.extensions);
   state.siteZoom = restoreZoom(saved.siteZoom);
   // A private window's chord is never saved; if one ever were, it doesn't come back.
-  for (const chord of saved.chords) if (!chord.private) state.chords[chord.id] = chord;
+  for (const chord of saved.chords) if (!chord.private) state.chords[chord.id] = restoreChord(chord);
   state.linkRoutes = restoreRoutes(saved.linkRoutes, state.chords);
   for (const node of saved.nodes) {
     if (!state.chords[node.chordId]) continue;
