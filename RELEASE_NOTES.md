@@ -14,6 +14,8 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 - **Fixed: tabs losing their site's icon.** A tab could drop to the letter tile when a page named no icon, its icon failed to load, or a navigation never arrived (a download, a cancelled link): sites that update their pages in place, like YouTube, did it most. A tab now keeps its site's icon. On a site Chord already has an icon for, it shows at once.
 
+- **Fixed: extension buttons showing a puzzle piece.** An extension that draws its own button icon, like Tampermonkey, showed Chord's puzzle piece instead. Its icon shows now, and if an extension sets one Chord can't read, its button keeps the extension's own icon.
+
 - **Effects:** restyle a site your way, in place of Arc's Boosts. Open them from the page's right-click menu (*Effects for this site…*) or the command bar, then:
   - write your own CSS, which applies as you type;
   - hide an element: click it on the page, and it stays hidden on the site's other pages too;
