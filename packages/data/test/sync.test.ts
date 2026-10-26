@@ -53,10 +53,11 @@ function setUp(): State {
 const outbox = () => db.sync.outbox().records;
 const chordId = (s: State) => Object.keys(s.chords)[0]!;
 
-describe('migrations 19 and 20', () => {
-  it('add sync’s tables, empty, and what its reader remembers of junk', () => {
+describe('migrations 19, 20 and 21', () => {
+  it('add sync’s tables, empty, what its reader remembers of junk, and the version main applied of each thing', () => {
     expect(db.version).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(20);
+    expect(MIGRATIONS.length).toBe(21);
+    expect(db.sync.versions([])).toEqual({});
     expect(db.sync.outboxSize()).toBe(0);
     expect(db.sync.meta.on).toBe(false);
     expect(db.sync.junk()).toEqual([]);

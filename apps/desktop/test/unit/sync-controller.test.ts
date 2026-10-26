@@ -282,3 +282,144 @@ describe('a quit or a crash, then a relaunch', () => {
     expect(applied(none)).toBe('[]');
   });
 });
+
+describe('kept here other than another computer wrote it', () => {
+  /** A relaunch: a new controller, as after a quit, asked for what isn't applied. */
+  async function relaunch(): Promise<DataPush[]> {
+    controller?.close();
+    const pushes: DataPush[] = [];
+    controller = new SyncController(() => db, (push) => pushes.push(push), fake().make);
+    await controller.handle({ type: 'sync.reconcile' });
+    await settle();
+    return pushes;
+  }
+
+  it('tidied by this computer’s checks, or refused: applied once, and a relaunch, and another, push nothing again', async () => {
+    let { state } = on({}, fake().make);
+    const home = Object.keys(state.chords)[0]!;
+    const at = [Date.now() + 1000, 0, OTHER] as DataRecord['at'];
+    db.atomically(() =>
+      db.sync.merge(
+        [
+          // Its colors with a key this Chord doesn't keep: the theme here is the same colors without it.
+          { type: 'chord', id: home, at, set: { theme: { ...THEME, sparkle: true } } },
+          // A name longer than a chord's here: refused, so this computer never has it.
+          { type: 'chord', id: 'long-one', at, set: { name: 'L'.repeat(300), icon: 'L', theme: THEME, rank: 'z0', profile: 'default', created: 1 } },
+        ],
+        Date.now(),
+      ),
+    );
+    // A launch: pushed (as this Chord keeps it: no sparkle); main applies it, and quits before saying so.
+    let pushes = await relaunch();
+    expect(applied(pushes)).toContain(`"id":"${home}"`);
+    expect(applied(pushes)).not.toContain('sparkle');
+    for (const push of pushes) if (push.push === 'sync.apply') state = mainApplies(state, push.apply);
+    // So the next launch pushes it again; this time main says what it applied.
+    pushes = await relaunch();
+    const push = pushes.find((p) => p.push === 'sync.apply') as Extract<DataPush, { push: 'sync.apply' }>;
+    expect(Object.keys(push.versions ?? {}).sort()).toEqual([thingKey('chord', home), thingKey('chord', 'long-one')].sort());
+    state = mainApplies(state, push.apply);
+    await controller!.handle({ type: 'sync.applied', versions: push.versions!, later: [] });
+    // Still kept other than the copy has it, and pushed no more: one relaunch, and another.
+    expect(state.chords[home]!.theme).not.toHaveProperty('sparkle');
+    expect(state.chords['long-one']).toBeUndefined();
+    expect(applied(await relaunch())).toBe('[]');
+    expect(applied(await relaunch())).toBe('[]');
+    // Changed again elsewhere, it's a new version: pushed.
+    db.atomically(() => db.sync.merge([{ type: 'chord', id: home, at: [Date.now() + 2000, 0, OTHER], set: { name: 'Renamed' } }], Date.now()));
+    expect(applied(await relaunch())).toContain('Renamed');
+  });
+
+  it('none of it applies here: seen at once, without asking main, and not pushed again', async () => {
+    on({}, fake().make);
+    db.atomically(() => db.sync.merge([{ type: 'chord', id: 'long-one', at: [Date.now() + 1000, 0, OTHER], set: { name: 'L'.repeat(300), icon: 'L', theme: THEME, rank: 'z0', profile: 'default', created: 1 } }], Date.now()));
+    expect(applied(await relaunch())).toBe('[]');
+    expect(new Map([...db.sync.unappliedPages()].flatMap((page) => [...page])).size).toBe(0);
+  });
+
+  it('put off for a change of yours waiting: not taken as applied, so it comes again', async () => {
+    const { state } = on({}, fake().make);
+    const id = Object.keys(state.chords)[0]!;
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: [Date.now() + 1000, 0, OTHER], set: { name: 'From elsewhere' } }], Date.now()));
+    const pushes = await relaunch();
+    const push = pushes.find((p) => p.push === 'sync.apply') as Extract<DataPush, { push: 'sync.apply' }>;
+    await controller!.handle({ type: 'sync.applied', versions: push.versions!, later: [`chord:${id}`] });
+    expect(applied(await relaunch())).toContain('From elsewhere');
+  });
+});
+
+describe('a folder that stops answering', () => {
+  it('a write that never returns: Settings says the folder isn’t answering, the changes wait, the worker starts again later, and writing goes on once the folder answers', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const workers: FakeWorker[] = [];
+      const terminated: FakeWorker[] = [];
+      const { state } = on({}, () => {
+        const w = new FakeWorker();
+        w.terminate = () => {
+          terminated.push(w);
+          return Promise.resolve(0);
+        };
+        workers.push(w);
+        return w as unknown as WorkerLike;
+      });
+      await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+      workers[0]!.say(passDone());
+      await settle();
+      rename(state, 'Waiting');
+      // The folder never answers the write: a stalled network drive.
+      const flushing = controller!.handle({ type: 'sync.flush' });
+      await settle();
+      expect(workers[0]!.posted.some((m) => m.t === 'write')).toBe(true);
+      vi.advanceTimersByTime(59_000);
+      expect(controller!.status().problem).toBeNull();
+      vi.advanceTimersByTime(1_000);
+      await flushing;
+      expect(controller!.status()).toMatchObject({ state: 'problem', problem: 'stalled', pending: 1 });
+      expect(db.sync.outboxSize()).toBe(1);
+      expect(terminated).toEqual([workers[0]]);
+      // Started again 30 s later; the folder answers now.
+      vi.advanceTimersByTime(30_000);
+      await settle();
+      expect(workers).toHaveLength(2);
+      // Its first write, at once.
+      vi.advanceTimersByTime(1);
+      await settle();
+      expect(workers[1]!.posted[0]).toMatchObject({ t: 'start' });
+      const write = workers[1]!.posted.find((m) => m.t === 'write') as Extract<ToWorker, { t: 'write' }> | undefined;
+      expect(write).toBeDefined();
+      workers[1]!.say({ t: 'written', upto: write!.upto, own: { generation: 1, device: db.device(), segment: 1, size: 300, frames: 2 }, frames: 1, bytes: 100 });
+      workers[1]!.say(passDone());
+      await settle();
+      expect(db.sync.outboxSize()).toBe(0);
+      expect(controller!.status()).toMatchObject({ state: 'on', problem: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still not answering: started again later and later, and Settings goes on saying so', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const workers: FakeWorker[] = [];
+      on({}, () => {
+        const w = new FakeWorker();
+        workers.push(w);
+        return w as unknown as WorkerLike;
+      });
+      // Not even a pass ends.
+      await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+      vi.advanceTimersByTime(60_000);
+      expect(controller!.status().problem).toBe('stalled');
+      vi.advanceTimersByTime(30_000);
+      expect(workers).toHaveLength(2);
+      vi.advanceTimersByTime(60_000 + 59_000);
+      expect(workers).toHaveLength(2);
+      vi.advanceTimersByTime(1_000);
+      expect(workers).toHaveLength(3);
+      expect(controller!.status().problem).toBe('stalled');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

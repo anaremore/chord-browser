@@ -370,6 +370,11 @@ function On({ view, onUpdates }: { view: SyncView; onUpdates(): void }) {
           <ProblemCard text={`Chord couldn’t write to the sync folder. It tries again every few minutes; ${view.pending > 0 ? `${plural(view.pending, 'change')} wait here` : 'your changes wait here'}.`} />
         </div>
       )}
+      {view.state === 'problem' && view.problem === 'stalled' && (
+        <div className={local.actions}>
+          <ProblemCard text={`The sync folder isn’t answering. Is your sync app or network drive working? Chord tries again in a few minutes; ${view.pending > 0 ? `${plural(view.pending, 'change')} wait here` : 'your changes wait here'}.`} />
+        </div>
+      )}
       {view.state === 'problem' && view.problem === 'unreadable' && (
         <div className={local.actions}>
           <ProblemCard text="Chord couldn’t take in changes from the sync folder. It tries again in a few minutes; nothing’s lost meanwhile." />

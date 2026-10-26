@@ -63,6 +63,16 @@ const READ_RETRY_MS = 10_000;
 const READ_RETRY_MAX = 10 * 60_000;
 /** How long turning off waits for what's waiting to be written: past that it goes on, and the changes stay in the outbox. */
 const OFF_WRITE_MS = 10_000;
+/**
+ * Every request to the worker (a folder operation, a pass) times out: while it
+ * owes an answer, this long without a word from it (an answer, a page asked
+ * for, a step read) means a folder call that never returned, a stalled network
+ * drive or cloud folder. Its thread is let go, and started again after
+ * STALL_RETRY_MS, doubling up to STALL_RETRY_MAX.
+ */
+const WORKER_MS = 60_000;
+const STALL_RETRY_MS = 30_000;
+const STALL_RETRY_MAX = 15 * 60_000;
 
 /** What starts sync's worker thread: a real one, or a stand-in in tests. */
 export type WorkerLike = Pick<Worker, 'postMessage' | 'on' | 'unref' | 'terminate'>;
@@ -99,6 +109,14 @@ export class SyncController {
   private readRetry: ReturnType<typeof setTimeout> | undefined;
   /** The worker went without being stopped (it crashed): it's started again with the next try. */
   private died = false;
+  /** A pass asked for (`start`, `read`) whose end hasn't come: the worker owes it, as it owes each of `asks`. */
+  private passOwed = false;
+  /** While the worker owes an answer: WORKER_MS without a word from it, and the folder isn't answering (`unanswered`). */
+  private watchdog: ReturnType<typeof setTimeout> | undefined;
+  /** The folder stopped answering: the worker was let go, it's started again later and later, and Settings says so until it answers. */
+  private stalled = false;
+  private stallMs = 0;
+  private stallRetry: ReturnType<typeof setTimeout> | undefined;
   private problem: SyncProblem | null = null;
   /** Writing's own problem (it couldn't write, or keeps finding another computer writing as this one): a look that finds the folder doesn't clear it. */
   private writeProblem: 'unwritable' | 'copies' | null = null;
@@ -221,10 +239,65 @@ export class SyncController {
     return new Promise((resolve) => {
       this.asks.push({ kinds: new Set(kinds), for: message.t, resolve });
       this.ensureWorker().postMessage(message);
+      this.watch();
     });
   }
 
+  /**
+   * The watchdog, from now. While the worker owes an answer, WORKER_MS
+   * without a word from it means the folder isn't answering. Once it owes
+   * none (it answered everything after being started again), a stall is over.
+   */
+  private watch(): void {
+    clearTimeout(this.watchdog);
+    if (this.worker && (this.asks.length > 0 || this.passOwed)) {
+      this.watchdog = setTimeout(() => this.unanswered(), WORKER_MS);
+      this.watchdog.unref?.();
+    } else if (this.stalled && this.worker) {
+      this.stalled = false;
+      this.stallMs = 0;
+      clearTimeout(this.stallRetry);
+      this.pushStatus();
+    }
+  }
+
+  /**
+   * The worker owed an answer and said nothing for WORKER_MS: a folder call
+   * that never returned holds its one-at-a-time chain. Its thread is let go
+   * (a call stuck in the system stays stuck, but nothing waits for it), what
+   * waited for it is answered as failed (writing keeps the outbox and tries
+   * again), a join waiting for a pass hears it ended, and Settings says the
+   * folder isn't answering. The worker starts again later and later.
+   */
+  private unanswered(): void {
+    const worker = this.worker;
+    if (!worker || (this.asks.length === 0 && !this.passOwed)) return;
+    console.error('Sync: the folder hasn’t answered for a minute; its worker is started again later');
+    this.quiet();
+    this.worker = null;
+    this.passOwed = false;
+    this.streams.clear();
+    void worker.terminate();
+    for (const ask of this.asks.splice(0)) ask.resolve({ t: 'failed', problem: 'io', for: ask.for });
+    const done = this.passDone;
+    this.passDone = null;
+    done?.();
+    this.stalled = true;
+    this.stallMs = Math.min(STALL_RETRY_MAX, Math.max(STALL_RETRY_MS, this.stallMs * 2));
+    clearTimeout(this.stallRetry);
+    this.stallRetry = setTimeout(() => this.startWorker(), this.stallMs);
+    this.stallRetry.unref?.();
+    this.pushStatus();
+  }
+
   private heard(message: FromWorker): void {
+    if (message.t === 'pass-done') this.passOwed = false;
+    this.hear(message);
+    // A word from it: the watchdog starts again, or stops.
+    this.watch();
+  }
+
+  private hear(message: FromWorker): void {
     const ask = this.asks[0];
     if (ask && (ask.kinds.has(message.t) || (message.t === 'failed' && message.for === ask.for))) {
       this.asks.shift();
@@ -305,7 +378,12 @@ export class SyncController {
 
   private stopWorker(): void {
     clearTimeout(this.writeTimer);
+    clearTimeout(this.watchdog);
+    clearTimeout(this.stallRetry);
     this.died = false;
+    this.passOwed = false;
+    this.stalled = false;
+    this.stallMs = 0;
     this.streams.clear();
     // Checkpoints go back to chord-data's own connection.
     this.quiet();
@@ -333,12 +411,18 @@ export class SyncController {
       app: this.info.app,
       junk: db.sync.junk(),
     } satisfies ToWorker);
+    // Starting is a pass, owed like any.
+    this.passOwed = true;
+    this.watch();
     if (db.sync.outboxSize() > 0) this.scheduleWrite(0);
   }
 
   /** Look at the folder now (Chord came to the front, or the folder changed). */
   read(): void {
-    if (this.worker && this.key && !this.db()?.sync.meta.paused) this.worker.postMessage({ t: 'read' } satisfies ToWorker);
+    if (!this.worker || !this.key || this.db()?.sync.meta.paused) return;
+    this.worker.postMessage({ t: 'read' } satisfies ToWorker);
+    this.passOwed = true;
+    this.watch();
   }
 
   /* ---------- reading ---------- */
@@ -388,6 +472,8 @@ export class SyncController {
       this.readFailed();
     } finally {
       this.worker?.postMessage({ t: 'ack', id: message.id, ok } satisfies ToWorker);
+      // Answered: the worker's silence counts from here, not from when the step came.
+      this.watch();
     }
   }
 
@@ -453,8 +539,12 @@ export class SyncController {
     for (const [at, slice] of slices.entries()) {
       const started = performance.now();
       const apply = db.sync.planFor(slice);
+      // Each thing's version, which main confirms once it has applied it and written it back (`sync.applied`).
+      const versions = db.sync.versions(slice.keys());
       db.sync.timed('plan', performance.now() - started);
-      if (!applyIsEmpty(apply)) this.push({ push: 'sync.apply', apply });
+      if (!applyIsEmpty(apply)) this.push({ push: 'sync.apply', apply, versions });
+      // Nothing of it applies here (all of it refused, or as this computer has it already): seen, and not pushed again.
+      else db.atomically(() => db.sync.markApplied(versions));
       if (at < slices.length - 1) await new Promise((resolve) => setImmediate(resolve));
     }
     // Main writes what it applied back to chord-data meanwhile: checkpoints stay small a while longer.
@@ -712,7 +802,7 @@ export class SyncController {
     }
     // A clock ahead, from what each computer says of itself (when it made its newest segment), never from stamps a change was bumped to.
     const ahead = [...this.wrote].filter(([device, at]) => device !== self && at > now + CLOCK_AHEAD_MS).map(([device, at]) => ({ name: devices.find((d) => d.id === device)?.name ?? 'Another computer', ms: at - now }));
-    const problem = this.problem ?? this.writeProblem ?? this.readProblem;
+    const problem = this.problem ?? (this.stalled ? 'stalled' : null) ?? this.writeProblem ?? this.readProblem;
     const state: SyncStatus['state'] = meta.joining ? 'choosing' : meta.paused ? 'paused' : !this.key ? 'locked' : problem ? 'problem' : 'on';
     return {
       state,
@@ -760,6 +850,14 @@ export class SyncController {
         this.info = request.info;
         this.startWorker();
         return { status: this.status() };
+      case 'sync.applied': {
+        // Main applied these versions and wrote them back (or saw nothing of them apply here): not pushed again, unless
+        // they change. Ones it put off for a change of its own waiting aren't, and come again.
+        const held = new Set(db.sync.thingsFor(request.later).keys());
+        const versions = Object.fromEntries(Object.entries(request.versions).filter(([key]) => !held.has(key)));
+        this.step(db, 'applied', () => db.atomically(() => db.sync.markApplied(versions)));
+        return {};
+      }
       case 'sync.reconcile':
         // After a launch (or chord-data starting again), and after main couldn't apply something: what's merged but not applied, again.
         void this.reconcile().catch(() => this.readFailed());
@@ -878,16 +976,17 @@ export class SyncController {
     await read;
     // More of the folder to look through (a big one, or junk): the passes that go on from there, so joining gets the
     // whole setup; a folder full of junk is said in Settings instead.
-    for (let pass = 1; pass < JOIN_PASSES && this.unfinished && !this.cluttered && !this.problem; pass++) {
+    for (let pass = 1; pass < JOIN_PASSES && this.unfinished && !this.cluttered && !this.problem && !this.stalled; pass++) {
       read = new Promise<void>((resolve) => (this.passDone = resolve));
       await read;
     }
-    if (this.problem) {
-      const problem = this.problem;
+    // The folder stopped answering partway: nothing's joined, and Settings says it couldn't use the folder.
+    const problem = this.problem as SyncProblem | null;
+    if (problem || this.stalled) {
       this.stopWorker();
       db.sync.clear();
       this.key = null;
-      return { problem: problem === 'changed' ? 'wrong' : problem === 'removed' ? 'io' : problem };
+      return { problem: problem === 'changed' ? 'wrong' : problem === 'missing' || problem === 'newer' || problem === 'conflict' ? problem : 'io' };
     }
     return { key: opened.key, fresh: this.step(db, 'fresh', () => db.sync.fresh()), status: this.status() };
   }
@@ -918,9 +1017,12 @@ export class SyncController {
       await new Promise((resolve) => setImmediate(resolve));
     }
     const ordered = this.step(db, 'order', () => db.sync.orderForApply(all));
+    const versions: Record<string, string> = {};
     for (let at = 0; at < ordered.length; at += PLAN_SLICE) {
       const started = performance.now();
-      const part = db.sync.planFor(new Map(ordered.slice(at, at + PLAN_SLICE)));
+      const slice = new Map(ordered.slice(at, at + PLAN_SLICE));
+      const part = db.sync.planFor(slice);
+      Object.assign(versions, db.sync.versions(slice.keys()));
       db.sync.timed('plan', performance.now() - started);
       for (const key of ['chords', 'nodes', 'favorites', 'themes', 'routes', 'effects'] as const) (apply[key] as unknown[]).push(...part[key]);
       for (const key of Object.keys(apply.gone) as (keyof SyncApply['gone'])[]) (apply.gone[key] as unknown[]).push(...part.gone[key]);
@@ -933,7 +1035,7 @@ export class SyncController {
     // Main writes all of it back next: checkpoints stay on the worker's connection meanwhile, never chord-data's thread.
     this.busyFor(db);
     this.pushStatus();
-    return { apply, replace, status: this.status() };
+    return { apply, replace, versions, status: this.status() };
   }
 
   /** The passphrase, once (no key kept here, or it changed on another computer): a newer generation is moved to with a snapshot. */
@@ -1068,6 +1170,8 @@ export class SyncController {
   /** chord-data is closing: the worker goes, with the key. */
   close(): void {
     clearTimeout(this.readRetry);
+    clearTimeout(this.watchdog);
+    clearTimeout(this.stallRetry);
     this.stopWorker();
     this.key?.fill(0);
     this.key = null;

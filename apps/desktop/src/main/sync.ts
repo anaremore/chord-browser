@@ -105,6 +105,7 @@ export class SyncService {
       else
         this.applying = this.applying
           .then(() => this.apply(push.apply))
+          .then((later) => this.confirm(push.versions, later))
           .then(() => {
             this.reconcileMs = 0;
           })
@@ -166,6 +167,19 @@ export class SyncService {
     }
     this.options.notify(this.view());
     return this.view();
+  }
+
+  /**
+   * Applied, and written back: chord-data hears which versions, so it never
+   * pushes them again, even what this computer keeps differently (tidied,
+   * refused, or placed otherwise here). Only once the store's writes are in,
+   * so a quit before then leaves them to be pushed again. What was put off for
+   * a change of yours waiting (`later`) comes again anyway.
+   */
+  private async confirm(versions: Record<string, string> | undefined, later: Set<string>): Promise<void> {
+    if (!versions || Object.keys(versions).length === 0) return;
+    await this.options.data.flush();
+    await this.options.data.sync({ type: 'sync.applied', versions, later: [...later] });
   }
 
   /** chord-data pushes again what it merged but this computer hasn't applied: later and later after each failure. */
@@ -337,6 +351,8 @@ export class SyncService {
       }
       await this.apply({ ...apply, chords: [] }, true);
     } else if (apply) await this.apply(apply, true);
+    // Joining holds nothing back: all of it was applied.
+    if (apply) await this.confirm(answer.versions, new Set()).catch((error: unknown) => console.error('Sync couldn’t confirm what it applied:', error));
     return this.stepResult(answer);
   }
 
@@ -452,7 +468,7 @@ export class SyncService {
    * A thing with a change of yours still waiting to be written is put off: its
    * write gets its stamp first, then chord-data sends what's merged again.
    */
-  private async apply(apply: SyncApply, joining = false): Promise<void> {
+  private async apply(apply: SyncApply, joining = false): Promise<Set<string>> {
     const isWaiting = this.options.data.waiting;
     // A split goes with its panes: one of them put off puts off the lot, or the store would settle the split without it.
     const groups = new Map<string, string[]>();
@@ -544,6 +560,7 @@ export class SyncService {
       await this.options.data.flush();
       await this.options.data.sync({ type: 'sync.repush', keys: [...later] }).catch(() => undefined);
     }
+    return later;
   }
 }
 
@@ -554,6 +571,7 @@ const PROBLEM_TOASTS: Record<string, string> = {
   unwritable: 'Chord couldn’t write to the sync folder. Your changes wait here, and it tries again.',
   copies: 'Another computer keeps writing to the sync folder as this one. Sync stopped writing here.',
   unreadable: 'Chord couldn’t take in changes from the sync folder. It tries again in a few minutes.',
+  stalled: 'The sync folder isn’t answering. Chord tries again in a few minutes.',
   newer: 'Another computer has a newer Chord. Update this one to keep syncing.',
   removed: 'This computer was removed from sync.',
   conflict: 'Sync was set up on two computers at once. Set it up on one, then join from the others.',

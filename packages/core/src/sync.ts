@@ -342,7 +342,7 @@ export function localChanges(merged: SyncThing | undefined, before: SyncValues |
  * couldn't write and tries again (`unwritable`), or another computer keeps
  * writing as this one (`copies`).
  */
-export type SyncProblem = 'missing' | 'changed' | 'newer' | 'removed' | 'conflict' | 'unwritable' | 'copies' | 'unreadable';
+export type SyncProblem = 'missing' | 'changed' | 'newer' | 'removed' | 'conflict' | 'unwritable' | 'copies' | 'unreadable' | 'stalled';
 
 export interface SyncComputer {
   id: string;

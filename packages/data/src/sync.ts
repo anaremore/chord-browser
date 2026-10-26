@@ -106,6 +106,9 @@ export interface SyncMeta {
   coveredReads: Record<string, string>;
 }
 
+/** A thing's version in the copy: a short hash of its merged fields and stamps, as stored. */
+const versionOf = (row: Row): string => createHash('sha256').update(String(row['fields'])).update('\n').update(String(row['stamps'])).digest('base64url').slice(0, 22);
+
 const OFF: SyncMeta = { on: false, folder: null, generation: 1, own: null, name: '', paused: false, joining: false, compactedAt: 0, framesSince: 0, bytesSince: 0, removedAt: null, retired: null, newIds: [], rebind: false, coveredReads: {} };
 
 /**
@@ -840,7 +843,6 @@ export class SyncStore {
     return new Map([...this.everythingPages()].flatMap((page) => [...page]));
   }
 
-  /** The same, `size` things at a time, by key: a join reads it with searches answered between. */
   /**
    * What this computer hasn't applied of the copy, by thing, a page at a time:
    * main's writes of what it applied are what set `local`, so after a quit or
@@ -850,34 +852,64 @@ export class SyncStore {
    * and a field this computer keeps whose value differs. Fields it never keeps
    * (a tab's title off its home, another platform's shortcuts) and ones it
    * never takes (a chord's sign-ins, Effects' Duet ids) aren't differences.
+   *
+   * And none of it if main has applied this very version (`applied`, the
+   * hash `versions` gives): what this computer keeps can differ from it for
+   * good, tidied by the same checks every apply makes, refused, or put
+   * elsewhere for where it is here (a folder too deep, the last chord, a split
+   * without its panes). Comparing through each kind's codec would catch only
+   * the first; the version catches all three, so a relaunch pushes nothing.
    */
   *unappliedPages(size = 200): Generator<Map<string, Set<string>>> {
     const never: Record<string, readonly string[]> = { chord: ['profile'], effects: ['duet'] };
     let after = { type: '', id: '' };
     for (;;) {
-      const rows = this.sql(`SELECT type, id, fields, stamps, local FROM sync_record WHERE type > ? OR (type = ? AND id > ?) ORDER BY type, id LIMIT ?`).all(after.type, after.type, after.id, size) as Row[];
+      const rows = this.sql(`SELECT type, id, fields, stamps, local, applied FROM sync_record WHERE type > ? OR (type = ? AND id > ?) ORDER BY type, id LIMIT ?`).all(after.type, after.type, after.id, size) as Row[];
       const out = new Map<string, Set<string>>();
       for (const row of rows) {
         const { thing, local } = this.loaded(str(row['type']), str(row['id']), row);
         after = { type: thing.type, id: thing.id };
         if (thing.type === 'icon' || thing.type === 'device' || syncKind(thing.type) !== 'sync') continue;
         const key = thingKey(thing.type, thing.id);
+        const differs = (names: Set<string>) => {
+          if (names.size > 0 && (row['applied'] === null || row['applied'] !== versionOf(row))) out.set(key, names);
+        };
         const gone = isGone(thing);
         const goneHere = local?.['deleted'] === true;
         if (!local || goneHere) {
-          if (!gone) out.set(key, new Set(Object.keys(thing.fields)));
+          if (!gone) differs(new Set(Object.keys(thing.fields)));
           continue;
         }
         if (gone) {
-          out.set(key, new Set(['deleted']));
+          differs(new Set(['deleted']));
           continue;
         }
         const skip = never[thing.type] ?? [];
-        const names = Object.keys(thing.fields).filter((name) => name !== 'deleted' && name in local && !skip.includes(name) && !same(thing.fields[name]!.v, local[name]));
-        if (names.length > 0) out.set(key, new Set(names));
+        differs(new Set(Object.keys(thing.fields).filter((name) => name !== 'deleted' && name in local && !skip.includes(name) && !same(thing.fields[name]!.v, local[name]))));
       }
       yield out;
       if (rows.length < size) return;
+    }
+  }
+
+  /** Each thing's version as the copy has it now (a hash of its merged fields and stamps), by key: what a push carries, for main to confirm. */
+  versions(keys: Iterable<string>): Record<string, string> {
+    const statement = this.sql('SELECT fields, stamps FROM sync_record WHERE type = ? AND id = ?');
+    const out: Record<string, string> = {};
+    for (const key of keys) {
+      const at = key.indexOf('\n');
+      const row = statement.get(key.slice(0, at), key.slice(at + 1)) as Row | undefined;
+      if (row) out[key] = versionOf(row);
+    }
+    return out;
+  }
+
+  /** Main applied these versions and wrote them back (`sync.applied`): a thing still at its version isn't pushed again. */
+  markApplied(versions: Record<string, string>): void {
+    const statement = this.sql('UPDATE sync_record SET applied = ? WHERE type = ? AND id = ?');
+    for (const [key, version] of Object.entries(versions)) {
+      const at = key.indexOf('\n');
+      statement.run(version, key.slice(0, at), key.slice(at + 1));
     }
   }
 
@@ -896,6 +928,7 @@ export class SyncStore {
     return (this.readPositions(meta.generation)[device] ?? '') === (meta.coveredReads[device] ?? '');
   }
 
+  /** What `everything` gives, `size` things at a time, by key: a join reads it with searches answered between. */
   *everythingPages(size = 200): Generator<Map<string, Set<string>>> {
     let after = { type: '', id: '' };
     for (;;) {

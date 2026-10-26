@@ -308,4 +308,10 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE IF NOT EXISTS sync_junk (path TEXT PRIMARY KEY, seen TEXT NOT NULL) STRICT;
   `,
+  // 21: the version of each synced thing main last applied (S15 §13): a hash of its merged fields and stamps, set once main
+  // has applied it and written it back. What this computer keeps of it can differ for good (tidied by its checks, refused,
+  // or a place it can't take here); a thing still at that version isn't pushed to main again. NULL, never applied.
+  `
+  ALTER TABLE sync_record ADD COLUMN applied TEXT;
+  `,
 ];
