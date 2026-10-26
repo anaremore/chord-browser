@@ -28,6 +28,9 @@ const NEWS = (title: string) =>
   '<header id="masthead">Masthead</header><main><h1>Headline</h1><p>Body text.</p><form><input id="secret" value="hunter2-effects"></form><aside id="promo">Promo</aside></main>' +
   '<aside id="sidebar">Sidebar</aside><div id="consent" class="cookie-banner">We use cookies</div>';
 
+/** A page whose first script keeps its renderer busy for 3 s, past main's 2 s wait for the stylesheet (a heavy site just reloaded). */
+const BUSY = '<title>Busy</title><script>const end = Date.now() + 3000; while (Date.now() < end) {}</script><h1>Busy</h1>';
+
 /** A page with about 24,000 elements, for what applying Effects costs. */
 const HEAVY =
   '<title>Heavy</title><style>.card { padding: 8px; border-bottom: 1px solid rgb(220, 220, 220) } .card h2 { font-size: 18px }</style>' +
@@ -37,7 +40,7 @@ let site: Site;
 /** Stands in for anything a stylesheet could fetch: it counts every request it gets. */
 let evil: { server: Server; url: string; hits: string[] };
 test.beforeAll(async () => {
-  site = await startSite({ '/news': NEWS('News'), '/news/2': NEWS('News 2'), '/heavy': HEAVY });
+  site = await startSite({ '/news': NEWS('News'), '/news/2': NEWS('News 2'), '/heavy': HEAVY, '/busy': BUSY });
   const hits: string[] = [];
   const server = createServer((req, res) => {
     hits.push(req.url ?? '');
@@ -381,6 +384,26 @@ test('Effects: your CSS, a hidden element, a preset, Dry/Wet, navigating, an uns
  * sanitizer's worker, and the page's own style and layout work, from a trace.
  * Printed for the record; CI's machines are too noisy to fail on.
  */
+test('a page still busy loading when its stylesheet goes in keeps it, however late it lands', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/busy` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const popover = await pageWhere(app, isPopover);
+    const busy = await pageAt(app, `${site.origin}/busy`);
+    const card = await openCard(shell, popover);
+    await yourCss(card).fill('h1 { color: rgb(0, 128, 0) }');
+    await expect.poll(() => style(busy, 'h1', 'color')).toBe('rgb(0, 128, 0)');
+    await card.getByRole('button', { name: 'Close Effects' }).click();
+    // Reloaded, the page's script holds its renderer past main's wait: the stylesheet lands late, and stays.
+    await busy.reload();
+    await expect.poll(() => style(busy, 'h1', 'color'), { timeout: 15_000 }).toBe('rgb(0, 128, 0)');
+    await busy.waitForTimeout(1000);
+    expect(await style(busy, 'h1', 'color')).toBe('rgb(0, 128, 0)');
+  } finally {
+    await app.close();
+  }
+});
+
 test('Effects on a heavy page: what applying them costs', async () => {
   test.setTimeout(120_000);
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/heavy`, CHORD_E2E_HOOKS: '1' });

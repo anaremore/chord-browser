@@ -6,6 +6,8 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 What's built since 0.3.0; it gets its version when it's released.
 
+- **Fixed: Effects not coming back after reloading a busy page.** On a site that keeps the page busy as it loads, like Reddit, an Effect could stop showing after a reload, though the card still said it was on. Chord stopped waiting for the page to take the styles, and took them out when they arrived late. Now they stay.
+
 - **Duet fills in forms you ask it to**, on the tab you're on: "fill this in with my work address", say. It reads what the form asks for, never what's already typed in it, and shows each field with the value it suggests in a card in its panel, where you can change a value or leave a field out. Nothing goes into the page until you press **Fill**, and Chord never sends a form: you press the page's own button. Undo puts every field back.
   - It never fills passwords, payment details, one-time codes or hidden fields, and says which ones it left for you.
   - It follows what you've let Duet read: never in a private window, on a site you said Duet may never read, or when Duet is set to read nothing.

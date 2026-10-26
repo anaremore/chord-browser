@@ -357,17 +357,22 @@ export class Effects {
     let key: string | null = null;
     const lookup = performance.now() - started;
     if (want) {
-      // A hung renderer never answers: past pageCall's limit the page counts as without it (the next change tries again),
-      // and a stylesheet that lands late after all is taken out again.
+      // Main doesn't wait past pageCall's limit. A page still busy loading (a heavy site just reloaded) can answer later:
+      // what lands then stays if it's still what the page should have, and goes if something newer came meanwhile. One
+      // that never lands leaves the page without it, and the next change tries again.
       const inserting = contents.insertCSS(want, { cssOrigin: 'author' });
       key = await pageCall(inserting, null);
       if (key === null) {
-        if (page.seq === seq) page.css = null;
-        void inserting
-          .then(async (late) => {
-            if (!contents.isDestroyed()) await contents.removeInsertedCSS(late);
-          })
-          .catch(() => undefined);
+        void inserting.then(
+          (late) => {
+            if (contents.isDestroyed()) return;
+            if (page.seq === seq && page.url === url && page.css === want) page.key = late;
+            else void contents.removeInsertedCSS(late).catch(() => {});
+          },
+          () => {
+            if (page.seq === seq) page.css = null;
+          },
+        );
       }
       this.timings.push({ lookup, insert: performance.now() - started - lookup, bytes: want.length });
       if (this.timings.length > 50) this.timings.shift();
