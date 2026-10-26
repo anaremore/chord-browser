@@ -230,8 +230,8 @@ const ofType = (things: Map<string, Thing>, type: string): Thing[] => [...things
 /** A tombstone (sync's): in a file it's ignored, so the thing neither comes in nor goes here (S15 §5). */
 const tombstoned = (thing: Thing): boolean => thing.fields.get('deleted')?.value === true;
 
-/** JSON with its keys in order, so two writers' values compare equal whatever order they put keys in. */
-function stable(value: unknown): string {
+/** JSON with its keys in order, so two writers' values compare equal whatever order they put keys in. Sync's merge orders values by it too. */
+export function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value && typeof value === 'object') {
     return `{${Object.keys(value)
@@ -241,7 +241,7 @@ function stable(value: unknown): string {
   }
   return JSON.stringify(value) ?? 'null';
 }
-const same = (a: unknown, b: unknown): boolean => stable(a) === stable(b);
+export const same = (a: unknown, b: unknown): boolean => stable(a) === stable(b);
 
 /**
  * The file's fields that win over this computer's: ones it doesn't have, and
@@ -308,6 +308,14 @@ function isNewProfile(local: Map<string, Thing>, here: MergeInput['here'], platf
     if (!same(field.value, fallback)) return false;
   }
   return true;
+}
+
+/**
+ * Whether this computer's setup, as records, is a clearly fresh Chord's (the
+ * rule above): joining sync replaces it with the synced setup without asking.
+ */
+export function isFreshSetup(local: readonly DataRecord[], here: MergeInput['here'], platform: Platform): boolean {
+  return isNewProfile(gather(local), here, platform);
 }
 
 /* ---------- Settings, in words ---------- */
@@ -377,7 +385,7 @@ function settingName(field: string): [string, (value: unknown) => string] {
 }
 
 /** Each field's default, as a file would carry it. */
-function defaultFields(platform: Platform): Map<string, unknown> {
+export function defaultFields(platform: Platform): Map<string, unknown> {
   const out = new Map<string, unknown>();
   for (const key of Object.keys(SETTING_TRAVEL) as (keyof Settings)[]) {
     for (const [name, value] of Object.entries(settingFields(key, DEFAULT_SETTINGS[key], platform) ?? {})) out.set(name, value);
@@ -386,8 +394,10 @@ function defaultFields(platform: Platform): Map<string, unknown> {
 }
 
 /** Where a field lives in Settings: `adBlocking.offSites` is two steps, `shortcuts.other` is `shortcuts`. */
-const pathOf = (field: string): string[] => (field.startsWith('shortcuts.') ? ['shortcuts'] : field.split('.'));
-const at = (from: unknown, path: readonly string[]): unknown => path.reduce<unknown>((v, step) => (v && typeof v === 'object' ? (v as Record<string, unknown>)[step] : undefined), from);
+export const settingPath = (field: string): string[] => (field.startsWith('shortcuts.') ? ['shortcuts'] : field.split('.'));
+const pathOf = settingPath;
+export const valueAt = (from: unknown, path: readonly string[]): unknown => path.reduce<unknown>((v, step) => (v && typeof v === 'object' ? (v as Record<string, unknown>)[step] : undefined), from);
+const at = valueAt;
 
 function deepMerge(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...base };

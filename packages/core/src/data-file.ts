@@ -208,6 +208,27 @@ const checkKey = (c: DataCrypto, root: Uint8Array, kdfSalt: Uint8Array) => c.hkd
 const fileKey = (c: DataCrypto, root: Uint8Array, fileSalt: Uint8Array) => c.hkdf(root, fileSalt, 'chord file 1', KEY);
 const rootKey = (c: DataCrypto, passphrase: string, kdf: ScryptParams, salt: Uint8Array) => c.scrypt(utf8.encode(normalizePassphrase(passphrase)), salt, kdf, KEY);
 
+/**
+ * The envelope's parts, for sync's folder (sync-folder.ts), which seals the
+ * same frames with the same keys: a sync segment is a file whose root key
+ * comes from the folder's `sync-<n>.json` rather than its own header.
+ */
+export const envelope = {
+  NONCE,
+  TAG,
+  KEY,
+  MAX_INFLATED,
+  checkWord: CHECK_WORD,
+  rootKey,
+  checkKey,
+  fileKey,
+  frameAad,
+  usableKdf: (kdf: unknown): kdf is DataKdf => usableKdf(kdf),
+  toBase64: (bytes: Uint8Array): string => toBase64(bytes),
+  fromBase64: (text: unknown): Uint8Array | null => fromBase64(text),
+  concat: (parts: readonly Uint8Array[]): Uint8Array => concat(parts),
+} as const;
+
 /* ---------- Writing ---------- */
 
 /** Writes a file a record at a time: its first bytes, then what each record adds, then the end. */

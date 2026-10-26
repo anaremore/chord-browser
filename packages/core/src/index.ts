@@ -29,6 +29,8 @@ export * from './sharing';
 export * from './shortcuts';
 export * from './split';
 export * from './stamps';
+export * from './sync';
+export * from './sync-folder';
 export * from './tab-counts';
 export * from './text';
 export * from './words';
