@@ -2,6 +2,14 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## Next · preview (unreleased)
+
+What's built since 0.3.0; it gets its version when it's released.
+
+- **Duet fills in forms you ask it to**, on the tab you're on: "fill this in with my work address", say. It reads what the form asks for, never what's already typed in it, and shows each field with the value it suggests in a card in its panel, where you can change a value or leave a field out. Nothing goes into the page until you press **Fill**, and Chord never sends a form: you press the page's own button. Undo puts every field back.
+  - It never fills passwords, payment details, one-time codes or hidden fields, and says which ones it left for you.
+  - It follows what you've let Duet read: never in a private window, on a site you said Duet may never read, or when Duet is set to read nothing.
+
 ## 0.3.0 · preview · 2026-10-25
 
 - **Choose what Duet can read**, in Settings → Duet, from least to most:
