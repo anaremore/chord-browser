@@ -2,6 +2,15 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## Next · preview (unreleased)
+
+What's built since 0.5.0; it gets its version when it's released.
+
+- **Bring a Chord file back**, in Settings → Your data → *From a Chord file*: an export from this computer or another. Before anything changes, Chord shows what it would bring: what's new, and what's newer than yours. It adds what's missing and updates what's older, and never removes anything. One Undo takes all of it back.
+  - Into a new Chord it's a restore: everything comes in, settings too, in place of the chord Chord started with.
+  - Into a Chord you use, your settings stay as they are unless you turn on *Settings from the file*, which names each change first. History, Duet chats and Effects each have a switch.
+  - A file is treated as untrusted: tabs don't load until you open them, every site's Effects are checked again, sites you'd allowed to use your camera, microphone or location ask again, and Duet chats send nothing anywhere until you write in one.
+
 ## 0.5.0 · preview · 2026-10-26
 
 - **Export everything in Chord to one file**, in Settings → Your data: your chords, pinned and Today tabs, folders, Favorites, themes, settings, link routes, Effects, and if you like, your history and Duet chats. Keep it as a backup, read it, or bring it to another computer.
