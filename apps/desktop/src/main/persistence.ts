@@ -12,6 +12,7 @@ import {
   opOrigin,
   opsForState,
   opsFromPatches,
+  coalesceOps,
   type ArchiveEntry,
   type ArchivePage,
   type DataRequest,
@@ -28,6 +29,7 @@ import {
   type SyncReply,
   type SyncRequest,
   type WriteOp,
+  type WriteSeq,
 } from '@chord/data';
 import { MessageChannelMain, utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron';
 
@@ -41,6 +43,9 @@ const WRITE_CHUNK = 100;
  */
 const SYNC_WRITE_CHUNK = 25;
 const CLOSE_TIMEOUT_MS = 2000;
+/** How long, and past how many entities, persistence remembers when it last wrote a change of yours to each (`waitingHere`). */
+const WRITTEN_MS = 5 * 60_000;
+const WRITTEN_KEEP = 2000;
 const MAX_RESTARTS = 3;
 
 /** Waits before each further try at opening the database. */
@@ -86,13 +91,71 @@ export function nextBatch(ops: readonly WriteOp[], chunk: number): WriteOp[] {
   return [...kept, ...nodes, ...others.slice(0, Math.max(0, chunk - kept.length - nodes.length - gone.length)), ...gone];
 }
 
-/**
- * The queue's key for a write: its entity, and whether it's yours. A change of
- * yours is never folded into another's: sync's or tidying's write to the same
- * entity after it waits behind it (`#auto`), so yours is written, and stamped,
- * first. Yours after theirs takes their place: it's the latest, and has it.
- */
+/** A write's entity and side, for what's refused (`retained`): yours, or another computer's or tidying's (`#auto`). */
 const queueKey = (op: WriteOp): string => (opOrigin(op) === 'user' ? opKey(op) : `${opKey(op)}#auto`);
+const yours = (op: WriteOp): boolean => opOrigin(op) === 'user';
+
+/**
+ * Writes waiting, in the order they're sent, each entity's in turns (S15 §13).
+ * A change of yours is never folded into another computer's or tidying's,
+ * nor theirs into yours: each turn holds one side's writes of the entity,
+ * folded, and a change from the other side starts a new turn after
+ * everything. So yours is stamped against what sync applied before it, and
+ * never after what sync applied since (a theme another computer deleted,
+ * brought back by yours).
+ */
+class WriteQueue {
+  private slots = new Map<string, WriteOp>();
+  private readonly turns = new Map<string, string[]>();
+  private n = 0;
+
+  get size(): number {
+    return this.slots.size;
+  }
+
+  values(): IterableIterator<WriteOp> {
+    return this.slots.values();
+  }
+
+  /** An entity's turns waiting, oldest first. */
+  turnsOf(entity: string): [string, WriteOp][] {
+    return (this.turns.get(entity) ?? []).map((slot) => [slot, this.slots.get(slot)!]);
+  }
+
+  /** A turn's write, in its place. */
+  set(slot: string, op: WriteOp): void {
+    this.slots.set(slot, op);
+  }
+
+  /** A new turn of its entity, after everything. */
+  append(op: WriteOp): void {
+    const slot = `${opKey(op)}#${++this.n}`;
+    this.slots.set(slot, op);
+    this.turns.set(opKey(op), [...(this.turns.get(opKey(op)) ?? []), slot]);
+  }
+
+  /** Put back ahead of everything, in their order, each a turn of its own. */
+  prepend(ops: readonly WriteOp[]): void {
+    const entries = ops.map((op): [string, WriteOp] => [`${opKey(op)}#${++this.n}`, op]);
+    this.slots = new Map([...entries, ...this.slots]);
+    for (const [slot, op] of [...entries].reverse()) this.turns.set(opKey(op), [slot, ...(this.turns.get(opKey(op)) ?? [])]);
+  }
+
+  delete(slot: string): void {
+    const op = this.slots.get(slot);
+    if (!op) return;
+    this.slots.delete(slot);
+    const left = (this.turns.get(opKey(op)) ?? []).filter((s) => s !== slot);
+    if (left.length > 0) this.turns.set(opKey(op), left);
+    else this.turns.delete(opKey(op));
+  }
+
+  /** These, taken to be written. */
+  take(ops: readonly WriteOp[]): void {
+    const taken = new Set(ops);
+    for (const [slot, op] of [...this.slots]) if (taken.has(op)) this.delete(slot);
+  }
+}
 
 /** Runs `attempt` until it succeeds, fails for a reason that won't pass, or the waits run out. */
 export async function withRetries(
@@ -116,8 +179,8 @@ export class Persistence {
   private child!: UtilityProcess;
   private nextId = 1;
   private readonly waiting = new Map<number, { resolve(r: DataResponse): void; reject(e: Error): void }>();
-  /** Writes waiting, by `queueKey`, in the order they're sent. */
-  private pending = new Map<string, WriteOp>();
+  /** Writes waiting, in the order they're sent, each entity's in turns, yours and others' apart. */
+  private readonly pending = new WriteQueue();
   private inFlight: WriteOp[] = [];
   /** History happenings, written in order with the next batch; never coalesced. */
   private events: HistoryEvent[] = [];
@@ -136,6 +199,8 @@ export class Persistence {
   private refusals = 0;
   /** Writes refused for now and not written yet, by `queueKey`, with who they're from: sync's are `unsaved`. */
   private readonly retained = new Map<string, Origin>();
+  /** When a change of yours to each entity was last written (the last WRITTEN_MS of them): `waitingHere`'s `since`. */
+  private readonly writtenAt = new Map<string, { seq: WriteSeq; at: number }>();
   /** History's happenings in the order they happened, so a batch put back never goes ahead of a later one (an `unarchive` before its `archive`). */
   private readonly eventOrder = new WeakMap<HistoryEvent, number>();
   private eventCount = 0;
@@ -214,29 +279,44 @@ export class Persistence {
   }
 
   private put(op: WriteOp): void {
-    const key = opKey(op);
-    if (opOrigin(op) !== 'user') {
-      this.pending.set(`${key}#auto`, op);
+    const entity = opKey(op);
+    if (!yours(op)) {
+      // Theirs again: the newer in its place, if theirs is the entity's latest turn; after yours, if yours is.
+      const last = this.pending.turnsOf(entity).at(-1);
+      if (last && !yours(last[1])) this.pending.set(last[0], op);
+      else this.pending.append(op);
       return;
     }
-    // Yours takes the place of sync's or tidying's waiting: it's later, and has what they wrote (or took away).
-    this.pending.delete(`${key}#auto`);
-    this.retained.delete(`${key}#auto`);
-    const waiting = this.pending.get(key);
-    // The themes you took out, since the last write of them, all of them: unless one is back.
-    if (op.k === 'setting' && op.id === 'themes' && waiting?.removed) {
-      const back = new Set((Array.isArray(op.value) ? (op.value as { id?: unknown }[]) : []).map((t) => t.id));
-      const removed = [...new Set([...waiting.removed, ...(op.removed ?? [])])].filter((id) => !back.has(id));
-      op = removed.length > 0 ? { ...op, removed } : (({ removed: _removed, ...rest }) => rest as WriteOp)(op);
+    // When you made it: stamped as of then, however long its write waits.
+    op = { ...op, at: Date.now() };
+    let last = this.pending.turnsOf(entity).at(-1);
+    // Yours takes the place of sync's or tidying's waiting where theirs takes it away: you brought it back, later.
+    if (last && !yours(last[1]) && last[1].value === null) {
+      this.pending.delete(last[0]);
+      this.retained.delete(queueKey(last[1]));
+      last = this.pending.turnsOf(entity).at(-1);
     }
-    this.pending.set(key, op);
+    // A change of yours the latest: this one in its place, with what it said (it took the entity out of sync, say). After
+    // theirs (a change of what sync applied and hasn't written yet: an edit, or taking it away), a turn of its own:
+    // chord-data then knows what you changed of it (a field), and what it was when it went, and doesn't take all of it
+    // for yours; and what of yours was before theirs stays before it.
+    if (last && yours(last[1])) this.pending.set(last[0], coalesceOps(last[1], op));
+    else this.pending.append(op);
   }
 
-  /** A batch back in the queue, ahead of what came since, in its own order; an entity written again meanwhile keeps the newer write. */
+  /**
+   * A batch back in the queue, ahead of what came since, in its own order; an
+   * entity written again meanwhile on the same side first keeps the newer
+   * write, with what the one put back said (`coalesceOps`).
+   */
   private requeue(ops: readonly WriteOp[]): void {
-    const back = ops.filter((op) => !this.pending.has(queueKey(op)));
-    if (back.length === 0) return;
-    this.pending = new Map([...back.map((op): [string, WriteOp] => [queueKey(op), op]), ...this.pending]);
+    const back: WriteOp[] = [];
+    for (const op of ops) {
+      const first = this.pending.turnsOf(opKey(op))[0];
+      if (first && yours(first[1]) === yours(op)) this.pending.set(first[0], coalesceOps(op, first[1]));
+      else back.push(op);
+    }
+    if (back.length > 0) this.pending.prepend(back);
   }
 
   /** History's happenings in the order they happened. */
@@ -246,12 +326,25 @@ export class Persistence {
 
   /**
    * Whether a change of yours to this entity (`node:<id>`, `setting:<key>`…)
-   * is waiting to be written, or being written: sync puts off applying
-   * another computer's to it until it's written and stamped (main/sync.ts).
+   * is waiting to be written, or being written, or was taken after the write
+   * `since` (chord-data read what sync is about to apply after it): sync puts
+   * off applying another computer's to it until it's written and stamped, and
+   * read again (main/sync.ts).
    */
-  waitingHere(key: string): boolean {
-    if (this.pending.has(key)) return true;
-    return this.inFlight.some((op) => opOrigin(op) === 'user' && opKey(op) === key);
+  waitingHere(key: string, since?: WriteSeq): boolean {
+    if (this.pending.turnsOf(key).some(([, op]) => yours(op))) return true;
+    if (this.inFlight.some((op) => opOrigin(op) === 'user' && opKey(op) === key)) return true;
+    // Taken since then: what sync read of it then is older than what chord.db has now.
+    const written = this.writtenAt.get(key);
+    return since !== undefined && written !== undefined && written.seq.run === since.run && written.seq.n > since.n;
+  }
+
+  /** A batch of yours is in: which write it was, by entity, for `waitingHere`'s `since` (the last few minutes' only). */
+  private wroteYours(ops: readonly WriteOp[], seq: WriteSeq | undefined): void {
+    if (!seq) return;
+    const now = Date.now();
+    for (const op of ops) if (opOrigin(op) === 'user') this.writtenAt.set(opKey(op), { seq, at: now });
+    if (this.writtenAt.size > WRITTEN_KEEP) for (const [key, written] of this.writtenAt) if (now - written.at > WRITTEN_MS) this.writtenAt.delete(key);
   }
 
   /** Sync's requests to chord-data. Throws if it can't answer. */
@@ -271,7 +364,8 @@ export class Persistence {
 
   /** Queue a whole state (a brand-new profile's first save). */
   recordAll(state: State): void {
-    for (const op of opsForState(state)) this.pending.set(queueKey(op), op);
+    const at = Date.now();
+    for (const op of opsForState(state)) this.pending.append({ ...op, at });
     this.schedule();
   }
 
@@ -279,7 +373,7 @@ export class Persistence {
   nav(nodeId: string, nav: NavState | null): void {
     if (this.closed) return;
     const op: WriteOp = { k: 'nav', id: nodeId, value: nav };
-    this.pending.set(opKey(op), op);
+    this.put(op);
     this.schedule();
   }
 
@@ -404,7 +498,7 @@ export class Persistence {
 
   /** A batch refused for now: back in the queue (unless a newer write of an entity is), and waiting until written. */
   private retain(ops: readonly WriteOp[], events: readonly HistoryEvent[]): void {
-    for (const op of ops) if (!this.pending.has(queueKey(op))) this.retained.set(queueKey(op), opOrigin(op));
+    for (const op of ops) if (!this.pending.turnsOf(opKey(op)).some(([, o]) => yours(o) === yours(op))) this.retained.set(queueKey(op), opOrigin(op));
     this.requeue(ops);
     this.events = this.inOrder([...events, ...this.events]);
   }
@@ -460,7 +554,7 @@ export class Persistence {
       while (this.pending.size > 0 || this.events.length > 0) {
         const all = [...this.pending.values()];
         const ops = nextBatch(all, all.some((op) => opOrigin(op) !== 'user') ? SYNC_WRITE_CHUNK : WRITE_CHUNK);
-        for (const op of ops) this.pending.delete(queueKey(op));
+        this.pending.take(ops);
         this.inFlight = ops;
         this.inFlightEvents = this.events;
         this.events = [];
@@ -478,7 +572,10 @@ export class Persistence {
           }
           // A batch the database refuses for what's in it would fail for ever if retried; report it and move on.
           if (!response.ok) console.error('chord-data refused a write:', response.error);
-          else this.saved();
+          else {
+            this.saved();
+            this.wroteYours(this.inFlight, response.seq);
+          }
           this.settled(this.inFlight);
           this.inFlight = [];
           this.inFlightEvents = [];

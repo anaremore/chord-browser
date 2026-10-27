@@ -34,7 +34,7 @@ import {
   type WindowId,
   type Command,
 } from '@chord/core';
-import type { DataPush, SyncInfo, SyncReply, SyncRequest } from '@chord/data';
+import type { DataPush, SyncInfo, SyncReply, SyncRequest, WriteSeq } from '@chord/data';
 import { ImportedSettings, type SyncFolderResult, type SyncStepResult, type SyncView, type Toast } from '@chord/ipc';
 import { dialog, safeStorage, type BaseWindow, type OpenDialogOptions } from 'electron';
 
@@ -61,8 +61,8 @@ export interface SyncServiceOptions {
     flush(): Promise<void>;
     /** How many things chord-data refused are waiting to be written again: what's on screen isn't all in chord.db yet. */
     unsaved(): number;
-    /** Whether a change of yours to this entity (`node:<id>`) is waiting to be written, or being written. */
-    waiting(key: string): boolean;
+    /** Whether a change of yours to this entity (`node:<id>`) is waiting to be written, being written, or was written `since`. */
+    waiting(key: string, since?: WriteSeq): boolean;
     onPush(listener: (push: DataPush) => void): void;
   };
   state(): State;
@@ -111,13 +111,27 @@ export class SyncService {
   private applying: Promise<void> = Promise.resolve();
   private reconcileMs = 0;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Putting back what was kept after turning off (`settleKept`), and when it's tried again. */
+  private settling: Promise<void> | null = null;
+  private settleMs = 0;
+  private settleTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: SyncServiceOptions) {
     options.data.onPush((push) => {
       if (push.push === 'sync.status') this.setStatus(push.status);
+      else if (push.push === 'sync.makeWay')
+        // Chords that were to make way for the synced setup and didn't (the change that took them was lost): now, in
+        // order. Not one with a change of yours waiting to be written (an Undo that brought it back).
+        this.applying = this.applying.then(() =>
+          this.makeWay(
+            push.chordIds.filter((id) => !this.options.data.waiting(`chord:${id}`)),
+            push.to,
+            false,
+          ),
+        );
       else
         this.applying = this.applying
-          .then(() => this.apply(push.apply))
+          .then(() => this.apply(push.apply, false, push.read))
           .then(() => {
             this.reconcileMs = 0;
           })
@@ -209,8 +223,9 @@ export class SyncService {
     const answer = await this.options.data.sync({ type: 'sync.status' }).catch(() => ({}) as SyncReply);
     if (answer.status) this.setStatus(answer.status);
     // What was merged but never applied (a quit or a crash during a pass or an apply): pushed now, key or not.
-    // Off with the merged copy kept (turned off while writes were refused): what chord.db lacks of it, put back.
-    if (answer.status && (answer.status.state !== 'off' || answer.kept)) void this.options.data.sync({ type: 'sync.reconcile' }).catch(() => this.reconcileLater());
+    // Off with the merged copy kept (turned off while writes were refused): what chord.db lacks of it, put back, and then it goes.
+    if (answer.kept) void this.settleKept();
+    else if (answer.status && answer.status.state !== 'off') void this.options.data.sync({ type: 'sync.reconcile' }).catch(() => this.reconcileLater());
     if (answer.status?.state !== 'locked' || !answer.keyBlob) return;
     try {
       const opened = await safeStorage.decryptStringAsync(Buffer.from(answer.keyBlob, 'base64'));
@@ -230,6 +245,39 @@ export class SyncService {
       this.keyKept = false;
       this.unbound = true;
     }
+  }
+
+  /**
+   * Off with the merged copy kept (turned off, or removed, while writes of what
+   * sync applied were refused; S15 §13): what chord.db lacks of it applied, as
+   * far as it applies here, and saved; then the copy goes, whatever still
+   * differs (what never applies here: a tab waiting for a chord that never
+   * comes). Still refused (the disk full): kept, and tried again later and
+   * later, and at the next launch. Nothing kept: nothing happens.
+   */
+  settleKept(): Promise<void> {
+    this.settling ??= (async () => {
+      clearTimeout(this.settleTimer);
+      try {
+        // The reconcile's pushes are in the queue once it answers: all applied, then saved.
+        await this.options.data.sync({ type: 'sync.reconcile', wait: true });
+        await this.applying;
+        await this.options.data.flush();
+        if (this.options.data.unsaved() > 0) {
+          this.settleMs = Math.min(RECONCILE_MAX, Math.max(RECONCILE_MS, this.settleMs * 2));
+          this.settleTimer = setTimeout(() => void this.settleKept(), this.settleMs);
+          return;
+        }
+        this.settleMs = 0;
+        const answer = await this.options.data.sync({ type: 'sync.forget' });
+        if (answer.status) this.setStatus(answer.status);
+      } catch (error) {
+        console.error('Sync couldn’t put back what it kept:', error);
+      } finally {
+        this.settling = null;
+      }
+    })();
+    return this.settling;
   }
 
   /** chord-data started again after a crash: it read nothing, and holds no key. */
@@ -258,8 +306,11 @@ export class SyncService {
   }
 
   private setStatus(status: SyncStatus): void {
+    const removed = status.problem === 'removed' && this.status?.problem !== 'removed';
     this.status = status;
     this.options.notify(this.view());
+    // Removed by another computer: what it read before, and kept, applied and saved here, and then its copy goes.
+    if (removed) void this.settleKept();
     // A problem that needs you gets a toast, once (S15 §8). Locked only once the key kept here, if any, has been tried.
     const kind = status.state === 'locked' ? (this.opening ? null : 'locked') : status.state === 'problem' ? status.problem : null;
     if (!kind || this.toasted.has(kind)) return;
@@ -298,6 +349,8 @@ export class SyncService {
   async setup(folderId: string, passphrase: string): Promise<SyncStepResult> {
     const folder = this.folderOf(folderId);
     if (!folder) return { ok: false, problem: 'missing' };
+    // What was kept after turning off, put back first (the setup is this computer as it is), and what waits to be saved, saved.
+    await this.settleKept();
     await this.options.data.flush();
     const answer = await this.options.data.sync({ type: 'sync.setup', folder, passphrase, info: this.options.info() });
     await this.keep(answer.key);
@@ -313,6 +366,8 @@ export class SyncService {
   async join(folderId: string, passphrase: string): Promise<SyncStepResult> {
     const folder = this.folderOf(folderId);
     if (!folder) return { ok: false, problem: 'missing' };
+    // What was kept after turning off, put back first: joining goes by this computer as it is.
+    await this.settleKept();
     await this.options.data.flush();
     const answer = await this.options.data.sync({ type: 'sync.join', folder, passphrase, info: this.options.info() });
     if (answer.problem) return this.stepResult(answer);
@@ -334,24 +389,41 @@ export class SyncService {
       // then the rest of the synced setup.
       await this.apply({ ...emptyApply(), chords: apply.chords }, true);
       const keep = new Set(answer.replace.keep);
-      const state = this.options.state();
-      const mine = sortedChords(state).filter((c) => !c.private && !keep.has(c.id));
-      if (mine.length > 0 && state.chords[answer.replace.to]) {
-        this.options.dispatch({ t: 'sync.replace', chordIds: mine.map((c) => c.id), to: answer.replace.to });
-        const windowId = this.options.lastWindow();
-        // A fresh Chord's first-run chord just makes way; a computer's own chords go with Undo.
-        if (windowId && !fresh) {
-          const n = mine.length;
-          this.options.toast(windowId, {
-            id: 'sync:replaced',
-            message: n === 1 ? `“${mine[0]!.name}” made way for the synced setup` : `This computer’s ${n} chords made way for the synced setup`,
-            action: { label: 'Undo', command: { t: 'sync.unreplace', windowId, chordIds: mine.map((c) => c.id) } },
-          });
-        }
-      }
+      this.makeWay(
+        sortedChords(this.options.state())
+          .filter((c) => !keep.has(c.id))
+          .map((c) => c.id),
+        answer.replace.to,
+        fresh,
+      );
       await this.apply({ ...apply, chords: [] }, true);
     } else if (apply) await this.apply(apply, true);
     return this.stepResult(answer);
+  }
+
+  /**
+   * This computer's chords make way for the synced setup (*Use the synced
+   * setup*): its Today tabs go to `to`, and the chords, with what's pinned in
+   * them, are kept for Undo (a fresh Chord's first-run chord just goes). It's
+   * tidying, never stamped. chord-data asks again after a launch for any whose
+   * change was lost before it was written (S15 §13, `makingWay`).
+   */
+  private makeWay(ids: readonly string[], to: string, fresh: boolean): void {
+    const state = this.options.state();
+    const mine = ids.flatMap((id) => {
+      const chord = state.chords[id];
+      return chord && !chord.private && id !== to ? [chord] : [];
+    });
+    if (mine.length === 0 || !state.chords[to]) return;
+    this.options.dispatch({ t: 'sync.replace', chordIds: mine.map((c) => c.id), to });
+    const windowId = this.options.lastWindow();
+    if (!windowId || fresh) return;
+    const n = mine.length;
+    this.options.toast(windowId, {
+      id: 'sync:replaced',
+      message: n === 1 ? `“${mine[0]!.name}” made way for the synced setup` : `This computer’s ${n} chords made way for the synced setup`,
+      action: { label: 'Undo', command: { t: 'sync.unreplace', windowId, chordIds: mine.map((c) => c.id) } },
+    });
   }
 
   /** The passphrase, once: after launch with no key kept, or after it changed on another computer. */
@@ -440,7 +512,7 @@ export class SyncService {
       // Turning off clears the synced copy: not while what sync applied here isn't all in chord.db (writes refused, waiting
       // to go again), or it would be gone at the next launch. It waits for them, a while at a time, up to OFF_WAIT_MAX;
       // then it turns off keeping the copy, which puts back what chord.db lacks once it can (S15 §13).
-      await this.options.data.flush();
+      await this.options.data.flush().catch(() => undefined);
       unsaved = this.options.data.unsaved();
       if (this.pending?.token !== token) return;
       const since = pending.since ?? Date.now();
@@ -451,11 +523,13 @@ export class SyncService {
       }
     }
     this.pending = null;
-    const answer =
-      pending.what === 'off'
-        ? await this.options.data.sync({ type: 'sync.off', ...(unsaved > 0 ? { keep: true } : {}) })
-        : await this.options.data.sync({ type: 'sync.remove', device: pending.device ?? '' });
-    if (pending.what === 'off') {
+    const answer = await this.step(pending, unsaved);
+    if (!answer || answer.problem === 'full') {
+      // Refused (the disk full even for that) or failed: sync is as it was, and says so; Settings can try again.
+      const windowId = this.options.lastWindow();
+      const why = answer ? ': this computer’s disk is full. Make some room, then try again.' : '. Try again from Settings.';
+      if (windowId) this.options.toast(windowId, { id: 'sync:pending', message: pending.what === 'off' ? `Sync couldn’t turn off${why}` : `Couldn’t remove that computer from sync${why}` });
+    } else if (pending.what === 'off') {
       this.keyKept = this.keyWeak = this.anyway = false;
       this.toasted.clear();
       const windowId = unsaved > 0 ? this.options.lastWindow() : null;
@@ -465,9 +539,23 @@ export class SyncService {
           message: `Sync is off. ${unsaved === 1 ? 'A change' : `${unsaved} changes`} it brought ${unsaved === 1 ? 'isn’t' : 'aren’t'} saved on this computer yet (its disk is full): Chord keeps ${unsaved === 1 ? 'it' : 'them'}, and saves ${unsaved === 1 ? 'it' : 'them'} once it can.`,
         });
       }
+      // Kept: once what it brought is saved, the copy goes.
+      if (unsaved > 0) void this.settleKept();
     }
-    if (answer.status) this.setStatus(answer.status);
+    if (answer?.status) this.setStatus(answer.status);
     else this.options.notify(this.view());
+  }
+
+  /** Turning off or removing, asked of chord-data: null if it failed (never thrown at a timer); a full disk says `full`. */
+  private async step(pending: Pending, unsaved: number, quitting = false): Promise<SyncReply | null> {
+    try {
+      return pending.what === 'off'
+        ? await this.options.data.sync({ type: 'sync.off', ...(unsaved > 0 ? { keep: true } : {}), ...(quitting ? { quitting } : {}) })
+        : await this.options.data.sync({ type: 'sync.remove', device: pending.device ?? '' });
+    } catch (error) {
+      console.error(`Sync couldn’t ${pending.what === 'off' ? 'turn off' : 'remove a computer'}:`, error);
+      return null;
+    }
   }
 
   /** No Chord window is in front any more (one lost focus, and none took it). */
@@ -490,9 +578,19 @@ export class SyncService {
     void this.options.data.sync({ type: 'sync.check' }).catch(() => undefined);
   }
 
-  /** Quitting: what's waiting goes to the folder now (within the 2 s quitting allows); a step held for Undo is let go. */
+  /**
+   * Quitting: what's waiting goes to the folder now (within the 2 s quitting
+   * allows). Quitting is no Undo: a Turn off or Remove held for one (or
+   * waiting for writes the disk refused) happens now, turning off keeping the
+   * merged copy if what sync applied isn't all saved.
+   */
   async quit(): Promise<void> {
+    const pending = this.pending;
     this.cancelPending();
+    if (pending) {
+      const answer = await this.step(pending, pending.what === 'off' ? this.options.data.unsaved() : 0, true);
+      if (answer?.status) this.status = answer.status;
+    }
     if (this.status?.state === 'on') await this.options.data.sync({ type: 'sync.flush' }).catch(() => undefined);
   }
 
@@ -504,47 +602,64 @@ export class SyncService {
    * A thing with a change of yours still waiting to be written is put off: its
    * write gets its stamp first, then chord-data sends what's merged again.
    */
-  private async apply(apply: SyncApply, joining = false): Promise<void> {
-    const isWaiting = this.options.data.waiting;
+  /**
+   * What of a push applies now: a thing with a change of yours waiting to be
+   * written is put off (`later`, by what holds it: itself, or the change of
+   * yours it goes with, a pane's split or a tombstone's chord), unless joining
+   * (nothing of yours is waiting then that the join doesn't take in).
+   */
+  private putOff(apply: SyncApply, joining: boolean, later: Map<string, string>, read?: WriteSeq): SyncApply {
+    const isWaiting = (key: string) => this.options.data.waiting(key, read);
     // A split goes with its panes: one of them put off puts off the lot, or the store would settle the split without it.
     const groups = new Map<string, string[]>();
     for (const node of apply.nodes) {
       const group = node.kind === 'split' ? node.id : node.kind === 'tab' && node.parentId && apply.nodes.some((n) => n.id === node.parentId && n.kind === 'split') ? node.parentId : null;
       if (group) groups.set(group, [...(groups.get(group) ?? []), node.id]);
     }
-    const heldGroups = new Set([...groups].filter(([, ids]) => ids.some((id) => isWaiting(`node:${id}`))).flatMap(([, ids]) => ids.map((id) => `node:${id}`)));
-    const waiting = (key: string) => heldGroups.has(key) || isWaiting(key);
-    const later = new Set<string>();
+    const heldBy = new Map<string, string>();
+    for (const [, ids] of groups) {
+      const holder = ids.find((id) => isWaiting(`node:${id}`));
+      if (holder) for (const id of ids) heldBy.set(`node:${id}`, `node:${holder}`);
+    }
+    const holderOf = (key: string) => heldBy.get(key) ?? (isWaiting(key) ? key : null);
     const hold = <T>(list: T[], key: (item: T) => string) =>
       list.filter((item) => {
-        if (joining || !waiting(key(item))) return true;
-        later.add(key(item));
+        const holder = joining ? null : holderOf(key(item));
+        if (!holder) return true;
+        later.set(key(item), holder);
         return false;
       });
     // A chord that went, put off: its nodes' tombstones wait with it, so it takes them with it (kept for Undo) when it goes.
     const state = this.options.state();
-    const heldChords = new Set(apply.gone.chords.filter((id) => !joining && waiting(`chord:${id}`)));
-    const withChord = (n: { id: string }) => heldChords.has(state.nodes[n.id]?.chordId ?? '');
+    const heldChords = new Set(apply.gone.chords.filter((id) => !joining && holderOf(`chord:${id}`)));
+    const chordOf = (n: { id: string }) => state.nodes[n.id]?.chordId ?? '';
     const filtered: SyncApply = {
       ...apply,
       chords: hold(apply.chords, (c) => `chord:${c.id}`),
       nodes: hold(apply.nodes, (n) => `node:${n.id}`),
       favorites: hold(apply.favorites, (f) => `favorite:${f.id}`),
-      themes: apply.themes.length > 0 && !joining && waiting('setting:themes') ? (later.add('setting:themes'), []) : apply.themes,
+      themes: apply.themes.length > 0 && !joining && holderOf('setting:themes') ? (later.set('setting:themes', 'setting:themes'), []) : apply.themes,
       routes: hold(apply.routes, (r) => `linkRoute:${r.host}`),
       gone: {
         ...apply.gone,
         chords: hold(apply.gone.chords, (id) => `chord:${id}`),
-        nodes: hold(apply.gone.nodes, (n) => `node:${n.id}`).filter((n) => !withChord(n) || (later.add(`node:${n.id}`), false)),
+        nodes: hold(apply.gone.nodes, (n) => `node:${n.id}`).filter((n) => !heldChords.has(chordOf(n)) || (later.set(`node:${n.id}`, `chord:${chordOf(n)}`), false)),
         favorites: hold(apply.gone.favorites, (id) => `favorite:${id}`),
         routes: hold(apply.gone.routes, (host) => `linkRoute:${host}`),
       },
       effects: hold(apply.effects, (s) => `effect:${s.host}`),
     };
-    if (apply.settings && !joining && Object.keys(apply.settings).some((key) => waiting(`setting:${key}`))) {
+    const settingHolder = apply.settings && !joining ? Object.keys(apply.settings).find((key) => holderOf(`setting:${key}`)) : undefined;
+    if (apply.settings && settingHolder !== undefined) {
       filtered.settings = null;
-      for (const key of Object.keys(apply.settings)) later.add(`setting:${key}`);
+      for (const key of Object.keys(apply.settings)) later.set(`setting:${key}`, `setting:${settingHolder}`);
     }
+    return filtered;
+  }
+
+  private async apply(apply: SyncApply, joining = false, read?: WriteSeq): Promise<void> {
+    const later = new Map<string, string>();
+    const filtered = this.putOff(apply, joining, later, read);
     // Settings pass the schema Settings' own changes pass (as an import's), then settings.set's checks.
     if (filtered.settings) {
       const checked = ImportedSettings.safeParse(filtered.settings);
@@ -560,7 +675,9 @@ export class SyncService {
     // Input and painting go first between parts, two frames apart, the first too (not in the task that brought the push). Nothing here is urgent.
     for (const part of syncParts(filtered)) {
       await new Promise((resolve) => setTimeout(resolve, PART_GAP_MS));
-      this.options.dispatch({ t: 'sync.apply', ...part });
+      // A change of yours made meanwhile, waiting to be written, puts off what this part has of it too, as it would have.
+      const { effects: _effects, ...now } = this.putOff({ ...part, effects: [] }, joining, later, read);
+      this.options.dispatch({ t: 'sync.apply', ...now });
     }
     if (filtered.effects.length > 0 || filtered.gone.effects.length > 0) await this.options.effects.syncSites(filtered.effects, filtered.gone.effects);
     const after = this.options.state();
@@ -594,7 +711,11 @@ export class SyncService {
     }
     if (later.size > 0) {
       await this.options.data.flush();
-      await this.options.data.sync({ type: 'sync.repush', keys: [...later] }).catch(() => undefined);
+      // Asked for again once your change is written, its own or the one it goes with: one still waiting (refused, a full
+      // disk) waits for a later look, later and later, never straight back here, which would only put it off again, and again.
+      const written = [...later].filter(([, holder]) => !this.options.data.waiting(holder)).map(([key]) => key);
+      if (written.length > 0) await this.options.data.sync({ type: 'sync.repush', keys: written }).catch(() => undefined);
+      if (written.length < later.size) this.reconcileLater();
     }
   }
 }

@@ -15,7 +15,7 @@ import { apply, seedState, thingKey, type DataRecord, type SegmentCursor, type S
 import { ChordDatabase } from '@chord/data/db';
 import { opsForState, opsFromPatches, type DataPush, type WriteOp } from '@chord/data';
 import { SyncController, type WorkerLike } from '../../src/data/sync';
-import type { FromWorker, ToWorker } from '../../src/data/sync-worker';
+import type { FromWorker, ToWorker } from '../../src/data/sync-worker-core';
 
 const workerPath = join(import.meta.dirname, 'fixtures', 'fake-sync-worker.mjs');
 const worker = (): WorkerLike => new Worker(workerPath);
@@ -274,7 +274,7 @@ describe('a quit or a crash, then a relaunch', () => {
     w.worker.say(
       records(1, [
         { type: 'chord', id, at, set: { name: 'First part' } },
-        { type: 'chord', id: 'new-one', at, set: { name: 'Second part', icon: 'S', theme: THEME, rank: 'z0', profile: 'default', created: 1 } },
+        { type: 'chord', id: 'new-one', at, set: { name: 'Second part', icon: 'S', theme: THEME, rank: 'az', profile: 'default', created: 1 } },
       ]),
     );
     await settle();
@@ -329,7 +329,7 @@ describe('kept here other than another computer wrote it', () => {
           // Its colors with a key this Chord doesn't keep: the theme here is the same colors without it.
           { type: 'chord', id: home, at, set: { theme: { ...THEME, sparkle: true } } },
           // A name longer than a chord's here: refused, so this computer never has it.
-          { type: 'chord', id: 'long-one', at, set: { name: 'L'.repeat(300), icon: 'L', theme: THEME, rank: 'z0', profile: 'default', created: 1 } },
+          { type: 'chord', id: 'long-one', at, set: { name: 'L'.repeat(300), icon: 'L', theme: THEME, rank: 'az', profile: 'default', created: 1 } },
         ],
         Date.now(),
       ),
@@ -718,5 +718,57 @@ describe('an error taking in what the worker said', () => {
     // The next pass finds it again, and this time it's kept.
     w.worker.say({ t: 'own-changed' });
     expect(db.sync.meta.rebind).toBe(true);
+  });
+});
+
+describe('turning off, and what’s kept (S15 §13, the ninth review)', () => {
+  const full = () => Object.assign(new Error('database or disk is full'), { errcode: 13 });
+
+  it('on a full disk, the device record can’t be written: sync turns off all the same', async () => {
+    const w = fake();
+    on({}, w.make);
+    await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+    vi.spyOn(db.sync, 'stampDevice').mockImplementationOnce(() => {
+      throw full();
+    });
+    const reply = await controller!.handle({ type: 'sync.off' });
+    expect(reply.problem).toBeUndefined();
+    expect(db.sync.meta.on).toBe(false);
+  });
+
+  it('a disk so full even turning off is refused: on, as it was, and it says so', async () => {
+    const w = fake();
+    on({}, w.make);
+    await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+    vi.spyOn(db.sync, 'stampDevice').mockImplementationOnce(() => {
+      throw full();
+    });
+    vi.spyOn(db.sync, 'clear').mockImplementationOnce(() => {
+      throw full();
+    });
+    const reply = await controller!.handle({ type: 'sync.off' });
+    expect(reply.problem).toBe('full');
+    expect(db.sync.meta.on).toBe(true);
+    expect(controller!.status().state).toBe('on');
+  });
+
+  it('kept, then forgotten once main has saved what it lacked: the copy goes, and a removal is still said', async () => {
+    on({});
+    db.atomically(() => {
+      db.sync.keepOff();
+      db.sync.setMeta({ folder: dir, removedAt: 1234 });
+    });
+    expect((await controller!.handle({ type: 'sync.status' })).kept).toBe(true);
+    const reply = await controller!.handle({ type: 'sync.forget' });
+    expect(reply.status).toMatchObject({ state: 'problem', problem: 'removed', removedAt: 1234 });
+    expect(db.sync.meta.kept).toBe(false);
+    expect(db.sync.snapshot()).toEqual([]);
+  });
+
+  it('a setup a crash left partway: cleared at the next launch, sync off as it was', async () => {
+    on({});
+    db.sync.setMeta({ joining: true, settingUp: true });
+    expect((await controller!.handle({ type: 'sync.status' })).status?.state).toBe('off');
+    expect(db.sync.meta.on).toBe(false);
   });
 });

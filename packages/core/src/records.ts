@@ -10,6 +10,7 @@
  * the time a tab was last shown, a Duet chat's provider session, or anything
  * that's a path on this computer.
  */
+import { generateKeyBetween } from 'fractional-indexing';
 import { DUET_PROVIDERS, isDuetScope, type DuetAttachment, type DuetCitation, type DuetImage, type DuetMessage, type DuetMessageBody, type DuetThread } from './duet';
 import { routeKey } from './links';
 import {
@@ -99,7 +100,29 @@ export function isDataRecord(raw: unknown): raw is DataRecord {
 const text = (v: unknown, max: number): string | null => (typeof v === 'string' && v.length <= max ? v : null);
 const time = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
 const isId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
-const isRank = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 200;
+/**
+ * A place in an order the sidebar can put things before and after
+ * (fractional-indexing's key): one that isn't would throw the next time
+ * something's placed beside it (a chord made after it), so a file or another
+ * computer can't put one here.
+ */
+export const isRank = (v: unknown): v is string => {
+  if (typeof v !== 'string' || v.length === 0 || v.length > 200) return false;
+  try {
+    generateKeyBetween(v, null);
+    return true;
+  } catch {
+    try {
+      generateKeyBetween(null, v);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+
+/** A place after every rank Chord makes (`generateKeyBetween` gets to `y…` only after millions): what a chord without one sorts as. */
+export const LAST_RANK = `y${'0'.repeat(25)}`;
 const isWebUrl = (v: unknown): v is string => typeof v === 'string' && v.length <= MAX_ID && /^https?:\/\/[^\s/]/i.test(v);
 const record = (type: RecordType, id: string, set: Record<string, unknown>, at?: Stamp): DataRecord => (at ? { type, id, at, set } : { type, id, set });
 

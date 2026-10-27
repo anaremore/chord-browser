@@ -937,7 +937,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     // Your data's sync (S15 §6–§8): chord-data's thread and its worker do the work; main keeps the key and applies what comes in.
     syncService = new SyncService({
-      data: { sync: (request) => store.sync(request), flush: () => store.flush(), unsaved: () => store.unsaved, waiting: (key) => store.waitingHere(key), onPush: (listener) => store.onPush(listener) },
+      data: { sync: (request) => store.sync(request), flush: () => store.flush(), unsaved: () => store.unsaved, waiting: (key, since) => store.waitingHere(key, since), onPush: (listener) => store.onPush(listener) },
       state: () => browser!.store.state,
       dispatch: (command) => browser!.store.dispatch(command),
       effects: { syncSites: (sites, gone) => browser!.effects.syncSites(sites, gone) },
@@ -997,6 +997,19 @@ if (!app.requestSingleInstanceLock()) {
         pinnedNames: (suffix: string) => {
           const pinned = Object.values(browser!.store.state.nodes).filter((n) => n.section === 'pinned');
           return { count: pinned.length, named: pinned.filter((n) => (n.kind === 'tab' ? n.customTitle : n.kind === 'folder' ? n.title : null)?.endsWith(suffix)).length };
+        },
+        /**
+         * A chord with all its pinned tabs: deleted (`delete`), its Undo (`restore`), or a second one made first so it can
+         * go (`spare`); answered once chord-data has written it (perf.spec.ts times keystrokes around it).
+         */
+        chordForTests: async (what: 'spare' | 'delete' | 'restore') => {
+          const state = browser!.store.state;
+          const windowId = Object.keys(state.windows)[0]!;
+          const busiest = Object.values(state.chords).sort((a, b) => Object.values(state.nodes).filter((n) => n.chordId === b.id).length - Object.values(state.nodes).filter((n) => n.chordId === a.id).length)[0];
+          if (what === 'spare') browser!.store.dispatch({ t: 'chord.create', windowId, name: 'Spare', icon: 'S', theme: state.chords[Object.keys(state.chords)[0]!]!.theme });
+          else if (what === 'delete' && busiest) browser!.store.dispatch({ t: 'chord.delete', chordId: busiest.id });
+          else if (what === 'restore' && state.deletedChords[0]) browser!.store.dispatch({ t: 'chord.restore', windowId, chordId: state.deletedChords[0].chord.id });
+          await store.flush();
         },
         /** Ad blocking's lists, and what each session has (the extension, the dispatcher). */
         adBlocking: () => ({ status: adBlocking.status(), ...adBlocking.inspect() }),

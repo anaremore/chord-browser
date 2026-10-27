@@ -356,11 +356,11 @@ describe('what this computer writes', () => {
     it.each<[string, SyncThing | undefined, Record<string, unknown> | null, Record<string, unknown> | null, Record<string, unknown> | null]>([
       ['a field you changed', known, { name: 'W', icon: 'W' }, { name: 'Work', icon: 'W' }, { name: 'Work' }],
       ['nothing you changed', known, { name: 'W', icon: 'W' }, { name: 'W', icon: 'W' }, null],
-      ['a change that’s the merged value already (it came from another computer)', known, { name: 'Old', icon: 'W' }, { name: 'W', icon: 'W' }, null],
+      ['a change of yours to what the merged copy has already: yours, the latest word (a newer change elsewhere may not be read yet)', known, { name: 'Old', icon: 'W' }, { name: 'W', icon: 'W' }, { name: 'W' }],
       ['gone here, and known: a tombstone', known, { name: 'W' }, null, { deleted: true }],
       ['gone here, and never synced: nothing', undefined, { name: 'W' }, null, null],
-      ['gone here, and gone already: nothing', gone, { deleted: true }, null, null],
-      ['new here: every field', undefined, null, { name: 'New', icon: 'N' }, { name: 'New', icon: 'N' }],
+      ['gone here, and gone in the copy already: a tombstone as of now (a bringing back elsewhere may be earlier)', gone, { deleted: true }, null, { deleted: true }],
+      ['new here: every field, and deleted: false (made after any deletion of its id elsewhere)', undefined, null, { name: 'New', icon: 'N' }, { name: 'New', icon: 'N', deleted: false }],
       ['back after being gone (pinned again): every field, and deleted: false', gone, { deleted: true }, { name: 'W' }, { name: 'W', deleted: false }],
       ['a field it leaves out (a title off its home) isn’t a change', known, { name: 'W', icon: 'W' }, { name: 'W' }, null],
     ])('%s', (_what, merged, before, after, expected) => {

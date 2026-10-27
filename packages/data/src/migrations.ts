@@ -308,13 +308,26 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE IF NOT EXISTS sync_junk (path TEXT PRIMARY KEY, seen TEXT NOT NULL) STRICT;
   `,
-  // 21: who last wrote each synced row (S15 §13): `user` (something you did), `sync` (another computer's change applied)
-  // or `tidy` (this computer adjusting on its own), by the write's kind and id (`chord`, `node`, `favorite`, `linkRoute`,
-  // `effect`, `setting`). Sync's drift check stamps only what you wrote. A row written before this has none: who wrote
-  // it isn't known. And a write too big for one transaction (a chord with thousands of tabs going), as what it will do,
-  // so a stop partway is finished at the next open (`write_intent`).
+  // 21: who last wrote what sync keeps of each synced row (S15 §13): `user` (something you did), `sync` (another
+  // computer's change applied) or `tidy` (this computer adjusting on its own), and when that was made (`at`, ms), by the
+  // write's kind and id (`chord`, `node`, `favorite`, `linkRoute`, `effect`, `setting`). A write that changed nothing
+  // sync keeps (a tab's last visit) leaves it. Sync's drift check stamps only what you wrote, and joining and the drift
+  // check take a row's time from here, not from its last write. A row written before this has none: who wrote it isn't
+  // known. And a write too big for one short transaction (a chord with thousands of tabs going), as what it will do, a
+  // part a row (part -1: made whole), so a stop partway is finished at the next open (`write_intent`). And what this
+  // computer last had of a synced thing before it went here (sync_record.was): brought back (an Undo, a tab pinned
+  // again), only what differs from it is a change of yours. And what you changed while a join waited for your choice
+  // (`sync_noted`, with when, what it was before, and whether it was in sync at any point in that window): stamped as
+  // it ends, even after a crash meanwhile. And, of each segment read, the last frame read (where, its hash, and the
+  // file's time then), so one another copy of the profile wrote on from a point, or over its last frame, is read again
+  // from its start.
   `
-  CREATE TABLE IF NOT EXISTS row_origin (k TEXT NOT NULL, id TEXT NOT NULL, origin TEXT NOT NULL, PRIMARY KEY (k, id)) STRICT;
-  CREATE TABLE IF NOT EXISTS write_intent (id TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0) STRICT;
+  ALTER TABLE sync_record ADD COLUMN was TEXT;
+  ALTER TABLE sync_cursor ADD COLUMN last_at INTEGER;
+  ALTER TABLE sync_cursor ADD COLUMN last_hash TEXT;
+  ALTER TABLE sync_cursor ADD COLUMN last_mtime REAL;
+  CREATE TABLE IF NOT EXISTS row_origin (k TEXT NOT NULL, id TEXT NOT NULL, origin TEXT NOT NULL, at INTEGER, PRIMARY KEY (k, id)) STRICT;
+  CREATE TABLE IF NOT EXISTS write_intent (id TEXT NOT NULL, part INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (id, part)) STRICT;
+  CREATE TABLE IF NOT EXISTS sync_noted (k TEXT NOT NULL, id TEXT NOT NULL, at INTEGER, base TEXT, live INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (k, id)) STRICT;
   `,
 ];

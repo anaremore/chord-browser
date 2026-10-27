@@ -101,10 +101,10 @@ const fresh = (): State => seedState({ now: 1000, newId: () => 'first', theme: T
 function used(): State {
   const state = emptyState();
   state.chords['work'] = chord('work', { name: 'Work', rank: 'a0' });
-  state.chords['home'] = chord('home', { name: 'Home', rank: 'b0' });
+  state.chords['home'] = chord('home', { name: 'Home', rank: 'a2' });
   state.nodes['folder'] = { kind: 'folder', id: 'folder', chordId: 'work', section: 'pinned', parentId: null, rank: 'a0', title: 'Reading', collapsed: false, createdAt: 1 };
   state.nodes['mail'] = tab('mail', 'work', { parentId: 'folder' });
-  state.nodes['docs'] = tab('docs', 'work', { rank: 'b0' });
+  state.nodes['docs'] = tab('docs', 'work', { rank: 'a2' });
   state.favorites['fav'] = { id: 'fav', url: 'https://calendar.test/', title: 'Calendar', favicon: null, rank: 'a0', createdAt: 1 };
   state.linkRoutes['github.com'] = { host: 'github.com', chordId: 'work', createdAt: 1 };
   state.siteZoom['docs.test'] = 1.25;
@@ -179,7 +179,7 @@ describe('the merge planner', () => {
       (_here, there) => {
         delete there.favorites['fav'];
         there.favorites['other-id'] = { id: 'other-id', url: 'https://calendar.test/', title: 'My calendar', favicon: null, rank: 'a0', createdAt: 1 };
-        there.favorites['twice'] = { id: 'twice', url: 'https://calendar.test/', title: 'Again', favicon: null, rank: 'b0', createdAt: 1 };
+        there.favorites['twice'] = { id: 'twice', url: 'https://calendar.test/', title: 'Again', favicon: null, rank: 'a2', createdAt: 1 };
       },
       (p) => {
         expect(p.favorites).toEqual([expect.objectContaining({ id: 'fav', title: 'My calendar' })]);
@@ -217,8 +217,8 @@ describe('the merge planner', () => {
     [
       'folders inside each other (moved on two computers) end at the root',
       (_here, there) => {
-        there.nodes['a'] = { kind: 'folder', id: 'a', chordId: 'work', section: 'pinned', parentId: 'b', rank: 'c0', title: 'A', collapsed: false, createdAt: 1 };
-        there.nodes['b'] = { kind: 'folder', id: 'b', chordId: 'work', section: 'pinned', parentId: 'a', rank: 'd0', title: 'B', collapsed: false, createdAt: 1 };
+        there.nodes['a'] = { kind: 'folder', id: 'a', chordId: 'work', section: 'pinned', parentId: 'b', rank: 'a3', title: 'A', collapsed: false, createdAt: 1 };
+        there.nodes['b'] = { kind: 'folder', id: 'b', chordId: 'work', section: 'pinned', parentId: 'a', rank: 'a4', title: 'B', collapsed: false, createdAt: 1 };
       },
       (p) => {
         const a = p.nodes.find((x) => x.id === 'a')!;
@@ -267,7 +267,7 @@ describe('the merge planner', () => {
     const here = used();
     const file: DataRecord[] = [
       { type: 'chord', id: 'work', at: late, set: { deleted: true } },
-      { type: 'chord', id: 'gone', at: old, set: { name: 'Gone', icon: 'G', theme: THEME, rank: 'z0', profile: 'default' } },
+      { type: 'chord', id: 'gone', at: old, set: { name: 'Gone', icon: 'G', theme: THEME, rank: 'aA', profile: 'default' } },
       { type: 'chord', id: 'gone', at: late, set: { deleted: true } },
     ];
     const p = plan(recordsOf(here, mid), file);
@@ -308,7 +308,7 @@ describe('the merge planner', () => {
     const there = used();
     const proxy = { mode: 'server' as const, server: { scheme: 'http' as const, host: 'proxy.corp.test', port: 3128, bypass: [] }, pac: null };
     there.chords['work'] = chord('work', { name: 'Work', profileId: 'theirs', proxy });
-    there.chords['lab'] = chord('lab', { name: 'Lab', profileId: 'mine', proxy, rank: 'c0' });
+    there.chords['lab'] = chord('lab', { name: 'Lab', profileId: 'mine', proxy, rank: 'a3' });
     const local = recordsOf(here, old);
     const off = plan(local, recordsOf(there, late), { effects: true, settings: false });
     expect(off.changes.map((c) => c.label)).toEqual(['Work’s own proxy', 'Lab’s own proxy']);
@@ -340,7 +340,7 @@ describe('the merge planner', () => {
     const after = applyPlan(before, p);
     expect(after.chords['work']).toMatchObject({ name: 'Work, renamed', proxy: before.chords['work']!.proxy });
     // Nor does a chord that comes in a part carry one: only `proxies` sets it.
-    const sneaky = apply(before, { t: 'data.merge', importId: 'imp2', chords: [chord('work', { name: 'W', profileId: 'mine', proxy: { mode: 'none' } as never }), chord('new', { profileId: 'own', proxy: { mode: 'none' } as never, rank: 'z0' })] }, { now: NOW, newId }).state;
+    const sneaky = apply(before, { t: 'data.merge', importId: 'imp2', chords: [chord('work', { name: 'W', profileId: 'mine', proxy: { mode: 'none' } as never }), chord('new', { profileId: 'own', proxy: { mode: 'none' } as never, rank: 'aA' })] }, { now: NOW, newId }).state;
     expect(sneaky.chords['work']!.proxy).toEqual(before.chords['work']!.proxy);
     expect(sneaky.chords['new']).not.toHaveProperty('proxy');
     // With it on, `proxies` sets it, and Undo puts the one before back.
@@ -388,7 +388,7 @@ describe('the merge planner', () => {
 
   it('comes in parts of at most 200, chords first and the first-run chord making way last', () => {
     const there = used();
-    for (let i = 0; i < 450; i++) there.nodes[`t${i}`] = tab(`t${i}`, 'home', { rank: `a${String(i).padStart(4, '0')}` });
+    for (let i = 0; i < 450; i++) there.nodes[`t${i}`] = tab(`t${i}`, 'home', { rank: `a${String(i).padStart(4, '0')}1` });
     const p = plan(recordsOf(fresh(), mid), recordsOf(there, old));
     const parts = mergeParts(p);
     for (const part of parts) {
@@ -408,7 +408,7 @@ describe('the merge planner', () => {
     for (let i = 0; i < 250; i++) there.nodes[`t${i}`] = tab(`t${i}`, 'big', { section: 'today', pinnedUrl: null, rank: ranks[i]! });
     there.nodes['split'] = { kind: 'split', id: 'split', chordId: 'big', section: 'today', parentId: null, rank: ranks[250]!, direction: 'row', sizes: [0.5, 0.5], createdAt: 1 };
     there.nodes['left'] = tab('left', 'big', { section: 'today', pinnedUrl: null, parentId: 'split', rank: 'a0' });
-    there.nodes['right'] = tab('right', 'big', { section: 'today', pinnedUrl: null, parentId: 'split', rank: 'b0' });
+    there.nodes['right'] = tab('right', 'big', { section: 'today', pinnedUrl: null, parentId: 'split', rank: 'a2' });
     const p = plan(recordsOf(fresh(), mid), recordsOf(there, old));
     expect(p.newProfile).toBe(true);
     const parts = mergeParts(p);
@@ -430,11 +430,11 @@ describe('the merge planner', () => {
 
   it('brings at most so many new chords, tabs and folders, and folders only so deep, and says what it left out', () => {
     const there = emptyState();
-    for (let i = 0; i < IMPORT_LIMITS.chords + 3; i++) there.chords[`c${i}`] = chord(`c${i}`, { rank: `a${String(i).padStart(4, '0')}` });
+    for (let i = 0; i < IMPORT_LIMITS.chords + 3; i++) there.chords[`c${i}`] = chord(`c${i}`, { rank: `a${String(i).padStart(4, '0')}1` });
     // Tabs of a chord past the limit are left out with it.
     there.nodes['lost'] = tab('lost', `c${IMPORT_LIMITS.chords + 1}`);
-    for (let i = 0; i < IMPORT_LIMITS.tabs + 5; i++) there.nodes[`t${i}`] = tab(`t${i}`, 'c0', { section: 'today', pinnedUrl: null, rank: `a${String(i).padStart(6, '0')}` });
-    for (let i = 0; i < IMPORT_LIMITS.folders + 2; i++) there.nodes[`f${i}`] = { kind: 'folder', id: `f${i}`, chordId: 'c1', section: 'pinned', parentId: null, rank: `a${String(i).padStart(5, '0')}`, title: `F${i}`, collapsed: false, createdAt: 1 };
+    for (let i = 0; i < IMPORT_LIMITS.tabs + 5; i++) there.nodes[`t${i}`] = tab(`t${i}`, 'c0', { section: 'today', pinnedUrl: null, rank: `a0${String(i).padStart(6, '0')}1` });
+    for (let i = 0; i < IMPORT_LIMITS.folders + 2; i++) there.nodes[`f${i}`] = { kind: 'folder', id: `f${i}`, chordId: 'c1', section: 'pinned', parentId: null, rank: `a${String(i).padStart(5, '0')}1`, title: `F${i}`, collapsed: false, createdAt: 1 };
     // One already here is updated whatever the count, though it comes after.
     const p = plan(recordsOf(used(), mid), [...recordsOf(there, old), { type: 'chord', id: 'work', at: late, set: { name: 'Work, renamed' } }]);
     expect(p.chords).toHaveLength(IMPORT_LIMITS.chords + 1);
@@ -469,11 +469,11 @@ describe('the merge planner', () => {
     ['nothing known of history or chats', () => undefined, null, {}, false],
     ['a Duet chat', () => undefined, { pages: 0, chats: 1 }, {}, false],
     ['more history than a few pages', () => undefined, { pages: FRESH_PAGES + 1, chats: 0 }, {}, false],
-    ['a second Today tab', (s) => void (s.nodes['two'] = tab('two', 'first', { section: 'today', pinnedUrl: null, rank: 'b0' })), NOTHING, {}, false],
+    ['a second Today tab', (s) => void (s.nodes['two'] = tab('two', 'first', { section: 'today', pinnedUrl: null, rank: 'a2' })), NOTHING, {}, false],
     ['a pinned tab', (s) => void (s.nodes['pin'] = tab('pin', 'first')), NOTHING, {}, false],
     ['a page zoom', (s) => void (s.siteZoom['a.test'] = 1.5), NOTHING, {}, false],
     ['a blocked permission', (s) => void (s.sitePermissions['https://a.test'] = { camera: 'block' }), NOTHING, {}, false],
-    ['a second chord', (s) => void (s.chords['two'] = chord('two', { rank: 'b0' })), NOTHING, {}, false],
+    ['a second chord', (s) => void (s.chords['two'] = chord('two', { rank: 'a2' })), NOTHING, {}, false],
     ['a setting changed', () => undefined, NOTHING, { searchEngine: 'duckduckgo' }, false],
     ['a keyboard shortcut changed', () => undefined, NOTHING, { shortcuts: { 'tab.new': ['Ctrl+J'] } }, false],
   ])('a fresh Chord, restored from a file, is only a clearly fresh one: %s', (_what, change, here, settings, fresh_) => {
@@ -583,7 +583,7 @@ describe('data.merge and its Undo', () => {
     ['never an allow', { blocks: { 'https://meet.test': ['camera', 'allow' as never] } }, (s) => expect(s.sitePermissions['https://meet.test']).toEqual({ camera: 'block' })],
     ['never a permission for something that isn’t an origin', { blocks: { 'javascript:alert(1)': ['camera'] } }, (s) => expect(s.sitePermissions['javascript:alert(1)']).toBeUndefined()],
     ['never a tab that isn’t a web page', { nodes: [tab('evil', 'work', { url: 'javascript:alert(1)' })] }, (s) => expect(s.nodes['evil']).toBeUndefined()],
-    ['never a Favorite that isn’t a web page', { favorites: [{ id: 'f2', url: 'file:///etc/passwd', title: 'x', favicon: null, rank: 'z', createdAt: 1 }] }, (s) => expect(s.favorites['f2']).toBeUndefined()],
+    ['never a Favorite that isn’t a web page', { favorites: [{ id: 'f2', url: 'file:///etc/passwd', title: 'x', favicon: null, rank: 'a9', createdAt: 1 }] }, (s) => expect(s.favorites['f2']).toBeUndefined()],
     ['never into a private window’s chord', { nodes: [tab('sneak', 'private')] }, (s) => expect(s.nodes['sneak']).toBeUndefined()],
     ['never a chord with a private window’s sign-ins', { chords: [chord('spy', { profileId: 'private-w9' })] }, (s) => expect(s.chords['spy']).toBeUndefined()],
     ['never a chord’s other sign-ins: one here keeps its own', { chords: [chord('work', { name: 'Work', profileId: 'elsewhere' })] }, (s) => expect(s.chords['work']!.profileId).toBe('default')],
@@ -596,7 +596,7 @@ describe('data.merge and its Undo', () => {
 
   it('a part that arrives while Undo is under way changes nothing', () => {
     const before = used();
-    const part = { chords: [chord('late', { rank: 'z0' })], nodes: [tab('x', 'work', { rank: 'x0' }), tab('y', 'work', { rank: 'y0' })] };
+    const part = { chords: [chord('late', { rank: 'aA' })], nodes: [tab('x', 'work', { rank: 'a7' }), tab('y', 'work', { rank: 'a8' })] };
     let s = apply(before, { t: 'data.merge', importId: 'imp', ...part }, { now: NOW, newId }).state;
     s = apply(s, { t: 'import.undo', importId: 'imp', limit: 1 }, { now: NOW, newId }).state;
     expect(s.imports['imp']).toBeDefined();

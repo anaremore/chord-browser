@@ -1752,8 +1752,8 @@ test('sync: keystrokes during a large merge', async () => {
   const setup: DataRecord[] = [
     { type: 'device', id: OTHER, at: stamp(), set: { name: 'Perf desk', os: 'Linux', app: '0.5.0' } },
     ...icons.map((icon): DataRecord => ({ type: 'icon', id: icon.id, set: { mime: icon.mime, data: icon.data } })),
-    ...Array.from({ length: 12 }, (_, c): DataRecord => ({ type: 'chord', id: `c${c}`, at: stamp(), set: { name: `Chord ${c}`, icon: 'C', theme: THEME, rank: `a${String(c).padStart(2, '0')}`, profile: 'default', created: 1 } })),
-    ...Array.from({ length: 40 }, (_, f): DataRecord => ({ type: 'folder', id: `f${f}`, at: stamp(), set: { pos: { chord: `c${f % 12}`, section: 'pinned', parent: null, rank: `b${String(f).padStart(3, '0')}` }, title: `Folder ${f}`, collapsed: true, created: 1 } })),
+    ...Array.from({ length: 12 }, (_, c): DataRecord => ({ type: 'chord', id: `c${c}`, at: stamp(), set: { name: `Chord ${c}`, icon: 'C', theme: THEME, rank: `a${String(c).padStart(2, '0')}V`, profile: 'default', created: 1 } })),
+    ...Array.from({ length: 40 }, (_, f): DataRecord => ({ type: 'folder', id: `f${f}`, at: stamp(), set: { pos: { chord: `c${f % 12}`, section: 'pinned', parent: null, rank: `b${String(f).padStart(3, '0')}V` }, title: `Folder ${f}`, collapsed: true, created: 1 } })),
     ...Array.from({ length: 260 }, (_, t): DataRecord => {
       const inFolder = t < 200;
       const chord = inFolder ? `c${(t % 40) % 12}` : `c${t % 12}`;
@@ -1764,7 +1764,7 @@ test('sync: keystrokes during a large merge', async () => {
         set: { pos: { chord, section: 'pinned', parent: inFolder ? `f${t % 40}` : null, rank: `c${String(t).padStart(3, '0')}` }, pinnedUrl: `${site.origin}/perf/${t}`, title: `Page ${t}`, customTitle: null, icon: icons[t % 200]!.id, muted: false, created: 1 },
       };
     }),
-    ...Array.from({ length: 24 }, (_, i): DataRecord => ({ type: 'favorite', id: `fav${i}`, at: stamp(), set: { url: `https://fav${i}.test/`, title: `Favorite ${i}`, icon: icons[i]!.id, rank: `a${String(i).padStart(2, '0')}`, created: 1 } })),
+    ...Array.from({ length: 24 }, (_, i): DataRecord => ({ type: 'favorite', id: `fav${i}`, at: stamp(), set: { url: `https://fav${i}.test/`, title: `Favorite ${i}`, icon: icons[i]!.id, rank: `a${String(i).padStart(2, '0')}V`, created: 1 } })),
     ...Array.from({ length: 30 }, (_, i): DataRecord => ({ type: 'route', id: `route${i}.test`, at: stamp(), set: { chord: `c${i % 12}`, created: 1 } })),
     ...Array.from({ length: 40 }, (_, i): DataRecord => ({ type: 'effects', id: `fx${i}.test`, at: stamp(), set: { wet: true, css: `h1 { color: rgb(${i}, 0, 0) }`, cssOn: true, hidden: [], presets: [], duet: [] } })),
   ];
@@ -1908,7 +1908,7 @@ test('sync: keystrokes while joining with 500 pinned tabs and 40 large Effects h
   const THEME = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' };
   const setup: DataRecord[] = [
     { type: 'device', id: OTHER, at: [Date.now() - 60_000, 0, OTHER], set: { name: 'Perf laptop', os: 'Linux', app: '0.5.0' } },
-    { type: 'chord', id: 'synced', at: [Date.now() - 60_000, 1, OTHER], set: { name: 'Synced', icon: 'S', theme: THEME, rank: 'z0', profile: 'default', created: 1 } },
+    { type: 'chord', id: 'synced', at: [Date.now() - 60_000, 1, OTHER], set: { name: 'Synced', icon: 'S', theme: THEME, rank: 'az', profile: 'default', created: 1 } },
   ];
   await writeSnapshot(fs, { generation: 1, device: OTHER }, [setup], root, { app: '0.5.0', device: [setup[0]!] }, nodeCrypto);
 
@@ -1974,6 +1974,98 @@ test('sync: keystrokes while joining with 500 pinned tabs and 40 large Effects h
           check('sync step', max(steps.map((step) => step.ms)), BUDGET.historyKeystrokeMs, { locked: null }),
         ],
         detail: { mainTaskMs: { alone: round(alone.task), during: round(main.task), inside: main.inside }, slowestStepsMs: slowest([...steps]), ...extra },
+      });
+    }
+  } finally {
+    await app.close();
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Keystrokes while the first computer sets up with 5,000 pinned tabs, each
+ * with an icon of its own, then while their chord is deleted, and while its
+ * Undo brings them back (S15 §13, the ninth review): setting up adds this
+ * computer's things a slice at a time, as a join does, and the deletion and
+ * its Undo go as a durable intent a part at a time (about 100 tabs), searches
+ * answered between. The keystroke budgets hold, and none of chord-data's
+ * steps, setting up or writing, passes a keystroke's.
+ */
+test('sync: keystrokes while setting up with 5,000 pinned tabs, then deleting their chord, and its Undo', async () => {
+  test.setTimeout(600_000);
+  cpuBusy = await measureCpuBusy();
+  const folder = mkdtempSync(join(tmpdir(), 'chord-perf-sync-setup-'));
+  const app = await launch({ ...SEEDED, CHORD_PERF_PINNED: '5000' });
+  try {
+    const overlay = await pageWhere(app, isOverlay);
+    const { shell, settings } = await yourData(app);
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog;
+    }, folder);
+    const pinned = () => app.evaluate(() => (globalThis as unknown as { chordTestHooks: { pinnedNames(s: string): { count: number } } }).chordTestHooks.pinnedNames('').count);
+    await expect.poll(pinned, { timeout: 60_000 }).toBe(5000);
+    const chord = (what: 'spare' | 'delete' | 'restore') => app.evaluate((_electron, w) => (globalThis as unknown as { chordTestHooks: { chordForTests(w: string): Promise<void> } }).chordTestHooks.chordForTests(w), what);
+    await chord('spare');
+
+    await bringToFront(app, shell);
+    await setMotion(app, shell, overlay, true);
+    environment ??= await readEnvironment(app, shell);
+    const { s, typing } = await typingSession(app, shell, overlay);
+    await openCommandBar(shell, overlay);
+    await typeSlowly(overlay, 'warm up');
+    await closeCommandBar(overlay);
+    const alone = await typing('before setting up with 5,000 pinned tabs');
+    const timings = () => syncHook<SyncTimings>(app, 'syncTimings');
+    // A part's steps and writes: those since the part before (chord-data keeps the last 500 of each; past that, all it keeps).
+    const since = <T>(from: T[], to: T[]) => (to.length < 500 ? to.slice(from.length) : to);
+    const start = await timings();
+    let setupMs = NaN;
+    const settingUp = await typing('while setting up with 5,000 pinned tabs', async () => {
+      const t0 = performance.now();
+      const state = await settings.evaluate(async (passphrase) => {
+        const sync = (window as unknown as { chord: { sync: { chooseFolder(): Promise<{ ok: boolean; folderId?: string }>; setup(id: string, p: string): Promise<{ ok: boolean; view?: { state: string } }> } } }).chord.sync;
+        const chosen = await sync.chooseFolder();
+        return (await sync.setup(chosen.folderId!, passphrase)).view?.state ?? 'failed';
+      }, SYNC_PASSPHRASE);
+      expect(state).toBe('on');
+      setupMs = performance.now() - t0;
+    });
+    const setUp = await timings();
+    let deleteMs = NaN;
+    const deleting = await typing('while their chord is deleted', async () => {
+      const t0 = performance.now();
+      await chord('delete');
+      deleteMs = performance.now() - t0;
+    });
+    const deleted = await timings();
+    expect(await pinned()).toBe(0);
+    let undoMs = NaN;
+    const undoing = await typing('while its Undo brings them back', async () => {
+      const t0 = performance.now();
+      await chord('restore');
+      undoMs = performance.now() - t0;
+    });
+    const undone = await timings();
+    expect(await pinned()).toBe(5000);
+    for (const [label, main, from, to, ms] of [
+      ['setting up', settingUp, start, setUp, setupMs],
+      ['deleting their chord', deleting, setUp, deleted, deleteMs],
+      ['its Undo', undoing, deleted, undone, undoMs],
+    ] as const) {
+      const steps = since(from.steps, to.steps);
+      const writes = since(from.write, to.write);
+      record({
+        group: 'sync',
+        name: `Sync: 5,000 pinned tabs, ${label}`,
+        scenario: `${s.scenario}, 5,000 pinned tabs with icons`,
+        motion: null,
+        locked: main.locked,
+        checks: [
+          check('main task', main.task, BUDGET.frameMs, { locked: main.locked }),
+          // chord-data's thread answers the command bar's searches between sync's steps and a write's parts: none past a keystroke's budget.
+          check('sync step', max([...steps.map((step) => step.ms), ...writes]), BUDGET.historyKeystrokeMs, { locked: null }),
+        ],
+        detail: { mainTaskMs: { alone: round(alone.task), during: round(main.task), inside: main.inside }, allMs: round(ms), slowestStepsMs: slowest([...steps]), writes: writes.length, slowestWriteMs: round(max(writes)) },
       });
     }
   } finally {

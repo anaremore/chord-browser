@@ -54,6 +54,7 @@ const STEP_PROBLEMS: Record<Exclude<SyncStepResult, { ok: true }>['problem'], st
   missing: 'Chord can’t find that folder any more. Choose it again.',
   io: 'Chord couldn’t write to that folder. Choose another.',
   busy: 'Sync is busy with another step. Try again in a moment.',
+  full: 'This computer’s disk is full. Make some room, then try again.',
 };
 
 type Flow =
@@ -259,6 +260,7 @@ function TurnOn({ onUpdates, removed }: { onUpdates(): void; removed: boolean })
 function Choose({ view }: { view: SyncView }) {
   const [mode, setMode] = useState<'synced' | 'both'>('synced');
   const [working, setWorking] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   const here = view.choosing?.here ?? 0;
   const options = [
     { key: 'synced' as const, name: 'Use the synced setup', hint: `${here === 1 ? 'This computer’s chord goes' : `This computer’s ${plural(here, 'chord')} go`}, and its Today tabs move to the synced setup. You can undo this.` },
@@ -281,6 +283,7 @@ function Choose({ view }: { view: SyncView }) {
           </button>
         ))}
       </RadioGroup>
+      {problem && <p className={local.problem}>{problem}</p>}
       <div className={local.actions}>
         <div className={local.buttons}>
           <button
@@ -289,7 +292,12 @@ function Choose({ view }: { view: SyncView }) {
             disabled={working}
             onClick={() => {
               setWorking(true);
-              void api.sync.choose(mode).finally(() => setWorking(false));
+              setProblem(null);
+              void api.sync
+                .choose(mode)
+                .catch(() => ({ ok: false, problem: 'busy' }) as const)
+                .then((result) => setProblem(result.ok ? null : STEP_PROBLEMS[result.problem]))
+                .finally(() => setWorking(false));
             }}
           >
             Continue

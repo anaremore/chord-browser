@@ -102,11 +102,31 @@ describe('a chord another computer deleted', () => {
 describe('a chord another computer deleted, while a change of yours to it waits', () => {
   it('its tabs’ tombstones wait with it, so when it goes it takes them, kept for its Undo', async () => {
     const asked: SyncRequest[] = [];
-    const h = harness((request) => (asked.push(request), {}), (key) => key === 'chord:x');
+    let waits = true;
+    const h = harness((request) => (asked.push(request), {}), (key) => waits && key === 'chord:x');
+    // Yours is written with the flush that follows: then what waited for it is asked for again.
+    h.whenFlushed(() => (waits = false));
     h.push({ ...emptyApply(), gone: { ...emptyApply().gone, chords: ['x'], nodes: [{ id: 'p', kind: 'tab' }] } });
     await vi.waitFor(() => expect(asked.some((r) => r.type === 'sync.repush')).toBe(true));
     expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
     expect(asked.find((r) => r.type === 'sync.repush')).toMatchObject({ keys: expect.arrayContaining(['chord:x', 'node:p']) });
+  });
+});
+
+describe('what waits for another change of yours', () => {
+  it('a tab held with its chord’s deletion is asked for again only once that change is written, never straight away (S15 §13, the ninth review)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const asked: SyncRequest[] = [];
+      // The change to the chord stays refused (a full disk): never written.
+      const h = harness((request) => (asked.push(request), {}), (key) => key === 'chord:x');
+      h.push({ ...emptyApply(), gone: { ...emptyApply().gone, chords: ['x'], nodes: [{ id: 'p', kind: 'tab' }] } });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(asked.filter((r) => r.type === 'sync.repush')).toEqual([]);
+      expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -152,6 +172,78 @@ describe('turning sync off while chord-data keeps refusing writes', () => {
       await vi.advanceTimersByTimeAsync(45_000);
       expect(asked.find((r) => r.type === 'sync.off')).toEqual({ type: 'sync.off', keep: true });
       expect(h.toasts.find((t) => t.id === 'sync:unsaved')?.message).toMatch(/3 changes it brought aren’t saved on this computer yet/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('turning sync off or removing a computer, refused (S15 §13, the ninth review)', () => {
+  it('a disk so full even that’s refused: sync is as it was, and a toast says why and how to go on', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = harness((request) => (request.type === 'sync.off' || request.type === 'sync.remove' ? { problem: 'full' } : {}));
+      h.service.hold('off');
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(h.toasts.at(-1)).toMatchObject({ id: 'sync:pending', message: 'Sync couldn’t turn off: this computer’s disk is full. Make some room, then try again.' });
+      h.service.hold('remove', 'other');
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(h.toasts.at(-1)?.message).toBe('Couldn’t remove that computer from sync: this computer’s disk is full. Make some room, then try again.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('chord-data failing outright: said, never thrown at a timer', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = harness((request) => {
+        if (request.type === 'sync.off') throw new Error('chord-data: closed');
+        return {};
+      });
+      h.service.hold('off');
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(h.toasts.at(-1)?.message).toBe('Sync couldn’t turn off. Try again from Settings.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('quitting while Turn off or Remove waits for its Undo', () => {
+  it('it happens now (quitting is no Undo), the folder given a moment only; with what sync applied not all saved, keeping the merged copy', async () => {
+    const asked: SyncRequest[] = [];
+    const h = harness((request) => (asked.push(request), {}));
+    h.service.hold('off');
+    await h.service.quit();
+    expect(asked.filter((r) => r.type === 'sync.off')).toEqual([{ type: 'sync.off', quitting: true }]);
+    h.setUnsaved(2);
+    h.service.hold('off');
+    await h.service.quit();
+    expect(asked.filter((r) => r.type === 'sync.off').at(-1)).toEqual({ type: 'sync.off', keep: true, quitting: true });
+    h.service.hold('remove', 'other');
+    await h.service.quit();
+    expect(asked.filter((r) => r.type === 'sync.remove')).toEqual([{ type: 'sync.remove', device: 'other' }]);
+  });
+});
+
+describe('the merged copy kept after turning off', () => {
+  it('at launch, what chord.db lacks of it applied and saved, then it goes; still refused (a full disk), kept, and tried again later', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const asked: SyncRequest[] = [];
+      const h = harness((request) => {
+        asked.push(request);
+        return request.type === 'sync.status' ? { status: SYNC_OFF, kept: true } : {};
+      });
+      h.setUnsaved(1);
+      await h.service.afterLaunch();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(asked).toContainEqual({ type: 'sync.reconcile', wait: true });
+      expect(asked.some((r) => r.type === 'sync.forget')).toBe(false);
+      h.setUnsaved(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(asked.filter((r) => r.type === 'sync.forget')).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

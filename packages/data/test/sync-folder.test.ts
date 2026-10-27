@@ -31,6 +31,7 @@ import {
   MAX_SEGMENT,
   mayPrune,
   nextGeneration,
+  othersUnder,
   ownIntact,
   readComputers,
   readSegment,
@@ -720,6 +721,48 @@ describe('two copies of one profile, writing under one id', () => {
     expect(await segmentsOf(fs, 1, A)).toEqual([1, n.segment]);
     const reader = new Reader(fs, B, root);
     expect(ids(await reader.pass())).toEqual(expect.arrayContaining(['a0', 'b1', 'b2']));
+  });
+
+  it('the other copy’s version kept under the name, as long as the one read: its last frame is checked again when the file’s time changes, and it’s read from its start (S15 §13, the ninth review)', async () => {
+    const { fs, root, reader, own } = await twoComputers();
+    const shared = own();
+    const mine = await appendRecords(fs, shared, [chord('a1', 'Mine', 3)], root, { app: '0.5.0', device: [] }, nodeCrypto);
+    if (!mine.ok) throw new Error(mine.problem);
+    // A copy, offline, appends a frame of its own to the shared segment, as long as this one's (a name found that makes it so).
+    let offline = new MemoryFolder();
+    for (let n = 0; n < 200; n++) {
+      offline = new MemoryFolder();
+      for (const [path, file] of fs.files) if (!path.endsWith(segmentName(1))) offline.files.set(path, { ...file, bytes: new Uint8Array(file.bytes) });
+      offline.files.set(`1/${A}/${segmentName(1)}`, { bytes: new Uint8Array(fs.files.get(`1/${A}/${segmentName(1)}`)!.bytes.subarray(0, shared.size)), mtime: 1 });
+      const theirs = await appendRecords(offline, shared, [chord('c1', `Copy ${n}`, 3)], root, { app: '0.5.0', device: [] }, nodeCrypto);
+      if (theirs.ok && theirs.own.size === mine.own.size) break;
+    }
+    expect(offline.files.get(`1/${A}/${segmentName(1)}`)!.bytes.length).toBe(mine.own.size);
+    expect(ids(await reader.pass())).toContain('a1');
+    expect(ids(await reader.pass())).toEqual([]);
+    // The sync app keeps the copy's version under the name: as long, at another time.
+    fs.plant(`1/${A}/${segmentName(1)}`, offline.files.get(`1/${A}/${segmentName(1)}`)!.bytes);
+    expect(ids(await reader.pass())).toContain('c1');
+  });
+
+  it('each writing a snapshot of its own, the second past a name the first’s held while still being delivered: each finds the other, though neither reads its own id’s (S15 §13, the ninth review)', async () => {
+    const { fs, root, own } = await twoComputers();
+    // The copy's snapshot (segment 2), written in its own copy of the folder, arriving here a part at a time.
+    const offline = new MemoryFolder();
+    for (const [path, file] of fs.files) offline.files.set(path, { ...file, bytes: new Uint8Array(file.bytes) });
+    const copy = await snapshot(offline, { generation: 1, device: A }, [chord('work', 'Work', 1), chord('b1', 'B1', 3)], root, { own: own() });
+    expect(copy.segment).toBe(2);
+    const whole = offline.files.get(`1/${A}/${segmentName(2)}`)!.bytes;
+    fs.plant(`1/${A}/${segmentName(2)}`, whole.slice(0, 20));
+    // This one compacts meanwhile: past the name being delivered, which it notes.
+    const mine = await snapshot(fs, { generation: 1, device: A }, [chord('work', 'Work', 1), chord('a1', 'A1', 4)], root, { own: own() });
+    expect(mine.segment).toBe(3);
+    expect(mine.skipped).toEqual([2]);
+    expect(await othersUnder(fs, mine, root, nodeCrypto)).toBe(false);
+    // Delivered whole: another computer under this id, found at the next look, as the copy finds this one's past its own.
+    fs.plant(`1/${A}/${segmentName(2)}`, whole);
+    expect(await othersUnder(fs, mine, root, nodeCrypto)).toBe(true);
+    expect(await othersUnder(fs, copy, root, nodeCrypto)).toBe(true);
   });
 
   it('this computer’s segment gone with nothing real past it: a new id all the same, and nothing in the old folder deleted', async () => {

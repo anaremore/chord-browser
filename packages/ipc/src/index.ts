@@ -1272,8 +1272,8 @@ export interface SyncView extends SyncStatus {
 /** The folder picked (by an id, main keeps the path), and what's in it. `busy`: sync is on already. */
 export type SyncFolderResult = { ok: true; folderId: string; name: string; inspection: FolderInspection } | { ok: false; problem: 'cancelled' | 'busy' };
 
-/** A step's answer: where sync stands now, or why it didn't work. */
-export type SyncStepResult = { ok: true; view: SyncView } | { ok: false; problem: 'wrong' | 'conflict' | 'newer' | 'damaged' | 'missing' | 'io' | 'busy' };
+/** A step's answer: where sync stands now, or why it didn't work (`full`: this computer's disk refused the step's writes). */
+export type SyncStepResult = { ok: true; view: SyncView } | { ok: false; problem: 'wrong' | 'conflict' | 'newer' | 'damaged' | 'missing' | 'io' | 'busy' | 'full' };
 
 const syncPassphrase = z
   .string()

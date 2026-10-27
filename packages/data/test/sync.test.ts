@@ -96,7 +96,7 @@ describe('the stamping hook', () => {
     expect(outbox()).toEqual([]);
   });
 
-  it('a tab you pin syncs; one you unpin is a tombstone; pinned again, it goes whole with deleted: false', () => {
+  it('a tab you pin syncs; one you unpin is a tombstone; pinned again, it’s back (deleted: false) with what changed since, never what didn’t', () => {
     let state = setUp();
     const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
@@ -105,7 +105,10 @@ describe('the stamping hook', () => {
     state = drive(state, [{ t: 'tab.unpin', nodeId: tab }]);
     expect(outbox().at(-1)).toMatchObject({ type: 'tab', id: tab, set: { deleted: true } });
     drive(state, [{ t: 'tab.pin', nodeId: tab }]);
-    expect(outbox().at(-1)!.set).toMatchObject({ deleted: false, pinnedUrl: 'https://home.test/', title: expect.any(String) });
+    // Its title and home are as they were: another computer's change to them meanwhile stands.
+    expect(outbox().at(-1)!.set).toMatchObject({ deleted: false });
+    expect(outbox().at(-1)!.set).not.toHaveProperty('title');
+    expect(outbox().at(-1)!.set).not.toHaveProperty('pinnedUrl');
   });
 
   it('a Today tab, a window, history and zoom are never stamped', () => {
@@ -209,10 +212,12 @@ describe('merging another computer’s records', () => {
   });
 
   it('a change made here beats a value whose stamp is far ahead, and the clock stays near the time', () => {
-    const state = setUp();
+    let state = setUp();
     const id = chordId(state);
     const far: Stamp = [Date.now() + 300 * 86_400_000, MAX_COUNTER, OTHER];
     db.atomically(() => db.sync.merge([{ type: 'chord', id, at: far, set: { name: 'From a wrong clock' } }], Date.now()));
+    // Shown here (sync applied it), then changed: yours replaced it.
+    state = drive(state, [{ t: 'sync.apply', chords: [{ ...state.chords[id]!, name: 'From a wrong clock' }] }], true);
     drive(state, [{ t: 'chord.update', chordId: id, name: 'Mine' }]);
     const mine = outbox().at(-1)!;
     expect(compareStamps(mine.at!, far)).toBeGreaterThan(0);
@@ -366,13 +371,13 @@ describe('a chord another computer deleted, with more than a push holds', () => 
     const tabs = Array.from({ length: 150 }, (_, i) => `pinned-${i}`);
     state = {
       ...state,
-      chords: { ...state.chords, [big]: { id: big, profileId: 'default', name: 'Big', icon: 'B', theme: THEME, rank: 'b0', createdAt: 1 } },
+      chords: { ...state.chords, [big]: { id: big, profileId: 'default', name: 'Big', icon: 'B', theme: THEME, rank: 'a5', createdAt: 1 } },
       nodes: {
         ...state.nodes,
         ...Object.fromEntries(
           tabs.map((id, i) => [
             id,
-            { kind: 'tab', id, chordId: big, section: 'pinned', parentId: null, rank: `a${String(i).padStart(3, '0')}`, url: `https://t${i}.test/`, title: `T${i}`, pinnedUrl: `https://t${i}.test/`, customTitle: null, favicon: null, lastActiveAt: 1, createdAt: 1 },
+            { kind: 'tab', id, chordId: big, section: 'pinned', parentId: null, rank: `a${String(i).padStart(3, '0')}V`, url: `https://t${i}.test/`, title: `T${i}`, pinnedUrl: `https://t${i}.test/`, customTitle: null, favicon: null, lastActiveAt: 1, createdAt: 1 },
           ]),
         ),
       },
@@ -441,7 +446,7 @@ describe('what this computer hasn’t applied', () => {
       db.sync.merge(
         [
           { type: 'chord', id: home, at, set: { name: 'First part' } },
-          { type: 'chord', id: 'new-one', at, set: { name: 'Second part', icon: 'S', theme: THEME, rank: 'z0', profile: 'default', created: 1 } },
+          { type: 'chord', id: 'new-one', at, set: { name: 'Second part', icon: 'S', theme: THEME, rank: 'az', profile: 'default', created: 1 } },
         ],
         Date.now(),
       ),
@@ -504,7 +509,7 @@ describe('stamping by origin: yours is stamped, sync’s and tidying’s never a
     return records.length > 0 && !records.some((r) => r.set['deleted'] === true);
   };
   const unapplied = () => new Map([...db.sync.unappliedPages()].flatMap((page) => [...page]));
-  const chordSet = { name: 'Theirs', icon: 'T', theme: THEME, rank: 'z0', profile: 'default', created: 1 };
+  const chordSet = { name: 'Theirs', icon: 'T', theme: THEME, rank: 'az', profile: 'default', created: 1 };
 
   it('a theme another computer has and this one never had: saving your own list never deletes it (you didn’t take it out)', () => {
     const state = setUp();
@@ -802,5 +807,241 @@ describe('icons and reconcile pages stay small', () => {
     const pages = [...db.sync.unappliedPages()].filter((page) => page.size > 0);
     expect(pages.length).toBeGreaterThan(1);
     for (const page of pages) expect(page.size).toBeLessThanOrEqual(4);
+  });
+});
+
+describe('what the sync simulation found (S15 §13, the ninth review)', () => {
+  const ahead = (ms = 1000): Stamp => [Date.now() + ms, 0, OTHER];
+  const records = (id: string) => outbox().filter((r) => r.id === id);
+
+  it('an edit of something another computer deleted, its deletion not applied here yet, leaves the deletion', () => {
+    const state = setUp();
+    const id = chordId(state);
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: ahead(), set: { deleted: true } }], Date.now()));
+    drive(state, [{ t: 'chord.update', chordId: id, name: 'Edited' }]);
+    expect(records(id).some((r) => r.set['name'] === 'Edited')).toBe(true);
+    expect(records(id).some((r) => 'deleted' in r.set)).toBe(false);
+  });
+
+  it('brought back here (a route set again after it went) says it’s here, even while the copy still has it', () => {
+    let state = setUp();
+    state = drive(state, [{ t: 'linkRoute.set', host: 'mail.test', chordId: chordId(state) }]);
+    state = drive(state, [{ t: 'linkRoute.delete', host: 'mail.test' }]);
+    // Another computer set it again meanwhile, earlier than what follows: the copy has it live.
+    db.atomically(() => db.sync.merge([{ type: 'route', id: 'mail.test', at: [Date.now() - 1, 0, OTHER], set: { deleted: false, chord: chordId(state), created: 1 } }], Date.now()));
+    drive(state, [{ t: 'linkRoute.set', host: 'mail.test', chordId: chordId(state) }]);
+    expect(records('mail.test').at(-1)!.set['deleted']).toBe(false);
+  });
+
+  it('made here and gone again in one write, before the copy had it: gone as of then (another computer may have made it too)', () => {
+    setUp();
+    db.write([{ k: 'linkRoute', id: 'made.test', value: null, took: true, back: true, at: Date.now() } as WriteOp]);
+    expect(records('made.test').map((r) => r.set)).toEqual([{ deleted: true }]);
+  });
+
+  it('a deletion of something gone in the copy already is stamped again, as of now', () => {
+    const state = setUp();
+    const id = chordId(state);
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: [Date.now() - 10, 0, OTHER], set: { deleted: true } }], Date.now()));
+    db.write([{ k: 'chord', id, value: null, at: Date.now() } as WriteOp]);
+    expect(records(id).some((r) => r.set['deleted'] === true)).toBe(true);
+  });
+
+  it('a row keeps when what sync keeps of it was made: a write that changes nothing of that (a tab’s last visit) leaves its time', () => {
+    let state = setUp();
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
+    const made = Date.now() - 60_000;
+    db.write([{ k: 'node', id: tab, value: state.nodes[tab]!, at: made } as WriteOp]);
+    db.write([{ k: 'node', id: tab, value: { ...state.nodes[tab]!, lastActiveAt: Date.now() }, synced: false, at: Date.now() } as WriteOp]);
+    db.sync.setMeta({ joining: true });
+    const joined = [...db.sync.localPages()].flat().find((r) => r.type === 'tab' && r.id === tab)!;
+    expect(joined.at?.[0]).toBe(made);
+  });
+
+  it('what you changed while a join waited is stamped as a change from before it: an edit of what the synced setup deleted leaves it deleted', () => {
+    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    db.write(opsForState(state));
+    const id = chordId(state);
+    db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
+    db.atomically(() =>
+      db.sync.merge(
+        [
+          { type: 'chord', id, at: ahead(), set: { name: 'Synced', icon: 'S', theme: THEME, rank: 'a0', profile: 'default', created: 1 } },
+          { type: 'chord', id, at: ahead(2000), set: { deleted: true } },
+        ],
+        Date.now(),
+      ),
+    );
+    drive(state, [{ t: 'chord.update', chordId: id, name: 'Renamed while joining' }]);
+    expect(db.sync.unstamped).toBe(true);
+    db.atomically(() => db.sync.stampJoinWindow('all', Date.now()));
+    expect(records(id).some((r) => r.set['name'] === 'Renamed while joining')).toBe(true);
+    expect(records(id).some((r) => r.set['deleted'] === false)).toBe(false);
+  });
+
+  it('a setting changed while a join with the synced setup waited is stamped as it ends, over an older synced one', () => {
+    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    db.write(opsForState(state));
+    db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
+    db.atomically(() => db.sync.merge([{ type: 'settings', id: 'settings', at: [Date.now() - 5000, 0, OTHER], set: { searchEngine: 'duckduckgo' } }], Date.now()));
+    drive(state, [{ t: 'settings.set', settings: { searchEngine: 'bing' } }]);
+    db.atomically(() => db.sync.addLocal('synced-setup'));
+    db.atomically(() => db.sync.stampJoinWindow('synced-setup', Date.now()));
+    expect(outbox().some((r) => r.type === 'settings' && r.set['searchEngine'] === 'bing')).toBe(true);
+  });
+
+  it('in the copy, never written here since it came (its apply lost to a crash): the drift check takes the row for no change of yours', () => {
+    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    db.write(opsForState(state));
+    const id = chordId(state);
+    db.sync.setMeta({ on: true, folder: '/sync', generation: 1, name: 'Desk', projection: 1 });
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: [1, 0, OTHER], set: { name: 'Synced', icon: 'S', theme: THEME, rank: 'a0', profile: 'default', created: 1 } }], Date.now()));
+    for (const step of db.sync.driftRepairs()) void step;
+    expect(records(id)).toEqual([]);
+  });
+
+  it('a setting changed while a join waited, to what the copy has already (an older value; a newer one may not be read yet): stamped all the same', () => {
+    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    db.write(opsForState(state));
+    db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
+    db.atomically(() => db.sync.merge([{ type: 'settings', id: 'settings', at: [Date.now() - 5000, 0, OTHER], set: { searchEngine: 'bing' } }], Date.now()));
+    drive(state, [{ t: 'settings.set', settings: { searchEngine: 'bing' } }]);
+    db.atomically(() => db.sync.addLocal('all'));
+    db.atomically(() => db.sync.stampJoinWindow('all', Date.now()));
+    expect(outbox().some((r) => r.type === 'settings' && r.set['searchEngine'] === 'bing' && r.at![2] !== OTHER)).toBe(true);
+  });
+
+  it('a change a full disk put off, made before another computer’s deletion read meanwhile: the deletion stays, and main is sent it', () => {
+    const state = setUp();
+    const made = Date.now() - 10_000;
+    db.atomically(() => db.sync.merge([{ type: 'route', id: 'late.test', at: [Date.now() - 5000, 0, OTHER], set: { chord: chordId(state), created: 1, deleted: true } }], Date.now()));
+    db.write([{ k: 'linkRoute', id: 'late.test', value: { host: 'late.test', chordId: chordId(state), createdAt: made }, at: made, back: true } as WriteOp]);
+    expect(records('late.test')).toEqual([]);
+    expect([...db.sync.takeLost().keys()]).toEqual([thingKey('route', 'late.test')]);
+  });
+
+  it('a route here to a chord that isn’t (deleted here): the drift check leaves what this computer has of it, so an edit of it later is an edit, never a bringing back', () => {
+    let state = setUp();
+    const windowId = Object.keys(state.windows)[0]!;
+    state = drive(state, [{ t: 'chord.create', windowId, name: 'Two', icon: 'T', theme: THEME }]);
+    const second = Object.keys(state.chords).find((id) => id !== chordId(state))!;
+    state = drive(state, [
+      { t: 'linkRoute.set', host: 'mail.test', chordId: second },
+      { t: 'chord.delete', chordId: second },
+    ]);
+    expect(state.linkRoutes['mail.test']).toBeDefined();
+    for (const step of db.sync.driftRepairs()) void step;
+    const before = outbox().length;
+    drive(state, [{ t: 'linkRoute.set', host: 'mail.test', chordId: chordId(state) }]);
+    expect(outbox().slice(before).filter((r) => r.id === 'mail.test').map((r) => r.set)).toEqual([{ chord: chordId(state) }]);
+  });
+
+  it('joining with the synced setup, a chord it has too (the same id): what this computer has of it is noted, so a rename after is a rename, never a new chord that brings back a deletion not read yet', () => {
+    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    db.write(opsForState(state));
+    const id = chordId(state);
+    db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: [Date.now() - 5000, 0, OTHER], set: { name: state.chords[id]!.name, icon: state.chords[id]!.icon, theme: THEME, rank: state.chords[id]!.rank, profile: 'default', created: 1000 } }], Date.now()));
+    db.atomically(() => db.sync.addLocal('synced-setup'));
+    db.atomically(() => db.sync.stampJoinWindow('synced-setup', Date.now()));
+    db.sync.setMeta({ joining: false });
+    drive(state, [{ t: 'chord.update', chordId: id, name: 'Renamed' }]);
+    expect(records(id).map((r) => r.set)).toEqual([{ name: 'Renamed' }]);
+  });
+
+  it('joining with the synced setup, which has no chord (its other logs not come yet): nothing to make way for, so this computer’s chords join it', () => {
+    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    db.write(opsForState(state));
+    db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
+    db.atomically(() => db.sync.addLocal('synced-setup', undefined, false));
+    expect(db.sync.syncedChords()).toEqual([chordId(state)]);
+  });
+
+  it('gone in a join’s window, here before it, though the copy hasn’t read it yet (a join refused partway, carried on): gone as of then', () => {
+    let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    db.write(opsForState(state));
+    db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
+    db.sync.setMeta({ on: false });
+    db.sync.setMeta({ on: true, joining: true });
+    // Pinned before the window (noted then), unpinned in it; the copy has never read it.
+    (db as unknown as { sql(text: string): StatementSync }).sql('DELETE FROM sync_noted').run();
+    drive(state, [{ t: 'tab.unpin', nodeId: tab }]);
+    db.atomically(() => db.sync.stampJoinWindow('all', Date.now()));
+    expect(records(tab).map((r) => r.set)).toEqual([{ deleted: true }]);
+  });
+
+  it('a change put off (a full disk) and a later one of the same thing, written together: each stamped as of when it was made', () => {
+    const state = setUp();
+    const id = chordId(state);
+    // Written two minutes on, the first made a minute on, the later a moment before the write.
+    const now = Date.now() + 120_000;
+    const first = now - 60_000;
+    const later = now - 1000;
+    const chord = state.chords[id]!;
+    db.write([{ k: 'chord', id, value: { ...chord, name: 'Later', icon: 'L' }, at: later, before: [{ value: { ...chord, icon: 'L' }, at: first }] } as WriteOp], now);
+    const sent = records(id).map((r) => [r.set, r.at![0]]);
+    expect(sent).toEqual([
+      [{ icon: 'L' }, first],
+      [{ name: 'Later' }, later],
+    ]);
+  });
+
+  it('a route made and removed while a join waited, the copy never having read it: gone as of then (another computer may have made it)', () => {
+    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    db.write(opsForState(state));
+    db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
+    drive(drive(state, [{ t: 'linkRoute.set', host: 'made.test', chordId: chordId(state) }]), [{ t: 'linkRoute.delete', host: 'made.test' }]);
+    db.atomically(() => db.sync.stampJoinWindow('all', Date.now()));
+    expect(records('made.test').map((r) => r.set)).toEqual([{ deleted: true }]);
+  });
+
+  it('an edit of a thing here this computer never wrote while sync was on (a route waiting for its chord when it joined): a change from the copy’s, never a bringing back', () => {
+    let state = setUp();
+    state = drive(state, [{ t: 'linkRoute.set', host: 'wait.test', chordId: chordId(state) }]);
+    // The copy has it gone (another computer removed it), and this computer's `local` never had it.
+    db.atomically(() => db.sync.merge([{ type: 'route', id: 'wait.test', at: [Date.now() + 1000, 0, OTHER], set: { deleted: true } }], Date.now()));
+    (db as unknown as { sql(text: string): StatementSync }).sql(`UPDATE sync_record SET local = NULL WHERE type = 'route' AND id = 'wait.test'`).run();
+    const before = outbox().length;
+    const windowId = Object.keys(state.windows)[0]!;
+    state = drive(state, [{ t: 'chord.create', windowId, name: 'Two', icon: 'T', theme: THEME }]);
+    const second = Object.keys(state.chords).find((id) => id !== chordId(state))!;
+    drive(state, [{ t: 'linkRoute.set', host: 'wait.test', chordId: second }]);
+    expect(outbox().slice(before).filter((r) => r.id === 'wait.test').map((r) => r.set)).toEqual([{ chord: second }]);
+  });
+
+  it('a change a full disk put off is stamped above what it replaced, never above another computer’s value stamped after it was made, though the same (a folder brought back after you deleted it)', () => {
+    const state = setUp();
+    const id = chordId(state);
+    // Made a minute on, written two minutes on; another computer brought it back between (the same value this computer showed: here).
+    const now = Date.now() + 120_000;
+    const made = now - 60_000;
+    db.atomically(() => db.sync.merge([{ type: 'chord', id, at: [now - 30_000, 0, OTHER], set: { deleted: false } }], now - 30_000));
+    db.write([{ k: 'chord', id, value: null, at: made } as WriteOp], now);
+    expect(records(id)).toEqual([]);
+    expect([...db.sync.takeLost().keys()]).toEqual([thingKey('chord', id)]);
+  });
+
+  it('another computer’s chord applied, then taken away by you, in one write: applied first, so its Undo brings back only what differs', () => {
+    const state = setUp();
+    const theirs = { ...state.chords[chordId(state)]!, id: 'theirs', name: 'Theirs', rank: 'a5' };
+    db.atomically(() => db.sync.merge([{ type: 'chord', id: 'theirs', at: [Date.now() - 1000, 0, OTHER], set: { name: 'Theirs', icon: theirs.icon, theme: THEME, rank: 'a5', profile: 'default', created: 1 } }], Date.now()));
+    db.write([{ k: 'chord', id: 'theirs', value: theirs, origin: 'sync' } as WriteOp, { k: 'chord', id: 'theirs', value: null, at: Date.now() } as WriteOp]);
+    db.write([{ k: 'chord', id: 'theirs', value: theirs, at: Date.now(), back: true } as WriteOp]);
+    expect(records('theirs').map((r) => r.set)).toEqual([{ deleted: true }, { deleted: false }]);
+  });
+
+  it('a chord made and deleted, written together, a while apart: made as of then, then gone, never gone first and made after', () => {
+    let state = setUp();
+    const windowId = Object.keys(state.windows)[0]!;
+    const made = Date.now() - 60_000;
+    const after = apply(state, { t: 'chord.create', windowId, name: 'Brief', icon: 'B', theme: THEME }, ctx).state;
+    const id = Object.keys(after.chords).find((c) => !state.chords[c])!;
+    db.write([{ k: 'chord', id, value: null, at: Date.now() - 1000, before: [{ value: after.chords[id]!, at: made, back: true }] } as WriteOp]);
+    expect(records(id).map((r) => r.set['deleted'])).toEqual([false, true]);
+    state = after;
+    void state;
   });
 });

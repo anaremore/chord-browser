@@ -14,13 +14,14 @@
  * The root key lives here in memory only: main reads it from safeStorage
  * after launch and hands it over, or you type the passphrase.
  */
+import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { applyIsEmpty, CLOCK_AHEAD_MS, emptyApply, localDeviceFields, newDeviceId, SYNC_OFF, type DataRecord, type FolderInspection, type SyncApply, type SyncProblem, type SyncStatus } from '@chord/core';
-import type { DataPush, SyncInfo, SyncReply, SyncRequest } from '@chord/data';
-import type { ChordDatabase } from '@chord/data/db';
-import type { FromWorker, ToWorker } from './sync-worker';
+import type { DataPush, SyncInfo, SyncReply, SyncRequest, WriteSeq } from '@chord/data';
+import { errorPasses, type ChordDatabase } from '@chord/data/db';
+import type { FromWorker, ToWorker } from './sync-worker-core';
 
 /** Changes are written this long after the last one (S15 §6), so a burst of them is one frame. */
 const WRITE_MS = 3000;
@@ -68,6 +69,8 @@ const CHECKPOINT_MS = 500;
 /** Compaction at most daily, once a computer's own segments pass twice a snapshot's size, or 500 frames (S15 §6). */
 const COMPACT_MS = 86_400_000;
 const COMPACT_FRAMES = 500;
+/** Another computer's log went back to an older version: this one's snapshot (with all it read of it) goes again at most this often. */
+const REPUBLISH_MS = 60_000;
 /** An old generation's file goes this long after this computer moved past it. */
 const RETIRE_MS = 30 * 86_400_000;
 /** A write that failed is tried again after this long, doubling each time up to WRITE_RETRY_MAX. */
@@ -83,6 +86,8 @@ const READ_RETRY_MS = 10_000;
 const READ_RETRY_MAX = 10 * 60_000;
 /** How long turning off waits for what's waiting to be written: past that it goes on, and the changes stay in the outbox. */
 const OFF_WRITE_MS = 10_000;
+/** As OFF_WRITE_MS, when turning off as Chord quits (a Turn off still in its Undo): quitting allows 2 s for everything. */
+const QUIT_WRITE_MS = 1000;
 /**
  * The folder operation under way in the worker (each begun and ended out loud,
  * `busy` and `idle`) has a deadline of its own: this long without progress on
@@ -178,6 +183,8 @@ export class SyncController {
   private driftChecked = false;
   /** Off with the merged copy kept: writes are waited for (what was refused, what a reconcile put back), to see if it can go. */
   private keptChasing = false;
+  /** Setting up now (this run): a `settingUp` in chord.db that isn't is one a crash left. */
+  private settingUp = false;
   /** A reconcile running, and whether another was asked for meanwhile (`true`: only idle ones; `false`: a full one). */
   private reconciling = false;
   private reconcileAgain: boolean | null = null;
@@ -189,6 +196,8 @@ export class SyncController {
   private healthySince: number | null = null;
   /** Whether a Chord window is in front: the worker watches the folder on Windows only then. */
   private front = true;
+  /** The writes taken this run, counted (`tookWrite`): what a push read after (main puts off what has a change of yours taken since). */
+  private readonly writes: WriteSeq = { run: randomUUID(), n: 0 };
   /** Checkpoints are small while sync is busy (BUSY_MS). */
   private busy: { db: ChordDatabase; timer: ReturnType<typeof setTimeout>; every: ReturnType<typeof setInterval> } | null = null;
 
@@ -306,6 +315,13 @@ export class SyncController {
         }
       }
       if (!opts.idle && !kept) this.pushedAs.clear();
+      // Joined with *Use the synced setup*: any of this computer's chords that hasn't made way yet, asked for again;
+      // none left, and that's done.
+      if (!kept && db.sync.meta.makingWay) {
+        const way = this.step(db, 'makingWay', () => db.sync.chordsMakingWay());
+        if (way) this.push({ push: 'sync.makeWay', ...way });
+        else db.sync.setMeta({ makingWay: null });
+      }
       let fresh = 0;
       const pages = db.sync.unappliedPages();
       for (let page = this.step(db, 'unapplied', () => pages.next()); !page.done; page = this.step(db, 'unapplied', () => pages.next())) {
@@ -324,12 +340,8 @@ export class SyncController {
       }
       // Kept: chord.db has all of it now, so the copy goes, as turning off would have cleared it. Otherwise writes are
       // watched for while something new was pushed; what applies as nothing (kept otherwise here) waits for a launch.
-      if (kept && found === 0 && db.sync.meta.kept && !db.sync.meta.on) {
-        this.keptChasing = false;
-        this.pushedAs.clear();
-        this.step(db, 'forget', () => db.atomically(() => db.sync.clear()));
-        console.error('Sync: what it kept after turning off is all saved here now; its copy is gone');
-      } else if (kept) this.keptChasing = fresh > 0;
+      if (kept && found === 0 && db.sync.meta.kept && !db.sync.meta.on) this.step(db, 'forget', () => this.forgetKept(db));
+      else if (kept) this.keptChasing = fresh > 0;
       if (this.changes.size > 0) this.chain(() => this.pushChanges());
     } finally {
       this.reconciling = false;
@@ -692,6 +704,11 @@ export class SyncController {
         this.capped += result.capped;
         for (const [device, ms] of result.newest) this.newest.set(device, Math.max(ms, this.newest.get(device) ?? 0));
         if (result.removed !== null && !db.sync.meta.joining) this.removedHere(result.removed);
+        // A copy of this profile turned off as this computer: this one takes a new id, and goes on (S15 §6's copied id).
+        else if (result.removedByCopy && !db.sync.meta.joining) {
+          db.sync.setMeta({ rebind: true });
+          this.scheduleWrite(0);
+        }
         // A slice is a few milliseconds: the command bar's searches, and anything else waiting, go between them.
         if (!last) await new Promise((resolve) => setImmediate(resolve));
       }
@@ -733,6 +750,12 @@ export class SyncController {
     else this.readOk();
     if (message.junk) this.step(db, 'junk', () => db.sync.saveJunk(message.junk!));
     for (const [device, at] of Object.entries(message.wrote)) this.wrote.set(device, Math.max(at, this.wrote.get(device) ?? 0));
+    // Another computer's log went back to an older version after this one read it (a sync app restoring a file): what
+    // was past there may be gone from the folder, and this one has it. Its next write is a snapshot, so it's there again.
+    if (message.rewound && message.rewound.length > 0 && !db.sync.meta.joining) {
+      db.sync.setMeta({ republish: true });
+      this.scheduleWrite(WRITE_MS);
+    }
     const look = message.look;
     const was = this.problem;
     // A newer generation that's this computer's own (it's moving there, or a look from before it moved): no reason to pause.
@@ -770,9 +793,11 @@ export class SyncController {
     this.changes = new Map();
     for (const [at, slice] of slices.entries()) {
       const started = performance.now();
+      // After how many writes it's read: main puts off what has a change of yours taken since (what's read is older).
+      const read = { ...this.writes };
       const apply = db.sync.planFor(slice);
       db.sync.timed('plan', performance.now() - started);
-      if (!applyIsEmpty(apply)) this.push({ push: 'sync.apply', apply });
+      if (!applyIsEmpty(apply)) this.push({ push: 'sync.apply', apply, read });
       if (at < slices.length - 1) await new Promise((resolve) => setImmediate(resolve));
     }
     // Main writes what it applied back to chord-data meanwhile: checkpoints stay small a while longer.
@@ -817,20 +842,59 @@ export class SyncController {
     if (this.db() === busy.db) busy.db.checkpointElsewhere(false);
   }
 
-  /** Another computer removed this one: sync stops here, and this computer's data stays (S15 §6). */
+  /**
+   * Another computer removed this one: sync stops here, and this computer's
+   * data stays (S15 §6). The merged copy is kept, as turning off with writes
+   * refused keeps it: main puts back what chord.db lacks of it (read before
+   * the removal; `settleKept`), then it goes. A full disk refusing even this:
+   * sync goes on, and finds the removal again at its next look.
+   */
   private removedHere(at: number): void {
     const db = this.db();
     if (!db) return;
     const folder = db.sync.meta.folder;
+    try {
+      db.atomically(() => {
+        db.sync.keepOff();
+        db.sync.setMeta({ folder, removedAt: at });
+      });
+    } catch (error) {
+      if (!errorPasses(error)) throw error;
+      console.error('Sync couldn’t stop after this computer was removed (its disk is full):', error);
+      return;
+    }
     this.stopWorker();
     this.key = null;
-    db.sync.clear();
-    db.sync.setMeta({ on: false, folder, removedAt: at });
     this.changes.clear();
+    this.keptChasing = true;
     this.pushStatus();
   }
 
+  /** Off with the merged copy kept, and chord.db lacks nothing of it that applies here: the copy goes (a removal still said). */
+  private forgetKept(db: ChordDatabase): void {
+    const { folder, removedAt } = db.sync.meta;
+    db.atomically(() => {
+      db.sync.clear();
+      if (removedAt) db.sync.setMeta({ folder, removedAt });
+    });
+    this.keptChasing = false;
+    this.pushedAs.clear();
+    console.error('Sync: what it kept after turning off is all saved here now; its copy is gone');
+  }
+
   /* ---------- writing ---------- */
+
+  /** A write taken (writes.ts): its place in this run's, for its answer. */
+  tookWrite(): WriteSeq {
+    this.writes.n++;
+    return { ...this.writes };
+  }
+
+  /** A batch written in parts (writes.ts): checkpoints run on the worker's connection meanwhile, as while sync merges. */
+  writingInParts(): void {
+    const db = this.db();
+    if (db) this.busyFor(db);
+  }
 
   /** chord-data wrote a batch: what it stamped is written to the folder about 3 seconds after the last change. */
   afterWrite(): void {
@@ -897,6 +961,21 @@ export class SyncController {
           if (!(await this.newId())) return this.writeFailed();
         } else if (!made) return this.writeFailed();
         continue;
+      }
+      // Another computer's log went back (`republish`): a snapshot, with all of it, at most every REPUBLISH_MS.
+      if (meta.republish) {
+        const wait = meta.compactedAt + REPUBLISH_MS - Date.now();
+        if (wait > 0) {
+          this.scheduleWrite(wait);
+          if (db.sync.outboxSize() === 0) return;
+        } else {
+          const made = await this.snapshotNow(db);
+          if (made === 'copied') {
+            if (!(await this.newId())) return this.writeFailed();
+          } else if (!made) return this.writeFailed();
+          db.sync.setMeta({ republish: false });
+          continue;
+        }
       }
       const { upto, records } = db.sync.outbox();
       if (records.length === 0) return this.writeOk();
@@ -1029,8 +1108,8 @@ export class SyncController {
     const db = this.db();
     if (!db) return SYNC_OFF;
     const meta = db.sync.meta;
-    // Off: changes made while it was on that never reached the folder still wait, and Settings says so.
-    if (!meta.on) return meta.removedAt ? { ...SYNC_OFF, state: 'problem', problem: 'removed', removedAt: meta.removedAt, folder: meta.folder, pending: db.sync.outboxSize() } : { ...SYNC_OFF, pending: db.sync.outboxSize() };
+    // Off: changes made while it was on that never reached the folder still wait, and Settings says so. Setting up, off till it's done.
+    if (!meta.on || meta.settingUp) return meta.removedAt ? { ...SYNC_OFF, state: 'problem', problem: 'removed', removedAt: meta.removedAt, folder: meta.folder, pending: db.sync.outboxSize() } : { ...SYNC_OFF, pending: db.sync.outboxSize() };
     const self = db.device();
     const devices = db.sync.devices();
     const now = Date.now();
@@ -1083,25 +1162,38 @@ export class SyncController {
     if (!db) throw new Error('chord-data: sync before open');
     switch (request.type) {
       case 'sync.status':
+        // A setup a stop left partway (a crash): cleared, so sync is off as it was.
+        if (db.sync.meta.settingUp && !this.settingUp) db.atomically(() => db.sync.clear());
         return { status: this.step(db, 'status', () => this.status()), keyBlob: db.sync.keyBlob(), kept: db.sync.meta.kept && !db.sync.meta.on };
       case 'sync.inspect':
         return { inspection: await this.inspect(request.folder) };
       case 'sync.setup':
-        return this.setup(db, request.folder, request.passphrase, request.info);
+        return this.refusable(db, () => this.setup(db, request.folder, request.passphrase, request.info));
       case 'sync.join':
-        return this.join(db, request.folder, request.passphrase, request.info);
+        return this.refusable(db, () => this.join(db, request.folder, request.passphrase, request.info));
       case 'sync.choose':
-        return this.choose(db, request.mode);
+        return this.refusable(db, () => this.choose(db, request.mode));
       case 'sync.start':
         this.key = request.key;
         this.info = request.info;
         this.startWorker();
+        // A snapshot owed from before (another computer's log went back): written soon.
+        if (db.sync.meta.republish) this.scheduleWrite(WRITE_MS);
         return { status: this.status() };
       case 'sync.reconcile':
         // After a launch (or chord-data starting again), and after main couldn't apply something: what's merged but not applied, again.
-        if (request.wait) await this.reconcile({ idle: request.idle === true });
-        else void this.reconcile({ idle: request.idle === true }).catch(() => this.readFailed());
+        if (request.wait) {
+          await this.reconcile({ idle: request.idle === true });
+          // What it found, pushed to main before the answer: main's queue has it all once this answers.
+          await this.merging;
+        } else void this.reconcile({ idle: request.idle === true }).catch(() => this.readFailed());
         return {};
+      case 'sync.forget':
+        if (!db.sync.meta.kept || db.sync.meta.on) return { status: this.status() };
+        return this.refusable(db, async () => {
+          this.forgetKept(db);
+          return { status: this.status() };
+        });
       case 'sync.unlock':
         this.info = request.info;
         // Its key couldn't be read here: this profile may be a copy of another computer's, so it takes a new id before it writes.
@@ -1110,12 +1202,13 @@ export class SyncController {
       case 'sync.passphrase':
         return this.rekey(db, request.passphrase);
       case 'sync.off':
-        await this.off(db, request.keep === true);
-        return { status: this.status() };
+        return this.off(db, request.keep === true, request.quitting === true);
       case 'sync.remove':
-        db.atomically(() => db.sync.stampDevice({ removed: true }, request.device));
-        this.scheduleWrite(0);
-        return { status: this.status() };
+        return this.refusable(db, async () => {
+          db.atomically(() => db.sync.stampDevice({ removed: true }, request.device));
+          this.scheduleWrite(0);
+          return { status: this.status() };
+        });
       case 'sync.rename': {
         const name = request.name.trim().slice(0, 100);
         if (name) {
@@ -1164,6 +1257,23 @@ export class SyncController {
     }
   }
 
+  /**
+   * A step whose writes this computer's disk refused (full, say): said as
+   * `full`, so Settings says so, rather than thrown and lost. What it wrote
+   * before stays (each part is whole, and goes in again unchanged), so trying
+   * again once there's room carries on.
+   */
+  private async refusable(db: ChordDatabase, work: () => Promise<SyncReply>): Promise<SyncReply> {
+    try {
+      return await work();
+    } catch (error) {
+      if (!errorPasses(error)) throw error;
+      console.error('Sync couldn’t write to this computer’s disk:', error);
+      if (!db.sync.meta.on) this.stopWorker();
+      return { problem: 'full', status: this.status() };
+    }
+  }
+
   private async inspect(folder: string): Promise<FolderInspection> {
     const reply = await this.ask({ t: 'inspect', folder }, ['inspected']);
     if (!this.db()?.sync.meta.on) this.stopWorker();
@@ -1176,18 +1286,46 @@ export class SyncController {
     const inspection = await this.inspect(folder);
     if (inspection.state !== 'new') return { problem: inspection.state === 'join' ? 'conflict' : inspection.state };
     this.info = info;
-    db.sync.clear();
-    db.atomically(() => {
-      db.sync.setMeta({ on: true, joining: false, folder, generation: inspection.generation, name: info.name, own: null, compactedAt: Date.now() });
-      db.sync.addLocal('all');
-      db.sync.readmitOutbox();
-      db.sync.stampDevice({ ...info, removed: false });
-    });
+    // This computer's things into the copy a slice at a time, searches answered between, as a join's choice adds them:
+    // what you change meanwhile is noted (`joining`), and stamped as it ends. A stop partway (a crash) is cleared at the
+    // next launch (`settingUp`); refused partway (a full disk), now.
+    this.settingUp = true;
+    try {
+      db.atomically(() => {
+        db.sync.clear();
+        db.sync.setMeta({ on: true, joining: true, settingUp: true, folder, generation: inspection.generation, name: info.name, own: null, compactedAt: Date.now() });
+      });
+      const pages = db.sync.localPages();
+      for (let page = this.step(db, 'local', () => pages.next()); !page.done; page = this.step(db, 'local', () => pages.next())) {
+        for (const slice of bySize(page.value, PLAN_SLICE, ADD_CHARS)) {
+          this.step(db, 'add', () => db.atomically(() => db.sync.addLocal('all', slice)));
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      this.step(db, 'setUp', () =>
+        db.atomically(() => {
+          db.sync.readmitOutbox();
+          db.sync.stampJoinWindow('all', Date.now());
+          db.sync.stampDevice({ ...info, removed: false });
+          db.sync.setMeta({ joining: false, settingUp: false });
+        }),
+      );
+    } catch (error) {
+      try {
+        db.atomically(() => db.sync.clear());
+      } catch {
+        // Cleared at the next launch (`settingUp`).
+      }
+      throw error;
+    } finally {
+      this.settingUp = false;
+    }
     const { snapshot, mark } = this.snapshotOf(db);
     const reply = await this.ask({ t: 'setup', folder, generation: inspection.generation, passphrase, device: db.device(), app: info.app, snapshot }, ['set-up']);
     this.streams.delete(snapshot.stream);
     if (reply.t !== 'set-up') {
-      db.sync.clear();
+      db.atomically(() => db.sync.clear());
       this.stopWorker();
       return { problem: reply.t === 'failed' && reply.problem === 'conflict' ? 'conflict' : 'io' };
     }
@@ -1209,10 +1347,27 @@ export class SyncController {
       return { problem: opened.t === 'failed' ? stepProblem(opened.problem) : 'io' };
     }
     this.info = info;
-    this.stopWorker();
-    db.sync.clear();
-    db.sync.setMeta({ on: true, joining: true, folder, generation: opened.generation, name: info.name, own: null, compactedAt: Date.now() });
     this.key = opened.key;
+    const failed = await this.readToJoin(db, folder, opened.generation);
+    if (failed) return failed;
+    return { key: opened.key, fresh: this.step(db, 'fresh', () => db.sync.fresh()), status: this.status() };
+  }
+
+  /**
+   * A join's reading: the copy cleared, and every computer's log read and
+   * merged, nothing applied yet. Null once read; otherwise why not (nothing's
+   * joined, and Settings says it couldn't use the folder).
+   */
+  private async readToJoin(db: ChordDatabase, folder: string, generation: number): Promise<SyncReply | null> {
+    this.stopWorker();
+    db.atomically(() => {
+      db.sync.clear();
+      // A new id in the folder for each join (S15 §6): what this computer wrote under the one it had (before it was turned
+      // off, or removed) is read as another computer's, so what only it wrote comes back; and its new log never shares a
+      // name with that one, whose segments another computer may have pruned from the folder meanwhile, numbers and all.
+      db.adoptDevice(newDeviceId());
+      db.sync.setMeta({ on: true, joining: true, folder, generation, name: this.info.name, own: null, compactedAt: Date.now() });
+    });
     this.problem = null;
     this.changes.clear();
     let read = new Promise<void>((resolve) => (this.passDone = resolve));
@@ -1224,26 +1379,44 @@ export class SyncController {
       read = new Promise<void>((resolve) => (this.passDone = resolve));
       await read;
     }
-    // The folder stopped answering partway: nothing's joined, and Settings says it couldn't use the folder.
     const problem = this.problem as SyncProblem | null;
     if (problem || this.stalled) {
       this.stopWorker();
-      db.sync.clear();
+      db.atomically(() => db.sync.clear());
       this.key = null;
       return { problem: problem === 'changed' ? 'wrong' : problem === 'missing' || problem === 'newer' || problem === 'conflict' ? problem : 'io' };
     }
-    return { key: opened.key, fresh: this.step(db, 'fresh', () => db.sync.fresh()), status: this.status() };
+    return null;
   }
 
   /** Joining, decided: this computer's setup joins the synced one (`both`), or makes way for it (`synced`); then its first segment, a snapshot. */
   private async choose(db: ChordDatabase, mode: 'synced' | 'both'): Promise<SyncReply> {
     if (!db.sync.meta.joining) return { problem: 'busy' };
+    // A choice refused partway (a full disk) keeps what it added, each part whole: chosen again the same way, it carries
+    // on; the other way, the join reads the folder again first, so nothing of the first choice's stays.
+    const chose = db.sync.meta.chose;
+    if (chose && chose !== mode && db.sync.meta.folder) {
+      const failed = await this.readToJoin(db, db.sync.meta.folder, db.sync.meta.generation);
+      if (failed) return failed;
+    }
+    // *Use the synced setup* with no synced chord (a folder whose other logs haven't come yet, say, or whose chords this
+    // computer deleted before, its changes to chords that never reached the folder read in first; the rest are read in
+    // as the join ends, after this computer's rows, so a change made while it was off wins over one made before): nothing
+    // to make way for, so this computer's chords join it. Decided once, as the choice is first made: carried on the same
+    // way after a refusal.
+    if (chose !== mode) {
+      db.atomically(() => {
+        db.sync.readmitOutbox('chord');
+        db.sync.setMeta({ chose: mode, keepChords: mode === 'synced' && db.sync.syncedChords().length === 0 });
+      });
+    }
+    const makeWay = !db.sync.meta.keepChords;
     // This computer's things into the copy, a slice at a time, searches answered between (still joining: nothing's stamped meanwhile).
     // Read a page at a time, by bytes (icons, Effects), and added in slices of about ADD_CHARS: none holds a search up.
     const pages = db.sync.localPages();
     for (let page = this.step(db, 'local', () => pages.next()); !page.done; page = this.step(db, 'local', () => pages.next())) {
       for (const slice of bySize(page.value, PLAN_SLICE, ADD_CHARS)) {
-        this.step(db, 'add', () => db.atomically(() => db.sync.addLocal(mode === 'synced' ? 'synced-setup' : 'all', slice)));
+        this.step(db, 'add', () => db.atomically(() => db.sync.addLocal(mode === 'synced' ? 'synced-setup' : 'all', slice, makeWay)));
         await new Promise((resolve) => setImmediate(resolve));
       }
       await new Promise((resolve) => setImmediate(resolve));
@@ -1255,7 +1428,7 @@ export class SyncController {
         // back from their rows and stamped in the same transaction that ends the join, so nothing written since is missed.
         db.sync.stampJoinWindow(mode === 'synced' ? 'synced-setup' : 'all', Date.now());
         db.sync.stampDevice({ ...this.info, removed: false });
-        db.sync.setMeta({ joining: false });
+        db.sync.setMeta({ joining: false, chose: null, keepChords: false });
       }),
     );
     this.changes.clear();
@@ -1279,7 +1452,11 @@ export class SyncController {
     }
     const synced = this.step(db, 'synced', () => db.sync.syncedChords());
     const replace = mode === 'synced' && synced[0] ? { to: synced[0], keep: synced } : null;
-    await this.snapshotNow(db);
+    // Before main makes way: should its change be lost (a crash before it's written), the next launch's reconcile asks again.
+    if (replace) db.sync.setMeta({ makingWay: { to: replace.to } });
+    // Its first snapshot. Not written now (the folder didn't answer, another writer under this id): writing makes it
+    // soon (`writeNow`, under a new id if need be), or what joined here would reach no one until something changed.
+    if ((await this.snapshotNow(db)) !== true) this.scheduleWrite(0);
     // Main writes all of it back next: checkpoints stay on the worker's connection meanwhile, never chord-data's thread.
     this.busyFor(db);
     this.pushStatus();
@@ -1395,16 +1572,38 @@ export class SyncController {
    * Turning off removes this computer, from itself (S15 §6): its device record
    * says so, written before it stops. Its data stays. `keep`: what sync
    * applied isn't all in chord.db yet (writes refused), so the merged copy
-   * stays too, until a reconcile finds chord.db lacks nothing of it.
+   * stays too, until a reconcile finds chord.db lacks nothing of it. On a full
+   * disk the device record can't be written: it turns off all the same, and
+   * the others list this computer until one of them removes it. One so full
+   * that even turning off is refused leaves sync on, as it was, and says so
+   * (`full`). `quitting`: the folder is given a moment only (QUIT_WRITE_MS);
+   * what doesn't reach it waits in the outbox, as ever.
    */
-  private async off(db: ChordDatabase, keep = false): Promise<void> {
+  private async off(db: ChordDatabase, keep = false, quitting = false): Promise<SyncReply> {
     if (db.sync.meta.on && !db.sync.meta.joining && this.key) {
-      db.atomically(() => db.sync.stampDevice({ removed: true }));
-      clearTimeout(this.writeTimer);
-      // At most a few seconds: what doesn't reach the folder stays in the outbox, and goes when sync is on again.
-      await Promise.race([this.write(), new Promise((resolve) => setTimeout(resolve, OFF_WRITE_MS).unref?.())]);
+      let said = true;
+      try {
+        db.atomically(() => db.sync.stampDevice({ removed: true }));
+      } catch (error) {
+        if (!errorPasses(error)) throw error;
+        console.error('Sync couldn’t say it’s off on this computer (its disk is full); turning off all the same:', error);
+        said = false;
+      }
+      if (said) {
+        clearTimeout(this.writeTimer);
+        // At most a few seconds: what doesn't reach the folder stays in the outbox, and goes when sync is on again.
+        await Promise.race([this.write(), new Promise((resolve) => setTimeout(resolve, quitting ? QUIT_WRITE_MS : OFF_WRITE_MS).unref?.())]);
+      }
     }
     this.stopWorker();
+    try {
+      db.atomically(() => (keep ? db.sync.keepOff() : db.sync.clear()));
+    } catch (error) {
+      if (!errorPasses(error)) throw error;
+      console.error('Sync couldn’t turn off on this computer (its disk is full):', error);
+      if (db.sync.meta.on && this.key) this.startWorker();
+      return { problem: 'full', status: this.status() };
+    }
     this.key = null;
     this.problem = null;
     this.changes.clear();
@@ -1418,12 +1617,11 @@ export class SyncController {
     this.stuck.clear();
     this.wrote.clear();
     this.driftChecked = false;
-    if (keep) db.atomically(() => db.sync.keepOff());
-    else db.sync.clear();
     // Kept: the refused writes still going again are watched for, and the copy goes once they're in.
     this.keptChasing = keep;
     this.pushedAs.clear();
     await rm(this.pendingFile(db), { force: true }).catch(() => undefined);
+    return { status: this.status() };
   }
 
   /** chord-data's own file, beside chord.db, holding what the worker is writing to this computer's log until it's answered. */

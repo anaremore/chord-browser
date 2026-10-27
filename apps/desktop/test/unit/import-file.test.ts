@@ -205,7 +205,7 @@ describe('a hostile Chord file', () => {
 
   it('a line past 32 MB is refused, and the rest of the file still reads', async () => {
     const huge = `{"type":"image","id":"abcdefabcdefabcdefabcdef","set":{"data":"${'A'.repeat(MAX_LINE)}"}}`;
-    const { problem, records } = await read(file([chord, huge, { ...chord, id: 'c2', set: { ...chord.set, name: 'Home', rank: 'b0' } }]));
+    const { problem, records } = await read(file([chord, huge, { ...chord, id: 'c2', set: { ...chord.set, name: 'Home', rank: 'a5' } }]));
     expect(problem).toBe('damaged');
     expect(records.map((r) => r.id)).toEqual(['c1', 'c2']);
     expect(plan(records).chords.map((c) => c.name)).toEqual(['Work', 'Home']);
@@ -230,7 +230,7 @@ describe('a hostile Chord file', () => {
         { type: 'favorite', id: 'f', at: [...at], set: { url: 'javascript:alert(1)', title: 'x', rank: 'a0' } },
         { type: 'route', id: 'not a route', at: [...at], set: { chord: 'c1' } },
         { type: 'permission', id: 'https://meet.test', at: [...at], set: { camera: 'allow', microphone: 'allow' } },
-        { type: 'chord', id: 'spy', at: [...at], set: { ...chord.set, profile: 'private-w1', rank: 'z0' } },
+        { type: 'chord', id: 'spy', at: [...at], set: { ...chord.set, profile: 'private-w1', rank: 'az' } },
       ]),
     );
     expect(problem).toBe('damaged');
@@ -245,7 +245,7 @@ describe('a hostile Chord file', () => {
 
   it('a damaged frame in an encrypted file is passed over: what the other frames hold still comes in', async () => {
     // Enough chords for several frames (about 256 KB of lines each).
-    const chords = Array.from({ length: 900 }, (_, i): DataRecord => ({ ...chord, id: `c${i}`, set: { ...chord.set, name: `Chord ${i}`, rank: `a${String(i).padStart(4, '0')}`, notes: 'x'.repeat(400) } }));
+    const chords = Array.from({ length: 900 }, (_, i): DataRecord => ({ ...chord, id: `c${i}`, set: { ...chord.set, name: `Chord ${i}`, rank: `a${String(i).padStart(4, '0')}V`, notes: 'x'.repeat(400) } }));
     const writer = await encryptedWriter(header, 'harbor tulip velvet orbit', nodeCrypto, { N: 2 ** 10, r: 8, p: 1 });
     const bytes = Buffer.concat([writer.head, ...chords.flatMap((r) => writer.add(r)), ...writer.end()]);
     const start = bytes.indexOf(0x0a, bytes.indexOf(0x0a) + 1) + 1;

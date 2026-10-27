@@ -311,30 +311,32 @@ export function deviceOf(thing: SyncThing): SyncDevice | null {
  * this computer wrote last (null: never, or it was gone here), `after` what
  * the model has now (null: gone here, or out of sync's reach, as a tab
  * leaving Pinned).
- * - Gone here, and known and live: a tombstone. Unknown: nothing, since no
- *   other computer has it.
- * - New here, or back: every field (and `deleted: false` if it was gone), so
- *   the whole thing goes out (S15 §1: pinning a tab again writes it whole).
- * - Otherwise: the fields this computer changed that aren't the merged value
- *   already. A field `after` leaves out (a tab's title off its pinned page)
- *   isn't a change.
+ * - Gone here, and known: a tombstone, as of now, even if it's gone in the
+ *   copy already (a later bringing back elsewhere, not read here yet, may be
+ *   earlier than this). Unknown: nothing, since no other computer has it.
+ * - New here: every field, and `deleted: false`, always: one made again under
+ *   an id another computer deleted (a route, by its host) was made after that
+ *   deletion, and stays (S15 §13).
+ * - Otherwise: the fields this computer changed, even to what the merged copy
+ *   has already (a change made elsewhere earlier, or one read here later,
+ *   may differ: yours is the latest word). Only writes of yours come here
+ *   (S15 §13, stamping by origin), so none is another computer's value. A
+ *   field `after` leaves out (a tab's title off its pinned page) isn't a
+ *   change. Nor is it here again, if the merged copy has it gone: an edit
+ *   against a deletion leaves the deletion. Brought back here (an Undo: the
+ *   caller passes what it was before it went as `before`), the caller adds
+ *   `deleted: false`.
  */
 export function localChanges(merged: SyncThing | undefined, before: SyncValues | null, after: SyncValues | null): SyncValues | null {
   const known = merged !== undefined && Object.keys(merged.fields).length > 0;
-  if (after === null) return known && !isGone(merged) ? { deleted: true } : null;
+  if (after === null) return known ? { deleted: true } : null;
   const base = before && before['deleted'] !== true ? before : null;
-  if (!base) {
-    const all: SyncValues = { ...after };
-    if (isGone(merged)) all['deleted'] = false;
-    return all;
-  }
+  if (!base) return { ...after, deleted: false };
   const out: SyncValues = {};
   for (const [name, value] of Object.entries(after)) {
     if (name in base && same(base[name], value)) continue;
-    if (merged?.fields[name] && same(merged.fields[name]!.v, value)) continue;
     out[name] = value;
   }
-  if (isGone(merged)) out['deleted'] = false;
   return Object.keys(out).length > 0 ? out : null;
 }
 

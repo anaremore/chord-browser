@@ -19,7 +19,7 @@ import { apply, MAX_FAVORITES, restoreState, seedState, type Command, type DataR
 import { ChordDatabase } from '@chord/data/db';
 import { opKey, opOrigin, opsForState, opsFromPatches, originOf, type DataPush, type WriteOp } from '@chord/data';
 import { SyncController, type WorkerLike } from '../../src/data/sync';
-import type { FromWorker, ToWorker } from '../../src/data/sync-worker';
+import type { FromWorker, ToWorker } from '../../src/data/sync-worker-core';
 
 vi.mock('electron', () => ({
   dialog: {},
@@ -177,22 +177,22 @@ const chordRecord = (id: string, name: string, extra: Record<string, unknown> = 
   type: 'chord',
   id,
   at: at(A),
-  set: { name, icon: 'W', theme: THEME, rank: 'z0', profile: 'default', created: 1, deleted: false, ...extra },
+  set: { name, icon: 'W', theme: THEME, rank: 'az', profile: 'default', created: 1, deleted: false, ...extra },
 });
 const folderRecord = (id: string, chord: string, parent: string | null = null, device = A): DataRecord => ({
   type: 'folder',
   id,
   at: at(device),
-  set: { pos: { chord, section: 'pinned', parent, rank: 'b0' }, title: `Folder ${id}`, collapsed: false, created: 1, deleted: false },
+  set: { pos: { chord, section: 'pinned', parent, rank: 'a5' }, title: `Folder ${id}`, collapsed: false, created: 1, deleted: false },
 });
-const moveRecord = (type: 'folder' | 'tab', id: string, chord: string, parent: string | null, device: string): DataRecord => ({ type, id, at: at(device), set: { pos: { chord, section: 'pinned', parent, rank: 'b1' } } });
+const moveRecord = (type: 'folder' | 'tab', id: string, chord: string, parent: string | null, device: string): DataRecord => ({ type, id, at: at(device), set: { pos: { chord, section: 'pinned', parent, rank: 'a5V' } } });
 const tabRecord = (id: string, chord: string, parent: string | null): DataRecord => ({
   type: 'tab',
   id,
   at: at(B),
-  set: { pos: { chord, section: 'pinned', parent, rank: 'c0' }, pinnedUrl: 'https://mail.test/', title: 'Mail', customTitle: null, muted: false, created: 1, deleted: false },
+  set: { pos: { chord, section: 'pinned', parent, rank: 'a6' }, pinnedUrl: 'https://mail.test/', title: 'Mail', customTitle: null, muted: false, created: 1, deleted: false },
 });
-const favoriteRecord = (i: number, device = A): DataRecord => ({ type: 'favorite', id: `fav-${i}`, at: at(device), set: { url: `https://fav${i}.test/`, title: `Favorite ${i}`, rank: `a${String(i).padStart(3, '0')}`, created: 1, deleted: false } });
+const favoriteRecord = (i: number, device = A): DataRecord => ({ type: 'favorite', id: `fav-${i}`, at: at(device), set: { url: `https://fav${i}.test/`, title: `Favorite ${i}`, rank: `a${String(i).padStart(3, '0')}V`, created: 1, deleted: false } });
 const applies = (pushes: DataPush[]) => pushes.filter((p) => p.push === 'sync.apply');
 const home = () => Object.keys(state.chords)[0]!;
 
@@ -284,7 +284,7 @@ describe('what arrives before what it depends on', { timeout: 20_000 }, () => {
 describe('a Favorite refused as a twin', { timeout: 20_000 }, () => {
   it('another computer’s Favorite at an address one here has: not here; once that one’s address changes, it lands, and no idle look had skipped it', async () => {
     const first = await launch();
-    const atUrl = (id: string, url: string, device: string): DataRecord => ({ type: 'favorite', id, at: at(device), set: { url, title: id, rank: `r-${id}`, created: 1, deleted: false } });
+    const atUrl = (id: string, url: string, device: string): DataRecord => ({ type: 'favorite', id, at: at(device), set: { url, title: id, rank: id === 'fav-x' ? 'a1' : 'a2', created: 1, deleted: false } });
     await read(first.worker, A, [atUrl('fav-x', 'https://same.test/', A)]);
     await vi.waitFor(() => expect(state.favorites['fav-x']).toBeDefined());
     await read(first.worker, B, [atUrl('fav-y', 'https://same.test/', B)]);

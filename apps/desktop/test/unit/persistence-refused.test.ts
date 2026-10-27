@@ -145,16 +145,60 @@ describe('a write chord-data refused', () => {
     persistence.recordAll(seed());
     await persistence.flush();
     expect(persistence.unsaved).toBe(0);
-    // Sync's apply refused too, then a change of yours to the same chords: yours takes its place, and it no longer counts.
+    // Sync's apply refused too, then a change of yours to the same chords: each in its turn, in the order made (yours from
+    // before theirs, theirs, then yours since: what you changed of theirs is known exactly), and theirs counts until it's in.
     const state = seed();
     applied(persistence, state);
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(persistence.unsaved).toBeGreaterThan(0);
+    const theirs = persistence.unsaved;
+    expect(theirs).toBeGreaterThan(0);
     persistence.record([{ path: ['chords'] }, { path: ['nodes'] }], state, 'user');
-    expect(persistence.unsaved).toBe(0);
+    expect(persistence.unsaved).toBe(theirs);
     full = false;
     await vi.advanceTimersByTimeAsync(4_000);
-    expect(child.writes.at(-1)!.every((op) => op.origin === undefined)).toBe(true);
+    expect(persistence.unsaved).toBe(0);
+    const last = child.writes.slice(-2).flat();
+    const chordId = Object.keys(state.chords)[0]!;
+    const order = last.filter((op) => op.k === 'chord' && op.id === chordId).map((op) => op.origin ?? 'user');
+    expect(order).toEqual(['user', 'sync', 'user']);
+  });
+
+  it('sync’s, yours, then sync’s again, all waiting: each in its turn, in the order made, never sync’s since ahead of yours (S15 §13, the ninth review)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { persistence } = await Persistence.open('/profile/chord.db');
+    let full = true;
+    child.answer = () => (full ? FULL : { ok: true });
+    const state = seed();
+    const chordId = Object.keys(state.chords)[0]!;
+    applied(persistence, state);
+    await persistence.flush();
+    persistence.record([{ path: ['chords'] }], state, 'user');
+    applied(persistence, state);
+    full = false;
+    await vi.advanceTimersByTimeAsync(4_000);
+    const order = child.writes.flat().filter((op) => op.k === 'chord' && op.id === chordId);
+    expect(order.slice(-3).map((op) => op.origin ?? 'user')).toEqual(['sync', 'user', 'sync']);
+  });
+
+  it('two changes of yours to one thing, made more than a second apart, written together: the earlier a step, stamped as of its own time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { persistence } = await Persistence.open('/profile/chord.db');
+    let full = true;
+    child.answer = () => (full ? FULL : { ok: true });
+    const state = seed();
+    const chordId = Object.keys(state.chords)[0]!;
+    persistence.record([{ path: ['chords'] }], state, 'user');
+    const first = Date.now();
+    await persistence.flush();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const renamed = { ...state, chords: { ...state.chords, [chordId]: { ...state.chords[chordId]!, name: 'Later' } } };
+    persistence.record([{ path: ['chords', chordId] }], renamed, 'user');
+    full = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+    const op = child.writes.flat().filter((o) => o.k === 'chord' && o.id === chordId).at(-1)!;
+    expect(op.before?.map((step) => step.at)).toEqual([first]);
+    expect((op.value as Chord).name).toBe('Later');
+    expect(op.at).toBeGreaterThan(first + 1000);
   });
 
   it('history in a batch being written, refused, never lands after what a search sent later: the search waits for it, and the order holds', async () => {
@@ -188,11 +232,24 @@ describe('a write chord-data refused', () => {
       [chordId, 'user', false],
       [chordId, 'tidy', true],
     ]);
-    // Theirs, then yours: yours takes its place.
+    // Theirs, then an edit of yours: both, theirs first, so chord-data knows what you changed of what it applied.
     persistence.record([{ path: ['chords', chordId] }], state, 'sync');
     persistence.record([{ path: ['chords', chordId] }], state, 'user');
     await persistence.flush();
-    expect(child.writes[1]!.map((op) => op.origin ?? 'user')).toEqual(['user']);
+    expect(child.writes[1]!.map((op) => op.origin ?? 'user')).toEqual(['sync', 'user']);
+    // Theirs, then yours taking it away: both, theirs first (what it was when it went is what sync applied).
+    persistence.record([{ path: ['chords', chordId] }], state, 'sync');
+    persistence.record([{ path: ['chords', chordId] }], { ...state, chords: {} }, 'user');
+    await persistence.flush();
+    expect(child.writes[2]!.map((op) => [op.origin ?? 'user', op.value === null])).toEqual([
+      ['sync', false],
+      ['user', true],
+    ]);
+    // Theirs taking it away, then yours bringing it back: yours takes its place.
+    persistence.record([{ path: ['chords', chordId] }], { ...state, chords: {} }, 'tidy');
+    persistence.record([{ path: ['chords', chordId] }], state, 'user');
+    await persistence.flush();
+    expect(child.writes[3]!.map((op) => [op.origin ?? 'user', op.value === null])).toEqual([['user', false]]);
   });
 });
 
