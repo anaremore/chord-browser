@@ -13,6 +13,7 @@
     "lint": "eslint . && stylelint \"**/*.css\" --ignore-pattern \".claude/**\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:sim": "node scripts/sync-sim.mjs",
     "test:e2e:linux": "node scripts/e2e-linux/run.mjs"
   },
   "devDependencies": {
