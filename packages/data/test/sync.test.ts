@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apply, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, MAX_STAMP_MS, seedState, SYNC_LIMITS, thingKey, type Command, type Context, type DataRecord, type Stamp, type State } from '@chord/core';
 import { ChordDatabase } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
-import { opsForState, opsFromPatches, type WriteOp } from '../src';
+import { coalesceOps, opsForState, opsFromPatches, type WriteOp } from '../src';
 
 let dir: string;
 let db: ChordDatabase;
@@ -1116,5 +1116,43 @@ describe('what the sync simulation found (S15 §13, the ninth review)', () => {
     expect(records(id).map((r) => r.set['deleted'])).toEqual([false, true]);
     state = after;
     void state;
+  });
+});
+
+describe('what the sync simulation found past 20,000 seeds (S15 §13, the ninth review)', () => {
+  const records = (id: string) => outbox().filter((r) => r.id === id);
+  const raw = (text: string) => (db as unknown as { sql(text: string): StatementSync }).sql(text);
+
+  it('a route you delete that the copy hasn’t read yet (it waited for its chord as this computer joined): gone as of then, so an older one read later doesn’t bring it back', () => {
+    setUp();
+    const at = Date.now();
+    db.write([{ k: 'linkRoute', id: 'waiting.test', value: null, took: true, at } as WriteOp]);
+    expect(records('waiting.test').map((r) => r.set)).toEqual([{ deleted: true }]);
+    db.atomically(() => db.sync.merge([{ type: 'route', id: 'waiting.test', at: [at - 60_000, 0, OTHER], set: { chord: 'x', created: 1 } }], Date.now()));
+    expect([...db.sync.unappliedPages()].some((page) => page.has(thingKey('route', 'waiting.test')))).toBe(false);
+  });
+
+  it('a join’s window: a route set and deleted again before its write landed is stamped gone, and a folder deleted then brought back by Undo is stamped here again, as of then', () => {
+    let state = setUp();
+    const id = chordId(state);
+    state = drive(state, [{ t: 'folder.create', folderId: 'f-window', chordId: id, title: 'F' }]);
+    const began = Date.now();
+    db.sync.setMeta({ joining: true, compactedAt: began });
+    // Made and gone again, one write (coalesced); then gone and back, in the window.
+    db.write([{ k: 'linkRoute', id: 'gone.test', value: null, took: true, back: true, at: began + 100 } as WriteOp]);
+    const gone = apply(state, { t: 'folder.delete', nodeId: 'f-window' }, ctx);
+    db.write(opsFromPatches(gone.patches, gone.state, state).map((op) => ({ ...op, at: began + 200 })));
+    const back = apply(gone.state, { t: 'folder.restore', nodeId: 'f-window' }, ctx);
+    db.write(opsFromPatches(back.patches, back.state, gone.state).map((op) => ({ ...op, at: began + 300, back: true }) as WriteOp));
+    expect(raw('SELECT COUNT(*) AS n FROM sync_noted WHERE k = ?').get('back')).toMatchObject({ n: 1 });
+    db.atomically(() => db.sync.stampJoinWindow('all', began + 400));
+    expect(records('gone.test').map((r) => r.set)).toEqual([{ deleted: true }]);
+    expect(records('f-window').at(-1)).toMatchObject({ at: [began + 300, 0, expect.any(String)], set: { deleted: false } });
+  });
+
+  it('two changes of one thing a moment apart, written together: each stamped as of its own time, so a rename elsewhere between them wins over the first', () => {
+    const first = { k: 'chord', id: 'c', value: null, at: 1000 } as WriteOp;
+    const later = { k: 'chord', id: 'c', value: null, at: 1200 } as WriteOp;
+    expect(coalesceOps(first, later).before).toEqual([{ value: null, at: 1000 }]);
   });
 });

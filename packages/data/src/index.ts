@@ -57,7 +57,7 @@ export const originOf = (command: { t: string } | undefined): Origin => (command
  * (it wasn't in sync's reach before it, though chord.db may still have it, if
  * what took it, another computer's change, wasn't written yet): it's here as
  * of then, whatever was deleted elsewhere before. `before`: earlier changes
- * of yours to it, waiting with this one, each made more than STEP_MS before
+ * of yours to it, waiting with this one, each made before
  * the next: each is stamped first, as of its own time (`coalesceOps`).
  */
 export type WriteOp = (
@@ -99,11 +99,13 @@ export interface WriteStep {
 
 /**
  * Changes of yours to one entity made further apart than this, waiting
- * together (a full disk putting writes off for minutes, say), are stamped
- * each as of its own time (`WriteOp.before`); closer (typing), as one, as of
- * the later.
+ * together (a write in flight, a full disk putting writes off for minutes),
+ * are stamped each as of its own time (`WriteOp.before`): any later at all,
+ * so a change made elsewhere between them (a rename a moment after yours, on
+ * another computer) wins over the earlier only, never loses to it. At most
+ * MAX_STEPS are kept.
  */
-export const STEP_MS = 1000;
+export const STEP_MS = 0;
 /** At most this many earlier changes kept with one write: the first (which may have made it) and the latest. */
 const MAX_STEPS = 16;
 /** The kinds sync stamps: only theirs are kept in steps (a tab's history, a window, never). */

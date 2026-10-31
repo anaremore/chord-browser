@@ -253,6 +253,9 @@ const iconHash = (base64: string): string => createHash('sha256').update(Buffer.
 /** Things main applies apart from chords and sidebar nodes. */
 const SYNC_TYPES_APPLIED: ReadonlySet<string> = new Set(['favorite', 'theme', 'route', 'settings', 'effects']);
 
+/** A write's changes, the earlier ones waiting with it first (`before`), each as a write of its own. */
+const stepsOf = (op: WriteOp): WriteOp[] => [...(op.before ?? []).map((step) => ({ k: op.k, id: op.id, ...(op.origin ? { origin: op.origin } : {}), ...step }) as WriteOp), op];
+
 /** A thing's values but whether it's gone. */
 const withoutDeleted = ({ deleted: _deleted, ...rest }: SyncValues): SyncValues => rest;
 
@@ -572,9 +575,15 @@ export class SyncStore {
     let changes = localChanges(had?.thing, base, after);
     // Here again as of now, as a new one is (S15 §13): a deletion elsewhere it's later than doesn't take it.
     if (back && after !== null) changes = { ...changes, deleted: false };
+    // Brought back in a join's window (gone in it, then an Undo): here again as of then, though it's as before the window.
+    if (windowBase !== undefined && madeHere === true && after !== null) changes = { ...changes, deleted: false };
     // Made here and gone again before the copy had it: gone as of then all the same, since another computer may have made
     // it too, under the same id (a route, by its host), and yours is the later word.
     if (after === null && madeHere === true && !changes) changes = { deleted: true };
+    // Taken out by you, from sync's reach, though the copy hasn't read it yet (a route waiting for its chord as this
+    // computer joined, the record that made it elsewhere not read yet): gone as of then, so what's read of it later,
+    // older, doesn't bring it back.
+    if (after === null && took === true && !had && windowBase === undefined && !changes) changes = { deleted: true };
     // Gone in a join's window, and here (synced) before it: gone as of then, though the copy hasn't read it yet (a join
     // refused partway and carried on reads the rest after): what's read later of it is older. Out of sync before the
     // window and after it, and never in it (a tab brought back by an Undo, to Today): no change of yours; in it, made and
@@ -863,7 +872,8 @@ export class SyncStore {
     for (const op of ops) {
       if (opOrigin(op) !== 'user' || !WINDOW_KINDS.has(op.k) || !this.inWindow(op)) continue;
       const before = this.keptOf(this.rowOp(op.k, op.id) ?? ({ k: op.k, id: op.id, value: null } as WriteOp));
-      if (op.k !== 'setting' && [...before.values(), ...this.keptOf(op).values()].every((set) => set === null)) {
+      // (Not one made and taken out again before its write, `back` or `took`: in sync's reach in between.)
+      if (op.k !== 'setting' && stepsOf(op).every((step) => step.took !== true && !step.back && [...this.keptOf(step).values()].every((set) => set === null)) && [...before.values()].every((set) => set === null)) {
         outside.add(op);
         continue;
       }
@@ -889,7 +899,13 @@ export class SyncStore {
       if (opOrigin(op) !== 'user' || !this.inWindow(op) || outside.has(op)) continue;
       if (WINDOW_KINDS.has(op.k)) note.run(op.k, op.id, op.at ?? null);
       // In sync at some point in the window (made, then gone again): its going is a deletion, as of then.
-      if (op.value !== null && (op.k === 'chord' || op.k === 'node' || op.k === 'favorite' || op.k === 'linkRoute' || op.k === 'effect') && [...this.keptOf(op).values()].some((set) => set !== null)) live.run(op.k, op.id);
+      // So was one made and taken out again before its write landed (`back`, gone).
+      // Each change it carries counts (`before`: earlier ones of yours, waiting with it).
+      const synced = op.k === 'chord' || op.k === 'node' || op.k === 'favorite' || op.k === 'linkRoute' || op.k === 'effect';
+      const steps = stepsOf(op);
+      if (synced && steps.some((step) => (step.value !== null ? [...this.keptOf(step).values()].some((set) => set !== null) : step.back === true))) live.run(op.k, op.id);
+      // Brought back in it (an Undo): here again as of then, as outside a join, whatever it was before the window.
+      if (synced && op.value !== null && steps.some((step) => step.back === true)) note.run('back', `${op.k}\n${op.id}`, op.at ?? null);
       // The themes you took out of the list in that window.
       if (op.k === 'setting' && op.id === 'themes') for (const id of op.removed ?? []) note.run('themeRemoved', id, op.at ?? null);
     }
@@ -976,6 +992,7 @@ export class SyncStore {
     const ops: WriteOp[] = [];
     const noted = this.sql('SELECT k, id, at, base, live FROM sync_noted').all() as Row[];
     const themesRemoved = noted.filter((r) => r['k'] === 'themeRemoved').map((r) => str(r['id']));
+    const broughtBack = new Set(noted.filter((r) => r['k'] === 'back').map((r) => str(r['id'])));
     for (const r of noted) {
       const [k, id] = [str(r['k']), str(r['id'])];
       if (!WINDOW_KINDS.has(k)) continue;
@@ -991,7 +1008,8 @@ export class SyncStore {
         if (!this.chordInCopy(op.value?.chordId ?? inCopy)) continue;
       }
       const removed = k === 'setting' && id === 'themes' && themesRemoved.length > 0 ? { removed: themesRemoved } : {};
-      ops.push({ ...op, ...removed, ...(typeof r['at'] === 'number' && r['at'] > 0 ? { at: r['at'] } : {}) } as WriteOp);
+      const back = op.value !== null && broughtBack.has(`${k}\n${id}`) ? { back: true } : {};
+      ops.push({ ...op, ...removed, ...back, ...(typeof r['at'] === 'number' && r['at'] > 0 ? { at: r['at'] } : {}) } as WriteOp);
     }
     this.sql('DELETE FROM sync_noted').run();
     try {
