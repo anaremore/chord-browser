@@ -44,7 +44,7 @@ function seed(profile: string, personal: string): void {
   const proxy = JSON.stringify({ mode: 'server', server: { scheme: 'socks5', host: '10.0.0.2', port: 1080, bypass: [] }, pac: null });
   db.exec('BEGIN');
   run(`INSERT INTO profile (id, name, partition, is_default, created_at) VALUES ('work-signins', 'Work', 'persist:p-work-signins', 0, 1)`);
-  run(`INSERT INTO chord (id, profile_id, name, icon, theme, rank, proxy, created_at, updated_at) VALUES ('work', 'work-signins', 'Work', 'W', ?, 'zz', ?, 1, 1700000000000)`, theme, proxy);
+  run(`INSERT INTO chord (id, profile_id, name, icon, theme, rank, proxy, created_at, updated_at) VALUES ('work', 'work-signins', 'Work', 'W', ?, 'a5', ?, 1, 1700000000000)`, theme, proxy);
   run(`INSERT INTO favicon (key, data, mime, fetched_at) VALUES ('icon-key', ?, 'image/png', 1)`, ICON);
   run(`INSERT INTO node (id, chord_id, parent_id, section, kind, rank, created_at, updated_at) VALUES ('folder', 'work', NULL, 'pinned', 'folder', 'a0', 1, 1700000000001)`);
   run(`INSERT INTO folder (node_id, title, collapsed) VALUES ('folder', 'Reading', 0)`);
@@ -475,7 +475,7 @@ test('a Chord file into a profile with data: problems first, then its settings o
   await pageWhere(app, isShell);
   await app.close();
   const db = new DatabaseSync(join(profile, 'chord.db'));
-  db.exec(`INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES ('side', 'default', 'Side project', 'S', '{"stops":[{"l":0.7,"c":0.1,"h":120}],"grain":0.2,"appearance":"auto"}', 'b0', 1, 1)`);
+  db.exec(`INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES ('side', 'default', 'Side project', 'S', '{"stops":[{"l":0.7,"c":0.1,"h":120}],"grain":0.2,"appearance":"auto"}', 'a6', 1, 1)`);
   db.exec(`INSERT INTO node (id, chord_id, parent_id, section, kind, rank, created_at, updated_at) VALUES ('notes', 'side', NULL, 'pinned', 'tab', 'a0', 1, 1)`);
   db.exec(`INSERT INTO tab (node_id, pinned_url, url, title, last_active_at) VALUES ('notes', 'https://notes.test/', 'https://notes.test/', 'Notes', 1)`);
   db.exec(`INSERT INTO favorite (id, url, title, rank, created_at, updated_at) VALUES ('mine', 'https://calendar.test/', 'Cal (mine)', 'a0', 1, 0)`);
