@@ -64,6 +64,24 @@ const api: SettingsApi = {
     undo: (importId) => invoke('importFile:undo', { importId }),
     onProgress: (listener) => subscribe('importFile:progress', listener),
   },
+  sync: {
+    status: () => invoke('sync:status'),
+    chooseFolder: () => invoke('sync:chooseFolder'),
+    setup: (folderId, passphrase) => invoke('sync:setup', { folderId, passphrase }),
+    join: (folderId, passphrase) => invoke('sync:join', { folderId, passphrase }),
+    choose: (mode) => invoke('sync:choose', { mode }),
+    unlock: (passphrase) => invoke('sync:unlock', { passphrase }),
+    changePassphrase: (passphrase) => invoke('sync:passphrase', { passphrase }),
+    off: () => invoke('sync:off'),
+    remove: (device) => invoke('sync:remove', { device }),
+    undo: (token) => invoke('sync:undo', { token }),
+    rename: (name) => invoke('sync:rename', { name }),
+    pause: (paused) => invoke('sync:pause', { paused }),
+    relocate: () => invoke('sync:relocate'),
+    startOver: (passphrase) => invoke('sync:startOver', { passphrase }),
+    rememberKey: (on) => invoke('sync:rememberKey', { on }),
+    onStatus: (listener) => subscribe('sync:status', listener),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));

@@ -14,6 +14,7 @@ import { api } from './api';
 import { Row, SectionHeader, Switch } from './controls';
 import { FromChordFile } from './ChordFile';
 import { FromAnotherBrowser } from './Import';
+import { SyncSection } from './Sync';
 import styles from './Settings.module.css';
 import local from './YourData.module.css';
 
@@ -233,12 +234,14 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
 export function YourDataSection({ snapshot, info, onUpdates }: { snapshot: SettingsSnapshot; info: SystemInfo; onUpdates(): void }) {
   return (
     <>
-      <SectionHeader title="Your data" description="Take everything in Chord with you in one file, or bring in what you had in another browser." />
+      <SectionHeader title="Your data" description="Take everything in Chord with you in one file, bring in what you had in another browser, or keep your setup the same on each of your computers." />
       <h2 className={styles.groupTitle}>Export</h2>
       <Export snapshot={snapshot} />
       <h2 className={styles.groupTitle}>Import</h2>
       <FromChordFile onUpdates={onUpdates} />
       <FromAnotherBrowser snapshot={snapshot} info={info} />
+      <h2 className={styles.groupTitle}>Sync</h2>
+      <SyncSection onUpdates={onUpdates} />
     </>
   );
 }

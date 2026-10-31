@@ -4,7 +4,7 @@
  * either computer's wall clock says.
  */
 import { describe, expect, it } from 'vitest';
-import { compareStamps, isDeviceId, isStamp, newDeviceId, nextStamp, rowStamp, seenStamp, type Stamp } from '../src';
+import { CLOCK_DRIFT_MS, compareStamps, isDeviceId, isStamp, newDeviceId, nextStamp, rowStamp, seenStamp, stampAbove, type Stamp } from '../src';
 
 const A = 'aaaaaaaaaaaaaaaa';
 const B = 'bbbbbbbbbbbbbbbb';
@@ -34,10 +34,13 @@ describe('reading another computer’s stamp', () => {
     expect(seenStamp(last, remote, now, A)).toEqual(expected);
   });
 
-  it('so a change made after seeing a stamp from a clock an hour ahead still wins over it', () => {
+  it('a stamp from a clock an hour ahead moves this one only a minute; a change made after it, to what it set, still wins, stamped just above it', () => {
     const fast: Stamp = [1000 + 3_600_000, 0, B];
     const seen = seenStamp(nextStamp(null, 1000, A), fast, 1500, A);
-    const change = nextStamp(seen, 1600, A);
+    expect(seen[0]).toBe(1500 + CLOCK_DRIFT_MS);
+    // As chord-data stamps a change: the clock, or just above the value it replaces.
+    const tick = nextStamp(seen, 1600, A);
+    const change = compareStamps(tick, fast) > 0 ? tick : stampAbove(fast, A);
     expect(compareStamps(change, fast)).toBeGreaterThan(0);
   });
 });

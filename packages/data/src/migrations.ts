@@ -285,4 +285,49 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE duet_thread ADD COLUMN imported_at INTEGER;
   `,
+  // 19: sync (docs/decisions/S15-your-data.md §6, §7). sync_record is the merged copy of every synced thing: each field's
+  // value (fields) and the stamp of the change that set it (stamps), as JSON objects by field; local is what this
+  // computer last wrote of it ({"deleted":true} once it's gone here; NULL, never), which write() compares the model with
+  // to stamp only what you changed. sync_outbox holds your stamped changes until the sync worker has appended them to
+  // this computer's log; sync_cursor, how far each computer's segments have been read. The clock, the folder, the
+  // generation and this computer's own segment are in meta (sync.*). Empty, and untouched by write(), while sync is off.
+  `
+  CREATE TABLE IF NOT EXISTS sync_record (
+    type TEXT NOT NULL, id TEXT NOT NULL, fields TEXT NOT NULL, stamps TEXT NOT NULL, local TEXT,
+    PRIMARY KEY (type, id)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS sync_outbox (seq INTEGER PRIMARY KEY, record TEXT NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS sync_cursor (
+    generation INTEGER NOT NULL, device TEXT NOT NULL, segment INTEGER NOT NULL,
+    head TEXT NOT NULL, offset INTEGER NOT NULL, frame INTEGER NOT NULL, snapshot INTEGER NOT NULL,
+    PRIMARY KEY (generation, device, segment)
+  ) STRICT;
+  `,
+  // 20: what sync's reader remembers of junk in the folder (S15 §13): each name with its size and time when looked
+  // into, so it's looked into once, across launches too. At most a few thousand rows (core's MAX_JUNK).
+  `
+  CREATE TABLE IF NOT EXISTS sync_junk (path TEXT PRIMARY KEY, seen TEXT NOT NULL) STRICT;
+  `,
+  // 21: who last wrote what sync keeps of each synced row (S15 §13): `user` (something you did), `sync` (another
+  // computer's change applied) or `tidy` (this computer adjusting on its own), and when that was made (`at`, ms), by the
+  // write's kind and id (`chord`, `node`, `favorite`, `linkRoute`, `effect`, `setting`). A write that changed nothing
+  // sync keeps (a tab's last visit) leaves it. Sync's drift check stamps only what you wrote, and joining and the drift
+  // check take a row's time from here, not from its last write. A row written before this has none: who wrote it isn't
+  // known. And a write too big for one short transaction (a chord with thousands of tabs going), as what it will do, a
+  // part a row (part -1: made whole), so a stop partway is finished at the next open (`write_intent`). And what this
+  // computer last had of a synced thing before it went here (sync_record.was): brought back (an Undo, a tab pinned
+  // again), only what differs from it is a change of yours. And what you changed while a join waited for your choice
+  // (`sync_noted`, with when, what it was before, and whether it was in sync at any point in that window): stamped as
+  // it ends, even after a crash meanwhile. And, of each segment read, the last frame read (where, its hash, and the
+  // file's time then), so one another copy of the profile wrote on from a point, or over its last frame, is read again
+  // from its start.
+  `
+  ALTER TABLE sync_record ADD COLUMN was TEXT;
+  ALTER TABLE sync_cursor ADD COLUMN last_at INTEGER;
+  ALTER TABLE sync_cursor ADD COLUMN last_hash TEXT;
+  ALTER TABLE sync_cursor ADD COLUMN last_mtime REAL;
+  CREATE TABLE IF NOT EXISTS row_origin (k TEXT NOT NULL, id TEXT NOT NULL, origin TEXT NOT NULL, at INTEGER, PRIMARY KEY (k, id)) STRICT;
+  CREATE TABLE IF NOT EXISTS write_intent (id TEXT NOT NULL, part INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (id, part)) STRICT;
+  CREATE TABLE IF NOT EXISTS sync_noted (k TEXT NOT NULL, id TEXT NOT NULL, at INTEGER, base TEXT, live INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (k, id)) STRICT;
+  `,
 ];

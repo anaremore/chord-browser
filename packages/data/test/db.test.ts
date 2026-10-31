@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { apply, restoreState, seedState, type Command, type Context, type ProxySettings, type State, type TabNode } from '@chord/core';
-import { ChordDatabase } from '../src/db';
+import { ChordDatabase, errorPasses } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
-import { opsForState, opsFromPatches } from '../src';
+import { opsForState, opsFromPatches, type WriteOp } from '../src';
 
 let dir: string;
 let file: string;
@@ -565,6 +565,37 @@ describe('chord-data', () => {
       backup.close();
     } finally {
       (MIGRATIONS as string[]).pop();
+    }
+  });
+});
+
+describe('a full disk', () => {
+  it('a write past the room there is throws SQLite’s own error (FULL, which passes), never “no transaction is active”, and writes go in again once there’s room', () => {
+    const db = new ChordDatabase(file);
+    try {
+      db.write(opsForState(seed()));
+      const raw = (db as unknown as { db: DatabaseSync }).db;
+      const pages = Number((raw.prepare('PRAGMA page_count').get() as { page_count: number }).page_count);
+      raw.exec(`PRAGMA max_page_count = ${pages}`);
+      // SQLite rolls the transaction back itself on a full disk: rolling back again would throw its own error over this one.
+      const big = { k: 'setting', id: 'homeUrl', value: 'x'.repeat(2_000_000) } as WriteOp;
+      let thrown: unknown = null;
+      try {
+        db.write([big]);
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as Error).message).toMatch(/database or disk is full/);
+      expect((thrown as { errcode: number }).errcode & 0xff).toBe(13);
+      expect(errorPasses(thrown)).toBe(true);
+      expect(errorPasses(new Error('NOT NULL constraint failed'))).toBe(false);
+      expect(errorPasses(Object.assign(new Error('constraint'), { errcode: 2067 }))).toBe(false);
+      expect(errorPasses(Object.assign(new Error('disk I/O error'), { errcode: 10 | (3 << 8) }))).toBe(true);
+      raw.exec('PRAGMA max_page_count = 1073741823');
+      db.write([big]);
+      expect(db.load()!.settings.homeUrl).toHaveLength(2_000_000);
+    } finally {
+      db.close();
     }
   });
 });

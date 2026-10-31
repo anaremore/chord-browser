@@ -2,7 +2,7 @@
  * chord-data's database (ARCHITECTURE.md §7). Runs only in the chord-data
  * utility process, never on main: `node:sqlite` is synchronous.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
@@ -35,6 +35,7 @@ import {
   type InstalledExtension,
   type LinkRoute,
   type PersistedState,
+  type Platform,
   type SavedEffects,
   type SidebarNode,
   type SitePermissions,
@@ -45,6 +46,7 @@ import { runDuet, threadOf, type DuetOp, type DuetResult } from './duet';
 import { exportCounts } from './export';
 import { MIGRATIONS } from './migrations';
 import { chordOf, favoriteOf, iconOf, nodeOf, nodeSelect, num, parseJson, siteEffectsOf, str, strOrNull, type Row } from './rows';
+import { SyncStore } from './sync';
 
 /** The profile every chord belongs to until "Keep sign-ins separate" exists. */
 const DEFAULT_PROFILE = 'default';
@@ -90,20 +92,108 @@ function archivedTab(r: Row): ArchivedTab {
   };
 }
 
+/** SQLite's primary result codes that can pass: BUSY, LOCKED, READONLY, IOERR (any of its extended codes) and FULL. */
+const PASSING_CODES = new Set([5, 6, 8, 10, 13]);
+
+/** Whether a write refused with this error can go again later (a full disk, an I/O error, a lock), by SQLite's result code. */
+export function errorPasses(error: unknown): boolean {
+  const code = (error as { errcode?: unknown } | null)?.errcode;
+  return typeof code === 'number' && PASSING_CODES.has(code & 0xff);
+}
+
+/** The kinds of write whose rows say who wrote them (`row_origin`): the synced ones. */
+const ORIGIN_KINDS = new Set(['chord', 'node', 'favorite', 'linkRoute', 'effect', 'setting']);
+
+/**
+ * Past this many synced things, sync on, a batch is written in parts
+ * (`writeSteps`): stamping and writing one takes 45 to 70 µs (a tab with its
+ * icon, about 160), so a part stays a few ms, well within a keystroke's 16 ms
+ * on a slow computer, and the command bar's searches are answered between.
+ */
+export const WRITE_PART = 50;
+/** A part's size at most, as recorded (icons, Effects, tabs' histories): about 128 KB, some 20 tabs with icons. */
+const PART_CHARS = 128 * 1024;
+
+/** A part of a batch written in parts, as `write_intent` records it. */
+interface WritePart {
+  ops: WriteOp[];
+  events?: HistoryEvent[];
+  /** Stamped before the part's own: the batch's chord tombstones, with its first part. */
+  first?: WriteOp[];
+  /** Stamped already (`kind:id`), with the first part: a chord tombstone, its row written in its turn. */
+  stamped?: string[];
+}
+
+/** About how big a write is, as recorded: a tab by its address, title and icon, the rest (histories, Effects, settings) whole. */
+function sizeOf(op: WriteOp): number {
+  if (op.value === null) return 100;
+  if (op.k === 'node') return 300 + (op.value.kind === 'tab' ? op.value.url.length + op.value.title.length + (op.value.favicon?.length ?? 0) + (op.value.pinnedUrl?.length ?? 0) : 0);
+  if (op.k === 'chord' || op.k === 'favorite' || op.k === 'linkRoute' || op.k === 'window') return 1000;
+  return JSON.stringify(op.value).length + 100;
+}
+
+/**
+ * A batch in parts, in its order but for the chords it makes or changes (first,
+ * so the tabs in them hold), history with the first, tabs' histories (navs)
+ * after every row, each part about WRITE_PART synced things, and the
+ * chords it deletes stamped with the first part, before their tabs' (S15 §13).
+ */
+function writeParts(ops: readonly WriteOp[], events: readonly HistoryEvent[]): WritePart[] {
+  const parts: WritePart[] = [];
+  let part: WritePart = { ops: [] };
+  let count = 0;
+  let chars = 0;
+  // Chords made or changed first: a part's tabs may be in one (each part's foreign keys hold as it ends).
+  const made = (o: WriteOp) => o.k === 'chord' && o.value !== null;
+  for (const op of [...ops.filter(made), ...ops.filter((o) => o.k !== 'nav' && !made(o)), ...ops.filter((o) => o.k === 'nav')]) {
+    const size = sizeOf(op);
+    if (part.ops.length > 0 && (count >= WRITE_PART || chars + size > PART_CHARS)) {
+      parts.push(part);
+      part = { ops: [] };
+      count = 0;
+      chars = 0;
+    }
+    part.ops.push(op);
+    if (ORIGIN_KINDS.has(op.k)) count++;
+    chars += size;
+  }
+  parts.push(part);
+  if (events.length > 0) parts[0]!.events = [...events];
+  const gone = ops.filter((op) => op.k === 'chord' && op.value === null);
+  if (gone.length > 0) {
+    parts[0]!.first = gone;
+    for (const p of parts) {
+      const stamped = p.ops.filter((op) => op.k === 'chord' && op.value === null).map((op) => `chord:${op.id}`);
+      if (stamped.length > 0) p.stamped = stamped;
+    }
+  }
+  return parts;
+}
+
 export class ChordDatabase {
   private readonly db: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
+  /** Batches written in parts this run (`writeSteps`), by intent: their parts, so none is read back from chord.db. */
+  private readonly intents = new Map<string, WritePart[]>();
+  /** Whether intents never made whole (a stop while they were recorded) have been cleared this run. */
+  private intentsChecked = false;
   /** Imports undone this session: their late batches are ignored. */
   private readonly undoneImports = new Set<string>();
   /** Imports writing now (their batches, or their Undo): while any is, checkpoints come smaller (`importing`). */
   private writingImports = 0;
   /** The largest history_visit id an import has had this session: the next import's visits go above it (`importTables`). */
   private importedUpto = 0;
+  /** Sync's tables (sync.ts): write() stamps your changes through it while sync is on. */
+  readonly sync: SyncStore;
 
-  constructor(readonly file: string) {
+  constructor(
+    readonly file: string,
+    platform: Platform = process.platform === 'darwin' || process.platform === 'win32' ? process.platform : 'linux',
+  ) {
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
     this.migrate();
+    this.sync = new SyncStore((text) => this.sql(text), () => this.device(), platform);
     // Archived tabs past their keep-by date, icons nothing uses any more, and picks unused for their lifetime.
     this.db.prepare('DELETE FROM archive_item WHERE archived_at < ?').run(Date.now() - ARCHIVE_KEEP_MS);
     this.db.exec(
@@ -159,7 +249,15 @@ export class ChordDatabase {
       work();
       this.db.exec('COMMIT');
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      // A full disk can end the transaction itself (SQLite rolls back on some I/O errors, and on a failed COMMIT): rolled
+      // back only if one is still open, so the error that's thrown is the real one, never "no transaction is active".
+      try {
+        if (this.db.isTransaction) this.db.exec('ROLLBACK');
+      } catch {
+        // Gone meanwhile: nothing to roll back.
+      }
+      // What sync keeps in memory of chord.db, read again as it is now (a transaction during the migrations has no sync yet).
+      (this.sync as SyncStore | undefined)?.rolledBack();
       throw error;
     }
   }
@@ -255,34 +353,136 @@ export class ChordDatabase {
 
   /** One batch, all or nothing. */
   write(ops: readonly WriteOp[], now = Date.now(), events: readonly HistoryEvent[] = []): void {
+    this.transaction(() => this.writeOps(ops, now, events));
+  }
+
+  /**
+   * A batch main sent (writes.ts), as steps, each one short transaction: an
+   * intent a stop partway (a crash) left is finished first; then the batch,
+   * at once, or, past WRITE_PART things sync stamps, as an intent of its own
+   * (`write_intent`): its parts recorded, each in a transaction of its own,
+   * then marked whole; from then on it's written a part at a time, and the
+   * next open finishes it. Stopped before it was whole, none of it was
+   * written, and what was recorded goes. A chord's tombstone is stamped with
+   * the first part, before its tabs', as `write` stamps it (S15 §13).
+   */
+  *writeSteps(ops: readonly WriteOp[], now = Date.now(), events: readonly HistoryEvent[] = []): Generator<void, void> {
+    yield* this.finishWrites();
+    if (!this.sync.stamping || ops.filter((op) => ORIGIN_KINDS.has(op.k)).length <= WRITE_PART) {
+      this.write(ops, now, events);
+      return;
+    }
+    const id = randomUUID();
+    const parts = writeParts(ops, events);
+    this.intents.set(id, parts);
+    try {
+      for (const [i, part] of parts.entries()) {
+        this.transaction(() => this.sql('INSERT INTO write_intent (id, part, payload) VALUES (?, ?, ?)').run(id, i, JSON.stringify(part)));
+        yield;
+      }
+      // Whole: from here on it's written, if not now then at the next open.
+      this.transaction(() => this.sql('INSERT INTO write_intent (id, part, payload) VALUES (?, -1, ?)').run(id, JSON.stringify({ now })));
+    } catch (error) {
+      this.intents.delete(id);
+      try {
+        this.sql('DELETE FROM write_intent WHERE id = ?').run(id);
+      } catch {
+        // Gone at the next open, never made whole.
+      }
+      throw error;
+    }
+    yield* this.finishWrites();
+  }
+
+  /** Intents made whole and not all written, a part at a time; what never was made whole, gone. */
+  private *finishWrites(): Generator<void, void> {
+    if (!this.intentsChecked) {
+      this.intentsChecked = true;
+      this.sql('DELETE FROM write_intent WHERE id NOT IN (SELECT id FROM write_intent WHERE part = -1)').run();
+    }
+    for (;;) {
+      const header = this.sql('SELECT id, payload FROM write_intent WHERE part = -1 ORDER BY rowid LIMIT 1').get() as Row | undefined;
+      if (!header) return;
+      const id = str(header['id']);
+      const { now } = parseJson<{ now: number }>(header['payload'], { now: Date.now() });
+      for (;;) {
+        const row = this.sql('SELECT part, payload FROM write_intent WHERE id = ? AND part >= 0 ORDER BY part LIMIT 1').get(id) as Row | undefined;
+        if (!row) break;
+        const i = num(row['part']);
+        const part = this.intents.get(id)?.[i] ?? parseJson<WritePart>(row['payload'], { ops: [] });
+        this.transaction(() => {
+          this.writeOps(part.ops, now, part.events ?? [], part.first, part.stamped ? new Set(part.stamped) : undefined);
+          this.sql('DELETE FROM write_intent WHERE id = ? AND part = ?').run(id, i);
+        });
+        yield;
+      }
+      this.sql('DELETE FROM write_intent WHERE id = ?').run(id);
+      this.intents.delete(id);
+    }
+  }
+
+  /**
+   * A batch's writes, in the transaction it's in. `first`: stamped before the
+   * rest (a parted write's chord tombstones, with its first part); `stamped`:
+   * stamped already (`kind:id`), with an earlier part.
+   */
+  private writeOps(ops: readonly WriteOp[], now: number, events: readonly HistoryEvent[], first?: readonly WriteOp[], stamped?: ReadonlySet<string>): void {
+    // Joining, nothing's stamped till it ends: what each synced thing was before this write, the first time (S15 §13).
+    const noting = ops.length > 0 && this.sync.meta.on && !this.sync.stamping;
+    const outside = noting ? this.sync.noteBases(ops) : undefined;
+    for (const event of events) this.record(event);
+    for (const op of ops) {
+      if (op.k === 'chord') this.writeChord(op.id, op.value, now);
+      else if (op.k === 'node') this.writeNode(op.id, op.value, now);
+      else if (op.k === 'window') this.writeWindow(op.id, op.value);
+      else if (op.k === 'sitePermission') this.writeSitePermissions(op.id, op.value, now);
+      else if (op.k === 'download') this.writeDownload(op.id, op.value);
+      else if (op.k === 'favorite') this.writeFavorite(op.id, op.value, now);
+      else if (op.k === 'extension') this.writeExtension(op.id, op.value);
+      else if (op.k === 'siteZoom') this.writeSiteZoom(op.id, op.value, now);
+      else if (op.k === 'linkRoute') this.writeLinkRoute(op.id, op.value, now);
+      else if (op.k === 'effect') this.writeEffect(op.id, op.value);
+      else if (op.k === 'nav') continue;
+      else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
+      else
+        // updated_at moves only when the value does: it's the setting's stamp in an export (migration 17).
+        this.sql(
+          `INSERT INTO setting (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+             updated_at = CASE WHEN value = excluded.value THEN updated_at ELSE excluded.updated_at END`,
+        ).run(op.id, JSON.stringify(op.value), now);
+    }
+    // Who wrote what sync keeps of each synced row, and when it was made (S15 §13), whether sync is on or off: the drift
+    // check stamps only what you wrote, and joining and the drift check go by that time. A write that changed nothing
+    // sync keeps (a tab's last visit) leaves both as they were.
+    for (const op of ops) {
+      if (!ORIGIN_KINDS.has(op.k)) continue;
+      if (op.value === null) this.sql('DELETE FROM row_origin WHERE k = ? AND id = ?').run(op.k, op.id);
+      else if (op.synced !== false)
+        this.sql('INSERT INTO row_origin (k, id, origin, at) VALUES (?, ?, ?, ?) ON CONFLICT(k, id) DO UPDATE SET origin = excluded.origin, at = excluded.at').run(op.k, op.id, op.origin ?? 'user', op.at ?? now);
+    }
+    // Histories last: a tab's row may be made in this same batch. A tab that's gone takes its history with it.
+    for (const op of ops) {
+      // The column is a BLOB (migration 1): the JSON goes in as UTF-8 bytes.
+      if (op.k === 'nav') this.sql('UPDATE tab SET nav_state = ? WHERE node_id = ?').run(op.value ? Buffer.from(JSON.stringify(op.value)) : null, op.id);
+    }
+    // Sync's stamping hook (S15 §7), in the same transaction: what you changed of synced things gets a stamp. Off, it isn't called.
+    if (this.sync.stamping) {
+      const at = performance.now();
+      if (first && first.length > 0) this.sync.stamp(first, now);
+      this.sync.stamp(stamped ? ops.filter((op) => !stamped.has(`${op.k}:${op.id}`)) : ops, now);
+      this.sync.timed('stamp', performance.now() - at);
+    } else if (noting) this.sync.noteUnstamped(ops, outside);
+    // Off, with the merged copy kept (S15 §13): what sync applied, now in, and what you changed since, noted.
+    else if (ops.length > 0 && this.sync.meta.kept) this.sync.keptWrite(ops, now);
+  }
+
+  /** Work in one transaction (sync's merge and its cursor, a slice at a time). */
+  atomically<T>(work: () => T): T {
+    let out!: T;
     this.transaction(() => {
-      for (const event of events) this.record(event);
-      for (const op of ops) {
-        if (op.k === 'chord') this.writeChord(op.id, op.value, now);
-        else if (op.k === 'node') this.writeNode(op.id, op.value, now);
-        else if (op.k === 'window') this.writeWindow(op.id, op.value);
-        else if (op.k === 'sitePermission') this.writeSitePermissions(op.id, op.value, now);
-        else if (op.k === 'download') this.writeDownload(op.id, op.value);
-        else if (op.k === 'favorite') this.writeFavorite(op.id, op.value, now);
-        else if (op.k === 'extension') this.writeExtension(op.id, op.value);
-        else if (op.k === 'siteZoom') this.writeSiteZoom(op.id, op.value, now);
-        else if (op.k === 'linkRoute') this.writeLinkRoute(op.id, op.value, now);
-        else if (op.k === 'effect') this.writeEffect(op.id, op.value);
-        else if (op.k === 'nav') continue;
-        else if (op.value === null) this.sql('DELETE FROM setting WHERE key = ?').run(op.id);
-        else
-          // updated_at moves only when the value does: it's the setting's stamp in an export (migration 17).
-          this.sql(
-            `INSERT INTO setting (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value,
-               updated_at = CASE WHEN value = excluded.value THEN updated_at ELSE excluded.updated_at END`,
-          ).run(op.id, JSON.stringify(op.value), now);
-      }
-      // Histories last: a tab's row may be made in this same batch. A tab that's gone takes its history with it.
-      for (const op of ops) {
-        // The column is a BLOB (migration 1): the JSON goes in as UTF-8 bytes.
-        if (op.k === 'nav') this.sql('UPDATE tab SET nav_state = ? WHERE node_id = ?').run(op.value ? Buffer.from(JSON.stringify(op.value)) : null, op.id);
-      }
+      out = work();
     });
+    return out;
   }
 
   /** Open tabs' saved back/forward histories, by node id. */
@@ -700,7 +900,24 @@ export class ChordDatabase {
    */
   importing(on: boolean): void {
     this.writingImports = Math.max(0, this.writingImports + (on ? 1 : -1));
-    this.db.exec(`PRAGMA wal_autocheckpoint = ${this.writingImports > 0 ? IMPORT_CHECKPOINT : DEFAULT_CHECKPOINT}`);
+    this.checkpointing();
+  }
+
+  /**
+   * Sync's worker thread runs the checkpoints, on a connection of its own,
+   * while sync merges and main writes what it applied (true), so none runs on
+   * this thread meanwhile; then this connection runs them again (false). A
+   * checkpoint here took 10–70 ms in the Linux container (S15 §13).
+   */
+  checkpointElsewhere(on: boolean): void {
+    this.elsewhere = on;
+    this.checkpointing();
+  }
+
+  private elsewhere = false;
+
+  private checkpointing(): void {
+    this.db.exec(`PRAGMA wal_autocheckpoint = ${this.elsewhere ? 0 : this.writingImports > 0 ? IMPORT_CHECKPOINT : DEFAULT_CHECKPOINT}`);
   }
 
   /** Duet's threads and messages (packages/data/src/duet.ts). */
@@ -717,6 +934,20 @@ export class ChordDatabase {
     const kept = row?.['value'];
     if (isDeviceId(kept)) return kept;
     const id = newDeviceId();
+    this.sql(`INSERT INTO meta (key, value) VALUES ('device', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(id);
+    return id;
+  }
+
+  /**
+   * A new id for this computer: another computer writes under the old one in
+   * sync's folder (a profile folder copied to a new computer, S15 §6).
+   */
+  newDevice(): string {
+    return this.adoptDevice(newDeviceId());
+  }
+
+  /** This computer's id from now on: sync takes a new one only once its first snapshot under it is in the folder. */
+  adoptDevice(id: string): string {
     this.sql(`INSERT INTO meta (key, value) VALUES ('device', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(id);
     return id;
   }
@@ -753,6 +984,7 @@ export class ChordDatabase {
   private writeChord(id: string, chord: Chord | null, now: number): void {
     if (!chord) {
       // Hard delete until chords can be deleted (and restored) in M1.3.
+      this.sql("DELETE FROM row_origin WHERE k = 'node' AND id IN (SELECT id FROM node WHERE chord_id = ?)").run(id);
       this.sql('DELETE FROM node WHERE chord_id = ?').run(id);
       this.sql('DELETE FROM chord WHERE id = ?').run(id);
       return;

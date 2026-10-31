@@ -8,8 +8,12 @@ import type { Patch } from 'immer';
 
 export interface Change {
   state: State;
+  /** The state before it: what a list written whole (the themes) had, so what was taken out of it is known. */
+  before: State;
   patches: Patch[];
   effects: Effect[];
+  /** What made it: persistence saves another computer's changes (`sync.apply`) marked as sync's. */
+  command?: Command;
 }
 
 export class Store {
@@ -27,8 +31,10 @@ export class Store {
   dispatch(command: Command): void {
     const result = apply(this.current, command, { now: Date.now(), newId: () => uuidv7() });
     if (result.patches.length === 0 && result.effects.length === 0) return;
+    const before = this.current;
     this.current = result.state;
-    for (const listener of this.listeners) listener(result);
+    const change: Change = { ...result, before, command };
+    for (const listener of this.listeners) listener(change);
   }
 
   subscribe(listener: (change: Change) => void): () => void {

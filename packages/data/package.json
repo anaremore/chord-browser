@@ -9,7 +9,8 @@
     "./db": "./src/db.ts",
     "./export": "./src/export.ts",
     "./import-file": "./src/import-file.ts",
-    "./crypto": "./src/crypto.ts"
+    "./crypto": "./src/crypto.ts",
+    "./sync": "./src/sync.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

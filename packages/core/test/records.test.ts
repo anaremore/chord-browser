@@ -96,7 +96,7 @@ const pinned: TabNode = {
 };
 const { muted: _muted, ...unmuted } = pinned;
 const today: TabNode = { ...unmuted, id: 't2', section: 'today', parentId: 's1', pinnedUrl: null, customTitle: null, favicon: null };
-const split: SplitNode = { kind: 'split', id: 's1', chordId: chord.id, section: 'today', parentId: null, rank: 'b0', direction: 'column', sizes: [0.4, 0.6], createdAt: 1700000000300 };
+const split: SplitNode = { kind: 'split', id: 's1', chordId: chord.id, section: 'today', parentId: null, rank: 'a2', direction: 'column', sizes: [0.4, 0.6], createdAt: 1700000000300 };
 const favorite: Favorite = { id: 'fav1', url: 'https://calendar.example/', title: 'Calendar', favicon: 'data:image/png;base64,AAAA', rank: 'a0', createdAt: 1700000000400 };
 const thread: DuetThread = {
   id: 'th1',
@@ -316,11 +316,14 @@ describe('records that aren’t what they say', () => {
   });
 
   it.each<[string, () => unknown]>([
-    ['a chord with no name', () => chordFromRecord({ type: 'chord', id: 'c', at, set: { icon: 'x', theme: chord.theme, rank: 'a', profile: 'default' } })],
+    ['a chord with no name', () => chordFromRecord({ type: 'chord', id: 'c', at, set: { icon: 'x', theme: chord.theme, rank: 'Zz', profile: 'default' } })],
+    // Not a place in an order: placing anything beside it would throw (the sync simulation found one that did).
+    ['a chord whose rank is no place in an order', () => chordFromRecord({ type: 'chord', id: 'c', at, set: { ...chordRecord(chord, at)!.set, rank: '￿' } })],
+    ['a chord whose rank is a key cut short', () => chordFromRecord({ type: 'chord', id: 'c', at, set: { ...chordRecord(chord, at)!.set, rank: 'b0' } })],
     ['a chord with a color out of range', () => chordFromRecord({ type: 'chord', id: 'c', at, set: { ...chordRecord(chord, at)!.set, theme: { stops: [{ l: 2, c: 0, h: 0 }], grain: 0, appearance: 'auto' } } })],
-    ['a folder in Today', () => nodeFromRecord({ type: 'folder', id: 'f', at, set: { pos: { chord: 'c', section: 'today', parent: null, rank: 'a' }, title: 'x' } }, NOW)],
+    ['a folder in Today', () => nodeFromRecord({ type: 'folder', id: 'f', at, set: { pos: { chord: 'c', section: 'today', parent: null, rank: 'Zz' }, title: 'x' } }, NOW)],
     ['a tab with no place', () => nodeFromRecord({ type: 'tab', id: 't', at, set: { url: 'https://a.test/', title: '' } }, NOW)],
-    ['a Favorite that runs script', () => favoriteFromRecord({ type: 'favorite', id: 'f', at, set: { url: 'javascript:alert(1)', title: 'x', rank: 'a' } })],
+    ['a Favorite that runs script', () => favoriteFromRecord({ type: 'favorite', id: 'f', at, set: { url: 'javascript:alert(1)', title: 'x', rank: 'Zz' } })],
     ['a route that isn’t a site', () => routeFromRecord({ type: 'route', id: 'not a site', at, set: { chord: 'c' } })],
     ['zoom past Chromium’s range', () => zoomFromRecord({ type: 'zoom', id: 'a.test', at, set: { factor: 9 } })],
     ['a permission for a page, not an origin', () => permissionFromRecord({ type: 'permission', id: 'https://a.test/page', at, set: { camera: 'allow' } })],

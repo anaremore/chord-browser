@@ -21,8 +21,9 @@ import {
 } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
+import { hostname } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { app, clipboard, nativeTheme, net, powerMonitor, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, clipboard, nativeTheme, net, powerMonitor, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import type { ImportEnv } from '../import/detect';
 import { AdBlocking } from './ad-blocking/service';
 import { FILTER_LISTS } from './ad-blocking/lists';
@@ -35,6 +36,7 @@ import { Exporter } from './export';
 import { APP_ID, configureAppIdentity, inFlatpak } from './identity';
 import { ImportGate, Importer } from './import';
 import { FileImporter } from './import-file';
+import { SyncService } from './sync';
 import { handle, send } from './ipc';
 import { DownloadManager } from './downloads';
 import { WebStore } from './extensions/webstore';
@@ -46,6 +48,7 @@ import { memoryLow } from './memory';
 import { applySpellcheck, setDictionarySource } from './spellcheck';
 import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
+import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveDuetImages, serveReaderImages } from './protocol';
@@ -96,6 +99,7 @@ let duet: DuetService | undefined;
 let importer: Importer | undefined;
 let exporter: Exporter | undefined;
 let fileImporter: FileImporter | undefined;
+let syncService: SyncService | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
@@ -265,6 +269,9 @@ function registerIpc(): void {
     if (command.t === 'effects.undo') return browser!.effects.undo(command.token);
     // A toast's Undo for a form Duet filled: the page puts back what it had (main/duet).
     if (command.t === 'duet.undoFill') return duet?.undoFill(command.token);
+    // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
+    if (command.t === 'sync.undo') return void syncService?.undo(command.token);
+    if (command.t === 'sync.open') return browser!.openSettings('data');
     // Docking and collapsing picture the page first, so its frame can glide (ARCHITECTURE.md §5).
     if (command.t === 'window.sidebar') {
       browser!.setSidebar(w, command.sidebar);
@@ -492,6 +499,22 @@ function registerIpc(): void {
     return fileImporter!.run(fileId, choices, w.id, (progress) => send(sender, 'importFile:progress', progress));
   });
   handle('importFile:undo', ({ importId }) => fileImporter!.undo(importId));
+  // Your data: sync (S15 §8). The folder picker belongs to the Settings window; a folder is named by its id from then on.
+  handle('sync:status', () => syncService!.refresh());
+  handle('sync:chooseFolder', (_request, sender) => syncService!.chooseFolder(browser!.settingsWindowOf(sender)));
+  handle('sync:setup', ({ folderId, passphrase }) => syncService!.setup(folderId, passphrase));
+  handle('sync:join', ({ folderId, passphrase }) => syncService!.join(folderId, passphrase));
+  handle('sync:choose', ({ mode }) => syncService!.choose(mode));
+  handle('sync:unlock', ({ passphrase }) => syncService!.unlock(passphrase));
+  handle('sync:passphrase', ({ passphrase }) => syncService!.changePassphrase(passphrase));
+  handle('sync:off', () => syncService!.hold('off'));
+  handle('sync:remove', ({ device }) => syncService!.hold('remove', device));
+  handle('sync:undo', ({ token }) => syncService!.undo(token));
+  handle('sync:rename', ({ name }) => syncService!.rename(name));
+  handle('sync:pause', ({ paused }) => syncService!.pause(paused));
+  handle('sync:relocate', (_request, sender) => syncService!.relocate(browser!.settingsWindowOf(sender)));
+  handle('sync:startOver', ({ passphrase }) => syncService!.startOver(passphrase));
+  handle('sync:rememberKey', ({ on }) => syncService!.rememberAnyway(on));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -544,7 +567,8 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     flushed = true;
     // An import stops, and its copies of another browser's files go; an export stops, and its unfinished file goes (at most 2 s, like the rest).
-    const imports = Promise.race([Promise.all([importer?.quit(), exporter?.quit(), fileImporter?.quit()]).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
+    // Sync writes what's waiting to its folder.
+    const imports = Promise.race([Promise.all([importer?.quit(), exporter?.quit(), fileImporter?.quit(), syncService?.quit()]).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
     // Duet first: replies in flight are kept as interrupted, and provider processes end. Ad blocking
     // finishes a change under way (no control page may be open as Electron tears down) and ends its workers.
     // Chord Player quits by itself once Chord's channel closes: nothing to wait for.
@@ -696,9 +720,12 @@ if (!app.requestSingleInstanceLock()) {
           tabs: perfTabs,
           visits: perfVisits,
           pages: devNumber('CHORD_PERF_PAGES') ?? perfVisits,
+          pinned: devNumber('CHORD_PERF_PINNED') ?? 0,
+          effects: devNumber('CHORD_PERF_EFFECTS') ?? 0,
           homeUrl: HOME_URL,
           newId: () => uuidv7(),
           history: (event) => opened.persistence.history(event),
+          effect: (host, value) => opened.persistence.effect(host, value),
         });
       }
       persistence.recordAll(initial);
@@ -745,7 +772,7 @@ if (!app.requestSingleInstanceLock()) {
       saveHistory: (nodeId, nav) => persistence?.nav(nodeId, nav),
       effects: {
         saved: opened.effects,
-        persist: (host, site) => persistence?.effect(host, site),
+        persist: (host, site, fromSync) => persistence?.effect(host, site, fromSync),
         workerPath: join(import.meta.dirname, 'effects.js'),
       },
       history: (event) => store.history(event),
@@ -762,7 +789,12 @@ if (!app.requestSingleInstanceLock()) {
       memoryLow: () => (!app.isPackaged && process.env['CHORD_MEMORY_LOW'] === '1') || memoryLow(process.getSystemMemoryInfo(), process.platform),
       // CHORD_ON_BATTERY=1 (development and tests only) acts as if the computer were on battery.
       onBattery: () => (!app.isPackaged && process.env['CHORD_ON_BATTERY'] === '1') || powerMonitor.isOnBatteryPower(),
-      onChange: (change) => store.record(change.patches, change.state),
+      // Another computer's changes (sync.apply) are saved marked as sync's: never stamped, never back into this computer's log.
+      // Who each change is from (S15 §13): yours are stamped; another computer's applied, and tidying, never are.
+      onChange: (change) => store.record(change.patches, change.state, originOf(change.command), change.before),
+      windowFocused: () => syncService?.focused(),
+      // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).
+      windowBlurred: () => setTimeout(() => (BaseWindow.getFocusedWindow() ? undefined : syncService?.blurred()), 250),
       proxyReady: (ses) => proxies.ready(ses),
       releaseProfile,
       devtoolsSession,
@@ -903,6 +935,33 @@ if (!app.requestSingleInstanceLock()) {
       toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
       gate: importGate,
     });
+    // Your data's sync (S15 §6–§8): chord-data's thread and its worker do the work; main keeps the key and applies what comes in.
+    syncService = new SyncService({
+      data: { sync: (request) => store.sync(request), flush: () => store.flush(), unsaved: () => store.unsaved, waiting: (key, since) => store.waitingHere(key, since), onPush: (listener) => store.onPush(listener) },
+      state: () => browser!.store.state,
+      dispatch: (command) => browser!.store.dispatch(command),
+      effects: { syncSites: (sites, gone) => browser!.effects.syncSites(sites, gone) },
+      toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
+      lastWindow: () => browser!.lastBrowserWindow()?.id ?? null,
+      notify: (view) => browser?.syncChanged(view),
+      info: () => ({ name: hostname().slice(0, 100) || 'This computer', os: platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : 'Linux', app: app.getVersion() }),
+      platform,
+      folder: () => app.getPath('home'),
+      // Tests only (development builds): no keyring, on any system, so a relaunch asks for the passphrase again.
+      noKeyring: devEnv('CHORD_E2E_NO_KEYRING') === '1',
+    });
+    store.onRespawn(() => void syncService?.restarted());
+    // Writes chord-data keeps refusing (a full disk): they wait, are sent again later and later, and the window says so.
+    store.onTrouble((failing) => {
+      const windowId = browser?.lastBrowserWindow()?.id;
+      if (!windowId) return;
+      browser!.window(windowId)?.toast({
+        id: 'save:failing',
+        message: failing ? 'Chord can’t save your changes right now. Is the disk full? It keeps trying.' : 'Chord saved your changes again.',
+      });
+    });
+    // The key is read once launch is over: safeStorage can ask the OS's keychain, which mustn't hold up the first page.
+    afterLaunch.run(() => void syncService!.afterLaunch());
     registerIpc();
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu; and launch timing.
@@ -922,6 +981,36 @@ if (!app.requestSingleInstanceLock()) {
         safeBrowsingCheck: (urls: string[]) => safeBrowsing.check(urls, 'frame'),
         /** Effects: the saved sites, what each page has, and how long applying and checking took (ms). */
         effects: () => browser!.effects.inspect(),
+        /** Sync: write what's waiting now (not 3 s after the last change), and look at the folder now (not at the next watch or poll). */
+        syncWrite: async () => {
+          await store.flush();
+          await store.sync({ type: 'sync.flush' });
+        },
+        syncRead: () => store.sync({ type: 'sync.check' }),
+        /** An idle reconcile now, `local` checked against the rows first, answered once it's done. */
+        syncDrift: () => store.sync({ type: 'sync.reconcile', idle: true, wait: true }),
+        /** Sync's costs on chord-data's thread: writes with it on and off, the stamping hook, frames, merged slices (ms). */
+        syncTimings: async () => (await store.sync({ type: 'sync.timings' })).timings,
+        /** Turn sync off at once (Settings holds it for its Undo first). */
+        syncOff: () => store.sync({ type: 'sync.off' }),
+        /** Pinned folders and tabs, and how many have a name ending in `suffix`: what a sync check waits for, without a state snapshot. */
+        pinnedNames: (suffix: string) => {
+          const pinned = Object.values(browser!.store.state.nodes).filter((n) => n.section === 'pinned');
+          return { count: pinned.length, named: pinned.filter((n) => (n.kind === 'tab' ? n.customTitle : n.kind === 'folder' ? n.title : null)?.endsWith(suffix)).length };
+        },
+        /**
+         * A chord with all its pinned tabs: deleted (`delete`), its Undo (`restore`), or a second one made first so it can
+         * go (`spare`); answered once chord-data has written it (perf.spec.ts times keystrokes around it).
+         */
+        chordForTests: async (what: 'spare' | 'delete' | 'restore') => {
+          const state = browser!.store.state;
+          const windowId = Object.keys(state.windows)[0]!;
+          const busiest = Object.values(state.chords).sort((a, b) => Object.values(state.nodes).filter((n) => n.chordId === b.id).length - Object.values(state.nodes).filter((n) => n.chordId === a.id).length)[0];
+          if (what === 'spare') browser!.store.dispatch({ t: 'chord.create', windowId, name: 'Spare', icon: 'S', theme: state.chords[Object.keys(state.chords)[0]!]!.theme });
+          else if (what === 'delete' && busiest) browser!.store.dispatch({ t: 'chord.delete', chordId: busiest.id });
+          else if (what === 'restore' && state.deletedChords[0]) browser!.store.dispatch({ t: 'chord.restore', windowId, chordId: state.deletedChords[0].chord.id });
+          await store.flush();
+        },
         /** Ad blocking's lists, and what each session has (the extension, the dispatcher). */
         adBlocking: () => ({ status: adBlocking.status(), ...adBlocking.inspect() }),
         /** Check the lists that are due now, as the timer would. */

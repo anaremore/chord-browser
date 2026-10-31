@@ -65,14 +65,16 @@ export interface PersistedState {
   linkRoutes?: LinkRoute[];
 }
 
-/** Routes that still make sense: a plausible site (and path), pointing at a chord that's still there (and isn't a private window's). */
+/** Routes that still make sense: a plausible site (and path), pointing at a chord that isn't a private window's (or one that's gone, waiting for it). */
 function restoreRoutes(saved: LinkRoute[] | undefined, chords: Record<string, Chord>): Record<string, LinkRoute> {
   const out: Record<string, LinkRoute> = {};
   for (const route of saved ?? []) {
     const host = typeof route?.host === 'string' ? routeKey(route.host) : null;
-    const chord = typeof route?.chordId === 'string' ? chords[route.chordId] : undefined;
-    if (!host || host !== route.host || !chord || chord.private) continue;
-    out[host] = { host, chordId: chord.id, createdAt: typeof route.createdAt === 'number' ? route.createdAt : 0 };
+    const chordId = typeof route?.chordId === 'string' && route.chordId.length > 0 ? route.chordId : null;
+    // One to a chord that's gone (deleted here, kept for its Undo, or by sync) stays, waiting for it, as it did before
+    // the launch: links don't go by it meanwhile (`routeFor`), and the rows and sync have it as this computer does.
+    if (!host || host !== route.host || !chordId || chords[chordId]?.private) continue;
+    out[host] = { host, chordId, createdAt: typeof route.createdAt === 'number' ? route.createdAt : 0 };
   }
   return out;
 }

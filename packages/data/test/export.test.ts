@@ -53,8 +53,8 @@ function seeded(): { db: ChordDatabase; state: State } {
   const db = new ChordDatabase(file);
   const state = seedState({ now: 1000, newId, theme: { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' }, homeUrl: 'https://home.test/' });
   const personal = Object.values(state.chords)[0]!;
-  state.chords['work'] = { id: 'work', profileId: 'work-signins', name: 'Work', icon: 'W', theme: personal.theme, rank: 'b0', createdAt: 2000, proxy: { mode: 'none', server: null, pac: null } };
-  state.chords['private'] = { id: 'private', profileId: 'private-w9', name: 'Private', icon: 'P', theme: personal.theme, rank: 'c0', createdAt: 2000, private: true };
+  state.chords['work'] = { id: 'work', profileId: 'work-signins', name: 'Work', icon: 'W', theme: personal.theme, rank: 'a5', createdAt: 2000, proxy: { mode: 'none', server: null, pac: null } };
+  state.chords['private'] = { id: 'private', profileId: 'private-w9', name: 'Private', icon: 'P', theme: personal.theme, rank: 'a6', createdAt: 2000, private: true };
   const tab = (id: string, extra: Partial<TabNode>): TabNode => ({
     kind: 'tab',
     id,
@@ -73,7 +73,7 @@ function seeded(): { db: ChordDatabase; state: State } {
   });
   state.nodes['folder'] = { kind: 'folder', id: 'folder', chordId: 'work', section: 'pinned', parentId: null, rank: 'a0', title: 'Reading', collapsed: false, createdAt: 1500 };
   state.nodes['mail'] = tab('mail', { parentId: 'folder', favicon: ICON, customTitle: 'Mail' });
-  state.nodes['docs'] = tab('docs', { rank: 'b0' });
+  state.nodes['docs'] = tab('docs', { rank: 'a5' });
   state.nodes['secret'] = tab('secret', { chordId: 'private', section: 'today', pinnedUrl: null });
   state.favorites['fav'] = { id: 'fav', url: 'https://calendar.test/', title: 'Calendar', favicon: ICON, rank: 'a0', createdAt: 1600 };
   state.linkRoutes['github.com'] = { host: 'github.com', chordId: 'work', createdAt: 1700 };
@@ -157,7 +157,7 @@ describe('an export', () => {
     expect(of(items, 'chord').map((r) => chordFromRecord(r))).toEqual([
       { ...personal },
       // A chord's own sign-ins and proxy.
-      { id: 'work', profileId: 'work-signins', name: 'Work', icon: 'W', theme: personal.theme, rank: 'b0', createdAt: 2000, proxy: { mode: 'none', server: null, pac: null } },
+      { id: 'work', profileId: 'work-signins', name: 'Work', icon: 'W', theme: personal.theme, rank: 'a5', createdAt: 2000, proxy: { mode: 'none', server: null, pac: null } },
     ]);
     // Pinned in the sidebar's order, a folder before what's in it; the icon is a record of its own.
     const pinned = items.filter((i) => i.phase === 'setup' && ['folder', 'tab', 'split'].includes(i.record.type)).map((i) => i.record.id);

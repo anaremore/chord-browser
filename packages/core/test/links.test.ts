@@ -145,7 +145,7 @@ describe('link routes', () => {
     expect(t.state.linkRoutes).toEqual({});
   });
 
-  it('drops routes whose chord is gone when restoring', () => {
+  it('keeps a route whose chord is gone, waiting for it, when restoring, and drops one that isn’t a route', () => {
     const saved: PersistedState = {
       chords: [chord('c1', 'Personal')],
       nodes: [],
@@ -158,7 +158,9 @@ describe('link routes', () => {
       ],
     };
     const state = restoreState(saved, { now: 1, newId: () => 'w', theme: chord('x', 'x').theme, homeUrl: 'https://home.test/' });
-    expect(Object.keys(state.linkRoutes)).toEqual(['github.com']);
+    expect(Object.keys(state.linkRoutes)).toEqual(['github.com', 'linear.app']);
+    // Links don't go by it meanwhile.
+    expect(routeFor(state, 'https://linear.app/issue')).toBeNull();
   });
 });
 

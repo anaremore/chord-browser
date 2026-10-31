@@ -206,6 +206,28 @@ const LEADS_AT_RECENCY = 100;
 
 const tabTitle = (t: TabNode) => pageTitle(t) || displayHost(t.url) || 'New tab';
 
+/** What a tab is matched and shown by: its place, title, short address and host. */
+interface TabTexts {
+  place: string | null;
+  title: string;
+  short: string;
+  host: string;
+}
+/**
+ * Each tab's texts, worked out once: a tab changed is a new node (state is
+ * never changed in place), so this never goes stale. With thousands of tabs,
+ * parsing every address again on each keystroke took more than a frame.
+ */
+const tabTexts = new WeakMap<TabNode, TabTexts>();
+function textsOf(t: TabNode): TabTexts {
+  let texts = tabTexts.get(t);
+  if (!texts) {
+    texts = { place: placeKey(t.url), title: tabTitle(t), short: shortUrl(t.url), host: displayHost(t.url) };
+    tabTexts.set(t, texts);
+  }
+  return texts;
+}
+
 const archiveResult = (a: ArchivedTab): Result => ({
   kind: 'archive',
   key: `archive:${a.id}`,
@@ -326,8 +348,8 @@ function resultsFor(
   const tabResult = (t: TabNode): Result => ({
     kind: 'tab',
     key: `tab:${t.id}`,
-    title: tabTitle(t),
-    detail: displayHost(t.url),
+    title: textsOf(t).title,
+    detail: textsOf(t).host,
     tab: t,
     chordName: chordName(t),
   });
@@ -356,7 +378,7 @@ function resultsFor(
     const onSite = (url: string) => placeKey(url)?.startsWith(k.place) ?? false;
     const intent: Result = { kind: 'open', key: 'open', title: q, detail: `Search ${k.name}`, url: keywordSearchUrl(k, q), search: true };
     const pages: Result[] = [
-      ...tabs.filter((t) => onSite(t.url) && matchScore(q, tabTitle(t), shortUrl(t.url)) !== null).map(tabResult),
+      ...tabs.filter((t) => (textsOf(t).place?.startsWith(k.place) ?? false) && matchScore(q, textsOf(t).title, textsOf(t).short) !== null).map(tabResult),
       ...(history?.archive ?? [])
         .filter((a) => onSite(a.url) && matchScore(q, a.title || shortUrl(a.url), shortUrl(a.url)) !== null)
         .map(archiveResult),
@@ -399,20 +421,17 @@ function resultsFor(
     : null;
 
   const choices = history?.choices ?? [];
-  const learned = (result: Result) => {
-    const destination = destinationOf(result);
-    return destination ? learnedPoints(choices, q, destination, now) : 0;
-  };
+  const learnedAt = (destination: string | null) => (destination && choices.length > 0 ? learnedPoints(choices, q, destination, now) : 0);
+  const learned = (result: Result) => learnedAt(destinationOf(result));
   const scored: Scored[] = [];
 
   // Open tabs, in every chord. In edit mode the query starts as the current address; don't echo it.
   const claimed = new Set<string>();
   for (const t of tabs) {
-    const place = placeKey(t.url);
+    const { place, title, short } = textsOf(t);
     if (place) claimed.add(place);
     if (mode === 'edit' && t.id === activeId) continue;
-    const title = tabTitle(t);
-    const match = matchScore(q, title, shortUrl(t.url)) ?? abbreviationScore(q, title);
+    const match = matchScore(q, title, short) ?? abbreviationScore(q, title);
     if (match === null) continue;
     const result = tabResult(t);
     const recency = recencyPoints(t.lastActiveAt, now);
@@ -420,8 +439,9 @@ function resultsFor(
     scored.push({
       result,
       kind: 'tab',
-      score: match + OPEN_TAB_POINTS + recency + kept + learned(result),
-      mayLead: (prefixes(q, title) || prefixes(q, shortUrl(t.url))) && (recency >= LEADS_AT_RECENCY || kept > 0),
+      // destinationOf(result), from what's worked out already.
+      score: match + OPEN_TAB_POINTS + recency + kept + learnedAt(place ?? `tab:${t.id}`),
+      mayLead: (prefixes(q, title) || prefixes(q, short)) && (recency >= LEADS_AT_RECENCY || kept > 0),
     });
   }
 
@@ -536,7 +556,7 @@ function filtered(
       .sort((a, b) => b.score - a.score)
       .slice(0, FILTER_ROWS)
       .map((x) => x.result);
-  const tabMatch = (t: TabNode) => matchScore(q, tabTitle(t), shortUrl(t.url)) ?? abbreviationScore(q, tabTitle(t));
+  const tabMatch = (t: TabNode) => matchScore(q, textsOf(t).title, textsOf(t).short) ?? abbreviationScore(q, textsOf(t).title);
   switch (filter) {
     case 'tabs':
       return ranked(

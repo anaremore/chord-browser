@@ -63,6 +63,8 @@ export default defineConfig({
           export: src('export/worker.ts'),
           // Your data's import from a Chord file: reads and checks the file, so nothing of it is parsed on main.
           'import-file': src('import-file/worker.ts'),
+          // Sync's worker thread, inside chord-data's process: the folder work, off the thread that answers searches.
+          sync: src('data/sync-worker.ts'),
         },
         external: ['node:sqlite'],
         output: { entryFileNames: '[name].js', chunkFileNames: 'chunks/[name]-[hash].js' },
