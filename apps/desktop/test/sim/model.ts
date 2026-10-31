@@ -69,8 +69,12 @@ interface Edit {
 export class Model {
   /** By thing, by field: every edit, in the order made. */
   private readonly edits = new Map<string, Map<string, Edit[]>>();
-  /** When each value a person typed was first made, and last put back: what tells a revert. */
-  private readonly made = new Map<string, { first: number; last: number }>();
+  /**
+   * Each time a value a person typed was made, or put back (`back`), by the
+   * edit that made it: what tells a revert. Edits dropped as no change, or set
+   * aside by a join, take theirs out (they made nothing that syncs).
+   */
+  private readonly made = new Map<string, { at: number; back: boolean; edit: Edit }[]>();
   /** In a join's window, by computer, thing and field: what it was before the window (null: not there). */
   private readonly windowBases = new Map<string, { value: unknown } | null>();
   readonly violations: string[] = [];
@@ -79,6 +83,19 @@ export class Model {
   private dropped(why: string, key: string, field: string, e: Edit): void {
     const watch = process.env['SIM_WATCH'];
     if (watch && key.includes(watch)) this.note(`model drops ${e.by}'s ${field}=${JSON.stringify(e.value)}@${e.at} of ${key.replace('\n', ' ')} (${why})`);
+    // No change, or set aside by a join: nothing made that syncs (one lost unwritten was made all the same).
+    if (why !== 'unwritten' && typeof e.value === 'string') {
+      const events = this.made.get(e.value);
+      if (events) this.made.set(e.value, events.filter((m) => m.edit !== e));
+    }
+  }
+
+  /** When a value was first made (a put-back as old as when it was typed, with sync off), and last made or put back. */
+  private madeRange(value: string): { first: number; last: number } | undefined {
+    const events = this.made.get(value);
+    if (!events || events.length === 0) return undefined;
+    const first = Math.min(...events.map((m) => (m.back ? Math.min(m.at, this.typedOff.get(value) ?? m.at) : m.at)));
+    return { first, last: Math.max(...events.map((m) => m.at)) };
   }
   readonly counts = { edits: 0, joins: 0, reverts: 0, phantoms: 0 };
 
@@ -86,11 +103,10 @@ export class Model {
   private readonly typedOff = new Map<string, number>();
 
   /** When a value a person typed was made, and last put back (`back`: an Undo, pinned again, made again), for I4. */
-  private madeAt(value: unknown, at: number, back = false): void {
+  private madeAt(edit: Edit, back = false): void {
+    const value = edit.value;
     if (typeof value !== 'string' || !value.startsWith('~')) return;
-    const made = this.made.get(value);
-    const first = back ? (made?.first ?? this.typedOff.get(value) ?? at) : Math.min(at, made?.first ?? at);
-    this.made.set(value, { first, last: Math.max(at, made?.last ?? at) });
+    this.made.set(value, [...(this.made.get(value) ?? []), { at: edit.at, back, edit }]);
   }
 
   /** A change made with sync off: the values typed in it, as of then (I4, should one be put back into sync). */
@@ -110,8 +126,9 @@ export class Model {
     if (!fields) this.edits.set(key, (fields = new Map()));
     let list = fields.get(field);
     if (!list) fields.set(field, (list = []));
-    list.push({ at, value, by, ...flags });
-    this.madeAt(value, at, back);
+    const e: Edit = { at, value, by, ...flags };
+    list.push(e);
+    this.madeAt(e, back);
   }
 
   /**
@@ -341,8 +358,8 @@ export class Model {
         const old = a[field];
         if (typeof value !== 'string' || typeof old !== 'string' || value === old) continue;
         // Older for sure: the new value was last made before the old one was first made.
-        const newAt = this.made.get(value)?.last;
-        const oldAt = this.made.get(old)?.first;
+        const newAt = this.madeRange(value)?.last;
+        const oldAt = this.madeRange(old)?.first;
         if (newAt !== undefined && oldAt !== undefined && newAt < oldAt) {
           this.counts.reverts++;
           this.violations.push(`I4 revert on ${by} (${command.t}): ${key.replace('\n', ' ')} ${field} "${old}" (made at ${oldAt}) replaced by older "${value}" (made at ${newAt})`);

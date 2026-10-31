@@ -64,6 +64,10 @@ const SEEDS: [number, string][] = [
   [25987, 'a route set and deleted again in a join’s window, one write, was never stamped gone, and came back'],
   [24181, 'a folder deleted and brought back by Undo in a join’s window lost to another computer’s earlier deletion'],
   [25410, 'a rename and a move of one folder a moment apart, written together, stamped the rename as of the move, over a later rename elsewhere'],
+  [39439, 'a pinned tab deleted in a join’s window, before the copy had read it, got no tombstone, and a log put back brought it back'],
+  [33660, 'the simulation’s own: a folder deleted in a join’s window, made in Turn off’s Undo, is in the chord the outbox and its window say'],
+  [38763, 'the simulation’s own: as 33660'],
+  [34719, 'the simulation’s own: a value dropped as no change, or set aside by a join, made nothing that syncs, for I4'],
 ];
 
 describe('the sync simulation’s seeds that found bugs', () => {

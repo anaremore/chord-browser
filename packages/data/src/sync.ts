@@ -612,6 +612,12 @@ export class SyncStore {
     return row !== undefined && row['deleted'] !== 1;
   }
 
+  /** As a join ends: the kind of node this id was before its window (`noteBases`), if it was in sync's reach then. */
+  private windowKind(id: string): string | null {
+    for (const kind of NODE_TYPES) if (this.windowBases.get(thingKey(kind, id))) return kind;
+    return null;
+  }
+
   /** The kind of node a thing of this id is here, if sync knows it. */
   private nodeType(id: string): string | null {
     const row = this.sql(`SELECT type FROM sync_record WHERE id = ? AND type IN ('folder', 'tab', 'split') LIMIT 1`).get(id) as Row | undefined;
@@ -648,8 +654,9 @@ export class SyncStore {
           break;
         case 'node': {
           if (!op.value) {
-            // One gone: whichever kind sync has under its id.
-            const type = this.nodeType(op.id);
+            // One gone: whichever kind sync has under its id, or, gone in a join's window before the copy read it, the kind
+            // it was before the window (a late snapshot, or a log put back, would otherwise bring it back).
+            const type = this.nodeType(op.id) ?? this.windowKind(op.id);
             if (type) this.touch(type, op.id, null, origin, now, null, op.took, op.at, op.back);
             break;
           }
@@ -1003,9 +1010,12 @@ export class SyncStore {
       const op = this.rowOp(k, id) ?? ({ k, id, value: null } as WriteOp);
       if (mode === 'synced-setup' && op.k === 'chord' && !this.chordInCopy(id)) continue;
       if (mode === 'synced-setup' && op.k === 'node') {
+        // Gone: the chord it was in before the window, else the one the copy has it in.
+        const kind = this.windowKind(id);
+        const before = kind ? (this.windowBases.get(thingKey(kind, id))?.['pos'] as { chord?: unknown } | undefined)?.chord : undefined;
         const type = this.nodeType(id);
         const inCopy = type ? (this.load(type, id)?.thing.fields['pos']?.v as { chord?: unknown } | undefined)?.chord : undefined;
-        if (!this.chordInCopy(op.value?.chordId ?? inCopy)) continue;
+        if (!this.chordInCopy(op.value?.chordId ?? before ?? inCopy)) continue;
       }
       const removed = k === 'setting' && id === 'themes' && themesRemoved.length > 0 ? { removed: themesRemoved } : {};
       const back = op.value !== null && broughtBack.has(`${k}\n${id}`) ? { back: true } : {};

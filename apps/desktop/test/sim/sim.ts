@@ -482,6 +482,7 @@ class Sim {
     const { all } = this.copyOf(c);
     const chooser = new DatabaseSync(c.file, { readOnly: true });
     const chordsNow = chordsChoosing(chooser);
+    const nodesNow = nodeChordsChoosing(chooser);
     chooser.close();
     const state = c.state;
     this.joiningNow.add(c);
@@ -500,8 +501,12 @@ class Sim {
       if (mode === 'both') return true;
       const [type, id] = key.split('\n') as [string, string];
       if (type === 'chord') return chordKept(id);
-      // A node gone here: the chord the copy has it in, gone from the copy or not.
-      if (type === 'tab' || type === 'folder' || type === 'split') return chordKept(state.nodes[id]?.chordId ?? (all.get(key)?.['pos'] as { chord?: string } | undefined)?.chord);
+      // A node gone here: the chord it was in before the window, else the one the copy has it in (the outbox's too,
+      // readmitted as the join ends), gone from the copy or not.
+      if (type === 'tab' || type === 'folder' || type === 'split') {
+        const before = nodesNow.before.get(key);
+        return chordKept(state.nodes[id]?.chordId ?? before ?? (all.get(key)?.['pos'] as { chord?: string } | undefined)?.chord ?? nodesNow.outbox.get(key));
+      }
       return true;
     });
     this.joined(c, mode);
@@ -1021,6 +1026,32 @@ function chordsChoosing(raw: DatabaseSync): Map<string, boolean> {
     else if ('deleted' in r.set && later(r.at, had.at) > 0) chords.set(r.id, { deleted: r.set['deleted'] === true, at: r.at });
   }
   return new Map([...chords].map(([id, c]) => [id, c.deleted]));
+}
+
+/**
+ * As a join is chosen, the chord each pinned node is in, by key: as it was
+ * before the join's window (`sync_noted.base`), and as the outbox has it
+ * (readmitted into the copy as the join ends).
+ */
+function nodeChordsChoosing(raw: DatabaseSync): { before: Map<string, string>; outbox: Map<string, string> } {
+  const chordOf = (set: unknown) => {
+    const chord = (set as { pos?: { chord?: unknown } } | null)?.pos?.chord;
+    return typeof chord === 'string' ? chord : undefined;
+  };
+  const before = new Map<string, string>();
+  for (const r of raw.prepare(`SELECT base FROM sync_noted WHERE k = 'node' AND base IS NOT NULL`).all() as { base: string }[]) {
+    for (const [key, set] of JSON.parse(r.base) as [string, unknown][]) {
+      const chord = chordOf(set);
+      if (chord) before.set(key, chord);
+    }
+  }
+  const outbox = new Map<string, string>();
+  for (const row of raw.prepare('SELECT record FROM sync_outbox ORDER BY seq').all() as { record: string }[]) {
+    const r = JSON.parse(row.record) as { type: string; id: string; set: unknown };
+    const chord = chordOf(r.set);
+    if ((r.type === 'tab' || r.type === 'folder' || r.type === 'split') && chord) outbox.set(`${r.type}\n${r.id}`, chord);
+  }
+  return { before, outbox };
 }
 
 /** Whether a thing is this computer's last chord, or in it, or a route to it: kept whatever another computer did (by design). */

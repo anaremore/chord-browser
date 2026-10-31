@@ -1121,6 +1121,10 @@ describe('what the sync simulation found (S15 §13, the ninth review)', () => {
 
 describe('what the sync simulation found past 20,000 seeds (S15 §13, the ninth review)', () => {
   const records = (id: string) => outbox().filter((r) => r.id === id);
+  const chordRecordOf = (state: State, id: string): DataRecord => {
+    const c = state.chords[id]!;
+    return { type: 'chord', id, at: [Date.now() - 1000, 0, OTHER], set: { name: c.name, icon: c.icon, theme: c.theme, rank: c.rank, profile: c.profileId, created: c.createdAt } };
+  };
   const raw = (text: string) => (db as unknown as { sql(text: string): StatementSync }).sql(text);
 
   it('a route you delete that the copy hasn’t read yet (it waited for its chord as this computer joined): gone as of then, so an older one read later doesn’t bring it back', () => {
@@ -1148,6 +1152,26 @@ describe('what the sync simulation found past 20,000 seeds (S15 §13, the ninth 
     db.atomically(() => db.sync.stampJoinWindow('all', began + 400));
     expect(records('gone.test').map((r) => r.set)).toEqual([{ deleted: true }]);
     expect(records('f-window').at(-1)).toMatchObject({ at: [began + 300, 0, expect.any(String)], set: { deleted: false } });
+  });
+
+  it('a pinned folder deleted in a join’s window that the copy hasn’t read yet: a tombstone as the join ends, so a late snapshot doesn’t bring it back, Keep both or the synced setup', () => {
+    for (const mode of ['all', 'synced-setup'] as const) {
+      let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+      const chord = chordId(state);
+      const folder = `f-${mode}`;
+      state = apply(state, { t: 'folder.create', folderId: folder, chordId: chord, title: 'F' }, ctx).state;
+      db.write(opsForState(state));
+      const began = Date.now();
+      db.atomically(() => db.sync.clear());
+      db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk', compactedAt: began });
+      // The synced setup has this chord (read), not the folder (its record not read yet).
+      db.atomically(() => db.sync.merge([chordRecordOf(state, chord)], began));
+      const gone = apply(state, { t: 'folder.delete', nodeId: folder }, ctx);
+      db.write(opsFromPatches(gone.patches, gone.state, state).map((op) => ({ ...op, at: began + 100 })));
+      db.atomically(() => db.sync.stampJoinWindow(mode, began + 200));
+      expect(records(folder).at(-1)).toMatchObject({ type: 'folder', set: { deleted: true } });
+      db.sync.setMeta({ joining: false });
+    }
   });
 
   it('two changes of one thing a moment apart, written together: each stamped as of its own time, so a rename elsewhere between them wins over the first', () => {
