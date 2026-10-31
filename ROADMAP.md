@@ -60,7 +60,7 @@ A milestone is done when all of these hold:
 | **After 0.1** | 0.1.x | Nov 2026 | sign in to sites that ask for a password in a box, and trust that a force-quit loses nothing |
 | | 0.2 · Cleaner pages | Dec 2026 | browse without ads or trackers, and bring your bookmarks and history from Chrome, Edge, Brave, Firefox or Safari |
 | | 0.3 · Effects | next, after the performance plan (moved up 2026-10-25); Effects and Duet fills forms built 2026-10-25 | restyle a site by hand or by asking Duet, with a Dry/Wet switch; have Duet fill a form you check first |
-| | Your data | right after Effects (moved up 2026-10-25): export shipped in 0.5.0; import and sync built | export everything and bring it back, and sync your setup through a folder you already sync, end-to-end encrypted |
+| | Your data | right after Effects (moved up 2026-10-25): export shipped in 0.5.0, import and sync in 0.6.0 | export everything and bring it back, and sync your setup through a folder you already sync, end-to-end encrypted |
 
 ## Where we are (updated 2026-10-25)
 
@@ -74,7 +74,7 @@ Released: **0.1.0** (2026-10-24) and **0.2.1** (2026-10-25), both previews; 0.2.
 | Phase 4 | Windows signing (live since 0.2.1); macOS signing and notarization, built and off | | yours: an Apple Developer account, then Mac in-app updates; a Store submission; Electron 47 |
 | After 0.1 | 0.1.x's gaps, 0.2's cleaner pages, Effects, Duet fills forms, Chord Player (waiting on its secrets and hand checks), DevTools in the window, counts on tabs, battery, CI checks for launch time and memory, a proxy per chord, Your data's design, its export, import from a Chord file and sync (2026-10-26) | the P0 performance pass: a lighter launch | Clear Today's slow frames; the back/forward cache (Electron upstream); Your data's hand checks with real sync apps |
 
-**Next, in order:** finish the performance pass, then release 0.3 (tagged when you say), with Duet fills forms, then Your data (export, import and sync built; sync's hand checks with real sync apps next). Electron 46 comes first whenever it lands, on the 72-hour clock.
+**Next, in order:** sync's hand checks with real sync apps; the performance pass's costs with 5,000 pinned tabs (the store's update and an unwindowed sidebar); then the password-manager pass, after Your data (export in 0.5.0, import and sync in 0.6.0). Electron 46 comes first whenever it lands, on the 72-hour clock.
 
 ---
 
@@ -418,7 +418,7 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
   - **Built 2026-10-25** (ARCHITECTURE.md §11.6, DESIGN.md §7.8). Ask Duet to fill the form on the tab on screen: it reads the fields' structure (labels, kinds, names, autocomplete hints, choices, required; never what's in them) under the chat's reading scope, and shows its values in a card in the panel. Each field is editable and can be left out; nothing goes in until you press Fill. Chord fills from its isolated world with the native setter and the events React, Vue and Angular listen for, outlines each field for a moment and scrolls to the first, and Undo puts back what was there. Chord's ids for the fields are checked again at Fill against the field as it was read, so a page that changed fills nothing and says so. Never a password, payment, one-time-code, ID-number, hidden or off-screen field, a frame, a private window, a Never site, or anything when Duet reads nothing; never a button pressed or a form submitted. Tests: two journeys in `duet.spec.ts` (on X11 and Wayland), a timed read of a page of 5,000 fields, and the classification and mapping tables in `core/test/duet-forms.test.ts`.
   - *Not yet:* forms inside frames (even the same site's), multiple-choice lists and rich-text editors; an "about me" note Duet could fill from (D16); a hand check on real sign-up and checkout pages on each OS.
 
-### Your data · export in 0.5.0; import and sync built
+### Your data · export in 0.5.0; import and sync in 0.6.0
 - **P1 A proxy per chord** (asked 2026-10-25), with one proxy for all chords as the default. **Built 2026-10-25** (ARCHITECTURE.md §9 *Proxies*, DESIGN.md §9 *Proxies*):
   - **For every chord**, in Settings → Privacy → Proxy: the system's (the default), none, a server (HTTP, HTTPS or SOCKS5, with addresses that skip it) or an automatic configuration file. Private windows and Chord's own requests (update checks, ad-blocking lists, Safe Browsing, suggestions, Chord Player's updates, the Web Store) use it too.
   - **A chord's own**, from Settings, the chord's menu or the command bar. Electron sets proxies per session, so it comes with the chord's own sign-ins: for a chord sharing them, Settings says first that it will be signed out, and the button says so too. Undo puts both back. Its suggestions and DevTools go through it as well.

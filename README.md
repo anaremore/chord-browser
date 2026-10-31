@@ -30,7 +30,7 @@ Everything here works on `main` today and comes with the latest preview.
 - **Effects:** restyle a site your way, with your own CSS, hidden elements, presets, or styles Duet writes. Dry/Wet takes them off at once. They're styles only, and never load anything.
 - **Developer tools** dock beside the page, as in Chrome, or pop out into a window.
 - **Proxies:** one for every chord, or one for a chord of its own (HTTP, HTTPS or SOCKS5, or a configuration file), in place before any page loads.
-- **Your data:** export everything to one file, plain text anyone can read ([docs/data-format.md](docs/data-format.md)) or encrypted with a passphrase. Bringing a file back in comes next, then sync.
+- **Your data:** export everything to one file, plain text anyone can read ([docs/data-format.md](docs/data-format.md)) or encrypted with a passphrase; bring a file back in, with one Undo; and sync your setup between your computers through a folder you already sync, encrypted with your passphrase.
 
 | | |
 |---|---|

@@ -2,9 +2,7 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
-## Next · preview (unreleased)
-
-What's built since 0.5.0; it gets its version when it's released.
+## 0.6.0 · preview · 2026-10-31
 
 - **Bring a Chord file back**, in Settings → Your data → *From a Chord file*: an export from this computer or another. Before anything changes, Chord shows what it would bring: what's new, and what's newer than yours. It adds what's missing and updates what's older, and never removes anything. One Undo takes all of it back.
   - Into a new Chord it's a restore: everything comes in, settings too, in place of the chord Chord started with.
