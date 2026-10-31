@@ -46,6 +46,20 @@ const SEEDS: [number, string][] = [
   [6215, 'a deletion while a join waited was stamped above another computer’s later bringing back'],
   [9993, 'an edit of a route waiting for its chord, never written here, brought back another computer’s deletion'],
   [207, 'another computer’s chord applied and taken away by you in one write was taken away first, and its Undo made it again, every field, over a rename'],
+  [10110, 'a copy of a profile compacted past the segment the original wrote on, and never read what the original wrote there after'],
+  [10370, 'a theme the copy had only renames of (the record that made it gone with a log put back) was never applied'],
+  [10400, 'a crash just after joining with the synced setup: this computer’s chord was asked to make way before the synced chord was there, and never did'],
+  [11547, 'a removed computer’s log, put back to an old version, was pruned before the computers that had read past it saw it, so they never wrote what was past it again'],
+  [12601, 'a deletion made while sync was off, its write put off by a full disk until a join had begun, was stamped as one of the join’s, and went everywhere'],
+  [15192, 'the simulation’s own: a pinned tab the copy had only a change of, its making lost with a log put back and never on this computer, has nothing to make it from, and waits'],
+  [15431, 'a pinned tab the copy had only changes of (its making gone with a log put back) was never applied, though this computer had the rest'],
+  [15440, 'a removed computer’s log, put back to an old version, was pruned by its new id before the others that had read past it saw it, and the copies never agreed again'],
+  [17767, 'the simulation’s own: as 15192, a tab moved elsewhere whose making no one has any more'],
+  [8856, 'a Today tab closed in a join’s window, unpinned earlier in it, retimed the unpinning’s deletion past another computer’s pinning it again'],
+  [11137, 'joining with the synced setup, its last synced chord deleted here while the join waited: no chord to make way for, and this computer’s left out of sync'],
+  [11738, 'the simulation’s own: a name typed with sync off is as old as that, though an Undo brings it into sync later'],
+  [12186, 'the simulation’s own: what chord-data kept of a route before it went came from the join, not a write here'],
+  [14148, 'as 11137, the synced chord deleted here in the join’s window'],
 ];
 
 describe('the sync simulation’s seeds that found bugs', () => {

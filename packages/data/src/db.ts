@@ -106,12 +106,13 @@ const ORIGIN_KINDS = new Set(['chord', 'node', 'favorite', 'linkRoute', 'effect'
 
 /**
  * Past this many synced things, sync on, a batch is written in parts
- * (`writeSteps`): stamping one takes about 45 µs, so a part stays well within
- * a keystroke's 16 ms, and the command bar's searches are answered between.
+ * (`writeSteps`): stamping and writing one takes 45 to 70 µs (a tab with its
+ * icon, about 160), so a part stays a few ms, well within a keystroke's 16 ms
+ * on a slow computer, and the command bar's searches are answered between.
  */
-export const WRITE_PART = 100;
-/** A part's size at most, as recorded (icons, Effects, tabs' histories): about 256 KB. */
-const PART_CHARS = 256 * 1024;
+export const WRITE_PART = 50;
+/** A part's size at most, as recorded (icons, Effects, tabs' histories): about 128 KB, some 20 tabs with icons. */
+const PART_CHARS = 128 * 1024;
 
 /** A part of a batch written in parts, as `write_intent` records it. */
 interface WritePart {
@@ -428,7 +429,7 @@ export class ChordDatabase {
   private writeOps(ops: readonly WriteOp[], now: number, events: readonly HistoryEvent[], first?: readonly WriteOp[], stamped?: ReadonlySet<string>): void {
     // Joining, nothing's stamped till it ends: what each synced thing was before this write, the first time (S15 §13).
     const noting = ops.length > 0 && this.sync.meta.on && !this.sync.stamping;
-    if (noting) this.sync.noteBases(ops);
+    const outside = noting ? this.sync.noteBases(ops) : undefined;
     for (const event of events) this.record(event);
     for (const op of ops) {
       if (op.k === 'chord') this.writeChord(op.id, op.value, now);
@@ -470,7 +471,7 @@ export class ChordDatabase {
       if (first && first.length > 0) this.sync.stamp(first, now);
       this.sync.stamp(stamped ? ops.filter((op) => !stamped.has(`${op.k}:${op.id}`)) : ops, now);
       this.sync.timed('stamp', performance.now() - at);
-    } else if (noting) this.sync.noteUnstamped(ops);
+    } else if (noting) this.sync.noteUnstamped(ops, outside);
     // Off, with the merged copy kept (S15 §13): what sync applied, now in, and what you changed since, noted.
     else if (ops.length > 0 && this.sync.meta.kept) this.sync.keptWrite(ops, now);
   }

@@ -752,7 +752,7 @@ export function createSyncWorker(env: SyncWorkerEnv): {
             device: message.snapshot.device,
             covers: coversOf(mine),
             memory: r.memory,
-            ...(mine ? { after: mine.segment, ...(mine.skipped ? { skipped: mine.skipped } : {}) } : {}),
+            ...(mine ? { after: mine.segment, ...(mine.skipped ? { skipped: mine.skipped } : {}), ...(mine.covered ? { covered: mine.covered } : {}) } : {}),
             onRename: (a) => appending(r, a),
           },
           nodeCrypto,

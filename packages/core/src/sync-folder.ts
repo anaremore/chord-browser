@@ -620,9 +620,16 @@ export interface OwnSegment {
    * a real segment is another computer's under this id (`othersUnder`).
    */
   skipped?: number[];
+  /**
+   * Segments its snapshots covered and deleted, the last few, as it left them:
+   * one back under its name and longer (a sync app keeping what another copy
+   * of the profile wrote on there over the deletion) is another computer's
+   * under this id (`othersUnder`).
+   */
+  covered?: Cover[];
 }
 
-/** At most this many names skipped kept with this computer's segment. */
+/** At most this many names skipped, and segments covered and deleted, kept with this computer's segment. */
 const MAX_SKIPPED = 16;
 
 /** The tail of a segment that ends with `last`, `size` bytes long. */
@@ -875,12 +882,27 @@ async function firstFree(fs: SyncFs, generation: number, device: string, after: 
 /**
  * Whether another computer writes under this one's id, as a look at the
  * folder finds it (S15 §13): a real segment past this one's (`othersAbove`),
- * or under a name it skipped choosing this one's (one being delivered then).
- * Two copies of a profile each writing a segment of its own find each other
- * so, though neither reads its own id's.
+ * or under a name it skipped choosing this one's (one being delivered then),
+ * or an earlier segment of its own grown past what it wrote (closed, or
+ * covered by its snapshot and deleted, then back: the copy it was copied
+ * from writing on there). Two copies of a profile each writing a segment of
+ * its own find each other so, though neither reads its own id's.
  */
 export async function othersUnder(fs: SyncFs, own: OwnSegment, root: Uint8Array, c: DataCrypto, memory?: FolderMemory): Promise<boolean> {
-  return (await othersAbove(fs, own.generation, own.device, own.segment, root, c, memory)) || (await realAmong(fs, own.generation, own.device, own.skipped ?? [], root, c, memory));
+  return (
+    (await othersAbove(fs, own.generation, own.device, own.segment, root, c, memory)) ||
+    (await realAmong(fs, own.generation, own.device, own.skipped ?? [], root, c, memory)) ||
+    (await grownAmong(fs, own.generation, own.device, [...(own.closed ?? []), ...(own.covered ?? [])]))
+  );
+}
+
+/** Whether any of these earlier segments of this computer's is longer now than it left it. */
+async function grownAmong(fs: SyncFs, generation: number, device: string, covers: readonly Cover[]): Promise<boolean> {
+  for (const [segment, size] of covers) {
+    const stat = await fs.stat(`${deviceFolder(generation, device)}/${segmentName(segment)}`);
+    if (stat && stat.size > size) return true;
+  }
+  return false;
 }
 
 /** Whether any of these names (skipped, choosing this computer's segment) is a real segment now. */
@@ -944,7 +966,12 @@ export async function appendRecords(
     const where = { generation: own.generation, device: own.device, segment: n };
     const segment = sealSegment(where, records, root, { snapshot: false, app: opts.app, device: opts.device, ...(opts.now ? { now: opts.now } : {}) }, c);
     // The one it closes is its, as it left it: its next snapshot covers it.
-    const expect: OwnSegment = { ...segment.own, closed: [...(own.closed ?? []), [own.segment, own.size, own.frames] as Cover], ...(free.skipped.length > 0 ? { skipped: free.skipped } : {}) };
+    const expect: OwnSegment = {
+      ...segment.own,
+      closed: [...(own.closed ?? []), [own.segment, own.size, own.frames] as Cover],
+      ...(free.skipped.length > 0 ? { skipped: free.skipped } : {}),
+      ...(own.covered ? { covered: own.covered } : {}),
+    };
     await opts.onAppend?.({ expect, at: 0, length: segment.bytes.length, hash: hex(c.sha256(segment.bytes)), bytes: segment.bytes });
     await fs.mkdir(folder);
     await fs.create(`${folder}/${segmentName(n)}`, segment.bytes);
@@ -1349,9 +1376,20 @@ async function headerOf(fs: SyncFs, where: { generation: number; device: string;
  * it has been read to its end here (`cursor`), none was made after it was
  * removed (it joined again, and this computer hasn't read that yet), and none
  * is still being delivered (a pending one may be its new snapshot). Junk
- * doesn't keep a folder.
+ * doesn't keep a folder. Nor does one shorter than it was read here, or
+ * changed in the last day (PRUNE_QUIET_MS: an older version put back): every
+ * computer that read past it reads it again first, which says what was past
+ * there may be gone, so that computer writes it again (`rewound`, a snapshot).
  */
-export async function mayPrune(fs: SyncFs, where: { generation: number; device: string }, removedAt: number, root: Uint8Array, cursor: (segment: number) => SegmentCursor | null, c: DataCrypto): Promise<boolean> {
+export async function mayPrune(
+  fs: SyncFs,
+  where: { generation: number; device: string },
+  removedAt: number,
+  root: Uint8Array,
+  cursor: (segment: number) => SegmentCursor | null,
+  c: DataCrypto,
+  now = Date.now(),
+): Promise<boolean> {
   for (const segment of await segmentsOf(fs, where.generation, where.device)) {
     const path = `${deviceFolder(where.generation, where.device)}/${segmentName(segment)}`;
     const found = await segmentKind(fs, { ...where, segment }, root, c);
@@ -1361,10 +1399,13 @@ export async function mayPrune(fs: SyncFs, where: { generation: number; device: 
     if (!Number.isFinite(created) || created >= removedAt) return false;
     const stat = await fs.stat(path);
     const known = cursor(segment);
-    if (!stat || !known || known.offset < stat.size) return false;
+    if (!stat || !known || known.offset !== stat.size || now - stat.mtime < PRUNE_QUIET_MS) return false;
   }
   return true;
 }
+
+/** How long a removed computer's folder stays unchanged before it may go: time for every computer to see an older version put back. */
+export const PRUNE_QUIET_MS = 24 * 60 * 60 * 1000;
 /**
  * A snapshot as this computer's newest segment in a generation (joining,
  * setting up, a new passphrase, a new id, or compaction), written in pieces as
@@ -1378,27 +1419,28 @@ export async function mayPrune(fs: SyncFs, where: { generation: number; device: 
  * wrote) stops it (`AnotherWriter`): this computer takes a new id instead.
  * After, it deletes each of them only if it's still the size it covered; one
  * that's grown meanwhile stays, still named as this computer's (`closed`), so
- * the next compaction finds the other writer. Nothing else is ever deleted.
+ * a look at the folder finds the other writer. What it deletes it remembers
+ * (`covered`, with `opts.covered`'s): one back under its name, longer, is
+ * another writer too. Nothing else is ever deleted.
  */
 export async function writeSnapshot(
   fs: SyncFs,
   where: { generation: number; device: string },
   records: AsyncIterable<readonly DataRecord[]> | Iterable<readonly DataRecord[]>,
   root: Uint8Array,
-  opts: { app: string; device: readonly DataRecord[]; after?: number; covers?: Cover[]; skipped?: number[]; now?: number; memory?: FolderMemory; onRename?(appending: Appending): void | Promise<void> },
+  opts: { app: string; device: readonly DataRecord[]; after?: number; covers?: Cover[]; skipped?: number[]; covered?: Cover[]; now?: number; memory?: FolderMemory; onRename?(appending: Appending): void | Promise<void> },
   c: DataCrypto,
 ): Promise<OwnSegment> {
   const folder = deviceFolder(where.generation, where.device);
   const covers = (opts.covers ?? []).slice(-MAX_COVERS);
   await fs.mkdir(folder);
-  const grown = async () => {
-    for (const [segment, size] of covers) {
-      const stat = await fs.stat(`${folder}/${segmentName(segment)}`);
-      if (stat && stat.size > size) return true;
-    }
-    return false;
-  };
-  if (opts.after !== undefined && ((await othersAbove(fs, where.generation, where.device, opts.after, root, c, opts.memory)) || (await realAmong(fs, where.generation, where.device, opts.skipped ?? [], root, c, opts.memory)) || (await grown()))) throw new AnotherWriter();
+  if (
+    opts.after !== undefined &&
+    ((await othersAbove(fs, where.generation, where.device, opts.after, root, c, opts.memory)) ||
+      (await realAmong(fs, where.generation, where.device, opts.skipped ?? [], root, c, opts.memory)) ||
+      (await grownAmong(fs, where.generation, where.device, [...covers, ...(opts.covered ?? [])])))
+  )
+    throw new AnotherWriter();
   const { n, skipped } = await firstFree(fs, where.generation, where.device, opts.after ?? 0, opts.skipped);
   const name = segmentName(n);
   const temp = `${folder}/${name}.part-${hex(c.random(4))}`;
@@ -1434,6 +1476,7 @@ export async function writeSnapshot(
   }
   // Only what it covers, and only as long as it covered it: anything more is another writer's, and stays.
   const kept: Cover[] = [];
+  const deleted: Cover[] = [];
   for (const cover of covers) {
     const path = `${folder}/${segmentName(cover[0])}`;
     const stat = await fs.stat(path);
@@ -1442,10 +1485,14 @@ export async function writeSnapshot(
       kept.push(cover);
       continue;
     }
-    await fs.remove(path).catch(() => kept.push(cover));
+    await fs.remove(path).then(
+      () => deleted.push(cover),
+      () => kept.push(cover),
+    );
   }
   const tail = tailOf(last, size, c);
-  return { ...where, segment: n, size, frames: index, closed: kept, ...(tail ? { tail } : {}), ...(skipped.length > 0 ? { skipped } : {}) };
+  const covered = [...(opts.covered ?? []), ...deleted].slice(-MAX_SKIPPED);
+  return { ...where, segment: n, size, frames: index, closed: kept, ...(tail ? { tail } : {}), ...(skipped.length > 0 ? { skipped } : {}), ...(covered.length > 0 ? { covered } : {}) };
 }
 
 /** A new passphrase (S15 §6): the next generation's file. This computer's snapshot goes under it next (`writeSnapshot`). */

@@ -315,13 +315,21 @@ export class SyncController {
         }
       }
       if (!opts.idle && !kept) this.pushedAs.clear();
-      // Joined with *Use the synced setup*: any of this computer's chords that hasn't made way yet, asked for again;
-      // none left, and that's done.
-      if (!kept && db.sync.meta.makingWay) {
-        const way = this.step(db, 'makingWay', () => db.sync.chordsMakingWay());
-        if (way) this.push({ push: 'sync.makeWay', ...way });
-        else db.sync.setMeta({ makingWay: null });
-      }
+      // Joined with *Use the synced setup*: any of this computer's chords that hasn't made way yet, asked for again,
+      // after what's found unapplied below (the chord they make way into among it, its apply lost with theirs); none
+      // left, and that's done. No synced chord left to make way into (all deleted since): they stay, and join the copy.
+      const way = !kept && db.sync.meta.makingWay ? this.step(db, 'makingWay', () => db.sync.chordsMakingWay()) : null;
+      if (way && way.to === null) {
+        const { chordIds } = way;
+        const adopted = this.step(db, 'adopt', () =>
+          db.atomically(() => {
+            const n = db.sync.adoptChords(chordIds);
+            db.sync.setMeta({ makingWay: null });
+            return n;
+          }),
+        );
+        if (adopted > 0) this.scheduleWrite(WRITE_MS);
+      } else if (!kept && db.sync.meta.makingWay && !way) db.sync.setMeta({ makingWay: null });
       let fresh = 0;
       const pages = db.sync.unappliedPages();
       for (let page = this.step(db, 'unapplied', () => pages.next()); !page.done; page = this.step(db, 'unapplied', () => pages.next())) {
@@ -343,6 +351,12 @@ export class SyncController {
       if (kept && found === 0 && db.sync.meta.kept && !db.sync.meta.on) this.step(db, 'forget', () => this.forgetKept(db));
       else if (kept) this.keptChasing = fresh > 0;
       if (this.changes.size > 0) this.chain(() => this.pushChanges());
+      // Main takes pushes in order: these make way once what was pushed before is applied. The chord they make way
+      // into not there even so (put off), they're asked for again at the next reconcile, soon after it's written.
+      if (way?.to) {
+        const { chordIds, to } = way;
+        this.chain(async () => this.push({ push: 'sync.makeWay', chordIds, to }));
+      }
     } finally {
       this.reconciling = false;
       const again = this.reconcileAgain;
@@ -809,8 +823,9 @@ export class SyncController {
    * the worker thread runs chord.db's checkpoints, passive ones on a
    * connection of its own, every CHECKPOINT_MS, and chord-data's thread none.
    */
-  private busyFor(db: ChordDatabase): void {
-    const worker = this.worker;
+  private busyFor(db: ChordDatabase, start = false): void {
+    // Setting up, before the folder's written: a worker for the checkpoints alone (the setup's own ask uses it after).
+    const worker = this.worker ?? (start ? this.ensureWorker() : null);
     if (!worker) return;
     if (this.busy?.db !== db) {
       this.quiet();
@@ -1298,6 +1313,8 @@ export class SyncController {
       const pages = db.sync.localPages();
       for (let page = this.step(db, 'local', () => pages.next()); !page.done; page = this.step(db, 'local', () => pages.next())) {
         for (const slice of bySize(page.value, PLAN_SLICE, ADD_CHARS)) {
+          // Checkpoints on the worker's connection meanwhile, as while sync merges: one here can take tens of ms.
+          this.busyFor(db, true);
           this.step(db, 'add', () => db.atomically(() => db.sync.addLocal('all', slice)));
           await new Promise((resolve) => setImmediate(resolve));
         }
@@ -1416,6 +1433,7 @@ export class SyncController {
     const pages = db.sync.localPages();
     for (let page = this.step(db, 'local', () => pages.next()); !page.done; page = this.step(db, 'local', () => pages.next())) {
       for (const slice of bySize(page.value, PLAN_SLICE, ADD_CHARS)) {
+        this.busyFor(db, true);
         this.step(db, 'add', () => db.atomically(() => db.sync.addLocal(mode === 'synced' ? 'synced-setup' : 'all', slice, makeWay)));
         await new Promise((resolve) => setImmediate(resolve));
       }
@@ -1427,6 +1445,9 @@ export class SyncController {
         // What you changed here meanwhile (between the join's reading and now, nothing was stamped): those ids, read
         // back from their rows and stamped in the same transaction that ends the join, so nothing written since is missed.
         db.sync.stampJoinWindow(mode === 'synced' ? 'synced-setup' : 'all', Date.now());
+        // *Use the synced setup* with no synced chord left as it ends (the last deleted here meanwhile): nothing to make
+        // way for, so this computer's chords join it, as when there was none to begin with (`keepChords`).
+        if (mode === 'synced' && db.sync.syncedChords().length === 0) db.sync.adoptChords(db.sync.chordsOutOfCopy());
         db.sync.stampDevice({ ...this.info, removed: false });
         db.sync.setMeta({ joining: false, chose: null, keepChords: false });
       }),

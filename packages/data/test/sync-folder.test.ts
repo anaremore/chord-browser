@@ -30,6 +30,7 @@ import {
   MAX_JUNK,
   MAX_SEGMENT,
   mayPrune,
+  PRUNE_QUIET_MS,
   nextGeneration,
   othersUnder,
   ownIntact,
@@ -508,6 +509,10 @@ describe('a removed computer', () => {
     await remover.pass();
     const cursor = (s: number) => remover.cursors.get(`${B}/${s}`) ?? null;
     expect(await mayPrune(fs, { generation: 1, device: B }, removedAt + 1, root, cursor, nodeCrypto)).toBe(true);
+    // Changed within the day (an older version put back, say): it stays, so every computer that read past it sees it first.
+    const changed = Math.max(...[...fs.files].filter(([path]) => path.startsWith(`1/${B}/`)).map(([, file]) => file.mtime));
+    expect(await mayPrune(fs, { generation: 1, device: B }, removedAt + 1, root, cursor, nodeCrypto, changed + PRUNE_QUIET_MS - 1)).toBe(false);
+    expect(await mayPrune(fs, { generation: 1, device: B }, removedAt + 1, root, cursor, nodeCrypto, changed + PRUNE_QUIET_MS)).toBe(true);
     await fs.remove(`1/${B}`);
     const third = new Reader(fs, '00000000000000cc', reader.root);
     expect((await third.pass()).map((r) => `${r.type}:${r.id}`).sort()).toEqual([`chord:work`, `device:${A}`, `device:${B}`]);
@@ -763,6 +768,30 @@ describe('two copies of one profile, writing under one id', () => {
     fs.plant(`1/${A}/${segmentName(2)}`, whole);
     expect(await othersUnder(fs, mine, root, nodeCrypto)).toBe(true);
     expect(await othersUnder(fs, copy, root, nodeCrypto)).toBe(true);
+  });
+
+  it('the copy compacting past the segment the original writes on, then that segment back, longer, over its deletion: another computer under this id (S15 §13, the ninth review)', async () => {
+    const { fs, root, own } = await twoComputers();
+    // The original's folder while the sync app is stopped: it writes on in segment 1.
+    const offline = new MemoryFolder();
+    for (const [path, file] of fs.files) offline.files.set(path, { ...file, bytes: new Uint8Array(file.bytes) });
+    const theirs = await appendRecords(offline, own(), [chord('t1', 'Theirs', 3)], root, { app: '0.5.0', device: [] }, nodeCrypto);
+    expect(theirs.ok).toBe(true);
+    // The copy compacts here meanwhile: segment 1, as it covered it, deleted, and remembered.
+    const mine = await snapshot(fs, { generation: 1, device: A }, [chord('work', 'Work', 1)], root, { own: own() });
+    expect(mine.segment).toBe(2);
+    expect(fs.files.has(`1/${A}/${segmentName(1)}`)).toBe(false);
+    expect(mine.covered).toEqual([[1, own().size, own().frames]]);
+    expect(await othersUnder(fs, mine, root, nodeCrypto)).toBe(false);
+    // The sync app puts it back as it was (an old version): still nothing.
+    fs.plant(`1/${A}/${segmentName(1)}`, offline.files.get(`1/${A}/${segmentName(1)}`)!.bytes.subarray(0, own().size));
+    expect(await othersUnder(fs, mine, root, nodeCrypto)).toBe(false);
+    // What the original wrote on, kept over the deletion: found, and its own next snapshot refused.
+    fs.plant(`1/${A}/${segmentName(1)}`, offline.files.get(`1/${A}/${segmentName(1)}`)!.bytes);
+    expect(await othersUnder(fs, mine, root, nodeCrypto)).toBe(true);
+    await expect(
+      writeSnapshot(fs, { generation: 1, device: A }, [[chord('work', 'Work', 1)]], root, { app: '0.5.0', device: [], covers: coversOf(mine), after: mine.segment, ...(mine.covered ? { covered: mine.covered } : {}) }, nodeCrypto),
+    ).rejects.toBeInstanceOf(AnotherWriter);
   });
 
   it('this computer’s segment gone with nothing real past it: a new id all the same, and nothing in the old folder deleted', async () => {

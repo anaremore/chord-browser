@@ -854,13 +854,23 @@ export class SyncStore {
    * the first time in the join (`sync_noted.base`). Your changes in the
    * window are what differs from that, as when sync is on.
    */
-  noteBases(ops: readonly WriteOp[]): void {
+  noteBases(ops: readonly WriteOp[]): Set<WriteOp> {
     const noted = this.sql('SELECT 1 FROM sync_noted WHERE k = ? AND id = ?');
     const note = this.sql('INSERT OR IGNORE INTO sync_noted (k, id, at, base) VALUES (?, ?, NULL, ?)');
+    // Out of sync before your write and after it (a Today tab you closed, once unpinned): no change of what sync keeps, so
+    // never one of the window's, and never what times one (the unpinning's deletion stays as of then).
+    const outside = new Set<WriteOp>();
     for (const op of ops) {
-      if (opOrigin(op) !== 'user' || !WINDOW_KINDS.has(op.k) || noted.get(op.k, op.id)) continue;
-      note.run(op.k, op.id, JSON.stringify([...this.keptOf(this.rowOp(op.k, op.id) ?? ({ k: op.k, id: op.id, value: null } as WriteOp))]));
+      if (opOrigin(op) !== 'user' || !WINDOW_KINDS.has(op.k) || !this.inWindow(op)) continue;
+      const before = this.keptOf(this.rowOp(op.k, op.id) ?? ({ k: op.k, id: op.id, value: null } as WriteOp));
+      if (op.k !== 'setting' && [...before.values(), ...this.keptOf(op).values()].every((set) => set === null)) {
+        outside.add(op);
+        continue;
+      }
+      if (noted.get(op.k, op.id)) continue;
+      note.run(op.k, op.id, JSON.stringify([...before]));
     }
+    return outside;
   }
 
   /**
@@ -869,18 +879,25 @@ export class SyncStore {
    * when you made them (`sync_noted`, in the write's transaction, so a crash
    * meanwhile loses none), to stamp from their rows as the join ends.
    */
-  noteUnstamped(ops: readonly WriteOp[]): void {
+  noteUnstamped(ops: readonly WriteOp[], outside: ReadonlySet<WriteOp> = new Set()): void {
     const note = this.sql('INSERT INTO sync_noted (k, id, at) VALUES (?, ?, ?) ON CONFLICT(k, id) DO UPDATE SET at = max(coalesce(at, 0), coalesce(excluded.at, 0))');
     const live = this.sql('UPDATE sync_noted SET live = 1 WHERE k = ? AND id = ?');
     for (const op of ops) {
-      // Another computer's, applied, or tidying: never stamped.
-      if (opOrigin(op) !== 'user') continue;
+      // Another computer's, applied, or tidying: never stamped. Nor one made before the join began (while sync was off,
+      // its write put off by a full disk): it's what this computer had then, as the join reads its rows (`addLocal`), and
+      // the drift check after takes it so too, never as a change in the window. Nor one out of sync before and after.
+      if (opOrigin(op) !== 'user' || !this.inWindow(op) || outside.has(op)) continue;
       if (WINDOW_KINDS.has(op.k)) note.run(op.k, op.id, op.at ?? null);
       // In sync at some point in the window (made, then gone again): its going is a deletion, as of then.
       if (op.value !== null && (op.k === 'chord' || op.k === 'node' || op.k === 'favorite' || op.k === 'linkRoute' || op.k === 'effect') && [...this.keptOf(op).values()].some((set) => set !== null)) live.run(op.k, op.id);
       // The themes you took out of the list in that window.
       if (op.k === 'setting' && op.id === 'themes') for (const id of op.removed ?? []) note.run('themeRemoved', id, op.at ?? null);
     }
+  }
+
+  /** Whether a change was made in this join's window: since it began (`compactedAt`, set as it starts). */
+  private inWindow(op: WriteOp): boolean {
+    return op.at === undefined || op.at >= this.meta.compactedAt;
   }
 
   get unstamped(): boolean {
@@ -896,15 +913,52 @@ export class SyncStore {
    * After *Use the synced setup* (`makingWay`): this computer's chords still in
    * chord.db that the merged copy hasn't, the ones that were to make way (the
    * change that took them lost: a crash before its write), and the synced
-   * chord they make way into (the one asked for, or the first synced one).
-   * Null once there are none.
+   * chord they make way into (the one asked for, or the first synced one;
+   * null when there's none left: they stay, `adoptChords`). Null once there
+   * are none.
    */
-  chordsMakingWay(): { chordIds: string[]; to: string } | null {
+  chordsMakingWay(): { chordIds: string[]; to: string | null } | null {
     const way = this.meta.makingWay;
     if (!way) return null;
-    const chordIds = (this.sql('SELECT id FROM chord WHERE deleted_at IS NULL').all() as Row[]).map((r) => str(r['id'])).filter((id) => !this.chordInCopy(id));
-    const to = this.chordInCopy(way.to) ? way.to : this.syncedChords()[0];
-    return chordIds.length > 0 && to ? { chordIds, to } : null;
+    const chordIds = this.chordsOutOfCopy();
+    const to = this.chordInCopy(way.to) ? way.to : (this.syncedChords()[0] ?? null);
+    return chordIds.length > 0 ? { chordIds, to } : null;
+  }
+
+  /** This computer's chords the merged copy hasn't live: what makes way for the synced setup, or joins it when there's none. */
+  chordsOutOfCopy(): string[] {
+    return (this.sql('SELECT id FROM chord WHERE deleted_at IS NULL').all() as Row[]).map((r) => str(r['id'])).filter((id) => !this.chordInCopy(id));
+  }
+
+  /**
+   * After *Use the synced setup*, with no synced chord left for this
+   * computer's to make way into (all deleted since, and the change that was to
+   * take them lost in a crash): they stay, so they join the copy with what's
+   * pinned in them, as a join with no synced chord has them (`keepChords`),
+   * each as of its row, and go to the folder. Not one the copy knows (gone
+   * there: its deletion is applied here in its turn). How many things joined.
+   */
+  adoptChords(chordIds: readonly string[], size = 200): number {
+    const ids = new Set(chordIds);
+    const self = this.device();
+    let added = 0;
+    for (const page of this.rowThings(size)) {
+      for (const thing of page) {
+        const chord = thing.type === 'chord' ? thing.id : NODE_TYPES.has(thing.type) ? (thing.set['pos'] as { chord?: unknown } | undefined)?.chord : undefined;
+        if (typeof chord !== 'string' || !ids.has(chord) || this.load(thing.type, thing.id)) continue;
+        if (thing.icon && thing.set['icon'] === thing.icon.id) this.ensureIcon(thing.icon);
+        const at = rowStamp(thing.ms(''), self);
+        const record: DataRecord = { type: thing.type, id: thing.id, at, set: { ...thing.set, deleted: false } };
+        this.save(mergeRecord(undefined, record).thing, thing.set);
+        this.clock = seenStamp(this.loadClock(), at, Date.now(), self);
+        this.clockDirty = true;
+        this.sql('INSERT INTO sync_outbox (record) VALUES (?)').run(JSON.stringify(record));
+        this.pending++;
+        added++;
+      }
+    }
+    this.saveClock();
+    return added;
   }
 
   /**
@@ -1515,23 +1569,40 @@ export class SyncStore {
       const [type, id] = key.split('\n') as [string, string];
       const had = this.load(type, id);
       if (!had) continue;
-      out.push({ thing: type === 'chord' && !isGone(had.thing) ? this.whole(had) : had.thing, names: names.size > 0 ? [...names] : Object.keys(had.thing.fields) });
+      const fill = type === 'chord' || type === 'theme' || NODE_TYPES.has(type);
+      out.push({ thing: fill && !isGone(had.thing) ? this.whole(had) : had.thing, names: names.size > 0 ? [...names] : Object.keys(had.thing.fields) });
     }
     return out;
   }
 
   /**
-   * A chord whose fields haven't all come (a rename read before the record
-   * that made it): what's missing from what this computer has of it, or a
-   * default, so it's applied (and kept), never dropped, until they come.
+   * A chord, theme, folder, tab or split whose fields haven't all come (a
+   * rename read before the record that made it, or that record gone from the
+   * folder with a log put back to an old version): what's missing from what
+   * this computer has of it, or for a chord or theme a default, so it's
+   * applied (and kept), never dropped, until they come. A pinned node has no
+   * default (a tab's home): one this computer never had waits for them.
    */
   private whole(had: { thing: SyncThing; local: SyncValues | null }): SyncThing {
     const fields = had.thing.fields;
-    if (['name', 'icon', 'theme', 'rank', 'profile'].every((name) => name in fields)) return had.thing;
+    if (NODE_TYPES.has(had.thing.type)) {
+      const local = had.local && had.local['deleted'] !== true ? had.local : {};
+      const missing = Object.keys(local).filter((name) => name !== 'deleted' && !(name in fields));
+      if (missing.length === 0) return had.thing;
+      const filled: SyncThing['fields'] = { ...fields };
+      for (const name of missing) filled[name] = { v: local[name], at: [0, 0, ''] };
+      return { ...had.thing, fields: filled };
+    }
+    const chord = had.thing.type === 'chord';
+    const needed = chord ? ['name', 'icon', 'theme', 'rank', 'profile'] : ['name', 'stops', 'grain'];
+    if (needed.every((name) => name in fields)) return had.thing;
     const local = had.local && had.local['deleted'] !== true ? had.local : {};
-    const defaults = chordRecord({ id: had.thing.id, profileId: DEFAULT_PROFILE, name: '', icon: '', theme: { stops: [{ l: 0.72, c: 0.12, h: 300 }], grain: 0.2, appearance: 'auto' }, rank: LAST_RANK, createdAt: 0 }, [0, 0, ''])!.set;
+    const look = { stops: [{ l: 0.72, c: 0.12, h: 300 }], grain: 0.2 };
+    const defaults: SyncValues = chord
+      ? chordRecord({ id: had.thing.id, profileId: DEFAULT_PROFILE, name: '', icon: '', theme: { ...look, appearance: 'auto' }, rank: LAST_RANK, createdAt: 0 }, [0, 0, ''])!.set
+      : { name: 'Theme', ...look };
     const filled: SyncThing['fields'] = { ...fields };
-    for (const name of ['name', 'icon', 'theme', 'rank', 'profile', 'created']) if (!(name in filled)) filled[name] = { v: name in local ? local[name] : defaults[name], at: [0, 0, ''] };
+    for (const name of chord ? [...needed, 'created'] : needed) if (!(name in filled)) filled[name] = { v: name in local ? local[name] : defaults[name], at: [0, 0, ''] };
     return { ...had.thing, fields: filled };
   }
 

@@ -82,16 +82,36 @@ export class Model {
   }
   readonly counts = { edits: 0, joins: 0, reverts: 0, phantoms: 0 };
 
-  private edit(key: string, field: string, at: number, value: unknown, by: string, flags: Partial<Pick<Edit, 'window' | 'uncertain' | 'stamped'>> = {}): void {
+  /** Values typed with sync off, and when first: never sync's as such, but one put back into sync later is as old as that. */
+  private readonly typedOff = new Map<string, number>();
+
+  /** When a value a person typed was made, and last put back (`back`: an Undo, pinned again, made again), for I4. */
+  private madeAt(value: unknown, at: number, back = false): void {
+    if (typeof value !== 'string' || !value.startsWith('~')) return;
+    const made = this.made.get(value);
+    const first = back ? (made?.first ?? this.typedOff.get(value) ?? at) : Math.min(at, made?.first ?? at);
+    this.made.set(value, { first, last: Math.max(at, made?.last ?? at) });
+  }
+
+  /** A change made with sync off: the values typed in it, as of then (I4, should one be put back into sync). */
+  typed(at: number, before: State, after: State): void {
+    const was = synced(before);
+    for (const [key, b] of synced(after)) {
+      const a = was.get(key);
+      for (const [field, value] of Object.entries(b)) {
+        if (typeof value !== 'string' || !value.startsWith('~') || (a && same(a[field], value))) continue;
+        this.typedOff.set(value, Math.min(at, this.typedOff.get(value) ?? at));
+      }
+    }
+  }
+
+  private edit(key: string, field: string, at: number, value: unknown, by: string, flags: Partial<Pick<Edit, 'window' | 'uncertain' | 'stamped'>> = {}, back = false): void {
     let fields = this.edits.get(key);
     if (!fields) this.edits.set(key, (fields = new Map()));
     let list = fields.get(field);
     if (!list) fields.set(field, (list = []));
     list.push({ at, value, by, ...flags });
-    if (typeof value === 'string' && value.startsWith('~')) {
-      const made = this.made.get(value);
-      this.made.set(value, { first: Math.min(at, made?.first ?? at), last: Math.max(at, made?.last ?? at) });
-    }
+    this.madeAt(value, at, back);
   }
 
   /**
@@ -122,7 +142,7 @@ export class Model {
         // In a join's window: what it was before the window, which the join's end compares with (`noteBases`).
         const k = `${by}\n${key}\n${field}`;
         if (window && !this.windowBases.has(k)) this.windowBases.set(k, a && field in a ? { value: a[field] } : null);
-        this.edit(key, field, at, value, by, window ? { window } : {});
+        this.edit(key, field, at, value, by, window ? { window } : {}, !a);
         this.counts.edits++;
       }
     }

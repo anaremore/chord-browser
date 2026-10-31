@@ -584,6 +584,26 @@ describe('rejoining with Use the synced setup', () => {
     void state;
   });
 
+  it('a theme the copy has only renames of (the record that made it gone from the folder with a log put back): applied with a default look, never left unapplied (S15 §13, the ninth review)', () => {
+    rejoin([{ type: 'theme', id: 'renamed-t', at: [Date.now() + 1000, 0, OTHER], set: { name: 'Renamed elsewhere' } }]);
+    const apply = db.sync.planFor(new Map([[thingKey('theme', 'renamed-t'), new Set(['name'])]]));
+    expect(apply.themes).toEqual([{ id: 'renamed-t', name: 'Renamed elsewhere', stops: [{ l: 0.72, c: 0.12, h: 300 }], grain: 0.2 }]);
+  });
+
+  it('a pinned tab the copy has only a change of (its making gone from the folder), which this computer has: applied, the rest from what it has (S15 §13, the ninth review)', () => {
+    let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    const chord = chordId(state);
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    state = apply(state, { t: 'tab.pin', nodeId: tab }, ctx).state;
+    db.write(opsForState(state));
+    db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
+    db.atomically(() => db.sync.merge([{ type: 'chord', id: chord, at: [Date.now(), 0, OTHER], set: { name: 'Synced', icon: 'S', theme: THEME, rank: 'a1', profile: 'default', created: 1 } }], Date.now()));
+    db.atomically(() => db.sync.merge([{ type: 'tab', id: tab, at: [Date.now() + 1000, 0, OTHER], set: { muted: true } }], Date.now()));
+    db.atomically(() => db.sync.addLocal('synced-setup'));
+    const plan = db.sync.planFor(new Map([[thingKey('tab', tab), new Set(['muted'])]]));
+    expect(plan.nodes.find((n) => n.id === tab)).toMatchObject({ kind: 'tab', chordId: chord, section: 'pinned', muted: true, pinnedUrl: 'https://home.test/' });
+  });
+
   it('a tab you pinned while sync was off, in a chord the synced setup keeps, joins it; this computer’s own chords still make way', () => {
     let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
     const kept = chordId(state);
@@ -702,6 +722,33 @@ describe('local checked against the rows', () => {
     // Nothing left over for the drift check.
     expect(db.atomically(() => mendAll())).toBe(0);
     void state;
+  });
+
+  it('a change made before a join began (sync off), its write put off into the join by a full disk: never one of the window’s (S15 §13, the ninth review)', () => {
+    const state = setUp();
+    const id = chordId(state);
+    const began = Date.now();
+    db.sync.setMeta({ joining: true, compactedAt: began });
+    db.write([{ k: 'chord', id, value: { ...state.chords[id]!, name: 'Made while off' }, at: began - 5000 }], began + 1000);
+    expect(db.sync.unstamped).toBe(false);
+    db.write([{ k: 'chord', id, value: { ...state.chords[id]!, name: 'Made in the window' }, at: began + 500 }], began + 1000);
+    expect(db.sync.unstamped).toBe(true);
+  });
+
+  it('a Today tab closed in a join’s window, unpinned earlier in it: the unpinning’s deletion stays as of then, never retimed by a write out of sync before and after (S15 §13, the ninth review)', () => {
+    let state = setUp();
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
+    const began = Date.now();
+    db.sync.setMeta({ joining: true, compactedAt: began });
+    const unpinned = state;
+    state = apply(state, { t: 'tab.unpin', nodeId: tab }, ctx).state;
+    db.write(opsFromPatches(apply(unpinned, { t: 'tab.unpin', nodeId: tab }, ctx).patches, state, unpinned).map((op) => ({ ...op, at: began + 1000 })), began + 1000);
+    const closed = apply(state, { t: 'tab.close', windowId: Object.keys(state.windows)[0]!, nodeId: tab }, ctx);
+    expect(closed.state.nodes[tab]).toBeUndefined();
+    db.write(opsFromPatches(closed.patches, closed.state, state).map((op) => ({ ...op, at: began + 9000 })), began + 9000);
+    const at = (raw('SELECT at FROM sync_noted WHERE k = ? AND id = ?').get('node', tab) as { at: number } | undefined)?.at;
+    expect(at).toBe(began + 1000);
   });
 
   it('a real edit that slipped past the hook: stamped at its row’s time, not now, and sent', () => {
@@ -956,6 +1003,32 @@ describe('what the sync simulation found (S15 §13, the ninth review)', () => {
     db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
     db.atomically(() => db.sync.addLocal('synced-setup', undefined, false));
     expect(db.sync.syncedChords()).toEqual([chordId(state)]);
+  });
+
+  it('joined with the synced setup, this computer’s chord’s making way lost in a crash, and every synced chord deleted since: it stays, and joins the copy with its pinned tabs (S15 §13, the ninth review)', () => {
+    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    const mine = chordId(state);
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    db.write(opsForState(state));
+    drive(state, [{ t: 'tab.pin', nodeId: tab }]);
+    const synced = { name: 'Synced', icon: 'S', theme: THEME, rank: 'a1', profile: 'default', created: 1 };
+    db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
+    db.atomically(() => db.sync.merge([{ type: 'chord', id: 'synced', at: [Date.now() - 5000, 0, OTHER], set: synced }], Date.now()));
+    db.atomically(() => db.sync.addLocal('synced-setup'));
+    db.atomically(() => db.sync.stampJoinWindow('synced-setup', Date.now()));
+    db.sync.setMeta({ joining: false, makingWay: { to: 'synced' } });
+    // Its chord and pinned tab made way, out of the copy; then another computer deletes the synced chord.
+    expect(db.sync.syncedChords()).toEqual(['synced']);
+    db.atomically(() => db.sync.merge([{ type: 'chord', id: 'synced', at: [Date.now(), 0, OTHER], set: { deleted: true } }], Date.now()));
+    const way = db.sync.chordsMakingWay();
+    expect(way).toEqual({ chordIds: [mine], to: null });
+    const before = db.sync.outboxSize();
+    expect(db.atomically(() => db.sync.adoptChords(way!.chordIds))).toBe(2);
+    expect(db.sync.syncedChords()).toEqual([mine]);
+    // Sent, each as of its row, here.
+    expect(records(mine).map((r) => r.set['deleted'])).toEqual([false]);
+    expect(records(tab).map((r) => r.set['deleted'])).toEqual([false]);
+    expect(db.sync.outboxSize()).toBe(before + 2);
   });
 
   it('gone in a join’s window, here before it, though the copy hasn’t read it yet (a join refused partway, carried on): gone as of then', () => {

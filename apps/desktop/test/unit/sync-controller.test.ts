@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apply, seedState, thingKey, type DataRecord, type SegmentCursor, type State } from '@chord/core';
+import { apply, chordRecord, seedState, thingKey, type DataRecord, type SegmentCursor, type State } from '@chord/core';
 import { ChordDatabase } from '@chord/data/db';
 import { opsForState, opsFromPatches, type DataPush, type WriteOp } from '@chord/data';
 import { SyncController, type WorkerLike } from '../../src/data/sync';
@@ -164,6 +164,32 @@ describe('joining with Keep both, a change made here meanwhile', () => {
     expect(db.sync.meta.own).toMatchObject({ segment: 2 });
     expect([...db.sync.unappliedPages()].some((page) => page.has(thingKey('chord', id)))).toBe(false);
   });
+
+  it('Use the synced setup, its last synced chord deleted here while the join waited: this computer’s chords join the copy instead of being left out (S15 §13, the ninth review)', async () => {
+    let { state } = on({ snapshot: ['ok'] });
+    await controller!.handle({ type: 'sync.start', key: new Uint8Array(32), info: INFO });
+    const synced = Object.keys(state.chords)[0]!;
+    const windowId = Object.keys(state.windows)[0]!;
+    // Another chord of this computer's only, then the join: the copy's one synced chord is the first.
+    const made = apply(state, { t: 'chord.create', windowId, name: 'Mine', icon: 'M', theme: THEME }, ctx);
+    db.write(opsFromPatches(made.patches, made.state, state));
+    state = made.state;
+    const mine = Object.keys(state.chords).find((id) => id !== synced)!;
+    db.atomically(() => {
+      db.sync.clear();
+      // Made while sync was off, as far as the join knows: nothing of it waits to be sent.
+      (db as unknown as { sql(text: string): { run(): void } }).sql('DELETE FROM sync_outbox').run();
+      db.sync.setMeta({ on: true, joining: true, folder: dir, generation: 1, name: 'Desk', own: null, compactedAt: Date.now() - 1000 });
+      db.sync.merge([chordRecord(state.chords[synced]!, [Date.now() - 500, 0, OTHER])!], Date.now());
+    });
+    // Deleted here while the join waits.
+    const gone = apply(state, { t: 'chord.delete', chordId: synced }, ctx);
+    db.write(opsFromPatches(gone.patches, gone.state, state));
+    const reply = await controller!.handle({ type: 'sync.choose', mode: 'synced' });
+    expect(db.sync.meta.joining).toBe(false);
+    expect(db.sync.syncedChords()).toEqual([mine]);
+    expect(reply).toMatchObject({ replace: { to: mine, keep: [mine] } });
+  });
 });
 
 describe('a copy of a profile that never writes', () => {
@@ -305,6 +331,30 @@ describe('a quit or a crash, then a relaunch', () => {
     await controller.handle({ type: 'sync.reconcile' });
     await settle();
     expect(applied(none)).toBe('[]');
+  });
+
+  it('a crash just after joining with the synced setup, before its chord or the making way was written: its chord is pushed first, then this computer’s make way into it (S15 §13, the ninth review)', async () => {
+    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    const mine = Object.keys(state.chords)[0]!;
+    db.write(opsForState(state));
+    db.sync.setMeta({ on: true, folder: dir, generation: 1, name: 'Desk', own: { generation: 1, device: db.device(), segment: 1, size: 100, frames: 1 } });
+    // The synced setup's chord, read from the folder, and this computer's things joined to it: its chord made way.
+    const synced = chordRecord({ id: 'synced', profileId: 'default', name: 'Synced', icon: 'S', theme: THEME, rank: 'a1', createdAt: 1 }, [2000, 0, OTHER])!;
+    db.atomically(() => {
+      db.sync.merge([{ ...synced, set: { ...synced.set, deleted: false } }], Date.now());
+      db.sync.addLocal('synced-setup');
+      db.sync.setMeta({ makingWay: { to: 'synced' } });
+    });
+    // The next launch: the synced chord isn't here, so the making way waits for it, pushed after.
+    const pushes: DataPush[] = [];
+    controller = new SyncController(() => db, (push) => pushes.push(push), fake().make);
+    await controller.handle({ type: 'sync.reconcile', wait: true });
+    await settle();
+    const apply = pushes.findIndex((p) => p.push === 'sync.apply' && p.apply.chords.some((c) => c.id === 'synced'));
+    const way = pushes.findIndex((p) => p.push === 'sync.makeWay');
+    expect(apply).toBeGreaterThanOrEqual(0);
+    expect(way).toBeGreaterThan(apply);
+    expect(pushes[way]).toMatchObject({ chordIds: [mine], to: 'synced' });
   });
 });
 

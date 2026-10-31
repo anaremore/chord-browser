@@ -153,7 +153,11 @@ class Sim {
           for (const [field, value] of Object.entries(set)) if (field in before && same(before[field], value)) this.model.unchanged(name, key, field, op.at ?? 0);
         }
         if (set === null && had) was.set(key, had);
-        else if (set) was.delete(key);
+        else if (set === null && had === undefined) {
+          // What chord-data kept of it came from elsewhere than a write here (joining's rows, the drift check): its `was`, as it has it.
+          const kept = this.keptWas(c, key);
+          if (kept) was.set(key, kept);
+        } else if (set) was.delete(key);
         local.set(key, set && key === 'settings\nsettings' ? { ...had, ...set } : set);
       }
     };
@@ -172,6 +176,8 @@ class Sim {
     if (command.t === 'sync.apply' || command.t === 'sync.replace') this.model.applied(c.name, command, before, after, !this.joiningNow.has(c));
     // Yours count where chord-data stamps them (on, or joining: noted and stamped as the join ends), whatever the sim thinks.
     else if (c.life?.data?.db?.sync.meta.on) this.model.user(c.name, Date.now(), before, after, c.life.data.db.sync.meta.joining);
+    // Off: never synced as such, but a value typed then is as old as that, whatever brings it into sync later (I4).
+    else this.model.typed(Date.now(), before, after);
   }
 
   private unique(): string {
@@ -245,6 +251,18 @@ class Sim {
         }
         if (r.was !== null) kept.was.set(`${r.type}\n${r.id}`, JSON.parse(r.was) as SyncValues);
       }
+    } finally {
+      raw.close();
+    }
+  }
+
+  /** What chord-data keeps of a thing gone here (`sync_record.was`), as it has it now. */
+  private keptWas(c: Computer, key: string): SyncValues | null {
+    const [type, id] = key.split('\n') as [string, string];
+    const raw = new DatabaseSync(c.file, { readOnly: true });
+    try {
+      const row = raw.prepare('SELECT was FROM sync_record WHERE type = ? AND id = ?').get(type, id) as { was: string | null } | undefined;
+      return row?.was ? (JSON.parse(row.was) as SyncValues) : null;
     } finally {
       raw.close();
     }
@@ -871,6 +889,10 @@ class Sim {
         if (key === 'settings\nsettings' || waiting(key, set, copy)) continue;
         const here = mine.get(key);
         if (!here) {
+          // Only part of a tab or folder this computer never had (moved elsewhere, its making lost with a log put back
+          // and no one left to write it again): nothing to make it from (a tab's home) till that comes. One it has is
+          // filled from what it has.
+          if ((key.startsWith('tab\n') && !('pinnedUrl' in set)) || (key.startsWith('folder\n') && !('title' in set))) continue;
           this.fail(`I1 ${c.name} hasn't ${key.replace('\n', ' ')}, which its merged copy has`);
           continue;
         }
@@ -895,7 +917,7 @@ class Sim {
           const merged = copies.get(c)!.live.get(key);
           // Waiting for its chord or folder, which another change took away: kept in the copy, applied once it's back.
           if (merged && waiting(key, merged, copies.get(c)!.live)) continue;
-          this.fail(`I3 ${c.name} hasn't ${key.replace('\n', ' ')}, which no one deleted last [${this.recordOf(c, key)}]`);
+          this.fail(`I3 ${c.name} hasn't ${key.replace('\n', ' ')}, which no one deleted last [${this.recordOf(c, key)}] deleted: ${this.model.history(key, 'deleted')}`);
           continue;
         }
         // Waiting whole for its chord or folder: it stays as it was here meanwhile (S15 §13).
