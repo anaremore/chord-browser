@@ -30,12 +30,46 @@ export const HALF_LIFE_DAYS = 30;
 const DAY_MS = 86_400_000;
 const FRESH_USE_MS = 3_600_000;
 
-const fold = (s: string) => s.toLocaleLowerCase().replace(/ς/g, 'σ');
+/**
+ * Texts folded already, and titles' initials: the command bar matches every
+ * open tab's title and address on each keystroke (thousands of them, with
+ * many pinned), the same texts each time. At most this many of each.
+ */
+const MAX_REMEMBERED = 20_000;
+const foldedTexts = new Map<string, string>();
+const titleInitials = new Map<string, readonly string[]>();
+const remember = <T>(map: Map<string, T>, key: string, value: T): T => {
+  if (map.size >= MAX_REMEMBERED) map.clear();
+  map.set(key, value);
+  return value;
+};
+
+const fold = (s: string) => foldedTexts.get(s) ?? remember(foldedTexts, s, s.toLocaleLowerCase().replace(/ς/g, 'σ'));
 const isBoundary = (ch: string) => !/[\p{L}\p{N}]/u.test(ch);
 
+/** The last text split into terms, and its terms: asked again for each row a keystroke matches. */
+let lastTyped: string | null = null;
+let lastTerms: readonly string[] = [];
+
 /** What was typed, trimmed and split into folded words. */
-export function terms(typed: string): string[] {
-  return fold(typed.trim()).split(/\s+/u).filter(Boolean);
+export function terms(typed: string): readonly string[] {
+  if (typed !== lastTyped) {
+    lastTerms = fold(typed.trim()).split(/\s+/u).filter(Boolean);
+    lastTyped = typed;
+  }
+  return lastTerms;
+}
+
+/** The first letter of each of a folded title's words, in order. */
+function initialsOf(folded: string): readonly string[] {
+  const known = titleInitials.get(folded);
+  if (known) return known;
+  const chars = [...folded];
+  return remember(
+    titleInitials,
+    folded,
+    chars.filter((ch, i) => !isBoundary(ch) && (i === 0 || isBoundary(chars[i - 1]!))),
+  );
 }
 
 function bestMatch(term: string, text: string): number | null {
@@ -76,11 +110,11 @@ export function abbreviationScore(typed: string, title: string): number | null {
   const words = terms(typed);
   if (words.length !== 1 || [...words[0]!].length < 2) return null;
   const word = [...words[0]!];
-  const chars = [...fold(title)];
-  const initials = chars.filter((ch, i) => !isBoundary(ch) && (i === 0 || isBoundary(chars[i - 1]!)));
+  const folded = fold(title);
+  const initials = initialsOf(folded);
   if (word.every((ch, i) => initials[i] === ch)) return INITIALS_POINTS;
   let found = 0;
-  for (const ch of chars) if (found < word.length && ch === word[found]) found++;
+  for (const ch of folded) if (found < word.length && ch === word[found]) found++;
   return found === word.length ? SUBSEQUENCE_POINTS : null;
 }
 
