@@ -1,8 +1,8 @@
 /**
  * The Effects card (DESIGN.md §7.15): a site's Effects in the popover, over
  * the page, which shows each change as it's made. Dry · Wet, the presets,
- * hiding an element, your CSS, Ask Duet, and removing it all; your CSS, each
- * hidden element and each of Duet's patches with its own switch, and the
+ * hiding an element, your CSS, Ask Riff, and removing it all; your CSS, each
+ * hidden element and each of Riff's patches with its own switch, and the
  * latter two with an editor that opens in their row. Main keeps the site's
  * Effects and pushes them here (`effects:state`); every change goes back as an
  * action, checked again in main against the card's own site.
@@ -217,7 +217,7 @@ function HiddenEditor({ item, taken, waiting, onSent, done }: { item: Hidden; ta
   );
 }
 
-/** One of Duet's patches: its name and its CSS, which apply after a pause as your CSS does. */
+/** One of Riff's patches: its name and its CSS, which apply after a pause as your CSS does. */
 function PatchEditor({ item, waiting, done }: { item: Patch; waiting: Waiting; done(): void }) {
   const nameId = useId();
   const cssId = useId();
@@ -513,11 +513,11 @@ export function EffectsCard({ opened }: { opened: number }) {
         </section>
 
         {view.ask.available && (
-          <section className={styles.section} aria-label="Ask Duet">
+          <section className={styles.section} aria-label="Ask Riff">
             {busy ? (
               <div className={styles.working} role="status">
                 <span>
-                  {view.ask.provider ?? 'Duet'} is writing… {view.ask.startedAt !== null && <Seconds since={view.ask.startedAt} />}
+                  {view.ask.provider ?? 'Riff'} is writing… {view.ask.startedAt !== null && <Seconds since={view.ask.startedAt} />}
                 </span>
                 <button type="button" className={base.secondary} onClick={() => run({ do: 'stop' })}>
                   Stop
@@ -526,7 +526,7 @@ export function EffectsCard({ opened }: { opened: number }) {
             ) : (
               <label className={styles.ask}>
                 <DuetIcon {...ICON} aria-hidden />
-                <input value={ask} placeholder="Ask Duet to restyle this site" aria-label="Ask Duet to restyle this site" maxLength={500} onChange={(e) => setAsk(e.target.value)} onKeyDown={onAsk} />
+                <input value={ask} placeholder="Ask Riff to restyle this site" aria-label="Ask Riff to restyle this site" maxLength={500} onChange={(e) => setAsk(e.target.value)} onKeyDown={onAsk} />
               </label>
             )}
             {view.ask.error && (
@@ -538,7 +538,7 @@ export function EffectsCard({ opened }: { opened: number }) {
           </section>
         )}
         {view.duet.length > 0 && (
-          <ul className={styles.list} aria-label="From Duet">
+          <ul className={styles.list} aria-label="From Riff">
             {view.duet.map((d) => {
               const name = d.summary || d.ask;
               return (

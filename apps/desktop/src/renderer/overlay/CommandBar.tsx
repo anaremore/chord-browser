@@ -253,7 +253,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   // dropped; until the new one lands, the last reply keeps rows from flickering away. `@history`
   // asks even before anything is typed, as does `@archive`: recent pages, newest archived tabs.
   const [history, setHistory] = useState<HistorySearch | null>(null);
-  // @duet: Duet chats by their words, from chord-data.
+  // @duet: Riff chats by their words, from chord-data.
   const [duetHits, setDuetHits] = useState<DuetHit[]>([]);
   const duetFilter = scope?.kind === 'filter' && scope.filter === 'duet';
   useEffect(() => {
@@ -331,7 +331,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
 
   // A pasted or dropped image (DESIGN.md §7.3): its own rows instead of the rest.
   const [image, setImage] = useState<PastedImage | null>(null);
-  // Presenting mode (ARCHITECTURE.md §9): main answers nothing from history, the archive or Duet while it's on;
+  // Presenting mode (ARCHITECTURE.md §9): main answers nothing from history, the archive or Riff while it's on;
   // a reply that left before it started isn't shown either.
   const presenting = state.presenting !== null;
   const textResults = useMemo(
@@ -342,14 +342,14 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
     [session, query, state, windowId, history, scope, suggestions, duetHits, presenting],
   );
   const imageEngine = imageSearchFor(state.settings.searchEngine, state.settings.googleFree);
-  // Duet, where it can be asked: set up, reading pages (an image is one), this chord not turned off for it, and not a private window.
+  // Riff, where it can be asked: set up, reading pages (an image is one), this chord not turned off for it, and not a private window.
   const duetReady = Boolean(win && !win.private && state.settings.duet.enabled && !state.settings.duet.readsNothing && state.settings.duet.provider && !state.settings.duet.offChords.includes(win.activeChordId));
   const results = useMemo<Result[]>(() => {
     if (!image) return textResults;
     const search: Result = { kind: 'imageSearch', key: 'image-search', title: `Search ${imageEngine.label} for this image`, engine: imageEngine.engine };
     const words = query.trim();
-    const duet: Result = { kind: 'imageDuet', key: 'image-duet', title: words ? `Ask Duet: ${words}` : 'Ask Duet about this image' };
-    // With words typed, they're most likely a question for Duet.
+    const duet: Result = { kind: 'imageDuet', key: 'image-duet', title: words ? `Ask Riff: ${words}` : 'Ask Riff about this image' };
+    // With words typed, they're most likely a question for Riff.
     return duetReady ? (words ? [duet, search] : [search, duet]) : [search];
   }, [image, imageEngine.label, imageEngine.engine, textResults, duetReady, query]);
   const takeImage = (file: File | null) => {
@@ -587,7 +587,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   const label = scope ? scopeLabel(scope) : null;
   const placeholder = image
     ? duetReady
-      ? 'Press Enter to search, or ask Duet about it'
+      ? 'Press Enter to search, or ask Riff about it'
       : 'Press Enter to search by this image'
     : (label?.placeholder ?? (session.mode === 'split' ? 'Split with a tab or a page' : 'Search or enter address'));
   const ScopeIcon = scope ? scopeIcon(scope) : null;

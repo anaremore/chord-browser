@@ -13,7 +13,7 @@
  *   what came from another computer never goes back into this one's log.
  * - **What another computer wrote is untrusted.** `checkSyncRecord` takes only
  *   records of a synced type with an id and a stamp that make sense, within
- *   sizes; types sync never carries (history, Duet, zoom, permissions) are
+ *   sizes; types sync never carries (history, Riff, zoom, permissions) are
  *   dropped, and a newer Chord's are kept as they came, merged under the same
  *   rules, and written back, but never used. `planApply` reads each changed
  *   thing back through the codecs a Chord file's records pass, and the

@@ -61,7 +61,7 @@ describe('restoreState', () => {
     expect(restoreState(after, seed).settings).toMatchObject({ autoPip: true, autoPipDefaultOff: true });
   });
 
-  it('what Duet can read: Nothing and every scope come back as saved; anything else is the default', () => {
+  it('what Riff can read: Nothing and every scope come back as saved; anything else is the default', () => {
     const duet = (saved: Record<string, unknown>) => restoreState({ chords: [], nodes: [], windows: [], settings: { duet: saved } }, seed).settings.duet;
     expect(duet({ readsNothing: true, scope: 'every' })).toMatchObject({ readsNothing: true, scope: 'every' });
     expect(duet({ scope: 'all' })).toMatchObject({ readsNothing: false, scope: 'all' });

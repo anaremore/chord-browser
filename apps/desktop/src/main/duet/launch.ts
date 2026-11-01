@@ -1,5 +1,5 @@
 /**
- * How Duet starts a provider's CLI (ARCHITECTURE.md §11.1, §11.2): the
+ * How Riff starts a provider's CLI (ARCHITECTURE.md §11.1, §11.2): the
  * binary itself with shell:false, or, for Claude Code or Codex installed only
  * inside WSL (Windows), the same binary through `wsl.exe -e`. WSL needs three
  * translations, all made here: Windows paths become the distro's paths
@@ -220,7 +220,7 @@ export function wslTarget(probe: WslProbe, argv: string[]): WslTarget {
 
 export const wslLaunch = (target: WslTarget, env: NodeJS.ProcessEnv = process.env): Launch => ({ command: wslExe(), prefix: [], env: { ...env }, wsl: target });
 
-/** A target as saved in Duet's panel.json, checked field by field; null if it isn't one. */
+/** A target as saved in Riff's panel.json, checked field by field; null if it isn't one. */
 export function asWslTarget(value: unknown): WslTarget | null {
   const t = value as Partial<WslTarget> | null;
   const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0;

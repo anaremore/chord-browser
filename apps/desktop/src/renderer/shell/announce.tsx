@@ -1,6 +1,6 @@
 /**
  * What the shell says to screen readers that isn't on screen as text
- * (DESIGN.md §10): chord switches, Duet finishing an answer, a row picked up
+ * (DESIGN.md §10): chord switches, Riff finishing an answer, a row picked up
  * or moved with the keyboard. One polite live region for the window, so
  * announcements queue instead of talking over each other.
  */

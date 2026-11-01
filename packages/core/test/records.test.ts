@@ -139,7 +139,7 @@ describe('every type, model → record → model', () => {
     ['a site’s zoom', zoomRecord('docs.example', 1.25, at), zoomFromRecord, { host: 'docs.example', factor: 1.25 }],
     ['a site’s permissions', permissionRecord('https://meet.example', { camera: 'allow', notifications: 'block' }, at)!, permissionFromRecord, { origin: 'https://meet.example', decisions: { camera: 'allow', notifications: 'block' } }],
     ['a history page, visits oldest first', pageRecord({ url: 'https://news.test/a?b=1', title: 'A', visits: [30, 10, 20], typed: 2 }), pageFromRecord, { url: 'https://news.test/a?b=1', title: 'A', visits: [10, 20, 30], typed: 2 }],
-    ['a Duet chat, without its provider session', threadRecord(thread), threadFromRecord, { ...thread, providerSessionId: null }],
+    ['a Riff chat, without its provider session', threadRecord(thread), threadFromRecord, { ...thread, providerSessionId: null }],
     ['an image, without Codex’s own copy', imageRecord(image, 'iVBORw0KGgo=', '/9j/4AAQ'), imageFromRecord, { image: { id: image.id, mime: 'image/png', width: 640, height: 480, prompt: 'A lighthouse at dusk' }, data: 'iVBORw0KGgo=', thumb: '/9j/4AAQ' }],
   ])('%s', (_what, r, decode, expected) => {
     expect(isDataRecord(viaFile(r))).toBe(true);
@@ -195,7 +195,7 @@ describe('never in a record', () => {
     ['a folder', nodeRecord(folder, at), ['pos', 'title', 'collapsed', 'created']],
     ['a split', nodeRecord(split, at), ['pos', 'direction', 'sizes', 'created']],
     ['a Favorite', favoriteRecord(favorite, at, null), ['url', 'title', 'icon', 'rank', 'created']],
-    ['a Duet chat', threadRecord(thread), ['chord', 'title', 'provider', 'model', 'scope', 'created', 'updated', 'lastUsed']],
+    ['a Riff chat', threadRecord(thread), ['chord', 'title', 'provider', 'model', 'scope', 'created', 'updated', 'lastUsed']],
     ['an image', imageRecord(image, 'AAAA', null), ['mime', 'width', 'height', 'data', 'thumb', 'prompt']],
   ])('%s has exactly its fields', (_what, r, fields) => {
     expect(Object.keys(r.set)).toEqual(fields);
@@ -243,7 +243,7 @@ describe('which settings travel', () => {
   it.each<[string, string, unknown]>([
     ['the search engine', 'searchEngine', 'duckduckgo'],
     ['a group’s part, by a dotted name', 'adBlocking.offSites', ['nytimes.com']],
-    ['Duet’s Never list', 'duet.neverSites', ['https://bank.example']],
+    ['Riff’s Never list', 'duet.neverSites', ['https://bank.example']],
     ['the proxy for every chord, whole (exported, never synced)', 'proxy', { mode: 'pac', server: null, pac: 'https://wpad.corp.example/proxy.pac' }],
     ['whether exports are encrypted', 'encryptExports', true],
     ['Windows’ and Linux’s shortcuts, as their family', 'shortcuts.other', { 'tab.new': ['Ctrl+Alt+T'] }],
@@ -259,8 +259,8 @@ describe('which settings travel', () => {
     ['the one-time switch-off', 'autoPipDefaultOff'],
     ['the mini window’s size', 'miniWindowSize'],
     ['developer tools’ side', 'devtools.side'],
-    ['Duet’s app', 'duet.provider'],
-    ['Duet’s model', 'duet.model'],
+    ['Riff’s app', 'duet.provider'],
+    ['Riff’s model', 'duet.model'],
     ['themes, which are records of their own', 'themes'],
     ['a Mac’s shortcuts, on Windows', 'shortcuts.mac'],
   ])('out: %s', (_what, field) => {

@@ -327,8 +327,8 @@ test('page-first keys reach Chord only when the page passes; reserved keys fire 
     await press('S');
     await expect(sidebar).toBeVisible();
 
-    // Ctrl+E has no item in the ⋯ menu, only a hidden key: from the page it still shows and hides Duet.
-    const duet = shell.getByRole('complementary', { name: 'Duet' });
+    // Ctrl+E has no item in the ⋯ menu, only a hidden key: from the page it still shows and hides Riff.
+    const duet = shell.getByRole('complementary', { name: 'Riff' });
     await press('E');
     await expect(duet).toBeVisible();
     await press('E');

@@ -1,10 +1,10 @@
 /**
- * Duet fills forms (decision D16; ARCHITECTURE.md §11.6, DESIGN.md §7.8): the
- * pure parts. What a page's form looks like to Duet (each field's label, kind,
+ * Riff fills forms (decision D16; ARCHITECTURE.md §11.6, DESIGN.md §7.8): the
+ * pure parts. What a page's form looks like to Riff (each field's label, kind,
  * name and autocomplete hint, choices, and whether it's required: never what's
  * in it), which fields are never offered (passwords, payment details, one-time
  * codes, ID numbers, hidden fields), and how values map back to the fields
- * Chord read, checked when Duet proposes them and again when you press Fill.
+ * Chord read, checked when Riff proposes them and again when you press Fill.
  * The page side, which reads and fills from Chord's isolated world, is
  * main/duet/forms.ts. Everything here is unit-tested.
  */
@@ -12,14 +12,14 @@
 // Core compiles without DOM types; URL is a global in Node and every browser.
 declare const URL: new (url: string) => { origin: string; href: string; hash: string };
 
-/** Fields Duet is offered from one read: a real form has far fewer. */
+/** Fields Riff is offered from one read: a real form has far fewer. */
 export const DUET_FORM_MAX_FIELDS = 100;
 /** Fields the page script describes (offered and left out together); past it, it stops. */
 export const DUET_FORM_MAX_CONTROLS = 300;
 /** Controls the page script looks at, and how long it may look, before it stops: a page with 5,000 inputs stays responsive. */
 export const DUET_FORM_SCAN = 2000;
 export const DUET_FORM_SCAN_MS = 250;
-/** Choices listed for one select or radio group. One with more isn't offered (it's not a form field you'd ask Duet for). */
+/** Choices listed for one select or radio group. One with more isn't offered (it's not a form field you'd ask Riff for). */
 export const DUET_FORM_MAX_OPTIONS = 400;
 /** The longest value Chord puts in a one-line field, and in a text area (a field's own maxlength can be less). */
 export const DUET_FORM_TEXT_MAX = 500;
@@ -110,7 +110,7 @@ export function sensitiveField(c: Pick<FormControl, 'type' | 'autocomplete' | 'n
 }
 
 /**
- * Whether Duet may be offered a field, and as what: hidden ones never (a
+ * Whether Riff may be offered a field, and as what: hidden ones never (a
  * `type=hidden` field, or one not on screen), nor locked ones, nor sensitive
  * ones; then text inputs, text areas, single-choice selects, checkboxes and
  * radio groups. Everything else (files, ranges, colors, multiple-choice
@@ -128,7 +128,7 @@ export function classifyField(c: FormControl): { kind: DuetFieldKind } | { leftO
   return { leftOut: 'unsupported' };
 }
 
-/** A field Duet may fill, as Chord keeps it from a read. */
+/** A field Riff may fill, as Chord keeps it from a read. */
 export interface DuetFormField {
   /** Chord's id for it: unique in the chat, so an id from an earlier read is caught, never taken for another field. */
   id: string;
@@ -147,14 +147,14 @@ export interface DuetFormField {
   form: number;
 }
 
-/** A form as Duet read it: the fields it may fill, and the ones you'd see that it may not. */
+/** A form as Riff read it: the fields it may fill, and the ones you'd see that it may not. */
 export interface DuetFormRead {
   url: string;
   forms: string[];
   fields: DuetFormField[];
   /** Sensitive fields on screen: the card names them, so you fill them yourself. */
   leftOut: { label: string; why: DuetFieldSensitive }[];
-  /** The page had more than Duet is offered, or took too long to look through. */
+  /** The page had more than Riff is offered, or took too long to look through. */
   truncated: boolean;
 }
 
@@ -201,7 +201,7 @@ export function cleanFormPage(raw: unknown): { url: string; forms: string[]; con
 
 const SENSITIVE_NAMES: Record<DuetFieldSensitive, string> = { password: 'Password', payment: 'Card details', code: 'One-time code', identity: 'ID number' };
 
-/** A read's fields: those Duet may fill, numbered from `firstId`, and the sensitive ones on screen, named for the card. */
+/** A read's fields: those Riff may fill, numbered from `firstId`, and the sensitive ones on screen, named for the card. */
 export function formRead(page: { url: string; forms: string[]; controls: readonly FormControl[]; truncated: boolean }, firstId: number): DuetFormRead {
   const fields: DuetFormField[] = [];
   const leftOut: DuetFormRead['leftOut'] = [];
@@ -292,14 +292,14 @@ export function formResult(read: DuetFormRead, page: { ref: string; retrievedAt:
     fields.push(entry);
   }
   const notes = [
-    fields.length === 0 ? 'There are no fields Duet can fill on this page.' : '',
+    fields.length === 0 ? 'There are no fields Riff can fill on this page.' : '',
     read.leftOut.length ? 'Fields for passwords, payment details, one-time codes and ID numbers are left out: Chord never fills them, so the user fills those themselves.' : '',
-    cut || read.truncated ? `This page has more fields than Duet is given at once: these are the first ${fields.length}.` : '',
+    cut || read.truncated ? `This page has more fields than Riff is given at once: these are the first ${fields.length}.` : '',
   ].filter(Boolean);
   return JSON.stringify({ ...head, fields, ...(read.leftOut.length ? { left_out: counts } : {}), ...(notes.length ? { note: notes.join(' ') } : {}) });
 }
 
-/** A field on the fill card: what Chord read of it, and the value that goes in (Duet's, then yours). */
+/** A field on the fill card: what Chord read of it, and the value that goes in (Riff's, then yours). */
 export interface DuetFillField {
   id: string;
   kind: DuetFieldKind;
@@ -343,7 +343,7 @@ const FORMATS: Record<string, { test(value: string): boolean; like: string }> = 
  * A value for a field, as Chord will put it in: text that fits (one line for
  * inputs, the field's own maxlength, a format the page won't throw away), one
  * of a select's or radio group's choices (by its label, any case), or true or
- * false for a checkbox. The problem says why not, for Duet or for the card.
+ * false for a checkbox. The problem says why not, for Riff or for the card.
  */
 export function fieldValue(field: Pick<DuetFormField, 'kind' | 'type' | 'maxLength' | 'options'>, value: unknown): { ok: true; value: string | boolean; choice?: number } | { ok: false; problem: string } {
   if (field.kind === 'checkbox') return typeof value === 'boolean' ? { ok: true, value } : { ok: false, problem: 'needs true (checked) or false (not checked)' };
@@ -371,7 +371,7 @@ export function fieldValue(field: Pick<DuetFormField, 'kind' | 'type' | 'maxLeng
  * gave an id (one from an earlier read, or one never given, is refused), at
  * most DUET_FORM_MAX_FIELDS, none twice, each value one the field takes, and
  * the page still at the address it was read at. Every problem comes back at
- * once, so Duet can fix them all.
+ * once, so Riff can fix them all.
  */
 export function proposedFill(read: DuetFormRead, args: Record<string, unknown>, currentUrl: string): { ok: true; fields: DuetFillField[] } | { ok: false; problems: string[] } {
   if (!samePage(read.url, currentUrl)) return { ok: false, problems: ['The page changed since you read its form: it’s at a different address now. Read the form again.'] };
@@ -415,7 +415,7 @@ export interface FillWrite {
 
 /**
  * The card's fields as you left them, checked again when you press Fill
- * (the panel is trusted no more than Duet): only fields on the card, each
+ * (the panel is trusted no more than Riff): only fields on the card, each
  * value one the field takes. The problems name each field by its label.
  */
 export function fillWrites(read: DuetFormRead, card: readonly DuetFillField[], edits: readonly { id: string; value: string | boolean }[]): { ok: true; writes: FillWrite[] } | { ok: false; problems: string[] } {
@@ -455,7 +455,7 @@ export function fillLeftOutNote(leftOut: readonly { label: string; why: DuetFiel
 export function fillChangedNote(labels: readonly string[]): string {
   if (labels.length === 0) return '';
   const them = labels.length === 1 ? 'it' : 'them';
-  return `${list(labels)} changed as the other fields went in, so Chord left ${them} alone. Ask Duet again for ${them}.`;
+  return `${list(labels)} changed as the other fields went in, so Chord left ${them} alone. Ask Riff again for ${them}.`;
 }
 
 /** "4 fields", "1 field". */

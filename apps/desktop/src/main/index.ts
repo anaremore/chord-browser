@@ -247,7 +247,7 @@ function ownProxyOf(sender: WebContents): string | null {
 const fromPrivateWindow = (sender: WebContents): boolean => isPrivateWindow(browser!.store.state, senderWindow(sender).id);
 
 /**
- * Presenting mode (ARCHITECTURE.md §9): history, the archive and Duet's chats
+ * Presenting mode (ARCHITECTURE.md §9): history, the archive and Riff's chats
  * answer nothing, here where they come from, so a keystroke the command bar
  * sends before it hears the mode is on can't show one either.
  */
@@ -267,7 +267,7 @@ function registerIpc(): void {
     if (command.t === 'import.undo') return fileImporter?.owns(command.importId) ? fileImporter.undo(command.importId) : importer!.undo(command.importId);
     // A toast's Undo for Effects: they live in main, not in the store.
     if (command.t === 'effects.undo') return browser!.effects.undo(command.token);
-    // A toast's Undo for a form Duet filled: the page puts back what it had (main/duet).
+    // A toast's Undo for a form Riff filled: the page puts back what it had (main/duet).
     if (command.t === 'duet.undoFill') return duet?.undoFill(command.token);
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
@@ -569,7 +569,7 @@ if (!app.requestSingleInstanceLock()) {
     // An import stops, and its copies of another browser's files go; an export stops, and its unfinished file goes (at most 2 s, like the rest).
     // Sync writes what's waiting to its folder.
     const imports = Promise.race([Promise.all([importer?.quit(), exporter?.quit(), fileImporter?.quit(), syncService?.quit()]).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 2000))]);
-    // Duet first: replies in flight are kept as interrupted, and provider processes end. Ad blocking
+    // Riff first: replies in flight are kept as interrupted, and provider processes end. Ad blocking
     // finishes a change under way (no control page may be open as Electron tears down) and ends its workers.
     // Chord Player quits by itself once Chord's channel closes: nothing to wait for.
     browser?.player.stopUpdates();
@@ -891,7 +891,7 @@ if (!app.requestSingleInstanceLock()) {
     // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
     // from before gets it switched off once, through the store, so it's saved like any other change.
     if (!browser.store.state.settings.autoPipDefaultOff) browser.store.dispatch({ t: 'settings.set', settings: { autoPip: false, autoPipDefaultOff: true } });
-    // Effects' Ask Duet: Duet's own reading rules, one request at a time, nothing kept.
+    // Effects' Ask Riff: Riff's own reading rules, one request at a time, nothing kept.
     browser.effects.duet = {
       available: (windowId, url) => duet!.effectsProvider(windowId, url),
       ask: (request) => duet!.oneShot(request),

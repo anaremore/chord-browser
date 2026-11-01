@@ -2,7 +2,7 @@
  * Hostile Chord files (S15 §5, §9): everything from a file is untrusted. Each
  * file here is read as the import process reads it (`openDataFile`, a stream
  * of pieces, the records' codecs, the merge planner), and what would reach the
- * store, Effects' sanitizer, chord-data or Duet's images folder is checked.
+ * store, Effects' sanitizer, chord-data or Riff's images folder is checked.
  */
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -68,7 +68,7 @@ describe('a hostile Chord file', () => {
     ['data:', 'data:text/html,<script>alert(1)</script>'],
     ['file:', 'file:///etc/passwd'],
     ['chrome:', 'chrome://settings'],
-  ])('Duet: a %s link in a citation or an attachment is dropped; the message stays', (_scheme, url) => {
+  ])('Riff: a %s link in a citation or an attachment is dropped; the message stays', (_scheme, url) => {
     const message = messageFromRecord({
       type: 'message',
       id: 'm1',
@@ -91,7 +91,7 @@ describe('a hostile Chord file', () => {
     expect(user?.body).toMatchObject({ role: 'user', attachments: [] });
   });
 
-  it('Duet: a citation that isn’t one (no handle, a huge quote, a page that isn’t a number) is dropped', () => {
+  it('Riff: a citation that isn’t one (no handle, a huge quote, a page that isn’t a number) is dropped', () => {
     const message = messageFromRecord({
       type: 'message',
       id: 'm1',

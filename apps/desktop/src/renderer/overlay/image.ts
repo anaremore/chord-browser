@@ -11,7 +11,7 @@
 export interface PastedImage {
   preview: string;
   bytes: Uint8Array<ArrayBuffer>;
-  /** At most 240 px a side, for Duet's panel. */
+  /** At most 240 px a side, for Riff's panel. */
   thumb: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;

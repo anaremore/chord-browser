@@ -2,7 +2,7 @@
  * What reader view runs in a page (ARCHITECTURE.md §9), always in Chord's
  * own isolated world: it shares the page's DOM but none of its scripts, so
  * the page can't see, call or tamper with any of it. Mozilla's Readability
- * (Apache-2.0, shipped in licenses/) goes in as its source text, as Duet's
+ * (Apache-2.0, shipped in licenses/) goes in as its source text, as Riff's
  * extractor does: a bundled function's toString() may be renamed or wrapped.
  *
  * - READABLE_SCRIPT asks Readability's `isProbablyReaderable` whether the
@@ -16,7 +16,7 @@
 import READABILITY from '@mozilla/readability/Readability.js?raw';
 import READERABLE from '@mozilla/readability/Readability-readerable.js?raw';
 
-/** Chord's isolated world for reader view (Duet reads in 4400; extension popups' sizer uses 4321). */
+/** Chord's isolated world for reader view (Riff reads in 4400; extension popups' sizer uses 4321). */
 export const READER_WORLD = 4410;
 
 /** Only an HTML document can hold an article (not a PDF in its viewer, an image or plain text). */

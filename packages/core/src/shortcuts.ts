@@ -137,8 +137,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('chord.delete', 'Delete this chord', 'page-first', []),
   s('chord.separateSignIns', 'Keep sign-ins separate for this chord', 'page-first', []),
   s('chord.proxy', 'Proxy for this chord…', 'page-first', []),
-  // Duet (DESIGN.md §13.1): page-first, so web editors that use ⌘E / Ctrl+E keep it; Chrome uses these keys too.
-  s('duet.toggle', 'Show or hide Duet', 'page-first', ['Mod+E']),
+  // Riff (DESIGN.md §13.1): page-first, so web editors that use ⌘E / Ctrl+E keep it; Chrome uses these keys too.
+  s('duet.toggle', 'Show or hide Riff', 'page-first', ['Mod+E']),
   // Window and view
   s('window.new', 'New window', 'reserved', ['Mod+N']),
   s('window.newPrivate', 'New private window', 'reserved', ['Mod+Shift+N']),

@@ -1,8 +1,8 @@
-// A stand-in for `codex app-server` in Duet's adapter tests: JSON-RPC without the "jsonrpc"
+// A stand-in for `codex app-server` in Riff's adapter tests: JSON-RPC without the "jsonrpc"
 // field, one message per line (research §3.2). It calls Chord's dynamic tool, asks to change a
 // file (Chord must decline), and, for "run", produces a commandExecution item (the tripwire).
 // Asked to draw, it makes an image as Codex's image tool does (when Chord left the tool on),
-// saving its own copy under CODEX_HOME/generated_images. Duet's E2E tests run it as Codex too
+// saving its own copy under CODEX_HOME/generated_images. Riff's E2E tests run it as Codex too
 // (CHORD_DUET_CODEX), so it answers `--version` and `login status` the way codex-cli does.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

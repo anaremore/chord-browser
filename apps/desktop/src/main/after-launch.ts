@@ -1,6 +1,6 @@
 /**
  * Work the first window doesn't need waits until launch is over (ARCHITECTURE.md
- * §1): sweeps of old data, and looking for Duet's apps. Until then main is busy
+ * §1): sweeps of old data, and looking for Riff's apps. Until then main is busy
  * serving the window's views their files and starting its first page, and
  * anything alongside slows them down.
  *

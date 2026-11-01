@@ -1,6 +1,6 @@
 /**
- * Images in Duet's chats, kept with them: `<userData>/duet/images/<id>.jpg`
- * (or `.png`, `.webp`), and for one you gave Duet (a pasted image, a
+ * Images in Riff's chats, kept with them: `<userData>/duet/images/<id>.jpg`
+ * (or `.png`, `.webp`), and for one you gave Riff (a pasted image, a
  * screenshot) `<id>.thumb.jpg`, what the panel shows. One Codex made has no
  * thumbnail: the panel shows the image itself, from chord://shell/duet-image/
  * (`file`). Deleted with their chat, with the copy Codex saved of one it made.
@@ -56,7 +56,7 @@ export function isCodexCopy(path: string, platform: NodeJS.Platform = process.pl
 export class DuetImages {
   constructor(private readonly dir: string) {}
 
-  /** `thumb`: for an image you gave Duet; one Codex made shows itself. */
+  /** `thumb`: for an image you gave Riff; one Codex made shows itself. */
   async save(image: DuetImage, bytes: Uint8Array, thumb?: Uint8Array): Promise<void> {
     if (!ID.test(image.id)) return;
     await mkdir(this.dir, { recursive: true });

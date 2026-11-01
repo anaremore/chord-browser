@@ -7,7 +7,7 @@
  * the scroll, so a capture can reach past the screen.
  */
 
-/** Chord's isolated world for screenshots (Duet reads in 4400, reader view in 4410). */
+/** Chord's isolated world for screenshots (Riff reads in 4400, reader view in 4410). */
 export const SHOT_WORLD = 4420;
 
 const DESCRIBE = String.raw`

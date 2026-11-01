@@ -96,8 +96,8 @@ describe('what a site has', () => {
   it('is summed up for Settings, with how many are switched off', () => {
     const hidden = [hiddenAt('#a'), hiddenAt('#b')];
     const duet = [patch('1', '')];
-    expect(effectsSummary(site({ css: 'p{}', hidden, presets: ['dark', 'no-sticky'], duet }))).toBe('Your CSS · 2 hidden · Dark · No sticky bars · 1 from Duet');
-    expect(effectsSummary(site({ css: 'p{}', cssOn: false, hidden: [hidden[0]!, { ...hidden[1]!, on: false }], duet: [{ ...duet[0]!, on: false }] }))).toBe('Your CSS · 2 hidden · 1 from Duet · 3 off');
+    expect(effectsSummary(site({ css: 'p{}', hidden, presets: ['dark', 'no-sticky'], duet }))).toBe('Your CSS · 2 hidden · Dark · No sticky bars · 1 from Riff');
+    expect(effectsSummary(site({ css: 'p{}', cssOn: false, hidden: [hidden[0]!, { ...hidden[1]!, on: false }], duet: [{ ...duet[0]!, on: false }] }))).toBe('Your CSS · 2 hidden · 1 from Riff · 3 off');
     // Your CSS emptied and off isn't counted: there's nothing of it to be off.
     expect(effectsSummary(site({ cssOn: false, presets: ['dark'] }))).toBe('Dark');
     expect(effectsSummary(site())).toBe('');
@@ -170,7 +170,7 @@ describe('cleanSiteEffects', () => {
 describe('the record (Your data, S15 §1)', () => {
   const at: Stamp = [1234, 0, '9f2c4e1a7b3d5c60'];
 
-  it('round-trips a site with each item’s switch, without what main inserts and with new ids for Duet’s patches', () => {
+  it('round-trips a site with each item’s switch, without what main inserts and with new ids for Riff’s patches', () => {
     const before = site({
       wet: false,
       css: 'h1 { color: red }',
@@ -247,7 +247,7 @@ describe('the record (Your data, S15 §1)', () => {
   });
 });
 
-describe('Ask Duet', () => {
+describe('Ask Riff', () => {
   it.each<[string, string, { css: string; summary: string } | null]>([
     ['plain JSON', '{"css": "h1 { color: green }", "summary": "Green headline"}', { css: 'h1 { color: green }', summary: 'Green headline' }],
     ['in a fence', 'Here you go:\n```json\n{"css":"p{}","summary":"x"}\n```', { css: 'p{}', summary: 'x' }],

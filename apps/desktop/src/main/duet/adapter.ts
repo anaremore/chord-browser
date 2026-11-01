@@ -45,14 +45,14 @@ export interface SessionOptions {
   /** An empty Chord-owned folder: no project instructions, hooks or MCP servers load from it. */
   cwd: string;
   model: string | null;
-  /** Duet's instructions, already written to `instructionsFile` (0600) for Claude. */
+  /** Riff's instructions, already written to `instructionsFile` (0600) for Claude. */
   instructions: string;
   instructionsFile: string;
   /** A provider session to resume, or null to start one (Claude uses `newSessionId`). */
   resumeId: string | null;
   newSessionId: string;
   tools: readonly DuetToolSpec[];
-  /** Codex's image tool is on (Settings → Duet). */
+  /** Codex's image tool is on (Settings → Riff). */
   images?: boolean;
 }
 
@@ -99,7 +99,7 @@ export function errorCopy(provider: DuetProvider, kind: ProviderErrorKind, detai
     case 'model':
       return `That model isn't available on your ${name} account. Pick another in the model menu.`;
     case 'tripwire':
-      return `${name} tried something Duet doesn't allow in browse mode, so Duet stopped the reply.`;
+      return `${name} tried something Riff doesn't allow in browse mode, so Riff stopped the reply.`;
     case 'crashed':
       return `${name} stopped unexpectedly.${detail ? ` ${detail}` : ''} Your message is still here: try again.`;
     default:

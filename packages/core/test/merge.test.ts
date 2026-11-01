@@ -467,7 +467,7 @@ describe('the merge planner', () => {
     ['a first run, as it is', () => undefined, NOTHING, {}, true],
     ['a first run that answered Safe Browsing’s notice and looked at a few pages', () => undefined, { pages: FRESH_PAGES, chats: 0 }, { safeBrowsing: false, safeBrowsingAsked: true, autoPip: false }, true],
     ['nothing known of history or chats', () => undefined, null, {}, false],
-    ['a Duet chat', () => undefined, { pages: 0, chats: 1 }, {}, false],
+    ['a Riff chat', () => undefined, { pages: 0, chats: 1 }, {}, false],
     ['more history than a few pages', () => undefined, { pages: FRESH_PAGES + 1, chats: 0 }, {}, false],
     ['a second Today tab', (s) => void (s.nodes['two'] = tab('two', 'first', { section: 'today', pinnedUrl: null, rank: 'a2' })), NOTHING, {}, false],
     ['a pinned tab', (s) => void (s.nodes['pin'] = tab('pin', 'first')), NOTHING, {}, false],
@@ -508,7 +508,7 @@ describe('what an import says it brought', () => {
   it.each<[Partial<typeof none>, string]>([
     [{ chords: 2, tabs: 40, favorites: 3, pages: 3000 }, 'Imported 2 chords, 40 tabs, 3 Favorites and 3,000 pages of history'],
     [{ tabs: 1 }, 'Imported 1 tab'],
-    [{ effects: 2, settings: 1, chats: 1 }, 'Imported Effects for 2 sites, 1 setting and 1 Duet chat'],
+    [{ effects: 2, settings: 1, chats: 1 }, 'Imported Effects for 2 sites, 1 setting and 1 Riff chat'],
     [{ other: 4 }, 'Imported your setup'],
     [{}, 'Everything in the file was here already'],
   ])('%j → %s', (counts, text) => {

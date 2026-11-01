@@ -1,6 +1,6 @@
 /**
- * A Duet chat's images from a Chord file (docs/decisions/S15-your-data.md §5),
- * written by the import process beside Duet's own (main/duet/images.ts). A
+ * A Riff chat's images from a Chord file (docs/decisions/S15-your-data.md §5),
+ * written by the import process beside Riff's own (main/duet/images.ts). A
  * file can say anything: an image record must really be the picture it says,
  * and its id must be no file's here. Each file is named to main before it's
  * written, so the import's Undo deletes exactly what it wrote.
@@ -12,7 +12,7 @@ import { imageInfo } from '../main/duet/images';
 
 const EXTENSIONS: Record<DuetImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 
-/** An image file an import may write, and so its Undo delete: a Duet image id's picture or thumbnail, a name, never a path. */
+/** An image file an import may write, and so its Undo delete: a Riff image id's picture or thumbnail, a name, never a path. */
 export const IMAGE_FILE = /^[0-9a-f]{24}\.(jpg|png|webp|thumb\.jpg)$/;
 
 /** Every file an image id can have here: its picture, of any type, and its thumbnail. */
@@ -27,7 +27,7 @@ export interface ImageWriter {
 }
 
 /**
- * An image kept with Duet's if it's PNG, JPEG or WebP by its bytes, of the
+ * An image kept with Riff's if it's PNG, JPEG or WebP by its bytes, of the
  * type its record names, and no file of its id is here, of any type (its id,
  * checked by `imageFromRecord`, is the files' name); its thumbnail only if
  * that's really a JPEG. Returns the files it wrote: the picture, and the

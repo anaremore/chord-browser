@@ -1,5 +1,5 @@
 /**
- * Reading a page for Duet (ARCHITECTURE.md §11.4). Runs in Chord's own
+ * Reading a page for Riff (ARCHITECTURE.md §11.4). Runs in Chord's own
  * isolated world, so page scripts can't see or tamper with it, and returns
  * the page's visible text as light Markdown. Never included: form-field
  * values (input, textarea, select: passwords, card numbers and one-time codes
@@ -13,7 +13,7 @@
 import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
 
-/** Chord's isolated world for Duet's reads (extension popups' sizer uses 4321). */
+/** Chord's isolated world for Riff's reads (extension popups' sizer uses 4321). */
 export const DUET_WORLD = 4400;
 
 export interface PageRead {
@@ -80,7 +80,7 @@ export const EXTRACT_SCRIPT = String.raw`(() => {
   return { title: document.title, url: location.href, contentType: document.contentType, text, selection };
 })()`;
 
-/** How long a page may take to be read or pictured for Duet: a long page is slow, a hung one never answers. */
+/** How long a page may take to be read or pictured for Riff: a long page is slow, a hung one never answers. */
 const READ_MS = 8000;
 
 export async function readPage(contents: WebContents): Promise<PageRead | null> {

@@ -1,5 +1,5 @@
 /**
- * The PDF reader utility process (ARCHITECTURE.md §11.4): Duet hands it one
+ * The PDF reader utility process (ARCHITECTURE.md §11.4): Riff hands it one
  * PDF's bytes and gets back each page's text. A file from the web is parsed
  * here rather than in main, and the process is thrown away after each read,
  * so a hostile or enormous PDF costs this process at most (main also stops it

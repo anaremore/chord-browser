@@ -37,7 +37,7 @@ const message = (id: string, threadId: string, text: string, role: 'user' | 'ass
   body: role === 'user' ? { role, text, attachments: [] } : { role, text, citations: [], status: 'done' },
 });
 
-describe('Duet store (migration 9)', () => {
+describe('Riff store (migration 9)', () => {
   it('keeps threads per chord, newest first, with their messages and scope', () => {
     db.duet({ op: 'saveThread', thread: thread('a', 1) });
     db.duet({ op: 'saveThread', thread: { ...thread('b', 2), scope: 'chord' } });
@@ -83,7 +83,7 @@ describe('Duet store (migration 9)', () => {
     expect(db.duet({ op: 'deleteAll' }).removed?.map((t) => t.id)).toEqual(['new']);
   });
 
-  it('upgrades a version-8 profile (site zoom, no Duet yet), keeping its zoom', () => {
+  it('upgrades a version-8 profile (site zoom, no Riff yet), keeping its zoom', () => {
     db.close();
     const file = join(dir, 'v8.db');
     const v8 = new DatabaseSync(file);
@@ -93,7 +93,7 @@ describe('Duet store (migration 9)', () => {
     v8.close();
 
     db = new ChordDatabase(file);
-    // Upgraded through Duet's migration to the latest (later features add their own).
+    // Upgraded through Riff's migration to the latest (later features add their own).
     expect(db.version).toBe(MIGRATIONS.length);
     db.duet({ op: 'saveThread', thread: thread('a', 1) });
     db.duet({ op: 'saveMessage', message: message('m1', 'a', 'Hello after the upgrade') });

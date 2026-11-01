@@ -1,5 +1,5 @@
 /**
- * Duet, browse mode (ARCHITECTURE.md §11, DESIGN.md §7.8): the pure parts.
+ * Riff, browse mode (ARCHITECTURE.md §11, DESIGN.md §7.8): the pure parts.
  * Threads and messages as Chord stores them (Chord's transcript is the source
  * of truth; a provider's session is a cache), the tool registry with its
  * tiers, and the prompt-injection rules from docs/research/duet.md §6 that can
@@ -17,7 +17,7 @@ export const DUET_PROVIDERS: readonly DuetProvider[] = ['claude', 'codex'];
 export const DUET_PROVIDER_NAMES: Record<DuetProvider, string> = { claude: 'Claude Code', codex: 'Codex' };
 
 /**
- * What Duet may read without asking (Settings → Duet, and per thread from the
+ * What Riff may read without asking (Settings → Riff, and per thread from the
  * panel header), least to most. Attached tabs are always readable; beyond
  * them, "every" and "ask" show a card for each read, "chord" reads any tab in
  * the current chord plus history and the archive, "all" every chord. "every"
@@ -32,19 +32,19 @@ export const isDuetScope = (value: unknown): value is DuetScope => DUET_SCOPES.i
 /** Settings' names (and the panel's menu), and the panel's button, which says what the chat does now. */
 export const DUET_SCOPE_NAMES: Record<DuetScope, string> = { every: 'Ask every time', ask: 'The tab you’re on', chord: 'Tabs in this chord', all: 'All your tabs' };
 export const DUET_SCOPE_SHORT: Record<DuetScope, string> = { every: 'Asks before reading', ask: 'Reads this tab', chord: 'Reads this chord', all: 'Reads all tabs' };
-/** What each choice lets Duet read: Settings' descriptions and the panel's tooltips. */
+/** What each choice lets Riff read: Settings' descriptions and the panel's tooltips. */
 export const DUET_SCOPE_HINTS: Record<DuetScope, string> = {
-  every: 'Nothing goes with your messages unless you attach it. Duet asks before reading any page, even the one you’re on.',
-  ask: 'The tab on screen goes with each message. Duet asks before reading anything else.',
-  chord: 'Duet reads this chord’s tabs, history and Archive without asking.',
-  all: 'Duet reads every chord’s tabs, history and Archive without asking.',
+  every: 'Nothing goes with your messages unless you attach it. Riff asks before reading any page, even the one you’re on.',
+  ask: 'The tab on screen goes with each message. Riff asks before reading anything else.',
+  chord: 'Riff reads this chord’s tabs, history and Archive without asking.',
+  all: 'Riff reads every chord’s tabs, history and Archive without asking.',
 };
-/** Settings → Duet's strictest choice (DuetSettings.readsNothing): its name and what it means. */
-export const DUET_READS_NOTHING = { name: 'Nothing', hint: 'Only what you type. Duet gets no way to read your tabs, pages, history or Archive, and nothing can be attached.' };
+/** Settings → Riff's strictest choice (DuetSettings.readsNothing): its name and what it means. */
+export const DUET_READS_NOTHING = { name: 'Nothing', hint: 'Only what you type. Riff gets no way to read your tabs, pages, history or Archive, and nothing can be attached.' };
 /** Whether the tab on screen goes with each message (unless it's removed from the composer). */
 export const attachesTabOnScreen = (scope: DuetScope): boolean => scope !== 'every';
 
-/** How long Duet chats are kept (Settings → Duet). */
+/** How long Riff chats are kept (Settings → Riff). */
 export type DuetKeep = 'forever' | '90d' | '30d';
 export const DUET_KEEP_MS: Record<DuetKeep, number | null> = { forever: null, '90d': 90 * 86_400_000, '30d': 30 * 86_400_000 };
 
@@ -55,7 +55,7 @@ export const DUET_PROCESS_IDLE_MS = 10 * 60_000;
 export const DUET_MAX_PROCESSES = 3;
 /** `read_tab` ranges: Claude saves text results over 50,000 characters to a file a browse thread can't open. */
 export const DUET_READ_MAX = 40_000;
-/** PDFs Duet reads: larger files are refused, longer ones are read up to this page (with a note saying so). */
+/** PDFs Riff reads: larger files are refused, longer ones are read up to this page (with a note saying so). */
 export const DUET_PDF_MAX_BYTES = 25 * 1024 * 1024;
 export const DUET_PDF_MAX_PAGES = 200;
 
@@ -90,7 +90,7 @@ export interface DuetAttachment {
 
 /**
  * An image in a chat, kept in `<userData>/duet/images/` by its id: one you
- * gave Duet with a message (a pasted image, a screenshot), sent to the model
+ * gave Riff with a message (a pasted image, a screenshot), sent to the model
  * with it, or one Codex made, shown with its reply.
  */
 export interface DuetImage {
@@ -115,7 +115,7 @@ export interface DuetCitation {
   quote: string;
   /** The tab it came from, if it still existed when the reply finished. */
   tabId: string | null;
-  /** For a PDF: the page the quote is on, found in the text Duet read (not taken from the model). */
+  /** For a PDF: the page the quote is on, found in the text Riff read (not taken from the model). */
   page?: number;
 }
 
@@ -161,7 +161,7 @@ export interface DuetHit {
   createdAt: number;
 }
 
-/** The searchable text of a message: what the user wrote and what Duet answered. */
+/** The searchable text of a message: what the user wrote and what Riff answered. */
 export function duetMessageText(body: DuetMessageBody): string {
   if (body.role === 'user' || body.role === 'assistant') return stripCitations(body.text);
   if (body.role === 'approval') return body.description;
@@ -177,7 +177,7 @@ export type DuetToolName =
   | 'tab_screenshot'
   | 'search_history'
   | 'search_archive'
-  /** Duet fills forms (D16, duet-forms.ts): the fields on the tab on screen, then values for you to check. */
+  /** Riff fills forms (D16, duet-forms.ts): the fields on the tab on screen, then values for you to check. */
   | 'read_form'
   | 'propose_fill'
   /** Effects' one tool (effects.ts): never offered in a chat. */
@@ -186,8 +186,8 @@ export type DuetToolName =
 export interface DuetToolSpec {
   name: DuetToolName;
   /**
-   * Every Duet tool reads (tier 0), or shows you something to do yourself:
-   * propose_fill's card changes nothing until you press Fill (D16). Duet never
+   * Every Riff tool reads (tier 0), or shows you something to do yourself:
+   * propose_fill's card changes nothing until you press Fill (D16). Riff never
    * changes the browser on its own: organizing tools are out of scope
    * (ROADMAP.md, Phase 2), so there is no tier 1.
    */
@@ -245,7 +245,7 @@ export const DUET_TOOLS: readonly DuetToolSpec[] = [
 export const duetTool = (name: string): DuetToolSpec | undefined => DUET_TOOLS.find((t) => t.name === name);
 
 /**
- * Pages Duet can never read, at any scope: Chord's own pages, extension
+ * Pages Riff can never read, at any scope: Chord's own pages, extension
  * pages, anything that isn't a web or file page, and sites the user marked
  * "Never". (Private windows are refused by the caller, which knows windows.)
  */
@@ -363,7 +363,7 @@ const squash = (s: string) =>
     .toLowerCase();
 
 /**
- * The page a quoted passage is on, by searching the text Duet read (so a
+ * The page a quoted passage is on, by searching the text Riff read (so a
  * citation can say "p. 3" without trusting the model to say where). Line
  * breaks, curly quotes and hyphenation at line ends don't matter; a quote
  * that runs onto the next page counts as the page it starts on.
@@ -436,7 +436,7 @@ const hostOf = (url: string): string => {
 
 /* ---------- Citations ---------- */
 
-/** The marker Duet's prompt asks for: [[t3:"exact words from the page"]]. */
+/** The marker Riff's prompt asks for: [[t3:"exact words from the page"]]. */
 const CITATION = /\[\[(t\d{1,4}):"([^"\]\n]{1,300})"\]\]/g;
 
 export type DuetSegment = { kind: 'text'; text: string } | { kind: 'citation'; n: number; ref: string; quote: string };
@@ -492,7 +492,7 @@ export interface DuetTabName {
 }
 
 /**
- * A tab's handle in a reply's own words ("t1", "tab t1"), which Duet is asked
+ * A tab's handle in a reply's own words ("t1", "tab t1"), which Riff is asked
  * not to write: found so the user sees the tab's name instead. Not part of a
  * word, path or name like "t2.micro". Citations are split out first.
  */
@@ -531,7 +531,7 @@ export function threadTitle(firstUserText: string): string {
  * that couldn't resume, the other provider's after a switch, or a chat's
  * first from a Chord file. As JSON marked untrusted, the way page text goes
  * (ARCHITECTURE.md §11.4), to put at the start of the user's message; never
- * in the instructions. A file can say anything, and Duet's own replies can
+ * in the instructions. A file can say anything, and Riff's own replies can
  * carry what pages said, so this keeps them data. The newest turns, within
  * `max` characters; empty when there are none.
  */
@@ -554,7 +554,7 @@ export function earlierTurns(messages: readonly DuetMessage[], max = 6000): stri
   return `${JSON.stringify({ trust: 'untrusted', source: 'the earlier turns of this chat', turns: kept })}\n\n`;
 }
 
-/** Threads past their keep-by date (Settings → Duet → Keep Duet chats). */
+/** Threads past their keep-by date (Settings → Riff → Keep Riff chats). */
 export function duetPruneBefore(keep: DuetKeep, now: number): number | null {
   const ms = DUET_KEEP_MS[keep];
   return ms === null ? null : now - ms;
@@ -574,7 +574,7 @@ export function threadToShow(threads: readonly DuetThread[], now: number, idleMs
 export const MAKE_IMAGE_MARK = '[[make-image]]';
 
 /**
- * What Duet's instructions say about making images: Codex with its image
+ * What Riff's instructions say about making images: Codex with its image
  * tool on makes them; Codex with it off says where to turn it on; Claude,
  * which can't make images at all, says so and leaves the mark for Codex's button.
  */
@@ -583,12 +583,12 @@ export type DuetImageMaking = 'codex' | 'codex-off' | 'claude';
 const IMAGE_LINES: Record<DuetImageMaking, string> = {
   codex: '- When the user asks you to make, draw or change an image, make it with your image generation tool. The image shows in the chat by itself, so say only a short sentence about it. Otherwise, answer in plain prose with light Markdown (paragraphs, lists, bold, code).',
   'codex-off':
-    "- Answer in plain prose with light Markdown (paragraphs, lists, bold, code). You can't make images here: if the user asks for one, say that making images is off in Chord's Settings → Duet.",
+    "- Answer in plain prose with light Markdown (paragraphs, lists, bold, code). You can't make images here: if the user asks for one, say that making images is off in Chord's Settings → Riff.",
   claude: `- Answer in plain prose with light Markdown (paragraphs, lists, bold, code). You can't make or change images. If the user asks you to, say so in one short sentence, then end your reply with ${MAKE_IMAGE_MARK} on a line of its own: Chord shows a button there to ask Codex to make it.`,
 };
 
 /**
- * Duet's instructions for a session, appended to the provider's own system
+ * Riff's instructions for a session, appended to the provider's own system
  * prompt: Chord's words only, never a chat's (those come as `earlierTurns`).
  * `readsPages` false is Settings' "Nothing": the session has no tools at all,
  * and is told so, so it says why it can't see a page instead of guessing.
@@ -602,11 +602,11 @@ const EARLIER_LINE =
 
 function readingNothingLines(images: DuetImageMaking): string {
   return [
-    "You are Duet, an assistant inside the Chord web browser, chatting with the browser's user.",
+    "You are Riff, an assistant inside the Chord web browser, chatting with the browser's user.",
     '',
     'How to work:',
-    "- You can't see the browser in this chat: the user set Duet to read nothing, so you have no tools and no access to their tabs, pages, history or screenshots. Answer from what they write.",
-    "- If they ask about a page, say you can't see it, and that they can paste the text, or change what Duet can read in Settings → Duet.",
+    "- You can't see the browser in this chat: the user set Riff to read nothing, so you have no tools and no access to their tabs, pages, history or screenshots. Answer from what they write.",
+    "- If they ask about a page, say you can't see it, and that they can paste the text, or change what Riff can read in Settings → Riff.",
     "- You can't open, close or move tabs; if the user wants that, tell them how to do it in Chord.",
     IMAGE_LINES[images],
   ].join('\n');
@@ -614,7 +614,7 @@ function readingNothingLines(images: DuetImageMaking): string {
 
 function browsingLines(images: DuetImageMaking): string {
   return [
-    "You are Duet, an assistant inside the Chord web browser, chatting with the browser's user about their tabs and the web.",
+    "You are Riff, an assistant inside the Chord web browser, chatting with the browser's user about their tabs and the web.",
     '',
     'How to work:',
     "- You can only see the browser through the chord tools. A user message may end with \"Attached: tab t3 · site\": those tabs are the ones the user wants you to look at; read them with read_tab before answering about them.",

@@ -86,7 +86,7 @@ export function importText(p: FileImportProgress): string {
     case 'history':
       return `Adding history: ${new Intl.NumberFormat('en-US').format(p.done)} of ${plural(p.total, 'page')}`;
     case 'duet':
-      return 'Adding Duet chats…';
+      return 'Adding Riff chats…';
     case 'done':
       return `${importedText(p.counts)}.`;
     case 'failed':
@@ -267,7 +267,7 @@ function Preview({
       <Row label="From" description={fromText(preview)} control={null} />
       <Row label="What comes in" description={whatComesIn(preview, choices.effects)} control={null} />
       {pages && <Row label="History" description={pages} control={<Switch label="Import history" checked={choices.history} onChange={set('history')} />} />}
-      {duet.chats > 0 && <Row label="Duet chats" description={chats} control={<Switch label="Import Duet chats" checked={choices.duet} onChange={set('duet')} />} />}
+      {duet.chats > 0 && <Row label="Riff chats" description={chats} control={<Switch label="Import Riff chats" checked={choices.duet} onChange={set('duet')} />} />}
       {preview.effects.length > 0 && (
         <Row
           label="Effects"

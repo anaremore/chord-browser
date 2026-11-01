@@ -151,7 +151,7 @@
   list-style: none;
 }
 
-/* A hidden element or a patch from Duet: its row, and under it its editor while it's open. */
+/* A hidden element or a patch from Riff: its row, and under it its editor while it's open. */
 .item {
   display: flex;
   flex-direction: column;

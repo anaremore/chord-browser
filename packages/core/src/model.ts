@@ -406,7 +406,7 @@ export interface Settings {
   /** Ad and tracker blocking (ARCHITECTURE.md §9, decision D5): on by default, in every chord and private window. */
   adBlocking: AdBlockingSettings;
   tabCounts: TabCountsSettings;
-  /** Duet, the chat panel (ARCHITECTURE.md §11). */
+  /** Riff, the chat panel (ARCHITECTURE.md §11). */
   duet: DuetSettings;
   /** Where links from other apps open (Chord as the default browser): a mini window, or a new tab. */
   externalLinks: ExternalLinks;
@@ -482,13 +482,13 @@ export interface DuetSettings {
   /** What new threads may read without asking. */
   scope: DuetScope;
   /**
-   * Settings' "Nothing": Duet reads no pages at all, whatever a chat's scope.
+   * Settings' "Nothing": Riff reads no pages at all, whatever a chat's scope.
    * Its sessions get no tools, and nothing can be attached (ARCHITECTURE.md §11.3).
    */
   readsNothing: boolean;
-  /** Sites Duet may never read or have attached (origins). */
+  /** Sites Riff may never read or have attached (origins). */
   neverSites: string[];
-  /** Chords where Duet is off. */
+  /** Chords where Riff is off. */
   offChords: string[];
   /** Codex may make images when asked (its own image tool, on the user's plan). */
   codexImages: boolean;

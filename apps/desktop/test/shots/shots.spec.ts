@@ -8,7 +8,7 @@
  * at the screen's top left, so a picture is 2880 × 1800. A picture is the whole window as the
  * screen shows it: the shell, the pages over it and the caption buttons, from desktopCapturer's
  * copy of the screen cropped to the window, taken once two copies in a row agree (loads, fonts
- * and animations done). Duet's answer comes from demo-claude.mjs.
+ * and animations done). Riff's answer comes from demo-claude.mjs.
  *
  * Writes test-results/shots/<name>.png. The screen must hold the window at 2×: shots.mjs sets
  * CHORD_E2E_SCREEN for that.
@@ -127,7 +127,7 @@ async function tabFor(shell: Page, url: string) {
 const rest = (page: Page) => page.mouse.move(SIZE.width - 10, SIZE.height - 10);
 
 async function session(appearance: 'light' | 'dark') {
-  // Duet's stand-in keeps its session files here; no Codex (a path that doesn't exist).
+  // Riff's stand-in keeps its session files here; no Codex (a path that doesn't exist).
   const config = mkdtempSync(join(tmpdir(), 'chord-shots-claude-'));
   const app = await launch(
     { CHORD_APPEARANCE: appearance, CHORD_HOME_URL: PAGES.chord, CHORD_DUET_CLAUDE: demoClaude, CHORD_DUET_CODEX: join(config, 'no-codex'), CLAUDE_CONFIG_DIR: config },
@@ -186,20 +186,30 @@ async function session(appearance: 'light' | 'dark') {
   await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)?.focus(), PAGES.chord);
   await rest(shell);
   await pagesLoaded(app);
+  await quietBanners(app);
   await iconsLoaded(shell);
   return { app, shell, windowId, article };
 }
 
-test('light: the window, Duet beside the article, and split view', async () => {
+/** Wikipedia's fundraising banners (CentralNotice) come and go by date and would cover the article: hidden for the pictures. */
+async function quietBanners(app: ElectronApplication) {
+  await app.evaluate(async ({ webContents }) => {
+    for (const c of webContents.getAllWebContents()) {
+      if (/^https:\/\/[a-z]+\.wikipedia\.org\//.test(c.getURL())) await c.insertCSS('#centralNotice, .frb, .cn-fundraising { display: none !important; }');
+    }
+  });
+}
+
+test('light: the window, Riff beside the article, and split view', async () => {
   const { app, shell, windowId, article } = await session('light');
   try {
     await capture(app, 'Chord', 'chord-light');
 
     await runAction(shell, 'duet.toggle');
-    const panel = shell.getByRole('complementary', { name: 'Duet' });
+    const panel = shell.getByRole('complementary', { name: 'Riff' });
     await panel.getByRole('button', { name: 'Use this' }).first().click();
     await panel.getByRole('button', { name: 'Got it' }).click();
-    const input = panel.getByRole('textbox', { name: 'Message Duet' });
+    const input = panel.getByRole('textbox', { name: 'Message Riff' });
     await input.fill('What’s a chord, in one line?');
     await input.press('Enter');
     await panel.getByText('In the article').waitFor({ timeout: 20_000 });

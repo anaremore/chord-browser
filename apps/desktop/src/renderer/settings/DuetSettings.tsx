@@ -1,5 +1,5 @@
 /**
- * Settings → Duet (ARCHITECTURE.md §11, DESIGN.md §8.6): on or off, which of
+ * Settings → Riff (ARCHITECTURE.md §11, DESIGN.md §8.6): on or off, which of
  * your own CLIs it uses, what it may read without asking, sites it never
  * reads, and how long chats are kept.
  */
@@ -11,7 +11,7 @@ import { api } from './api';
 import { RadioGroup, ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
 import styles from './Settings.module.css';
 
-/** What Duet can read, least to most: Settings' "Nothing", then the scopes a chat can also choose. */
+/** What Riff can read, least to most: Settings' "Nothing", then the scopes a chat can also choose. */
 const READING: { key: 'nothing' | DuetScope; name: string; hint: string }[] = [
   { key: 'nothing', ...DUET_READS_NOTHING },
   ...DUET_SCOPES.map((s) => ({ key: s, name: DUET_SCOPE_NAMES[s], hint: DUET_SCOPE_HINTS[s] })),
@@ -44,12 +44,12 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
 
   return (
     <>
-      <SectionHeader title="Duet" description="Chat about your pages and tabs with your own Claude Code or Codex. Chord never sees your sign-in." />
+      <SectionHeader title="Riff" description="Chat about your pages and tabs with your own Claude Code or Codex. Chord never sees your sign-in." />
       <div className={styles.group}>
         <Row
-          label="Show Duet"
+          label="Show Riff"
           description="Off removes the panel, its button and shortcut. Nothing runs."
-          control={<Switch label="Show Duet" checked={duet.enabled} onChange={(enabled) => set({ enabled })} />}
+          control={<Switch label="Show Riff" checked={duet.enabled} onChange={(enabled) => set({ enabled })} />}
         />
       </div>
 
@@ -86,14 +86,14 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
       </div>
 
       <h2 className={styles.groupTitle}>
-        What Duet can read
+        What Riff can read
         <ResetButton
-          label="Reset What Duet can read to default"
+          label="Reset What Riff can read to default"
           visible={duet.readsNothing !== DEFAULT_SETTINGS.duet.readsNothing || duet.scope !== DEFAULT_SETTINGS.duet.scope}
           onReset={() => set({ readsNothing: DEFAULT_SETTINGS.duet.readsNothing, scope: DEFAULT_SETTINGS.duet.scope })}
         />
       </h2>
-      <RadioGroup className={styles.group} label="What Duet can read">
+      <RadioGroup className={styles.group} label="What Riff can read">
         {READING.map((r) => {
           const chosen = r.key === 'nothing' ? duet.readsNothing : !duet.readsNothing && duet.scope === r.key;
           return (
@@ -115,19 +115,19 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
         })}
       </RadioGroup>
       <p className={styles.groupNote}>
-        Each chat can choose for itself from Duet’s panel, except Nothing, which only changes here. Whatever you choose, Duet only reads, and never sees private windows, form fields, or the sites below.
+        Each chat can choose for itself from Riff’s panel, except Nothing, which only changes here. Whatever you choose, Riff only reads, and never sees private windows, form fields, or the sites below.
       </p>
       <div className={`${styles.group} ${styles.groupAfter}`}>
         <Row
           label="Never read"
-          description="Sites Duet can't read or have attached, whatever a chat allows. Private windows, Chord's pages and form fields are never read."
+          description="Sites Riff can't read or have attached, whatever a chat allows. Private windows, Chord's pages and form fields are never read."
           control={
             <span className={styles.slider}>
               <input
                 className={styles.siteInput}
                 value={site}
                 placeholder="bank.example"
-                aria-label="Add a site Duet never reads"
+                aria-label="Add a site Riff never reads"
                 onChange={(e) => setSite(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && addSite()}
               />
@@ -139,7 +139,7 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
             key={s}
             label={s}
             control={
-              <button type="button" className={styles.reset} data-visible aria-label={`Allow Duet to read ${s} again`} onClick={() => set({ neverSites: duet.neverSites.filter((x) => x !== s) })}>
+              <button type="button" className={styles.reset} data-visible aria-label={`Allow Riff to read ${s} again`} onClick={() => set({ neverSites: duet.neverSites.filter((x) => x !== s) })}>
                 <X size={13} strokeWidth={2} />
               </button>
             }
@@ -150,13 +150,13 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
       <h2 className={styles.groupTitle}>Chats</h2>
       <div className={styles.group}>
         <Row
-          label="Keep Duet chats"
+          label="Keep Riff chats"
           description="Older chats are deleted, with the provider's local copy."
           changed={duet.keep !== DEFAULT_SETTINGS.duet.keep}
           onReset={() => set({ keep: DEFAULT_SETTINGS.duet.keep })}
           control={
             <Segmented<DuetKeep>
-              label="Keep Duet chats"
+              label="Keep Riff chats"
               value={duet.keep}
               options={[
                 { value: 'forever', label: 'Forever' },
@@ -168,7 +168,7 @@ export function DuetSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
           }
         />
         <Row
-          label="Clear all Duet chats"
+          label="Clear all Riff chats"
           description="Claude Code and Codex keep their own local copy of each chat while it exists; deleting a chat deletes theirs too."
           control={
             <button type="button" className={styles.linkButton} onClick={() => (confirmClear ? (setConfirmClear(false), void api.settings.duet({ do: 'clearAll' })) : setConfirmClear(true))}>

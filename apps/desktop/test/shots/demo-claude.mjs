@@ -1,8 +1,8 @@
-// A stand-in for Claude Code, for the Duet screenshot only (shots.spec.ts).
+// A stand-in for Claude Code, for the Riff screenshot only (shots.spec.ts).
 // It speaks the same stream-json protocol as the E2E fake (test/e2e/fake-claude.mjs)
 // and reads the attached tab through Chord's real read_tab tool. Its answer is the page's own
 // first sentence about chords, cited, so nothing on screen is invented about the page.
-// Started by Duet through CHORD_DUET_CLAUDE (development builds only).
+// Started by Riff through CHORD_DUET_CLAUDE (development builds only).
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';

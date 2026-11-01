@@ -522,7 +522,7 @@ describe('chord-data', () => {
     backup.close();
   });
 
-  it('upgrades a version-13 profile to 14: Duet chats keep their messages, and a chat can be set to ask every time', () => {
+  it('upgrades a version-13 profile to 14: Riff chats keep their messages, and a chat can be set to ask every time', () => {
     const v13 = new DatabaseSync(file);
     for (const migration of MIGRATIONS.slice(0, 13)) v13.exec(migration);
     v13.exec('PRAGMA user_version = 13');

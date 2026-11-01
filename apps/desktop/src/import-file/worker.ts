@@ -343,7 +343,7 @@ async function plan(request: Extract<FileRequest, { type: 'plan' }>): Promise<Fi
   };
 }
 
-/** What a chat imported from a file may read: the narrower of what it could and what a new chat may (Settings → Duet), never more. */
+/** What a chat imported from a file may read: the narrower of what it could and what a new chat may (Settings → Riff), never more. */
 const narrower = (a: DuetScope, b: DuetScope): DuetScope => (DUET_SCOPES.indexOf(a) <= DUET_SCOPES.indexOf(b) ? a : b);
 
 /** The images a message names. */

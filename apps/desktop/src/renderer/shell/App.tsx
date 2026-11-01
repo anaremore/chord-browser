@@ -33,7 +33,7 @@ import { ChordHeader, ChordPane, ChordSwitcher, GhostPane, newChordLook, Tint } 
 import { ShortcutsProvider, useKeys } from './keys';
 import { DockedPane } from './Devtools';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
-import { DuetPanel } from './Duet';
+import { DuetPanel } from './Riff';
 import { DuetReadTabs } from './duet-context';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { FrameSnapshots } from './FrameSnapshot';
@@ -401,7 +401,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const archiveLabel = archiveKeys ? `Archive  ${archiveKeys}` : 'Archive';
   // Archived rows' favicons fly here (DESIGN.md §6.5).
   const archiveButton = <ArchiveButton title={archiveLabel} onClick={() => void api.action.run('app.history')} />;
-  // Duet's panel for this window (DESIGN.md §7.8): main pushes what it shows.
+  // Riff's panel for this window (DESIGN.md §7.8): main pushes what it shows.
   const [duet, setDuet] = useState<DuetView | null>(null);
   useEffect(() => {
     // A push can arrive before the answer and be the newer of the two (live.ts says why): it wins.
@@ -753,11 +753,11 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                   type="button"
                   className={styles.duetButton}
                   aria-pressed={duetOpen}
-                  title={`Duet  ${keycap('duet.toggle')}`.trim()}
+                  title={`Riff  ${keycap('duet.toggle')}`.trim()}
                   onClick={() => void api.duet.act({ do: 'toggle' })}
                 >
                   <DuetIcon {...ICON} aria-hidden />
-                  Duet
+                  Riff
                 </button>
               )}
               {overlayChrome && (

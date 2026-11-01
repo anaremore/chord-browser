@@ -93,7 +93,7 @@ describe('sanitizeSelector', () => {
 });
 
 describe('compileEffects', () => {
-  it('puts presets, then hidden elements, then your CSS, then Duet’s patches, and says what it left out of each', () => {
+  it('puts presets, then hidden elements, then your CSS, then Riff’s patches, and says what it left out of each', () => {
     const { css, removed, patches, unusable } = compileEffects({
       presets: ['body { max-width: 70ch }'],
       hidden: ['#ad', `a url(${EVIL})`],

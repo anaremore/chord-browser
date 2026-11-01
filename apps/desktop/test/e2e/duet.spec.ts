@@ -1,5 +1,5 @@
 /**
- * Duet, end to end, with a fake Claude Code (fake-claude.mjs) speaking the
+ * Riff, end to end, with a fake Claude Code (fake-claude.mjs) speaking the
  * real stream-json protocol: no network, no real CLI, no sign-in. The fake
  * keeps its "session files" in a temp CLAUDE_CONFIG_DIR, so resume, fallback
  * and deletion of the provider's copy can be checked on disk.
@@ -23,7 +23,7 @@ failOnMainErrors();
 const pdfRequests: { signedIn: boolean }[] = [];
 
 /**
- * A sign-up form for Duet to fill (D16), below the fold: fields it may fill, a
+ * A sign-up form for Riff to fill (D16), below the fold: fields it may fill, a
  * password, a card number, a one-time code, a hidden field, one moved off
  * screen, and another site's frame with a form of its own. Its name field is
  * controlled the way React does it (a setter on the element tracks what the
@@ -85,7 +85,7 @@ test.beforeAll(async () => {
       '<title>Form</title><h1>Account settings</h1><p>Visible words here.</p>' +
       '<input value="hunter2-secret"><input type="password" value="pw-very-secret"><textarea>my-draft-note</textarea>' +
       '<select><option>card-4242-selected</option></select><input autocomplete="one-time-code" value="otp-123456">',
-    // Layouts that hid real text from Duet: a page wrapped in display: contents (Substack's), a section
+    // Layouts that hid real text from Riff: a page wrapped in display: contents (Substack's), a section
     // that skips rendering off screen, and a long page's top once you've scrolled down. Then what stays hidden.
     '/layouts':
       '<title>Layouts</title><p>Top of a long page.</p>' +
@@ -109,7 +109,7 @@ test.beforeAll(async () => {
     if (req.url?.startsWith('/guide.pdf')) {
       const signedIn = /(^|;\s*)chord_pdf=yes/.test(req.headers.cookie ?? '');
       pdfRequests.push({ signedIn });
-      // no-store: Duet's own copy has to come through the network, with the tab's cookies.
+      // no-store: Riff's own copy has to come through the network, with the tab's cookies.
       res.writeHead(signedIn ? 200 : 403, { 'content-type': signedIn ? 'application/pdf' : 'text/plain', 'cache-control': 'no-store' });
       res.end(signedIn ? Buffer.from(buildPdf(SAMPLE_PDF_PAGES, { title: 'Field guide' })) : 'sign in first');
       return;
@@ -154,7 +154,7 @@ const runAction = (shell: Page, action: string) => shell.evaluate((a) => (window
 
 async function openDuet(shell: Page): Promise<Locator> {
   await runAction(shell, 'duet.toggle');
-  const panel = shell.getByRole('complementary', { name: 'Duet' });
+  const panel = shell.getByRole('complementary', { name: 'Riff' });
   await expect(panel).toBeVisible();
   return panel;
 }
@@ -165,7 +165,7 @@ async function setUp(panel: Locator): Promise<void> {
 }
 
 async function send(panel: Locator, text: string): Promise<void> {
-  const input = panel.getByRole('textbox', { name: 'Message Duet' });
+  const input = panel.getByRole('textbox', { name: 'Message Riff' });
   await input.fill(text);
   await input.press('Enter');
 }
@@ -182,7 +182,7 @@ const sessionFiles = (setup: Setup) => {
   return readdirSync(projects).flatMap((dir) => readdirSync(join(projects, dir)).filter((f) => f.endsWith('.jsonl')).map((f) => join(projects, dir, f)));
 };
 
-test('what Duet can read: "Ask every time" attaches nothing for you; "Nothing", set in Settings, gives Claude no tools and no page, and no chat can change it', async () => {
+test('what Riff can read: "Ask every time" attaches nothing for you; "Nothing", set in Settings, gives Claude no tools and no page, and no chat can change it', async () => {
   const setup = fresh();
   const app = await launch(setup, '/article');
   try {
@@ -193,10 +193,10 @@ test('what Duet can read: "Ask every time" attaches nothing for you; "Nothing", 
     const reads = panel.getByRole('button', { name: /^(Reads |Asks before reading)/ });
     await expect(reads).toHaveText('Reads this tab');
     await reads.click();
-    const ladder = panel.getByRole('menu', { name: 'What Duet can read' });
+    const ladder = panel.getByRole('menu', { name: 'What Riff can read' });
     await expect(ladder.getByRole('menuitemradio')).toHaveText([/^Ask every time/, /^The tab you’re on/, /^Tabs in this chord/, /^All your tabs/]);
     await expect(ladder.getByRole('menuitemradio', { name: 'The tab you’re on' })).toHaveAttribute('aria-checked', 'true');
-    await expect(ladder.getByRole('menuitemradio', { name: 'Tabs in this chord' })).toHaveAccessibleDescription('Duet reads this chord’s tabs, history and Archive without asking.');
+    await expect(ladder.getByRole('menuitemradio', { name: 'Tabs in this chord' })).toHaveAccessibleDescription('Riff reads this chord’s tabs, history and Archive without asking.');
     await panel.screenshot({ path: join(capturesDir, 'duet-reads-menu.png') });
     const chip = panel.getByText(/^Reading 127\.0\.0\.1/);
     await expect(chip).toBeVisible();
@@ -207,11 +207,11 @@ test('what Duet can read: "Ask every time" attaches nothing for you; "Nothing", 
     await expect(chip).toHaveCount(0);
     await expect(panel.getByRole('button', { name: 'Attach a tab' })).toBeVisible();
 
-    // Nothing, in Settings → Duet.
+    // Nothing, in Settings → Riff.
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
-    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Duet' }).click();
-    const choice = settings.getByRole('radiogroup', { name: 'What Duet can read' });
+    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Riff' }).click();
+    const choice = settings.getByRole('radiogroup', { name: 'What Riff can read' });
     await expect(choice.getByRole('radio')).toHaveCount(5);
     await choice.getByRole('radio', { name: /^Nothing/ }).click();
     await expect(choice.getByRole('radio', { name: /^Nothing/ })).toHaveAttribute('aria-checked', 'true');
@@ -235,17 +235,17 @@ test('what Duet can read: "Ask every time" attaches nothing for you; "Nothing", 
     expect(seen.images).toBe(0);
     expect(seen.tried).toContain('read nothing');
     expect(seen.tried).not.toContain('Chords are three notes');
-    expect(seen.instructions).toContain('set Duet to read nothing');
+    expect(seen.instructions).toContain('set Riff to read nothing');
     expect(seen.instructions).not.toContain('read_tab');
 
-    // Effects' "Ask Duet" reads the page's outline: it isn't offered either.
+    // Effects' "Ask Riff" reads the page's outline: it isn't offered either.
     await runAction(shell, 'effects.open');
     const popover = await pageWhere(app, isPopover);
     const card = popover.getByRole('dialog', { name: /^Effects on / });
     await expect(card).toBeVisible();
-    await expect(card.getByRole('textbox', { name: 'Ask Duet to restyle this site' })).toHaveCount(0);
+    await expect(card.getByRole('textbox', { name: 'Ask Riff to restyle this site' })).toHaveCount(0);
 
-    // "Change in Settings" opens Duet's section, and choosing a scope there reads again.
+    // "Change in Settings" opens Riff's section, and choosing a scope there reads again.
     await popover.keyboard.press('Escape');
     await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'General' }).click();
     await expect(choice).toHaveCount(0);
@@ -259,13 +259,13 @@ test('what Duet can read: "Ask every time" attaches nothing for you; "Nothing", 
   }
 });
 
-test('Duet: set up, ask about the page with a citation, gate reads, stop, and resume after a relaunch', async () => {
+test('Riff: set up, ask about the page with a citation, gate reads, stop, and resume after a relaunch', async () => {
   const setup = fresh();
   let app = await launch(setup, '/article');
   try {
     const shell = await shellOf(app);
     const panel = await openDuet(shell);
-    await expect(panel.getByText('Meet Duet.')).toBeVisible();
+    await expect(panel.getByText('Meet Riff.')).toBeVisible();
     await setUp(panel);
 
     // The current tab is attached; reading it needs no card; the reply cites it.
@@ -274,7 +274,7 @@ test('Duet: set up, ask about the page with a citation, gate reads, stop, and re
     await expect(panel.getByText('Here is the gist.')).toBeVisible();
     await expect(panel.getByRole('button', { name: /^Source 1: “/ })).toBeVisible();
     await expect(panel.getByRole('button', { name: /Read “Article”/ })).toBeVisible();
-    await expect(shell.getByRole('img', { name: 'Duet read this tab' })).toBeVisible();
+    await expect(shell.getByRole('img', { name: 'Riff read this tab' })).toBeVisible();
     // Browse mode: no built-in tools, the user's settings ignored.
     expect(fakeLog(setup)[0]).toMatchObject({ restricted: true, tools: '', resume: null });
 
@@ -300,7 +300,7 @@ test('Duet: set up, ask about the page with a citation, gate reads, stop, and re
 
     // The tab you're on (the default): listing tabs asks; "Allow for this chat" stops it asking again.
     await send(panel, 'list my tabs');
-    await panel.getByRole('group', { name: 'Duet is asking' }).getByRole('button', { name: 'Allow for this chat' }).click();
+    await panel.getByRole('group', { name: 'Riff is asking' }).getByRole('button', { name: 'Allow for this chat' }).click();
     await expect(panel.getByText(/I can see \d+ tabs\./)).toBeVisible();
     await send(panel, 'list them again');
     await expect(panel.getByText(/I can see \d+ tabs\./)).toHaveCount(2);
@@ -332,7 +332,7 @@ test('Duet: set up, ask about the page with a citation, gate reads, stop, and re
     await expect(overlay.getByRole('dialog')).toBeVisible();
     // The space sets the filter itself; Enter on a half-typed one raced the results on a slow machine.
     await overlay.keyboard.type('@duet ');
-    await expect(overlay.getByTestId('scope-chip')).toHaveText('Duet chats');
+    await expect(overlay.getByTestId('scope-chip')).toHaveText('Riff chats');
     await overlay.keyboard.type('gist');
     await expect(overlay.getByRole('option').first()).toContainText('Summarize this page');
   } finally {
@@ -340,7 +340,7 @@ test('Duet: set up, ask about the page with a citation, gate reads, stop, and re
   }
 });
 
-test('Duet: a lost session continues from a summary; after the idle window a fresh chat offers Continue; delete removes the provider copy too', async () => {
+test('Riff: a lost session continues from a summary; after the idle window a fresh chat offers Continue; delete removes the provider copy too', async () => {
   const setup = fresh();
   let app = await launch(setup, '/article');
   try {
@@ -353,7 +353,7 @@ test('Duet: a lost session continues from a summary; after the idle window a fre
     await app.close();
   }
 
-  // The provider's copy goes away (an upgrade, a cleanup): Duet starts again from a summary.
+  // The provider's copy goes away (an upgrade, a cleanup): Riff starts again from a summary.
   for (const file of sessionFiles(setup)) rmSync(file);
   app = await launch(setup, '/article');
   try {
@@ -362,7 +362,7 @@ test('Duet: a lost session continues from a summary; after the idle window a fre
     await send(panel, 'hello');
     await expect(panel.getByText('Continued with a summary')).toBeVisible();
     await expect(panel.getByText('Hello from the fake.')).toBeVisible();
-    // The chat so far comes with the message, as untrusted data, never in the instructions: Duet's replies can carry what pages said.
+    // The chat so far comes with the message, as untrusted data, never in the instructions: Riff's replies can carry what pages said.
     expect(fakeLog(setup).at(-1)).toMatchObject({ resume: null, summary: false });
     const earlier = readFileSync(join(setup.config, 'fake-earlier.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { trust: string; turns: { role: string; text: string }[] });
     expect(earlier.at(-1)!.trust).toBe('untrusted');
@@ -394,7 +394,7 @@ test('Duet: a lost session continues from a summary; after the idle window a fre
   }
 });
 
-test('Duet reads text in display: contents wrappers, off-screen sections and a scrolled page’s top, and still not hidden text', async () => {
+test('Riff reads text in display: contents wrappers, off-screen sections and a scrolled page’s top, and still not hidden text', async () => {
   const app = await launch(fresh(), '/layouts');
   try {
     await shellOf(app);
@@ -414,7 +414,7 @@ test('Duet reads text in display: contents wrappers, off-screen sections and a s
   }
 });
 
-test('Duet: form values never leave the page, and a Never site is refused even under All my tabs', async () => {
+test('Riff: form values never leave the page, and a Never site is refused even under All my tabs', async () => {
   const setup = fresh();
   const app = await launch(setup, '/form');
   try {
@@ -426,16 +426,16 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     await expect(reply).toContainText('Account settings');
     for (const secret of ['hunter2-secret', 'pw-very-secret', 'my-draft-note', 'card-4242-selected', 'otp-123456']) await expect(reply).not.toContainText(secret);
 
-    // Mark the site "Never", then let Duet read all tabs: it still can't have it.
+    // Mark the site "Never", then let Riff read all tabs: it still can't have it.
     await runAction(shell, 'app.settings');
     await expect.poll(() => app.windows().some((p) => p.url().includes('settings'))).toBe(true);
     const settings = app.windows().find((p) => p.url().includes('settings'))!;
-    await settings.getByRole('button', { name: 'Duet' }).click();
-    const add = settings.getByRole('textbox', { name: 'Add a site Duet never reads' });
+    await settings.getByRole('button', { name: 'Riff' }).click();
+    const add = settings.getByRole('textbox', { name: 'Add a site Riff never reads' });
     await add.fill('127.0.0.1');
     await add.press('Enter');
     await panel.getByRole('button', { name: /^(Reads |Asks before reading)/ }).click();
-    await panel.getByRole('menu', { name: 'What Duet can read' }).getByRole('menuitemradio', { name: 'All your tabs' }).click();
+    await panel.getByRole('menu', { name: 'What Riff can read' }).getByRole('menuitemradio', { name: 'All your tabs' }).click();
     await expect(panel.getByText(/Reading 127\.0\.0\.1/)).toHaveCount(0);
     await send(panel, 'list my tabs');
     await expect(panel.getByText('I can see 0 tabs.')).toBeVisible();
@@ -443,10 +443,10 @@ test('Duet: form values never leave the page, and a Never site is refused even u
     // Off in this chord: no composer until it's turned back on, from the panel itself.
     await panel.getByRole('button', { name: 'Chats' }).click();
     await panel.getByRole('menuitem', { name: 'Turn off in this chord' }).click();
-    await expect(panel.getByText(/Duet is off in this chord/)).toBeVisible();
-    await expect(panel.getByRole('textbox', { name: 'Message Duet' })).toHaveCount(0);
+    await expect(panel.getByText(/Riff is off in this chord/)).toBeVisible();
+    await expect(panel.getByRole('textbox', { name: 'Message Riff' })).toHaveCount(0);
     await panel.getByRole('button', { name: 'Turn on in this chord' }).click();
-    await expect(panel.getByRole('textbox', { name: 'Message Duet' })).toBeVisible();
+    await expect(panel.getByRole('textbox', { name: 'Message Riff' })).toBeVisible();
   } finally {
     await app.close();
   }
@@ -481,7 +481,7 @@ const activateTab = (shell: Page, title: string) =>
     await chord.state.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
   }, title);
 
-test('Duet fills a form you ask it to: you check and change its values in a card, Fill puts them in as typing would, nothing is submitted, and Undo puts back what was there', async () => {
+test('Riff fills a form you ask it to: you check and change its values in a card, Fill puts them in as typing would, nothing is submitted, and Undo puts back what was there', async () => {
   const setup = fresh();
   const app = await launch(setup, '/signup');
   try {
@@ -501,7 +501,7 @@ test('Duet fills a form you ask it to: you check and change its values in a card
     await expect(card).toBeVisible();
     await expect(panel.getByText('Check the values in the card, then press Fill.')).toBeVisible();
 
-    // What Duet was given: each fillable field's structure, never what's in it, nothing sensitive, hidden or in another site's frame.
+    // What Riff was given: each fillable field's structure, never what's in it, nothing sensitive, hidden or in another site's frame.
     const read = readFileSync(join(setup.config, 'form-read.json'), 'utf8');
     const form = JSON.parse(read) as { trust: string; fields: { id: string; name: string; label: string; kind: string; options?: string[] }[]; left_out: Record<string, number> };
     expect(form.trust).toBe('untrusted');
@@ -522,7 +522,7 @@ test('Duet fills a form you ask it to: you check and change its values in a card
     expect(readFileSync(join(setup.config, 'fill-stale.json'), 'utf8')).toContain('f999: not a field in your last read_form');
     expect(readFileSync(join(setup.config, 'fill-again.json'), 'utf8')).toContain('You already showed the user values for this message');
 
-    // The card: each field with Duet's value, and what Chord left out. Nothing is in the page yet.
+    // The card: each field with Riff's value, and what Chord left out. Nothing is in the page yet.
     await expect(card.getByRole('textbox', { name: 'Full name' })).toHaveValue('Ada Lovelace');
     await expect(card.getByRole('textbox', { name: 'Email' })).toHaveValue('ada@example.com');
     await expect(card.getByRole('combobox', { name: 'Country' })).toHaveValue('United Kingdom');
@@ -554,7 +554,7 @@ test('Duet fills a form you ask it to: you check and change its values in a card
     expect(filled.seen.submits).toBe(0);
     await expect.poll(async () => (await signupState(tab)).seen.animations).toBeGreaterThanOrEqual(5);
     await expect.poll(async () => (await signupState(tab)).scrolled).toBeGreaterThan(0);
-    await expect(panel.getByText('Filled 5 fields. Region changed as the other fields went in, so Chord left it alone. Ask Duet again for it.')).toBeVisible();
+    await expect(panel.getByText('Filled 5 fields. Region changed as the other fields went in, so Chord left it alone. Ask Riff again for it.')).toBeVisible();
     await expect(card).toHaveCount(0);
 
     // Undo puts back every field the fill changed, as typing would, and still nothing is submitted.
@@ -575,7 +575,7 @@ test('Duet fills a form you ask it to: you check and change its values in a card
   expect(saved.includes('ada@lovelace.dev')).toBe(false);
 });
 
-test('Duet fills nothing it shouldn’t: a form that changed, another tab in front, a Never site, reading nothing, a private window', async () => {
+test('Riff fills nothing it shouldn’t: a form that changed, another tab in front, a Never site, reading nothing, a private window', async () => {
   const setup = fresh();
   const app = await launch(setup, '/signup');
   try {
@@ -586,12 +586,12 @@ test('Duet fills nothing it shouldn’t: a form that changed, another tab in fro
     const card = panel.getByRole('group', { name: `Fill this form on ${new URL(site.origin).host}` });
     const empty = { name: '', email: '', country: '', plan: 'free', news: false, bio: '' };
 
-    // The page swaps a field after Duet read it (the email field becomes a password field): nothing at all is filled.
+    // The page swaps a field after Riff read it (the email field becomes a password field): nothing at all is filled.
     await send(panel, 'Fill in this form for me');
     await expect(card).toBeVisible();
     await tab.evaluate(() => document.getElementById('email')!.setAttribute('type', 'password'));
     await card.getByRole('button', { name: /^Fill \d+ fields$/ }).click();
-    await expect(panel.getByText('The form changed since Duet read it, so nothing was filled. Ask Duet again.')).toBeVisible();
+    await expect(panel.getByText('The form changed since Riff read it, so nothing was filled. Ask Riff again.')).toBeVisible();
     expect(await signupState(tab)).toMatchObject(empty);
 
     // Another tab in front: the card waits, and says how to go on.
@@ -609,25 +609,25 @@ test('Duet fills nothing it shouldn’t: a form that changed, another tab in fro
     await activateTab(shell, 'Sign up');
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
-    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Duet' }).click();
-    const add = settings.getByRole('textbox', { name: 'Add a site Duet never reads' });
+    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Riff' }).click();
+    const add = settings.getByRole('textbox', { name: 'Add a site Riff never reads' });
     await add.fill('127.0.0.1');
     await add.press('Enter');
     await shell.bringToFront();
     await card.getByRole('button', { name: /^Fill \d+ fields$/ }).click();
-    await expect(panel.getByText('Duet can’t read this site any more, so nothing was filled.')).toBeVisible();
+    await expect(panel.getByText('Riff can’t read this site any more, so nothing was filled.')).toBeVisible();
     await send(panel, 'Fill the form once more');
-    await expect(panel.getByText(/^I can't read the form: Duet can never read this page/)).toBeVisible();
+    await expect(panel.getByText(/^I can't read the form: Riff can never read this page/)).toBeVisible();
     expect(await signupState(tab)).toMatchObject(empty);
 
-    // Reading nothing: Duet has no tools at all, and a read it tries anyway is refused.
+    // Reading nothing: Riff has no tools at all, and a read it tries anyway is refused.
     await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ duet: { readsNothing: true } }));
     await send(panel, 'Fill it, please');
-    await expect(panel.getByText(/^I can't read the form: Duet is set to read nothing/)).toBeVisible();
+    await expect(panel.getByText(/^I can't read the form: Riff is set to read nothing/)).toBeVisible();
     expect(JSON.parse(readFileSync(join(setup.config, 'fill-tools.json'), 'utf8'))).toEqual([]);
     expect(await signupState(tab)).toMatchObject({ ...empty, seen: expect.objectContaining({ submits: 0 }) });
 
-    // A private window has no Duet to ask: main says so to its shell, which shows no panel.
+    // A private window has no Riff to ask: main says so to its shell, which shows no panel.
     await runAction(shell, 'window.newPrivate');
     const privateShell = await newPage(app, isShell, [shell]);
     const view = await privateShell.evaluate(() => (window as unknown as { chord: { duet: { view(): Promise<{ enabled: boolean; messages: unknown[] }> } } }).chord.duet.view());
@@ -636,13 +636,13 @@ test('Duet fills nothing it shouldn’t: a form that changed, another tab in fro
     await expect.poll(() => privateShell.evaluate(() => (window as unknown as { chord: { duet: { view(): Promise<{ open: boolean }> } } }).chord.duet.view().then((v) => v.open))).toBe(true);
     // Long enough for main's push (33 ms) and a frame: a panel that was coming would be here.
     await privateShell.waitForTimeout(500);
-    await expect(privateShell.getByRole('complementary', { name: 'Duet' })).toHaveCount(0);
+    await expect(privateShell.getByRole('complementary', { name: 'Riff' })).toHaveCount(0);
   } finally {
     await app.close();
   }
 });
 
-test('Duet reads the form on a page of 5,000 fields in a moment, and stops at what it may describe', async () => {
+test('Riff reads the form on a page of 5,000 fields in a moment, and stops at what it may describe', async () => {
   const app = await launch(fresh(), '/many');
   try {
     await shellOf(app);
@@ -674,7 +674,7 @@ test('Duet reads the form on a page of 5,000 fields in a moment, and stops at wh
   }
 });
 
-test('Duet: a Claude Code too old for browse mode isn’t asked whether it’s signed in, and Setup says to update it', async () => {
+test('Riff: a Claude Code too old for browse mode isn’t asked whether it’s signed in, and Setup says to update it', async () => {
   const setup = fresh();
   const app = await launch(setup, '/article', { FAKE_CLAUDE_VERSION: '1.0.34' });
   try {
@@ -693,7 +693,7 @@ test('Duet: a Claude Code too old for browse mode isn’t asked whether it’s s
 /** Every page URL main has open (tabs, and the PDF viewer inside them). */
 const openUrls = (app: ElectronApplication) => app.evaluate(({ webContents }) => webContents.getAllWebContents().map((w) => w.getURL()));
 
-test('Duet sees an image: pasted in the command bar, or a screenshot from its toast or the recent list; not a Never site’s; kept with the chat, and deleted with it', async () => {
+test('Riff sees an image: pasted in the command bar, or a screenshot from its toast or the recent list; not a Never site’s; kept with the chat, and deleted with it', async () => {
   const setup = fresh();
   const images = join(setup.profile, 'duet', 'images');
   const toastOf = (shell: Page) => shell.getByRole('region', { name: 'Notifications' }).getByRole('group', { name: 'Screenshot copied' });
@@ -706,7 +706,7 @@ test('Duet sees an image: pasted in the command bar, or a screenshot from its to
     await runAction(shell, 'duet.toggle');
     await expect(panel).toBeHidden();
 
-    // Pasted in the command bar: searching by it comes first, then Duet. Words typed make Duet's row the first.
+    // Pasted in the command bar: searching by it comes first, then Riff. Words typed make Riff's row the first.
     await app.evaluate(async ({ clipboard, ClipboardItem, nativeImage }) => {
       const [width, height] = [1600, 900];
       const bitmap = Buffer.alloc(width * height * 4, 200);
@@ -717,22 +717,22 @@ test('Duet sees an image: pasted in the command bar, or a screenshot from its to
     const field = overlay.getByRole('dialog', { name: 'New tab' }).getByRole('combobox');
     await field.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+V`);
     await expect(overlay.getByTestId('image-chip')).toBeVisible();
-    await expect(overlay.getByRole('option')).toHaveText([/Search Google Lens for this image/, /Ask Duet about this image/]);
+    await expect(overlay.getByRole('option')).toHaveText([/Search Google Lens for this image/, /Ask Riff about this image/]);
     await field.fill('what colors are these');
-    await expect(overlay.getByRole('option').first()).toContainText('Ask Duet: what colors are these');
+    await expect(overlay.getByRole('option').first()).toContainText('Ask Riff: what colors are these');
     await field.press('Enter');
     // The panel opens with the question asked: the model gets the JPEG the overlay made, at most 1,000 px a side.
     await expect(panel).toBeVisible();
     await expect(panel.getByRole('img', { name: 'Image you sent, 1000 × 563' })).toBeVisible();
     await expect(panel.getByText('I see one image: image/jpeg 1000×563. You asked: what colors are these')).toBeVisible();
 
-    // A screenshot's toast: Ask Duet puts it in the composer; the message sends it, the whole of what's on screen.
+    // A screenshot's toast: Ask Riff puts it in the composer; the message sends it, the whole of what's on screen.
     const tab = await pageWhere(app, (url) => url === `${site.origin}/article`);
     const viewport = await tab.evaluate(() => `${document.documentElement.clientWidth}×${document.documentElement.clientHeight}`);
     await runAction(shell, 'page.screenshot');
     await expect(overlay.getByRole('dialog', { name: 'Take a screenshot' })).toBeVisible();
     await overlay.keyboard.press('v');
-    await toastOf(shell).getByRole('button', { name: 'Ask Duet' }).click();
+    await toastOf(shell).getByRole('button', { name: 'Ask Riff' }).click();
     await expect(panel.getByRole('img', { name: 'Image to send' })).toBeVisible();
     await send(panel, 'describe it');
     await expect(panel.getByText(`I see one image: image/jpeg ${viewport}. You asked: describe it`)).toBeVisible();
@@ -741,24 +741,24 @@ test('Duet sees an image: pasted in the command bar, or a screenshot from its to
     await panel.getByText('describe it', { exact: true }).hover();
     await panel.getByRole('button', { name: 'Edit and send again' }).click();
     await expect(panel.getByRole('img', { name: 'Image to send' })).toBeVisible();
-    await panel.getByRole('textbox', { name: 'Message Duet' }).fill('describe it again');
-    await panel.getByRole('textbox', { name: 'Message Duet' }).press('Enter');
+    await panel.getByRole('textbox', { name: 'Message Riff' }).fill('describe it again');
+    await panel.getByRole('textbox', { name: 'Message Riff' }).press('Enter');
     await expect(panel.getByText(`I see one image: image/jpeg ${viewport}. You asked: describe it again`)).toBeVisible();
 
-    // The recent list's Ask Duet: into the composer, and the panel steps aside. Taken out again with its ×.
+    // The recent list's Ask Riff: into the composer, and the panel steps aside. Taken out again with its ×.
     await shell.getByRole('button', { name: /^Downloads/ }).click();
     const downloads = overlay.getByRole('dialog', { name: 'Downloads' });
-    await downloads.getByRole('button', { name: 'Ask Duet about the screenshot of Article' }).click();
+    await downloads.getByRole('button', { name: 'Ask Riff about the screenshot of Article' }).click();
     await expect(downloads).toHaveCount(0);
     await expect(panel.getByRole('img', { name: 'Image to send' })).toBeVisible();
     await panel.getByRole('button', { name: "Don't send this image" }).click();
     await expect(panel.getByRole('img', { name: 'Image to send' })).toHaveCount(0);
 
-    // A Never site: its screenshots don't offer Duet, on the toast or in the list.
+    // A Never site: its screenshots don't offer Riff, on the toast or in the list.
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
-    await settings.getByRole('button', { name: 'Duet' }).click();
-    const add = settings.getByRole('textbox', { name: 'Add a site Duet never reads' });
+    await settings.getByRole('button', { name: 'Riff' }).click();
+    const add = settings.getByRole('textbox', { name: 'Add a site Riff never reads' });
     await add.fill('127.0.0.1');
     await add.press('Enter');
     await shell.bringToFront();
@@ -766,10 +766,10 @@ test('Duet sees an image: pasted in the command bar, or a screenshot from its to
     await expect(overlay.getByRole('dialog', { name: 'Take a screenshot' })).toBeVisible();
     await overlay.keyboard.press('v');
     await expect(toastOf(shell).getByRole('button', { name: 'Save' })).toBeVisible();
-    await expect(toastOf(shell).getByRole('button', { name: 'Ask Duet' })).toHaveCount(0);
+    await expect(toastOf(shell).getByRole('button', { name: 'Ask Riff' })).toHaveCount(0);
     await shell.getByRole('button', { name: /^Downloads/ }).click();
     await expect(downloads.getByRole('button', { name: /^Copy screenshot/ }).first()).toBeVisible();
-    await expect(downloads.getByRole('button', { name: /^Ask Duet/ })).toHaveCount(0);
+    await expect(downloads.getByRole('button', { name: /^Ask Riff/ })).toHaveCount(0);
     await overlay.keyboard.press('Escape');
     // Two pictures sent (one twice, the same files), each kept with a thumbnail; the one taken out of the composer isn't.
     expect(readdirSync(images).sort()).toHaveLength(4);
@@ -793,13 +793,13 @@ test('Duet sees an image: pasted in the command bar, or a screenshot from its to
   }
 });
 
-test('Duet makes images with Codex: Claude says it can’t and offers Codex; the image shows, copies and saves, stays after a relaunch, and goes with the chat, Codex’s copy too; off in Settings, no offer', async () => {
+test('Riff makes images with Codex: Claude says it can’t and offers Codex; the image shows, copies and saves, stays after a relaunch, and goes with the chat, Codex’s copy too; off in Settings, no offer', async () => {
   const setup = fresh();
   const codexHome = join(setup.config, 'codex');
   const downloads = mkdtempSync(join(tmpdir(), 'chord-downloads-'));
   const images = join(setup.profile, 'duet', 'images');
   const env = { CHORD_DUET_CODEX: fakeCodex, CODEX_HOME: codexHome, CHORD_DOWNLOADS_DIR: downloads };
-  const made = (panel: Locator) => panel.getByRole('img', { name: 'Image Duet made: A cartoon of the page' });
+  const made = (panel: Locator) => panel.getByRole('img', { name: 'Image Riff made: A cartoon of the page' });
   let app = await launch(setup, '/article', env);
   try {
     const shell = await shellOf(app);
@@ -831,7 +831,7 @@ test('Duet makes images with Codex: Claude says it can’t and offers Codex; the
       )
       .toEqual({ width: 64, height: 48 });
     await panel.getByRole('button', { name: 'Save image to Downloads' }).click();
-    await expect.poll(() => readdirSync(downloads).filter((f) => /^Duet image .+\.png$/.test(f)).length).toBe(1);
+    await expect.poll(() => readdirSync(downloads).filter((f) => /^Riff image .+\.png$/.test(f)).length).toBe(1);
     expect(readdirSync(join(codexHome, 'generated_images', 'thr_fake'))).toHaveLength(1);
   } finally {
     await app.close();
@@ -862,7 +862,7 @@ test('Duet makes images with Codex: Claude says it can’t and offers Codex; the
   }
 });
 
-test('Duet: reads a PDF through the tab’s own session, cites its page, and shows how full the context is', async () => {
+test('Riff: reads a PDF through the tab’s own session, cites its page, and shows how full the context is', async () => {
   pdfRequests.length = 0;
   const setup = fresh();
   const app = await launch(setup, '/login');
@@ -877,11 +877,11 @@ test('Duet: reads a PDF through the tab’s own session, cites its page, and sho
     await expect(panel.getByRole('meter', { name: 'Context used' })).toHaveCount(0);
     await send(panel, 'What does this PDF say about triads?');
     await expect(panel.getByText(/The PDF has 3 pages\. Triads sound bright\./)).toBeVisible();
-    // The page comes from the text Duet read, not from the model.
+    // The page comes from the text Riff read, not from the model.
     const pill = panel.getByRole('button', { name: /^Source 1, page 2: “A major triad sounds bright”/ });
     await expect(pill).toHaveText('1 · p. 2');
     await expect(panel.getByRole('button', { name: /^Read “/ })).toBeVisible();
-    // Duet's copy came over the network (no-store) with the tab's cookie: every request was signed in.
+    // Riff's copy came over the network (no-store) with the tab's cookie: every request was signed in.
     expect(pdfRequests.length).toBeGreaterThanOrEqual(2);
     expect(pdfRequests.every((r) => r.signedIn)).toBe(true);
 
@@ -907,7 +907,7 @@ test('Duet: reads a PDF through the tab’s own session, cites its page, and sho
  * through wsl.exe. Opt-in (CHORD_E2E_WSL=1), as it needs Windows with WSL and node in the distro.
  * CLAUDE_CONFIG_DIR reaches the distro through WSLENV, the way a user's own setting would.
  */
-test('Duet: Claude Code inside WSL is offered in Setup, answers through wsl.exe, and deleting the chat deletes its session there', async () => {
+test('Riff: Claude Code inside WSL is offered in Setup, answers through wsl.exe, and deleting the chat deletes its session there', async () => {
   test.skip(!(process.platform === 'win32' && process.env['CHORD_E2E_WSL'] === '1'), 'Needs WSL with node in the default distro: set CHORD_E2E_WSL=1');
   test.setTimeout(120_000);
   const wsl = (args: string[]) => new Promise<string>((done) => execFile('wsl.exe', args, { windowsHide: true }, (_e, out) => done(String(out))));
@@ -996,13 +996,13 @@ async function windowPicture(app: ElectronApplication, shell: Page, tab: Page, o
 }
 
 for (const appearance of ['light', 'dark'] as const) {
-  test(`Duet: captures a PDF citation and the context meter in ${appearance}`, async () => {
+  test(`Riff: captures a PDF citation and the context meter in ${appearance}`, async () => {
     const app = await launch(fresh(), '/login', { CHORD_APPEARANCE: appearance });
     try {
       const shell = await shellOf(app);
       await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe(appearance);
       await expect.poll(async () => (await openUrls(app)).some((u) => u.endsWith('/guide.pdf')), { timeout: 20_000 }).toBe(true);
-      // As a user would: the PDF is open (Chromium's viewer done loading, its zoom set) before Duet opens beside it.
+      // As a user would: the PDF is open (Chromium's viewer done loading, its zoom set) before Riff opens beside it.
       await expect
         .poll(
           () =>
@@ -1047,7 +1047,7 @@ for (const appearance of ['light', 'dark'] as const) {
 }
 
 for (const appearance of ['light', 'dark'] as const) {
-  test(`Duet: captures the panel in ${appearance} for design QA`, async () => {
+  test(`Riff: captures the panel in ${appearance} for design QA`, async () => {
     const app = await launch(fresh(), '/article', { CHORD_APPEARANCE: appearance });
     try {
       const shell = await shellOf(app);
@@ -1060,7 +1060,7 @@ for (const appearance of ['light', 'dark'] as const) {
         await expect.poll(async () => (last === (last = JSON.stringify(await panel.boundingBox())) ? 'still' : 'moving'), { intervals: [100] }).toBe('still');
         await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-${step}.png`) });
       };
-      await expect(panel.getByText('Meet Duet.')).toBeVisible();
+      await expect(panel.getByText('Meet Riff.')).toBeVisible();
       await capture('1-setup');
       await panel.getByRole('button', { name: 'Use this' }).first().click();
       await expect(panel.getByRole('button', { name: 'Got it' })).toBeVisible();
@@ -1069,7 +1069,7 @@ for (const appearance of ['light', 'dark'] as const) {
       await send(panel, 'Summarize this page');
       await expect(panel.getByText('Here is the gist.')).toBeVisible();
       await send(panel, 'list my tabs');
-      await expect(panel.getByRole('group', { name: 'Duet is asking' })).toBeVisible();
+      await expect(panel.getByRole('group', { name: 'Riff is asking' })).toBeVisible();
       await capture('3-conversation');
     } finally {
       await app.close();

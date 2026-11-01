@@ -640,7 +640,7 @@ interface TabRowProps extends RowBase {
   shows: boolean;
   section: Section;
   isActive: boolean;
-  /** Duet read it (DESIGN.md §7.8). */
+  /** Riff read it (DESIGN.md §7.8). */
   duetRead: boolean;
   /** Picked up with the keyboard (Space). */
   moving: boolean;
@@ -712,7 +712,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
       >
         <TabFace tab={tab} live={live} appearance={appearance} />
         <Count unread={unread} />
-        {duetRead && <DuetIcon className={styles.duetRead} size={12} strokeWidth={2} role="img" aria-label="Duet read this tab" />}
+        {duetRead && <DuetIcon className={styles.duetRead} size={12} strokeWidth={2} role="img" aria-label="Riff read this tab" />}
       </div>
       {sharing ? (
         <button

@@ -48,7 +48,7 @@ export interface FileImporterOptions {
   /** chord-data: what's pending written first, this computer's id, a port for history and chats, and an import's Undo (the chats it took away come back). */
   data: { flush(): Promise<void>; device(): Promise<string>; port(importId: string): Promise<MessagePortMain>; undo(importId: string): Promise<DuetThread[]> };
   effects: { importSites(importId: string, sites: SiteEffects[]): Promise<void>; undoImport(importId: string): Promise<void> };
-  /** Duet's lists follow chats that came in or went; ones that went end their sessions. */
+  /** Riff's lists follow chats that came in or went; ones that went end their sessions. */
   duet(): { importChanged(removed?: readonly DuetThread[]): Promise<void> } | undefined;
   toast(windowId: WindowId, toast: Toast): void;
   /** Shared with another browser's importer: one import at a time. */
@@ -79,7 +79,7 @@ export class FileImporter {
   private running: Running | null = null;
   private choosing = false;
   private readonly processes = new Set<FileProcess>();
-  /** Each import this session, for its Undo: where it reports, and the image files it writes (names in Duet's images folder). */
+  /** Each import this session, for its Undo: where it reports, and the image files it writes (names in Riff's images folder). */
   private readonly imports = new Map<string, { notify(progress: FileImportProgress): void; files: Set<string> }>();
   /** The last folder a file came from: the dialog opens there next time. */
   private folder: string | null = null;

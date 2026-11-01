@@ -32,7 +32,7 @@ export class EffectsCompiler {
     return this.request({ type: 'compile', parts }) as Promise<Compiled>;
   }
 
-  /** One stylesheet on its own (a patch from Duet), as it's kept: nothing that fetches, and no !important added. */
+  /** One stylesheet on its own (a patch from Riff), as it's kept: nothing that fetches, and no !important added. */
   patch(css: string): Promise<Sanitized> {
     return this.request({ type: 'patch', css }) as Promise<Sanitized>;
   }

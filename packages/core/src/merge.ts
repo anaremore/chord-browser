@@ -60,7 +60,7 @@ import { restoreSettings } from './restore';
 import type { Platform } from './shortcuts';
 import { compareStamps, type Stamp } from './stamps';
 
-/** The switches on the preview that decide what comes in. History and Duet chats never pass through here. */
+/** The switches on the preview that decide what comes in. History and Riff chats never pass through here. */
 export interface MergeChoices {
   effects: boolean;
   /** *Settings from the file*, and a chord's own proxy: off for a profile with data until you turn it on. */
@@ -171,7 +171,7 @@ export interface MergePlan {
   favoritesFull: number;
   /** What `IMPORT_LIMITS` left out or moved. */
   capped: MergeCapped;
-  /** The chords there'll be once it's in: a Duet chat whose chord isn't among them goes to the chord you're in. */
+  /** The chords there'll be once it's in: a Riff chat whose chord isn't among them goes to the chord you're in. */
   chordIds: ChordId[];
 }
 
@@ -181,7 +181,7 @@ export interface MergeInput {
   /** The file's setup, Today tabs and icons. */
   file: readonly DataRecord[];
   /**
-   * How much history and how many Duet chats are here (chord.db's, not
+   * How much history and how many Riff chats are here (chord.db's, not
    * setup): a fresh Chord has next to none. Without it, this is a profile
    * with data.
    */
@@ -297,7 +297,7 @@ const USED_TYPES: ReadonlySet<string> = new Set(['favorite', 'theme', 'route', '
 /**
  * A clearly fresh Chord, which a file restores (S15 §5): only the chord first
  * run made, with no more Today tabs than first run opens (one) and nothing
- * pinned; nothing of `USED_TYPES`; no Duet chats; at most `FRESH_PAGES` of
+ * pinned; nothing of `USED_TYPES`; no Riff chats; at most `FRESH_PAGES` of
  * history; and every setting at its default but those first run sets. In
  * doubt (`here` unknown), it's a profile with data: nothing makes way, and
  * *Settings from the file* starts off.
@@ -370,12 +370,12 @@ const SETTING_NAMES: Record<string, [label: string, describe: (value: unknown) =
   'adBlocking.offSites': ['Sites where ads aren’t blocked', sites],
   'tabCounts.enabled': ['Show counts on tabs', ON_OFF],
   'tabCounts.offSites': ['Sites whose counts are hidden', sites],
-  'duet.enabled': ['Show Duet', ON_OFF],
-  'duet.keep': ['Keep Duet chats', named({ forever: 'Forever', '90d': '90 days', '30d': '30 days' })],
-  'duet.scope': ['What Duet can read', named(DUET_SCOPE_NAMES)],
-  'duet.readsNothing': ['Duet reads nothing', ON_OFF],
-  'duet.neverSites': ['Sites Duet never reads', sites],
-  'duet.offChords': ['Chords where Duet is off', (v) => (Array.isArray(v) ? (v.length === 0 ? 'None' : `${v.length} chords`) : String(v))],
+  'duet.enabled': ['Show Riff', ON_OFF],
+  'duet.keep': ['Keep Riff chats', named({ forever: 'Forever', '90d': '90 days', '30d': '30 days' })],
+  'duet.scope': ['What Riff can read', named(DUET_SCOPE_NAMES)],
+  'duet.readsNothing': ['Riff reads nothing', ON_OFF],
+  'duet.neverSites': ['Sites Riff never reads', sites],
+  'duet.offChords': ['Chords where Riff is off', (v) => (Array.isArray(v) ? (v.length === 0 ? 'None' : `${v.length} chords`) : String(v))],
   'duet.codexImages': ['Codex can make images', ON_OFF],
   externalLinks: ['Links from other apps open in', named({ mini: 'A mini window', tab: 'A new tab' })],
   'reader.size': ['Reader view’s text size', (v) => String(v)],
@@ -951,7 +951,7 @@ export function importedText(counts: ImportedCounts): string {
     counts.effects ? `Effects for ${plural(counts.effects, 'site')}` : '',
     counts.settings ? plural(counts.settings, 'setting') : '',
     counts.pages ? `${plural(counts.pages, 'page')} of history` : '',
-    counts.chats ? plural(counts.chats, 'Duet chat') : '',
+    counts.chats ? plural(counts.chats, 'Riff chat') : '',
   ].filter(Boolean);
   if (parts.length === 0) return counts.other ? 'Imported your setup' : 'Everything in the file was here already';
   return `Imported ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`}`;

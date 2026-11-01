@@ -4,17 +4,18 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 
 ## 0.6.0 · preview · 2026-10-31
 
+- **Duet is now Riff.** Same panel, same shortcut (⌘/Ctrl+E), same settings, and your chats are all still there; only the name changed, since Anthropic's new Claude Duet is something else.
 - **Bring a Chord file back**, in Settings → Your data → *From a Chord file*: an export from this computer or another. Before anything changes, Chord shows what it would bring: what's new, and what's newer than yours. It adds what's missing and updates what's older, and never removes anything. One Undo takes all of it back.
   - Into a new Chord it's a restore: everything comes in, settings too, in place of the chord Chord started with.
-  - Into a Chord you use, your settings stay as they are unless you turn on *Settings from the file*, which names each change first. History, Duet chats and Effects each have a switch.
-  - A file is treated as untrusted: tabs don't load until you open them, every site's Effects are checked again, sites you'd allowed to use your camera, microphone or location ask again, and Duet chats send nothing anywhere until you write in one.
-- **Sync your setup between your computers**, in Settings → Your data → *Sync*, through a folder you already sync: iCloud Drive, Dropbox, OneDrive or Syncthing. Your chords, pinned tabs and folders, Favorites, themes, settings, link routes and Effects stay the same on each computer. History, Today tabs, Duet chats, page zoom, site permissions and proxies stay on each one.
+  - Into a Chord you use, your settings stay as they are unless you turn on *Settings from the file*, which names each change first. History, Riff chats and Effects each have a switch.
+  - A file is treated as untrusted: tabs don't load until you open them, every site's Effects are checked again, sites you'd allowed to use your camera, microphone or location ask again, and Riff chats send nothing anywhere until you write in one.
+- **Sync your setup between your computers**, in Settings → Your data → *Sync*, through a folder you already sync: iCloud Drive, Dropbox, OneDrive or Syncthing. Your chords, pinned tabs and folders, Favorites, themes, settings, link routes and Effects stay the same on each computer. History, Today tabs, Riff chats, page zoom, site permissions and proxies stay on each one.
   - Pick the folder, and choose a passphrase. Everything Chord puts there is encrypted with it, and you type it once on each computer. Lose it and the synced copy can't be opened; what's on each computer stays, and *Start over* syncs it again under a new one.
   - On another computer, pick the same folder and enter the passphrase. A new Chord takes your synced setup; one with chords of its own asks whether to use the synced setup (with Undo) or keep both.
   - A change on one computer reaches the others a few seconds after your sync app delivers it. If two computers change the same thing, the later change wins; changes to different things both stay. A computer whose clock is wrong can't make your changes lose to it.
   - A chord deleted on another computer never takes this computer's Today tabs or the tabs you have open: they move to another chord, a message says where, and Undo brings the chord back.
   - Settings lists your computers. Remove one or turn sync off, each with Undo first, pause it, or change the passphrase. Your data on each computer stays whatever you do.
-  - What comes from the folder is treated as untrusted, as a file is: tabs don't load until you open them, Effects are checked again, a chord never changes its sign-ins or proxy, and sync never carries permissions or Duet chats.
+  - What comes from the folder is treated as untrusted, as a file is: tabs don't load until you open them, Effects are checked again, a chord never changes its sign-ins or proxy, and sync never carries permissions or Riff chats.
 
 ## 0.5.0 · preview · 2026-10-26
 

@@ -1,5 +1,5 @@
 /**
- * Duet's provider adapters against fake CLIs that speak each protocol
+ * Riff's provider adapters against fake CLIs that speak each protocol
  * (Claude's stream-json with the control channel, Codex's app-server), so CI
  * never needs the real CLIs or the network.
  */
@@ -31,12 +31,12 @@ function options(script: string, extra: Partial<SessionOptions> = {}): SessionOp
   const dir = mkdtempSync(join(tmpdir(), 'chord-duet-unit-'));
   dirs.push(dir);
   const instructionsFile = join(dir, 'instructions.md');
-  writeFileSync(instructionsFile, 'Duet test instructions');
+  writeFileSync(instructionsFile, 'Riff test instructions');
   return {
     launch: { command: process.execPath, prefix: [script], env: { ...process.env, CLAUDE_CONFIG_DIR: dir, CODEX_HOME: dir } },
     cwd: dir,
     model: null,
-    instructions: 'Duet test instructions',
+    instructions: 'Riff test instructions',
     instructionsFile,
     resumeId: null,
     newSessionId: '11111111-2222-4333-8444-555555555555',
@@ -161,7 +161,7 @@ describe('Claude Code adapter', () => {
     session.close();
   });
 
-  it('reports a session it can’t resume, so Duet can start over from a summary', async () => {
+  it('reports a session it can’t resume, so Riff can start over from a summary', async () => {
     const { seen, events, turnEnded } = recorder();
     const ended = turnEnded();
     new ClaudeSession(options(fakeClaude, { resumeId: '99999999-0000-4000-8000-000000000000' }), events);
@@ -186,7 +186,7 @@ describe('Codex adapter', () => {
     expect(withImages).toContain('--disable shell_tool');
   });
 
-  it('makes an image when allowed: Duet gets its bytes, what it was made from, and where Codex saved its copy', async () => {
+  it('makes an image when allowed: Riff gets its bytes, what it was made from, and where Codex saved its copy', async () => {
     const { seen, events, turnEnded } = recorder();
     const opts = options(fakeCodex, { images: true });
     const session = new CodexSession(opts, events);

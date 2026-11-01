@@ -1,5 +1,5 @@
 /**
- * Duet's store (migration 9; ARCHITECTURE.md §11): threads and their
+ * Riff's store (migration 9; ARCHITECTURE.md §11): threads and their
  * messages, retention, and the command bar's @duet search. Chord's transcript
  * is the source of truth; `provider_session_id` only caches the provider's
  * side, so losing it costs a summary, never the conversation.
@@ -16,9 +16,9 @@ export type DuetOp =
   /** Insert or replace (a streamed reply is saved as it finishes; approvals change when answered). */
   | { op: 'saveMessage'; message: DuetMessage }
   | { op: 'deleteThread'; threadId: string }
-  /** Every thread (Settings → Duet → Clear all Duet chats). */
+  /** Every thread (Settings → Riff → Clear all Riff chats). */
   | { op: 'deleteAll' }
-  /** Threads unused since `before` (Keep Duet chats). */
+  /** Threads unused since `before` (Keep Riff chats). */
   | { op: 'prune'; before: number }
   | { op: 'search'; query: string; limit: number };
 

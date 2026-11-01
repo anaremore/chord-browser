@@ -235,7 +235,7 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
     CHORD_USER_DATA: profile,
     CHORD_HOME_URL: `${site.origin}/`,
     CHORD_E2E_HOOKS: '1',
-    // Duet's panel opens without looking for a real Claude Code or Codex on this machine (paths that don't exist).
+    // Riff's panel opens without looking for a real Claude Code or Codex on this machine (paths that don't exist).
     CHORD_DUET_CLAUDE: join(profile, 'no-claude'),
     CHORD_DUET_CODEX: join(profile, 'no-codex'),
     ...env,
@@ -952,7 +952,7 @@ for (const tabs of [20, 200]) {
           detail: { perSwitch: switchRenders.map((r) => r.total), mostInAFramePerSwitch: switchRenders.map((r) => r.mostInAFrame) },
         });
 
-        // Collapsing and docking the sidebar, and Duet's panel: the page frame changes size by the
+        // Collapsing and docking the sidebar, and Riff's panel: the page frame changes size by the
         // snapshot technique (DESIGN.md §6.5), so each page view moves at most twice, never every frame.
         const frameChange = async (name: string, change: () => Promise<void>, ready: () => Promise<void>, done: () => Promise<void>) => {
           const moves: number[] = [];
@@ -1014,7 +1014,7 @@ for (const tabs of [20, 200]) {
         await frameChange('Collapse the sidebar', toggleSidebar, docked, () => expect(showSidebar).toBeVisible());
         await frameChange('Dock the sidebar', toggleSidebar, collapsed, () => expect(hideSidebar).toBeVisible());
         await docked();
-        const duetPanel = shell.getByRole('complementary', { name: 'Duet' });
+        const duetPanel = shell.getByRole('complementary', { name: 'Riff' });
         const toggleDuet = () => runAction(shell, 'duet.toggle');
         const duetClosed = async () => {
           if (await duetPanel.isVisible()) {
@@ -1030,8 +1030,8 @@ for (const tabs of [20, 200]) {
           }
           await expect(duetPanel).toBeVisible();
         };
-        await frameChange('Open Duet', toggleDuet, duetClosed, () => expect(duetPanel).toBeVisible());
-        await frameChange('Close Duet', toggleDuet, duetOpen, () => expect(duetPanel).toBeHidden());
+        await frameChange('Open Riff', toggleDuet, duetClosed, () => expect(duetPanel).toBeVisible());
+        await frameChange('Close Riff', toggleDuet, duetOpen, () => expect(duetPanel).toBeHidden());
         await duetClosed();
 
         // Pinning: the row travels into Pinned.

@@ -165,7 +165,7 @@ describe('merging another computer’s records', () => {
     expect(mine.at![0]).toBeGreaterThanOrEqual(ahead[0]);
   });
 
-  it('never keeps what sync doesn’t carry: history, Duet chats and their messages, zoom, permissions', () => {
+  it('never keeps what sync doesn’t carry: history, Riff chats and their messages, zoom, permissions', () => {
     setUp();
     const records: DataRecord[] = [
       { type: 'page', id: 'https://a.test/', set: { title: 'A', visits: [1] } },

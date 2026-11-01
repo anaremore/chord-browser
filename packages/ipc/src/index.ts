@@ -137,7 +137,7 @@ export const CustomThemeSchema = z.strictObject({
   grain: z.number().min(0).max(1),
 });
 /** An emoji, a symbol, or a letter: one or two grapheme clusters at most. */
-/** What a Duet chat may read without asking (core's DUET_SCOPES). */
+/** What a Riff chat may read without asking (core's DUET_SCOPES). */
 const duetScope = z.enum(DUET_SCOPES);
 const chordIcon = z.string().min(1).max(16);
 const chordName = z.string().max(64);
@@ -228,7 +228,7 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('import.undo'), importId: id }),
   // A toast's Undo for a change to a site's Effects (main takes it over: Effects live outside the store).
   z.object({ t: z.literal('effects.undo'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
-  // A toast's Undo for a form Duet filled (main takes it over: what was there before stays in the page).
+  // A toast's Undo for a form Riff filled (main takes it over: what was there before stays in the page).
   z.object({ t: z.literal('duet.undoFill'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // Presenting mode's indicator turns it off. Only yours: shares start and end it in main.
   z.object({ t: z.literal('presenting.set'), on: z.boolean(), by: z.literal('you') }),
@@ -421,10 +421,10 @@ export interface EffectsView {
   /** Each element you hid, with its own switch; `usable` is false when the sanitizer can't use its selector, so it hides nothing. */
   hidden: { selector: string; label: string; on: boolean; usable: boolean }[];
   presets: EffectPresetId[];
-  /** Each of Duet's patches: its stylesheet (as Duet or you wrote it), its own switch, and what was left out of it while it's on. */
+  /** Each of Riff's patches: its stylesheet (as Riff or you wrote it), its own switch, and what was left out of it while it's on. */
   duet: { id: string; ask: string; summary: string; css: string; on: boolean; removed: EffectsRemoval[] }[];
   /**
-   * Ask Duet: offered only where Duet may read the page (set up, on in this
+   * Ask Riff: offered only where Riff may read the page (set up, on in this
    * chord, not a Never site, not a private window); how a request is going.
    */
   ask: {
@@ -435,7 +435,7 @@ export interface EffectsView {
     startedAt: number | null;
     /** Why the last request gave nothing, in a sentence. */
     error: string | null;
-    /** What Chord left out of the last patch Duet wrote. */
+    /** What Chord left out of the last patch Riff wrote. */
     note: string | null;
   };
   /** A private window's: what's changed here lasts only as long as the window. */
@@ -457,7 +457,7 @@ export const EffectsAction = z.discriminatedUnion('do', [
     next: z.object({ selector: z.string().trim().min(1).max(EFFECTS_LIMITS.selector), label: z.string().max(EFFECTS_LIMITS.label) }),
   }),
   z.object({ do: z.literal('unhide'), selector: z.string().min(1).max(EFFECTS_LIMITS.selector) }),
-  /** One of Duet's patches by its id: on or off, edited (its name and CSS), or removed. */
+  /** One of Riff's patches by its id: on or off, edited (its name and CSS), or removed. */
   z.object({ do: z.literal('duetOn'), id: z.string().min(1).max(64), on: z.boolean() }),
   z.object({ do: z.literal('editDuet'), id: z.string().min(1).max(64), summary: z.string().max(EFFECTS_LIMITS.summary), css: z.string().max(EFFECTS_LIMITS.duetCss) }),
   z.object({ do: z.literal('removeDuet'), id: z.string().min(1).max(64) }),
@@ -864,7 +864,7 @@ export interface ArchiveSnapshot {
 /** A trackpad scroll gesture starting, ending, or ending in a fling (momentum follows). */
 export type GesturePhase = 'begin' | 'end' | 'fling';
 
-/** What a toast's button does: a command in the shell's store (Undo), "Restart to update", or a screenshot's Save or Ask Duet. */
+/** What a toast's button does: a command in the shell's store (Undo), "Restart to update", or a screenshot's Save or Ask Riff. */
 export type ToastAction = { label: string; command: RendererCommand } | { label: string; update: 'restart' } | { label: string; screenshot: { id: string; do: 'save' | 'duet' } };
 
 export interface Toast {
@@ -872,7 +872,7 @@ export interface Toast {
   message: string;
   /** Most run a command in the shell's store (Undo); "Restart to update" asks main to install. */
   action?: ToastAction;
-  /** A second button, before the first (a screenshot's Ask Duet beside its Save). */
+  /** A second button, before the first (a screenshot's Ask Riff beside its Save). */
   secondary?: ToastAction;
   /** A second line with its own action, about the same thing ("Always open linear.app here?" under "Moved to Work"). */
   also?: { message: string; action: { label: string; command: RendererCommand } };
@@ -907,7 +907,7 @@ export type ScreenshotChoice = z.infer<typeof ScreenshotChoice>;
 /** One of the recent screenshots, with its thumbnail as a data URL (JPEG). */
 export interface ScreenshotItem extends ScreenshotEntry {
   thumb: string | null;
-  /** Duet may be asked about it here (it's set up, and may read the page it's of). */
+  /** Riff may be asked about it here (it's set up, and may read the page it's of). */
   duet: boolean;
 }
 
@@ -975,18 +975,18 @@ export interface StatePatchEvent {
   patches: unknown[];
 }
 
-/* ---------- Duet (ARCHITECTURE.md §11) ---------- */
+/* ---------- Riff (ARCHITECTURE.md §11) ---------- */
 
 export const DuetProviderSchema = z.enum(['claude', 'codex']);
 
 /** What the panel asks main to do. Everything is checked again in main (scope, private, never-sites). */
 export const DuetAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('toggle'), open: z.boolean().optional() }),
-  /** Settings → Duet, from the panel (what it can read). */
+  /** Settings → Riff, from the panel (what it can read). */
   z.object({ do: z.literal('settings') }),
   z.object({ do: z.literal('dismissFirstUse') }),
   z.object({ do: z.literal('setup'), provider: DuetProviderSchema }),
-  /** Duet off (or back on) in the window's current chord. */
+  /** Riff off (or back on) in the window's current chord. */
   z.object({ do: z.literal('chordOff'), off: z.boolean() }),
   z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }),
   z.object({ do: z.literal('refresh') }),
@@ -1044,15 +1044,15 @@ export interface DuetProviderInfo {
   wsl: string | null;
 }
 
-/** What one window's Duet panel shows (pushed as `duet:state`). */
+/** What one window's Riff panel shows (pushed as `duet:state`). */
 export interface DuetView {
-  /** Duet is on (Settings) and this isn't a private window. */
+  /** Riff is on (Settings) and this isn't a private window. */
   enabled: boolean;
   open: boolean;
   provider: DuetProvider | null;
   providers: DuetProviderInfo[];
   chordOff: boolean;
-  /** Settings → Duet's "Nothing": no tabs, pages or images, and no scope to choose per chat. */
+  /** Settings → Riff's "Nothing": no tabs, pages or images, and no scope to choose per chat. */
   readsNothing: boolean;
   /** The transparency card hasn't been dismissed yet. */
   firstUse: boolean;
@@ -1163,10 +1163,10 @@ export interface ExportProgress {
   exportId: string;
   /**
    * `key` while the passphrase becomes the file's key, then each part as it's
-   * written (setup, Today tabs and icons, history, Duet), then `done` or `failed`.
+   * written (setup, Today tabs and icons, history, Riff), then `done` or `failed`.
    */
   phase: 'key' | 'setup' | 'today' | 'history' | 'duet' | 'done' | 'failed';
-  /** History's pages, or Duet's chats, written so far, of `total`. */
+  /** History's pages, or Riff's chats, written so far, of `total`. */
   done: number;
   total: number;
   /** How much of the whole is written, 0 to 1: the bar. */
@@ -1326,7 +1326,7 @@ export const invokeChannels = {
   /** The command bar's @duet. */
   'duet:search': { roles: ['overlay'], request: z.strictObject({ query: z.string().max(200) }), response: z.custom<DuetHit[]>() },
   'duet:openHit': { roles: ['overlay'], request: z.strictObject({ chordId: id, threadId: id }), response: z.void() },
-  /** Settings → Duet: the providers on this computer, sign in, clear all chats. */
+  /** Settings → Riff: the providers on this computer, sign in, clear all chats. */
   'settings:duet': {
     roles: ['internal'],
     request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }), z.object({ do: z.literal('clearAll') })]),
@@ -1392,7 +1392,7 @@ export const invokeChannels = {
   'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
   /** Search suggestions while typing, from the chosen engine (or a keyword's engine); empty when they're off. */
   /** "Search … for this image" in the command bar: the window opens the engine's upload (main/image-search.ts). */
-  /** "Ask Duet about this image" in the command bar: Duet opens with the image and the words typed (main/duet/service.ts). */
+  /** "Ask Riff about this image" in the command bar: Riff opens with the image and the words typed (main/duet/service.ts). */
   'duet:ask': {
     roles: ['overlay'],
     request: z.strictObject({
@@ -1731,7 +1731,7 @@ export interface ShellApi {
   action: { run(action: CoreActionId): Promise<void> };
   /** "Restart to update" from a toast. */
   updates: { restart(): Promise<void> };
-  /** A screenshot toast's Save and Ask Duet. */
+  /** A screenshot toast's Save and Ask Riff. */
   screenshots: { act(id: string, action: 'save' | 'duet'): Promise<void> };
   extensions: {
     state(): Promise<ExtensionsBarState>;
@@ -1742,7 +1742,7 @@ export interface ShellApi {
   };
   /** First run's "Open links in Chord?" (DESIGN.md §8.1). */
   defaultBrowser: { status(): Promise<DefaultBrowserStatus>; make(): Promise<DefaultBrowserStatus> };
-  /** Duet's panel in this window (ARCHITECTURE.md §11). */
+  /** Riff's panel in this window (ARCHITECTURE.md §11). */
   duet: { view(): Promise<DuetView>; act(action: DuetAction): Promise<void>; onState(listener: (view: DuetView) => void): () => void };
   /** Stop a tab's share (its sidebar row shows it's sharing), or the shares of a tab that's being shared. */
   share: { stop(nodeId: string): Promise<void> };
@@ -1841,7 +1841,7 @@ export interface SettingsApi {
     /** Install the downloaded update and reopen Chord. */
     restartToUpdate(): Promise<void>;
     about(): Promise<AboutInfo>;
-    /** Settings → Duet: which providers are installed and signed in; sign in; clear all chats. */
+    /** Settings → Riff: which providers are installed and signed in; sign in; clear all chats. */
     duet(request: { do: 'detect' } | { do: 'signIn'; provider: DuetProvider } | { do: 'clearAll' }): Promise<DuetProviderInfo[]>;
     openUrl(url: string): Promise<void>;
     /** Settings → Privacy → Safe Browsing: available in this build, and how its lists are doing. */
@@ -2063,7 +2063,7 @@ export interface OverlayApi {
     onState(listener: (state: PeekState) => void): () => void;
     expand(): Promise<void>;
   };
-  /** @duet: Duet chats by their words, and opening one; and asking about a pasted image. */
+  /** @duet: Riff chats by their words, and opening one; and asking about a pasted image. */
   duet: {
     search(query: string): Promise<DuetHit[]>;
     open(chordId: string, threadId: string): Promise<void>;

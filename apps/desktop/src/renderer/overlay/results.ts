@@ -49,7 +49,7 @@ export type Result =
   | { kind: 'history'; key: string; title: string; detail: string; url: string }
   /** A tab in the archive: picking it brings the tab back, history and all. */
   | { kind: 'archive'; key: string; title: string; detail: string; url: string; archiveId: string }
-  /** A Duet chat whose words match (@duet): picking it opens the chat. */
+  /** A Riff chat whose words match (@duet): picking it opens the chat. */
   | { kind: 'duet'; key: string; title: string; detail: string; threadId: string; chordId: string }
   | { kind: 'action'; key: string; title: string; action: ActionId }
   | { kind: 'chord'; key: string; title: string; chord: Chord }
@@ -57,7 +57,7 @@ export type Result =
   | { kind: 'scope'; key: string; title: string; detail: string; scope: Scope }
   /** A pasted or dropped image (DESIGN.md §7.3): search the web by it. */
   | { kind: 'imageSearch'; key: string; title: string; engine: ImageSearchEngine }
-  /** A pasted or dropped image: ask Duet about it, with the words typed. */
+  /** A pasted or dropped image: ask Riff about it, with the words typed. */
   | { kind: 'imageDuet'; key: string; title: string };
 
 /** The narrowing filters (DESIGN.md §7.3), in the order `@` lists them. */
@@ -66,7 +66,7 @@ export const FILTERS: readonly { id: Filter; token: string; name: string; placeh
   { id: 'pinned', token: '@pinned', name: 'Pinned', placeholder: 'Search pinned tabs' },
   { id: 'history', token: '@history', name: 'History', placeholder: 'Search history' },
   { id: 'archive', token: '@archive', name: 'Archive', placeholder: 'Search the archive' },
-  { id: 'duet', token: '@duet', name: 'Duet chats', placeholder: 'Search Duet chats' },
+  { id: 'duet', token: '@duet', name: 'Riff chats', placeholder: 'Search Riff chats' },
   { id: 'chords', token: '@chords', name: 'Chords', placeholder: 'Search chords' },
   { id: 'actions', token: '@actions', name: 'Actions', placeholder: 'Search actions' },
 ];
@@ -301,7 +301,7 @@ export interface Narrowing {
   scope?: Scope | null;
   /** The engine's suggestions for the text, newest reply. */
   suggestions?: readonly string[];
-  /** Duet chats matching the text (@duet), newest reply. */
+  /** Riff chats matching the text (@duet), newest reply. */
   duetHits?: readonly DuetHit[];
 }
 
@@ -358,7 +358,7 @@ function resultsFor(
     suggestions.map((text) => ({ kind: 'open', key: `suggest:${text}`, title: text, detail: '', url: into(text), search: true, suggested: true }));
 
   if (scope?.kind === 'filter' && scope.filter === 'duet') {
-    return duetHits.map((h) => ({ kind: 'duet', key: `duet:${h.messageId}`, title: h.threadTitle || 'Duet chat', detail: h.snippet, threadId: h.threadId, chordId: h.chordId }));
+    return duetHits.map((h) => ({ kind: 'duet', key: `duet:${h.messageId}`, title: h.threadTitle || 'Riff chat', detail: h.snippet, threadId: h.threadId, chordId: h.chordId }));
   }
   if (scope?.kind === 'filter') return filtered(scope.filter, q, state, windowId, win?.activeChordId ?? null, activeId ?? null, tabs, tabResult, history, now);
 

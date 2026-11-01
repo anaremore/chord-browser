@@ -308,7 +308,7 @@
   box-sizing: border-box;
   min-block-size: var(--size-setting-row);
 
-  /* As a row's: a choice with a description under its name (Duet's reading) has room above and below. */
+  /* As a row's: a choice with a description under its name (Riff's reading) has room above and below. */
   padding: var(--space-2) var(--space-4);
   border: 0;
   background: transparent;
@@ -440,7 +440,7 @@
   box-shadow: var(--shadow-raised);
 }
 
-/* Settings → Duet: adding a site Duet never reads. */
+/* Settings → Riff: adding a site Riff never reads. */
 .siteInput {
   inline-size: calc(var(--size-slider-width) * 0.8);
   block-size: var(--size-hit-min);

@@ -758,7 +758,7 @@ export class ChordDatabase {
   }
 
   /**
-   * One batch of a Chord file's Duet chats (S15 §5), all or nothing: threads
+   * One batch of a Chord file's Riff chats (S15 §5), all or nothing: threads
    * and messages are added by id, never replaced, so what's here stays as it
    * is and a file imported twice adds nothing. A message goes only into a
    * thread this import added: never into a chat that was here, which a file
@@ -804,7 +804,7 @@ export class ChordDatabase {
    * An import's Undo: its visits go, and on each page it touched what it
    * added comes off (visits, typed visits, frecency, a title it gave), so what
    * Chord saw before, meanwhile, or from another import stays. A page it
-   * brought that nothing else has used goes too. So do the Duet chats and
+   * brought that nothing else has used goes too. So do the Riff chats and
    * messages it added: the threads come back, for main to end their sessions
    * and delete the providers' copies.
    */
@@ -920,7 +920,7 @@ export class ChordDatabase {
     this.db.exec(`PRAGMA wal_autocheckpoint = ${this.elsewhere ? 0 : this.writingImports > 0 ? IMPORT_CHECKPOINT : DEFAULT_CHECKPOINT}`);
   }
 
-  /** Duet's threads and messages (packages/data/src/duet.ts). */
+  /** Riff's threads and messages (packages/data/src/duet.ts). */
   duet(op: DuetOp): DuetResult {
     return runDuet((text) => this.sql(text), op);
   }

@@ -1,5 +1,5 @@
 /**
- * Builds small, valid PDFs for Duet's tests: one page per entry, each line
+ * Builds small, valid PDFs for Riff's tests: one page per entry, each line
  * set in Helvetica (a standard font, so nothing is embedded), uncompressed,
  * with a correct cross-reference table. Text is plain ASCII.
  */

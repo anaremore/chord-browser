@@ -36,7 +36,7 @@ export default defineConfig({
     // Bundle everything (workspace packages are TypeScript sources); only
     // electron and Node built-ins stay external. The entries: main itself,
     // chord-data's utility process (ARCHITECTURE.md §4), the PDF reader
-    // Duet starts for each PDF it reads (§11.4; pdf.js stays out of main),
+    // Riff starts for each PDF it reads (§11.4; pdf.js stays out of main),
     // Safe Browsing's worker thread (§14.5), ad blocking's (§9; the engine
     // stays out of main), the process that reads other browsers' files
     // for an import (§9), the worker that cleans reader view's

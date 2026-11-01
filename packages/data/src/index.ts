@@ -214,7 +214,7 @@ export type DataRequest =
   | { id: number; type: 'archive.get'; archiveId: string }
   /** The newest entry archived for one of these reasons (⌘⇧T after a restart). */
   | { id: number; type: 'archive.latest'; reasons: ArchiveReason[] }
-  /** Duet's threads and messages (./duet.ts). */
+  /** Riff's threads and messages (./duet.ts). */
   | { id: number; type: 'duet'; op: DuetOp }
   /**
    * A port (transferred with this request) on which the import process sends
@@ -222,7 +222,7 @@ export type DataRequest =
    * never pass through main (ARCHITECTURE.md §9). Each batch is answered.
    */
   | { id: number; type: 'import.port'; importId: string }
-  /** Take back what an import added to history and Duet: its Undo. The chats it took away come back (`duet.removed`). */
+  /** Take back what an import added to history and Riff: its Undo. The chats it took away come back (`duet.removed`). */
   | { id: number; type: 'import.undo'; importId: string }
   /** This computer's id for Your data (made the first time it's asked for). */
   | { id: number; type: 'device' }
@@ -312,7 +312,7 @@ export type DataPush =
 
 /**
  * The import process → chord-data, on an import's port: one batch of history,
- * or of a Chord file's Duet chats (S15 §5), written in one transaction.
+ * or of a Chord file's Riff chats (S15 §5), written in one transaction.
  */
 export interface ImportBatch {
   pages?: ImportedPage[];

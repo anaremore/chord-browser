@@ -95,7 +95,7 @@ process.parentPort.on('message', (event) => {
         const writing = db;
         writing.importing(true);
         port.on('close', () => writing.importing(false));
-        // The import process's batches of history (and a Chord file's Duet chats), each written in one transaction and answered.
+        // The import process's batches of history (and a Chord file's Riff chats), each written in one transaction and answered.
         port.on('message', ({ data }) => {
           try {
             if (!db) throw new Error('chord-data: closed');

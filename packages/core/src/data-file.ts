@@ -23,7 +23,7 @@ declare function atob(data: string): string;
 export const DATA_FORMAT = 1;
 export const DATA_FORMAT_ABOUT = 'https://github.com/anaremore/chord-browser/blob/main/docs/data-format.md';
 
-/** What a file holds, in the order it holds it: setup, then Today tabs and icons, then history, then Duet. */
+/** What a file holds, in the order it holds it: setup, then Today tabs and icons, then history, then Riff. */
 export type DataPart = 'setup' | 'today' | 'history' | 'duet';
 
 /** What an export would hold, counted before anything is written: Settings' card says so (S15 §8). */
@@ -39,7 +39,7 @@ export interface ExportCounts {
   effects: number;
   /** History pages with at least one visit. */
   pages: number;
-  /** Duet chats, and the images in them. */
+  /** Riff chats, and the images in them. */
   chats: number;
   images: number;
 }

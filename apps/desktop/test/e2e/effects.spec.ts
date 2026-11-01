@@ -2,7 +2,7 @@
  * Effects (DESIGN.md §7.15, ARCHITECTURE.md §9), end to end: your own CSS, an
  * element hidden with the picker, a preset, Dry/Wet for the site and for every
  * site, a navigation, an unsafe patch stripped (a server that counts requests
- * must never hear from Chord), Ask Duet with the fake Claude Code
+ * must never hear from Chord), Ask Riff with the fake Claude Code
  * (fake-claude.mjs) writing two patches, each item switched off and on, a
  * patch and a hidden element edited, a reload and a relaunch, and a private
  * window that keeps nothing; the card captured in light and dark. Then the
@@ -89,7 +89,7 @@ const sessionFiles = (config: string) => {
   return readdirSync(projects).flatMap((dir) => readdirSync(join(projects, dir)).filter((f) => f.endsWith('.jsonl')));
 };
 
-test('Effects: your CSS, a hidden element, a preset, Dry/Wet, navigating, an unsafe patch, Ask Duet, each one switched and edited, reloading and relaunching, and a private window that keeps nothing', async () => {
+test('Effects: your CSS, a hidden element, a preset, Dry/Wet, navigating, an unsafe patch, Ask Riff, each one switched and edited, reloading and relaunching, and a private window that keeps nothing', async () => {
   test.setTimeout(300_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
@@ -183,23 +183,23 @@ test('Effects: your CSS, a hidden element, a preset, Dry/Wet, navigating, an uns
     expect(await style(other, 'h1', 'color')).toBe('rgb(0, 0, 0)');
     await expect(shell.getByRole('button', { name: /^Effects:/ })).toHaveCount(0);
 
-    // Ask Duet: set up with the fake Claude Code, which reads the outline and answers with a patch that tries a fetch.
+    // Ask Riff: set up with the fake Claude Code, which reads the outline and answers with a patch that tries a fetch.
     await navigate(shell, `${site.origin}/news`);
     news = await pageAt(app, `${site.origin}/news`);
     await expect.poll(() => style(news, 'h1', 'color')).toBe('rgb(255, 0, 0)');
     await runAction(shell, 'duet.toggle');
-    const panel = shell.getByRole('complementary', { name: 'Duet' });
+    const panel = shell.getByRole('complementary', { name: 'Riff' });
     await panel.getByRole('button', { name: 'Use this' }).first().click();
     await panel.getByRole('button', { name: 'Got it' }).click();
     await runAction(shell, 'duet.toggle');
     card = await openCard(shell, popover);
-    const ask = card.getByRole('textbox', { name: 'Ask Duet to restyle this site' });
+    const ask = card.getByRole('textbox', { name: 'Ask Riff to restyle this site' });
     await ask.fill('Make the headline green');
     await ask.press('Enter');
     await expect(card.getByRole('listitem').filter({ hasText: 'Green headline' })).toBeVisible({ timeout: 30_000 });
     await expect.poll(() => style(news, 'h1', 'color')).toBe('rgb(0, 128, 0)');
-    await expect(card).toContainText('Chord left out url() on line 1 from Duet’s patch.');
-    // What Duet got: the page's outline as an untrusted tool result, never a form field's value.
+    await expect(card).toContainText('Chord left out url() on line 1 from Riff’s patch.');
+    // What Riff got: the page's outline as an untrusted tool result, never a form field's value.
     const outline = JSON.parse(readFileSync(join(config, 'effects-outline.json'), 'utf8')) as { trust: string; outline: string; current_effects_css: string };
     expect(outline.trust).toBe('untrusted');
     expect(outline.outline).toContain('header#masthead');
@@ -241,7 +241,7 @@ test('Effects: your CSS, a hidden element, a preset, Dry/Wet, navigating, an uns
     const editorName = editor.getByRole('textbox', { name: 'Name' });
     const editorCss = editor.getByRole('textbox', { name: 'CSS' });
     await expect(editorName).toBeFocused();
-    // As Duet wrote it, with nothing that fetches and without the !important joining adds.
+    // As Riff wrote it, with nothing that fetches and without the !important joining adds.
     await expect(editorCss).toHaveValue(/^body \{\n {2}background-color: rgb\(92, 148, 252\);\n\}/);
     await expect(editorCss).not.toHaveValue(/!important/);
     await editorName.fill('Night sky');
@@ -341,7 +341,7 @@ test('Effects: your CSS, a hidden element, a preset, Dry/Wet, navigating, an uns
     await runAction(privateShell, 'effects.open');
     const privateCard = privatePopover.getByRole('dialog', { name: `Effects on ${host()}` });
     await expect(privateCard).toContainText('Changes here last until this window closes.');
-    await expect(privateCard.getByRole('textbox', { name: 'Ask Duet to restyle this site' })).toHaveCount(0);
+    await expect(privateCard.getByRole('textbox', { name: 'Ask Riff to restyle this site' })).toHaveCount(0);
     await yourCss(privateCard).fill('main h1 { color: rgb(0, 0, 255) }');
     await expect.poll(() => style(privatePage, 'h1', 'color')).toBe('rgb(0, 0, 255)');
     // The normal window's page didn't change.

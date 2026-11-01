@@ -34,7 +34,7 @@ const NOW = Date.now();
 /**
  * What a few weeks of use leave, written straight into chord.db while Chord is closed: a chord with its own sign-ins
  * and proxy, a folder with a tab and its icon, a Favorite, a theme, settings, a route, Effects, zoom, permissions,
- * history and a Duet chat with an image. And what an export must never hold: an open tab's back/forward history
+ * history and a Riff chat with an image. And what an export must never hold: an open tab's back/forward history
  * (with a form's contents), the archive, a download, the interface size, a chat's provider session, Codex's own copy.
  */
 function seed(profile: string, personal: string): void {
@@ -322,7 +322,7 @@ async function openYourData(app: ElectronApplication, shell: Page): Promise<Page
   return settings;
 }
 
-/** What a chord.db says of a Duet chat: whether it came from a file, and its provider session. */
+/** What a chord.db says of a Riff chat: whether it came from a file, and its provider session. */
 function chatRow(profile: string, id: string): { imported_at: number | null; provider_session_id: string | null } | undefined {
   const db = new DatabaseSync(join(profile, 'chord.db'), { readOnly: true });
   try {
@@ -409,7 +409,7 @@ test('a Chord file into a new profile: everything comes in as it was, nothing lo
     await settings.screenshot({ path: resolve(capturesDir, 'settings-your-data-import-dark.png') });
 
     await card.getByRole('button', { name: 'Import', exact: true }).click();
-    const done = /^Imported 2 chords, 2 tabs, 1 Favorite, Effects for 2 sites, \d+ settings, \d+ pages of history and 1 Duet chat/;
+    const done = /^Imported 2 chords, 2 tabs, 1 Favorite, Effects for 2 sites, \d+ settings, \d+ pages of history and 1 Riff chat/;
     await expect(card.getByText(done)).toBeVisible({ timeout: 30_000 });
     await expect(shell.getByRole('group', { name: done })).toBeVisible();
 
@@ -430,7 +430,7 @@ test('a Chord file into a new profile: everything comes in as it was, nothing lo
     await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Reading');
     await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Mail');
 
-    // History in the command bar, the chat in its search, and its image beside Duet's own.
+    // History in the command bar, the chat in its search, and its image beside Riff's own.
     await expect.poll(() => historyFor(overlay, 'story')).toEqual(['https://news.test/a', 'https://news.test/b']);
     await expect.poll(() => chatsFor(overlay, 'lighthouse')).toEqual(['Trip']);
     expect(chatRow(profile, 'th')).toMatchObject({ provider_session_id: null, imported_at: expect.any(Number) });
@@ -518,7 +518,7 @@ test('a Chord file into a profile with data: problems first, then its settings o
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-checked', 'true');
     await card.getByRole('button', { name: 'Import', exact: true }).click();
-    const done = /^Imported 2 chords, 2 tabs, 1 Favorite, Effects for 2 sites, \d+ settings, \d+ pages of history and 1 Duet chat/;
+    const done = /^Imported 2 chords, 2 tabs, 1 Favorite, Effects for 2 sites, \d+ settings, \d+ pages of history and 1 Riff chat/;
     await expect(card.getByText(done)).toBeVisible({ timeout: 30_000 });
 
     const after = await stateOf(shell);

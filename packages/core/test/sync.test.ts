@@ -76,8 +76,8 @@ describe('what another computer’s log may hold', () => {
   it.each<[string, DataRecord, boolean]>([
     ['a chord', ok, true],
     ['history: never synced', rec('page', 'https://a.test/', undefined, { title: 'A', visits: [1] }), false],
-    ['a Duet chat: never synced', rec('thread', 'th', undefined, { chord: 'work', title: 'T' }), false],
-    ['a Duet message: never synced (a chat never gains turns through sync)', rec('message', 'm1', undefined, { thread: 'th' }), false],
+    ['a Riff chat: never synced', rec('thread', 'th', undefined, { chord: 'work', title: 'T' }), false],
+    ['a Riff message: never synced (a chat never gains turns through sync)', rec('message', 'm1', undefined, { thread: 'th' }), false],
     ['an image: never synced', rec('image', 'abcdefabcdefabcdefabcdef', undefined, { data: 'AAAA' }), false],
     ['zoom: this computer’s display', rec('zoom', 'docs.test', at(1), { factor: 1.25 }), false],
     ['a permission: never synced, not even a block', rec('permission', 'https://meet.test', at(1), { camera: 'allow' }), false],

@@ -1,6 +1,6 @@
 /**
  * The frame's snapshot (ARCHITECTURE.md §5; DESIGN.md §6.1 rule 4, §6.5):
- * docking and collapsing the sidebar, and opening and closing Duet's panel,
+ * docking and collapsing the sidebar, and opening and closing Riff's panel,
  * change the content frame's size by picturing the pages and gliding the
  * pictures in the shell. Each page moves twice at most, never every frame;
  * with motion off nothing is pictured at all.
@@ -25,7 +25,7 @@ const appDir = resolve(import.meta.dirname, '../..');
 const framesDir = resolve(appDir, 'test-results', 'frame-snapshot');
 /** The page's color, to find in its picture: rgb(200, 40, 120). */
 const COLOR = [200, 40, 120] as const;
-/** Duet's panel and the gap before it (DESIGN.md §7.8). */
+/** Riff's panel and the gap before it (DESIGN.md §7.8). */
 const DUET_SPACE = 380 + 8;
 
 let site: { server: Server; origin: string };
@@ -54,7 +54,7 @@ async function launch(home = '/', profile = mkdtempSync(join(tmpdir(), 'chord-e2
     CHORD_USER_DATA: profile,
     CHORD_E2E_HOOKS: '1',
     CHORD_HOME_URL: `${site.origin}${home}`,
-    // Duet's panel opens without looking for a real Claude Code or Codex (paths that don't exist).
+    // Riff's panel opens without looking for a real Claude Code or Codex (paths that don't exist).
     CHORD_DUET_CLAUDE: join(profile, 'no-claude'),
     CHORD_DUET_CODEX: join(profile, 'no-codex'),
   };
@@ -292,14 +292,14 @@ test('docking and collapsing glide the page by its snapshot: two moves, its pict
   }
 });
 
-test("Duet's panel slides in while the page's frame narrows by its snapshot, and out while it widens", async () => {
+test("Riff's panel slides in while the page's frame narrows by its snapshot, and out while it widens", async () => {
   const app = await launch();
   try {
     const { shell } = await ready(app);
     await setMotion(app, shell, true);
     await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(248);
     const full = (await pages(app)).views[0]!.width;
-    const panel = shell.getByRole('complementary', { name: 'Duet' });
+    const panel = shell.getByRole('complementary', { name: 'Riff' });
 
     for (const [name, width] of [['duet-open', full - DUET_SPACE], ['duet-close', full]] as const) {
       await watch(app);
@@ -466,7 +466,7 @@ test('with reduced motion, or "Animate the sidebar" off, nothing is pictured and
     expect((await watched(app)).captures).toBe(0);
     expect((await picturesSeen(shell)).count).toBe(0);
     await runAction(shell, 'duet.toggle');
-    await expect(shell.getByRole('complementary', { name: 'Duet' })).toBeVisible();
+    await expect(shell.getByRole('complementary', { name: 'Riff' })).toBeVisible();
     await expect.poll(async () => (await pages(app)).views[0]!.width).toBe((await pages(app)).width - 4 - 4 - DUET_SPACE);
     expect((await watched(app)).captures).toBe(0);
     expect((await picturesSeen(shell)).count).toBe(0);

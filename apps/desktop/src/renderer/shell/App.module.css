@@ -602,7 +602,7 @@ kbd {
   gap: var(--space-2);
   align-items: center;
 
-  /* Padding inside the 100%: otherwise the row overflows its item and clips its end (titles, Duet's marker). */
+  /* Padding inside the 100%: otherwise the row overflows its item and clips its end (titles, Riff's marker). */
   box-sizing: border-box;
   inline-size: 100%;
   block-size: var(--size-row);
@@ -1883,7 +1883,7 @@ kbd {
   opacity: 0.75;
 }
 
-/* The bar's Duet button (DESIGN.md §3.1): Duet's icon and name, when Duet is on. */
+/* The bar's Riff button (DESIGN.md §3.1): Riff's icon and name, when Riff is on. */
 .duetButton {
   display: inline-flex;
   flex: none;
@@ -1905,7 +1905,7 @@ kbd {
   color: var(--color-fg);
 }
 
-/* A tab Duet read in the open chat. */
+/* A tab Riff read in the open chat. */
 .duetRead {
   flex: none;
   color: var(--color-accent);

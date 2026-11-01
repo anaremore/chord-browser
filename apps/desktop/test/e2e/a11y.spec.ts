@@ -5,7 +5,7 @@
  * contrast, computed from the theme tokens, is under WCAG AA (a11y-kit.ts).
  *
  * Also here: the screen-reader structure of the sidebar, the command bar,
- * Settings and Duet (aria snapshots), Windows High Contrast (forced colors,
+ * Settings and Riff (aria snapshots), Windows High Contrast (forced colors,
  * with captures), reduced motion both ways, and reduced transparency.
  */
 import { mkdirSync, mkdtempSync } from 'node:fs';
@@ -296,7 +296,7 @@ for (const mode of APPEARANCES) {
         await runAction(shell, 'app.settings');
         const settings = await pageWhere(app, isSettings);
         const nav = settings.getByRole('navigation', { name: 'Settings sections' });
-        for (const name of ['General', 'Appearance', 'Motion', 'Privacy', 'Effects', 'Site permissions', 'Extensions', 'Your data', 'Duet', 'Keyboard shortcuts', 'About']) {
+        for (const name of ['General', 'Appearance', 'Motion', 'Privacy', 'Effects', 'Site permissions', 'Extensions', 'Your data', 'Riff', 'Keyboard shortcuts', 'About']) {
           await nav.getByRole('button', { name }).click();
           await expect(settings.getByRole('heading', { level: 1 }).first()).toBeVisible();
           await settings.waitForTimeout(250);
@@ -366,7 +366,7 @@ for (const mode of APPEARANCES) {
       expectClean(findings);
     });
 
-    test(`Duet: setup, chat, citations, approval cards and menus (${mode})`, async () => {
+    test(`Riff: setup, chat, citations, approval cards and menus (${mode})`, async () => {
       const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
       const app = await launch({
         CHORD_HOME_URL: `${site.origin}/article`,
@@ -381,38 +381,38 @@ for (const mode of APPEARANCES) {
         await expect(today(shell)).toContainText('Article');
         await setTheme(shell, 'dusk');
         await runAction(shell, 'duet.toggle');
-        const panel = shell.getByRole('complementary', { name: 'Duet' });
-        await expect(panel.getByText('Meet Duet.')).toBeVisible();
-        findings.push(...(await audit(shell, 'Duet: intro and setup', { appearance: mode })));
+        const panel = shell.getByRole('complementary', { name: 'Riff' });
+        await expect(panel.getByText('Meet Riff.')).toBeVisible();
+        findings.push(...(await audit(shell, 'Riff: intro and setup', { appearance: mode })));
         await panel.getByRole('button', { name: 'Use this' }).first().click();
         await expect(panel.getByRole('button', { name: 'Got it' })).toBeVisible();
-        findings.push(...(await audit(shell, 'Duet: ready, first use', { appearance: mode })));
+        findings.push(...(await audit(shell, 'Riff: ready, first use', { appearance: mode })));
         await panel.getByRole('button', { name: 'Got it' }).click();
 
-        const input = panel.getByRole('textbox', { name: 'Message Duet' });
+        const input = panel.getByRole('textbox', { name: 'Message Riff' });
         await input.fill('Summarize this page');
         await input.press('Enter');
         await expect(panel.getByRole('button', { name: /^Source 1: “/ })).toBeVisible();
-        findings.push(...(await audit(shell, 'Duet: a reply with citations', { appearance: mode })));
+        findings.push(...(await audit(shell, 'Riff: a reply with citations', { appearance: mode })));
         await panel.getByRole('button', { name: /Read “Article”/ }).click();
-        findings.push(...(await audit(shell, 'Duet: tool activity', { appearance: mode })));
+        findings.push(...(await audit(shell, 'Riff: tool activity', { appearance: mode })));
 
         await panel.getByRole('button', { name: 'Chats' }).click();
         await expect(panel.getByRole('menu', { name: 'Chats' })).toBeVisible();
-        findings.push(...(await audit(shell, 'Duet: Chats menu', { appearance: mode })));
+        findings.push(...(await audit(shell, 'Riff: Chats menu', { appearance: mode })));
         await shell.keyboard.press('Escape');
         await panel.getByRole('button', { name: /Claude Code · / }).click();
         await expect(panel.getByRole('menu', { name: 'Model' })).toBeVisible();
-        findings.push(...(await audit(shell, 'Duet: model menu', { appearance: mode })));
+        findings.push(...(await audit(shell, 'Riff: model menu', { appearance: mode })));
         await shell.keyboard.press('Escape');
         await panel.getByRole('button', { name: 'Attach a tab' }).click();
-        findings.push(...(await audit(shell, 'Duet: attach a tab', { appearance: mode })));
+        findings.push(...(await audit(shell, 'Riff: attach a tab', { appearance: mode })));
         await shell.keyboard.press('Escape');
 
         await input.fill('list my tabs');
         await input.press('Enter');
-        await expect(panel.getByRole('group', { name: 'Duet is asking' })).toBeVisible();
-        findings.push(...(await audit(shell, 'Duet: approval card', { appearance: mode })));
+        await expect(panel.getByRole('group', { name: 'Riff is asking' })).toBeVisible();
+        findings.push(...(await audit(shell, 'Riff: approval card', { appearance: mode })));
       } finally {
         await app.close();
       }
@@ -570,7 +570,7 @@ for (const mode of APPEARANCES) {
 
 /* ---------- What a screen reader is told (aria snapshots), and what it hears ---------- */
 
-test('screen readers get the structure: the sidebar tree, the command bar combobox, Settings and Duet, and polite announcements', async () => {
+test('screen readers get the structure: the sidebar tree, the command bar combobox, Settings and Riff, and polite announcements', async () => {
   const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/article`, CHORD_DUET_CLAUDE: fakeClaude, CHORD_DUET_CODEX: resolve(config, 'no-codex'), CLAUDE_CONFIG_DIR: config });
   try {
@@ -643,7 +643,7 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
       - button "Privacy"
       - button "Site permissions"
       - button "Extensions"
-      - button "Duet"
+      - button "Riff"
       - button "Keyboard shortcuts"
       - button "About"
     `);
@@ -655,26 +655,26 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
     await expect(engines.getByRole('radio', { checked: true })).toHaveAttribute('tabindex', '0');
     await app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows().find((w) => w.getTitle() === 'Chord Settings')?.close());
 
-    // Duet: a labelled panel with a conversation log that isn't read word by word, and an announcement when a reply is done.
+    // Riff: a labelled panel with a conversation log that isn't read word by word, and an announcement when a reply is done.
     await runAction(shell, 'duet.toggle');
-    const panel = shell.getByRole('complementary', { name: 'Duet' });
+    const panel = shell.getByRole('complementary', { name: 'Riff' });
     await panel.getByRole('button', { name: 'Use this' }).first().click();
     await panel.getByRole('button', { name: 'Got it' }).click();
     await expect(panel).toMatchAriaSnapshot(`
       - button "Chats" [expanded=false]
-      - button "Close Duet"
+      - button "Close Riff"
       - button "Reads this tab" [expanded=false]
-      - textbox "Message Duet"
+      - textbox "Message Riff"
     `);
-    const input = panel.getByRole('textbox', { name: 'Message Duet' });
+    const input = panel.getByRole('textbox', { name: 'Message Riff' });
     await input.fill('Summarize this page');
     await input.press('Enter');
     await expect(panel.getByRole('button', { name: /^Source 1: “/ })).toBeVisible();
-    const log = panel.getByRole('log', { name: 'Duet conversation' });
+    const log = panel.getByRole('log', { name: 'Riff conversation' });
     await expect(log).toHaveAttribute('aria-live', 'off');
     await expect(log).toHaveAttribute('aria-busy', 'false');
     const announcer = shell.getByTestId('announcer');
-    await expect(announcer).toHaveText('Duet finished answering.');
+    await expect(announcer).toHaveText('Riff finished answering.');
     await expect(announcer).toHaveAttribute('aria-live', 'polite');
 
     // A chord switch is announced.

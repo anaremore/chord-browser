@@ -45,7 +45,7 @@ const READER_CONTENT_SECURITY_POLICY = [
   "trusted-types 'none'",
 ].join('; ');
 
-/** Duet's chat images, by main's DuetService (none until it exists). */
+/** Riff's chat images, by main's DuetService (none until it exists). */
 let duetImages: ((url: string) => Promise<Response>) | null = null;
 export function serveDuetImages(serve: (url: string) => Promise<Response>): void {
   duetImages = serve;

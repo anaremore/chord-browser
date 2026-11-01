@@ -1,6 +1,6 @@
 /**
  * Claude Code or Codex installed only inside WSL (ARCHITECTURE.md §11.1):
- * how Duet finds them, translates paths, and builds wsl.exe's arguments. The
+ * how Riff finds them, translates paths, and builds wsl.exe's arguments. The
  * last block runs the real thing (a fake CLI inside the default distro) and
  * is opt-in: CHORD_TEST_WSL=1 on a Windows computer with WSL and node there.
  */
@@ -202,7 +202,7 @@ describe.runIf(realWsl)('Through real WSL (opt-in)', () => {
     const t = { ...wslTarget(probe, ['node', fake]), env: { CLAUDE_CONFIG_DIR: config }, claudeConfigDir: config };
     const dir = mkdtempSync(join(tmpdir(), 'chord-duet-wsl-'));
     const instructionsFile = join(dir, 'instructions.md');
-    writeFileSync(instructionsFile, 'Duet test instructions');
+    writeFileSync(instructionsFile, 'Riff test instructions');
     const options = { launch: wslLaunch(t), cwd: dir, model: null, instructions: '', instructionsFile, resumeId: null as string | null, newSessionId: '22222222-3333-4444-8555-666666666666', tools: DUET_TOOLS };
     const turn = async (resumeId: string | null, text: string) => {
       const seen = { text: '', tools: [] as string[], session: '', status: '', exited: false };
