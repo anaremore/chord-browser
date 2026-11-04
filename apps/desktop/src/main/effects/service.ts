@@ -11,10 +11,9 @@
  *   site's one stylesheet goes in with `insertCSS`, every declaration
  *   `!important`: no script ever goes into a page. A change swaps it on the
  *   site's open pages: the new one in, then the old one out, so nothing
- *   flashes. It's an author-origin sheet: Electron's `removeInsertedCSS` takes
- *   only those out (it passes no origin to Blink, which assumes the author's),
- *   and a user-origin sheet would stay until its document went (seen in
- *   effects.spec.ts: Dry left the page styled).
+ *   flashes. It's an author-origin sheet. Before Electron 45.2.2,
+ *   `removeInsertedCSS` took only those out, and a user-origin sheet stayed
+ *   until its document went (seen in effects.spec.ts: Dry left the page styled).
  * - **Each one's switch.** Your CSS, each hidden element and each of Riff's
  *   patches can be switched off and kept (a preset that's off isn't kept).
  *   The site's stylesheet is made from what's on (`effectsParts`), so
