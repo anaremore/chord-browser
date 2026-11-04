@@ -117,8 +117,12 @@ jobs:
         run: '"$CHORD_EVS_PYTHON" -I -m castlabs_evs.account --no-ask reauth'
 
       # VMP signing happens in here, in castLabs' order: macOS before code signing (afterPack), Windows after it.
+      # On a pull request electron-builder skips Mac signing unless told otherwise, even the ad-hoc signature
+      # (identity '-') that "Check the signature" verifies. A pull request's build has no signing keys to expose.
       - name: Package
         shell: bash
+        env:
+          CSC_FOR_PULL_REQUEST: 'true'
         run: node apps/player/scripts/package.mjs --out "$GITHUB_WORKSPACE/apps/player/release"
 
       - name: Forget the EVS tokens
