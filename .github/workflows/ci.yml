@@ -44,8 +44,9 @@ jobs:
   e2e:
     name: E2E · ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    # The performance spec adds about 4 minutes on a fast machine.
-    timeout-minutes: 40
+    # The performance spec adds about 4 minutes on a fast machine. The Intel Macs are the slowest, and vary:
+    # 31 to 40 minutes for the same suite. This limit only has to catch a hung job.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
