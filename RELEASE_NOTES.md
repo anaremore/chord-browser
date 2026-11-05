@@ -2,6 +2,10 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.6.1 · security · 2026-11-05
+
+**Security.** Updates Electron to 45.2.3 (Chromium 156.0.8078.80), which fixes security issues in Chromium and the components it uses. Update as soon as you can.
+
 ## 0.6.0 · preview · 2026-10-31
 
 - **Duet is now Riff.** Same panel, same shortcut (⌘/Ctrl+E), same settings, and your chats are all still there; only the name changed, since Anthropic's new Claude Duet is something else.
