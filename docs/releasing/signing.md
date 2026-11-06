@@ -177,7 +177,7 @@ Chord Player (ARCHITECTURE.md §9, `apps/player`) runs on castLabs ECS. The stre
 **Without the secrets** (forks, pull requests), the Windows and macOS binaries stay as castLabs built them, so ECS's development signature stays valid. Only Widevine's test servers accept that, so such builds are for tests, not for release.
 
 **Your steps:**
-- **Move the secrets into the `release` environment** (they were repository secrets until 2026-10-25, which every workflow on any branch could read):
+- **Done 2026-11-06:** the account's secrets are in the `release` environment, with the `player-v*` tag rule, and the repository copies are deleted. The steps, for a new account or a rotated password:
   1. *Settings → Environments → release → Deployment branches and tags → Add deployment branch or tag rule*: ref type **Tag**, pattern `player-v*`. Without it, a player tag can't use the environment.
   2. On the same page, *Environment secrets → Add environment secret*: `EVS_ACCOUNT_NAME`, then `EVS_PASSWD`, with your castLabs EVS sign-in. GitHub never shows a secret again, so type them from your castLabs account.
   3. *Settings → Secrets and variables → Actions → Repository secrets*: delete `EVS_ACCOUNT_NAME` and `EVS_PASSWD`.
