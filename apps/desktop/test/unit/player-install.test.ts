@@ -5,7 +5,9 @@
  * signed release installs, and an unsigned or wrongly signed manifest, a
  * manifest from another release, and a corrupted download are each refused,
  * leaving nothing installed. Updates wait their turn beside the running
- * version and replace it only once they've started.
+ * version and replace it only once they've started. Then the service over
+ * it: an answer of none is asked again a while later, and Settings installs
+ * without opening anything.
  */
 import { manifestFor, manifestName, archiveName, writeZip, type PlayerManifest } from '@chord/player-protocol';
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
@@ -15,6 +17,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { nextState, offerFor, type InstallState } from '../../src/main/player/install-state';
 import { PlayerInstaller } from '../../src/main/player/installer';
+import { ChordPlayer } from '../../src/main/player/service';
 
 const release = { version: '0.1.0', tag: 'player-v0.1.0' };
 const manifest: PlayerManifest = {
@@ -128,7 +131,7 @@ function server(releases: Record<string, Record<string, Buffer>>) {
   };
 }
 
-function installer(fetch: (url: string) => Promise<Response>, options: { root?: string; publicKey?: string } = {}) {
+function installer(fetch: (url: string) => Promise<Response>, options: { root?: string; publicKey?: string; now?: () => number } = {}) {
   const changes: string[] = [];
   const root = options.root ?? join(mkdtempSync(join(tmpdir(), 'player-root-')), 'Chord Player');
   const inst = new PlayerInstaller({
@@ -140,6 +143,7 @@ function installer(fetch: (url: string) => Promise<Response>, options: { root?: 
     fetch,
     workerPath,
     changed: () => changes.push(inst.state.s),
+    ...(options.now ? { now: options.now } : {}),
   });
   return { inst, root, changes };
 }
@@ -239,5 +243,105 @@ describe('the installer', () => {
     expect(existsSync(root)).toBe(false);
     expect(inst.state).toEqual({ s: 'unknown' });
     expect(inst.installed()).toBeNull();
+  });
+});
+
+/* ---------- The service: what the notice and Settings offer ---------- */
+
+/** Chord Player's service over a real installer, on a clock the test moves; the player itself never starts. */
+function service(releases: Record<string, Record<string, Buffer>>, { enabled = true } = {}) {
+  let now = 1_000_000;
+  const requests: string[] = [];
+  const serve = server(releases);
+  const fetch = (url: string) => {
+    requests.push(new URL(url).pathname);
+    return serve(url);
+  };
+  const { inst, root } = installer(fetch, { now: () => now });
+  const player = new ChordPlayer({
+    installer: inst,
+    host: { root, platform: 'linux', verbose: false },
+    enabled: () => enabled,
+    tabExists: () => true,
+    setTabInPlayer: () => {},
+    openLink: () => {},
+    back: () => {},
+    theme: () => null,
+    changed: () => {},
+    mediaChanged: () => {},
+    closed: () => {},
+    now: () => now,
+  });
+  /** Lets a check that offer() or status() started finish. */
+  const settle = () => new Promise((done) => setTimeout(done, 50));
+  return { player, inst, root, requests, settle, advance: (ms: number) => (now += ms) };
+}
+
+const feedRequests = (requests: string[]) => requests.filter((p) => p === '/releases').length;
+
+describe('the service', () => {
+  it('asks again, a while after no release was found, and offers one published since', async () => {
+    const releases: Record<string, Record<string, Buffer>> = {};
+    const { player, requests, settle, advance } = service(releases);
+    expect(player.offer()).toBe('pending');
+    await settle();
+    expect(player.offer()).toBeNull();
+    expect(feedRequests(requests)).toBe(1);
+
+    // Published meanwhile; a notice soon after doesn't ask again yet.
+    const r = await makeRelease('0.1.0');
+    releases['player-v0.1.0'] = r.files;
+    advance(60_000);
+    expect(player.offer()).toBeNull();
+    await settle();
+    expect(feedRequests(requests)).toBe(1);
+
+    // Ten minutes on, the next notice asks again. The card isn't held back meanwhile: it shows without the player, then with it.
+    advance(10 * 60_000);
+    expect(player.offer()).toBeNull();
+    await settle();
+    expect(feedRequests(requests)).toBe(2);
+    expect(player.offer()).toEqual({ state: 'install', size: r.files['chord-player-0.1.0-linux-x64.zip']!.length, update: false });
+  });
+
+  it('asks again after a release Chord couldn’t trust, but never where it can’t run', async () => {
+    const stranger = generateKeyPairSync('ed25519');
+    const forged = await makeRelease('0.1.0', { signedBy: stranger.privateKey });
+    const releases: Record<string, Record<string, Buffer>> = { 'player-v0.1.0': forged.files };
+    const { player, inst, requests, settle, advance } = service(releases);
+    player.offer();
+    await settle();
+    expect(inst.state).toEqual({ s: 'unavailable', why: 'unsigned' });
+    releases['player-v0.1.0'] = (await makeRelease('0.1.0')).files;
+    advance(11 * 60_000);
+    player.offer();
+    await settle();
+    expect(feedRequests(requests)).toBe(2);
+    expect(inst.state).toMatchObject({ s: 'available' });
+
+    inst.state = { s: 'unavailable', why: 'unsupported' };
+    advance(60 * 60_000);
+    player.offer();
+    await settle();
+    expect(feedRequests(requests)).toBe(2);
+  });
+
+  it('Settings offers Install, installs without opening anything, and offers nothing in Google-free mode', async () => {
+    const r = await makeRelease('0.1.0');
+    const { player, root, settle } = service({ 'player-v0.1.0': r.files });
+    expect(player.status().install).toBeNull();
+    await settle();
+    expect(player.status()).toMatchObject({ installed: null, install: { state: 'install', update: false } });
+    const done = await player.install();
+    expect(done).toMatchObject({ installed: { version: '0.1.0' }, install: null, running: false });
+    expect(existsSync(join(root, '0.1.0', 'chord-player'))).toBe(true);
+    expect(player.offer()).toEqual({ state: 'ready' });
+
+    const off = service({ 'player-v0.1.0': r.files }, { enabled: false });
+    expect(off.player.status()).toMatchObject({ googleFree: true, install: null });
+    await off.player.install();
+    await off.settle();
+    expect(off.requests).toEqual([]);
+    expect(off.player.status().installed).toBeNull();
   });
 });

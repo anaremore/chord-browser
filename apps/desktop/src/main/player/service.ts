@@ -1,7 +1,7 @@
 /**
  * Chord Player in Chord (ARCHITECTURE.md §9, §16 D4; DESIGN.md §7.1, §7.10,
- * §7.14): what the DRM notice offers, installing and opening a service's page
- * in the player, the tab that stays behind ("Playing in Chord Player"), the
+ * §7.14): what the DRM notice offers, installing (from the notice or Settings)
+ * and opening a service's page in the player, the tab that stays behind ("Playing in Chord Player"), the
  * Now playing card's entry for it, links it hands back, and Settings.
  *
  * It's never offered in Google-free mode (Widevine's CDM comes from Google's
@@ -14,13 +14,16 @@ import type { NodeId } from '@chord/core';
 import type { NowPlaying, PlayerFailure, PlayerOffer, PlayerStatus } from '@chord/ipc';
 import type { CdmState, MediaReport, Theme } from '@chord/player-protocol';
 import { PlayerHost, StartError, type HostDeps } from './host';
-import { offerFor } from './install-state';
+import { installOfferFor, offerFor } from './install-state';
 import type { PlayerInstaller } from './installer';
 
 const DAY_MS = 24 * 3_600_000;
 /** The first update check waits for launch to settle. */
 const FIRST_UPDATE_MS = 60_000;
-/** After GitHub couldn't be reached, how long before a notice asks again. */
+/**
+ * After an answer of none (GitHub couldn't be reached, no release was published yet, or none Chord
+ * could trust), how long before a notice or Settings asks again: one may have been published or fixed since.
+ */
 const RECHECK_MS = 10 * 60_000;
 /** Opening waits this long for the page: on a first start the CDM comes first (S14: under 2 s; up to a minute on a slow network). */
 const OPEN_MS = 90_000;
@@ -62,6 +65,8 @@ export class ChordPlayer {
   private failure: PlayerFailure | null = null;
   private cdm: CdmState | null = null;
   private lastCheck = 0;
+  /** The check running is a second look, after an answer of none: it doesn't hold back a notice that already showed without the player. */
+  private rechecking = false;
   private updateTimer: ReturnType<typeof setTimeout> | null = null;
   /** Goes up whenever what the card shows of the player changes. */
   version = 0;
@@ -104,15 +109,26 @@ export class ChordPlayer {
   offer(): PlayerOffer | null | 'pending' {
     if (!this.deps.enabled() || !this.deps.installer.supported) return null;
     const installer = this.deps.installer;
-    const state = installer.state;
-    // Found out once; after a network failure, again once a while has passed (the next notice that asks).
-    const stale = state.s === 'unavailable' && state.why === 'unreachable' && this.now() - this.lastCheck > RECHECK_MS;
-    if (state.s === 'unknown' || stale) {
-      this.lastCheck = this.now();
-      void installer.check();
-    }
+    this.lookForRelease();
     if (installer.state.s === 'installed' && this.failure) return { state: 'failed', why: this.failure };
-    return offerFor(installer.state, { now: this.now(), opening: this.opening });
+    const offer = offerFor(installer.state, { now: this.now(), opening: this.opening });
+    // A second look adds the player to the card when it finds one, rather than hiding the card meanwhile.
+    return offer === 'pending' && this.rechecking ? null : offer;
+  }
+
+  /**
+   * Finds out what there is to install: once, and again once a while has
+   * passed after an answer of none (the next notice or Settings that asks).
+   * Only a computer that can't have it at all is never asked about again.
+   */
+  private lookForRelease(): void {
+    const installer = this.deps.installer;
+    const state = installer.state;
+    const stale = state.s === 'unavailable' && state.why !== 'unsupported' && this.now() - this.lastCheck > RECHECK_MS;
+    if (state.s !== 'unknown' && !stale) return;
+    this.lastCheck = this.now();
+    this.rechecking = stale;
+    void installer.check();
   }
 
   /** The notice's button: installs Chord Player if it isn't yet, then opens the tab's page in it. */
@@ -252,14 +268,36 @@ export class ChordPlayer {
   }
 
   status(): PlayerStatus {
-    const installed = this.deps.installer.installed();
+    const installer = this.deps.installer;
+    const installed = installer.installed();
+    const offered = this.deps.enabled() && installer.supported && !installed;
+    // Settings offers Install too, so it finds out what there is to install as the notice does.
+    if (offered) this.lookForRelease();
     return {
-      available: this.deps.installer.supported,
+      available: installer.supported,
       googleFree: !this.deps.enabled(),
       installed: installed ? { version: installed.version, ecs: installed.ecs, vmp: installed.vmp } : null,
-      pending: this.deps.installer.pendingVersion,
+      pending: installer.pendingVersion,
       running: this.host.running,
+      install: offered ? installOfferFor(installer.state) : null,
     };
+  }
+
+  /**
+   * Settings' Install: installs Chord Player, the same download, checks and
+   * unpacking as the notice's, and opens nothing. Never in Google-free mode.
+   * An install already under way (from a notice) is the one this waits for.
+   */
+  async install(): Promise<PlayerStatus> {
+    const installer = this.deps.installer;
+    if (this.deps.enabled() && installer.supported) {
+      await installer.load();
+      if (!installer.installed()) {
+        if (installer.state.s !== 'available' && installer.state.s !== 'failed') await installer.check();
+        await installer.install();
+      }
+    }
+    return this.status();
   }
 
   /** Settings' Remove: the player quits, then every version and its profile go. */

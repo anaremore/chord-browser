@@ -779,7 +779,10 @@ As built in Phase 2. The assistant chats and reads; it never changes your tabs (
 **Settings → General → Chord Player** (after Spelling):
 - **Installed:** *Chord Player 0.1.0*, *Plays Netflix, Spotify and the other services that need Widevine, in a window of its own, on castLabs ECS 44.9.3.* An update waiting adds *Version 0.1.1 starts the next time it opens.*
 - **Remove** is a link button that asks once more inline: *Remove it and its sign-ins?* (for 5 seconds), then *Removing…*.
-- **Not installed:** *It installs from the notice on their pages.*
+- **Not installed, with a release to install:** *Plays Netflix, Spotify and the other services that need Widevine, in a window of its own. The download is about 125 MB.* and an **Install** link button (**Update** when the installed one is too old for this Chord). It installs only: nothing opens.
+  - **Installing:** the row's label is the notice's line (*Downloading Chord Player · 42%*, *Checking the download*, *Unpacking Chord Player · 80%*), *You can keep browsing.* under it, and no button. Then the installed row.
+  - **Failed:** the notice's sentence for why (*Chord Player didn't download. Check your connection and try again.*, and the others above) with **Try again**.
+- **Not installed, nothing to install yet** (Chord is still asking, or found no release): *It installs from the notice on their pages.*
 - **Google-free mode:** *Off in Google-free mode, because Widevine, which it plays with, comes from Google.*
 - **Where it can't run** (a Flatpak, Linux arm64), nothing shows.
 - Settings → Privacy → Google-free mode lists it under *Also changed*.

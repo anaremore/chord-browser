@@ -233,8 +233,19 @@ test('installs Chord Player from the notice, plays a Widevine stream in it, and 
     await remove.click();
     await settings.getByRole('button', { name: 'Remove it and its sign-ins?' }).click();
     await expect.poll(() => existsSync(root)).toBe(false);
-    await expect(settings.getByText('It installs from the notice on their pages.')).toBeVisible();
     await expect(card.getByRole('button', { name: /Install Chord Player/ })).toBeVisible({ timeout: 20_000 });
+
+    // Settings offers Install as well, with the download's size. Installing there opens nothing: the notice then offers Open.
+    const installHere = settings.getByRole('button', { name: 'Install', exact: true });
+    await expect(installHere).toBeVisible({ timeout: 20_000 });
+    await expect(settings.getByText(`The download is about ${Math.round(release.size / 1e6)} MB.`)).toBeVisible();
+    await settings.screenshot({ path: join(capturesDir, 'player-settings-install.png') });
+    await installHere.click();
+    await expect(settings.getByText(`Chord Player ${release.version}`)).toBeVisible({ timeout: 120_000 });
+    expect(existsSync(join(root, release.version))).toBe(true);
+    expect((await inspect(app))['running']).toBe(false);
+    await expect(card.getByRole('button', { name: 'Open in Chord Player' })).toBeVisible({ timeout: 20_000 });
+    await expect(playing).toHaveCount(0);
   } finally {
     await app.close();
   }
@@ -269,14 +280,22 @@ test('a corrupted download is refused; private windows and Google-free mode don�
     await expect(privateCard).toContainText('which Chord doesn’t include yet');
     await expect(privateCard.getByRole('button', { name: /Chord Player/ })).toHaveCount(0);
 
-    // Google-free mode: Widevine's CDM comes from Google, so the notice offers no player in any window.
+    // Settings says why too, with Try again.
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'General' }).click();
+    await expect(settings.getByText('The download didn’t match its signature, so Chord didn’t install it.')).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Try again', exact: true })).toBeVisible();
+
+    // Google-free mode: Widevine's CDM comes from Google, so the notice offers no player in any window, nor does Settings.
     await settings.getByRole('button', { name: 'Privacy' }).click();
     await settings.getByRole('switch', { name: 'Google-free mode' }).click();
     await expect(settings.getByText('Not offered, and closed if it’s open')).toBeVisible();
     await expect(card).toContainText('which Chord doesn’t include yet');
     await expect(card.getByRole('button', { name: /Chord Player|Try again/ })).toHaveCount(0);
+    await settings.getByRole('button', { name: 'General' }).click();
+    await expect(settings.getByText('Off in Google-free mode, because Widevine, which it plays with, comes from Google.')).toBeVisible();
+    await expect(settings.getByRole('button', { name: /^(Install|Update|Try again)$/ })).toHaveCount(0);
   } finally {
     site.corrupt = false;
     await app.close();

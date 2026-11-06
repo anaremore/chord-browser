@@ -750,6 +750,9 @@ export type PlayerOffer =
 /** Why installing or starting Chord Player failed. */
 export type PlayerFailure = 'download' | 'verify' | 'unpack' | 'start' | 'widevine';
 
+/** What Settings offers of installing Chord Player: Install, its progress, or why it failed (download, verify, unpack). */
+export type PlayerInstallOffer = Extract<PlayerOffer, { state: 'install' | 'installing' | 'failed' }>;
+
 /** Chord Player for Settings (General → Chord Player). */
 export interface PlayerStatus {
   /** This computer can have it: a supported OS and architecture, not a Flatpak, and a build that can check its signature. */
@@ -759,6 +762,8 @@ export interface PlayerStatus {
   /** A newer version downloaded, waiting to start the next time the player opens. */
   pending: string | null;
   running: boolean;
+  /** While it isn't installed: Install, its progress, or why it failed. Null in Google-free mode, where it can't run, while Chord finds out, and when no release was found. */
+  install: PlayerInstallOffer | null;
 }
 
 /**
@@ -1568,6 +1573,7 @@ export const invokeChannels = {
   'player:do': { roles: ['shell'], request: z.strictObject({ nodeId: id, action: z.enum(['show', 'release']) }), response: z.void() },
   /** Settings → General → Chord Player: its state, and removing it (with its sign-ins). */
   'settings:player': { roles: ['internal'], request: z.void(), response: z.custom<PlayerStatus>() },
+  'settings:installPlayer': { roles: ['internal'], request: z.void(), response: z.custom<PlayerStatus>() },
   'settings:removePlayer': { roles: ['internal'], request: z.void(), response: z.custom<PlayerStatus>() },
   /** A passkey chosen (one the prompt offered), or null to decline: the site then gets NotAllowedError, as after Cancel in Chrome. */
   'passkey:respond': { roles: ['popover'], request: z.strictObject({ id: z.number().int().min(1), credentialId: z.string().max(1024).nullable() }), response: z.void() },
@@ -1850,6 +1856,8 @@ export interface SettingsApi {
     adBlocking(): Promise<AdBlockingStatus>;
     /** Settings → General → Chord Player. */
     player(): Promise<PlayerStatus>;
+    /** Installs Chord Player, and opens nothing; resolves once it's installed or failed. */
+    installPlayer(): Promise<PlayerStatus>;
     removePlayer(): Promise<PlayerStatus>;
     /** Settings → Effects: a site dry or wet, or removed. */
     effects(change: EffectsSiteChange): Promise<void>;

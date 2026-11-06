@@ -448,6 +448,7 @@ function registerIpc(): void {
   handle('drm:player', ({ action }, sender) => browser!.drmAction(sender, { player: action }));
   handle('player:do', ({ nodeId, action }, sender) => browser!.playerAction(senderWindow(sender), nodeId, action));
   handle('settings:player', () => browser!.player.status());
+  handle('settings:installPlayer', () => browser!.player.install());
   handle('settings:removePlayer', () => browser!.player.remove());
   handle('settings:sitePermission', ({ origin, permission, decision }) =>
     browser!.store.dispatch({ t: 'permission.set', origin, permissions: [permission], decision }),
