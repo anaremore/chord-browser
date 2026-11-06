@@ -11,11 +11,14 @@
  * stream and its no-auth licence server, as spike S14 played. The CDM, the
  * stream and the licence come from the network.
  *
- * Linux x64 only: the E2E container and CI's Linux jobs. Windows and macOS
- * builds are checked by the player's own smoke test (.github/workflows/player.yml).
+ * Linux x64 and Windows x64: the E2E container and CI's jobs for those. On
+ * Windows the player plays in the tab (player/dock.ts); the tests written for
+ * a window of its own run there with docking off (CHORD_PLAYER_NO_DOCK), and
+ * the last test docks it. macOS builds are checked by the player's own smoke
+ * test (.github/workflows/player.yml).
  */
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -23,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { artworkPng, watchPage } from '../../../player/scripts/test-page.mjs';
-import { capturesDir, dispatch, isPopover, isSettings, isShell, launch, newPage, pageWhere, runAction, where } from './a11y-kit';
+import { capturesDir, dispatch, isOverlay, isPopover, isSettings, isShell, launch, newPage, pageWhere, runAction, where } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -34,7 +37,8 @@ test.afterEach(async () => {
   if (info.status !== info.expectedStatus) console.log(`--- Chord's output (last 12000 characters) ---\n${output.slice(-12_000)}`);
   output = '';
 });
-test.skip(!(process.platform === 'linux' && process.arch === 'x64'), 'Chord Player is driven end to end on Linux x64; other OSes run its smoke test');
+test.skip(!((process.platform === 'linux' || process.platform === 'win32') && process.arch === 'x64'), 'Chord Player is driven end to end on Linux and Windows x64; other OSes run its smoke test');
+const target = `${process.platform}-${process.arch}`;
 
 const repo = resolve(import.meta.dirname, '../../../..');
 const keys = generateKeyPairSync('ed25519');
@@ -63,7 +67,7 @@ function packagePlayer(): Release {
     const result = spawnSync(process.execPath, [join(repo, 'apps/player/scripts/package.mjs'), '--out', dir], { cwd: repo, env, stdio: 'inherit', timeout: 15 * 60_000 });
     if (result.status !== 0) throw new Error(`Packaging Chord Player failed (${result.status ?? result.signal})`);
   }
-  const manifestName = readdirSync(dir).find((n) => /^chord-player-linux-x64\.json$/.test(n))!;
+  const manifestName = readdirSync(dir).find((n) => n === `chord-player-${target}.json`)!;
   const manifest = readFileSync(join(dir, manifestName), 'utf8');
   const { version, file, size } = JSON.parse(manifest) as { version: string; file: string; size: number };
   return { tag: `player-v${version}`, version, manifestName, manifest, zip: join(dir, file), zipName: file, size };
@@ -113,9 +117,11 @@ test.afterAll(() => site?.server.close());
 const netflix = () => `http://www.netflix.com:${site.port}`;
 
 /** Chord, with a player folder of its own and the stand-in release. */
-async function launchChord(root = mkdtempSync(join(tmpdir(), 'chord-player-root-'))): Promise<{ app: ElectronApplication; root: string }> {
+async function launchChord(root = mkdtempSync(join(tmpdir(), 'chord-player-root-')), { dock = false } = {}): Promise<{ app: ElectronApplication; root: string }> {
   const app = await launch(
     {
+      // Windows docks the player in the tab; the tests of its window of its own turn that off.
+      ...(dock ? {} : { CHORD_PLAYER_NO_DOCK: '1' }),
       CHORD_HOME_URL: `${site.origin}/`,
       CHORD_E2E_HOOKS: '1',
       CHORD_PLAYER_ROOT: root,
@@ -298,6 +304,88 @@ test('a corrupted download is refused; private windows and Google-free mode donâ
     await expect(settings.getByRole('button', { name: /^(Install|Update|Try again)$/ })).toHaveCount(0);
   } finally {
     site.corrupt = false;
+    await app.close();
+  }
+});
+
+interface DockDebug {
+  docked: boolean;
+  visible: boolean;
+  bounds: { x: number; y: number; width: number; height: number } | null;
+  ownWindowVisible: boolean;
+}
+const docked = async (app: ElectronApplication) => ((await debug(app)) as unknown as { docked?: DockDebug } | null)?.docked ?? null;
+const dockState = async (app: ElectronApplication) => (await inspect(app))['dock'] as { supported: boolean | null; sent: { bounds: DockDebug['bounds']; windowId: string } | null; owned: { handle: string; owner: string } | null };
+
+test('plays in the tab on Windows: over the tab, following it, under Chordâ€™s own UI, and closing with it', async () => {
+  test.skip(process.platform !== 'win32', 'Only Windows plays Chord Player in the tab');
+  test.setTimeout(6 * 60_000);
+  const { app } = await launchChord(undefined, { dock: true });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const popover = await pageWhere(app, isPopover);
+    const { windowId } = await where(shell);
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${netflix()}/watch` });
+    await notice(popover).getByRole('button', { name: /Install Chord Player/ }).click({ timeout: 20_000 });
+
+    // Docked: the tab's frame is the player's (no window of its own), and it plays there.
+    await expect(shell.locator('[data-player-docked]')).toBeVisible({ timeout: 120_000 });
+    await expect
+      .poll(async () => {
+        const d = await debug(app);
+        return Boolean(d?.video && d.video.currentTime > 3 && !d.video.paused);
+      }, { timeout: 150_000, intervals: [1000] })
+      .toBe(true);
+    await expect.poll(async () => (await docked(app))?.visible).toBe(true);
+    expect((await docked(app))!.ownWindowVisible).toBe(false);
+
+    // Exactly over the tab's page, and owned by Chord's window (window-owner.exe set it).
+    const state = await dockState(app);
+    expect(state.supported).toBe(true);
+    expect((await docked(app))!.bounds).toEqual(state.sent!.bounds);
+    const chordHandle = await app.evaluate(({ BaseWindow }) => BaseWindow.getFocusedWindow()?.getNativeWindowHandle().readBigUInt64LE(0).toString() ?? BaseWindow.getAllWindows()[0]!.getNativeWindowHandle().readBigUInt64LE(0).toString());
+    const helper = join(repo, 'apps/desktop/out/window-owner/window-owner.exe');
+    await expect.poll(() => execFileSync(helper, ['get', state.owned?.handle ?? '0']).toString().trim()).toBe(chordHandle);
+    await shell.screenshot({ path: join(capturesDir, 'player-docked-frame.png') });
+
+    // It follows the window.
+    const before = (await docked(app))!.bounds!;
+    await app.evaluate(({ BaseWindow }) => {
+      const w = BaseWindow.getAllWindows().find((x) => x.isVisible())!;
+      const b = w.getBounds();
+      w.setPosition(b.x + 40, b.y + 30);
+    });
+    await expect.poll(async () => (await docked(app))?.bounds).toEqual({ ...before, x: before.x + 40, y: before.y + 30 });
+
+    // The command bar is drawn over the tab: the player hides, leaving a still picture of itself, and comes back after.
+    const overlay = await pageWhere(app, isOverlay);
+    await runAction(shell, 'address.edit');
+    await expect.poll(async () => (await docked(app))?.visible).toBe(false);
+    await expect.poll(async () => (await inspect(app))['still']).toBeGreaterThan(0);
+    await expect(shell.locator('[data-player-docked] img')).toBeVisible();
+    await shell.screenshot({ path: join(capturesDir, 'player-docked-still.png') });
+    await overlay.keyboard.press('Escape');
+    await expect.poll(async () => (await docked(app))?.visible).toBe(true);
+
+    // Another tab: hidden; back: shown again.
+    const netflixTab = (await where(shell)).tabId!;
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/` });
+    await expect.poll(async () => (await docked(app))?.visible).toBe(false);
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: netflixTab });
+    await expect.poll(async () => (await docked(app))?.visible).toBe(true);
+
+    // Chord's shortcuts pressed in the player go to Chord: Ctrl+T opens the command bar for a new tab over it.
+    await playerTest(app, { do: 'key', key: 't', control: true });
+    await expect.poll(async () => (await docked(app))?.visible).toBe(false);
+    await overlay.keyboard.press('Escape');
+    await expect.poll(async () => (await docked(app))?.visible).toBe(true);
+    expect((await where(shell)).tabId).toBe(netflixTab);
+
+    // The tab is the player: Ctrl+W in it closes the tab, and the player with it.
+    await playerTest(app, { do: 'key', key: 'w', control: true });
+    await expect.poll(async () => (await inspect(app))['running'], { timeout: 20_000 }).toBe(false);
+    await expect.poll(async () => (await where(shell)).tabId).not.toBe(netflixTab);
+  } finally {
     await app.close();
   }
 });

@@ -19,13 +19,16 @@ import {
   parseArtwork,
   parseLink,
   parseMedia,
+  parseKey,
   parseStatus,
+  parseStill,
   playerEnv,
   PROTOCOL,
   PROTOCOL_MIN,
   rateLimiter,
   type CdmState,
   type Hello,
+  type KeyReport,
   type Launch,
   type MediaReport,
   type Peer,
@@ -54,6 +57,10 @@ export interface HostDeps {
   onLink(url: string): void;
   onBack(): void;
   onStatus(cdm: CdmState): void;
+  /** Docked: a still picture of the page, for while the player hides under something of Chord's. */
+  onStill(data: string): void;
+  /** Docked: a key that may be one of Chord's shortcuts. */
+  onKey(input: KeyReport): void;
   /** The player is gone (its window closed, it quit, or it crashed). */
   onClosed(): void;
 }
@@ -164,6 +171,14 @@ export class PlayerHost {
     peer.handle('status', (m) => {
       const status = parseStatus(m);
       if (status) this.deps.onStatus(status.cdm);
+    });
+    peer.handle('still', (m) => {
+      const data = parseStill(m['data']);
+      if (data) this.deps.onStill(data);
+    });
+    peer.handle('key', (m) => {
+      const input = parseKey(m);
+      if (input) this.deps.onKey(input);
     });
     peer.handle('bye', () => {});
     let gone = false;

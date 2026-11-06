@@ -9,10 +9,14 @@
  * its own, which keeps sign-ins), and turning Google-free mode on closes it.
  * One player at a time, tied to the tab it was opened from: opening another
  * service's page moves it there.
+ *
+ * On Windows it plays in the tab (dock.ts): its page glued over the tab's
+ * content area, so the tab is the player. Closing the tab closes it then.
  */
 import type { NodeId } from '@chord/core';
-import type { NowPlaying, PlayerFailure, PlayerOffer, PlayerStatus } from '@chord/ipc';
-import type { CdmState, MediaReport, Theme } from '@chord/player-protocol';
+import type { NowPlaying, PlayerFailure, PlayerFrame, PlayerOffer, PlayerStatus } from '@chord/ipc';
+import type { CdmState, KeyReport, MediaReport, Theme } from '@chord/player-protocol';
+import { PlayerDock, type DockWindow } from './dock';
 import { PlayerHost, StartError, type HostDeps } from './host';
 import { installOfferFor, offerFor } from './install-state';
 import type { PlayerInstaller } from './installer';
@@ -30,7 +34,15 @@ const OPEN_MS = 90_000;
 
 export interface ChordPlayerDeps {
   installer: PlayerInstaller;
-  host: Omit<HostDeps, 'onMedia' | 'onArtwork' | 'onLink' | 'onBack' | 'onStatus' | 'onClosed'>;
+  host: Omit<HostDeps, 'onMedia' | 'onArtwork' | 'onLink' | 'onBack' | 'onStatus' | 'onClosed' | 'onStill' | 'onKey'>;
+  /** Windows: the window-owner helper that lets the player play in the tab (dock.ts); null: a window of its own. */
+  dockHelper: string | null;
+  /** Where each Chord window would put the player, for this tab (dock.ts). */
+  dockWindows(nodeId: NodeId): DockWindow[];
+  /** What the tab's frame shows of the player changed (playerFrame). */
+  frameChanged(): void;
+  /** A key pressed in the docked player that may be a shortcut of Chord's, for the tab it plays in. */
+  key(input: KeyReport, nodeId: NodeId): void;
   /** Not in Google-free mode. */
   enabled(): boolean;
   tabExists(nodeId: NodeId): boolean;
@@ -53,6 +65,9 @@ export interface ChordPlayerDeps {
 
 export class ChordPlayer {
   readonly host: PlayerHost;
+  readonly dock: PlayerDock;
+  /** The docked page's last still picture, shown while something of Chord's covers the tab. */
+  private still: string | null = null;
   /** The tab the player plays for. */
   nodeId: NodeId | null = null;
   private media: MediaReport | null = null;
@@ -89,9 +104,39 @@ export class ChordPlayer {
       onBack: () => deps.back(this.nodeId),
       onStatus: (cdm) => {
         this.cdm = cdm;
+        // Docked, the page shows once Widevine is ready; the tab's frame says it's starting until then.
+        this.dock.sync();
+        deps.frameChanged();
+      },
+      onStill: (data) => {
+        this.still = data;
+        deps.frameChanged();
+      },
+      onKey: (input) => {
+        if (this.nodeId && this.dock.docked) deps.key(input, this.nodeId);
       },
       onClosed: () => this.gone(),
     });
+    this.dock = new PlayerDock({
+      helper: deps.dockHelper,
+      chordPid: process.pid,
+      playerPid: () => this.host.hello?.pid ?? 0,
+      // Until Widevine is ready the page is blank, so the player stays hidden in the tab (its frame says it's starting).
+      windows: () => (this.nodeId ? this.deps.dockWindows(this.nodeId).map((w) => (this.cdm === 'ready' ? w : { ...w, rect: null })) : []),
+      request: (t, body) => this.host.request(t, body),
+      changed: () => deps.frameChanged(),
+    });
+  }
+
+  /** What the frame of the tab it plays for shows: docked in the tab (and its still picture), or in a window of its own. */
+  frame(): PlayerFrame | null {
+    if (!this.nodeId) return null;
+    return { nodeId: this.nodeId, docked: this.dock.docked, starting: this.cdm !== 'ready', still: this.dock.docked ? this.still : null };
+  }
+
+  /** Something moved, resized, or covers the tab (or stopped): the docked player follows. */
+  placementChanged(): void {
+    this.dock.sync();
   }
 
   private now(): number {
@@ -195,18 +240,27 @@ export class ChordPlayer {
   private attach(nodeId: NodeId): void {
     if (this.nodeId && this.nodeId !== nodeId && this.deps.tabExists(this.nodeId)) this.deps.setTabInPlayer(this.nodeId, false);
     this.nodeId = nodeId;
+    this.still = null;
     this.deps.setTabInPlayer(nodeId, true);
+    // Before `open`, so the page never shows in a window of its own first (the channel keeps the order).
+    this.dock.setEnabled(true);
+    this.dock.sync();
     this.version++;
     this.deps.mediaChanged();
+    this.deps.frameChanged();
   }
 
   private detach(): void {
     if (this.nodeId && this.deps.tabExists(this.nodeId)) this.deps.setTabInPlayer(this.nodeId, false);
     this.nodeId = null;
+    this.still = null;
+    this.dock.setEnabled(false);
+    this.deps.frameChanged();
   }
 
   private gone(): void {
     this.detach();
+    this.dock.reset();
     this.media = null;
     this.artwork = null;
     this.played = false;
@@ -217,9 +271,14 @@ export class ChordPlayer {
     this.deps.closed();
   }
 
-  /** Back to the player (the card, the tab's frame): it comes to the front. */
+  /** Back to the player (the card, the tab's frame): it comes to the front. Docked, its tab does that (browser.ts). */
   async focus(): Promise<void> {
     await this.host.request('focus');
+  }
+
+  /** The player plays in its tab: going back to it is going to the tab. */
+  get docked(): boolean {
+    return this.dock.docked;
   }
 
   /** The card's Play, Pause and Mute, for the player. */
@@ -230,15 +289,30 @@ export class ChordPlayer {
 
   /** The frame's "Show the page here": the tab shows its page again; the player plays on, still on the card. */
   release(nodeId: NodeId): void {
-    if (nodeId === this.nodeId) this.deps.setTabInPlayer(nodeId, false);
+    if (nodeId !== this.nodeId) return;
+    // Docked, the tab is the player: a tab that moves on to another page leaves the video behind, so the player closes.
+    if (this.dock.docked) {
+      void this.host.close();
+      return;
+    }
+    this.deps.setTabInPlayer(nodeId, false);
+    this.deps.frameChanged();
   }
 
-  /** The tab it plays for closed: the player plays on, but nothing in Chord stands for it any more. */
+  /**
+   * The tab it plays for closed. Docked, the tab was the player, so the player closes too. Otherwise
+   * it plays on in its window, but nothing in Chord stands for it any more.
+   */
   tabClosed(nodeId: NodeId): void {
     if (nodeId !== this.nodeId) return;
+    if (this.dock.docked) {
+      void this.host.close();
+      return;
+    }
     this.nodeId = null;
     this.version++;
     this.deps.mediaChanged();
+    this.deps.frameChanged();
   }
 
   /** The chord's colors changed (its theme, the appearance): the bar follows. */
@@ -280,6 +354,7 @@ export class ChordPlayer {
       pending: installer.pendingVersion,
       running: this.host.running,
       install: offered ? installOfferFor(installer.state) : null,
+      inTab: this.dock.available,
     };
   }
 
@@ -334,6 +409,6 @@ export class ChordPlayer {
 
   /** For the E2E tests' hooks: where things stand. */
   inspect(): Record<string, unknown> {
-    return { state: this.deps.installer.state.s, installed: this.deps.installer.installed(), running: this.host.running, hello: this.host.hello, nodeId: this.nodeId, media: this.media, cdm: this.cdm, failure: this.failure };
+    return { state: this.deps.installer.state.s, installed: this.deps.installer.installed(), running: this.host.running, hello: this.host.hello, nodeId: this.nodeId, media: this.media, cdm: this.cdm, failure: this.failure, dock: this.dock.inspect(), still: this.still ? this.still.length : 0 };
   }
 }

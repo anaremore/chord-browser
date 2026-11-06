@@ -270,6 +270,10 @@ function service(releases: Record<string, Record<string, Buffer>>, { enabled = t
     changed: () => {},
     mediaChanged: () => {},
     closed: () => {},
+    dockHelper: null,
+    dockWindows: () => [],
+    frameChanged: () => {},
+    key: () => {},
     now: () => now,
   });
   /** Lets a check that offer() or status() started finish. */

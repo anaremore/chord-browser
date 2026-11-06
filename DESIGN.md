@@ -776,6 +776,13 @@ As built in Phase 2. The assistant chats and reads; it never changes your tabs (
 - Closing the player, or the tab leaving its service, does the same.
 - Only one tab at a time: opening another service's page in the player moves it there.
 
+**In the tab, on Windows** (ARCHITECTURE.md §9, *Playing in the tab*). The page plays where the tab's page would be: no window of its own, no bar. The tab's chord, the sidebar and the strip are around it, as for any tab.
+- Its corners are rounded as the frame's are. It moves and resizes with the window, and hides when the tab isn't shown.
+- When Chord draws over the tab (the command bar, Peek, a hover preview, an extension's popup, the sidebar sliding over), a still picture of the page stands in for it until it's back.
+- While Widevine starts, the frame says *Starting Chord Player…* (`text-label`, `fg-muted`) on `surface`.
+- Clicking the video gives it the keyboard; Chord's shortcuts still work from it. Closing the tab, or leaving the service's page, closes the player.
+- The notice's line says *plays it right here, in this tab*; Settings says *right in the tab*.
+
 **Settings → General → Chord Player** (after Spelling):
 - **Installed:** *Chord Player 0.1.0*, *Plays Netflix, Spotify and the other services that need Widevine, in a window of its own, on castLabs ECS 44.9.3.* An update waiting adds *Version 0.1.1 starts the next time it opens.*
 - **Remove** is a link button that asks once more inline: *Remove it and its sign-ins?* (for 5 seconds), then *Removing…*.

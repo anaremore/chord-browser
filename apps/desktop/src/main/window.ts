@@ -13,6 +13,7 @@
 import { join } from 'node:path';
 import { DEFAULT_DEVTOOLS, devtoolsLayout, devtoolsSize, paneRects, type Bounds, type DevtoolsLayout, type DevtoolsSettings, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
+import type { DockWindow } from './player/dock';
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
 import { BaseWindow, MessageChannelMain, WebContentsView, nativeTheme, type Menu, type MessagePortMain, type Session, type WebContents } from 'electron';
 import { FrameSnapshots, offscreen } from './frame-snapshot';
@@ -77,6 +78,16 @@ export function toWindowRect(r: Rect, s = uiScale()): Rect {
   const x = Math.round(r.x * s);
   const y = Math.round(r.y * s);
   return { x, y, width: Math.round((r.x + r.width) * s) - x, height: Math.round((r.y + r.height) * s) - y };
+}
+
+/**
+ * A window's HWND as a decimal string, for the window-owner helper (player/dock.ts); '0' off Windows,
+ * where the native handle is something else (an NSView pointer, an X11 id, nothing on Wayland).
+ */
+export function hwndOf(window: BaseWindow): string {
+  if (process.platform !== 'win32' || window.isDestroyed()) return '0';
+  const handle = window.getNativeWindowHandle();
+  return handle.length >= 8 ? handle.readBigUInt64LE(0).toString() : '0';
 }
 
 /** How split panes share the content frame (DESIGN.md §7.9). */
@@ -226,6 +237,12 @@ export class AppWindow {
   private focusPopoverWhenShown = false;
   private anchor: Rect | null = null;
   private overlayVisible = false;
+  /**
+   * Where the pages are, or what covers them, may have changed: the window
+   * moved, resized or minimized, the layout changed, or one of Chord's views
+   * over the pages came or went. Chord Player, docked in a tab, follows (player/dock.ts).
+   */
+  onPlacement: (() => void) | null = null;
   /** Where the keyboard was when the overlay opened: Esc gives it back there. */
   private overlayFrom: 'shell' | 'page' = 'page';
   private overlaySeq = 0;
@@ -329,6 +346,9 @@ export class AppWindow {
     });
     this.window.on('move', reportBounds);
     if (platform === 'darwin') this.window.on('leave-full-screen', () => this.refreshPageFullScreen());
+    for (const event of ['move', 'minimize', 'restore', 'show', 'hide', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'focus'] as const) {
+      this.window.on(event as 'move', () => this.placementChanged());
+    }
     this.window.on('maximize', reportBounds);
     this.window.on('unmaximize', reportBounds);
 
@@ -846,7 +866,10 @@ export class AppWindow {
     this.previewAnchor = null;
     clearInterval(this.previewAnimation);
     this.previewAnimation = undefined;
-    if (!this.window.isDestroyed()) this.preview.setVisible(false);
+    if (this.window.isDestroyed()) return;
+    const was = this.preview.getVisible();
+    this.preview.setVisible(false);
+    if (was) this.placementChanged();
   }
 
   /**
@@ -859,7 +882,9 @@ export class AppWindow {
     if (this.window.isDestroyed()) return;
     const { width: w, height: h } = this.previewSize;
     if (!this.previewAnchor || w === 0 || h === 0) {
+      const was = this.preview.getVisible();
       this.preview.setVisible(false);
+      if (was) this.placementChanged();
       return;
     }
     const content = this.contentSize();
@@ -870,7 +895,9 @@ export class AppWindow {
     this.previewAnimation = undefined;
     if (!this.previewGlide || !this.preview.getVisible() || from.y === to.y) {
       this.preview.setBounds(to);
+      const was = this.preview.getVisible();
       this.preview.setVisible(true);
+      if (!was) this.placementChanged();
       return;
     }
     const start = performance.now();
@@ -911,6 +938,7 @@ export class AppWindow {
     this.overlay.setVisible(true);
     this.overlay.webContents.focus();
     send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq, requestedAt, ...(capture ? { capture } : {}) });
+    this.placementChanged();
   }
 
   /** The command bar has started and listens for openings (it says so after every load). */
@@ -954,6 +982,7 @@ export class AppWindow {
     this.overlay.setVisible(false);
     const back = dismissed && this.overlayFrom === 'shell' ? this.shell : (this.tabView ?? this.shell);
     back.webContents.focus();
+    this.placementChanged();
   }
 
   /**
@@ -1065,6 +1094,7 @@ export class AppWindow {
     root.removeChildView(this.shell);
     // Above the pages, below the popover and the command bar; or back at the bottom.
     root.addChildView(this.shell, this.shellRaised ? root.children.indexOf(this.popover) : 0);
+    this.placementChanged();
   }
 
   /** Float a view over the page, below the command bar. Whatever floated before closes. */
@@ -1072,18 +1102,21 @@ export class AppWindow {
     this.closeFloating();
     this.floating = floating;
     this.window.contentView.addChildView(floating.view, this.window.contentView.children.indexOf(this.overlay));
+    this.placementChanged();
   }
 
   /** Take a floating view off the window (it closed itself). */
   releaseFloating(floating: FloatingView): void {
     if (this.floating === floating) this.floating = null;
     if (!this.window.isDestroyed()) this.window.contentView.removeChildView(floating.view);
+    this.placementChanged();
   }
 
   closeFloating(): void {
     const floating = this.floating;
     this.floating = null;
     floating?.close();
+    if (floating) this.placementChanged();
   }
 
   /** The window's content area and the page frame within it, in window pixels, for placing floating views. */
@@ -1156,11 +1189,50 @@ export class AppWindow {
       place(this.popover, toWindowRect({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph }));
       if (this.peekView && this.window.contentView.children.includes(this.peekView)) place(this.peekView, toWindowRect(page));
       send(this.overlay.webContents, 'peek:state', this.peekState());
+      this.placementChanged();
       return;
     }
     // The popover (find, permission prompts) hangs from the focused page's top-right corner; its cards carry their own margin.
     const pane = this.pageRectsIn(frame)[this.focusedPane] ?? frame;
     place(this.popover, toWindowRect({ x: Math.max(pane.x, pane.x + pane.width - pw), y: pane.y, width: pw, height: ph }));
+    this.placementChanged();
+  }
+
+  private placementChanged(): void {
+    if (!this.window.isDestroyed()) this.onPlacement?.();
+  }
+
+  /**
+   * Whether something of Chord's is drawn over the pages: the command bar or
+   * Peek, the popover, a hover preview, an extension's popup, the shell raised
+   * over them (the sidebar peeking, a drag's drop zones), or a frame snapshot
+   * moving pictures of them.
+   */
+  private get pagesCovered(): boolean {
+    return this.overlayVisible || this.popover.getVisible() || this.preview.getVisible() || Boolean(this.floating) || this.shellRaised || this.snapshots.active;
+  }
+
+  /** Where Chord Player would go, docked in this tab (`contents`): its pane on screen, in DIPs (player/dock.ts). */
+  dockFor(contents: WebContents): DockWindow {
+    const win = this.window;
+    const visible = !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+    const view = this.panes.find((v) => v.webContents === contents);
+    let rect: Rect | null = null;
+    if (visible && view && !this.pageFullScreen) {
+      const content = win.getContentBounds();
+      const b = view.getBounds();
+      if (b.width > 0 && b.height > 0) rect = { x: content.x + b.x, y: content.y + b.y, width: b.width, height: b.height };
+    }
+    return {
+      id: this.id,
+      handle: hwndOf(win),
+      focused: !win.isDestroyed() && win.isFocused(),
+      visible,
+      rect,
+      covered: this.pagesCovered,
+      // As the pages round theirs (tabs.ts: setBorderRadius).
+      radius: frameRadius[platform],
+    };
   }
 
   /**

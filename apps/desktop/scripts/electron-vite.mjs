@@ -2,7 +2,7 @@
 // (some editors and agent tools) export it, and it makes Electron start as
 // plain Node, so `import { app } from 'electron'` fails. Packaged builds are
 // unaffected: the RunAsNode fuse is off there (ARCHITECTURE.md §14.1).
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
@@ -14,5 +14,9 @@ const cli = join(dirname(pkgPath), typeof bin === 'string' ? bin : bin['electron
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 
-const child = spawn(process.execPath, [cli, ...process.argv.slice(2)], { stdio: 'inherit', env });
-child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 0)));
+const args = process.argv.slice(2);
+// Windows: Chord Player's window-owner helper, beside the build (scripts/build-window-owner.mjs). After the build, which empties out/.
+const helper = () => (args[0] === 'build' || args[0] === 'dev' ? spawnSync(process.execPath, [join(import.meta.dirname, 'build-window-owner.mjs')], { stdio: 'inherit' }).status : 0);
+if (args[0] === 'dev' && helper() !== 0) process.exit(1);
+const child = spawn(process.execPath, [cli, ...args], { stdio: 'inherit', env });
+child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 0) || (args[0] === 'build' ? (helper() ?? 1) : 0)));

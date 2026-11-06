@@ -565,6 +565,7 @@ As built (`core/idle.ts`, `main/idle.ts`):
 | `drm:open` / `drm:dismiss` | — | — | ✓ | — | the DRM notice's buttons, for the page the sender's window shows: another browser by id (one main found, never a path), or Not now |
 | `drm:player` | — | — | ✓ | — | the notice's Chord Player button (install, open, try again) for the page the sender's window shows; refused from a private window, in Google-free mode, or on a page that isn't a service's |
 | `player:do` | ✓ | — | — | — | a tab that plays in Chord Player: back to the player, or show its page here; only the tab Chord Player plays for, in the sender's chords |
+| `player:view` / event `player:state` | ✓ | — | — | — | what the frame of the tab Chord Player plays for shows: docked in the tab (Windows), starting, and the still picture that stands in while Chord draws over it |
 | `settings:player` / `settings:installPlayer` / `settings:removePlayer` | — | — | — | ✓ | Settings → General → Chord Player: its state (with what installing offers), installing it (never in Google-free mode; opens nothing), and removing it with its profile |
 | `import:sources` / `import:preview` / `import:run` | ✓ (first run) | — | — | ✓ | other browsers' profiles by key, never a path; nothing from a private window; `run` answers at once and pushes `import:progress` to its caller ([§9](#import-from-other-browsers)) |
 | `import:undo` | — | — | — | ✓ | Settings' Undo; the window's toast sends the renderer command `import.undo`, which main takes over |
@@ -650,7 +651,9 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
   - `installer.ts` and `install-state.ts`: finding, checking, installing, updating and removing it;
   - `unpack-worker.ts`: hashing and unpacking, in a worker;
   - `host.ts`: starting it and holding its channel;
-  - `service.ts`: the notice's offer, the tab, the card, links and Settings.
+  - `service.ts`: the notice's offer, the tab, the card, links and Settings;
+  - `dock.ts`: playing in the tab, on Windows (below).
+- `apps/desktop/build/win/window-owner.cs`: the one Win32 call docking needs, as a 5 KB program (below).
 
 **Where it lives** (`paths.ts`): per user, no installer, nothing registered with the OS.
 - Windows: `%LOCALAPPDATA%\Chord Player`; macOS: `~/Library/Application Support/Chord Player`; Linux: `$XDG_DATA_HOME/chord-player`.
@@ -676,6 +679,15 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
   - `.github/workflows/ecs-bump.yml` runs daily. It reads `scripts/dev/ecs-lag.mjs`'s list of builds, pins a newer one's zips by the SHA-256 in castLabs' SHASUMS256.txt (cross-checked with GitHub's asset digests), bumps the player's version, opens a pull request and starts CI on it.
   - It never merges.
   - The player's version (`apps/player/package.json`) and manifests are separate from Chord's.
+
+**Playing in the tab (Windows).** *Built 2026-11-06* (S14 §2 (b); DESIGN.md §7.14). On Windows the player's page plays in the tab itself: the player moves it into a borderless window of its own (`window.ts`, docked) that Chord glues over the tab's content area, and its window of its own stays hidden.
+- **Where it goes** (`dock.ts`, `dockPlacement`): over the tab's page in the window that shows it (the focused one first), in screen DIPs, with the frame's corner radius (the player rounds its window with `setShape`). It hides whenever the tab isn't shown (another tab or chord, a minimized window), and swaps itself for a still picture whenever something of Chord's is drawn over the pages: the command bar or Peek, the popover, a hover preview, an extension's popup, the shell raised over the pages (the sidebar peeking, a drag's drop zones), or a frame snapshot. `AppWindow.onPlacement` fires on every move, resize, minimize, restore, layout and view change, and `PlayerDock.sync` sends `dock` only when the placement changed.
+- **The still picture:** asked to hide for Chord's own UI, the player captures its page (`capturePage`, a JPEG of at most 400,000 characters), sends it (`still`), then hides; the tab's frame shows it until the player is back (`player:state`). A protected video may picture as black, as in any screenshot.
+- **Above Chord's window:** only an *owned* window stays above its owner when you click the owner, minimizes with it, and keeps out of Alt+Tab and the taskbar (S14 §2). Windows makes a window owned only through `SetWindowLongPtr(GWLP_HWNDPARENT)`, which Electron doesn't expose, and Chord loads no native code of its own. So `window-owner.exe` does that one call: built at `pnpm build` with the C# compiler that ships with Windows (.NET Framework 4.8's `csc.exe`, `scripts/build-window-owner.mjs`), packaged beside the app (`resources/window-owner.exe`) and code-signed with `Chord.exe`. Chord runs it when the player's window gets a new owner (once per player, and when its tab moves to another window), about 60 ms. It acts only on a player window that belongs to the player's process and an owner that belongs to Chord's, as Chord names them; a window that closes first gives the player up (owner 0), since Windows destroys a window's owned windows with it.
+- **Keys:** a click in the player makes it the foreground window, as in S14. Keys with Ctrl, Alt or ⌘ held, function keys, and Ctrl's release go to Chord too (`key`), which runs a reserved shortcut for the tab (Ctrl+T, Ctrl+L, Ctrl+W, Ctrl+Tab…). Page-first keys stay the page's. When the player hides, Windows activates its owner, so the keyboard comes back to Chord.
+- **The tab is the player:** closing the tab, or the tab going to another page, closes the player. The card's *Back to the player* goes to the tab. With no Chord window left, it goes back to its window of its own until one opens.
+- **Fallbacks:** a player from before docking answers `dock` with `unknown` and keeps its window of its own, as macOS (its window server makes a glued window trail, S14) and Linux (Wayland has no window positions) always do. A development build without `csc.exe`, or `CHORD_PLAYER_NO_DOCK=1`, doesn't dock either.
+- Tested by `player.spec.ts` on Windows x64 (the window follows, the owner is Chord's, the command bar leaves a still, tab switches hide it, Ctrl+T reaches Chord, closing the tab closes it) and `player-dock.test.ts`; by hand in docs/testing/widevine-player.md.
 
 **Where it's offered.** The DRM notice offers Chord Player first, ahead of other browsers (DESIGN.md §7.1).
 - Before it's installed: *Install Chord Player (about N MB)*, then progress, then the page opens in it.

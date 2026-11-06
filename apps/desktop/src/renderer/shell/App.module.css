@@ -1843,6 +1843,35 @@ kbd {
   transform: scale(0.97);
 }
 
+/*
+ * Chord Player docked in the tab (DESIGN.md §7.14): its window covers the frame, so this shows only
+ * while it isn't there: the frame, with the page's still picture over it while Chord draws over the tab.
+ */
+.playerDocked {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--color-surface);
+}
+
+.playerStill {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  user-select: none;
+}
+
+.playerStarting {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-label);
+}
+
 /* Two ways out, side by side: "Playing in Chord Player" (DESIGN.md §7.14). */
 .emptyActions {
   display: flex;

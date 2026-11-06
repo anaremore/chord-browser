@@ -13,7 +13,7 @@ import {
   type LoadError,
   type TabNode,
 } from '@chord/core';
-import type { ChordEdit, AssistantView, SystemInfo } from '@chord/ipc';
+import type { ChordEdit, AssistantView, PlayerFrame, SystemInfo } from '@chord/ipc';
 import { durations } from '@chord/tokens';
 import { Archive, ArrowLeft, ArrowRight, Blend, BookOpenText, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
 import { AssistantIcon } from '../shared/icons';
@@ -85,13 +85,43 @@ function LoadErrorState({ error, canGoBack, windowId, tabId }: { error: LoadErro
   );
 }
 
+/** What the frame of the tab that plays in Chord Player shows (main's player:state), from the moment the shell loads. */
+function usePlayerFrame(nodeId: string): PlayerFrame | null {
+  const [frame, setFrame] = useState<PlayerFrame | null>(null);
+  useEffect(() => {
+    let live = true;
+    const off = api.player.onState((next) => setFrame(next));
+    void api.player.view().then((next) => {
+      if (live) setFrame((now) => now ?? next);
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, []);
+  return frame?.nodeId === nodeId ? frame : null;
+}
+
 /**
  * A tab whose service plays in Chord Player (DESIGN.md §7.14): the tab stays,
  * and its frame says where it plays, with the way back to the player and a
  * way to see the page here instead (to manage the account, say).
+ *
+ * Docked (Windows), the player's page sits over the frame itself, so the
+ * frame shows only what's left when it isn't there: that it's starting, or a
+ * still picture of the page while the command bar, Peek or a preview is over it.
  */
 function PlayerState({ tab }: { tab: TabNode }) {
   const host = displayHost(tab.url) || 'This page';
+  const frame = usePlayerFrame(tab.id);
+  if (frame?.docked) {
+    return (
+      <div className={styles.playerDocked} role="status" data-page-state data-player-docked>
+        {frame.still && !frame.starting ? <img className={styles.playerStill} src={frame.still} alt="" draggable={false} /> : null}
+        {frame.starting ? <p className={styles.playerStarting}>Starting Chord Player…</p> : null}
+      </div>
+    );
+  }
   return (
     <div className={styles.empty} role="status" data-page-state>
       <p className={styles.emptyTitle}>Playing in Chord Player</p>

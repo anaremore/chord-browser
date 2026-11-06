@@ -68,13 +68,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
-      # Chord Player's E2E test (player.spec.ts, Linux x64) packages the player on castLabs ECS: its checked zip, kept.
+      # Chord Player's E2E test (player.spec.ts, Linux and Windows x64) packages the player on castLabs ECS: its checked zip, kept.
       - name: Cache castLabs ECS
-        if: runner.os == 'Linux' && runner.arch == 'X64'
+        if: (runner.os == 'Linux' || runner.os == 'Windows') && runner.arch == 'X64'
         uses: actions/cache@v6
         with:
           path: ~/.cache/chord-ecs
-          key: ecs-linux-x64-${{ hashFiles('apps/player/ecs.json') }}
+          key: ecs-${{ runner.os }}-x64-${{ hashFiles('apps/player/ecs.json') }}
 
       # The packages below, kept between runs: the mirror has been slow enough to time the step out.
       - name: Cache display-server packages
