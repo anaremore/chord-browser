@@ -202,6 +202,8 @@ jobs:
           if (-not ($files | Where-Object { $_.Name -eq 'Chord Player.exe' })) { throw 'Chord Player.exe is missing from the zip' }
           "$($files.Count) files to sign: $(@($files | Where-Object Extension -eq '.exe').Count) .exe, $(@($files | Where-Object Extension -eq '.dll').Count) .dll, $(@($files | Where-Object Extension -eq '.node').Count) .node"
           $bad = @()
+          # Microsoft's own DLLs that keep Microsoft's signature (only these; every other file must carry Chord's).
+          $microsoftSigned = @('dxil.dll')
           foreach ($file in $files) {
             $relative = [System.IO.Path]::GetRelativePath($app, $file.FullName)
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
@@ -211,12 +213,14 @@ jobs:
             if ($env:RELEASE -ne 'true') { continue }
             if ($signature.Status -ne 'Valid') { $bad += "$relative isn't validly signed: $($signature.StatusMessage)" }
             elseif (-not $signature.TimeStamperCertificate) { $bad += "$relative has no timestamp, so its signature would lapse with the certificate" }
+            # dxil.dll comes from Microsoft with Windows' own signature, which electron-builder leaves in place: Microsoft's, valid and timestamped, is as good.
+            elseif ($file.Name -in $microsoftSigned -and $signer.Subject -match '(^|, )O=Microsoft Corporation(,|$)') { continue }
             elseif ($name -ne $env:WIN_PUBLISHER_NAME -and $signer.Subject -ne $env:WIN_PUBLISHER_NAME) { $bad += "$relative is signed by '$($signer.Subject)', not by '$env:WIN_PUBLISHER_NAME'" }
           }
           Remove-Item -Recurse -Force $check
           if ($env:RELEASE -ne 'true') { 'Not a release: nothing is code-signed, so this only lists what a release signs.'; exit 0 }
           if ($bad.Count -gt 0) { $bad | ForEach-Object { "::error::$_" }; throw "$($bad.Count) of $($files.Count) files aren't signed as they must be" }
-          "All $($files.Count) are validly signed by '$env:WIN_PUBLISHER_NAME' and timestamped."
+          "All $($files.Count) are validly signed and timestamped: by '$env:WIN_PUBLISHER_NAME', or Microsoft for $($microsoftSigned -join ', ')."
 
       - name: Linux display and sandbox
         if: runner.os == 'Linux'
