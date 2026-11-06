@@ -4,12 +4,13 @@
  * these cards, so the rest of the page stays clickable.
  */
 import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
-import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type DrmNotice, type FindState, type PasskeyPrompt, type PermissionPrompt, type PlayerFailure, type PlayerOffer, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
+import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type DrmNotice, type FindState, type PasskeyPrompt, type PermissionPrompt, type PlayerOffer, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
 import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, Fingerprint, KeyRound, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { useLive, type Live } from '../shared/live';
+import { installingLabel, megabytes, PLAYER_FAILURES } from '../shared/player';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
 import { EffectsCard } from './EffectsCard';
@@ -417,20 +418,6 @@ function SafeBrowsingOffer() {
   );
 }
 
-/** Why installing or starting Chord Player failed, in a sentence. */
-const PLAYER_FAILURES: Record<PlayerFailure, string> = {
-  download: 'Chord Player didn’t download. Check your connection and try again.',
-  verify: 'The download didn’t match its signature, so Chord didn’t install it.',
-  unpack: 'Chord Player couldn’t be unpacked. Check there’s room on the disk and try again.',
-  start: 'Chord Player didn’t start.',
-  widevine: 'Chord Player couldn’t get Widevine from Google. Check your connection and try again.',
-};
-
-const PHASES = { downloading: 'Downloading Chord Player', checking: 'Checking the download', unpacking: 'Unpacking Chord Player' } as const;
-
-/** About this many megabytes, as file sizes are shown (decimal). */
-const megabytes = (bytes: number) => Math.max(1, Math.round(bytes / 1_000_000));
-
 /**
  * Chord Player's part of the notice, first and full width (DESIGN.md §7.1):
  * install it (its download's size), its progress, open the page in it, or
@@ -447,7 +434,7 @@ function PlayerAction({ offer }: { offer: PlayerOffer }) {
         </div>
       );
     case 'installing': {
-      const label = offer.phase === 'downloading' ? `${PHASES.downloading} · ${offer.percent}%` : offer.phase === 'unpacking' ? `${PHASES.unpacking} · ${offer.percent}%` : PHASES.checking;
+      const label = installingLabel(offer);
       return (
         <div className={styles.playerRow}>
           <div className={styles.progressLabel} aria-hidden>

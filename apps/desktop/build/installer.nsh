@@ -47,4 +47,14 @@
   DeleteRegKey HKCU "${CHORD_CLIENT}"
   DeleteRegKey HKCU "Software\Classes\ChordHTML"
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+
+  ; Chord Player (ARCHITECTURE.md §9, Chord Player) goes with Chord: every version, its profile
+  ; (its sign-ins and the Widevine CDM) and its state, from where src/main/player/paths.ts puts it.
+  ; Only on a real uninstall: an update runs this uninstaller with --updated (electron-builder's
+  ; isUpdated), and the player stays. Chord has quit by now, and the player quits once Chord's
+  ; channel closes; a file it still holds stays behind, and nothing else depends on it.
+  ; Chord installs per user (perMachine: false), so $LOCALAPPDATA is that user's, as the player's root is.
+  ${ifNot} ${isUpdated}
+    RMDir /r "$LOCALAPPDATA\Chord Player"
+  ${endif}
 !macroend

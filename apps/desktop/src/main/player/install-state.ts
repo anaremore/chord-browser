@@ -15,7 +15,7 @@
  * keeps offering the installed one meanwhile.
  */
 import type { PlayerManifest, PlayerRelease } from '@chord/player-protocol';
-import type { PlayerFailure, PlayerOffer } from '@chord/ipc';
+import type { PlayerFailure, PlayerInstallOffer, PlayerOffer } from '@chord/ipc';
 
 export interface Installed {
   version: string;
@@ -112,4 +112,14 @@ export function offerFor(state: InstallState, { now, opening }: { now: number; o
     case 'failed':
       return { state: 'failed', why: state.why };
   }
+}
+
+/**
+ * What Settings offers while Chord Player isn't installed: Install (the
+ * download's size), its progress, or why installing failed (Try again);
+ * null while Chord finds out, or when there's nothing to install.
+ */
+export function installOfferFor(state: InstallState): PlayerInstallOffer | null {
+  const offer = offerFor(state, { now: 0, opening: false });
+  return offer !== null && offer !== 'pending' && (offer.state === 'install' || offer.state === 'installing' || offer.state === 'failed') ? offer : null;
 }

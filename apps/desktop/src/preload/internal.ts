@@ -34,6 +34,7 @@ const api: SettingsApi = {
     safeBrowsing: () => invoke('safeBrowsing:status'),
     adBlocking: () => invoke('adBlocking:status'),
     player: () => invoke('settings:player'),
+    installPlayer: () => invoke('settings:installPlayer'),
     removePlayer: () => invoke('settings:removePlayer'),
     effects: (change) => invoke('settings:effects', change),
   },

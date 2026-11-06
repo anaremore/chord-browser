@@ -565,7 +565,7 @@ As built (`core/idle.ts`, `main/idle.ts`):
 | `drm:open` / `drm:dismiss` | — | — | ✓ | — | the DRM notice's buttons, for the page the sender's window shows: another browser by id (one main found, never a path), or Not now |
 | `drm:player` | — | — | ✓ | — | the notice's Chord Player button (install, open, try again) for the page the sender's window shows; refused from a private window, in Google-free mode, or on a page that isn't a service's |
 | `player:do` | ✓ | — | — | — | a tab that plays in Chord Player: back to the player, or show its page here; only the tab Chord Player plays for, in the sender's chords |
-| `settings:player` / `settings:removePlayer` | — | — | — | ✓ | Settings → General → Chord Player: its state, and removing it with its profile |
+| `settings:player` / `settings:installPlayer` / `settings:removePlayer` | — | — | — | ✓ | Settings → General → Chord Player: its state (with what installing offers), installing it (never in Google-free mode; opens nothing), and removing it with its profile |
 | `import:sources` / `import:preview` / `import:run` | ✓ (first run) | — | — | ✓ | other browsers' profiles by key, never a path; nothing from a private window; `run` answers at once and pushes `import:progress` to its caller ([§9](#import-from-other-browsers)) |
 | `import:undo` | — | — | — | ✓ | Settings' Undo; the window's toast sends the renderer command `import.undo`, which main takes over |
 | `import:openAccess` | ✓ (first run) | — | — | ✓ | macOS's Full Disk Access pane, for Safari |
@@ -656,6 +656,7 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
 - Windows: `%LOCALAPPDATA%\Chord Player`; macOS: `~/Library/Application Support/Chord Player`; Linux: `$XDG_DATA_HOME/chord-player`.
 - Inside: `state.json` (the version that runs, one waiting to start, ones that failed to), a folder per version, `Profile/` (its cookies and the Widevine CDM), and `Downloads/` while a zip is on its way.
 - Development builds use `Chord Player Dev`, or `CHORD_PLAYER_ROOT`.
+- **Uninstalling Chord removes it, on Windows:** the NSIS uninstaller (`build/installer.nsh`, `customUnInstall`) deletes `%LOCALAPPDATA%\Chord Player` on a real uninstall only. Chord's updates run the old uninstaller first, with `--updated` (electron-builder's `${isUpdated}`), and the player stays then. Chord has quit by then and the player quits with it; a file it still holds would stay behind. On macOS Chord goes to the Trash with nothing run, and a Linux package's scripts run as root, which can't safely clean every user's home: there the player stays until Settings removes it (*Remove*, before uninstalling) or you delete its folder.
 
 **Installing and updating.**
 - **Which release:** the newest published `player-v<version>` release of this repository (GitHub's `/releases`, from an in-memory session that sends no cookies). Chord's own update check ignores those tags.
@@ -680,6 +681,8 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
 - Before it's installed: *Install Chord Player (about N MB)*, then progress, then the page opens in it.
 - Once installed: *Open in Chord Player*.
 - The card waits up to 3 s for Chord to learn what it can offer, so it arrives whole.
+- **Asking again:** Chord asks for a release once, when a notice or Settings first wants to know. An answer of none (GitHub unreachable, no release published yet, or none whose manifest checks out) is asked again 10 minutes later, by the next notice or Settings that wants to know. That second look doesn't hold a card back: it shows without the player, and the player joins it if a release turns up. Only a computer that can't have it (unsupported) is never asked about again.
+- **Settings → General → Chord Player** offers *Install* too, under the same rules, with the notice's progress and failures (`settings:installPlayer`, `ChordPlayer.install`). It's the same install (the notice and Settings share one), and it opens nothing.
 - **Never offered:**
   - in Google-free mode (the CDM comes from Google's component updater, S14 §7), and turning the mode on closes a running player;
   - in private windows (the player has one profile, which keeps sign-ins);
@@ -712,7 +715,7 @@ Navigation guards: every Chord UI view rejects `will-navigate`, `will-frame-navi
 - **The CDM:** `components.whenReady()` before a page loads; the bar says *Getting Widevine ready…* meanwhile. Spellcheck is off, so ECS fetches no dictionary.
 - **Now playing:** the player reads the page's Media Session and media elements from an isolated world, as Chord does for its tabs. It reports what changed (`media`, and `artwork` as a small data URL), and plays, pauses and mutes when asked.
 - **In Chord:** the tab it plays for stays, its page hidden behind *Playing in Chord Player* (`LiveTab.player`) with *Back to the player* and *Show the page here*. The player shows on the Now playing card as that tab would, with *Back to the player* and its own mute. A link it hands back opens as a tab beside that tab, in its window, which comes forward. *Back to Chord* brings that tab forward, and a window back if none is open.
-- **Settings → General → Chord Player:** the version and ECS build, an update waiting to start, and Remove (it and its sign-ins), asked twice inline.
+- **Settings → General → Chord Player:** the version and ECS build, an update waiting to start, and Remove (it and its sign-ins), asked twice inline. Not installed: Install, when there's a release to install.
 - **Exits:** every uncaught error or rejection exits the player (`guard.ts`); it never shows Electron's error box.
 
 **Packaging and signing** (`apps/player/scripts/package.mjs`, `.github/workflows/player.yml`; §15.1).
@@ -1448,6 +1451,7 @@ In the packages:
 - **Linux:** the `.desktop` file is `com.chordbrowser.Chord.desktop` with `StartupWMClass=com.chordbrowser.Chord` ✅ (checked in the built `.deb` and AppImage, and in the installed `.rpm` by its smoke test). `desktopName` in `apps/desktop/package.json` sets it; Electron uses the same value as the Wayland `app_id` and X11 `WM_CLASS`, and electron-builder's `linux.syncDesktopName` names the file after it.
 - **Flatpak:** the build overrides `desktopName` with `$FLATPAK_ID.desktop` (`extraMetadata`), so the app ID, `.desktop` file, Wayland `app_id` and X11 class all match whichever Flatpak ID is chosen.
 - **Windows:** the one-click per-user installer names its folder after the npm package name, so the packaged `package.json` is renamed `chord`: `%LOCALAPPDATA%\Programs\chord` (⚠ read from electron-builder's NSIS source; the release workflow logs where it installs). The installer is `Chord-<version>-win-<arch>-setup.exe`; its uninstall entry's GUID derives from the app ID.
+  - Uninstalling Chord also deletes Chord Player's folder, `%LOCALAPPDATA%\Chord Player`; an update doesn't ([§9, Chord Player](#chord-player)). Chord's own profile stays, as electron-builder leaves it. macOS and the Linux packages leave the player in place.
 
 ### 15.1 Targets
 
