@@ -72,7 +72,7 @@ Released: **0.1.0** (2026-10-24) and **0.2.1** (2026-10-25), both previews; 0.2.
 | Phase 2 | Riff, split view, mini window, Peek, hover previews | | Riff's slide-in; Codex's live-turn checks (S5, after its usage limit resets Nov 16); Electron 46 (2027-01-05) |
 | Phase 3 | link routes, in-app updates (live since 0.2.1), Google-free mode, D7 Safe Browsing, a Flatpak built from source, the apt/dnf upload workflow (off until Cloudsmith is set up), the 72-hour runbook | | yours: the Flathub manifest and submission, the Cloudsmith repository and key, Safe Browsing checked by hand |
 | Phase 4 | Windows signing (live since 0.2.1); macOS signing and notarization, built and off | | yours: an Apple Developer account, then Mac in-app updates; a Store submission; Electron 47 |
-| After 0.1 | 0.1.x's gaps, 0.2's cleaner pages, Effects, Riff fills forms, Chord Player (waiting on its secrets and hand checks), DevTools in the window, counts on tabs, battery, CI checks for launch time and memory, a proxy per chord, Your data's design, its export, import from a Chord file and sync (2026-10-26) | the P0 performance pass: a lighter launch | Clear Today's slow frames; the back/forward cache (Electron upstream); Your data's hand checks with real sync apps |
+| After 0.1 | 0.1.x's gaps, 0.2's cleaner pages, Effects, Riff fills forms, Chord Player (waiting on its hand checks and its first release), DevTools in the window, counts on tabs, battery, CI checks for launch time and memory, a proxy per chord, Your data's design, its export, import from a Chord file and sync (2026-10-26) | the P0 performance pass: a lighter launch | Clear Today's slow frames; the back/forward cache (Electron upstream); Your data's hand checks with real sync apps |
 
 **Next, in order:** sync's hand checks with real sync apps; the performance pass's costs with 5,000 pinned tabs (the store's update and an unwindowed sidebar); then the password-manager pass, after Your data (export in 0.5.0, import and sync in 0.6.0). Electron 46 comes first whenever it lands, on the 72-hour clock.
 
@@ -323,7 +323,7 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   - how it is installed and updated;
   - what signing in feels like without Chord's extensions;
   - Google-free mode (its CDM comes from Google).
-  - **Next: build it** (P2, started 2026-10-25). The maintainer's castLabs EVS account exists (2026-10-25). Production signing needs the maintainer's two secrets, `EVS_ACCOUNT_NAME` and `EVS_PASSWD`, in the `release` environment (docs/releasing/signing.md, Chord Player); code signing on Windows and macOS stays on the maintainer's track.
+  - **Next: build it** (P2, started 2026-10-25). The maintainer's castLabs EVS account was confirmed on 2026-11-06 (the signup of 2026-10-25 was never confirmed, so it couldn't sign in), and its two secrets, `EVS_ACCOUNT_NAME` and `EVS_PASSWD`, are in the `release` environment (docs/releasing/signing.md, Chord Player). The first `player-v*` tag is the first build that VMP-signs. Code signing on Windows and macOS stays on the maintainer's track.
   - **Built 2026-10-25: Chord Player** (ARCHITECTURE.md §9 and D4, DESIGN.md §7.14). What it does:
     - It's `apps/player`, on castLabs ECS 44.9.3+wvcus, in a window of its own with a bar in the chord's colors. On Windows the window joins Chord's taskbar button.
     - The DRM notice offers it first: *Install Chord Player (about N MB)*, its progress, then *Open in Chord Player*.
