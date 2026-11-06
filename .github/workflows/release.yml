@@ -310,6 +310,41 @@ jobs:
         if: runner.os != 'Linux'
         run: pnpm --filter @chord/desktop test:packaged
 
+      # Updating Chord must keep Chord Player; uninstalling Chord removes it (build/installer.nsh,
+      # customUnInstall). electron-updater runs the new installer as `<setup>.exe --updated /S`
+      # (electron-updater's NsisUpdater.doInstall), and that runs the old uninstaller with --updated.
+      # So: a stand-in player folder, the same installer again as an update, then a silent uninstall.
+      # After the smoke test, since this uninstalls the copy it tested.
+      - name: Check updates keep Chord Player and uninstalling removes it (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem apps/desktop/release -Filter '*-setup.exe' | Select-Object -First 1).FullName
+          $installed = Split-Path $env:CHORD_APP
+          $player = Join-Path $env:LOCALAPPDATA 'Chord Player'
+          $marker = Join-Path $player 'versions\stand-in\marker.txt'
+          New-Item -ItemType Directory -Force (Split-Path $marker) | Out-Null
+          Set-Content -LiteralPath $marker -Value 'A stand-in for an installed Chord Player'
+          "Stand-in Chord Player: $marker"
+
+          "Updating: $(Split-Path -Leaf $installer) --updated /S"
+          $update = Start-Process -FilePath $installer -ArgumentList '--updated', '/S' -Wait -PassThru
+          if ($update.ExitCode -ne 0) { throw "The update exited with $($update.ExitCode)" }
+          if (-not (Test-Path -LiteralPath $env:CHORD_APP)) { throw "Chord.exe is gone after the update" }
+          if (-not (Test-Path -LiteralPath $marker)) { throw "Updating Chord removed Chord Player ($player)" }
+          'After the update: Chord.exe is installed and Chord Player is still there.'
+
+          $uninstaller = Join-Path $installed 'Uninstall Chord.exe'
+          "Uninstalling: $(Split-Path -Leaf $uninstaller) /S"
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "The uninstaller exited with $($uninstall.ExitCode)" }
+          # NSIS's uninstaller runs a copy of itself from the temp folder; wait for that copy to finish.
+          $deadline = (Get-Date).AddMinutes(3)
+          while (((Test-Path -LiteralPath $env:CHORD_APP) -or (Test-Path -LiteralPath $player)) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path -LiteralPath $env:CHORD_APP) { throw "Chord.exe is still there after uninstalling" }
+          if (Test-Path -LiteralPath $player) { throw "Uninstalling Chord left Chord Player behind ($player)" }
+          'After uninstalling: Chord and Chord Player are both gone.'
+
       - name: Smoke test (Linux, installed .deb)
         if: runner.os == 'Linux'
         # No sysctl change here: on Ubuntu 24.04 the .deb's AppArmor profile is

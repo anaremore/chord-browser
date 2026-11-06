@@ -341,7 +341,8 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
     **Next, after 0.7.0: play in the tab, Windows first** (the maintainer's call, 2026-11-06). The player's window glued over the tab's content area (S14 §2 (b): an owned window follows a drag within a frame on Windows), hidden when you switch tabs or chords, and swapped for a still picture of it whenever Chord draws over the page (command bar, popovers, menus, Peek), as frame snapshots already do for animations; fullscreen and picture-in-picture as today. macOS (the window server makes it trail) and Wayland (no window positions) keep the window of its own.
 
     **Left:**
-    - macOS code signing (with Chord's, once there's an Apple Developer account); the player's DLLs on Windows (only the `.exe` is signed);
+    - macOS code signing (with Chord's, once there's an Apple Developer account);
+    - a player release with its DLLs code-signed on Windows too (set up 2026-11-06, as Chord's: every `.exe` and `.dll` is checked; 0.1.2 signs only the `.exe`);
     - the hand checks on macOS, and Netflix;
     - Chord's shortcuts forwarded from the player;
     - an icon of its own.
