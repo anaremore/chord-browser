@@ -9,9 +9,10 @@ name: Chord Player
 # a release build (player-release.yml, for a tag) can read them, after its reviewers approve. Every
 # other build, from ci.yml on every run or by hand, keeps ECS's development signature.
 #
-# A release's Windows build is also code-signed (Authenticode) with Chord's own Azure Artifact Signing
-# settings from that environment (the AZURE_* secrets and variables, and WIN_PUBLISHER_NAME, as
-# release.yml signs Chord.exe), before it's VMP-signed. Other builds aren't code-signed.
+# A release's Windows build is also code-signed (Authenticode): Chord Player.exe and every DLL, with
+# Chord's own Azure Artifact Signing settings from that environment (the AZURE_* secrets and variables,
+# and WIN_PUBLISHER_NAME, as release.yml signs Chord's), before it's VMP-signed. VMP covers only the .exe
+# (apps/player/electron-builder.config.ts says why that order). Other builds aren't code-signed.
 #
 # Linux arm64 isn't built: no Widevine CDM there that spike S14 could test. Linux has no VMP.
 on:
@@ -178,14 +179,16 @@ jobs:
           codesign --display --verbose=2 "$check/app/Chord Player.app" 2>&1 | grep -E '^(Identifier|Format|Signature|TeamIdentifier)='
           rm -rf "$check"
 
-      # A Windows release's Chord Player.exe, as Chord unpacks it from the zip, must carry a valid, timestamped
-      # Authenticode signature from Chord's publisher (as release.yml checks Chord.exe). VMP signing came after
-      # it and package.mjs's verify-pkg passed, so this also shows VMP signing left the code signature intact.
-      - name: Check the code signature (Windows release)
-        if: inputs.release == true && runner.os == 'Windows'
+      # A Windows release's Chord Player.exe, its DLLs and any .node addon, as Chord unpacks them from the zip, must
+      # each carry a valid, timestamped Authenticode signature from Chord's publisher (as release.yml checks Chord's).
+      # VMP signing came after code signing and package.mjs's verify-pkg passed, so this also shows VMP signing left
+      # the code signatures intact. Other Windows builds aren't code-signed: they only list what a release would sign.
+      - name: Check the code signatures (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
-          WIN_PUBLISHER_NAME: ${{ vars.WIN_PUBLISHER_NAME }}
+          RELEASE: ${{ inputs.release == true }}
+          WIN_PUBLISHER_NAME: ${{ inputs.release == true && vars.WIN_PUBLISHER_NAME || '' }}
           TARGET: ${{ matrix.target }}
         run: |
           $check = Join-Path $env:RUNNER_TEMP 'authenticode-check'
@@ -194,15 +197,26 @@ jobs:
           if (-not $zip) { throw 'No Chord Player zip to check' }
           node -e "import('./packages/player-protocol/src/zip.ts').then(z => z.extractZip(process.argv[1], process.argv[2], { maxBytes: 2 ** 31 }))" $zip (Join-Path $check 'app')
           if ($LASTEXITCODE -ne 0) { throw "Couldn't unpack $zip" }
-          $exe = Join-Path $check 'app\Chord Player.exe'
-          $signature = Get-AuthenticodeSignature -LiteralPath $exe
-          $signer = $signature.SignerCertificate
-          $name = if ($signer) { $signer.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } else { '' }
-          "Chord Player.exe: $($signature.Status), signed by '$name', timestamped by '$($signature.TimeStamperCertificate.Subject)'"
-          if ($signature.Status -ne 'Valid') { throw "Chord Player.exe isn't validly signed: $($signature.StatusMessage)" }
-          if (-not $signature.TimeStamperCertificate) { throw "Chord Player.exe has no timestamp, so its signature would lapse with the certificate" }
-          if ($name -ne $env:WIN_PUBLISHER_NAME -and $signer.Subject -ne $env:WIN_PUBLISHER_NAME) { throw "Chord Player.exe is signed by '$($signer.Subject)', not by '$env:WIN_PUBLISHER_NAME'" }
+          $app = Join-Path $check 'app'
+          $files = @(Get-ChildItem -LiteralPath $app -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll', '.node' } | Sort-Object FullName)
+          if (-not ($files | Where-Object { $_.Name -eq 'Chord Player.exe' })) { throw 'Chord Player.exe is missing from the zip' }
+          "$($files.Count) files to sign: $(@($files | Where-Object Extension -eq '.exe').Count) .exe, $(@($files | Where-Object Extension -eq '.dll').Count) .dll, $(@($files | Where-Object Extension -eq '.node').Count) .node"
+          $bad = @()
+          foreach ($file in $files) {
+            $relative = [System.IO.Path]::GetRelativePath($app, $file.FullName)
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            $signer = $signature.SignerCertificate
+            $name = if ($signer) { $signer.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } else { '' }
+            "${relative}: $($signature.Status), signed by '$name', timestamped by '$($signature.TimeStamperCertificate.Subject)'"
+            if ($env:RELEASE -ne 'true') { continue }
+            if ($signature.Status -ne 'Valid') { $bad += "$relative isn't validly signed: $($signature.StatusMessage)" }
+            elseif (-not $signature.TimeStamperCertificate) { $bad += "$relative has no timestamp, so its signature would lapse with the certificate" }
+            elseif ($name -ne $env:WIN_PUBLISHER_NAME -and $signer.Subject -ne $env:WIN_PUBLISHER_NAME) { $bad += "$relative is signed by '$($signer.Subject)', not by '$env:WIN_PUBLISHER_NAME'" }
+          }
           Remove-Item -Recurse -Force $check
+          if ($env:RELEASE -ne 'true') { 'Not a release: nothing is code-signed, so this only lists what a release signs.'; exit 0 }
+          if ($bad.Count -gt 0) { $bad | ForEach-Object { "::error::$_" }; throw "$($bad.Count) of $($files.Count) files aren't signed as they must be" }
+          "All $($files.Count) are validly signed by '$env:WIN_PUBLISHER_NAME' and timestamped."
 
       - name: Linux display and sandbox
         if: runner.os == 'Linux'

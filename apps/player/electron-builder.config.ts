@@ -18,8 +18,17 @@
  * Chord.exe (apps/desktop/electron-builder.config.ts, `artifact-signing`;
  * docs/releasing/signing.md). A release build passes its settings in the
  * environment (.github/workflows/player.yml); electron-builder then signs
- * `Chord Player.exe` after afterPack (the fuses) and before package.mjs
- * VMP-signs it. Without them, nothing is code-signed.
+ * `Chord Player.exe` and every DLL (and any `.node` addon) after afterPack
+ * (the fuses) and before package.mjs VMP-signs. Without them, nothing is
+ * code-signed.
+ *
+ * VMP covers only the .exe: castLabs EVS's `sign-pkg` finds `Chord Player.exe`
+ * in the folder and signs a SHA-512 of the whole file, Authenticode signature
+ * included, into `Chord Player.exe.sig` (castlabs-evs 1.3.2, vmp.py
+ * `_detect_pkgs`, core/util.py `hash_pe_wv0`). That's why the .exe must be
+ * code-signed first and left alone after; the DLLs aren't part of it, and
+ * they're signed in the same pass anyway, before VMP. The Widevine CDM isn't
+ * shipped (ECS downloads it into the profile), so it keeps Google's signature.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -34,14 +43,16 @@ if (!zip) throw new Error('CHORD_ECS_ZIP must name the checked ECS zip (scripts/
 const AZURE = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_SIGNING_PROFILE', 'WIN_PUBLISHER_NAME'] as const;
 
 /** Windows code signing when every setting is there, none when none is; a half-configured set stops the build rather than quietly building unsigned. */
-function winSigning(env: NodeJS.ProcessEnv): Pick<WindowsConfiguration, 'azureSignOptions'> {
+function winSigning(env: NodeJS.ProcessEnv): Pick<WindowsConfiguration, 'azureSignOptions' | 'signExts'> {
   const value = (name: string) => env[name]?.trim() || undefined;
   const missing = AZURE.filter((name) => !value(name));
   if (missing.length === AZURE.length) return {};
   if (missing.length > 0) throw new Error(`Code-signing Chord Player needs ${missing.join(', ')} too (docs/releasing/signing.md, Chord Player)`);
   return {
-    // The certificate's subject CN, exactly, as Chord's; only `Chord Player.exe` is signed (no signExts): ECS's DLLs stay as castLabs built them.
+    // The certificate's subject CN, exactly, as Chord's.
     azureSignOptions: { publisherName: value('WIN_PUBLISHER_NAME')!, endpoint: value('AZURE_SIGNING_ENDPOINT')!, codeSigningAccountName: value('AZURE_SIGNING_ACCOUNT')!, certificateProfileName: value('AZURE_SIGNING_PROFILE')! },
+    // electron-builder signs .exe files; ECS's DLLs (and any native addon) too, as Chord's are. All of it before VMP signing.
+    signExts: ['.dll', '.node'],
   };
 }
 
