@@ -374,14 +374,17 @@ test('plays in the tab on Windows: over the tab, following it, under Chord’s o
     await dispatch(shell, { t: 'tab.activate', windowId, nodeId: netflixTab });
     await expect.poll(async () => (await docked(app))?.visible).toBe(true);
 
-    // Chord's shortcuts pressed in the player go to Chord: Ctrl+T opens a tab, and the player hides with its tab.
+    // Chord's shortcuts pressed in the player go to Chord: Ctrl+T opens the command bar for a new tab over it.
     await playerTest(app, { do: 'key', key: 't', control: true });
-    await expect.poll(async () => (await where(shell)).tabId).not.toBe(netflixTab);
     await expect.poll(async () => (await docked(app))?.visible).toBe(false);
+    await overlay.keyboard.press('Escape');
+    await expect.poll(async () => (await docked(app))?.visible).toBe(true);
+    expect((await where(shell)).tabId).toBe(netflixTab);
 
-    // The tab is the player: closing it closes the player.
-    await dispatch(shell, { t: 'tab.close', windowId, nodeId: netflixTab });
+    // The tab is the player: Ctrl+W in it closes the tab, and the player with it.
+    await playerTest(app, { do: 'key', key: 'w', control: true });
     await expect.poll(async () => (await inspect(app))['running'], { timeout: 20_000 }).toBe(false);
+    await expect.poll(async () => (await where(shell)).tabId).not.toBe(netflixTab);
   } finally {
     await app.close();
   }
