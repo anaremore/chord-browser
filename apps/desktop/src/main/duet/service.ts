@@ -258,7 +258,7 @@ export class DuetService {
         // A fill card waiting then fills nothing: what it read was read before.
         if (this.settings.readsNothing) {
           for (const state of this.threads.values()) {
-            for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') void this.endFill(state, m, 'expired', 'It’s set to read nothing now, so nothing was filled.');
+            for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') void this.endFill(state, m, 'expired', 'What it can read is set to Nothing, so nothing was filled.');
           }
         }
       }
@@ -1435,7 +1435,7 @@ export class DuetService {
     const mapped = proposedFill(form.read, args, contents.getURL());
     if (!mapped.ok) return refuse('Some values can’t go in this form. Fix them and call propose_fill again.', mapped.problems);
     // A newer card takes the place of one still waiting.
-    for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') await this.endFill(state, m, 'expired', 'Replaced by the values below.');
+    for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') await this.endFill(state, m, 'expired', 'Newer values are below.');
     state.fillTurn = state.streaming?.id ?? null;
     const card: DuetFillCard = { status: 'pending', title, site: safeHost(node.url), fields: mapped.fields, leftOut: form.read.leftOut, truncated: form.read.truncated };
     const message = await this.addMessage(state, { role: 'tool', tool, summary: `Suggested values for ${fieldCount(card.fields.length)} in “${title}”`, detail: card.site, ok: true, fill: card });
@@ -1474,7 +1474,7 @@ export class DuetService {
     const card = message.body.fill;
     const meta = state.fills.get(messageId);
     if (!meta) return this.endFill(state, message, 'expired', 'This suggestion has ended, so nothing was filled.');
-    if (this.settings.readsNothing) return this.endFill(state, message, 'expired', 'It’s set to read nothing now, so nothing was filled.');
+    if (this.settings.readsNothing) return this.endFill(state, message, 'expired', 'What it can read is set to Nothing, so nothing was filled.');
     const node = this.browser.store.state.nodes[meta.nodeId];
     if (node?.kind !== 'tab') return this.endFill(state, message, 'expired', 'The tab is closed, so nothing was filled.');
     if (!this.readable(node)) return this.endFill(state, message, 'expired', 'This site can’t be read any more, so nothing was filled.');
