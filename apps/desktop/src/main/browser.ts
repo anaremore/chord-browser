@@ -1424,6 +1424,12 @@ export class Browser {
     if (w.window.isMinimized()) w.window.restore();
     // macOS doesn't let a background app take activation unless asked; this came from your click in the player.
     if (process.platform === 'darwin') app.focus({ steal: true });
+    // Windows ignores focus() from an app that isn't in front (its foreground lock), and the player is. Being on top a
+    // moment is allowed, so the window at least comes forward, even if Windows keeps the keyboard where it was.
+    if (process.platform === 'win32') {
+      w.window.setAlwaysOnTop(true);
+      w.window.setAlwaysOnTop(false);
+    }
     w.window.focus();
   }
 
