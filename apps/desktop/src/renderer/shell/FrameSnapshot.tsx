@@ -1,6 +1,6 @@
 /**
  * The frame's snapshot, the shell's half (ARCHITECTURE.md §5). While the
- * content frame changes size (the sidebar docks or collapses, Riff opens or
+ * content frame changes size (the sidebar docks or collapses, the assistant opens or
  * closes), main moves the pages out of sight and the shell, which draws the
  * frame behind them, shows their pictures instead:
  *
@@ -168,7 +168,7 @@ function attach(host: HTMLElement): () => void {
   };
 }
 
-/** Where the frame's pictures go: over the frame, under Riff's panel and anything else above the frame. */
+/** Where the frame's pictures go: over the frame, under the assistant's panel and anything else above the frame. */
 export function FrameSnapshots() {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => attach(host.current!), []);

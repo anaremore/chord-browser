@@ -132,7 +132,7 @@ function Row({ download }: { download: Download }) {
 }
 
 /** One of the recent screenshots (DESIGN.md §7.12): its picture, its page, when and how big; Copy, Save, Delete. */
-/** `onAsk`: it went to Riff's composer, so the panel steps aside for Riff's. */
+/** `onAsk`: it went to the assistant's composer, so the panel steps aside for its panel. */
 function ShotRow({ shot, onChange, onAsk }: { shot: ScreenshotItem; onChange(): void; onAsk(): void }) {
   const name = shot.title || shot.url || 'Screenshot';
   const act = (action: 'copy' | 'save' | 'delete' | 'duet') => void api.screenshots.act(shot.id, action).then(() => action === 'delete' && onChange());
@@ -148,13 +148,13 @@ function ShotRow({ shot, onChange, onAsk }: { shot: ScreenshotItem; onChange(): 
         </span>
       </div>
       <div className={styles.downloadActions}>
-        {/* Only where Riff may see that page, in this window's chord. */}
+        {/* Only where the assistant may see that page, in this window's chord. */}
         {shot.duet && (
           <button
             type="button"
             className={styles.smallButton}
-            aria-label={`Ask Riff about the screenshot of ${name}`}
-            title="Ask Riff"
+            aria-label={`Ask about the screenshot of ${name}`}
+            title="Ask about this screenshot"
             onClick={() => {
               act('duet');
               onAsk();

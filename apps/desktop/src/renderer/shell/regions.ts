@@ -1,13 +1,13 @@
 /**
  * F6 and ⇧F6 (DESIGN.md §10, §14.2): the keyboard moves between the
  * window's regions: sidebar → page → (its docked developer tools) → (find
- * bar or permission prompt) → Riff → top strip, and round again. Main says
+ * bar or permission prompt) → the assistant → top strip, and round again. Main says
  * where the keyboard is; the shell knows which regions show, picks the next
  * one, and asks main to put the keyboard there (a page, its developer tools
  * and the popover are views of their own).
  *
  * Coming back to a region lands where you left it; the first time, on its
- * natural start: the tab on screen, Riff's message field, the address.
+ * natural start: the tab on screen, the assistant's message field, the address.
  */
 import type { FocusRegionEvent } from '@chord/ipc';
 import { api } from './api';

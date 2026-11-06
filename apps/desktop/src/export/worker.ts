@@ -18,7 +18,7 @@ import { exportCounts, exportRecords, type ExportPhase } from '@chord/data/expor
 export interface ExportJob {
   /** chord.db, opened read-only. */
   database: string;
-  /** `<userData>/duet/images`, for the images in Riff's chats. */
+  /** `<userData>/duet/images`, for the images in the assistant's chats. */
   images: string;
   /** Where the file goes: written beside it as `.part` first. */
   target: string;

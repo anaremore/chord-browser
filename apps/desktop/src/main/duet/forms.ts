@@ -1,6 +1,6 @@
 /**
- * Riff fills forms, in the page (decision D16; ARCHITECTURE.md §11.6). Three
- * scripts, run in Riff's isolated world (4400) only when asked, so page
+ * The assistant fills forms, in the page (decision D16; ARCHITECTURE.md §11.6). Three
+ * scripts, run in the assistant's isolated world (4400) only when asked, so page
  * scripts can neither see nor tamper with them and nothing stays behind
  * between fills but this world's own notes:
  *
@@ -26,7 +26,7 @@
  *   and the first is scrolled into view.
  * - **Undo**: puts back each field that still holds what Chord put there.
  *
- * Plain JavaScript source, as Riff's extractor is: bundling may rename or
+ * Plain JavaScript source, as the assistant's extractor is: bundling may rename or
  * wrap functions in ways a page can't run. Arguments go in as JSON.
  */
 import {
@@ -219,7 +219,7 @@ function readScript(token: string): string {
     items.set(entry.key, item);
     controls[i] = { key: entry.key, ...describeGroup(entry.radios), form: entry.form };
   }
-  // A few reads are kept, so an earlier card still fills after Riff reads again.
+  // A few reads are kept, so an earlier card still fills after the assistant reads again.
   const reads = (globalThis.__chordForms = globalThis.__chordForms || new Map());
   reads.set(args.token, { url: location.href.split('#')[0], items });
   while (reads.size > 4) reads.delete(reads.keys().next().value);

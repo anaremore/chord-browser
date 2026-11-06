@@ -1,6 +1,6 @@
 /**
  * Keyboard only (DESIGN.md §1 principle 7, §10, ROADMAP.md M1.6): every key
- * flow from the first run to Riff and split view, with real focus and no
+ * flow from the first run to the assistant and split view, with real focus and no
  * pointer. Keys inside Chord's own pages are pressed as keys. Reserved
  * shortcuts (⌘T, ⌘L, F6…) go through Electron's input pipeline from main
  * (`pressReal`, which before-input-event sees, as with a real key), or through
@@ -305,9 +305,9 @@ test('Settings, keyboard only: change a setting, then put it back with its ↺, 
   }
 });
 
-test('Riff, keyboard only: open it, set it up, ask, answer its question from the keyboard, and use its menus', async () => {
+test('The assistant, keyboard only: open it, set it up, ask, answer its question from the keyboard, and use its menus', async () => {
   const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
-  // Claude answers late, so Riff opens before it has found it (as on a slow machine).
+  // Claude answers late, so the assistant opens before it has found it (as on a slow machine).
   const env = { CHORD_HOME_URL: `${site.origin}/article`, CHORD_DUET_CLAUDE: fakeClaude, CHORD_DUET_CODEX: resolve(config, 'no-codex'), CLAUDE_CONFIG_DIR: config, FAKE_CLAUDE_SLOW_VERSION: '2000' };
   const app = await launch(env);
   try {
@@ -316,34 +316,34 @@ test('Riff, keyboard only: open it, set it up, ask, answer its question from the
     // ⌘E (page-first, through the registry): the panel opens with the keyboard on its first step,
     // and the keyboard follows when "Use this" arrives.
     await runAction(shell, 'duet.toggle');
-    const panel = shell.getByRole('complementary', { name: 'Riff' });
+    const panel = shell.getByRole('complementary', { name: 'Assistant' });
     await expect(panel.getByRole('button', { name: 'Use this' }).first()).toBeFocused({ timeout: 15_000 });
     await shell.keyboard.press('Enter');
     await expect(panel.getByRole('button', { name: 'Got it' })).toBeFocused();
     await shell.keyboard.press('Enter');
-    const input = panel.getByRole('textbox', { name: 'Message Riff' });
+    const input = panel.getByRole('textbox', { name: 'Message' });
     await expect(input).toBeFocused();
 
     // Ask; the reply is announced once, when it's done.
     await shell.keyboard.type('Summarize this page');
     await shell.keyboard.press('Enter');
     await expect(panel.getByRole('button', { name: /^Source 1: “/ })).toBeVisible();
-    await expect(shell.getByTestId('announcer')).toHaveText('Riff finished answering.');
+    await expect(shell.getByTestId('announcer')).toHaveText('The assistant finished answering.');
 
-    // Riff asks before reading more: the question is announced, and ⌘↵ / Ctrl+↵ in the message field allows it once.
+    // The assistant asks before reading more: the question is announced, and ⌘↵ / Ctrl+↵ in the message field allows it once.
     await shell.keyboard.type('list my tabs');
     await shell.keyboard.press('Enter');
-    await expect(panel.getByRole('group', { name: 'Riff is asking' })).toBeVisible();
-    await expect(shell.getByTestId('announcer')).toContainText('Riff is asking');
+    await expect(panel.getByRole('group', { name: 'Asking permission' })).toBeVisible();
+    await expect(shell.getByTestId('announcer')).toContainText('The assistant is asking');
     await shell.keyboard.press('ControlOrMeta+Enter');
     await expect(panel.getByText(/I can see \d+ tabs\./)).toBeVisible();
     await expect(panel.getByText('Allowed', { exact: true })).toBeVisible();
 
-    // What Riff can read: ↵ opens its menu on the choice it has, ↓ moves, ↵ chooses, and the keyboard is back on the button.
+    // What the assistant can read: ↵ opens its menu on the choice it has, ↓ moves, ↵ chooses, and the keyboard is back on the button.
     const reads = panel.getByRole('button', { name: /^(Reads |Asks before reading)/ });
     await tabTo(shell, reads, { back: true });
     await shell.keyboard.press('Enter');
-    const ladder = panel.getByRole('menu', { name: 'What Riff can read' });
+    const ladder = panel.getByRole('menu', { name: 'What it can read' });
     await expect(ladder).toBeVisible();
     await shell.keyboard.press('ArrowDown');
     await shell.keyboard.press('Enter');
@@ -363,9 +363,9 @@ test('Riff, keyboard only: open it, set it up, ask, answer its question from the
     await expect(menu).toBeHidden();
     await expect(chats).toBeFocused();
 
-    // Close Riff from the keyboard: the panel goes, and the keyboard goes back to the page.
+    // Close the assistant from the keyboard: the panel goes, and the keyboard goes back to the page.
     await shell.keyboard.press('Tab');
-    await expect(panel.getByRole('button', { name: 'Close Riff' })).toBeFocused();
+    await expect(panel.getByRole('button', { name: 'Close assistant' })).toBeFocused();
     await shell.keyboard.press('Enter');
     await expect(panel).toBeHidden();
     await keyboardIn(app, `${site.origin}/article`);

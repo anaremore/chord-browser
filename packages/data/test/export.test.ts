@@ -2,7 +2,7 @@
  * Your data's export, rows into records (export.ts), over a read-only
  * connection of its own as the export process opens it: what a seeded
  * profile's file holds, in which order, what it never holds, the history and
- * Riff switches, and one moment's data while chord-data goes on writing.
+ * The assistant switches, and one moment's data while chord-data goes on writing.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -145,7 +145,7 @@ function exported(overrides: Partial<ExportOptions> = {}): ExportItem[] {
 const of = (items: ExportItem[], type: string) => items.filter((i) => i.record.type === type).map((i) => i.record);
 
 describe('an export', () => {
-  it('holds the profile’s setup, Today tabs, icons, history and Riff, in that order', () => {
+  it('holds the profile’s setup, Today tabs, icons, history and the assistant, in that order', () => {
     const { db, state } = seeded();
     db.close();
     const items = exported();
@@ -223,7 +223,7 @@ describe('an export', () => {
     }
   });
 
-  it('leaves history out, or Riff’s chats, when their switch is off', () => {
+  it('leaves history out, or the assistant’s chats, when their switch is off', () => {
     seeded().db.close();
     const types = (items: ExportItem[]) => new Set(items.map((i) => i.record.type));
     expect(types(exported({ history: false }))).not.toContain('page');

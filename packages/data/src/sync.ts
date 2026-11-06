@@ -1720,7 +1720,7 @@ export class SyncStore {
    * in the copy but not here, or the other way round; and a field this
    * computer keeps whose value differs. Fields it never keeps (a tab's title
    * off its home, another platform's shortcuts) and ones it never takes (a
-   * chord's sign-ins, Effects' Riff ids) aren't differences. What this
+   * chord's sign-ins, Effects' assistant patch ids) aren't differences. What this
    * computer always keeps otherwise (tidied, refused, waiting for its chord or
    * folder, past a cap) differs too, and is pushed again, to apply as
    * nothing, or as something once what it waited for is here. Only what can't

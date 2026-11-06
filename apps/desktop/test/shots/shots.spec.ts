@@ -8,7 +8,7 @@
  * at the screen's top left, so a picture is 2880 × 1800. A picture is the whole window as the
  * screen shows it: the shell, the pages over it and the caption buttons, from desktopCapturer's
  * copy of the screen cropped to the window, taken once two copies in a row agree (loads, fonts
- * and animations done). Riff's answer comes from demo-claude.mjs.
+ * and animations done). The assistant's answer comes from demo-claude.mjs.
  *
  * Writes test-results/shots/<name>.png. The screen must hold the window at 2×: shots.mjs sets
  * CHORD_E2E_SCREEN for that.
@@ -127,7 +127,7 @@ async function tabFor(shell: Page, url: string) {
 const rest = (page: Page) => page.mouse.move(SIZE.width - 10, SIZE.height - 10);
 
 async function session(appearance: 'light' | 'dark') {
-  // Riff's stand-in keeps its session files here; no Codex (a path that doesn't exist).
+  // The assistant's stand-in keeps its session files here; no Codex (a path that doesn't exist).
   const config = mkdtempSync(join(tmpdir(), 'chord-shots-claude-'));
   const app = await launch(
     { CHORD_APPEARANCE: appearance, CHORD_HOME_URL: PAGES.chord, CHORD_DUET_CLAUDE: demoClaude, CHORD_DUET_CODEX: join(config, 'no-codex'), CLAUDE_CONFIG_DIR: config },
@@ -200,16 +200,16 @@ async function quietBanners(app: ElectronApplication) {
   });
 }
 
-test('light: the window, Riff beside the article, and split view', async () => {
+test('light: the window, the assistant beside the article, and split view', async () => {
   const { app, shell, windowId, article } = await session('light');
   try {
     await capture(app, 'Chord', 'chord-light');
 
     await runAction(shell, 'duet.toggle');
-    const panel = shell.getByRole('complementary', { name: 'Riff' });
+    const panel = shell.getByRole('complementary', { name: 'Assistant' });
     await panel.getByRole('button', { name: 'Use this' }).first().click();
     await panel.getByRole('button', { name: 'Got it' }).click();
-    const input = panel.getByRole('textbox', { name: 'Message Riff' });
+    const input = panel.getByRole('textbox', { name: 'Message' });
     await input.fill('What’s a chord, in one line?');
     await input.press('Enter');
     await panel.getByText('In the article').waitFor({ timeout: 20_000 });

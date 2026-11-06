@@ -34,7 +34,7 @@ export function EffectsSection({ snapshot }: { snapshot: SettingsSnapshot }) {
   };
   return (
     <>
-      <SectionHeader title="Effects" description="Your own styles for sites: your CSS, elements you hid, presets, and patches Riff wrote. They stay on this computer." />
+      <SectionHeader title="Effects" description="Your own styles for sites: your CSS, elements you hid, presets, and patches the assistant wrote. They stay on this computer." />
       <h2 className={styles.groupTitle}>Every site</h2>
       <div className={styles.group}>
         <Row

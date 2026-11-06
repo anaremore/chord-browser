@@ -1,5 +1,5 @@
 /**
- * Reading PDFs for Riff: pdf.js extraction on a fixture PDF (what the PDF
+ * Reading PDFs for the assistant: pdf.js extraction on a fixture PDF (what the PDF
  * reader utility process runs), the size cap on the download, and the
  * "is this a PDF" check. The utility process and the tab's session are
  * covered end to end in duet.spec.ts.
@@ -70,7 +70,7 @@ describe('PDF download', () => {
     expect(await readCapped(new Response(small, { headers: { 'content-length': String(DUET_PDF_MAX_BYTES + 1) } }), DUET_PDF_MAX_BYTES)).toBeNull();
   });
 
-  it('fetches through the tab’s own session, and refuses where a redirect lands if Riff never reads it', async () => {
+  it('fetches through the tab’s own session, and refuses where a redirect lands if the assistant never reads it', async () => {
     const pdf = buildPdf(SAMPLE_PDF_PAGES);
     const asked: { url: string; init?: RequestInit }[] = [];
     /** A tab whose session answers with `respond()`, as if it ended at `landed`. */
@@ -98,7 +98,7 @@ describe('PDF download', () => {
   });
 
   it('says plainly why a PDF couldn’t be read', () => {
-    expect(pdfProblemCopy('too-big')).toBe('it’s larger than 25 MB, the most Riff reads');
+    expect(pdfProblemCopy('too-big')).toBe('it’s larger than 25 MB, the most Chord reads');
     expect(pdfProblemCopy('password')).toContain('password-protected');
     expect(pdfProblemCopy('unreachable', 'the site answered 403')).toContain('403');
   });

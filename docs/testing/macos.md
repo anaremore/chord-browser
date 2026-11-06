@@ -86,7 +86,7 @@ Use the packaged app: either `apps/desktop/release/mac-arm64/Chord.app`, or the 
     - **Chords:** switching (⌘2, or ← → on the switcher) is announced: "Work chord, 3 pinned, 7 today".
     - **A toast** (Clear Today): read once, on its own; ⌘Z undoes it.
     - **Settings:** each switch is read with its description; ↺ is named for its setting; radio groups are one Tab stop with arrow keys.
-    - **Riff:** a reply isn't read word by word while it streams; "Riff finished answering." is; a card asking to read more is announced, and ⌘↵ in the message field allows it.
+    - **Assistant:** a reply isn't read word by word while it streams; "The assistant finished answering." is; a card asking to read more is announced, and ⌘↵ in the message field allows it.
     - **System Settings → Accessibility → Display:** Reduce motion makes chord switches and the command bar appear without moving; Reduce transparency makes the sidebar solid while Chord runs, with no restart; Increase contrast leaves every text readable.
 
 ## Reporting

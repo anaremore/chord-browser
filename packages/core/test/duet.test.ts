@@ -29,7 +29,7 @@ import {
   type DuetThread,
 } from '../src';
 
-describe('Riff: prompt-injection rules (research §6)', () => {
+describe('Assistant: prompt-injection rules (research §6)', () => {
   it('names tools the Claude API and Codex both accept', () => {
     for (const tool of DUET_TOOLS) expect(tool.name).toMatch(/^[a-z_]{1,40}$/);
   });
@@ -56,7 +56,7 @@ describe('Riff: prompt-injection rules (research §6)', () => {
   });
 });
 
-describe('Riff: what can be read', () => {
+describe('Assistant: what can be read', () => {
   it('never reads Chord’s pages, extension pages, or sites marked Never', () => {
     expect(isNeverReadable('chord://settings/', [])).toBe(true);
     expect(isNeverReadable('chrome-extension://abc/popup.html', [])).toBe(true);
@@ -91,15 +91,15 @@ describe('Riff: what can be read', () => {
   it('tells a session that reads nothing that it has no tools, and never mentions them', () => {
     for (const making of ['codex', 'claude', 'codex-off'] as const) {
       const text = duetInstructions(making, false);
-      expect(text).toContain('set Riff to read nothing');
-      expect(text).toContain('Settings → Riff');
+      expect(text).toContain('set you to read nothing');
+      expect(text).toContain('Settings → Assistant');
       for (const tool of ['read_tab', 'list_tabs', 'chord tools', 'Attached:', '[[t3']) expect(text).not.toContain(tool);
     }
     expect(duetInstructions('claude')).toContain('read_tab');
   });
 });
 
-describe('Riff: threads', () => {
+describe('Assistant: threads', () => {
   const thread = (lastUsedAt: number): DuetThread => ({ id: `t${lastUsedAt}`, chordId: 'c', title: 'T', provider: 'claude', model: null, providerSessionId: null, scope: 'ask', createdAt: 0, updatedAt: 0, lastUsedAt });
 
   it('shows the latest thread within the idle window, else starts fresh offering to continue it', () => {
@@ -155,7 +155,7 @@ describe('Riff: threads', () => {
   });
 });
 
-describe('Riff: PDFs', () => {
+describe('Assistant: PDFs', () => {
   const pages = ['Field guide\nA chord is three notes.', 'Triads are bright and stable, a well-\nknown sound.', '', 'Inversions put another note at the bottom of the chord and continue onto'];
 
   it('marks each page, so ranges and the model both know where they are', () => {
@@ -189,7 +189,7 @@ describe('Riff: PDFs', () => {
   });
 });
 
-describe('Riff: context meter', () => {
+describe('Assistant: context meter', () => {
   it('rounds and clamps the share used', () => {
     expect(contextPercent({ used: 124_000, window: 200_000 })).toBe(62);
     expect(contextPercent({ used: 250_000, window: 200_000 })).toBe(100);
@@ -204,11 +204,11 @@ describe('Riff: context meter', () => {
   });
 });
 
-describe('Riff and images', () => {
+describe('The assistant and images', () => {
   it('tells each provider what it can do: Codex makes them, Claude leaves the mark for Codex, Codex with it off says where to turn it on', () => {
     expect(duetInstructions('codex')).toContain('make it with your image generation tool');
     expect(duetInstructions('claude')).toContain(`end your reply with ${MAKE_IMAGE_MARK}`);
-    expect(duetInstructions('codex-off')).toContain('Settings → Riff');
+    expect(duetInstructions('codex-off')).toContain('Settings → Assistant');
     for (const making of ['codex', 'claude', 'codex-off'] as const) expect(duetInstructions(making)).not.toContain('No images.');
   });
 

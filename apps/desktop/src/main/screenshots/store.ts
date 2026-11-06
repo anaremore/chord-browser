@@ -1,7 +1,7 @@
 /**
  * The recent screenshots (DESIGN.md §7.12): files in `<userData>/Screenshots/`
  * (`<id>.png`; `<id>.jpg`, the thumbnail; `<id>.ask.jpg`, at most 1,568 px a
- * side, what Riff is sent) and an `index.json`, like hover
+ * side, what the assistant is sent) and an `index.json`, like hover
  * previews' pictures (captures.ts): files, not database rows. A private
  * window's live in memory only, and go with it. Both keep within
  * SCREENSHOT_HISTORY. Plain Node file APIs, so it's unit-tested.
@@ -22,7 +22,7 @@ export interface ShotStore {
   add(entry: ScreenshotEntry, png: Buffer, thumb: Buffer, ask?: Buffer): Promise<void>;
   png(id: string): Promise<Buffer | null>;
   thumb(id: string): Promise<Buffer | null>;
-  /** The picture Riff is sent (none for one kept before there was one). */
+  /** The picture the assistant is sent (none for one kept before there was one). */
   ask(id: string): Promise<Buffer | null>;
   remove(id: string): Promise<void>;
   clear(): Promise<void>;

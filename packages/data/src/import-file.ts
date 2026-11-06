@@ -29,7 +29,7 @@ export function pagesHere(sql: Sql): (url: string) => boolean {
 }
 
 /**
- * How many pages of history and Riff chats are here, each counted no further
+ * How many pages of history and assistant chats are here, each counted no further
  * than `upto`: what says whether this is a fresh Chord (core's planMerge).
  */
 export function amountsHere(sql: Sql, upto: number): { pages: number; chats: number } {
@@ -40,7 +40,7 @@ export function amountsHere(sql: Sql, upto: number): { pages: number; chats: num
   };
 }
 
-/** The Riff chats here already, by id. */
+/** The assistant chats here already, by id. */
 export function chatsHere(sql: Sql): Set<string> {
   return new Set((sql('SELECT id FROM duet_thread').all() as { id: string }[]).map((r) => r.id));
 }

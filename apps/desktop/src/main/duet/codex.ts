@@ -6,8 +6,8 @@
  * own MCP servers disabled by name, and Chord's tools as dynamic tools in the
  * `chord` namespace. Command and file-change approvals are declined without
  * asking; any item outside the allowed set trips the wire and stops the turn.
- * Its image tool is the one exception, when Settings → Riff allows it: what
- * it makes goes to Riff as an image, never anywhere else.
+ * Its image tool is the one exception, when Settings → Assistant allows it: what
+ * it makes goes to the assistant as an image, never anywhere else.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -49,7 +49,7 @@ export function imageLimitError(resetsAt: unknown): ProviderError {
   return { kind: 'usage-limit', message: `Codex has reached your plan's limit for making images.${resets}` };
 }
 
-/** `error` notifications → Riff's provider errors (S5 saw usageLimitExceeded and an unsupported default model). */
+/** `error` notifications → the assistant's provider errors (S5 saw usageLimitExceeded and an unsupported default model). */
 export function codexError(info: string, message: string): ProviderError {
   const kind =
     info === 'usageLimitExceeded'
@@ -145,7 +145,7 @@ export class CodexSession implements DuetSession {
     }, 2000).unref();
   }
 
-  /** Delete a thread's rollout through Codex itself (Riff's "delete really deletes"). */
+  /** Delete a thread's rollout through Codex itself (the assistant's "delete really deletes"). */
   async deleteThread(threadId: string): Promise<boolean> {
     await this.ready;
     const r = await this.call('thread/delete', { threadId });
@@ -157,7 +157,7 @@ export class CodexSession implements DuetSession {
     if (init.error) return false;
     this.write({ method: 'initialized' });
     if (this.options.resumeId === '__delete_only__') return true;
-    // The user's own MCP servers would load into Riff's threads: switch each off by name (never config/read).
+    // The user's own MCP servers would load into the assistant's threads: switch each off by name (never config/read).
     const servers = await this.call('mcpServerStatus/list', {});
     const names = ((servers.result?.['data'] as { name?: string }[] | undefined) ?? []).map((s) => s.name).filter((n): n is string => Boolean(n));
     const config = Object.fromEntries([
@@ -237,7 +237,7 @@ export class CodexSession implements DuetSession {
 
   private tripwire(type: string): void {
     this.turnError = { kind: 'tripwire', message: errorCopy('codex', 'tripwire') };
-    console.error(`[chord] Riff: Codex produced a ${type} item in a browse thread; stopping the turn.`);
+    console.error(`[chord] Assistant: Codex produced a ${type} item in a browse thread; stopping the turn.`);
     if (this.threadId && this.turnId) void this.call('turn/interrupt', { threadId: this.threadId, turnId: this.turnId });
   }
 

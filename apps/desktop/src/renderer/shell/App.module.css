@@ -602,7 +602,7 @@ kbd {
   gap: var(--space-2);
   align-items: center;
 
-  /* Padding inside the 100%: otherwise the row overflows its item and clips its end (titles, Riff's marker). */
+  /* Padding inside the 100%: otherwise the row overflows its item and clips its end (titles, the assistant's marker). */
   box-sizing: border-box;
   inline-size: 100%;
   block-size: var(--size-row);
@@ -1883,14 +1883,14 @@ kbd {
   opacity: 0.75;
 }
 
-/* The bar's Riff button (DESIGN.md §3.1): Riff's icon and name, when Riff is on. */
+/* The bar's assistant button (DESIGN.md §3.1): just its icon, when the assistant is on. */
 .duetButton {
-  display: inline-flex;
+  display: grid;
   flex: none;
-  gap: var(--space-1);
-  align-items: center;
+  place-items: center;
+  inline-size: var(--size-icon-button);
   block-size: var(--size-icon-button);
-  padding-inline: var(--space-2);
+  padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1905,7 +1905,7 @@ kbd {
   color: var(--color-fg);
 }
 
-/* A tab Riff read in the open chat. */
+/* A tab the assistant read in the open chat. */
 .duetRead {
   flex: none;
   color: var(--color-accent);

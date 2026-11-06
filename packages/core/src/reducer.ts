@@ -287,7 +287,7 @@ export type Command =
    */
   | { t: 'effects.undo'; token: string }
   /**
-   * Undo a form Riff filled (a toast's button): main puts the fields back
+   * Undo a form the assistant filled (a toast's button): main puts the fields back
    * from the page's own isolated world (main/duet), outside the store.
    */
   | { t: 'duet.undoFill'; token: string }

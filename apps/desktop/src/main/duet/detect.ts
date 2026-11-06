@@ -24,7 +24,7 @@ export interface ProviderStatus {
   signedIn: boolean | null;
   /** How it's billed: a subscription sign-in, or an API key the user set (research §1.7: say so). */
   billing: 'subscription' | 'api-key' | 'other' | null;
-  /** Older than Chord's minimum: Riff warns but still tries (research §4.3: warn, don't block). */
+  /** Older than Chord's minimum: the assistant warns but still tries (research §4.3: warn, don't block). */
   tooOld: boolean;
   /** Installed only inside WSL (Windows): the distro it runs in. */
   wsl: string | null;
@@ -38,9 +38,9 @@ export interface Detected {
 
 export const notInstalled = (provider: DuetProvider): ProviderStatus => ({ provider, installed: false, path: null, version: null, signedIn: null, billing: null, tooOld: false, wsl: null });
 
-/** research §11: the flags Riff uses arrived by these versions. */
+/** research §11: the flags the assistant uses arrived by these versions. */
 export const MIN_VERSION: Record<DuetProvider, string> = { claude: '2.1.268', codex: '0.160.0' };
-/** The newest versions Riff was checked against (docs/decisions/S10-claude-headless.md, S5-codex-restriction.md). */
+/** The newest versions the assistant was checked against (docs/decisions/S10-claude-headless.md, S5-codex-restriction.md). */
 export const TESTED_VERSION: Record<DuetProvider, string> = { claude: '2.1.309', codex: '0.160.1' };
 
 const exe = (name: string) => (process.platform === 'win32' ? `${name}.exe` : name);

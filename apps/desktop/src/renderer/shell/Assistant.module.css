@@ -1,4 +1,4 @@
-/* Riff's panel (DESIGN.md §7.8): a calm, untinted frame for reading. Tokens only. */
+/* The assistant's panel (DESIGN.md §7.8): a calm, untinted frame for reading. Tokens only. */
 
 .panel {
   position: absolute;
@@ -36,6 +36,12 @@
 .title {
   flex: 1;
   font: var(--text-label);
+}
+
+/* A chat with no name yet shows the assistant's icon: it has no name either. */
+.title > svg {
+  display: block;
+  color: var(--color-fg-muted);
 }
 
 /* The context meter: a quiet pie that fills as the chat uses the model's context; the tooltip says how much. */
@@ -383,7 +389,7 @@
   gap: var(--space-1);
 }
 
-/* A soft accent-tinted bubble for what you wrote; Riff's replies are unbubbled for calm reading. */
+/* A soft accent-tinted bubble for what you wrote; the assistant's replies are unbubbled for calm reading. */
 .user {
   max-inline-size: 85%;
   padding: var(--space-2) var(--space-3);
@@ -669,7 +675,7 @@
   content: '';
 }
 
-/* One quiet line per turn for what Riff looked at; it opens to show each step. */
+/* One quiet line per turn for what the assistant looked at; it opens to show each step. */
 .toolRow {
   display: flex;
   flex-direction: column;

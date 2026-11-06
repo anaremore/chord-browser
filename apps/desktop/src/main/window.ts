@@ -256,9 +256,9 @@ export class AppWindow {
   private peek: PeekInfo | null = null;
   private peekSeq = 0;
   private peekTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Riff's panel on the right (0 when closed): the page's frame ends before it, with a gap. */
+  /** The assistant's panel on the right (0 when closed): the page's frame ends before it, with a gap. */
   private duetWidth = 0;
-  /** Riff's openings and closings waiting for their frame change, oldest first. */
+  /** The assistant's openings and closings waiting for their frame change, oldest first. */
   private readonly duetChanges: { width: number; publish(): void }[] = [];
   /** Views waiting for the shell's first paint to load (`deferViews`). */
   private deferred: { view: WebContentsView; surface: UiSurface }[] = [];
@@ -680,7 +680,7 @@ export class AppWindow {
     return { width: width / s, height: height / s };
   }
 
-  /** The content frame, in UI units from the window's corner (left of Riff's panel when it's open). */
+  /** The content frame, in UI units from the window's corner (left of the assistant's panel when it's open). */
   private frameRect(): Rect {
     const { width: windowWidth, height } = this.contentSize();
     const width = this.duetWidth > 0 ? Math.max(0, windowWidth - this.duetWidth - space[2]) : windowWidth;
@@ -1093,7 +1093,7 @@ export class AppWindow {
   }
 
   /**
-   * Riff's panel opens (its width) or closes (0), and the page makes room for
+   * The assistant's panel opens (its width) or closes (0), and the page makes room for
    * it: with `animate`, by the frame's snapshot while the panel slides in
    * (DESIGN.md §6.5). `publish` tells the shell what the panel shows; it's
    * held back while the frame's change waits for its pictures, so the panel

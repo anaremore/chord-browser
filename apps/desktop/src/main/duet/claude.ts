@@ -37,7 +37,7 @@ export function claudeArgs(options: Pick<SessionOptions, 'model' | 'instructions
   ];
 }
 
-/** api_retry error categories and result text → Riff's provider errors (research §1.2). */
+/** api_retry error categories and result text → the assistant's provider errors (research §1.2). */
 export function claudeError(category: string, text: string): ProviderError {
   const kind =
     category === 'authentication_failed' || /not (logged|signed) in|\/login|auth login/i.test(text)

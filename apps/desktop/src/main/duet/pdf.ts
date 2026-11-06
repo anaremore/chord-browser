@@ -1,6 +1,6 @@
 /**
- * Reading a PDF for Riff (ARCHITECTURE.md §11.4). Chromium's viewer shows a
- * PDF inside the tab, where the page extractor sees only the viewer; so Riff
+ * Reading a PDF for the assistant (ARCHITECTURE.md §11.4). Chromium's viewer shows a
+ * PDF inside the tab, where the page extractor sees only the viewer; so the assistant
  * fetches the file again through the tab's own session (the user's cookies
  * apply, and a private window's session stays in memory) and pdf.js reads it
  * in a utility process of its own (src/pdf/worker.ts), off main.
@@ -29,11 +29,11 @@ export class PdfError extends Error {
 export function pdfProblemCopy(problem: PdfProblem, detail = ''): string {
   switch (problem) {
     case 'too-big':
-      return `it’s larger than ${Math.round(DUET_PDF_MAX_BYTES / (1024 * 1024))} MB, the most Riff reads`;
+      return `it’s larger than ${Math.round(DUET_PDF_MAX_BYTES / (1024 * 1024))} MB, the most Chord reads`;
     case 'not-pdf':
       return 'the tab no longer shows a PDF';
     case 'never':
-      return 'it comes from a site Riff never reads';
+      return 'it comes from a site Chord never reads';
     case 'password':
       return 'it’s password-protected';
     case 'invalid':

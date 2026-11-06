@@ -4,7 +4,7 @@
  * decision D12). Chord asks in the window's popover, over the tab (or Peek)
  * that asked, and only while you're looking at it. Nothing is saved: Chromium
  * keeps a sign-in that worked for the rest of the session, so it lasts until
- * you quit. Requests from anything else (Chord's own pages, extensions, Riff,
+ * you quit. Requests from anything else (Chord's own pages, extensions, the assistant,
  * mini windows) and a page's requests to other sites for images or scripts
  * are cancelled, as Chrome does, and the site shows its own "unauthorized" page.
  */

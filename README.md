@@ -26,8 +26,8 @@ Everything here works on `main` today and comes with the latest preview.
 - **Chrome extensions**, including password managers.
 - **Pop-out video:** a playing video floats into picture-in-picture when you switch tabs.
 - **Safe Browsing:** a warning before suspected phishing and malware sites and downloads, from Google's lists, checked on your computer. Release builds only (it needs Chord's API key); off in Google-free mode.
-- **Riff** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. You choose what it can read, from your tabs down to nothing at all; it cites what it read, and never sees your sign-in. It can fill in a form you ask it to, once you've checked each value. Turn it off in Settings and it's gone.
-- **Effects:** restyle a site your way, with your own CSS, hidden elements, presets, or styles Riff writes. Dry/Wet takes them off at once. They're styles only, and never load anything.
+- **Assistant** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. You choose what it can read, from your tabs down to nothing at all; it cites what it read, and never sees your sign-in. It can fill in a form you ask it to, once you've checked each value. Turn it off in Settings and it's gone.
+- **Effects:** restyle a site your way, with your own CSS, hidden elements, presets, or styles the assistant writes. Dry/Wet takes them off at once. They're styles only, and never load anything.
 - **Developer tools** dock beside the page, as in Chrome, or pop out into a window.
 - **Proxies:** one for every chord, or one for a chord of its own (HTTP, HTTPS or SOCKS5, or a configuration file), in place before any page loads.
 - **Your data:** export everything to one file, plain text anyone can read ([docs/data-format.md](docs/data-format.md)) or encrypted with a passphrase; bring a file back in, with one Undo; and sync your setup between your computers through a folder you already sync, encrypted with your passphrase.
@@ -36,8 +36,8 @@ Everything here works on `main` today and comes with the latest preview.
 |---|---|
 | ![The command bar over a page, with open tabs, a site search and suggestions for "wiki"](site/public/images/command-bar-1440.webp) | ![Split view: a Wikipedia article and an MDN page side by side](site/public/images/split-view-1440.webp) |
 | **Command bar:** tabs, history, the archive and actions in one place. | **Split view:** pages side by side, one entry in the sidebar. |
-| ![Riff beside a Wikipedia article, answering from the page with a numbered citation](site/public/images/duet-1440.webp) | ![Settings, Appearance: the color scheme and a library of themes for the chord](site/public/images/themes-860.webp) |
-| **Riff:** answers from your tabs, with citations you can click. | **Themes:** each chord has its own colors, light or dark. |
+| ![The assistant beside a Wikipedia article, answering from the page with a numbered citation](site/public/images/duet-1440.webp) | ![Settings, Appearance: the color scheme and a library of themes for the chord](site/public/images/themes-860.webp) |
+| **Assistant:** answers from your tabs, with citations you can click. | **Themes:** each chord has its own colors, light or dark. |
 
 ## Try the preview
 
@@ -133,4 +133,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues privately,
 
 Release builds include [electron-chrome-extensions](packages/chrome-extensions) for Chrome extension support. That library is GPL-3.0, so Chord's release builds are distributed under the [GPL-3.0](LICENSES/GPL-3.0.txt), with the source at each release's tag. Chord's own source stays MIT.
 
-Riff reads PDFs with Mozilla's [pdf.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist`), and reader view finds articles with Mozilla's [Readability](https://github.com/mozilla/readability) (`@mozilla/readability`), both under the [Apache License 2.0](LICENSES/Apache-2.0.txt). Effects check stylesheets with the CSS Tokenizer and CSS Parser Algorithms from [csstools](https://github.com/csstools/postcss-plugins), under the [MIT License](LICENSES/MIT-csstools.txt). Ad blocking uses [Ghostery's adblocker engine](https://github.com/ghostery/adblocker), under the [Mozilla Public License 2.0](LICENSES/MPL-2.0.txt), and [EasyList and EasyPrivacy](https://easylist.to/) (`apps/desktop/build/ad-blocking`), which Chord distributes under the [GPL-3.0](LICENSES/GPL-3.0.txt). Every build ships the files in [LICENSES](LICENSES) in its `licenses` resources folder.
+The assistant reads PDFs with Mozilla's [pdf.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist`), and reader view finds articles with Mozilla's [Readability](https://github.com/mozilla/readability) (`@mozilla/readability`), both under the [Apache License 2.0](LICENSES/Apache-2.0.txt). Effects check stylesheets with the CSS Tokenizer and CSS Parser Algorithms from [csstools](https://github.com/csstools/postcss-plugins), under the [MIT License](LICENSES/MIT-csstools.txt). Ad blocking uses [Ghostery's adblocker engine](https://github.com/ghostery/adblocker), under the [Mozilla Public License 2.0](LICENSES/MPL-2.0.txt), and [EasyList and EasyPrivacy](https://easylist.to/) (`apps/desktop/build/ad-blocking`), which Chord distributes under the [GPL-3.0](LICENSES/GPL-3.0.txt). Every build ships the files in [LICENSES](LICENSES) in its `licenses` resources folder.

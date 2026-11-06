@@ -54,7 +54,7 @@ export function exportText(p: ExportProgress): string {
     case 'history':
       return `Writing history: ${numbers.format(p.done)} of ${plural(p.total, 'page')}`;
     case 'duet':
-      return `Writing Riff chats: ${numbers.format(p.done)} of ${plural(p.total, 'chat')}`;
+      return `Writing assistant chats: ${numbers.format(p.done)} of ${plural(p.total, 'chat')}`;
     case 'done':
       return `Saved ${p.name}, ${fileSize(p.bytes ?? 0)}${p.skipped ? `. ${plural(p.skipped, 'thing')} too big for the file (over 32 MB) stayed out.` : ''}`;
     case 'failed':
@@ -153,7 +153,7 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
             description={counts ? (counts.pages ? plural(counts.pages, 'page') : 'No history yet') : ''}
             control={<Switch label="Include history" checked={history} onChange={setHistory} />}
           />
-          <Row label="Riff chats" description={chats} control={<Switch label="Include Riff chats" checked={duet} onChange={setDuet} />} />
+          <Row label="Assistant chats" description={chats} control={<Switch label="Include assistant chats" checked={duet} onChange={setDuet} />} />
           <Row
             label="Encrypt with a passphrase"
             description={encrypt ? 'Chord can’t open the file without it, and can’t get it back for you.' : history || duet ? 'Anyone with the file can read it.' : undefined}

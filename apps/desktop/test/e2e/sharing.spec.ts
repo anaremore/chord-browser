@@ -308,7 +308,7 @@ test('presenting mode starts with a share: history, previews, notifications and 
     expect(await presentingOf(shell)).toBe('share');
     await expect(toasts).toHaveCount(0);
 
-    // History, the archive and Riff answer nothing (asked straight, as a keystroke before the patch would).
+    // History, the archive and the assistant answer nothing (asked straight, as a keystroke before the patch would).
     const answer = await overlay.evaluate(() => (window as unknown as { chord: { history: { search(q: string): Promise<{ history: unknown[]; archive: unknown[] }> } } }).chord.history.search('release'));
     expect(answer.history).toEqual([]);
     expect(answer.archive).toEqual([]);
