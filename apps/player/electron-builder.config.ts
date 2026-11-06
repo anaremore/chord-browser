@@ -12,15 +12,38 @@
  * final binary. Without production signing the binaries stay exactly as
  * castLabs built them on Windows and macOS, so ECS's development signature
  * stays valid: no fuses and no edited .exe resources there. Linux has no VMP.
+ *
+ * Windows code signing (Authenticode) is Chord's own: Azure Artifact Signing
+ * (formerly Trusted Signing) with the same account, profile and publisher as
+ * Chord.exe (apps/desktop/electron-builder.config.ts, `artifact-signing`;
+ * docs/releasing/signing.md). A release build passes its settings in the
+ * environment (.github/workflows/player.yml); electron-builder then signs
+ * `Chord Player.exe` after afterPack (the fuses) and before package.mjs
+ * VMP-signs it. Without them, nothing is code-signed.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Configuration } from 'electron-builder';
+import type { Configuration, WindowsConfiguration } from 'electron-builder';
 
 const ecs = (JSON.parse(readFileSync(join(import.meta.dirname, 'ecs.json'), 'utf8')) as { version: string }).version;
 const production = process.env['CHORD_PLAYER_VMP'] === 'production';
 const zip = process.env['CHORD_ECS_ZIP'];
 if (!zip) throw new Error('CHORD_ECS_ZIP must name the checked ECS zip (scripts/package.mjs sets it)');
+
+/** Azure Artifact Signing's settings: the first three sign in to Microsoft Entra ID, the rest say what signs. */
+const AZURE = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_SIGNING_PROFILE', 'WIN_PUBLISHER_NAME'] as const;
+
+/** Windows code signing when every setting is there, none when none is; a half-configured set stops the build rather than quietly building unsigned. */
+function winSigning(env: NodeJS.ProcessEnv): Pick<WindowsConfiguration, 'azureSignOptions'> {
+  const value = (name: string) => env[name]?.trim() || undefined;
+  const missing = AZURE.filter((name) => !value(name));
+  if (missing.length === AZURE.length) return {};
+  if (missing.length > 0) throw new Error(`Code-signing Chord Player needs ${missing.join(', ')} too (docs/releasing/signing.md, Chord Player)`);
+  return {
+    // The certificate's subject CN, exactly, as Chord's; only `Chord Player.exe` is signed (no signExts): ECS's DLLs stay as castLabs built them.
+    azureSignOptions: { publisherName: value('WIN_PUBLISHER_NAME')!, endpoint: value('AZURE_SIGNING_ENDPOINT')!, codeSigningAccountName: value('AZURE_SIGNING_ACCOUNT')!, certificateProfileName: value('AZURE_SIGNING_PROFILE')! },
+  };
+}
 
 const config: Configuration = {
   appId: 'com.chordbrowser.Chord.Player',
@@ -48,7 +71,9 @@ const config: Configuration = {
     target: 'dir',
     icon: '../desktop/build/icon.ico',
     // Editing the .exe's icon and version invalidates ECS's development signature; production builds are VMP-signed after it.
+    // It's also the switch for code signing: only production (release) builds are code-signed.
     signAndEditExecutable: production,
+    ...(production ? winSigning(process.env) : {}),
   },
   mac: {
     target: 'dir',

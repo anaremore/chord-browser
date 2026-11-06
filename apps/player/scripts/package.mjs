@@ -77,7 +77,8 @@ const unpacked = readdirSync(builderOut, { withFileTypes: true }).find((e) => e.
 if (!unpacked) throw new Error(`electron-builder left no app folder in ${builderOut}`);
 const appFolder = join(builderOut, unpacked.name);
 
-// 4. Windows: VMP signing after code signing, which electron-builder did (when it has a certificate).
+// 4. Windows: VMP signing after code signing, which electron-builder did (a release's Azure Artifact Signing,
+//    electron-builder.config.ts). Nothing touches the .exe after this: the zip only reads it.
 if (process.platform === 'win32') {
   if (production) vmpSign(appFolder);
   else {

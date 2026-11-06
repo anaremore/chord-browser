@@ -171,10 +171,17 @@ Chord Player (ARCHITECTURE.md §9, `apps/player`) runs on castLabs ECS. The stre
 3. *Package* (`apps/player/scripts/package.mjs`, non-interactive with `EVS_NO_ASK`), in castLabs' order:
    - **macOS:** the fuses are flipped, then VMP signing (`sign-pkg`), all in electron-builder's `afterPack`. Then code signing: ad-hoc today, Developer ID once it's set up for Chord.
    - **The fuses** must be exactly the set castLabs accepts (castLabs' FAQ; `apps/player/scripts/after-pack.mjs`). Any other change to the binary makes EVS answer *Binary signature denied*.
-   - **Windows:** code signing (by electron-builder, once a certificate is set up), then VMP signing. Nothing touches the `.exe` after it.
+   - **Windows:** code signing (by electron-builder, with Chord's Azure Artifact Signing: see below), then VMP signing. Nothing touches the `.exe` after it.
    - `verify-pkg` then checks the signature, and the job fails if it doesn't hold.
 
 **Without the secrets** (forks, pull requests), the Windows and macOS binaries stay as castLabs built them, so ECS's development signature stays valid. Only Widevine's test servers accept that, so such builds are for tests, not for release.
+
+**Windows code signing (Authenticode)**, from Chord Player 0.1.2: a release's `Chord Player.exe` is signed with the **same Azure Artifact Signing setup as Chord** (the `artifact-signing` mode above): the secrets `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` and the variables `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` and `WIN_PUBLISHER_NAME`, all in `release`. Nothing new to set up.
+- `player.yml` checks they're all there before anything else (a Windows release without them fails), and passes them to the Windows *Package* step of a release build only.
+- `apps/player/electron-builder.config.ts` sets `win.azureSignOptions` when they're there (a half-set group stops the build), and signs only in production (VMP) builds, the ones that edit the `.exe` at all. It signs `Chord Player.exe` alone; ECS's DLLs stay as castLabs built them.
+- electron-builder signs after `afterPack` (the fuses) and before `package.mjs` VMP-signs, castLabs' order; `verify-pkg` then checks the VMP signature on the signed binary.
+- *Check the code signature (Windows release)* unpacks the zip as Chord does and fails unless `Chord Player.exe` has a `Valid`, timestamped signature from `WIN_PUBLISHER_NAME`.
+- Builds before 0.1.2 aren't code-signed (the log said *no code signing certificate configured*). Pull requests and other builds still aren't: the first `player-v0.1.2` tag build is the first to run this path.
 
 **Your steps:**
 - **Done 2026-11-06:** the account's secrets are in the `release` environment, with the `player-v*` tag rule, and the repository copies are deleted. The steps, for a new account or a rotated password:
