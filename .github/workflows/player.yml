@@ -9,6 +9,10 @@ name: Chord Player
 # a release build (player-release.yml, for a tag) can read them, after its reviewers approve. Every
 # other build, from ci.yml on every run or by hand, keeps ECS's development signature.
 #
+# A release's Windows build is also code-signed (Authenticode) with Chord's own Azure Artifact Signing
+# settings from that environment (the AZURE_* secrets and variables, and WIN_PUBLISHER_NAME, as
+# release.yml signs Chord.exe), before it's VMP-signed. Other builds aren't code-signed.
+#
 # Linux arm64 isn't built: no Widevine CDM there that spike S14 could test. Linux has no VMP.
 on:
   workflow_call:
@@ -80,6 +84,30 @@ jobs:
             echo "::notice::Not VMP-signed through EVS: this build keeps ECS's development signature, which only Widevine's test servers accept."
           fi
 
+      # A Windows release must be code-signed: the settings are checked here, before EVS is asked for anything.
+      # Only whether each is set reaches this step, never its value.
+      - name: Check the code-signing settings (Windows release)
+        if: inputs.release == true && matrix.target == 'win32-x64'
+        shell: bash
+        env:
+          HAS_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID != '' }}
+          HAS_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          HAS_AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          HAS_AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT != '' }}
+          HAS_AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT != '' }}
+          HAS_AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE != '' }}
+          HAS_WIN_PUBLISHER_NAME: ${{ vars.WIN_PUBLISHER_NAME != '' }}
+        run: |
+          missing=""
+          for name in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE WIN_PUBLISHER_NAME; do
+            has="HAS_$name"
+            [ "${!has}" = "true" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::A Chord Player release must be code-signed on Windows, as Chord is: missing from the release environment:$missing (docs/releasing/signing.md, Chord Player)."
+            exit 1
+          fi
+
       - name: Python for castLabs EVS
         if: steps.vmp.outputs.mode == 'production'
         uses: actions/setup-python@v6
@@ -123,6 +151,15 @@ jobs:
         shell: bash
         env:
           CSC_FOR_PULL_REQUEST: 'true'
+          # Windows release builds only: Authenticode signing by electron-builder (apps/player/electron-builder.config.ts),
+          # before package.mjs VMP-signs. Empty everywhere else, and then nothing is code-signed.
+          AZURE_TENANT_ID: ${{ inputs.release == true && matrix.target == 'win32-x64' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ inputs.release == true && matrix.target == 'win32-x64' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ inputs.release == true && matrix.target == 'win32-x64' && secrets.AZURE_CLIENT_SECRET || '' }}
+          AZURE_SIGNING_ENDPOINT: ${{ inputs.release == true && matrix.target == 'win32-x64' && vars.AZURE_SIGNING_ENDPOINT || '' }}
+          AZURE_SIGNING_ACCOUNT: ${{ inputs.release == true && matrix.target == 'win32-x64' && vars.AZURE_SIGNING_ACCOUNT || '' }}
+          AZURE_SIGNING_PROFILE: ${{ inputs.release == true && matrix.target == 'win32-x64' && vars.AZURE_SIGNING_PROFILE || '' }}
+          WIN_PUBLISHER_NAME: ${{ inputs.release == true && matrix.target == 'win32-x64' && vars.WIN_PUBLISHER_NAME || '' }}
         run: node apps/player/scripts/package.mjs --out "$GITHUB_WORKSPACE/apps/player/release"
 
       - name: Forget the EVS tokens
@@ -140,6 +177,32 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$check/app/Chord Player.app"
           codesign --display --verbose=2 "$check/app/Chord Player.app" 2>&1 | grep -E '^(Identifier|Format|Signature|TeamIdentifier)='
           rm -rf "$check"
+
+      # A Windows release's Chord Player.exe, as Chord unpacks it from the zip, must carry a valid, timestamped
+      # Authenticode signature from Chord's publisher (as release.yml checks Chord.exe). VMP signing came after
+      # it and package.mjs's verify-pkg passed, so this also shows VMP signing left the code signature intact.
+      - name: Check the code signature (Windows release)
+        if: inputs.release == true && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WIN_PUBLISHER_NAME: ${{ vars.WIN_PUBLISHER_NAME }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          $check = Join-Path $env:RUNNER_TEMP 'authenticode-check'
+          if (Test-Path $check) { Remove-Item -Recurse -Force $check }
+          $zip = (Get-ChildItem apps/player/release -Filter "chord-player-*-$env:TARGET.zip" | Select-Object -First 1).FullName
+          if (-not $zip) { throw 'No Chord Player zip to check' }
+          node -e "import('./packages/player-protocol/src/zip.ts').then(z => z.extractZip(process.argv[1], process.argv[2], { maxBytes: 2 ** 31 }))" $zip (Join-Path $check 'app')
+          if ($LASTEXITCODE -ne 0) { throw "Couldn't unpack $zip" }
+          $exe = Join-Path $check 'app\Chord Player.exe'
+          $signature = Get-AuthenticodeSignature -LiteralPath $exe
+          $signer = $signature.SignerCertificate
+          $name = if ($signer) { $signer.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } else { '' }
+          "Chord Player.exe: $($signature.Status), signed by '$name', timestamped by '$($signature.TimeStamperCertificate.Subject)'"
+          if ($signature.Status -ne 'Valid') { throw "Chord Player.exe isn't validly signed: $($signature.StatusMessage)" }
+          if (-not $signature.TimeStamperCertificate) { throw "Chord Player.exe has no timestamp, so its signature would lapse with the certificate" }
+          if ($name -ne $env:WIN_PUBLISHER_NAME -and $signer.Subject -ne $env:WIN_PUBLISHER_NAME) { throw "Chord Player.exe is signed by '$($signer.Subject)', not by '$env:WIN_PUBLISHER_NAME'" }
+          Remove-Item -Recurse -Force $check
 
       - name: Linux display and sandbox
         if: runner.os == 'Linux'
