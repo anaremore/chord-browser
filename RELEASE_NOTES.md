@@ -2,6 +2,17 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.8.0 · preview · 2026-11-06
+
+- **Netflix, Spotify and the other services that need Widevine play right in the tab, on Windows.** With Chord Player 0.2, which Chord updates to by itself, the page plays where the tab's page would be: no second window. It moves and resizes with Chord's window, minimizes with it, and stays out of the taskbar and Alt+Tab.
+  - Switch tabs or chords and it hides; come back and it's there.
+  - When the command bar, Peek, a preview or the sidebar slides over it, a still picture of the page stands in until they close. Netflix's may be black: protected video can't be pictured.
+  - Chord's shortcuts work from inside it: Ctrl+T, Ctrl+L, Ctrl+W, Ctrl+Tab.
+  - The tab is the player now: closing the tab, or leaving the service's page, closes it.
+  - On macOS and Linux it keeps its window of its own.
+- **Chord Player's files are all code-signed on Windows**, its DLLs as well as the app, as Chord's are.
+- **Now playing:** a video you paused just after it started, then left for another chord, no longer stays on the card for a minute.
+
 ## 0.7.0 · preview · 2026-11-06
 
 - **Riff no longer has a name.** It's the assistant button now: the same icon and the same shortcut (⌘/Ctrl+E), in Settings → Assistant. Your chats and settings are all still there. Search your chats in the command bar with `@chats`.
