@@ -75,8 +75,8 @@
     }
   },
   "win32-arm64": {
-    "from": "CI run 40246180234",
-    "date": "2026-10-26",
+    "from": "CI run 40246180234; chord-data: the median of 37 CI runs, 2026-10-26 to 2026-11-06",
+    "date": "2026-11-06",
     "launch": 3.16,
     "memoryMb": {
       "main": 138.3,
@@ -86,7 +86,7 @@
       "hover preview": 31.6,
       "page": 27,
       "GPU": 23.9,
-      "chord-data": 27.5
+      "chord-data": 30.6
     }
   },
   "win32-x64": {
