@@ -2,7 +2,7 @@
  * Forward-only migrations (ARCHITECTURE.md §7). `PRAGMA user_version` is the
  * number of migrations applied. Each runs in a transaction, after a
  * `VACUUM INTO` backup of the previous version. Tables arrive with the
- * feature that needs them; history, archive and Riff add their own later.
+ * feature that needs them; history, archive and the assistant add their own later.
  */
 export const MIGRATIONS: readonly string[] = [
   // 1: the sidebar tree, windows, settings and favicons (session restore, M1.1).
@@ -177,7 +177,7 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (profile_id, host)
   ) STRICT;
   `,
-  // 9: Riff (ARCHITECTURE.md §11): Chord's own transcript is the source of truth; a provider's
+  // 9: the assistant (ARCHITECTURE.md §11): Chord's own transcript is the source of truth; a provider's
   // session (provider_session_id) is a cache, resumed when it works. Message bodies are JSON
   // (packages/core/src/duet.ts); text is what the command bar's @duet searches.
   `
@@ -207,7 +207,7 @@ export const MIGRATIONS: readonly string[] = [
     INSERT INTO duet_fts(rowid, text) VALUES (new.rid, new.text);
   END;
   `,
-  // 10: split view (Phase 2; 9 is Riff's). A split is a node of kind 'split'; its panes are its
+  // 10: split view (Phase 2; 9 is the assistant's). A split is a node of kind 'split'; its panes are its
   // child tabs, in rank order. layout is {direction:'row'|'column', sizes:number[]} (shares in pane order).
   `
   CREATE TABLE IF NOT EXISTS split (
@@ -243,7 +243,7 @@ export const MIGRATIONS: readonly string[] = [
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   ) STRICT;
   `,
-  // 14: a Riff chat's scope can be 'every' (Ask every time: nothing attached for you). SQLite can't change a CHECK,
+  // 14: an assistant chat's scope can be 'every' (Ask every time: nothing attached for you). SQLite can't change a CHECK,
   // so the table is made again, as SQLite documents: a copy with the new rule, the old one dropped, the copy renamed.
   // Foreign keys are off while migrations run (db.ts), so dropping it doesn't take its messages with it.
   `
@@ -260,7 +260,7 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX duet_thread_chord ON duet_thread(chord_id, last_used_at DESC);
   `,
   // 15: each of a site's Effects has its own switch (ARCHITECTURE.md §9). Your CSS's is a column; each hidden element's
-  // and Riff patch's is `on` in its JSON. A row from before has neither, and reads as everything on.
+  // and an assistant patch's is `on` in its JSON. A row from before has neither, and reads as everything on.
   `
   ALTER TABLE effect ADD COLUMN css_on INTEGER NOT NULL DEFAULT 1;
   `,
@@ -279,7 +279,7 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE link_route ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
   `,
-  // 18: Your data's import (docs/decisions/S15-your-data.md §5, §12). A Riff chat brought in from a Chord file is marked with
+  // 18: Your data's import (docs/decisions/S15-your-data.md §5, §12). An assistant chat brought in from a Chord file is marked with
   // when it came: its earlier turns reach a provider only as untrusted data, never in the instructions. NULL for a chat made
   // here. Sync's tables, once 18, come with 19.
   `

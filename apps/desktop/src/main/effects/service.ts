@@ -14,7 +14,7 @@
  *   flashes. It's an author-origin sheet. Before Electron 45.2.2,
  *   `removeInsertedCSS` took only those out, and a user-origin sheet stayed
  *   until its document went (seen in effects.spec.ts: Dry left the page styled).
- * - **Each one's switch.** Your CSS, each hidden element and each of Riff's
+ * - **Each one's switch.** Your CSS, each hidden element and each of the assistant's
  *   patches can be switched off and kept (a preset that's off isn't kept).
  *   The site's stylesheet is made from what's on (`effectsParts`), so
  *   switching one is a change like any other: one stylesheet made again and
@@ -24,12 +24,12 @@
  *   each item's switch says. A tab's `live.effects` says which, for the button
  *   beside the address.
  * - **Sanitizing.** Every change goes through the sanitizer in Effects' worker
- *   (compiler.ts) before anything of it is used, an edited Riff patch as much
+ *   (compiler.ts) before anything of it is used, an edited assistant patch as much
  *   as your CSS; nothing is applied from a stylesheet an older sanitizer made
  *   until the new one has made it again.
- * - **Ask Riff.** Your Claude Code or Codex app writes a patch from the page's
- *   outline (scripts.ts), under Riff's reading rules: never a private window, a
- *   chord where Riff is off, a Never site, or a form field's value.
+ * - **Asking the assistant.** Your Claude Code or Codex app writes a patch from the page's
+ *   outline (scripts.ts), under the assistant's reading rules: never a private window, a
+ *   chord where the assistant is off, a Never site, or a form field's value.
  */
 import {
   cleanOutline,
@@ -65,7 +65,7 @@ import type { Compiled, Removal } from './sanitize';
 import { SANITIZER_VERSION } from './sanitize';
 import { EFFECTS_WORLD, OUTLINE_MS, OUTLINE_SCRIPT, SELECTOR_SCRIPT, type PageOutline, type PickedElement } from './scripts';
 
-/** How long Riff may take to write a patch. */
+/** How long the assistant may take to write a patch. */
 const ASK_MS = 180_000;
 /** Undo tokens kept for toasts. */
 const MAX_UNDO = 30;
@@ -109,9 +109,9 @@ export interface EffectsDeps {
   settingsChanged(): void;
 }
 
-/** Ask Riff, as main's Riff offers it to Effects (duet/service.ts): set once Riff exists. */
+/** Asking the assistant, as main's DuetService offers it to Effects (duet/service.ts): set once it exists. */
 export interface EffectsDuet {
-  /** Whether Riff may read this page from this window, and the provider's name; null if not. */
+  /** Whether the assistant may read this page from this window, and the provider's name; null if not. */
   available(windowId: WindowId, url: string): { provider: string } | null;
   /** One request, no chat: its instructions, the user's turn, and the one tool. Resolves with the reply's text. */
   ask(request: { instructions: string; text: string; tool: DuetToolSpec; onTool(): Promise<string>; signal: AbortSignal; timeoutMs: number }): Promise<{ ok: true; text: string } | { ok: false; error: string }>;
@@ -126,7 +126,7 @@ interface Stored {
   notes: Notes | null;
 }
 
-/** What the sanitizer said about what's switched on: what it left out of your CSS and of each of Riff's patches (by id), and the hidden elements' selectors it can't use. */
+/** What the sanitizer said about what's switched on: what it left out of your CSS and of each of the assistant's patches (by id), and the hidden elements' selectors it can't use. */
 interface Notes {
   css: Removal[];
   duet: Map<string, Removal[]>;
@@ -197,7 +197,7 @@ export class Effects {
   private readonly chains = new Map<string, Promise<void>>();
   private readonly compiler: EffectsCompiler;
   private opened = 0;
-  /** Set once Riff exists (index.ts). */
+  /** Set once the assistant exists (index.ts). */
   duet: EffectsDuet | null = null;
   /** Main's part of applying a site's stylesheet to a page, in ms: finding it, and `insertCSS` answering (tests and the docs read it). */
   readonly timings: { lookup: number; insert: number; bytes: number }[] = [];
@@ -423,7 +423,7 @@ export class Effects {
     this.cards.set(w.id, { nodeId: front.nodeId, host: front.host, scope, opened: ++this.opened });
     this.deps.popoverChanged(w.id);
     w.focusPopover();
-    // What was left out of your CSS and Riff's patches is known once the stylesheet's been made this launch.
+    // What was left out of your CSS and the assistant's patches is known once the stylesheet's been made this launch.
     const st = this.stored(scope, front.host);
     if (st && st.notes === null && hasEffects(st.site)) void this.notes(st, w.id);
     else this.push(w.id);
@@ -615,18 +615,18 @@ export class Effects {
     if (pick.fromCard) this.open(w);
   }
 
-  /* ---------- Ask Riff ---------- */
+  /* ---------- Asking the assistant ---------- */
 
   private async ask(w: EffectsWindow, card: Card, text: string): Promise<void> {
     const front = this.frontSite(w.id);
     const duet = this.duet;
     if (this.asks.get(w.id)?.busy || !front || front.host !== card.host) return;
-    // Riff's own rules, checked again here: set up, on in this chord, not a Never site, not a private window.
+    // The assistant's own rules, checked again here: set up, on in this chord, not a Never site, not a private window.
     const available = duet && !w.isPrivate ? duet.available(w.id, front.url) : null;
     const state: Ask = { host: card.host, scope: card.scope, busy: true, startedAt: Date.now(), error: null, note: null, controller: new AbortController() };
     this.asks.set(w.id, state);
     if (!duet || !available) {
-      Object.assign(state, { busy: false, startedAt: null, error: 'Riff can’t read this page, so it can’t restyle it.' });
+      Object.assign(state, { busy: false, startedAt: null, error: 'This page can’t be read, so it can’t be restyled.' });
       return this.push(w.id);
     }
     this.push(w.id);
@@ -653,13 +653,13 @@ export class Effects {
       return this.push(w.id);
     }
     const answer = parseEffectsAnswer(result.text);
-    if (!answer) state.error = 'Riff’s answer wasn’t a stylesheet Chord could use. Try asking another way.';
-    else if (!answer.css.trim()) state.error = answer.summary || 'Riff couldn’t do that with CSS.';
+    if (!answer) state.error = 'The answer wasn’t a stylesheet Chord could use. Try asking another way.';
+    else if (!answer.css.trim()) state.error = answer.summary || 'Couldn’t do that with CSS.';
     else {
       const clean = await this.compiler.patch(answer.css).catch(() => null);
-      if (!clean?.css) state.error = 'Nothing in Riff’s answer was safe to use.';
+      if (!clean?.css) state.error = 'Nothing in the answer was safe to use.';
       else {
-        if (clean.removed.length) state.note = `Chord left out ${removedText(clean.removed)} from Riff’s patch.`;
+        if (clean.removed.length) state.note = `Chord left out ${removedText(clean.removed)} from the patch.`;
         const at = Date.now();
         await this.change(card.scope, card.host, (site) => ({
           ...site,
@@ -759,7 +759,7 @@ export class Effects {
     };
   }
 
-  /** Quitting: the worker goes; requests to Riff stop. */
+  /** Quitting: the worker goes; requests to the assistant stop. */
   stop(): void {
     for (const ask of this.asks.values()) ask.controller?.abort();
     this.compiler.stop();

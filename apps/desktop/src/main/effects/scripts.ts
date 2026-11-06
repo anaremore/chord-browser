@@ -3,18 +3,18 @@
  * none of its scripts), through `pageCall`, and only when you ask. Nothing of
  * these stays in the page: an Effect itself is a stylesheet, never a script.
  *
- * - The outline Riff reads to write a patch: elements' tags, ids, classes,
+ * - The outline the assistant reads to write a patch: elements' tags, ids, classes,
  *   roles and sizes, and a few headings. Never a form field's value, nor
  *   what's typed in an editor.
  * - A selector for the element you picked to hide: screenshots' picker keeps
  *   it in its own world (`__chordShot`, screenshots/scripts.ts), and this
  *   names it so a stylesheet can find it again on the site's other pages.
  *
- * Plain JavaScript source, as Riff's extractor is: bundling may rename or wrap
+ * Plain JavaScript source, as the assistant's extractor is: bundling may rename or wrap
  * functions in ways a page can't run.
  */
 
-/** Chord's isolated world for Effects' outline (Riff reads in 4400, reader view in 4410, screenshots and the picker in 4420). */
+/** Chord's isolated world for Effects' outline (the assistant reads in 4400, reader view in 4410, screenshots and the picker in 4420). */
 export const EFFECTS_WORLD = 4430;
 
 /** How long the outline may take: a long page is slow, a hung one never answers. */

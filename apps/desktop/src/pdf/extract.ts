@@ -1,6 +1,6 @@
 /**
  * A PDF's text, page by page, with pdf.js (pdfjs-dist, Apache-2.0: see
- * LICENSES/Apache-2.0.txt). Riff runs this in its own utility process
+ * LICENSES/Apache-2.0.txt). The assistant runs this in its own utility process
  * (worker.ts), never on main: the bytes come from the web and are untrusted.
  *
  * pdf.js is set up for text only: its "worker" runs in this process's thread

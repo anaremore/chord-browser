@@ -23,7 +23,7 @@ import { MemoryShots, newShotId, type ShotStore } from './store';
 
 /** The thumbnail's width in the downloads panel's list, in image pixels. */
 const THUMB_WIDTH = 240;
-/** The longest side of the picture Riff is sent: what Claude reads best (larger is scaled down anyway). */
+/** The longest side of the picture the assistant is sent: what Claude reads best (larger is scaled down anyway). */
 const ASK_SIDE = 1568;
 /** How long a hover's answer may take: a hung page just shows no highlight. */
 const HIT_MS = 500;
@@ -72,9 +72,9 @@ export interface ScreenshotDeps {
   disk: ShotStore;
   /** Into Downloads, listed as a finished download (a private window's only there). */
   saveFile(filename: string, bytes: Uint8Array, url: string, privateWindow: string | null): Promise<void>;
-  /** Whether Riff may be asked about a screenshot of this page in this window (set up, may read the page). */
+  /** Whether the assistant may be asked about a screenshot of this page in this window (set up, may read the page). */
   duetReady(w: AppWindow, url: string): boolean;
-  /** Put the picture in the window's Riff composer, and open the panel. */
+  /** Put the picture in the window's assistant composer, and open the panel. */
   askDuet(windowId: string, image: { mime: 'image/jpeg'; width: number; height: number; bytes: Uint8Array; thumb: Uint8Array }): void;
 }
 
@@ -185,7 +185,7 @@ export class Screenshots {
       whilePresenting: true,
       message: copied ? 'Screenshot copied' : 'Screenshot taken, but couldn’t be copied',
       action: { label: 'Save', screenshot: { id: entry.id, do: 'save' } },
-      ...(shot.ask && this.deps.duetReady(w, entry.url) ? { secondary: { label: 'Ask Riff', screenshot: { id: entry.id, do: 'duet' as const } } } : {}),
+      ...(shot.ask && this.deps.duetReady(w, entry.url) ? { secondary: { label: 'Ask about it', screenshot: { id: entry.id, do: 'duet' as const } } } : {}),
     });
   }
 
@@ -315,7 +315,7 @@ export class Screenshots {
       // The thumbnail: its top, at most 16:10, small and as a JPEG, made by Chromium too.
       const top = { ...clip, height: Math.min(clip.height, clip.width * 0.625) };
       const small = await send<{ data: string }>('Page.captureScreenshot', { format: 'jpeg', quality: 70, captureBeyondViewport: true, clip: { ...top, scale: Math.min(1, THUMB_WIDTH / (clip.width * screen)) } });
-      // What Riff is sent, if you ask it: the whole picture, at most 1,568 px a side.
+      // What the assistant is sent, if you ask it: the whole picture, at most 1,568 px a side.
       const sized = await send<{ data: string }>('Page.captureScreenshot', { format: 'jpeg', quality: 80, captureBeyondViewport: true, clip: { ...clip, scale: Math.min(scale, ASK_SIDE / (Math.max(clip.width, clip.height) * screen)) } });
       return { png, thumb: Buffer.from(small?.data ?? '', 'base64'), ask: sized?.data ? Buffer.from(sized.data, 'base64') : null, width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
     } finally {

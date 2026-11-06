@@ -1,13 +1,13 @@
 /**
  * Your data's records (docs/decisions/S15-your-data.md §1, docs/data-format.md):
  * the one format export and sync share. A record names one thing (`type`,
- * `id`), the fields it sets, and their stamp (`at`, stamps.ts). History, Riff
+ * `id`), the fields it sets, and their stamp (`at`, stamps.ts). History, the assistant
  * chats and icons are facts that never change once made, so theirs have none.
  *
  * Each type has a pair of codecs: model → record, and record → model, which
  * checks what it reads the way restore checks saved data. Only what S15 lists
  * goes in: never back/forward state, live state, a private window's chord,
- * the time a tab was last shown, a Riff chat's provider session, or anything
+ * the time a tab was last shown, an assistant chat's provider session, or anything
  * that's a path on this computer.
  */
 import { generateKeyBetween } from 'fractional-indexing';
@@ -389,7 +389,7 @@ export const SETTING_TRAVEL: Record<keyof Settings, SettingTravel> = {
  */
 const GROUPS = ['motion', 'interface', 'spellcheck', 'adBlocking', 'tabCounts', 'duet', 'reader', 'effects'] as const;
 type Group = (typeof GROUPS)[number];
-/** Riff's app and model depend on which CLI is installed on this computer. */
+/** The assistant's app and model depend on which CLI is installed on this computer. */
 const NOT_EXPORTED: Partial<Record<Group, readonly string[]>> = { duet: ['provider', 'model'] };
 
 const isGroup = (key: string): key is Group => (GROUPS as readonly string[]).includes(key);
@@ -520,7 +520,7 @@ export function pageFromRecord(r: DataRecord): PageFacts | null {
   return { url: r.id, title, visits: visits.sort((a, b) => a - b), typed };
 }
 
-/* ---------- Riff ---------- */
+/* ---------- Assistant ---------- */
 
 /** A chat, without its provider session: that's the CLI's own cache, and an imported chat starts a new one. */
 export function threadRecord(thread: DuetThread): DataRecord {
@@ -604,7 +604,7 @@ export function messageRecord(message: DuetMessage): DataRecord {
 
 const STATUSES = ['streaming', 'done', 'interrupted', 'error'] as const;
 const DECISIONS = ['pending', 'once', 'thread', 'denied', 'expired'] as const;
-/** A chat's handle for a tab ("t3"), as Riff's citations and attachments name it. */
+/** A chat's handle for a tab ("t3"), as the assistant's citations and attachments name it. */
 const isTabRef = (v: unknown): v is string => typeof v === 'string' && /^t\d{1,4}$/.test(v);
 /** At most this many attachments, citations, images or targets in one message: far more than Chord ever writes. */
 const MAX_PER_MESSAGE = 200;
@@ -675,7 +675,7 @@ export function messageFromRecord(r: DataRecord): DuetMessage | null {
   return { id: r.id, threadId: r.set['thread'], createdAt: created, body };
 }
 
-/** An image in a chat, with its bytes and (one you gave Riff) its thumbnail, in base64. */
+/** An image in a chat, with its bytes and (one you gave the assistant) its thumbnail, in base64. */
 export function imageRecord(image: DuetImage, data: string, thumb: string | null): DataRecord {
   return record('image', image.id, { mime: image.mime, width: image.width, height: image.height, data, thumb, prompt: image.prompt ?? null });
 }

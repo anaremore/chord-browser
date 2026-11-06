@@ -1,5 +1,5 @@
 /**
- * Riff's panel (DESIGN.md §7.8, §8.6): a calm second frame on the right for
+ * The assistant's panel (DESIGN.md §7.8, §8.6): a calm second frame on the right for
  * chatting about the page and your tabs. Main owns everything (threads,
  * sessions, what may be read); this renders the view it pushes and sends
  * actions back. Patterns taken from T3 Code's conversation UI (see
@@ -38,9 +38,10 @@ import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Download, Ellipsi
 import { motion, useIsPresent, type Transition } from 'motion/react';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useMenu } from '../shared/a11y';
+import { DuetIcon } from '../shared/icons';
 import { announce } from './announce';
 import { api } from './api';
-import styles from './Riff.module.css';
+import styles from './Assistant.module.css';
 
 const act = (action: DuetAction) => void api.duet.act(action);
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
@@ -161,7 +162,7 @@ function Markdown({ text, onLink, marks }: { text: string; onLink(url: string): 
   return <>{blocks}</>;
 }
 
-/** A reply: Markdown with numbered citation pills, in the sentence where Riff quoted a tab. */
+/** A reply: Markdown with numbered citation pills, in the sentence where the assistant quoted a tab. */
 function Reply({ message, onLink, names, offerCodex }: { message: DuetMessage; onLink(url: string): void; names: DuetView['tabNames']; offerCodex: boolean }) {
   if (message.body.role !== 'assistant') return null;
   const numbers = new Map<string, number>();
@@ -170,7 +171,7 @@ function Reply({ message, onLink, names, offerCodex }: { message: DuetMessage; o
   const cite: Marks['cite'] = (ref, quote, quoted) => {
     const n = numbers.get(`${ref}:${quote}`);
     if (n === undefined) return null;
-    // A PDF's citation names its page (found in the text Riff read).
+    // A PDF's citation names its page (found in the text the assistant read).
     const page = citations.find((c) => c.n === n)?.page;
     const pill = (
       <button
@@ -192,7 +193,7 @@ function Reply({ message, onLink, names, offerCodex }: { message: DuetMessage; o
       pill
     );
   };
-  // A tab named by its handle ("tab t1"), which Riff is asked not to write: its title, which shows the tab.
+  // A tab named by its handle ("tab t1"), which the assistant is asked not to write: its title, which shows the tab.
   const tab: Marks['tab'] = (ref, whole) => {
     const name = names[ref];
     if (!name) return whole;
@@ -245,7 +246,7 @@ function MadeImage({ image }: { image: DuetImage }) {
     <figure className={styles.madeImage}>
       <img
         src={`chord://shell/duet-image/${image.id}.${IMAGE_EXTENSIONS[image.mime]}`}
-        alt={image.prompt ? `Image Riff made: ${image.prompt}` : 'Image Riff made'}
+        alt={image.prompt ? `Generated image: ${image.prompt}` : 'Generated image'}
         width={image.width}
         height={image.height}
         draggable={false}
@@ -326,7 +327,7 @@ function Approval({ message }: { message: DuetMessage }) {
   };
   const outcome = { once: 'Allowed', thread: 'Allowed for this chat', denied: 'Not allowed', expired: 'Not answered', pending: '' }[body.decision];
   return (
-    <div className={styles.approval} data-pending={pending || undefined} role={pending ? 'group' : undefined} aria-label={pending ? 'Riff is asking' : undefined} aria-describedby={pending ? `ask-${message.id}` : undefined} onKeyDown={onKey} tabIndex={pending ? 0 : -1}>
+    <div className={styles.approval} data-pending={pending || undefined} role={pending ? 'group' : undefined} aria-label={pending ? 'Asking permission' : undefined} aria-describedby={pending ? `ask-${message.id}` : undefined} onKeyDown={onKey} tabIndex={pending ? 0 : -1}>
       <p id={`ask-${message.id}`} className={styles.approvalTitle}>
         {body.description}
       </p>
@@ -403,7 +404,7 @@ function fillOutcome(card: DuetFillCard): string {
 }
 
 /**
- * Riff's values for a form (D16, DESIGN.md §7.8): each field with its label
+ * The assistant's values for a form (D16, DESIGN.md §7.8): each field with its label
  * and value, editable, and a checkbox to leave it out. Nothing goes into the
  * page until Fill; main checks every value again. ⌘↵ / Ctrl+↵ fills and Esc
  * says not now, from inside the card only: the message field's keys never
@@ -471,7 +472,7 @@ function FillCard({ message }: { message: DuetMessage }) {
         })}
       </ul>
       {leftOut && <p className={styles.muted}>{leftOut}</p>}
-      {card.truncated && <p className={styles.muted}>This page has more fields than Riff reads at once: these are the first.</p>}
+      {card.truncated && <p className={styles.muted}>This page has more fields than are read at once: these are the first.</p>}
       {card.note && (
         <p className={styles.fillNote} role="status">
           {card.note}
@@ -543,7 +544,7 @@ function MessageView({ message, last, onLink, onEdit, view }: { message: DuetMes
       )}
       {body.status === 'error' && (
         <p className={styles.errorLine} role="alert">
-          {body.error ?? 'Riff couldn’t answer.'}
+          {body.error ?? 'Couldn’t answer.'}
           {last && (
             <button type="button" className={styles.quiet} onClick={() => act({ do: 'retry' })}>
               <RotateCcw size={13} strokeWidth={2} aria-hidden /> Retry
@@ -599,10 +600,10 @@ function Timeline({ view, onLink, onEdit }: { view: DuetView; onLink(url: string
         onScroll={onScroll}
         role="log"
         // Replies stream in a few words at a time; reading each would talk over itself. The panel
-        // announces "Riff finished answering" instead, and the log is there to read (DESIGN.md §10).
+        // announces "The assistant finished answering" instead, and the log is there to read (DESIGN.md §10).
         aria-live="off"
         aria-busy={view.busy}
-        aria-label="Riff conversation"
+        aria-label="Conversation"
         tabIndex={0}
       >
         {rows(view.messages).map((row) =>
@@ -680,7 +681,7 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
       act({ do: 'stop' });
     }
   };
-  const chipNote = `Riff reads this tab when you send, through your own ${providerName} account. Remove it, and Riff asks before reading it.`;
+  const chipNote = `This tab is read when you send, through your own ${providerName} account. Remove it, and you’re asked before it’s read.`;
   return (
     <div className={styles.composer}>
       {view.queue.length > 0 && (
@@ -769,8 +770,8 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
           className={styles.input}
           value={text}
           rows={Math.min(8, Math.max(1, text.split('\n').length))}
-          placeholder={view.busy ? 'Add a follow-up…' : 'Ask Riff'}
-          aria-label="Message Riff"
+          placeholder={view.busy ? 'Add a follow-up…' : 'Ask anything'}
+          aria-label="Message"
           onChange={(e) => update(e.target.value)}
           onKeyDown={onKey}
         />
@@ -824,8 +825,8 @@ function ContextMeter({ usage, provider }: { usage: DuetContextUsage; provider: 
 function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
   return (
     <div className={styles.setup}>
-      <p className={styles.setupTitle}>Set up Riff</p>
-      <p className={styles.muted}>Riff uses your own Claude Code or Codex app. Pick one; you can switch any time.</p>
+      <p className={styles.setupTitle}>Choose an app</p>
+      <p className={styles.muted}>Use your own Claude Code or Codex app. Pick one; you can switch any time.</p>
       <ul className={styles.providers}>
         {view.providers.map((p) => {
           const name = p.wsl ? `${DUET_PROVIDER_NAMES[p.provider]} in WSL (${p.wsl})` : DUET_PROVIDER_NAMES[p.provider];
@@ -879,7 +880,7 @@ function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
 /* ---------- The panel ---------- */
 
 /**
- * What screen readers hear from Riff (DESIGN.md §10): that it finished
+ * What screen readers hear from the assistant (DESIGN.md §10): that it finished
  * answering (not each word as it streams), that it's asking to read more,
  * and that it suggests values for a form.
  */
@@ -889,18 +890,18 @@ function useDuetAnnouncements(view: DuetView): void {
   useEffect(() => {
     if (wasBusy.current && !view.busy) {
       const last = [...view.messages].reverse().find((m) => m.body.role === 'assistant');
-      if (last?.body.role === 'assistant' && last.body.status === 'done') announce('Riff finished answering.');
-      else if (last?.body.role === 'assistant' && last.body.status === 'interrupted') announce('Riff stopped.');
+      if (last?.body.role === 'assistant' && last.body.status === 'done') announce('The assistant finished answering.');
+      else if (last?.body.role === 'assistant' && last.body.status === 'interrupted') announce('The assistant stopped.');
     }
     wasBusy.current = view.busy;
     for (const m of view.messages) {
       if (asked.current.has(m.id)) continue;
       if (m.body.role === 'approval') {
         asked.current.add(m.id);
-        if (m.body.decision === 'pending') announce(`Riff is asking: ${m.body.description}. Allow once, Allow for this chat, or No.`);
+        if (m.body.decision === 'pending') announce(`The assistant is asking: ${m.body.description}. Allow once, Allow for this chat, or No.`);
       } else if (m.body.role === 'tool' && m.body.fill) {
         asked.current.add(m.id);
-        if (m.body.fill.status === 'pending') announce(`Riff suggests values for ${fieldCount(m.body.fill.fields.length)} on ${m.body.fill.site}. Check them, then Fill or Not now.`);
+        if (m.body.fill.status === 'pending') announce(`The assistant suggests values for ${fieldCount(m.body.fill.fields.length)} on ${m.body.fill.site}. Check them, then Fill or Not now.`);
       }
     }
   }, [view]);
@@ -914,7 +915,7 @@ const panelStart = (panel: HTMLElement | null) =>
  * Opened, the panel takes the keyboard (from the page too: ⌘E); closed, it
  * gives it back. In between, a step that replaces the focused button (Use
  * this → Got it → the message field) hands the keyboard to the next one.
- * A step's main button can also arrive after the step: opened while Riff is
+ * A step's main button can also arrive after the step: opened while the assistant is
  * still finding Claude Code and Codex, the keyboard starts on the panel's
  * first button, and moves to "Use this" when it appears, unless the user has
  * moved it since.
@@ -948,7 +949,7 @@ function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string, prese
     const now = document.activeElement;
     const before = document.hasFocus() && now instanceof HTMLElement && now !== document.body && !panel.current?.contains(now) ? now : null;
     // After the panel's first frame, not in the commit that mounts it: focusing then forced a layout of the whole new
-    // panel in the middle of the opening frame (6.9 ms, the slowest part of opening Riff).
+    // panel in the middle of the opening frame (6.9 ms, the slowest part of opening the panel).
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
         if (panel.current && !panel.current.contains(document.activeElement)) focusStart();
@@ -998,7 +999,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
     <motion.aside
       ref={panel}
       className={styles.panel}
-      aria-label="Riff"
+      aria-label="Assistant"
       data-region="duet"
       inert={!present}
       initial={OFF_RIGHT}
@@ -1023,7 +1024,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
             }}
           />
         ) : (
-          <span className={`${styles.title} ${styles.ellipsis}`}>{thread?.title || 'Riff'}</span>
+          <span className={`${styles.title} ${styles.ellipsis}`}>{thread?.title || <DuetIcon {...ICON} aria-hidden />}</span>
         )}
         {ready && view.context && <ContextMeter usage={view.context} provider={provider} />}
         {ready && (
@@ -1051,7 +1052,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
         >
           <Ellipsis {...ICON} />
         </button>
-        <button type="button" className={styles.iconButton} aria-label="Close Riff" title="Close Riff" onClick={() => act({ do: 'toggle', open: false })}>
+        <button type="button" className={styles.iconButton} aria-label="Close assistant" title="Close assistant" onClick={() => act({ do: 'toggle', open: false })}>
           <X {...ICON} />
         </button>
       </header>
@@ -1158,15 +1159,15 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
 
       {view.chordOff ? (
         <div className={styles.centerNote}>
-          <p>Riff is off in this chord. It can’t read this chord’s tabs from other chords either.</p>
+          <p>The assistant is off in this chord. It can’t read this chord’s tabs from other chords either.</p>
           <button type="button" className={styles.secondary} onClick={() => act({ do: 'chordOff', off: false })}>
             Turn on in this chord
           </button>
         </div>
       ) : !view.provider ? (
         <div className={styles.intro}>
-          <p className={styles.introTitle}>Meet Riff.</p>
-          <p className={styles.muted}>Chat about this page and your tabs, using your own Claude Code or Codex app. Chord never sees your sign-in, and nothing is sent until you press Send.</p>
+          <p className={styles.introTitle}>Chat about your pages.</p>
+          <p className={styles.muted}>Ask about this page and your tabs, using your own Claude Code or Codex app. Chord never sees your sign-in, and nothing is sent until you press Send.</p>
           <Setup view={view} windowId={windowId} />
         </div>
       ) : !ready ? (
@@ -1177,8 +1178,8 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
             <div className={styles.firstUse} role="note">
               <p>
                 {view.readsNothing
-                  ? `What you type goes to ${providerName} through your own account. Riff is set to read nothing, so it can’t see your tabs.`
-                  : `What you attach goes to ${providerName} through your own account. Riff reads only what’s attached to your message, unless you let it see more. It never sees what you type into forms.`}
+                  ? `What you type goes to ${providerName} through your own account. It’s set to read nothing, so it can’t see your tabs.`
+                  : `What you attach goes to ${providerName} through your own account. It reads only what’s attached to your message, unless you let it see more. It never sees what you type into forms.`}
               </p>
               <button type="button" className={styles.secondary} data-autofocus onClick={() => act({ do: 'dismissFirstUse' })}>
                 Got it
@@ -1209,7 +1210,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
               </button>
             )}
             {menu === 'scope' && (
-              <ul ref={scopeMenu.ref} id="duet-scope" className={`${styles.menu} ${styles.scopeMenu}`} role="menu" aria-label="What Riff can read" onKeyDown={scopeMenu.onKeyDown}>
+              <ul ref={scopeMenu.ref} id="duet-scope" className={`${styles.menu} ${styles.scopeMenu}`} role="menu" aria-label="What it can read" onKeyDown={scopeMenu.onKeyDown}>
                 {DUET_SCOPES.map((s) => (
                   <li key={s} role="none">
                     <button
@@ -1238,7 +1239,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
           {empty ? (
             <div className={styles.empty}>
               <p className={styles.emptyTitle}>
-                {view.readsNothing ? 'Ask anything. Riff can’t see your tabs: paste in what you’d like it to read.' : 'Ask about this page, your tabs, or anything you’re working on.'}
+                {view.readsNothing ? 'Ask anything. It can’t see your tabs: paste in what you’d like it to read.' : 'Ask about this page, your tabs, or anything you’re working on.'}
               </p>
               <div className={styles.suggestions}>
                 {(view.readsNothing

@@ -1,7 +1,7 @@
 /**
  * Your data's export, chord-data's half (docs/decisions/S15-your-data.md §7):
  * rows into records (core's records.ts), in the file's order: setup, then
- * Today tabs and the icons both use, then history, then Riff. It runs in the
+ * Today tabs and the icons both use, then history, then the assistant. It runs in the
  * export process over a connection of its own, read-only and inside one read
  * transaction, so the export is one moment's data while chord-data goes on
  * writing, and chord-data's thread does nothing for it.
@@ -45,7 +45,7 @@ import { chordOf, favoriteOf, nodeOf, nodeSelect, num, parseJson, siteEffectsOf,
 type Sql = (text: string) => StatementSync;
 
 /**
- * The images Riff's messages name: the ones a user gave it, and the ones Codex
+ * The images the assistant's messages name: the ones a user gave it, and the ones Codex
  * made. Only with an id Chord makes (24 hex digits), since it becomes a file name.
  */
 function imagesOf(body: DuetMessageBody): DuetImage[] {
@@ -125,7 +125,7 @@ function sidebarOrder(nodes: readonly SidebarNode[], chordOrder: readonly string
 
 /**
  * Every record an export holds, in order. Rows are read as they're written
- * out (`iterate`), so history and Riff are never all in memory at once.
+ * out (`iterate`), so history and the assistant are never all in memory at once.
  */
 export function* exportRecords(sql: Sql, options: ExportOptions): Generator<ExportItem> {
   const { device } = options;

@@ -16,7 +16,7 @@ export const springs = {
   press: spring(1500, 74),
   /** Active-tab pill glide, chevrons, hover-card reposition. ζ 0.94, t90 ≈ 137 ms. */
   snappy: spring(700, 50),
-  /** Command bar, Peek, toasts, Riff panel. ζ 0.86, 0.5% overshoot. */
+  /** Command bar, Peek, toasts, the assistant's panel. ζ 0.86, 0.5% overshoot. */
   overlay: spring(600, 42),
   /** List reflow, reorder, folder expand. ζ 0.90, t90 ≈ 160 ms. */
   smooth: spring(450, 38),
@@ -45,7 +45,7 @@ export const durations = {
   tooltip: 600,
   springLoad: 600,
   toast: 6000,
-  /** A field Riff filled is outlined this long, arriving in a tenth of it, so you see where the values went (DESIGN.md §7.8). */
+  /** A field the assistant filled is outlined this long, arriving in a tenth of it, so you see where the values went (DESIGN.md §7.8). */
   fillHighlight: 1200,
   /** One turn of the loading spinner. */
   spin: 900,

@@ -236,12 +236,12 @@ export class Browser {
   private settingsWindow: SettingsWindow | null = null;
   private recent: { windowId: WindowId; order: NodeId[]; index: number } | null = null;
   readonly idle: IdleKeeper;
-  /** Riff (set once main has it): the panel's toggle and window bookkeeping. */
+  /** The assistant (set once main has it): the panel's toggle and window bookkeeping. */
   duet: { act(windowId: WindowId, action: { do: 'toggle' }): Promise<void>; forgetWindow(windowId: WindowId): void } | null = null;
-  /** Riff's panel width (DESIGN.md §3: 380, 320–560). */
+  /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
   readonly duetWidth = size.duetWidth;
 
-  /** A window by id (Riff acts in the window a message came from). */
+  /** A window by id (the assistant acts in the window a message came from). */
   window(id: WindowId): AppWindow | undefined {
     return this.windows.get(id);
   }
@@ -252,7 +252,7 @@ export class Browser {
   private readonly autoPip: AutoPip;
   /** Hover previews for pinned tabs and folders, and the pictures behind them (DESIGN.md §7.6). */
   private readonly previews: Previews;
-  /** Effects (DESIGN.md §7.15): per-site styles, the card, the picker, and Ask Riff. */
+  /** Effects (DESIGN.md §7.15): per-site styles, the card, the picker, and asking the assistant. */
   readonly effects: Effects;
   private readonly siteZoom: SiteZoom;
   private readonly archivedHistory = new Map<string, NavState | null>();
@@ -1444,7 +1444,7 @@ export class Browser {
     });
   }
 
-  /** The tab's chord's accent, as CSS: what outlines the fields Riff fills. */
+  /** The tab's chord's accent, as CSS: what outlines the fields the assistant fills. */
   accentOf(nodeId: NodeId): string | null {
     return this.chordTheme(nodeId)?.vars['--color-accent'] ?? null;
   }

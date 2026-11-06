@@ -1,5 +1,5 @@
 /**
- * Riff in main (ARCHITECTURE.md §11): threads per chord, provider sessions,
+ * The assistant in main (ARCHITECTURE.md §11): threads per chord, provider sessions,
  * Chord's tools with their tiers, scope and approvals, and what each window's
  * panel shows. Chord's transcript (chord-data, migration 9) is the source of
  * truth; a provider's session is a cache that's resumed when it still works
@@ -83,7 +83,7 @@ import { extractPdf, fetchPdf, PdfError, pdfProblemCopy } from './pdf';
 
 type Decision = 'once' | 'thread' | 'denied';
 
-/** An image for Riff, as a pasted image or a screenshot brings it: the picture for the model, and a thumbnail. */
+/** An image for the assistant, as a pasted image or a screenshot brings it: the picture for the model, and a thumbnail. */
 export interface ImageInput {
   mime: DuetImage['mime'];
   width: number;
@@ -110,7 +110,7 @@ interface ThreadState {
   attached: Set<NodeId>;
   /** "Allow for this chat": tool names the user said yes to for the rest of the thread. */
   grants: Set<string>;
-  /** Tabs Riff read in this thread: a badge in the sidebar while it's open. */
+  /** Tabs the assistant read in this thread: a badge in the sidebar while it's open. */
   read: Set<NodeId>;
   queue: string[];
   streaming: DuetMessage | null;
@@ -126,7 +126,7 @@ interface ThreadState {
   pdfs: Map<NodeId, PdfRead>;
   /** Images Codex made that are still being written: the reply is kept only once they're on disk. */
   saving: Set<Promise<void>>;
-  /** The last form Riff read in this chat (read_form): its fields by Chord's ids, and the page's token for that read. */
+  /** The last form the assistant read in this chat (read_form): its fields by Chord's ids, and the page's token for that read. */
   form: { nodeId: NodeId; token: string; read: DuetFormRead } | null;
   /** Fill cards waiting for you, by message id: the read they're for (the card in the panel holds the values). */
   fills: Map<string, { nodeId: NodeId; token: string; read: DuetFormRead }>;
@@ -150,9 +150,9 @@ const FILL_UNDOS = 30;
 
 /** Why Fill wrote nothing (fillFormPage's answers), as the card says it. */
 const FILL_PROBLEMS: Record<Exclude<FillOutcome, { ok: true }>['why'], string> = {
-  navigated: 'The page moved on since Riff read the form, so nothing was filled. Ask Riff again.',
+  navigated: 'The page moved on since the form was read, so nothing was filled. Ask again.',
   gone: 'The form isn’t on the page any more, so nothing was filled.',
-  changed: 'The form changed since Riff read it, so nothing was filled. Ask Riff again.',
+  changed: 'The form changed since it was read, so nothing was filled. Ask again.',
   'no-answer': 'The page didn’t answer in time, so Chord can’t say what went in. Check the form.',
 };
 
@@ -163,7 +163,7 @@ function saved(message: DuetMessage): DuetMessage {
   return { ...message, body };
 }
 
-/** Where Riff's images go when you save one: Downloads, listed as a finished download. */
+/** Where the assistant's images go when you save one: Downloads, listed as a finished download. */
 export interface DuetFiles {
   save(filename: string, bytes: Uint8Array, mime: string): Promise<void>;
 }
@@ -222,7 +222,7 @@ export class DuetService {
   private readonly toggled = new Set<WindowId>();
   private firstUseSeen = false;
   private readonly root: string;
-  /** Images you've given Riff, kept with their chats (images.ts). */
+  /** Images you've given the assistant, kept with their chats (images.ts). */
   private readonly images: DuetImages;
   /** Images waiting in each window's composer for the next message. */
   private readonly pending = new Map<WindowId, PendingImage[]>();
@@ -258,7 +258,7 @@ export class DuetService {
         // A fill card waiting then fills nothing: what it read was read before.
         if (this.settings.readsNothing) {
           for (const state of this.threads.values()) {
-            for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') void this.endFill(state, m, 'expired', 'Riff is set to read nothing now, so nothing was filled.');
+            for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') void this.endFill(state, m, 'expired', 'It’s set to read nothing now, so nothing was filled.');
           }
         }
       }
@@ -288,13 +288,13 @@ export class DuetService {
   }
 
   /**
-   * Once launch is over (after-launch.ts): chats past their date go, and Riff
+   * Once launch is over (after-launch.ts): chats past their date go, and the assistant
    * looks for Claude Code and Codex, which runs each one twice. Opening the
    * panel or sending before then looks for them itself.
    */
   async afterLaunch(): Promise<void> {
     await this.opened;
-    // Keep Riff chats: threads past their date go, the provider's copy with them.
+    // Keep chats: threads past their date go, the provider's copy with them.
     const before = duetPruneBefore(this.settings.keep, Date.now());
     if (before !== null) {
       const { removed = [], images = [] } = await this.persistence.duet({ op: 'prune', before }).catch(() => ({ removed: [], images: [] }));
@@ -431,7 +431,7 @@ export class DuetService {
   /**
    * The chips above the composer: the tab on screen (unless removed, or the
    * chat's scope attaches nothing for you), then anything added. None at all
-   * when Riff reads nothing.
+   * when the assistant reads nothing.
    */
   private attachments(windowId: WindowId): TabNode[] {
     if (this.settings.readsNothing) return [];
@@ -574,7 +574,7 @@ export class DuetService {
     const bytes = image ? await this.images.read(image) : null;
     if (!image || !bytes) return;
     if (what === 'save') {
-      await this.files?.save(screenshotFilename(new Date(), image.prompt ? 'Riff image' : 'Image', image.mime === 'image/jpeg' ? 'jpg' : image.mime.slice(6)), bytes, image.mime);
+      await this.files?.save(screenshotFilename(new Date(), image.prompt ? 'Generated image' : 'Image', image.mime === 'image/jpeg' ? 'jpg' : image.mime.slice(6)), bytes, image.mime);
       this.toast(windowId, { id: 'duet-image', message: 'Image saved to Downloads' });
       return;
     }
@@ -589,13 +589,13 @@ export class DuetService {
     if (shell) send(shell, 'toast:show', toast);
   }
 
-  /** Codex can make images: allowed in Settings → Riff, installed, signed in and new enough. */
+  /** Codex can make images: allowed in Settings → Assistant, installed, signed in and new enough. */
   private codexMakesImages(): boolean {
     const codex = this.statuses.codex;
     return Boolean(this.settings.codexImages && codex?.installed && codex.signedIn && !codex.tooOld);
   }
 
-  /** Whether a picture of this page may go to Riff from this window: set up, on in its chord, and a page Riff may read. */
+  /** Whether a picture of this page may go to the assistant from this window: set up, on in its chord, and a page the assistant may read. */
   canAskAbout(windowId: WindowId, url: string): boolean {
     const chordId = this.chordOf(windowId);
     return Boolean(
@@ -610,7 +610,7 @@ export class DuetService {
   }
 
   /**
-   * Effects' Ask Riff (main/effects): whether Riff may read this page from this
+   * Effects asking the assistant (main/effects): whether the assistant may read this page from this
    * window (canAskAbout's rules) with a provider that's installed, and its name.
    */
   effectsProvider(windowId: WindowId, url: string): { provider: string } | null {
@@ -623,7 +623,7 @@ export class DuetService {
 
   /**
    * One request with no chat (Effects' patches): the user's own CLI with
-   * Riff's browse-mode flags, Effects' instructions and one read-only tool, in
+   * The assistant's browse-mode flags, Effects' instructions and one read-only tool, in
    * a session of its own that's closed when the answer is in. Nothing is kept:
    * not a thread, not the instructions file, and the provider's own copy of the
    * session is deleted after, as Delete does for a chat.
@@ -637,13 +637,13 @@ export class DuetService {
     timeoutMs: number;
   }): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
     const provider = this.settings.provider;
-    if (!provider) return { ok: false, error: 'Set up Riff first, in Settings → Riff.' };
-    if (this.settings.readsNothing) return { ok: false, error: 'Riff is set to read nothing, in Settings → Riff.' };
+    if (!provider) return { ok: false, error: 'Choose an app first, in Settings → Assistant.' };
+    if (this.settings.readsNothing) return { ok: false, error: 'The assistant is set to read nothing, in Settings → Assistant.' };
     const name = provider === 'claude' ? 'Claude Code' : 'Codex';
     if (!this.statuses[provider]) await this.refreshProviders('never');
     if (!this.statuses[provider]?.installed && this.wslLookup) await this.wslLookup;
     const launch = this.launches[provider];
-    if (!this.statuses[provider]?.installed || !launch) return { ok: false, error: `${name} isn't installed. Settings → Riff shows how to set it up.` };
+    if (!this.statuses[provider]?.installed || !launch) return { ok: false, error: `${name} isn't installed. Settings → Assistant shows how to set it up.` };
     if (request.signal.aborted) return { ok: false, error: 'Stopped.' };
     const id = randomUUID();
     const instructionsFile = join(this.root, 'instructions', `effects-${id}.md`);
@@ -712,7 +712,7 @@ export class DuetService {
     this.schedulePush();
   }
 
-  /** "Ask Riff about this image": the panel opens and the message goes, with the words you typed or a plain question. */
+  /** "Ask about this image": the panel opens and the message goes, with the words you typed or a plain question. */
   async askAboutImage(windowId: WindowId, text: string, image: ImageInput): Promise<void> {
     this.attachImage(windowId, image);
     if (!this.pending.get(windowId)?.length) return;
@@ -734,7 +734,7 @@ export class DuetService {
       // The window may have closed while its view was built.
       if (w.window.isDestroyed()) continue;
       // Opening or closing the panel slides it while the page's frame narrows or widens by its snapshot
-      // (DESIGN.md §6.5); a panel restored at launch, or Riff turned off, just changes.
+      // (DESIGN.md §6.5); a panel restored at launch, or the assistant turned off, just changes.
       const animate = this.toggled.delete(w.id) && this.browser.animates('sidebar');
       w.setDuet(view.enabled && view.open ? this.browser.duetWidth : 0, () => send(w.shell.webContents, 'duet:state', view), animate);
     }
@@ -993,7 +993,7 @@ export class DuetService {
     const unseen = !thread.providerSessionId && !this.live.get(thread.id)?.session.alive;
     const session = await this.sessionFor(state);
     if (!session) {
-      await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Riff couldn't start. Check Settings → Riff." } });
+      await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Couldn't start. Check Settings → Assistant." } });
       return;
     }
     const earlier = unseen ? earlierTurns(state.messages.filter((m) => m !== sent)) : '';
@@ -1030,7 +1030,7 @@ export class DuetService {
     const status = this.statuses[thread.provider];
     const launch = this.launches[thread.provider];
     if (!status?.installed || !launch) {
-      state.lastError = { kind: 'other', message: `${thread.provider === 'claude' ? 'Claude Code' : 'Codex'} isn't installed. Settings → Riff shows how to set it up.` };
+      state.lastError = { kind: 'other', message: `${thread.provider === 'claude' ? 'Claude Code' : 'Codex'} isn't installed. Settings → Assistant shows how to set it up.` };
       return null;
     }
     // At most a few CLI processes: the least recently used idle one makes room.
@@ -1116,10 +1116,10 @@ export class DuetService {
       await this.persistence.duet({ op: 'saveMessage', message: divider }).catch(() => undefined);
     }
     // A chat's turns never go in the instructions: they go with the message, as untrusted data. A file can say anything,
-    // and Riff's own replies can carry what pages said (S15 §5).
+    // and the assistant's own replies can carry what pages said (S15 §5).
     const session = await this.sessionFor(state);
     if (session && lastUser?.body.role === 'user') session.send(earlierTurns(earlier) + userTurnText(lastUser.body.text, lastUser.body.attachments), await this.imagesToSend(lastUser.body.images ?? [], []));
-    else if (!session) await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Riff couldn't start." } });
+    else if (!session) await this.finishTurn(state, { status: 'error', error: state.lastError ?? { kind: 'other', message: "Couldn't start." } });
   }
 
   private touch(threadId: string, live: Live): void {
@@ -1158,7 +1158,7 @@ export class DuetService {
       if (seg.kind !== 'citation' || citations.some((c) => c.n === seg.n)) continue;
       const nodeId = state.refs.get(seg.ref) ?? null;
       const node = nodeId ? this.browser.store.state.nodes[nodeId] : undefined;
-      // A PDF's page comes from the text Riff read, not from the model.
+      // A PDF's page comes from the text the assistant read, not from the model.
       const pdf = nodeId ? state.pdfs.get(nodeId) : undefined;
       const page = pdf ? pdfPageOf(pdf.pages, seg.quote) : null;
       citations.push({
@@ -1245,7 +1245,7 @@ export class DuetService {
   private async runTool(state: ThreadState, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
     const spec = duetTool(name);
     if (!spec || !state.thread) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
-    if (this.settings.readsNothing) return { text: toolResult({ refused: 'Riff is set to read nothing, in Settings → Riff.' }, false), isError: true };
+    if (this.settings.readsNothing) return { text: toolResult({ refused: 'The user set you to read nothing, in Settings → Assistant.' }, false), isError: true };
     try {
       if (spec.name === 'read_form' || spec.name === 'propose_fill') return await this.formTool(state, spec.name, args);
       return await this.readTool(state, spec.name, args);
@@ -1269,7 +1269,7 @@ export class DuetService {
         return { text: toolResult({ tabs }) };
       }
       const query = String(args['query'] ?? '').slice(0, 200);
-      // Sites on the Never list stay out of search results too, as do chords where Riff is off.
+      // Sites on the Never list stay out of search results too, as do chords where the assistant is off.
       const allowed = (url: string, chordId?: string) =>
         !isNeverReadable(url, this.settings.neverSites) && !(chordId && (this.settings.offChords.includes(chordId) || this.isPrivateChord(chordId)));
       if (tool === 'search_history') {
@@ -1293,7 +1293,7 @@ export class DuetService {
     // read_tab, read_selection, tab_screenshot
     const node = tool === 'read_selection' && args['tab_id'] === undefined ? this.firstAttached(state) : this.resolveTab(state, args['tab_id']);
     if (!node) return refuse('No such tab. Use list_tabs or an attached tab id.');
-    if (!this.readable(node)) return refuse('Riff can never read this page (a private window, a Chord page, or a site the user keeps private).');
+    if (!this.readable(node)) return refuse('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
     const needs = readNeedsApproval({ scope: thread.scope, attached: state.attached.has(node.id), sameChord: node.chordId === state.chordId, tool, granted: state.grants.has(`read:${node.id}`) || state.grants.has(tool) });
     if (needs) {
       const verb = tool === 'tab_screenshot' ? 'Take a picture of' : 'Read';
@@ -1313,7 +1313,7 @@ export class DuetService {
     }
     const page = await readPage(contents);
     if (isPdf(page, contents.getURL())) {
-      if (tool === 'read_selection') return refuse('Riff can’t see what’s selected inside a PDF. Read the PDF with read_tab instead.');
+      if (tool === 'read_selection') return refuse('What’s selected inside a PDF can’t be seen. Read the PDF with read_tab instead.');
       return this.readPdf(state, node, contents, ref, args);
     }
     if (!page) return refuse('That page could not be read.');
@@ -1350,7 +1350,7 @@ export class DuetService {
       } catch (error) {
         const why = error instanceof PdfError ? pdfProblemCopy(error.problem, error.detail) : pdfProblemCopy('crashed');
         await this.activity(state, 'read_tab', `Couldn’t read “${title}”`, why, false);
-        return { text: toolResult({ refused: `Riff couldn’t read this PDF: ${why}.` }, false), isError: true };
+        return { text: toolResult({ refused: `Couldn’t read this PDF: ${why}.` }, false), isError: true };
       }
       state.pdfs.delete(node.id);
       state.pdfs.set(node.id, pdf);
@@ -1358,7 +1358,7 @@ export class DuetService {
     }
     const read = pdf.pages.length;
     const notes = [
-      pdf.totalPages > read ? `This PDF has ${pdf.totalPages} pages; Riff read pages 1–${read}, the most it reads.` : '',
+      pdf.totalPages > read ? `This PDF has ${pdf.totalPages} pages; pages 1–${read} were read, the most Chord reads.` : '',
       pdf.pages.every((p) => !p.trim()) ? 'This PDF has no text to read (it may be scanned pages); tab_screenshot shows the page on screen.' : '',
     ].filter(Boolean);
     const text = pageResult({ ref, url, text: pdf.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pdf: { pages: pdf.totalPages, read }, ...(notes.length ? { note: notes.join(' ') } : {}) });
@@ -1395,7 +1395,7 @@ export class DuetService {
 
   /**
    * read_form and propose_fill. Only the tab on screen in the window the
-   * message came from, and only where Riff may read (never a private window, a
+   * message came from, and only where the assistant may read (never a private window, a
    * chord where it's off, a Never site or a Chord page), never in reader view.
    * Reading follows the chat's scope as read_tab does (a card under Ask every
    * time). A proposal shows one card for each message you send, for fields of
@@ -1405,8 +1405,8 @@ export class DuetService {
     const refuse = (why: string, problems?: string[]) => ({ text: toolResult({ refused: why, ...(problems ? { problems } : {}) }, false), isError: true });
     const node = this.resolveTab(state, args['tab_id']);
     if (!node) return refuse('No such tab. Use the tab id from "Attached:".');
-    if (!this.readable(node)) return refuse('Riff can never read this page (a private window, a Chord page, or a site the user keeps private).');
-    if (!state.windowId || this.activeTab(state.windowId)?.id !== node.id) return refuse('Riff fills forms only on the tab on screen. Ask the user to switch to it, then to ask again.');
+    if (!this.readable(node)) return refuse('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+    if (!state.windowId || this.activeTab(state.windowId)?.id !== node.id) return refuse('Forms are filled only on the tab on screen. Ask the user to switch to it, then to ask again.');
     if (this.browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its form. Ask the user to close reader view first.');
     const title = node.title || safeHost(node.url);
     if (tool === 'read_form') {
@@ -1435,7 +1435,7 @@ export class DuetService {
     const mapped = proposedFill(form.read, args, contents.getURL());
     if (!mapped.ok) return refuse('Some values can’t go in this form. Fix them and call propose_fill again.', mapped.problems);
     // A newer card takes the place of one still waiting.
-    for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') await this.endFill(state, m, 'expired', 'Riff suggested other values below.');
+    for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') await this.endFill(state, m, 'expired', 'Replaced by the values below.');
     state.fillTurn = state.streaming?.id ?? null;
     const card: DuetFillCard = { status: 'pending', title, site: safeHost(node.url), fields: mapped.fields, leftOut: form.read.leftOut, truncated: form.read.truncated };
     const message = await this.addMessage(state, { role: 'tool', tool, summary: `Suggested values for ${fieldCount(card.fields.length)} in “${title}”`, detail: card.site, ok: true, fill: card });
@@ -1445,7 +1445,7 @@ export class DuetService {
         {
           shown: true,
           fields: card.fields.length,
-          note: 'The user now checks these in a card in the Riff panel, changes or leaves out what they like, and presses Fill themselves. Nothing is in the page yet, and Chord never submits: tell them to check the card, and that they send the form with the page’s own button.',
+          note: 'The user now checks these in a card in this chat, changes or leaves out what they like, and presses Fill themselves. Nothing is in the page yet, and Chord never submits: tell them to check the card, and that they send the form with the page’s own button.',
         },
         false,
       ),
@@ -1474,10 +1474,10 @@ export class DuetService {
     const card = message.body.fill;
     const meta = state.fills.get(messageId);
     if (!meta) return this.endFill(state, message, 'expired', 'This suggestion has ended, so nothing was filled.');
-    if (this.settings.readsNothing) return this.endFill(state, message, 'expired', 'Riff is set to read nothing now, so nothing was filled.');
+    if (this.settings.readsNothing) return this.endFill(state, message, 'expired', 'It’s set to read nothing now, so nothing was filled.');
     const node = this.browser.store.state.nodes[meta.nodeId];
     if (node?.kind !== 'tab') return this.endFill(state, message, 'expired', 'The tab is closed, so nothing was filled.');
-    if (!this.readable(node)) return this.endFill(state, message, 'expired', 'Riff can’t read this site any more, so nothing was filled.');
+    if (!this.readable(node)) return this.endFill(state, message, 'expired', 'This site can’t be read any more, so nothing was filled.');
     // Another tab in front: the card waits, and says how to go on.
     if (this.activeTab(windowId)?.id !== node.id) return this.noteFill(message, `Go back to “${card.title}” to fill it.`);
     const contents = this.browser.tabs.get(node.id)?.webContents;
@@ -1566,13 +1566,13 @@ export class DuetService {
     for (const m of state.messages) {
       if (m.body.role === 'user') lines.push(`**You:** ${m.body.text}`, '');
       else if (m.body.role === 'assistant') {
-        lines.push(`**Riff:** ${nameTabs(stripCitations(m.body.text), names)}`, '');
+        lines.push(`**Assistant:** ${nameTabs(stripCitations(m.body.text), names)}`, '');
         for (const c of m.body.citations) lines.push(`[${c.n}] ${c.title} — ${c.url} — “${c.quote}”`);
         if (m.body.citations.length) lines.push('');
       } else if (m.body.role === 'approval') lines.push(`*${m.body.description}: ${m.body.decision}*`, '');
     }
     const { downloadsDir } = await import('../downloads');
-    const safe = state.thread.title.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60) || 'Riff chat';
+    const safe = state.thread.title.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60) || 'Chat';
     const file = join(downloadsDir(), `${safe}.md`);
     await writeFile(file, lines.join('\n'), 'utf8');
     const shell = state.windowId ? this.browser.window(state.windowId)?.shell.webContents : undefined;

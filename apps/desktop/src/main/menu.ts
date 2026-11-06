@@ -66,7 +66,7 @@ export function buildAppMenu(run: (action: ActionId) => void, presenting = false
         .map((accelerator) => ({ label: action, accelerator, visible: false, click: () => run(action) })),
     );
   /**
-   * Page-first actions with keys but no item of their own (Show or hide Riff,
+   * Page-first actions with keys but no item of their own (Show or hide the assistant,
    * History, and any key you give an action in Settings): hidden items keep
    * their keys live, since this menu is the only way page-first keys reach Chord.
    */

@@ -1,7 +1,7 @@
-// A stand-in for Claude Code in Riff's E2E tests: it speaks the same stream-json protocol, calls
+// A stand-in for Claude Code in the assistant's E2E tests: it speaks the same stream-json protocol, calls
 // Chord's tools over the control channel, keeps "session files" under CLAUDE_CONFIG_DIR the way
 // Claude does (projects/<cwd as dashes>/<session>.jsonl), and logs how it was launched to
-// CLAUDE_CONFIG_DIR/fake-log.jsonl. Started by Riff through CHORD_DUET_CLAUDE (development only).
+// CLAUDE_CONFIG_DIR/fake-log.jsonl. Started by the assistant through CHORD_DUET_CLAUDE (development only).
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -21,7 +21,7 @@ const flag = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 if (args[0] === '--version') {
-  // FAKE_CLAUDE_SLOW_VERSION=<ms>: answer late, the way a slow machine does, so Riff is open before it has found Claude.
+  // FAKE_CLAUDE_SLOW_VERSION=<ms>: answer late, the way a slow machine does, so the assistant is open before it has found Claude.
   await new Promise((done) => setTimeout(done, Number(process.env.FAKE_CLAUDE_SLOW_VERSION ?? 0)));
   // FAKE_CLAUDE_VERSION plays an older Claude Code (1.x has no `auth` command).
   process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.309'} (Claude Code)\n`);
@@ -154,7 +154,7 @@ async function turn(sent, images = []) {
     const css = `main h1 { color: rgb(0, 128, 0) } body { background-image: url(${evil}/duet.png) }`;
     return finish(await say(`Here it is:\n\`\`\`json\n${JSON.stringify({ css, summary: 'Green headline' })}\n\`\`\``));
   }
-  // What it was given (Riff set to read nothing): the tools Chord lists, the words it was sent, a read it tries
+  // What it was given (the assistant set to read nothing): the tools Chord lists, the words it was sent, a read it tries
   // anyway (as a page's injected instructions might make it), and its instructions; kept where the test can see them.
   if (/what can you see/i.test(text)) {
     const tools = (await mcp('tools/list', {}))?.mcp_response?.result?.tools ?? [];
@@ -162,9 +162,9 @@ async function turn(sent, images = []) {
     writeFileSync(join(config, 'seen.json'), JSON.stringify({ tools: tools.map((t) => t.name), text, images: images.length, tried, instructions: instructions ? readFileSync(instructions, 'utf8') : '' }));
     return finish(await say(tools.length ? `I have ${tools.length} tools.` : 'I have no tools.'));
   }
-  // Asked for an image, it says it can't and leaves the mark for Codex's button, as Riff's instructions ask.
+  // Asked for an image, it says it can't and leaves the mark for Codex's button, as the assistant's instructions ask.
   if (/draw|cartoon/i.test(text)) return finish(await say("Claude can't make images.\n\n[[make-image]]"));
-  // Writes a tab's handle in its own words, as Riff is asked not to.
+  // Writes a tab's handle in its own words, as the assistant is asked not to.
   if (/which tab/i.test(text) && ref) return finish(await say(`That's tab ${ref}, the one you attached. Not to be confused with a t2.micro.`));
   if (/long/i.test(text)) return finish(await say(Array.from({ length: 400 }, (_, i) => `word${i} `).join(''), true));
   if (/pdf/i.test(text) && ref) {

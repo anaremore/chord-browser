@@ -23,7 +23,7 @@ export interface ScreenshotEntry {
   /** In image pixels. */
   width: number;
   height: number;
-  /** What it takes on disk: the PNG, its thumbnail and Riff's copy. */
+  /** What it takes on disk: the PNG, its thumbnail and the assistant's copy. */
   bytes: number;
   /** The page it's of. */
   title: string;

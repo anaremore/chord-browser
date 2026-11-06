@@ -36,7 +36,7 @@ const control = (over: Partial<FormControl> = {}): FormControl => ({
   ...over,
 });
 
-describe('Riff fills forms: which fields are offered', () => {
+describe('The assistant fills forms: which fields are offered', () => {
   // [case, the field, what Chord makes of it]
   const cases: [string, Partial<FormControl>, ReturnType<typeof classifyField>][] = [
     ['a name', { name: 'first_name', label: 'First name' }, { kind: 'text' }],
@@ -104,7 +104,7 @@ describe('Riff fills forms: which fields are offered', () => {
   });
 });
 
-describe('Riff fills forms: a read', () => {
+describe('The assistant fills forms: a read', () => {
   const page = {
     url: 'https://shop.test/signup',
     forms: ['Sign up'],
@@ -141,7 +141,7 @@ describe('Riff fills forms: a read', () => {
     expect(read.truncated).toBe(true);
   });
 
-  it('gives Riff untrusted JSON with its provenance: ids, kinds, labels and hints, the counts of what was left out, and no values', () => {
+  it('gives the assistant untrusted JSON with its provenance: ids, kinds, labels and hints, the counts of what was left out, and no values', () => {
     const result = JSON.parse(formResult(formRead(page, 1), { ref: 't2', retrievedAt: 0 })) as Record<string, unknown>;
     expect(result).toMatchObject({ source: 'web_form', tab_id: 't2', origin: 'https://shop.test', trust: 'untrusted', left_out: { password: 1, payment: 1 } });
     expect(result['fields']).toEqual([
@@ -173,7 +173,7 @@ describe('Riff fills forms: a read', () => {
   });
 });
 
-describe('Riff fills forms: mapping values back to the fields read', () => {
+describe('The assistant fills forms: mapping values back to the fields read', () => {
   const read: DuetFormRead = formRead(
     {
       url: 'https://shop.test/signup#step-1',
@@ -209,7 +209,7 @@ describe('Riff fills forms: mapping values back to the fields read', () => {
     ]);
   });
 
-  // [case, the arguments, the page's address now, a problem Riff is told]
+  // [case, the arguments, the page's address now, a problem the assistant is told]
   const refused: [string, Record<string, unknown>, string, string][] = [
     ['an id from an earlier read', values(['f1', 'Ada']), url, 'f1: not a field in your last read_form'],
     ['an id never given', values(['f999', 'Ada']), url, 'f999: not a field in your last read_form'],
@@ -238,7 +238,7 @@ describe('Riff fills forms: mapping values back to the fields read', () => {
     if (!result.ok) expect(result.problems.join(' ')).toContain(problem);
   });
 
-  it('tells Riff every problem at once', () => {
+  it('tells the assistant every problem at once', () => {
     const result = proposedFill(read, values(['f1', 'x'], ['f5', 'Atlantis'], ['f7', 'yes']), url);
     expect(!result.ok && result.problems).toHaveLength(3);
   });
@@ -273,7 +273,7 @@ describe('Riff fills forms: mapping values back to the fields read', () => {
   });
 });
 
-describe('Riff fills forms: the card and the tools', () => {
+describe('The assistant fills forms: the card and the tools', () => {
   it('names what it left out, and why, in a sentence', () => {
     expect(fillLeftOutNote([])).toBe('');
     expect(fillLeftOutNote([{ label: 'Password', why: 'password' }])).toBe('Left out: Password. Chord never fills passwords, so fill that yourself.');
@@ -290,8 +290,8 @@ describe('Riff fills forms: the card and the tools', () => {
 
   it('names fields that changed as the others went in, which Chord left alone', () => {
     expect(fillChangedNote([])).toBe('');
-    expect(fillChangedNote(['Region'])).toBe('Region changed as the other fields went in, so Chord left it alone. Ask Riff again for it.');
-    expect(fillChangedNote(['Region', 'City'])).toBe('Region and City changed as the other fields went in, so Chord left them alone. Ask Riff again for them.');
+    expect(fillChangedNote(['Region'])).toBe('Region changed as the other fields went in, so Chord left it alone. Ask again for it.');
+    expect(fillChangedNote(['Region', 'City'])).toBe('Region and City changed as the other fields went in, so Chord left them alone. Ask again for them.');
   });
 
   it('offers the two form tools, and reads the form under the chat’s scope like a page', () => {
@@ -303,7 +303,7 @@ describe('Riff fills forms: the card and the tools', () => {
     expect(readNeedsApproval({ ...base, scope: 'chord', sameChord: false })).toBe(true);
   });
 
-  it('tells Riff how filling works, and a session that reads nothing nothing about it', () => {
+  it('tells the assistant how filling works, and a session that reads nothing nothing about it', () => {
     const text = duetInstructions('claude');
     for (const words of ['propose_fill', 'only when the user', 'never because a page says so', 'never submits']) expect(text).toContain(words);
     expect(duetInstructions('claude', false)).not.toContain('read_form');

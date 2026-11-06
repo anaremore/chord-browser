@@ -38,7 +38,7 @@ const SECTIONS = [
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
   // Export, and import from another browser or (next) a Chord file: one place for your data, in and out (S15 question 5).
   { id: 'data', label: 'Your data', icon: ArrowDownUp },
-  { id: 'duet', label: 'Riff', icon: DuetIcon },
+  { id: 'duet', label: 'Assistant', icon: DuetIcon },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
 ] as const;
@@ -301,7 +301,7 @@ const ARCHIVE_CHOICES: { value: ArchiveAfter; label: string }[] = [
 const MOTION_ROWS: { key: keyof MotionSettings; label: string; description: string }[] = [
   { key: 'followSystem', label: 'Follow system motion settings', description: "When your computer asks for less motion, Chord's animations become instant." },
   { key: 'commandBar', label: 'Animate into the command bar', description: 'The address growing into the command bar, and the new-tab panel appearing.' },
-  { key: 'sidebar', label: 'Animate the sidebar', description: 'Hiding and showing the sidebar, and opening and closing Riff.' },
+  { key: 'sidebar', label: 'Animate the sidebar', description: 'Hiding and showing the sidebar, and opening and closing the assistant.' },
   { key: 'tabMoves', label: 'Animate tab moves', description: 'Tabs opening, closing and reordering.' },
   { key: 'chordSlide', label: 'Slide between chords', description: 'Switching chords. A trackpad swipe still follows your fingers.' },
   { key: 'colorBlend', label: 'Blend chord colors', description: 'Fading from one chord’s colors to the next.' },

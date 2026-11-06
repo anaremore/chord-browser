@@ -1,7 +1,7 @@
 /**
  * One render a frame (DESIGN.md §6.7). Main's state patches arrive as
  * separate IPC messages, each its own task: a tab switch sends several (and
- * the extensions bar and Riff follow with their own), and rendering each one
+ * the extensions bar and the assistant follow with their own), and rendering each one
  * would render the shell two or three times inside one frame. Work queued
  * here runs together at the start of the next frame, in one
  * requestAnimationFrame callback, inside `batch` (the shell gives React's

@@ -420,7 +420,7 @@ export class Persistence {
     return port2;
   }
 
-  /** Take back what an import added to history and Riff (its Undo): the chats it took away, for Riff to end their sessions. */
+  /** Take back what an import added to history and the assistant (its Undo): the chats it took away, for the assistant to end their sessions. */
   async undoImport(importId: string): Promise<DuetThread[]> {
     const response = await this.request({ type: 'import.undo', importId });
     if (!response.ok) throw new Error(response.error);
@@ -442,7 +442,7 @@ export class Persistence {
     return response.counts;
   }
 
-  /** Riff's threads and messages. Throws if chord-data can't answer, so Riff can say so. */
+  /** The assistant's threads and messages. Throws if chord-data can't answer, so the assistant can say so. */
   async duet(op: DuetOp): Promise<DuetResult> {
     const response = await this.request({ type: 'duet', op });
     if (!response.ok) throw new Error(response.error);

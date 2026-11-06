@@ -1,5 +1,5 @@
 /**
- * Riff's chat images (main/duet/images.ts): an image's type and size read
+ * The assistant's chat images (main/duet/images.ts): an image's type and size read
  * from its header (Codex's never decoded in main), the names the panel may
  * load, and which of Codex's paths Chord may delete with a chat.
  */

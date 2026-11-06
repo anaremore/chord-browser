@@ -1,6 +1,6 @@
 /**
  * Effects' sanitizer (ARCHITECTURE.md §9, decision D13). Every stylesheet an
- * Effect applies, yours, a preset's, a hidden element's or Riff's, comes
+ * Effect applies, yours, a preset's, a hidden element's or the assistant's, comes
  * through here before it's used, in Effects' worker (worker.ts), never on main.
  *
  * It parses with the CSS Syntax spec's own algorithms (`@csstools/css-tokenizer`
@@ -654,7 +654,7 @@ export interface Compiled {
   css: string;
   /** What was left out of your CSS. */
   removed: Removal[];
-  /** What was left out of each of Riff's patches, in the order they came. */
+  /** What was left out of each of the assistant's patches, in the order they came. */
   patches: Removal[][];
   /** Hidden elements whose selector couldn't be used. */
   unusable: string[];

@@ -1,14 +1,14 @@
 /**
  * Effects (ARCHITECTURE.md §9, decision D13): your own styles for a site, in
  * place of Arc's Boosts. A site's Effects are your CSS, elements you hid,
- * presets you turned on and patches Riff wrote, joined into one stylesheet
+ * presets you turned on and patches the assistant wrote, joined into one stylesheet
  * that main inserts on each of the site's pages, as a stylesheet only. Each
  * one has its own switch, and the Dry/Wet switch takes them all off at once,
  * per site and everywhere, over whatever each one's says.
  *
  * What's here is pure: the site key, the presets, limits, what goes into a
  * site's stylesheet, checking saved and imported data, Your data's record,
- * and what Riff is told and answers.
+ * and what the assistant is told and answers.
  * The sanitizer, which every stylesheet goes through before it's used, lives
  * with its worker in main (`main/effects/sanitize.ts`).
  */
@@ -40,10 +40,10 @@ export const EFFECTS_LIMITS = {
   selector: 1_000,
   /** The picked element's name in the list ("div#sidebar"). */
   label: 80,
-  /** Riff's patches for one site, and one patch's stylesheet. */
+  /** The assistant's patches for one site, and one patch's stylesheet. */
   duet: 12,
   duetCss: 8_000,
-  /** What you asked Riff, and its one-line summary. */
+  /** What you asked the assistant, and its one-line summary. */
   ask: 500,
   summary: 120,
   /** Sites with Effects. */
@@ -122,8 +122,8 @@ export interface HiddenElement {
 }
 
 /**
- * A patch Riff wrote when you asked: your words, its summary (which you can
- * rename), and its stylesheet, as the sanitizer left Riff's or as you edited
+ * A patch the assistant wrote when you asked: your words, its summary (which you can
+ * rename), and its stylesheet, as the sanitizer left the assistant's or as you edited
  * it. Either way it's sanitized again with the rest before it's used.
  */
 export interface DuetEffect {
@@ -165,7 +165,7 @@ export const emptyEffects = (host: string, now: number): SiteEffects => ({ host,
 export const hasEffects = (site: Pick<SiteEffects, 'css' | 'hidden' | 'presets' | 'duet'>): boolean =>
   site.css.trim().length > 0 || site.hidden.length > 0 || site.presets.length > 0 || site.duet.length > 0;
 
-/** "Your CSS · 2 hidden · Dark · 1 from Riff · 1 off": what a site has, for Settings' list. */
+/** "Your CSS · 2 hidden · Dark · 1 from the assistant · 1 off": what a site has, for Settings' list. */
 export function effectsSummary(site: Pick<SiteEffects, 'css' | 'cssOn' | 'hidden' | 'presets' | 'duet'>): string {
   const parts: string[] = [];
   if (site.css.trim()) parts.push('Your CSS');
@@ -174,7 +174,7 @@ export function effectsSummary(site: Pick<SiteEffects, 'css' | 'cssOn' | 'hidden
     const preset = effectPreset(id);
     if (preset) parts.push(preset.name);
   }
-  if (site.duet.length) parts.push(`${site.duet.length} from Riff`);
+  if (site.duet.length) parts.push(`${site.duet.length} from the assistant`);
   const off = (site.css.trim() && !site.cssOn ? 1 : 0) + site.hidden.filter((h) => !h.on).length + site.duet.filter((d) => !d.on).length;
   if (off) parts.push(`${off} off`);
   return parts.join(' · ');
@@ -188,7 +188,7 @@ export interface EffectsParts {
   hidden: string[];
   /** Your CSS, as you wrote it. */
   css: string;
-  /** Riff's patches, oldest first. */
+  /** The assistant's patches, oldest first. */
   duet: string[];
 }
 
@@ -283,7 +283,7 @@ export function effectsRecord(site: SiteEffects, at: Stamp): DataRecord {
   };
 }
 
-/** A record read back (an export, another computer's log), checked; null if it isn't one. Riff's patches get new ids. */
+/** A record read back (an export, another computer's log), checked; null if it isn't one. The assistant's patches get new ids. */
 export function effectsFromRecord(r: DataRecord, newId: () => string, now = Date.now()): SiteEffects | null {
   if (r.type !== 'effects') return null;
   const updatedAt = r.at && r.at[0] > 0 ? r.at[0] : now;
@@ -304,10 +304,10 @@ export function effectsFromRecord(r: DataRecord, newId: () => string, now = Date
   );
 }
 
-/* ---------- Ask Riff ---------- */
+/* ---------- Asking the assistant ---------- */
 
 /**
- * Riff's one tool for Effects: the page's outline, read in Chord's isolated
+ * The assistant's one tool for Effects: the page's outline, read in Chord's isolated
  * world (never form values), with the site's Effects as they are, as an
  * untrusted tool result. Page content never goes in the prompt itself (§11.4).
  */
@@ -318,7 +318,7 @@ export const EFFECTS_OUTLINE_TOOL: DuetToolSpec = {
   inputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
 };
 
-/** What Riff is told for an Effects request (its whole system prompt; no chat comes with it). */
+/** What the assistant is told for an Effects request (its whole system prompt; no chat comes with it). */
 export function effectsInstructions(): string {
   return [
     'You write Effects for Chord, a web browser: styles a person adds to one website so it looks the way they want.',
@@ -338,7 +338,7 @@ export function effectsTurn(host: string, ask: string): string {
   return `Restyle ${host}: ${ask.trim()}`;
 }
 
-/** The longest outline Riff gets. */
+/** The longest outline the assistant gets. */
 export const OUTLINE_MAX = 30_000;
 
 /** An outline as the page wrote it, without the characters a page can hide instructions in (Unicode tags, zero-width and bidi controls), and capped. */
@@ -373,7 +373,7 @@ export function outlineResult(page: { url: string; title: string; outline: strin
 }
 
 /**
- * Riff's answer, in its fixed shape: `{"css": "...", "summary": "..."}`, maybe
+ * The assistant's answer, in its fixed shape: `{"css": "...", "summary": "..."}`, maybe
  * inside a Markdown fence or a sentence. Null when there's no such object.
  * The CSS isn't checked here: the sanitizer does that.
  */
