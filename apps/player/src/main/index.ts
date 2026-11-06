@@ -167,11 +167,7 @@ class Player {
     });
     lockContents(this.window.page.webContents, deps);
     // Docked, the page is a tab in Chord: Chord's shortcuts pressed in it go to Chord (the page sees them too).
-    this.window.page.webContents.on('before-input-event', (_event, input) => {
-      if (!this.window.isDocked || (input.type !== 'keyDown' && input.type !== 'keyUp')) return;
-      const key: KeyReport = { type: input.type, key: input.key, code: input.code, control: input.control, shift: input.shift, alt: input.alt, meta: input.meta };
-      if (mayBeShortcut(key)) peer.send('key', { ...key });
-    });
+    this.window.page.webContents.on('before-input-event', (_event, input) => this.forwardKey(input));
     this.media = new MediaWatch(this.window.page.webContents, {
       service: () => this.serviceName,
       report: (media) => peer.send('media', { ...media }),
@@ -208,6 +204,13 @@ class Player {
     this.window.update({ status: 'ready' });
     void this.window.page.webContents.loadURL(url).catch(() => {});
     return { ok: true };
+  }
+
+  /** Docked, a key that may be one of Chord's shortcuts goes to Chord too (the page still gets it). */
+  private forwardKey(input: Pick<Electron.Input, 'type' | 'key' | 'code' | 'control' | 'shift' | 'alt' | 'meta'>): void {
+    if (!this.window.isDocked || (input.type !== 'keyDown' && input.type !== 'keyUp')) return;
+    const key: KeyReport = { type: input.type, key: input.key, code: input.code, control: input.control, shift: input.shift, alt: input.alt, meta: input.meta };
+    if (mayBeShortcut(key)) this.peer.send('key', { ...key });
   }
 
   /**
@@ -301,9 +304,13 @@ class Player {
       case 'capture':
         return (await this.window.capture()).toString('base64');
       case 'key': {
-        // A key pressed in the page, as a person's (docked, Chord's shortcuts go to Chord).
-        const modifiers = (['control', 'shift', 'alt', 'meta'] as const).filter((k) => m[k] === true);
-        for (const type of ['keyDown', 'keyUp'] as const) page.sendInputEvent({ type, keyCode: String(m['key']), modifiers });
+        // A key pressed in the page, as before-input-event reports it. (sendInputEvent needs the window focused, and
+        // the docked window is shown without taking focus, as it should be.)
+        const key = String(m['key']);
+        const code = /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : key;
+        const flags = { control: m['control'] === true, shift: m['shift'] === true, alt: m['alt'] === true, meta: m['meta'] === true };
+        this.forwardKey({ type: 'keyDown', key, code, ...flags });
+        this.forwardKey({ type: 'keyUp', key, code, ...flags });
         return true;
       }
       case 'close-window':
