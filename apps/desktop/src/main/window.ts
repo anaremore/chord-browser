@@ -80,6 +80,16 @@ export function toWindowRect(r: Rect, s = uiScale()): Rect {
   return { x, y, width: Math.round((r.x + r.width) * s) - x, height: Math.round((r.y + r.height) * s) - y };
 }
 
+/**
+ * A window's HWND as a decimal string, for the window-owner helper (player/dock.ts); '0' off Windows,
+ * where the native handle is something else (an NSView pointer, an X11 id, nothing on Wayland).
+ */
+export function hwndOf(window: BaseWindow): string {
+  if (process.platform !== 'win32' || window.isDestroyed()) return '0';
+  const handle = window.getNativeWindowHandle();
+  return handle.length >= 8 ? handle.readBigUInt64LE(0).toString() : '0';
+}
+
 /** How split panes share the content frame (DESIGN.md §7.9). */
 export interface PaneLayout {
   direction: SplitDirection;
@@ -1215,7 +1225,7 @@ export class AppWindow {
     }
     return {
       id: this.id,
-      handle: win.isDestroyed() ? '0' : win.getNativeWindowHandle().readBigUInt64LE(0).toString(),
+      handle: hwndOf(win),
       focused: !win.isDestroyed() && win.isFocused(),
       visible,
       rect,

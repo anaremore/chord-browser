@@ -96,7 +96,7 @@ import { platform, setUiScale, systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
 import { TabManager } from './tabs';
-import { AppWindow, createUiView } from './window';
+import { AppWindow, createUiView, hwndOf } from './window';
 
 /** Histories of tabs archived this session, kept in memory so ⌘⇧T doesn't wait on the database. */
 const MAX_REMEMBERED_HISTORIES = 100;
@@ -918,7 +918,7 @@ export class Browser {
     });
     w.window.on('blur', () => this.options.windowBlurred?.());
     // Windows destroys a window's owned windows with it: Chord Player, docked in one of its tabs, lets go first.
-    w.window.on('close', () => this.player.dock.ownerClosing(w.window.getNativeWindowHandle().readBigUInt64LE(0).toString()));
+    if (process.platform === 'win32') w.window.on('close', () => this.player.dock.ownerClosing(hwndOf(w.window)));
     for (const contents of [w.shell.webContents, w.overlay.webContents]) {
       attachShortcuts(contents, this.keyboard);
       attachContextMenu(contents, {
