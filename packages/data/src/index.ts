@@ -9,8 +9,8 @@ import type {
   Choice,
   Chord,
   Download,
-  DuetMessage,
-  DuetThread,
+  AssistantMessage,
+  AssistantThread,
   Favorite,
   ImportedPage,
   InstalledExtension,
@@ -25,7 +25,7 @@ import type {
 } from '@chord/core';
 import type { ExportCounts, FolderInspection, SyncApply, SyncStatus } from '@chord/core';
 import { localChordFields, localFavoriteFields, localNodeFields, localRouteFields, same } from '@chord/core';
-import type { DuetOp, DuetResult } from './duet';
+import type { AssistantOp, AssistantResult } from './assistant';
 import type { SyncTimings } from './sync';
 
 /**
@@ -214,15 +214,15 @@ export type DataRequest =
   | { id: number; type: 'archive.get'; archiveId: string }
   /** The newest entry archived for one of these reasons (⌘⇧T after a restart). */
   | { id: number; type: 'archive.latest'; reasons: ArchiveReason[] }
-  /** The assistant's threads and messages (./duet.ts). */
-  | { id: number; type: 'duet'; op: DuetOp }
+  /** The assistant's threads and messages (./assistant.ts). */
+  | { id: number; type: 'assistant'; op: AssistantOp }
   /**
    * A port (transferred with this request) on which the import process sends
    * one import's history, a batch at a time (`ImportBatch`), so the pages
    * never pass through main (ARCHITECTURE.md §9). Each batch is answered.
    */
   | { id: number; type: 'import.port'; importId: string }
-  /** Take back what an import added to history and the assistant: its Undo. The chats it took away come back (`duet.removed`). */
+  /** Take back what an import added to history and the assistant: its Undo. The chats it took away come back (`assistant.removed`). */
   | { id: number; type: 'import.undo'; importId: string }
   /** This computer's id for Your data (made the first time it's asked for). */
   | { id: number; type: 'device' }
@@ -316,7 +316,7 @@ export type DataPush =
  */
 export interface ImportBatch {
   pages?: ImportedPage[];
-  duet?: { threads: DuetThread[]; messages: DuetMessage[] };
+  assistant?: { threads: AssistantThread[]; messages: AssistantMessage[] };
 }
 
 /** chord-data's answer to each batch: the pages written (or messages, for chats) and the chats added, or why it couldn't. */
@@ -343,7 +343,7 @@ export type DataResponse =
       search?: SearchResult;
       archive?: ArchivePage;
       entry?: ArchiveEntry | null;
-      duet?: DuetResult;
+      assistant?: AssistantResult;
       timing?: OpenTiming;
       device?: string;
       counts?: ExportCounts;
@@ -520,5 +520,5 @@ export function opsForState(state: State): WriteOp[] {
   return ops.filter((op) => !isPrivate(op, state));
 }
 
-export type { DuetOp, DuetResult } from './duet';
+export type { AssistantOp, AssistantResult } from './assistant';
 export type { ExportPhase } from './export';

@@ -22,7 +22,7 @@ import {
   settingsFromFields,
   threadFromRecord,
   type DataRecord,
-  type DuetImage,
+  type AssistantImage,
   type State,
   type TabNode,
 } from '@chord/core';
@@ -43,7 +43,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const DEVICE = '9f2c4e1a7b3d5c60';
 const ICON_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUg==', 'base64');
 const ICON = `data:image/png;base64,${ICON_BYTES.toString('base64')}`;
-const IMAGE: DuetImage = { id: 'abcdefabcdefabcdefabcdef', mime: 'image/png', width: 2, height: 2, codexCopy: '/home/me/.codex/generated_images/x.png' };
+const IMAGE: AssistantImage = { id: 'abcdefabcdefabcdefabcdef', mime: 'image/png', width: 2, height: 2, codexCopy: '/home/me/.codex/generated_images/x.png' };
 
 let n = 0;
 const newId = () => `id-${++n}`;
@@ -107,12 +107,12 @@ function seeded(): { db: ChordDatabase; state: State } {
     {
       k: 'effect',
       id: 'news.test',
-      value: { host: 'news.test', wet: true, css: 'h1 { color: red }', cssOn: false, hidden: [{ selector: '#ad', label: 'Ad', on: true, at: 1 }], presets: ['dark'], duet: [], createdAt: 4000, updatedAt: 4000, compiled: 'COMPILED-SHEET', sanitizer: 1 },
+      value: { host: 'news.test', wet: true, css: 'h1 { color: red }', cssOn: false, hidden: [{ selector: '#ad', label: 'Ad', on: true, at: 1 }], presets: ['dark'], assistant: [], createdAt: 4000, updatedAt: 4000, compiled: 'COMPILED-SHEET', sanitizer: 1 },
     },
   ]);
-  db.duet({ op: 'saveThread', thread: { id: 'th', chordId: 'work', title: 'Trip', provider: 'codex', model: null, providerSessionId: 'SESSION-SECRET', scope: 'ask', createdAt: 5000, updatedAt: 5000, lastUsedAt: 5000 } });
-  db.duet({ op: 'saveMessage', message: { id: 'm1', threadId: 'th', createdAt: 5001, body: { role: 'user', text: 'Draw a lighthouse', attachments: [], images: [IMAGE] } } });
-  db.duet({
+  db.assistant({ op: 'saveThread', thread: { id: 'th', chordId: 'work', title: 'Trip', provider: 'codex', model: null, providerSessionId: 'SESSION-SECRET', scope: 'ask', createdAt: 5000, updatedAt: 5000, lastUsedAt: 5000 } });
+  db.assistant({ op: 'saveMessage', message: { id: 'm1', threadId: 'th', createdAt: 5001, body: { role: 'user', text: 'Draw a lighthouse', attachments: [], images: [IMAGE] } } });
+  db.assistant({
     op: 'saveMessage',
     message: { id: 'm2', threadId: 'th', createdAt: 5002, body: { role: 'assistant', text: 'Here [1]', citations: [{ n: 1, ref: 't1', url: 'https://maps.test/', title: 'Maps', quote: 'q', tabId: 'node-7' }], status: 'done' } },
   });
@@ -123,7 +123,7 @@ const options = (overrides: Partial<ExportOptions> = {}): ExportOptions => ({
   device: DEVICE,
   platform: 'linux',
   history: true,
-  duet: true,
+  assistant: true,
   sha256: sha256Hex,
   image: (image) => (image.id === IMAGE.id ? { data: Buffer.from('PNGDATA!'), thumb: Buffer.from('THUMB!!!') } : null),
   ...overrides,
@@ -150,8 +150,8 @@ describe('an export', () => {
     db.close();
     const items = exported();
     const phases = items.map((i) => i.phase);
-    expect([...new Set(phases)]).toEqual(['setup', 'today', 'history', 'duet']);
-    expect(phases).toEqual([...phases].sort((a, b) => ['setup', 'today', 'history', 'duet'].indexOf(a) - ['setup', 'today', 'history', 'duet'].indexOf(b)));
+    expect([...new Set(phases)]).toEqual(['setup', 'today', 'history', 'assistant']);
+    expect(phases).toEqual([...phases].sort((a, b) => ['setup', 'today', 'history', 'assistant'].indexOf(a) - ['setup', 'today', 'history', 'assistant'].indexOf(b)));
 
     const personal = Object.values(state.chords).find((c) => c.name === 'Personal')!;
     expect(of(items, 'chord').map((r) => chordFromRecord(r))).toEqual([
@@ -227,13 +227,13 @@ describe('an export', () => {
     seeded().db.close();
     const types = (items: ExportItem[]) => new Set(items.map((i) => i.record.type));
     expect(types(exported({ history: false }))).not.toContain('page');
-    expect([...types(exported({ duet: false }))].filter((t) => ['thread', 'message', 'image'].includes(t))).toEqual([]);
-    expect(types(exported({ history: false, duet: false }))).toContain('tab');
+    expect([...types(exported({ assistant: false }))].filter((t) => ['thread', 'message', 'image'].includes(t))).toEqual([]);
+    expect(types(exported({ history: false, assistant: false }))).toContain('tab');
   });
 
   it('reads an image’s file only by an id Chord makes: it becomes a file name', () => {
     const { db } = seeded();
-    db.duet({
+    db.assistant({
       op: 'saveMessage',
       message: { id: 'm3', threadId: 'th', createdAt: 5003, body: { role: 'user', text: 'x', attachments: [], images: [{ ...IMAGE, id: '../../../etc/passwd' }] } },
     });

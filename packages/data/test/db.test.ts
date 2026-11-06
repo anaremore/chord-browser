@@ -343,13 +343,13 @@ describe('chord-data', () => {
         { selector: '#promo', label: 'Promo', on: false, at: 2 },
       ],
       presets: ['dark' as const],
-      duet: [{ id: 'd1', ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }', on: false, at: 3 }],
+      assistant: [{ id: 'd1', ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }', on: false, at: 3 }],
       createdAt: 1,
       updatedAt: 4,
     };
     db.write([
       { k: 'effect', id: 'news.test', value: { ...site, compiled: 'h1 {\n  color: red !important;\n}', sanitizer: 1 } },
-      { k: 'effect', id: 'other.test:8080', value: { ...site, host: 'other.test:8080', css: '', hidden: [], presets: ['reading-width'], duet: [], compiled: 'x', sanitizer: 1 } },
+      { k: 'effect', id: 'other.test:8080', value: { ...site, host: 'other.test:8080', css: '', hidden: [], presets: ['reading-width'], assistant: [], compiled: 'x', sanitizer: 1 } },
     ]);
     db.close();
     db = new ChordDatabase(file);
@@ -384,12 +384,12 @@ describe('chord-data', () => {
     let db = new ChordDatabase(file);
     expect(db.version).toBe(MIGRATIONS.length);
     const [old] = db.loadEffects();
-    expect(old).toMatchObject({ host: 'news.test', css: 'h1 { color: red }', cssOn: true, hidden: [{ selector: '#ad', on: true }], duet: [{ id: 'd1', on: true }], compiled: 'h1 {\n  color: red !important;\n}', sanitizer: 1 });
-    db.write([{ k: 'effect', id: 'news.test', value: { ...old!, cssOn: false, hidden: [{ ...old!.hidden[0]!, on: false }], duet: [{ ...old!.duet[0]!, on: false }], updatedAt: 3 } }]);
+    expect(old).toMatchObject({ host: 'news.test', css: 'h1 { color: red }', cssOn: true, hidden: [{ selector: '#ad', on: true }], assistant: [{ id: 'd1', on: true }], compiled: 'h1 {\n  color: red !important;\n}', sanitizer: 1 });
+    db.write([{ k: 'effect', id: 'news.test', value: { ...old!, cssOn: false, hidden: [{ ...old!.hidden[0]!, on: false }], assistant: [{ ...old!.assistant[0]!, on: false }], updatedAt: 3 } }]);
     db.close();
     db = new ChordDatabase(file);
     const [after] = db.loadEffects();
-    expect(after).toMatchObject({ cssOn: false, hidden: [{ selector: '#ad', on: false }], duet: [{ id: 'd1', on: false }], updatedAt: 3 });
+    expect(after).toMatchObject({ cssOn: false, hidden: [{ selector: '#ad', on: false }], assistant: [{ id: 'd1', on: false }], updatedAt: 3 });
     db.close();
   });
 
@@ -536,16 +536,16 @@ describe('chord-data', () => {
 
     const db = new ChordDatabase(file);
     expect(db.version).toBe(MIGRATIONS.length);
-    const kept = db.duet({ op: 'thread', threadId: 't1' });
+    const kept = db.assistant({ op: 'thread', threadId: 't1' });
     expect(kept.thread).toMatchObject({ title: 'Laptops', scope: 'chord', providerSessionId: 's1', lastUsedAt: 3 });
     expect(kept.messages?.map((m) => m.id)).toEqual(['m1']);
     // Search still finds it, and the new scope is allowed.
-    expect(db.duet({ op: 'search', query: 'laptops', limit: 10 }).hits?.map((h) => h.messageId)).toEqual(['m1']);
-    db.duet({ op: 'saveThread', thread: { ...kept.thread!, scope: 'every' } });
-    expect(db.duet({ op: 'thread', threadId: 't1' }).thread?.scope).toBe('every');
+    expect(db.assistant({ op: 'search', query: 'laptops', limit: 10 }).hits?.map((h) => h.messageId)).toEqual(['m1']);
+    db.assistant({ op: 'saveThread', thread: { ...kept.thread!, scope: 'every' } });
+    expect(db.assistant({ op: 'thread', threadId: 't1' }).thread?.scope).toBe('every');
     // And deleting the chat still takes its messages with it: foreign keys are back on.
-    db.duet({ op: 'deleteThread', threadId: 't1' });
-    expect(db.duet({ op: 'search', query: 'laptops', limit: 10 }).hits).toEqual([]);
+    db.assistant({ op: 'deleteThread', threadId: 't1' });
+    expect(db.assistant({ op: 'search', query: 'laptops', limit: 10 }).hits).toEqual([]);
     db.close();
   });
 

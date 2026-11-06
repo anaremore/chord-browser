@@ -91,7 +91,7 @@ champion change channel chapter charcoal cheerful chef chicken chief chilly choi
 closet clothing cluster coastal collar college colony colorful common cookbook cooking cooler copy corduroy correct cosmos costly
 cottontail courage cracker crafty credit crimson cruise cuddle curious current customer
 dainty dairy dancer daring dashing debate decent deep defend degree deliver dentist deputy desktop detail detour devoted diet
-digital dimple dinner direct dizzy doctor dollar domino doodle double downtown draft drawing dressing driver drowsy duet durable
+digital dimple dinner direct dizzy doctor dollar domino doodle double downtown draft drawing dressing driver drowsy assistant durable
 dusty
 easy eating economy editor eighty either elastic electric eleven elite emblem employ endless enjoy entry episode erase errand
 estate eternal event every evolve excite exhibit exit expand explore extra

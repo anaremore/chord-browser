@@ -371,8 +371,8 @@ for (const mode of APPEARANCES) {
       const app = await launch({
         CHORD_HOME_URL: `${site.origin}/article`,
         CHORD_APPEARANCE: mode,
-        CHORD_DUET_CLAUDE: fakeClaude,
-        CHORD_DUET_CODEX: resolve(config, 'no-codex'),
+        CHORD_ASSISTANT_CLAUDE: fakeClaude,
+        CHORD_ASSISTANT_CODEX: resolve(config, 'no-codex'),
         CLAUDE_CONFIG_DIR: config,
       });
       const findings: Finding[] = [];
@@ -380,7 +380,7 @@ for (const mode of APPEARANCES) {
         const shell = await pageWhere(app, isShell);
         await expect(today(shell)).toContainText('Article');
         await setTheme(shell, 'dusk');
-        await runAction(shell, 'duet.toggle');
+        await runAction(shell, 'assistant.toggle');
         const panel = shell.getByRole('complementary', { name: 'Assistant' });
         await expect(panel.getByText('Chat about your pages.')).toBeVisible();
         findings.push(...(await audit(shell, 'Assistant: intro and setup', { appearance: mode })));
@@ -572,7 +572,7 @@ for (const mode of APPEARANCES) {
 
 test('screen readers get the structure: the sidebar tree, the command bar combobox, Settings and the assistant, and polite announcements', async () => {
   const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
-  const app = await launch({ CHORD_HOME_URL: `${site.origin}/article`, CHORD_DUET_CLAUDE: fakeClaude, CHORD_DUET_CODEX: resolve(config, 'no-codex'), CLAUDE_CONFIG_DIR: config });
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/article`, CHORD_ASSISTANT_CLAUDE: fakeClaude, CHORD_ASSISTANT_CODEX: resolve(config, 'no-codex'), CLAUDE_CONFIG_DIR: config });
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
@@ -656,7 +656,7 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
     await app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows().find((w) => w.getTitle() === 'Chord Settings')?.close());
 
     // The assistant: a labelled panel with a conversation log that isn't read word by word, and an announcement when a reply is done.
-    await runAction(shell, 'duet.toggle');
+    await runAction(shell, 'assistant.toggle');
     const panel = shell.getByRole('complementary', { name: 'Assistant' });
     await panel.getByRole('button', { name: 'Use this' }).first().click();
     await panel.getByRole('button', { name: 'Got it' }).click();

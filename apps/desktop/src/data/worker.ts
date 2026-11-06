@@ -5,7 +5,7 @@
  * Sync's tables are chord-data's too, and its worker thread starts here only
  * while sync is on (sync.ts, docs/decisions/S15-your-data.md §7).
  */
-import type { DuetThread } from '@chord/core';
+import type { AssistantThread } from '@chord/core';
 import type { DataPush, DataRequest, DataResponse, ImportBatch, ImportBatchReply, SyncRequest } from '@chord/data';
 import { ChordDatabase } from '@chord/data/db';
 import { SyncController } from './sync';
@@ -83,9 +83,9 @@ process.parentPort.on('message', (event) => {
         if (!db) throw new Error('chord-data: archive before open');
         reply({ id: request.id, ok: true, entry: db.archiveLatest(request.reasons) });
         break;
-      case 'duet':
-        if (!db) throw new Error('chord-data: duet before open');
-        reply({ id: request.id, ok: true, duet: db.duet(request.op) });
+      case 'assistant':
+        if (!db) throw new Error('chord-data: assistant before open');
+        reply({ id: request.id, ok: true, assistant: db.assistant(request.op) });
         break;
       case 'import.port': {
         const port = event.ports[0];
@@ -100,8 +100,8 @@ process.parentPort.on('message', (event) => {
           try {
             if (!db) throw new Error('chord-data: closed');
             const batch = data as ImportBatch;
-            if (batch.duet) {
-              const added = db.importDuet(importId, batch.duet.threads, batch.duet.messages);
+            if (batch.assistant) {
+              const added = db.importAssistant(importId, batch.assistant.threads, batch.assistant.messages);
               port.postMessage({ ok: true, added: added.messages, threads: added.threads } satisfies ImportBatchReply);
             } else port.postMessage({ ok: true, added: db.importHistory(importId, batch.pages ?? []) } satisfies ImportBatchReply);
           } catch (error) {
@@ -117,7 +117,7 @@ process.parentPort.on('message', (event) => {
         // A slice at a time, each its own transaction, with the command bar's searches (and anything else waiting) in between,
         // and smaller checkpoints meanwhile.
         const undoing = db;
-        const removed: DuetThread[] = [];
+        const removed: AssistantThread[] = [];
         undoing.importing(true);
         const step = () => {
           try {
@@ -126,7 +126,7 @@ process.parentPort.on('message', (event) => {
             removed.push(...slice.threads);
             if (!slice.done) return void setImmediate(step);
             undoing.importing(false);
-            reply({ id: request.id, ok: true, duet: { removed } });
+            reply({ id: request.id, ok: true, assistant: { removed } });
           } catch (error) {
             if (db === undoing) undoing.importing(false);
             reply({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) });

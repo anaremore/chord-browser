@@ -73,9 +73,9 @@ export interface ScreenshotDeps {
   /** Into Downloads, listed as a finished download (a private window's only there). */
   saveFile(filename: string, bytes: Uint8Array, url: string, privateWindow: string | null): Promise<void>;
   /** Whether the assistant may be asked about a screenshot of this page in this window (set up, may read the page). */
-  duetReady(w: AppWindow, url: string): boolean;
+  assistantReady(w: AppWindow, url: string): boolean;
   /** Put the picture in the window's assistant composer, and open the panel. */
-  askDuet(windowId: string, image: { mime: 'image/jpeg'; width: number; height: number; bytes: Uint8Array; thumb: Uint8Array }): void;
+  askAssistant(windowId: string, image: { mime: 'image/jpeg'; width: number; height: number; bytes: Uint8Array; thumb: Uint8Array }): void;
 }
 
 export class Screenshots {
@@ -185,7 +185,7 @@ export class Screenshots {
       whilePresenting: true,
       message: copied ? 'Screenshot copied' : 'Screenshot taken, but couldn’t be copied',
       action: { label: 'Save', screenshot: { id: entry.id, do: 'save' } },
-      ...(shot.ask && this.deps.duetReady(w, entry.url) ? { secondary: { label: 'Ask about it', screenshot: { id: entry.id, do: 'duet' as const } } } : {}),
+      ...(shot.ask && this.deps.assistantReady(w, entry.url) ? { secondary: { label: 'Ask about it', screenshot: { id: entry.id, do: 'assistant' as const } } } : {}),
     });
   }
 
@@ -197,13 +197,13 @@ export class Screenshots {
     return Promise.all(
       (await store.list()).map(async (entry) => {
         const thumb = await store.thumb(entry.id);
-        return { ...entry, thumb: thumb ? `data:image/jpeg;base64,${thumb.toString('base64')}` : null, duet: this.deps.duetReady(w, entry.url) };
+        return { ...entry, thumb: thumb ? `data:image/jpeg;base64,${thumb.toString('base64')}` : null, assistant: this.deps.assistantReady(w, entry.url) };
       }),
     );
   }
 
   /** Copy, save or delete one: the window's own (a private window never reaches a normal one's, nor the other way). */
-  async act(w: AppWindow, id: string, action: 'copy' | 'save' | 'delete' | 'duet'): Promise<void> {
+  async act(w: AppWindow, id: string, action: 'copy' | 'save' | 'delete' | 'assistant'): Promise<void> {
     const store = this.store(w);
     if (action === 'delete') {
       await store.remove(id);
@@ -213,12 +213,12 @@ export class Screenshots {
     const entry = last?.entry.id === id ? last.entry : (await store.list()).find((e) => e.id === id);
     const png = last?.entry.id === id ? last.png : await store.png(id);
     if (!entry || !png) return;
-    if (action === 'duet') {
+    if (action === 'assistant') {
       const ask = last?.entry.id === id ? last.ask : await store.ask(id);
       const thumb = last?.entry.id === id ? last.thumb : await store.thumb(id);
-      if (!ask || !thumb || !this.deps.duetReady(w, entry.url)) return;
+      if (!ask || !thumb || !this.deps.assistantReady(w, entry.url)) return;
       const k = Math.min(1, ASK_SIDE / Math.max(entry.width, entry.height));
-      this.deps.askDuet(w.id, { mime: 'image/jpeg', width: Math.round(entry.width * k), height: Math.round(entry.height * k), bytes: ask, thumb });
+      this.deps.askAssistant(w.id, { mime: 'image/jpeg', width: Math.round(entry.width * k), height: Math.round(entry.height * k), bytes: ask, thumb });
       return;
     }
     if (action === 'copy') {

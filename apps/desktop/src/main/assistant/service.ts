@@ -11,15 +11,15 @@ import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   children,
-  DUET_MAX_IMAGES,
-  DUET_MAX_PROCESSES,
-  DUET_PDF_MAX_PAGES,
-  DUET_PROCESS_IDLE_MS,
-  DUET_PROVIDERS,
-  DUET_TOOLS,
-  duetInstructions,
-  duetPruneBefore,
-  duetTool,
+  ASSISTANT_MAX_IMAGES,
+  ASSISTANT_MAX_PROCESSES,
+  ASSISTANT_PDF_MAX_PAGES,
+  ASSISTANT_PROCESS_IDLE_MS,
+  ASSISTANT_PROVIDERS,
+  ASSISTANT_TOOLS,
+  assistantInstructions,
+  assistantPruneBefore,
+  assistantTool,
   fieldCount,
   fillChangedNote,
   fillWrites,
@@ -45,39 +45,39 @@ import {
   toolResult,
   userTurnText,
   uuidv7,
-  type DuetAttachment,
-  type DuetCitation,
-  type DuetImage,
-  type DuetImageMaking,
-  type DuetTabName,
-  type DuetContextUsage,
-  type DuetFillCard,
-  type DuetFormRead,
-  type DuetMessage,
-  type DuetMessageBody,
-  type DuetProvider,
-  type DuetScope,
-  type DuetThread,
-  type DuetToolName,
-  type DuetToolSpec,
+  type AssistantAttachment,
+  type AssistantCitation,
+  type AssistantImage,
+  type AssistantImageMaking,
+  type AssistantTabName,
+  type AssistantContextUsage,
+  type AssistantFillCard,
+  type AssistantFormRead,
+  type AssistantMessage,
+  type AssistantMessageBody,
+  type AssistantProvider,
+  type AssistantScope,
+  type AssistantThread,
+  type AssistantToolName,
+  type AssistantToolSpec,
   type NodeId,
   type TabNode,
   type WindowId,
 } from '@chord/core';
-import type { DuetAction, DuetView, Toast } from '@chord/ipc';
+import type { AssistantAction, AssistantView, Toast } from '@chord/ipc';
 import { durations, easing } from '@chord/tokens';
 import { app, clipboard, ClipboardItem, nativeImage, net, type WebContents } from 'electron';
 import { pathToFileURL } from 'node:url';
 import type { Browser } from '../browser';
 import { send } from '../ipc';
 import type { Persistence } from '../persistence';
-import type { DuetSession, MadeImage, ProviderError, SessionImage, ToolOutput } from './adapter';
+import type { AssistantSession, MadeImage, ProviderError, SessionImage, ToolOutput } from './adapter';
 import { ClaudeSession } from './claude';
 import { CodexSession } from './codex';
 import { claudeConfigDir, claudeProjectFolder, detect, detectInWsl, mayBeInWsl, notInstalled, openSignIn, rememberedInWsl, type Detected, type Launch, type ProviderStatus } from './detect';
 import { readPage, screenshot, type PageRead } from './extract';
 import { fillFormPage, readFormPage, undoFillPage, type FillOutcome } from './forms';
-import { DuetImages, imageInfo, newImageId } from './images';
+import { AssistantImages, imageInfo, newImageId } from './images';
 import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
 import { extractPdf, fetchPdf, PdfError, pdfProblemCopy } from './pdf';
 
@@ -85,7 +85,7 @@ type Decision = 'once' | 'thread' | 'denied';
 
 /** An image for the assistant, as a pasted image or a screenshot brings it: the picture for the model, and a thumbnail. */
 export interface ImageInput {
-  mime: DuetImage['mime'];
+  mime: AssistantImage['mime'];
   width: number;
   height: number;
   bytes: Uint8Array;
@@ -94,7 +94,7 @@ export interface ImageInput {
 
 /** One waiting in the composer: kept in memory until its message is sent. */
 interface PendingImage {
-  image: DuetImage;
+  image: AssistantImage;
   bytes: Buffer;
   thumb: Buffer;
 }
@@ -102,8 +102,8 @@ interface PendingImage {
 interface ThreadState {
   chordId: string;
   /** Null until the first message is sent: a fresh thread isn't saved before then. */
-  thread: DuetThread | null;
-  messages: DuetMessage[];
+  thread: AssistantThread | null;
+  messages: AssistantMessage[];
   /** Opaque tab handles ("t3") ↔ node ids, so the model never sees titles or URLs it didn't ask for. */
   refs: Map<string, NodeId>;
   /** Tabs attached to any message in the thread: readable without asking. */
@@ -113,7 +113,7 @@ interface ThreadState {
   /** Tabs the assistant read in this thread: a badge in the sidebar while it's open. */
   read: Set<NodeId>;
   queue: string[];
-  streaming: DuetMessage | null;
+  streaming: AssistantMessage | null;
   startedAt: number | null;
   windowId: WindowId | null;
   pending: Map<string, (decision: Decision) => void>;
@@ -121,15 +121,15 @@ interface ThreadState {
   pendingDivider: string | null;
   lastError: ProviderError | null;
   /** How full the provider's context is, as its CLI last reported (the panel's meter). */
-  context: DuetContextUsage | null;
+  context: AssistantContextUsage | null;
   /** PDFs read in this chat, per tab: later ranges reuse them, and citations find their page in them. */
   pdfs: Map<NodeId, PdfRead>;
   /** Images Codex made that are still being written: the reply is kept only once they're on disk. */
   saving: Set<Promise<void>>;
   /** The last form the assistant read in this chat (read_form): its fields by Chord's ids, and the page's token for that read. */
-  form: { nodeId: NodeId; token: string; read: DuetFormRead } | null;
+  form: { nodeId: NodeId; token: string; read: AssistantFormRead } | null;
   /** Fill cards waiting for you, by message id: the read they're for (the card in the panel holds the values). */
-  fills: Map<string, { nodeId: NodeId; token: string; read: DuetFormRead }>;
+  fills: Map<string, { nodeId: NodeId; token: string; read: AssistantFormRead }>;
   /** Chord's next field id in this chat: ids never repeat, so one from an earlier read is caught, not taken for another field. */
   nextField: number;
   /** The reply that showed a fill card: one card for each message you send. */
@@ -157,14 +157,14 @@ const FILL_PROBLEMS: Record<Exclude<FillOutcome, { ok: true }>['why'], string> =
 };
 
 /** A message as chord-data keeps it: a fill card's values stay in memory (D16). */
-function saved(message: DuetMessage): DuetMessage {
+function saved(message: AssistantMessage): AssistantMessage {
   if (message.body.role !== 'tool' || !message.body.fill) return message;
   const { fill: _fill, ...body } = message.body;
   return { ...message, body };
 }
 
 /** Where the assistant's images go when you save one: Downloads, listed as a finished download. */
-export interface DuetFiles {
+export interface AssistantFiles {
   save(filename: string, bytes: Uint8Array, mime: string): Promise<void>;
 }
 
@@ -176,7 +176,7 @@ interface PdfRead {
 }
 
 /** WSL installs as panel.json keeps them, so a WSL-only setup is ready at launch without starting WSL. */
-type SavedWsl = Partial<Record<DuetProvider, { status: ProviderStatus; target: WslTarget }>>;
+type SavedWsl = Partial<Record<AssistantProvider, { status: ProviderStatus; target: WslTarget }>>;
 
 interface Panel {
   open: boolean;
@@ -186,7 +186,7 @@ interface Panel {
 }
 
 interface Live {
-  session: DuetSession;
+  session: AssistantSession;
   lastUsed: number;
   idle: ReturnType<typeof setTimeout> | undefined;
 }
@@ -197,18 +197,18 @@ const WEB_PAGE = /^https?:\/\/[^\s/]/i;
 /** PDFs kept per chat for later ranges and citations; the oldest goes first. */
 const PDFS_KEPT = 3;
 /** Development and tests: a shorter idle window, so "start fresh, offer Continue" can be seen. */
-const IDLE_MS = (!app.isPackaged && Number(process.env['CHORD_DUET_IDLE_MS'])) || undefined;
+const IDLE_MS = (!app.isPackaged && Number(process.env['CHORD_ASSISTANT_IDLE_MS'])) || undefined;
 const PUSH_MS = 33;
 
-export class DuetService {
-  private statuses: Partial<Record<DuetProvider, ProviderStatus>> = {};
+export class AssistantService {
+  private statuses: Partial<Record<AssistantProvider, ProviderStatus>> = {};
   /** How to start each provider: never sent to a page (a launch holds the environment). */
-  private launches: Partial<Record<DuetProvider, Launch>> = {};
+  private launches: Partial<Record<AssistantProvider, Launch>> = {};
   /** Installs found inside WSL at the last look, used while Windows itself has none. */
-  private inWsl: Partial<Record<DuetProvider, Detected>> = {};
+  private inWsl: Partial<Record<AssistantProvider, Detected>> = {};
   private wslLookup: Promise<void> | null = null;
   /** Providers Setup is still looking for inside WSL. */
-  private lookingInWsl: DuetProvider[] = [];
+  private lookingInWsl: AssistantProvider[] = [];
   private readonly threads = new Map<string, ThreadState>();
   /** Which thread each chord's panel shows: a thread id, or a chord-keyed fresh one. */
   private readonly showing = new Map<string, string>();
@@ -223,7 +223,7 @@ export class DuetService {
   private firstUseSeen = false;
   private readonly root: string;
   /** Images you've given the assistant, kept with their chats (images.ts). */
-  private readonly images: DuetImages;
+  private readonly images: AssistantImages;
   /** Images waiting in each window's composer for the next message. */
   private readonly pending = new Map<WindowId, PendingImage[]>();
   /** Which thumbnails each window's panel has been sent, so a streaming reply doesn't resend them. */
@@ -241,19 +241,19 @@ export class DuetService {
     private readonly browser: Browser,
     private readonly persistence: Persistence,
     userData: string,
-    private readonly files?: DuetFiles,
+    private readonly files?: AssistantFiles,
   ) {
-    this.root = join(userData, 'duet');
-    this.images = new DuetImages(join(this.root, 'images'));
+    this.root = join(userData, 'assistant');
+    this.images = new AssistantImages(join(this.root, 'images'));
     browser.store.subscribe((change) => {
       if (change.patches.some((p) => p.path[0] === 'windows' || p.path[0] === 'settings' || p.path[0] === 'nodes' || p.path[0] === 'chords')) this.schedulePush();
       // Codex starts with its image tool on or off: idle Codex sessions start again with the new choice.
-      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'duet' && p.path[2] === 'codexImages')) {
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'assistant' && p.path[2] === 'codexImages')) {
         for (const [threadId, live] of [...this.live]) if (live.session.provider === 'codex' && !live.session.busy) this.drop(threadId);
       }
       // "Nothing" turned on or off: every session starts again with its tools (or none) and instructions,
       // busy ones too, so a reply already under way can't read on with the tools it started with.
-      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'duet' && p.path[2] === 'readsNothing')) {
+      if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'assistant' && p.path[2] === 'readsNothing')) {
         for (const threadId of [...this.live.keys()]) this.drop(threadId);
         // A fill card waiting then fills nothing: what it read was read before.
         if (this.settings.readsNothing) {
@@ -267,7 +267,7 @@ export class DuetService {
   }
 
   private get settings() {
-    return this.browser.store.state.settings.duet;
+    return this.browser.store.state.settings.assistant;
   }
 
   private async init(): Promise<void> {
@@ -277,7 +277,7 @@ export class DuetService {
       const saved = JSON.parse(await readFile(join(this.root, 'panel.json'), 'utf8')) as { drafts?: Record<string, string>; firstUseSeen?: boolean; wsl?: SavedWsl };
       this.drafts = saved.drafts ?? {};
       this.firstUseSeen = Boolean(saved.firstUseSeen);
-      for (const provider of DUET_PROVIDERS) {
+      for (const provider of ASSISTANT_PROVIDERS) {
         const entry = saved.wsl?.[provider];
         const target = asWslTarget(entry?.target);
         if (entry?.status && target) this.inWsl[provider] = rememberedInWsl({ ...notInstalled(provider), ...entry.status, provider }, target);
@@ -295,9 +295,9 @@ export class DuetService {
   async afterLaunch(): Promise<void> {
     await this.opened;
     // Keep chats: threads past their date go, the provider's copy with them.
-    const before = duetPruneBefore(this.settings.keep, Date.now());
+    const before = assistantPruneBefore(this.settings.keep, Date.now());
     if (before !== null) {
-      const { removed = [], images = [] } = await this.persistence.duet({ op: 'prune', before }).catch(() => ({ removed: [], images: [] }));
+      const { removed = [], images = [] } = await this.persistence.assistant({ op: 'prune', before }).catch(() => ({ removed: [], images: [] }));
       for (const thread of removed) void this.deleteProviderCopy(thread);
       void this.images.remove(images, !this.launches.codex?.wsl);
     }
@@ -335,7 +335,7 @@ export class DuetService {
   private async stateFor(chordId: string): Promise<ThreadState> {
     const key = this.showing.get(chordId);
     if (key && this.threads.has(key)) return this.threads.get(key)!;
-    const result = await this.persistence.duet({ op: 'threads', chordId, limit: THREADS_IN_MENU }).catch(() => ({ threads: [] as DuetThread[] }));
+    const result = await this.persistence.assistant({ op: 'threads', chordId, limit: THREADS_IN_MENU }).catch(() => ({ threads: [] as AssistantThread[] }));
     const threads = result.threads ?? [];
     this.recent.set(chordId, threads.map((t) => ({ id: t.id, title: t.title, lastUsedAt: t.lastUsedAt })));
     const { current, continueFrom } = threadToShow(threads, Date.now(), IDLE_MS);
@@ -351,7 +351,7 @@ export class DuetService {
     return state;
   }
 
-  private blank(chordId: string, thread: DuetThread | null): ThreadState {
+  private blank(chordId: string, thread: AssistantThread | null): ThreadState {
     return {
       chordId,
       thread,
@@ -383,7 +383,7 @@ export class DuetService {
       this.showing.set(chordId, threadId);
       return existing;
     }
-    const result = await this.persistence.duet({ op: 'thread', threadId });
+    const result = await this.persistence.assistant({ op: 'thread', threadId });
     const state = this.blank(chordId, result.thread ?? null);
     state.messages = result.messages ?? [];
     // Handles and attachments carry over, so earlier tabs stay readable and citations resolve.
@@ -422,7 +422,7 @@ export class DuetService {
   }
 
   /** What the window's panel shows: its chord's chat's scope, or a new chat's. */
-  private scopeFor(windowId: WindowId): DuetScope {
+  private scopeFor(windowId: WindowId): AssistantScope {
     const chordId = this.chordOf(windowId);
     const key = chordId ? this.showing.get(chordId) : undefined;
     return (key ? this.threads.get(key)?.thread?.scope : undefined) ?? this.settings.scope;
@@ -446,7 +446,7 @@ export class DuetService {
     return out;
   }
 
-  async view(windowId: WindowId, full = false): Promise<DuetView> {
+  async view(windowId: WindowId, full = false): Promise<AssistantView> {
     const chordId = this.chordOf(windowId);
     const settings = this.settings;
     const privateWindow = chordId ? this.isPrivateChord(chordId) : false;
@@ -454,7 +454,7 @@ export class DuetService {
       enabled: settings.enabled && !privateWindow,
       open: this.panel(windowId).open,
       provider: settings.provider,
-      providers: DUET_PROVIDERS.map((p) => this.statuses[p] ?? notInstalled(p)),
+      providers: ASSISTANT_PROVIDERS.map((p) => this.statuses[p] ?? notInstalled(p)),
       chordOff: chordId ? settings.offChords.includes(chordId) : false,
       readsNothing: settings.readsNothing,
       codexImages: this.codexMakesImages(),
@@ -496,8 +496,8 @@ export class DuetService {
   }
 
   /** The chat's tabs by handle: open ones by their current title, closed ones as they were attached or cited. */
-  private tabNames(state: ThreadState): Record<string, DuetTabName> {
-    const names: Record<string, DuetTabName> = {};
+  private tabNames(state: ThreadState): Record<string, AssistantTabName> {
+    const names: Record<string, AssistantTabName> = {};
     for (const m of state.messages) {
       if (m.body.role === 'user') for (const a of m.body.attachments) names[a.ref] = { title: a.title, url: a.url };
       else if (m.body.role === 'assistant') for (const c of m.body.citations) if (c.url) names[c.ref] = { title: c.title || c.url, url: c.url };
@@ -551,7 +551,7 @@ export class DuetService {
     const bytes = made ? Buffer.from(made.data, 'base64') : null;
     const info = bytes ? imageInfo(bytes) : null;
     if (!made || !bytes || !info) return this.schedulePush();
-    const image: DuetImage = { id: newImageId(), ...info, ...(made.prompt ? { prompt: made.prompt.slice(0, 1000) } : {}), ...(made.savedPath ? { codexCopy: made.savedPath } : {}) };
+    const image: AssistantImage = { id: newImageId(), ...info, ...(made.prompt ? { prompt: made.prompt.slice(0, 1000) } : {}), ...(made.savedPath ? { codexCopy: made.savedPath } : {}) };
     const saving = this.images.save(image, bytes).then(() => {
       if (streaming.body.role === 'assistant') streaming.body = { ...streaming.body, images: [...(streaming.body.images ?? []), image] };
       this.schedulePush();
@@ -560,7 +560,7 @@ export class DuetService {
     void saving.catch(() => undefined).finally(() => state.saving.delete(saving));
   }
 
-  /** `chord://shell/duet-image/<id>.<ext>`: a chat's image, from disk, for the panel. */
+  /** `chord://shell/assistant-image/<id>.<ext>`: a chat's image, from disk, for the panel. */
   async serveImage(url: string): Promise<Response> {
     const file = this.images.file(url.slice(url.lastIndexOf('/') + 1));
     const response = file ? await net.fetch(pathToFileURL(file.path).toString()).catch(() => null) : null;
@@ -575,13 +575,13 @@ export class DuetService {
     if (!image || !bytes) return;
     if (what === 'save') {
       await this.files?.save(screenshotFilename(new Date(), image.prompt ? 'Generated image' : 'Image', image.mime === 'image/jpeg' ? 'jpg' : image.mime.slice(6)), bytes, image.mime);
-      this.toast(windowId, { id: 'duet-image', message: 'Image saved to Downloads' });
+      this.toast(windowId, { id: 'assistant-image', message: 'Image saved to Downloads' });
       return;
     }
     // The clipboard takes images as PNG: a JPEG or WebP is turned into one (on asking, not as it arrives).
     const png = image.mime === 'image/png' ? bytes : nativeImage.createFromBuffer(bytes).toPNG();
     await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })]);
-    this.toast(windowId, { id: 'duet-image', message: 'Image copied' });
+    this.toast(windowId, { id: 'assistant-image', message: 'Image copied' });
   }
 
   private toast(windowId: WindowId, toast: Toast): void {
@@ -631,7 +631,7 @@ export class DuetService {
   async oneShot(request: {
     instructions: string;
     text: string;
-    tool: DuetToolSpec;
+    tool: AssistantToolSpec;
     onTool(): Promise<string>;
     signal: AbortSignal;
     timeoutMs: number;
@@ -653,7 +653,7 @@ export class DuetService {
       let text = '';
       let sessionId: string | null = null;
       let settled = false;
-      let session: DuetSession | null = null;
+      let session: AssistantSession | null = null;
       const finish = (outcome: { ok: true; text: string } | { ok: false; error: string }) => {
         if (settled) return;
         settled = true;
@@ -661,7 +661,7 @@ export class DuetService {
         request.signal.removeEventListener('abort', stop);
         session?.close();
         void rm(instructionsFile, { force: true }).catch(() => undefined);
-        if (sessionId) void this.deleteProviderCopy({ provider, providerSessionId: sessionId } as DuetThread).catch(() => undefined);
+        if (sessionId) void this.deleteProviderCopy({ provider, providerSessionId: sessionId } as AssistantThread).catch(() => undefined);
         resolve(outcome);
       };
       const stop = () => finish({ ok: false, error: 'Stopped.' });
@@ -703,7 +703,7 @@ export class DuetService {
     const w = this.browser.allWindows.find((x) => x.id === windowId);
     if (!w || w.isPrivate || this.settings.readsNothing) return;
     const list = this.pending.get(windowId) ?? [];
-    if (list.length >= DUET_MAX_IMAGES) list.shift();
+    if (list.length >= ASSISTANT_MAX_IMAGES) list.shift();
     list.push({ image: { id: newImageId(), mime: image.mime, width: image.width, height: image.height }, bytes: Buffer.from(image.bytes), thumb: Buffer.from(image.thumb) });
     this.pending.set(windowId, list);
     const panel = this.panel(windowId);
@@ -736,13 +736,13 @@ export class DuetService {
       // Opening or closing the panel slides it while the page's frame narrows or widens by its snapshot
       // (DESIGN.md §6.5); a panel restored at launch, or the assistant turned off, just changes.
       const animate = this.toggled.delete(w.id) && this.browser.animates('sidebar');
-      w.setDuet(view.enabled && view.open ? this.browser.duetWidth : 0, () => send(w.shell.webContents, 'duet:state', view), animate);
+      w.setAssistant(view.enabled && view.open ? this.browser.assistantWidth : 0, () => send(w.shell.webContents, 'assistant:state', view), animate);
     }
   }
 
   /* ---------- Actions from the panel ---------- */
 
-  async act(windowId: WindowId, action: DuetAction): Promise<void> {
+  async act(windowId: WindowId, action: AssistantAction): Promise<void> {
     const chordId = this.chordOf(windowId);
     switch (action.do) {
       case 'toggle': {
@@ -763,14 +763,14 @@ export class DuetService {
         void this.savePanel();
         break;
       case 'setup':
-        this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { provider: action.provider } } });
+        this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { provider: action.provider } } });
         break;
       case 'chordOff':
         if (chordId) {
           const off = new Set(this.settings.offChords);
           if (action.off) off.add(chordId);
           else off.delete(chordId);
-          this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { offChords: [...off] } } });
+          this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { offChords: [...off] } } });
         }
         break;
       case 'signIn':
@@ -786,7 +786,7 @@ export class DuetService {
     this.schedulePush();
   }
 
-  private async threadAction(windowId: WindowId, chordId: string, action: DuetAction): Promise<void> {
+  private async threadAction(windowId: WindowId, chordId: string, action: AssistantAction): Promise<void> {
     const state = await this.stateFor(chordId);
     const panel = this.panel(windowId);
     switch (action.do) {
@@ -849,7 +849,7 @@ export class DuetService {
           state.thread.scope = action.scope;
           await this.saveThread(state.thread);
         } else {
-          this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { scope: action.scope } } });
+          this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { scope: action.scope } } });
         }
         return;
       case 'model':
@@ -892,7 +892,7 @@ export class DuetService {
       case 'export':
         return this.exportThread(state);
       case 'settings':
-        return this.browser.openSettings('duet');
+        return this.browser.openSettings('assistant');
       case 'fill':
         return this.fill(windowId, state, action.messageId, action.fields);
       case 'dismissFill': {
@@ -903,9 +903,9 @@ export class DuetService {
     }
   }
 
-  private async setModel(state: ThreadState, provider: DuetProvider, model: string | null): Promise<void> {
+  private async setModel(state: ThreadState, provider: AssistantProvider, model: string | null): Promise<void> {
     if (!state.thread) {
-      this.browser.store.dispatch({ t: 'settings.set', settings: { duet: { provider, model } } });
+      this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { provider, model } } });
       return;
     }
     const switched = state.thread.provider !== provider;
@@ -925,7 +925,7 @@ export class DuetService {
 
   /* ---------- Sending and sessions ---------- */
 
-  private async send(windowId: WindowId, state: ThreadState, text: string, reuse?: DuetAttachment[], reuseImages?: readonly DuetImage[]): Promise<void> {
+  private async send(windowId: WindowId, state: ThreadState, text: string, reuse?: AssistantAttachment[], reuseImages?: readonly AssistantImage[]): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed || this.settings.offChords.includes(state.chordId)) return;
     if (state.streaming) {
@@ -937,7 +937,7 @@ export class DuetService {
     if (!provider) return;
     const now = Date.now();
     if (!state.thread) {
-      const thread: DuetThread = {
+      const thread: AssistantThread = {
         id: uuidv7(),
         chordId: state.chordId,
         title: threadTitle(trimmed),
@@ -963,7 +963,7 @@ export class DuetService {
     state.lastError = null;
 
     const nothing = this.settings.readsNothing;
-    const attachments: DuetAttachment[] = nothing ? [] : (reuse ?? this.attachments(windowId).map((node) => ({ ref: this.refFor(state, node.id), url: node.url, title: node.title || node.url })));
+    const attachments: AssistantAttachment[] = nothing ? [] : (reuse ?? this.attachments(windowId).map((node) => ({ ref: this.refFor(state, node.id), url: node.url, title: node.title || node.url })));
     for (const a of attachments) {
       const node = state.refs.get(a.ref);
       if (node) state.attached.add(node);
@@ -1001,7 +1001,7 @@ export class DuetService {
   }
 
   /** The message's images for the model, base64-encoded: from the composer, or from disk for a retry. */
-  private async imagesToSend(images: readonly DuetImage[], pending: readonly PendingImage[]): Promise<SessionImage[]> {
+  private async imagesToSend(images: readonly AssistantImage[], pending: readonly PendingImage[]): Promise<SessionImage[]> {
     const out: SessionImage[] = [];
     for (const image of images) {
       const bytes = pending.find((p) => p.image.id === image.id)?.bytes ?? (await this.images.read(image));
@@ -1017,7 +1017,7 @@ export class DuetService {
     return ref;
   }
 
-  private async sessionFor(state: ThreadState): Promise<DuetSession | null> {
+  private async sessionFor(state: ThreadState): Promise<AssistantSession | null> {
     const thread = state.thread!;
     const existing = this.live.get(thread.id);
     if (existing?.session.alive) {
@@ -1034,15 +1034,15 @@ export class DuetService {
       return null;
     }
     // At most a few CLI processes: the least recently used idle one makes room.
-    if (this.live.size >= DUET_MAX_PROCESSES) {
+    if (this.live.size >= ASSISTANT_MAX_PROCESSES) {
       const idle = [...this.live.entries()].filter(([, l]) => !l.session.busy).sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0];
       if (idle) this.drop(idle[0]);
     }
     const images = thread.provider === 'codex' && this.settings.codexImages;
-    const making: DuetImageMaking = thread.provider === 'codex' ? (images ? 'codex' : 'codex-off') : 'claude';
+    const making: AssistantImageMaking = thread.provider === 'codex' ? (images ? 'codex' : 'codex-off') : 'claude';
     // Settings' "Nothing": no tools at all, so the model has no way to ask for a page (ARCHITECTURE.md §11.3).
     const readsPages = !this.settings.readsNothing;
-    const instructions = duetInstructions(making, readsPages);
+    const instructions = assistantInstructions(making, readsPages);
     const instructionsFile = join(this.root, 'instructions', `${thread.id}.md`);
     await writeFile(instructionsFile, instructions, { encoding: 'utf8', mode: 0o600 });
     const resumeId = thread.providerSessionId;
@@ -1054,7 +1054,7 @@ export class DuetService {
       instructionsFile,
       resumeId,
       newSessionId: randomUUID(),
-      tools: readsPages ? DUET_TOOLS : [],
+      tools: readsPages ? ASSISTANT_TOOLS : [],
       images,
     };
     let resumeFailed = false;
@@ -1071,7 +1071,7 @@ export class DuetService {
         this.schedulePush();
       },
       onTool: (name: string, args: Record<string, unknown>) => this.runTool(state, name, args),
-      onUsage: (usage: DuetContextUsage) => {
+      onUsage: (usage: AssistantContextUsage) => {
         state.context = usage;
         this.schedulePush();
       },
@@ -1111,9 +1111,9 @@ export class DuetService {
     // The divider goes before the message that's being answered again.
     if (lastUser) {
       const index = state.messages.indexOf(lastUser);
-      const divider: DuetMessage = { id: uuidv7(), threadId: thread.id, createdAt: lastUser.createdAt - 1, body: { role: 'divider', text: 'Continued with a summary' } };
+      const divider: AssistantMessage = { id: uuidv7(), threadId: thread.id, createdAt: lastUser.createdAt - 1, body: { role: 'divider', text: 'Continued with a summary' } };
       state.messages.splice(index, 0, divider);
-      await this.persistence.duet({ op: 'saveMessage', message: divider }).catch(() => undefined);
+      await this.persistence.assistant({ op: 'saveMessage', message: divider }).catch(() => undefined);
     }
     // A chat's turns never go in the instructions: they go with the message, as untrusted data. A file can say anything,
     // and the assistant's own replies can carry what pages said (S15 §5).
@@ -1127,7 +1127,7 @@ export class DuetService {
     clearTimeout(live.idle);
     live.idle = setTimeout(() => {
       if (!live.session.busy) this.drop(threadId);
-    }, DUET_PROCESS_IDLE_MS);
+    }, ASSISTANT_PROCESS_IDLE_MS);
     live.idle.unref?.();
   }
 
@@ -1153,7 +1153,7 @@ export class DuetService {
     for (const resolve of state.pending.values()) resolve('denied');
     state.pending.clear();
     const text = streaming.body.text;
-    const citations: DuetCitation[] = [];
+    const citations: AssistantCitation[] = [];
     for (const seg of splitCitations(text)) {
       if (seg.kind !== 'citation' || citations.some((c) => c.n === seg.n)) continue;
       const nodeId = state.refs.get(seg.ref) ?? null;
@@ -1172,12 +1172,12 @@ export class DuetService {
       });
     }
     const images = streaming.body.images ?? [];
-    const body: DuetMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}), ...(images.length ? { images } : {}) };
+    const body: AssistantMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}), ...(images.length ? { images } : {}) };
     if (outcome.status === 'error') state.lastError = outcome.error ?? null;
     if (text.trim() || images.length || outcome.status !== 'done') {
       const message = { ...streaming, body };
       state.messages.push(message);
-      await this.persistence.duet({ op: 'saveMessage', message }).catch(() => undefined);
+      await this.persistence.assistant({ op: 'saveMessage', message }).catch(() => undefined);
     }
     if (state.thread) {
       state.thread.updatedAt = Date.now();
@@ -1191,26 +1191,26 @@ export class DuetService {
     if (next && state.windowId && outcome.status !== 'error') void this.send(state.windowId, state, next);
   }
 
-  private async addMessage(state: ThreadState, body: DuetMessageBody): Promise<DuetMessage> {
-    const message: DuetMessage = { id: uuidv7(), threadId: state.thread!.id, createdAt: Date.now(), body };
+  private async addMessage(state: ThreadState, body: AssistantMessageBody): Promise<AssistantMessage> {
+    const message: AssistantMessage = { id: uuidv7(), threadId: state.thread!.id, createdAt: Date.now(), body };
     state.messages.push(message);
-    await this.persistence.duet({ op: 'saveMessage', message: saved(message) }).catch(() => undefined);
+    await this.persistence.assistant({ op: 'saveMessage', message: saved(message) }).catch(() => undefined);
     this.schedulePush();
     return message;
   }
 
-  private async updateMessage(message: DuetMessage, body: DuetMessageBody): Promise<void> {
+  private async updateMessage(message: AssistantMessage, body: AssistantMessageBody): Promise<void> {
     message.body = body;
-    await this.persistence.duet({ op: 'saveMessage', message: saved(message) }).catch(() => undefined);
+    await this.persistence.assistant({ op: 'saveMessage', message: saved(message) }).catch(() => undefined);
     this.schedulePush();
   }
 
-  private async saveThread(thread: DuetThread): Promise<void> {
-    await this.persistence.duet({ op: 'saveThread', thread }).catch(() => undefined);
+  private async saveThread(thread: AssistantThread): Promise<void> {
+    await this.persistence.assistant({ op: 'saveThread', thread }).catch(() => undefined);
   }
 
   private async refreshRecent(chordId: string): Promise<void> {
-    const result = await this.persistence.duet({ op: 'threads', chordId, limit: THREADS_IN_MENU }).catch(() => ({ threads: [] as DuetThread[] }));
+    const result = await this.persistence.assistant({ op: 'threads', chordId, limit: THREADS_IN_MENU }).catch(() => ({ threads: [] as AssistantThread[] }));
     this.recent.set(chordId, (result.threads ?? []).map((t) => ({ id: t.id, title: t.title, lastUsedAt: t.lastUsedAt })));
     this.schedulePush();
   }
@@ -1218,7 +1218,7 @@ export class DuetService {
   /* ---------- Tools ---------- */
 
   /** Ask in the thread (an approval card), and keep the answer as a record. */
-  private async ask(state: ThreadState, tool: string, description: string, target: string[]): Promise<{ decision: Decision; message: DuetMessage }> {
+  private async ask(state: ThreadState, tool: string, description: string, target: string[]): Promise<{ decision: Decision; message: AssistantMessage }> {
     const message = await this.addMessage(state, { role: 'approval', tool, description, target, decision: 'pending' });
     const decision = await new Promise<Decision>((resolve) => state.pending.set(message.id, resolve));
     if (decision === 'thread') state.grants.add(tool);
@@ -1237,13 +1237,13 @@ export class DuetService {
   }
 
   private tabsInScope(state: ThreadState): TabNode[] {
-    const scope: DuetScope = state.thread?.scope ?? 'ask';
+    const scope: AssistantScope = state.thread?.scope ?? 'ask';
     const nodes = Object.values(this.browser.store.state.nodes).filter((n): n is TabNode => n.kind === 'tab' && this.readable(n));
     return scope === 'all' ? nodes : nodes.filter((n) => n.chordId === state.chordId);
   }
 
   private async runTool(state: ThreadState, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
-    const spec = duetTool(name);
+    const spec = assistantTool(name);
     if (!spec || !state.thread) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
     if (this.settings.readsNothing) return { text: toolResult({ refused: 'The user set you to read nothing, in Settings → Assistant.' }, false), isError: true };
     try {
@@ -1254,7 +1254,7 @@ export class DuetService {
     }
   }
 
-  private async readTool(state: ThreadState, tool: DuetToolName, args: Record<string, unknown>): Promise<ToolOutput> {
+  private async readTool(state: ThreadState, tool: AssistantToolName, args: Record<string, unknown>): Promise<ToolOutput> {
     const thread = state.thread!;
     const refuse = (why: string) => ({ text: toolResult({ refused: why }, false), isError: true });
     if (tool === 'list_tabs' || tool === 'search_history' || tool === 'search_archive') {
@@ -1345,7 +1345,7 @@ export class DuetService {
         const readable = (address: string) => !isNeverReadable(address, this.settings.neverSites);
         if (!readable(url)) throw new PdfError('never');
         const bytes = await fetchPdf(contents, url, readable);
-        const { pages, totalPages } = await extractPdf(bytes, DUET_PDF_MAX_PAGES);
+        const { pages, totalPages } = await extractPdf(bytes, ASSISTANT_PDF_MAX_PAGES);
         pdf = { url, pages, totalPages, text: pdfText(pages) };
       } catch (error) {
         const why = error instanceof PdfError ? pdfProblemCopy(error.problem, error.detail) : pdfProblemCopy('crashed');
@@ -1437,7 +1437,7 @@ export class DuetService {
     // A newer card takes the place of one still waiting.
     for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') await this.endFill(state, m, 'expired', 'Newer values are below.');
     state.fillTurn = state.streaming?.id ?? null;
-    const card: DuetFillCard = { status: 'pending', title, site: safeHost(node.url), fields: mapped.fields, leftOut: form.read.leftOut, truncated: form.read.truncated };
+    const card: AssistantFillCard = { status: 'pending', title, site: safeHost(node.url), fields: mapped.fields, leftOut: form.read.leftOut, truncated: form.read.truncated };
     const message = await this.addMessage(state, { role: 'tool', tool, summary: `Suggested values for ${fieldCount(card.fields.length)} in “${title}”`, detail: card.site, ok: true, fill: card });
     state.fills.set(message.id, { nodeId: node.id, token: form.token, read: form.read });
     return {
@@ -1494,7 +1494,7 @@ export class DuetService {
     await this.endFill(state, message, 'filled', note || undefined, outcome.filled);
     this.fillUndos.set(undo, { state, messageId, windowId, nodeId: node.id, url: contents.getURL() });
     while (this.fillUndos.size > FILL_UNDOS) this.fillUndos.delete(this.fillUndos.keys().next().value!);
-    this.toast(windowId, { id: `duet-fill:${messageId}`, message: `Filled ${fieldCount(outcome.filled)} on ${card.site}`, action: { label: 'Undo', command: { t: 'duet.undoFill', token: undo } } });
+    this.toast(windowId, { id: `assistant-fill:${messageId}`, message: `Filled ${fieldCount(outcome.filled)} on ${card.site}`, action: { label: 'Undo', command: { t: 'assistant.undoFill', token: undo } } });
   }
 
   /** A fill's Undo (its toast): the page puts back each field the fill changed, unless you've changed it since. */
@@ -1504,19 +1504,19 @@ export class DuetService {
     this.fillUndos.delete(token);
     const contents = this.browser.tabs.get(u.nodeId)?.webContents;
     const result = contents && !contents.isDestroyed() && samePage(u.url, contents.getURL()) ? await undoFillPage(contents, token) : null;
-    if (!result) return this.toast(u.windowId, { id: `duet-fill:${u.messageId}`, message: 'Couldn’t undo: the page has moved on' });
+    if (!result) return this.toast(u.windowId, { id: `assistant-fill:${u.messageId}`, message: 'Couldn’t undo: the page has moved on' });
     const message = u.state.messages.find((m) => m.id === u.messageId);
     if (message) await this.endFill(u.state, message, 'undone', result.kept ? `${fieldCount(result.kept)} you changed since stayed as you left ${result.kept === 1 ? 'it' : 'them'}.` : undefined);
   }
 
   /** A card that waits with a note: what to do before Fill can work. */
-  private async noteFill(message: DuetMessage, note: string): Promise<void> {
+  private async noteFill(message: AssistantMessage, note: string): Promise<void> {
     if (message.body.role !== 'tool' || !message.body.fill) return;
     await this.updateMessage(message, { ...message.body, fill: { ...message.body.fill, note } });
   }
 
   /** A card ends: filled, undone, not now, or nothing filled and why. Its saved line says which (*Filled 4 fields in “Sign up”*). */
-  private async endFill(state: ThreadState, message: DuetMessage, status: Exclude<DuetFillCard['status'], 'pending'>, note?: string, filled?: number): Promise<void> {
+  private async endFill(state: ThreadState, message: AssistantMessage, status: Exclude<AssistantFillCard['status'], 'pending'>, note?: string, filled?: number): Promise<void> {
     if (message.body.role !== 'tool' || !message.body.fill) return;
     const { note: _waiting, ...card } = message.body.fill;
     const count = filled ?? card.filled ?? 0;
@@ -1576,7 +1576,7 @@ export class DuetService {
     const file = join(downloadsDir(), `${safe}.md`);
     await writeFile(file, lines.join('\n'), 'utf8');
     const shell = state.windowId ? this.browser.window(state.windowId)?.shell.webContents : undefined;
-    if (shell) send(shell, 'toast:show', { id: `duet-export:${state.thread.id}`, message: `Saved “${safe}.md” to Downloads` });
+    if (shell) send(shell, 'toast:show', { id: `assistant-export:${state.thread.id}`, message: `Saved “${safe}.md” to Downloads` });
   }
 
   /* ---------- Deleting ---------- */
@@ -1587,7 +1587,7 @@ export class DuetService {
       this.close(state);
       this.threads.delete(threadId);
     }
-    const { removed = [], images = [] } = await this.persistence.duet({ op: 'deleteThread', threadId }).catch(() => ({ removed: [], images: [] }));
+    const { removed = [], images = [] } = await this.persistence.assistant({ op: 'deleteThread', threadId }).catch(() => ({ removed: [], images: [] }));
     for (const thread of removed) await this.deleteProviderCopy(thread);
     await this.images.remove(images, !this.launches.codex?.wsl);
     delete this.drafts[threadId];
@@ -1601,7 +1601,7 @@ export class DuetService {
    * messages that came or went show as they are. Ones taken away end their
    * sessions first, and the providers' copies go, as Delete does.
    */
-  async importChanged(removed: readonly DuetThread[] = []): Promise<void> {
+  async importChanged(removed: readonly AssistantThread[] = []): Promise<void> {
     const gone = new Set(removed.map((t) => t.id));
     for (const [key, state] of [...this.threads]) {
       const removedHere = Boolean(state.thread && gone.has(state.thread.id));
@@ -1623,7 +1623,7 @@ export class DuetService {
     for (const id of [...this.live.keys()]) this.drop(id);
     this.threads.clear();
     this.showing.clear();
-    const removed = (await this.persistence.duet({ op: 'deleteAll' }).catch(() => ({ removed: [] }))).removed ?? [];
+    const removed = (await this.persistence.assistant({ op: 'deleteAll' }).catch(() => ({ removed: [] }))).removed ?? [];
     for (const thread of removed) await this.deleteProviderCopy(thread);
     await rm(join(this.root, 'images'), { recursive: true, force: true }).catch(() => {});
     this.pending.clear();
@@ -1639,7 +1639,7 @@ export class DuetService {
    * session id. Claude keeps it under Chord's working-directory project folder;
    * Codex deletes its rollout through its own API. Nothing else is read.
    */
-  async deleteProviderCopy(thread: DuetThread): Promise<void> {
+  async deleteProviderCopy(thread: AssistantThread): Promise<void> {
     const id = thread.providerSessionId;
     if (!id || !/^[A-Za-z0-9-]{8,80}$/.test(id)) return;
     if (thread.provider === 'claude') {
@@ -1685,7 +1685,7 @@ export class DuetService {
    * with a timeout, and Setup says it's looking meanwhile.
    */
   async refreshProviders(wsl: 'never' | 'if-needed' | 'always' = 'always'): Promise<ProviderStatus[]> {
-    const native = await Promise.all(DUET_PROVIDERS.map((p) => detect(p)));
+    const native = await Promise.all(ASSISTANT_PROVIDERS.map((p) => detect(p)));
     for (const found of native) this.setDetected(found.status.installed ? found : (this.inWsl[found.status.provider] ?? found));
     this.schedulePush();
     const missing = native.filter((d) => !d.status.installed && mayBeInWsl(d.status.provider)).map((d) => d.status.provider);
@@ -1699,7 +1699,7 @@ export class DuetService {
     return !chosen?.installed || !chosen.signedIn || chosen.wsl !== null;
   }
 
-  private lookInWsl(providers: DuetProvider[]): Promise<void> {
+  private lookInWsl(providers: AssistantProvider[]): Promise<void> {
     this.wslLookup ??= (async () => {
       // The registry says whether there's a distro at all: no WSL, nothing starts and nothing shows.
       const distro = await defaultWslDistro();
@@ -1735,11 +1735,11 @@ export class DuetService {
   }
 
   get providerStatuses(): ProviderStatus[] {
-    return DUET_PROVIDERS.map((p) => this.statuses[p]).filter((s): s is ProviderStatus => Boolean(s));
+    return ASSISTANT_PROVIDERS.map((p) => this.statuses[p]).filter((s): s is ProviderStatus => Boolean(s));
   }
 
   /** Sign in: the provider's own login in a terminal (inside WSL for a WSL install). */
-  async signIn(provider: DuetProvider): Promise<void> {
+  async signIn(provider: AssistantProvider): Promise<void> {
     if (!this.statuses[provider]) await this.refreshProviders('if-needed');
     const launch = this.launches[provider];
     if (launch) openSignIn(provider, launch);
@@ -1747,7 +1747,7 @@ export class DuetService {
 
   private async savePanel(): Promise<void> {
     const wsl: SavedWsl = {};
-    for (const [provider, found] of Object.entries(this.inWsl) as [DuetProvider, Detected][]) if (found.launch?.wsl) wsl[provider] = { status: found.status, target: found.launch.wsl };
+    for (const [provider, found] of Object.entries(this.inWsl) as [AssistantProvider, Detected][]) if (found.launch?.wsl) wsl[provider] = { status: found.status, target: found.launch.wsl };
     await writeFile(join(this.root, 'panel.json'), JSON.stringify({ drafts: this.drafts, firstUseSeen: this.firstUseSeen, wsl }), { encoding: 'utf8', mode: 0o600 }).catch(() => undefined);
   }
 
@@ -1756,19 +1756,19 @@ export class DuetService {
     for (const state of this.threads.values()) {
       if (state.streaming && state.streaming.body.role === 'assistant' && state.thread) {
         const message = { ...state.streaming, body: { ...state.streaming.body, status: 'interrupted' as const } };
-        await this.persistence.duet({ op: 'saveMessage', message }).catch(() => undefined);
+        await this.persistence.assistant({ op: 'saveMessage', message }).catch(() => undefined);
       }
     }
     for (const id of [...this.live.keys()]) this.drop(id);
   }
 
-  /** Command bar @duet. */
+  /** Command bar @chats. */
   async search(query: string) {
-    const result = await this.persistence.duet({ op: 'search', query, limit: 20 }).catch(() => ({ hits: [] }));
+    const result = await this.persistence.assistant({ op: 'search', query, limit: 20 }).catch(() => ({ hits: [] }));
     return result.hits ?? [];
   }
 
-  /** Open a thread found by @duet in this window, on its chord. */
+  /** Open a thread found by @chats in this window, on its chord. */
   async openHit(windowId: WindowId, chordId: string, threadId: string): Promise<void> {
     if (!this.browser.store.state.chords[chordId]) return;
     this.browser.store.dispatch({ t: 'chord.activate', windowId, chordId });

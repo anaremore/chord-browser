@@ -1,7 +1,7 @@
 // A stand-in for Claude Code in the assistant's E2E tests: it speaks the same stream-json protocol, calls
 // Chord's tools over the control channel, keeps "session files" under CLAUDE_CONFIG_DIR the way
 // Claude does (projects/<cwd as dashes>/<session>.jsonl), and logs how it was launched to
-// CLAUDE_CONFIG_DIR/fake-log.jsonl. Started by the assistant through CHORD_DUET_CLAUDE (development only).
+// CLAUDE_CONFIG_DIR/fake-log.jsonl. Started by the assistant through CHORD_ASSISTANT_CLAUDE (development only).
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -151,7 +151,7 @@ async function turn(sent, images = []) {
       return finish(await say(JSON.stringify({ css, summary: 'Mario Bros theme: a sky-blue page, with white paragraphs and blocky headings' })));
     }
     const evil = process.env.FAKE_CLAUDE_EVIL ?? 'https://evil.invalid';
-    const css = `main h1 { color: rgb(0, 128, 0) } body { background-image: url(${evil}/duet.png) }`;
+    const css = `main h1 { color: rgb(0, 128, 0) } body { background-image: url(${evil}/assistant.png) }`;
     return finish(await say(`Here it is:\n\`\`\`json\n${JSON.stringify({ css, summary: 'Green headline' })}\n\`\`\``));
   }
   // What it was given (the assistant set to read nothing): the tools Chord lists, the words it was sent, a read it tries

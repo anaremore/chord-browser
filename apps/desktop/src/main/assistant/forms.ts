@@ -8,7 +8,7 @@
  *   a frame's), described by structure: type, name, autocomplete, label,
  *   placeholder, required, maxlength, choices. Never a value, a checked state,
  *   which option is selected, or a text area's text; a label's words skip any
- *   field inside it. Bounded (core's DUET_FORM_SCAN, DUET_FORM_SCAN_MS), so a
+ *   field inside it. Bounded (core's ASSISTANT_FORM_SCAN, ASSISTANT_FORM_SCAN_MS), so a
  *   page with 5,000 inputs answers in a moment. Each field is kept by a
  *   WeakRef and its description, under a token main made for this read.
  * - **Fill**: only fields of that read, all checked against their
@@ -31,16 +31,16 @@
  */
 import {
   cleanFormPage,
-  DUET_FORM_MAX_CONTROLS,
-  DUET_FORM_MAX_OPTIONS,
-  DUET_FORM_SCAN,
-  DUET_FORM_SCAN_MS,
+  ASSISTANT_FORM_MAX_CONTROLS,
+  ASSISTANT_FORM_MAX_OPTIONS,
+  ASSISTANT_FORM_SCAN,
+  ASSISTANT_FORM_SCAN_MS,
   type FillWrite,
   type FormControl,
 } from '@chord/core';
 import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
-import { DUET_WORLD } from './extract';
+import { ASSISTANT_WORLD } from './extract';
 
 /** How long a read or a fill may take: a busy page answers within it; a hung one is a refusal, not a turn that never ends. */
 const FORM_MS = 5000;
@@ -155,9 +155,9 @@ const FORM_LIB = String.raw`
 
 /** The read: fields on screen in the main frame, in order, with a radio group where its first button is. */
 function readScript(token: string): string {
-  const args = { token, scan: DUET_FORM_SCAN, ms: DUET_FORM_SCAN_MS, max: DUET_FORM_MAX_CONTROLS };
+  const args = { token, scan: ASSISTANT_FORM_SCAN, ms: ASSISTANT_FORM_SCAN_MS, max: ASSISTANT_FORM_MAX_CONTROLS };
   return String.raw`((args) => {
-  const MAX_OPTIONS = ${DUET_FORM_MAX_OPTIONS};
+  const MAX_OPTIONS = ${ASSISTANT_FORM_MAX_OPTIONS};
   ${FORM_LIB}
   const started = performance.now();
   // The page's fields, then those in open shadow roots (a frame's are never reached).
@@ -282,7 +282,7 @@ export interface FillHighlight {
  */
 function fillScript(args: { token: string; writes: FillWrite[]; undo: string; highlight: FillHighlight }): string {
   return String.raw`((args) => {
-  const MAX_OPTIONS = ${DUET_FORM_MAX_OPTIONS};
+  const MAX_OPTIONS = ${ASSISTANT_FORM_MAX_OPTIONS};
   ${FORM_LIB}
   ${WRITE_LIB}
   const read = globalThis.__chordForms && globalThis.__chordForms.get(args.token);
@@ -367,7 +367,7 @@ export interface FormPage {
 /** Read the tab's form; null if the page doesn't answer in time or the answer isn't what the script returns. */
 export async function readFormPage(contents: WebContents, token: string): Promise<FormPage | null> {
   if (contents.isDestroyed()) return null;
-  return cleanFormPage(await pageCall(contents.executeJavaScriptInIsolatedWorld(DUET_WORLD, [{ code: readScript(token) }]), null, FORM_MS));
+  return cleanFormPage(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: readScript(token) }]), null, FORM_MS));
 }
 
 /** What a fill did: how many fields it filled, and the handles of any it left because they changed as it went. */
@@ -376,7 +376,7 @@ export type FillOutcome = { ok: true; filled: number; skipped: number[] } | { ok
 /** Fill the fields of the read `token` names; nothing is written unless every field is still as it was read. */
 export async function fillFormPage(contents: WebContents, args: { token: string; writes: FillWrite[]; undo: string; highlight: FillHighlight }): Promise<FillOutcome> {
   if (contents.isDestroyed()) return { ok: false, why: 'navigated' };
-  const result = (await pageCall(contents.executeJavaScriptInIsolatedWorld(DUET_WORLD, [{ code: fillScript(args) }]), null, FORM_MS)) as { ok?: unknown; filled?: unknown; skipped?: unknown; why?: unknown } | null;
+  const result = (await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: fillScript(args) }]), null, FORM_MS)) as { ok?: unknown; filled?: unknown; skipped?: unknown; why?: unknown } | null;
   if (result?.ok === true && typeof result.filled === 'number') {
     return { ok: true, filled: result.filled, skipped: Array.isArray(result.skipped) ? result.skipped.filter((k): k is number => typeof k === 'number') : [] };
   }
@@ -387,7 +387,7 @@ export async function fillFormPage(contents: WebContents, args: { token: string;
 /** Undo a fill: how many fields went back, and how many were kept because they'd changed since. Null if the page has moved on. */
 export async function undoFillPage(contents: WebContents, undo: string): Promise<{ restored: number; kept: number } | null> {
   if (contents.isDestroyed()) return null;
-  const result = (await pageCall(contents.executeJavaScriptInIsolatedWorld(DUET_WORLD, [{ code: undoScript({ undo }) }]), null, FORM_MS)) as { ok?: unknown; restored?: unknown; kept?: unknown } | null;
+  const result = (await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: undoScript({ undo }) }]), null, FORM_MS)) as { ok?: unknown; restored?: unknown; kept?: unknown } | null;
   return result?.ok === true && typeof result.restored === 'number' && typeof result.kept === 'number' ? { restored: result.restored, kept: result.kept } : null;
 }
 

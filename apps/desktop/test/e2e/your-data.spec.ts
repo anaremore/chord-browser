@@ -65,7 +65,7 @@ function seed(profile: string, personal: string): void {
   run(`INSERT INTO site_permission (profile_id, origin, permission, decision, updated_at) VALUES ('default', 'https://meet.test', 'camera', 'allow', 1700000000007)`);
   run(`INSERT INTO site_permission (profile_id, origin, permission, decision, updated_at) VALUES ('default', 'https://meet.test', 'notifications', 'block', 1700000000007)`);
   run(
-    `INSERT INTO effect (host, wet, css, css_on, hidden, presets, duet, compiled, sanitizer, created_at, updated_at) VALUES ('news.test', 1, 'h1 { color: red }', 0, ?, '["dark"]', '[]', '', 0, 1, 1700000000008)`,
+    `INSERT INTO effect (host, wet, css, css_on, hidden, presets, assistant, compiled, sanitizer, created_at, updated_at) VALUES ('news.test', 1, 'h1 { color: red }', 0, ?, '["dark"]', '[]', '', 0, 1, 1700000000008)`,
     JSON.stringify([{ selector: '#ad', label: 'Ad', on: true, at: 1 }]),
   );
   for (const [url, title, visits] of [
@@ -87,17 +87,17 @@ function seed(profile: string, personal: string): void {
     `INSERT INTO download (id, profile_id, url, path, filename, mime, state, received, total, started_at, ended_at) VALUES ('dl', 'default', 'https://download.test/file.zip', '/tmp/file.zip', 'file.zip', 'application/zip', 'completed', 1, 1, 1, 2)`,
   );
   run(
-    `INSERT INTO duet_thread (id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at) VALUES ('th', 'work', 'Trip', 'codex', NULL, 'SESSION-SECRET', 'ask', 5000, 5000, 5000)`,
+    `INSERT INTO assistant_thread (id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at) VALUES ('th', 'work', 'Trip', 'codex', NULL, 'SESSION-SECRET', 'ask', 5000, 5000, 5000)`,
   );
   const message = (id: string, role: string, text: string, body: unknown, at: number) =>
-    run(`INSERT INTO duet_message (id, thread_id, role, text, body, created_at) VALUES (?, 'th', ?, ?, ?, ?)`, id, role, text, JSON.stringify(body), at);
+    run(`INSERT INTO assistant_message (id, thread_id, role, text, body, created_at) VALUES (?, 'th', ?, ?, ?, ?)`, id, role, text, JSON.stringify(body), at);
   message('m1', 'user', 'Draw a lighthouse', { role: 'user', text: 'Draw a lighthouse', attachments: [], images: [{ id: IMAGE_ID, mime: 'image/png', width: 1, height: 1, codexCopy: '/home/me/.codex/generated_images/x.png' }] }, 5001);
   message('m2', 'assistant', 'Here', { role: 'assistant', text: 'Here [1]', citations: [{ n: 1, ref: 't1', url: 'https://maps.test/', title: 'Maps', quote: 'q', tabId: 'node-7' }], status: 'done' }, 5002);
   db.exec('COMMIT');
   db.close();
-  mkdirSync(join(profile, 'duet', 'images'), { recursive: true });
-  writeFileSync(join(profile, 'duet', 'images', `${IMAGE_ID}.png`), ICON);
-  writeFileSync(join(profile, 'duet', 'images', `${IMAGE_ID}.thumb.jpg`), Buffer.from('a thumbnail'));
+  mkdirSync(join(profile, 'assistant', 'images'), { recursive: true });
+  writeFileSync(join(profile, 'assistant', 'images', `${IMAGE_ID}.png`), ICON);
+  writeFileSync(join(profile, 'assistant', 'images', `${IMAGE_ID}.thumb.jpg`), Buffer.from('a thumbnail'));
 }
 
 /** The system's save dialog, answered in main with `path`; the options it was asked with are kept. */
@@ -183,7 +183,7 @@ test('a seeded profile exports plain and encrypted: everything it should hold, n
     const lines = text.split('\n');
     expect(lines.at(-1)).toBe('');
     const header = JSON.parse(lines[0]!) as Record<string, unknown>;
-    expect(header).toMatchObject({ chord: 'data', format: 1, kind: 'export', includes: ['setup', 'today', 'history', 'duet'] });
+    expect(header).toMatchObject({ chord: 'data', format: 1, kind: 'export', includes: ['setup', 'today', 'history', 'assistant'] });
     expect(header['device']).toMatch(/^[0-9a-f]{16}$/);
     const plain = records(text);
     expect(JSON.parse(lines.at(-2)!)).toEqual({ end: plain.length });
@@ -300,12 +300,12 @@ interface ImportWindow {
   chord: {
     state: { snapshot(): Promise<ImportSnapshot> };
     history: { search(q: string): Promise<{ history: { url: string }[] }> };
-    duet: { search(q: string): Promise<{ threadTitle: string }[]> };
+    assistant: { search(q: string): Promise<{ threadTitle: string }[]> };
   };
 }
 const stateOf = (shell: Page) => shell.evaluate(() => (window as unknown as ImportWindow).chord.state.snapshot());
 const historyFor = (overlay: Page, query: string) => overlay.evaluate(async (q) => (await (window as unknown as ImportWindow).chord.history.search(q)).history.map((h) => h.url).sort(), query);
-const chatsFor = (overlay: Page, query: string) => overlay.evaluate(async (q) => (await (window as unknown as ImportWindow).chord.duet.search(q)).map((h) => h.threadTitle), query);
+const chatsFor = (overlay: Page, query: string) => overlay.evaluate(async (q) => (await (window as unknown as ImportWindow).chord.assistant.search(q)).map((h) => h.threadTitle), query);
 const backgroundOf = (page: Page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 const STYLED = 'rgb(1, 2, 3)';
 
@@ -326,7 +326,7 @@ async function openYourData(app: ElectronApplication, shell: Page): Promise<Page
 function chatRow(profile: string, id: string): { imported_at: number | null; provider_session_id: string | null } | undefined {
   const db = new DatabaseSync(join(profile, 'chord.db'), { readOnly: true });
   try {
-    return db.prepare('SELECT imported_at, provider_session_id FROM duet_thread WHERE id = ?').get(id) as { imported_at: number | null; provider_session_id: string | null } | undefined;
+    return db.prepare('SELECT imported_at, provider_session_id FROM assistant_thread WHERE id = ?').get(id) as { imported_at: number | null; provider_session_id: string | null } | undefined;
   } finally {
     db.close();
   }
@@ -349,7 +349,7 @@ async function exportSeeded(): Promise<{ plain: string; sealed: string; passphra
   await app.close();
   seed(profile, personal);
   const db = new DatabaseSync(join(profile, 'chord.db'));
-  db.prepare(`INSERT INTO effect (host, wet, css, css_on, hidden, presets, duet, compiled, sanitizer, created_at, updated_at) VALUES (?, 1, ?, 1, '[]', '[]', '[]', '', 0, 1, 1700000000009)`).run(
+  db.prepare(`INSERT INTO effect (host, wet, css, css_on, hidden, presets, assistant, compiled, sanitizer, created_at, updated_at) VALUES (?, 1, ?, 1, '[]', '[]', '[]', '', 0, 1, 1700000000009)`).run(
     effectsHost(`${site.origin}/`)!,
     `body { background-color: ${STYLED} }`,
   );
@@ -434,7 +434,7 @@ test('a Chord file into a new profile: everything comes in as it was, nothing lo
     await expect.poll(() => historyFor(overlay, 'story')).toEqual(['https://news.test/a', 'https://news.test/b']);
     await expect.poll(() => chatsFor(overlay, 'lighthouse')).toEqual(['Trip']);
     expect(chatRow(profile, 'th')).toMatchObject({ provider_session_id: null, imported_at: expect.any(Number) });
-    expect(readFileSync(join(profile, 'duet', 'images', `${IMAGE_ID}.png`))).toEqual(ICON);
+    expect(readFileSync(join(profile, 'assistant', 'images', `${IMAGE_ID}.png`))).toEqual(ICON);
 
     // The site's Effects, sanitized again here, on its next page.
     await dispatch(shell, { t: 'tab.open', windowId: after.windowId, url: `${site.origin}/styled` });
@@ -454,7 +454,7 @@ test('a Chord file into a new profile: everything comes in as it was, nothing lo
     expect(await historyFor(overlay, 'story')).toEqual([]);
     expect(await chatsFor(overlay, 'lighthouse')).toEqual([]);
     expect(chatRow(profile, 'th')).toBeUndefined();
-    expect(existsSync(join(profile, 'duet', 'images', `${IMAGE_ID}.png`))).toBe(false);
+    expect(existsSync(join(profile, 'assistant', 'images', `${IMAGE_ID}.png`))).toBe(false);
     // The styled tab went with the chord it was in; the site, opened again, has no Effects.
     expect(styled.isClosed()).toBe(true);
     await dispatch(shell, { t: 'tab.open', windowId: undone.windowId, url: `${site.origin}/styled` });

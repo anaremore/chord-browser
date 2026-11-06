@@ -24,7 +24,7 @@ export const DATA_FORMAT = 1;
 export const DATA_FORMAT_ABOUT = 'https://github.com/anaremore/chord-browser/blob/main/docs/data-format.md';
 
 /** What a file holds, in the order it holds it: setup, then Today tabs and icons, then history, then the assistant. */
-export type DataPart = 'setup' | 'today' | 'history' | 'duet';
+export type DataPart = 'setup' | 'today' | 'history' | 'assistant';
 
 /** What an export would hold, counted before anything is written: Settings' card says so (S15 §8). */
 export interface ExportCounts {
@@ -67,7 +67,7 @@ export function parseHeader(raw: unknown): DataHeader | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const h = raw as Record<string, unknown>;
   if (h['chord'] !== 'data' || !Number.isInteger(h['format']) || (h['format'] as number) < 1) return null;
-  const includes = Array.isArray(h['includes']) ? h['includes'].filter((p): p is DataPart => p === 'setup' || p === 'today' || p === 'history' || p === 'duet') : [];
+  const includes = Array.isArray(h['includes']) ? h['includes'].filter((p): p is DataPart => p === 'setup' || p === 'today' || p === 'history' || p === 'assistant') : [];
   const str = (v: unknown) => (typeof v === 'string' ? v.slice(0, 200) : '');
   return { chord: 'data', format: h['format'] as number, kind: str(h['kind']), app: str(h['app']), device: str(h['device']), created: str(h['created']), includes, about: str(h['about']) };
 }

@@ -47,7 +47,7 @@ import {
   outlineResult,
   parseEffectsAnswer,
   uuidv7,
-  type DuetToolSpec,
+  type AssistantToolSpec,
   type EffectPresetId,
   type LiveTab,
   type NodeId,
@@ -109,12 +109,12 @@ export interface EffectsDeps {
   settingsChanged(): void;
 }
 
-/** Asking the assistant, as main's DuetService offers it to Effects (duet/service.ts): set once it exists. */
-export interface EffectsDuet {
+/** Asking the assistant, as main's AssistantService offers it to Effects (assistant/service.ts): set once it exists. */
+export interface EffectsAssistant {
   /** Whether the assistant may read this page from this window, and the provider's name; null if not. */
   available(windowId: WindowId, url: string): { provider: string } | null;
   /** One request, no chat: its instructions, the user's turn, and the one tool. Resolves with the reply's text. */
-  ask(request: { instructions: string; text: string; tool: DuetToolSpec; onTool(): Promise<string>; signal: AbortSignal; timeoutMs: number }): Promise<{ ok: true; text: string } | { ok: false; error: string }>;
+  ask(request: { instructions: string; text: string; tool: AssistantToolSpec; onTool(): Promise<string>; signal: AbortSignal; timeoutMs: number }): Promise<{ ok: true; text: string } | { ok: false; error: string }>;
 }
 
 interface Stored {
@@ -129,16 +129,16 @@ interface Stored {
 /** What the sanitizer said about what's switched on: what it left out of your CSS and of each of the assistant's patches (by id), and the hidden elements' selectors it can't use. */
 interface Notes {
   css: Removal[];
-  duet: Map<string, Removal[]>;
+  assistant: Map<string, Removal[]>;
   unusable: Set<string>;
 }
 
-const noNotes = (): Notes => ({ css: [], duet: new Map(), unusable: new Set() });
+const noNotes = (): Notes => ({ css: [], assistant: new Map(), unusable: new Set() });
 
 /** The notes on a stylesheet made from a site's parts (`effectsParts`), whose patches were the ones that are on, in order. */
 function notesOf(site: SiteEffects, compiled: Compiled): Notes {
-  const on = site.duet.filter((d) => d.on);
-  return { css: compiled.removed, duet: new Map(on.map((d, i) => [d.id, compiled.patches[i] ?? []])), unusable: new Set(compiled.unusable) };
+  const on = site.assistant.filter((d) => d.on);
+  return { css: compiled.removed, assistant: new Map(on.map((d, i) => [d.id, compiled.patches[i] ?? []])), unusable: new Set(compiled.unusable) };
 }
 
 interface Page {
@@ -198,7 +198,7 @@ export class Effects {
   private readonly compiler: EffectsCompiler;
   private opened = 0;
   /** Set once the assistant exists (index.ts). */
-  duet: EffectsDuet | null = null;
+  assistant: EffectsAssistant | null = null;
   /** Main's part of applying a site's stylesheet to a page, in ms: finding it, and `insertCSS` answering (tests and the docs read it). */
   readonly timings: { lookup: number; insert: number; bytes: number }[] = [];
 
@@ -252,7 +252,7 @@ export class Effects {
         let sanitizer = SANITIZER_VERSION;
         // Only what's on goes in; with everything off there's nothing to make.
         const parts = effectsParts(next);
-        if (parts.presets.length > 0 || parts.hidden.length > 0 || parts.css.trim() || parts.duet.length > 0) {
+        if (parts.presets.length > 0 || parts.hidden.length > 0 || parts.css.trim() || parts.assistant.length > 0) {
           try {
             const result = await this.compiler.compile(parts);
             compiled = result.css;
@@ -454,7 +454,7 @@ export class Effects {
     const st = this.stored(card.scope, card.host);
     const site = st?.site ?? emptyEffects(card.host, 0);
     const front = this.frontSite(windowId);
-    const available = front ? (this.duet?.available(windowId, front.url) ?? null) : null;
+    const available = front ? (this.assistant?.available(windowId, front.url) ?? null) : null;
     const ask = this.asks.get(windowId);
     const mine = ask && ask.host === card.host && ask.scope === card.scope ? ask : null;
     const notes = st?.notes;
@@ -468,7 +468,7 @@ export class Effects {
       removed: removals(notes?.css),
       hidden: site.hidden.map(({ selector, label, on }) => ({ selector, label, on, usable: !notes?.unusable.has(selector) })),
       presets: [...site.presets],
-      duet: site.duet.map(({ id, ask, summary, css, on }) => ({ id, ask, summary, css, on, removed: removals(notes?.duet.get(id)) })),
+      assistant: site.assistant.map(({ id, ask, summary, css, on }) => ({ id, ask, summary, css, on, removed: removals(notes?.assistant.get(id)) })),
       ask: { available: available !== null, provider: available?.provider ?? null, busy: Boolean(mine?.busy), startedAt: mine?.startedAt ?? null, error: mine?.error ?? null, note: mine?.note ?? null },
       private: card.scope !== null,
     };
@@ -509,13 +509,13 @@ export class Effects {
             : { ...site, hidden: site.hidden.map((h) => (h.selector === action.selector ? { ...h, selector, label: label.trim() } : h)), updatedAt: now },
         );
       }
-      case 'duetOn':
-        return this.change(scope, host, (site) => ({ ...site, duet: site.duet.map((d) => (d.id === action.id ? { ...d, on: action.on } : d)), updatedAt: now }));
-      case 'editDuet':
+      case 'assistantOn':
+        return this.change(scope, host, (site) => ({ ...site, assistant: site.assistant.map((d) => (d.id === action.id ? { ...d, on: action.on } : d)), updatedAt: now }));
+      case 'editAssistant':
         // Kept as written, like your CSS: the sanitizer makes the stylesheet from it, and the card says what it left out.
         return this.change(scope, host, (site) => ({
           ...site,
-          duet: site.duet.map((d) => (d.id === action.id ? { ...d, summary: action.summary.replace(/\s+/g, ' ').trim(), css: action.css } : d)),
+          assistant: site.assistant.map((d) => (d.id === action.id ? { ...d, summary: action.summary.replace(/\s+/g, ' ').trim(), css: action.css } : d)),
           updatedAt: now,
         }));
       case 'unhide': {
@@ -524,10 +524,10 @@ export class Effects {
         const label = hidden ? hidden.label || hidden.selector : 'it';
         return this.change(scope, host, (site) => ({ ...site, hidden: site.hidden.filter((h) => h.selector !== action.selector), updatedAt: now }), { w, message: `Showing ${label} again` });
       }
-      case 'removeDuet': {
-        const patch = this.stored(scope, host)?.site.duet.find((d) => d.id === action.id);
+      case 'removeAssistant': {
+        const patch = this.stored(scope, host)?.site.assistant.find((d) => d.id === action.id);
         if (!patch) return;
-        return this.change(scope, host, (site) => ({ ...site, duet: site.duet.filter((d) => d.id !== action.id), updatedAt: now }), { w, message: `Removed “${patch.summary || patch.ask}”` });
+        return this.change(scope, host, (site) => ({ ...site, assistant: site.assistant.filter((d) => d.id !== action.id), updatedAt: now }), { w, message: `Removed “${patch.summary || patch.ask}”` });
       }
       case 'clear':
         return this.change(scope, host, () => null, { w, message: `Removed the Effects on ${host}` });
@@ -619,20 +619,20 @@ export class Effects {
 
   private async ask(w: EffectsWindow, card: Card, text: string): Promise<void> {
     const front = this.frontSite(w.id);
-    const duet = this.duet;
+    const assistant = this.assistant;
     if (this.asks.get(w.id)?.busy || !front || front.host !== card.host) return;
     // The assistant's own rules, checked again here: set up, on in this chord, not a Never site, not a private window.
-    const available = duet && !w.isPrivate ? duet.available(w.id, front.url) : null;
+    const available = assistant && !w.isPrivate ? assistant.available(w.id, front.url) : null;
     const state: Ask = { host: card.host, scope: card.scope, busy: true, startedAt: Date.now(), error: null, note: null, controller: new AbortController() };
     this.asks.set(w.id, state);
-    if (!duet || !available) {
+    if (!assistant || !available) {
       Object.assign(state, { busy: false, startedAt: null, error: 'This page can’t be read, so it can’t be restyled.' });
       return this.push(w.id);
     }
     this.push(w.id);
     const { contents } = front;
     const current = this.stored(card.scope, card.host)?.compiled ?? '';
-    const result = await duet.ask({
+    const result = await assistant.ask({
       instructions: effectsInstructions(),
       text: effectsTurn(card.host, text),
       tool: EFFECTS_OUTLINE_TOOL,
@@ -663,7 +663,7 @@ export class Effects {
         const at = Date.now();
         await this.change(card.scope, card.host, (site) => ({
           ...site,
-          duet: [...site.duet, { id: uuidv7(at), ask: text.trim().slice(0, EFFECTS_LIMITS.ask), summary: answer.summary || text.trim().slice(0, EFFECTS_LIMITS.summary), css: clean.css, on: true, at }].slice(-EFFECTS_LIMITS.duet),
+          assistant: [...site.assistant, { id: uuidv7(at), ask: text.trim().slice(0, EFFECTS_LIMITS.ask), summary: answer.summary || text.trim().slice(0, EFFECTS_LIMITS.summary), css: clean.css, on: true, at }].slice(-EFFECTS_LIMITS.assistant),
           updatedAt: at,
         }));
       }

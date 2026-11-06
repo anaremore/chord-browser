@@ -1052,7 +1052,7 @@ export class SyncStore {
         return row ? { k, id, value: { host: str(row['host']), chordId: str(row['chord_id']), createdAt: num(row['created_at']) } } : null;
       }
       case 'effect': {
-        const row = this.sql('SELECT host, wet, css, css_on, hidden, presets, duet, created_at, updated_at FROM effect WHERE host = ?').get(id) as Row | undefined;
+        const row = this.sql('SELECT host, wet, css, css_on, hidden, presets, assistant, created_at, updated_at FROM effect WHERE host = ?').get(id) as Row | undefined;
         const site = row ? siteEffectsOf(row) : null;
         return site ? ({ k, id, value: site } as WriteOp) : null;
       }
@@ -1202,8 +1202,8 @@ export class SyncStore {
       yield page;
     }
     for (const rows of this.paged(
-      'SELECT host AS key, octet_length(css) + octet_length(hidden) + octet_length(presets) + octet_length(duet) + 100 AS chars FROM effect WHERE host > ? ORDER BY host LIMIT ?',
-      `SELECT e.host, e.wet, e.css, e.css_on, e.hidden, e.presets, e.duet, e.created_at, e.updated_at, o.origin, o.at AS origin_at FROM effect e
+      'SELECT host AS key, octet_length(css) + octet_length(hidden) + octet_length(presets) + octet_length(assistant) + 100 AS chars FROM effect WHERE host > ? ORDER BY host LIMIT ?',
+      `SELECT e.host, e.wet, e.css, e.css_on, e.hidden, e.presets, e.assistant, e.created_at, e.updated_at, o.origin, o.at AS origin_at FROM effect e
          LEFT JOIN row_origin o ON o.k = 'effect' AND o.id = e.host WHERE e.host > ? AND e.host <= ? ORDER BY e.host`,
       size,
     )) {
@@ -1727,7 +1727,7 @@ export class SyncStore {
    * apply anywhere yet (its chord isn't in the copy at all) is left out.
    */
   *unappliedPages(size = 100): Generator<Map<string, Set<string>>> {
-    const never: Record<string, readonly string[]> = { chord: ['profile'], effects: ['duet'] };
+    const never: Record<string, readonly string[]> = { chord: ['profile'], effects: ['assistant'] };
     const brief = this.briefs();
     const live = (type: string, id: unknown) => typeof id === 'string' && brief(type, id) !== null && !brief(type, id)!.gone;
     let after = { type: '', id: '' };

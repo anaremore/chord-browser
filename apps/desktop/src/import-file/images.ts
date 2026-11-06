@@ -1,16 +1,16 @@
 /**
  * An assistant chat's images from a Chord file (docs/decisions/S15-your-data.md §5),
- * written by the import process beside the assistant's own (main/duet/images.ts). A
+ * written by the import process beside the assistant's own (main/assistant/images.ts). A
  * file can say anything: an image record must really be the picture it says,
  * and its id must be no file's here. Each file is named to main before it's
  * written, so the import's Undo deletes exactly what it wrote.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DuetImage } from '@chord/core';
-import { imageInfo } from '../main/duet/images';
+import type { AssistantImage } from '@chord/core';
+import { imageInfo } from '../main/assistant/images';
 
-const EXTENSIONS: Record<DuetImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const EXTENSIONS: Record<AssistantImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 
 /** An image file an import may write, and so its Undo delete: an assistant image id's picture or thumbnail, a name, never a path. */
 export const IMAGE_FILE = /^[0-9a-f]{24}\.(jpg|png|webp|thumb\.jpg)$/;
@@ -33,7 +33,7 @@ export interface ImageWriter {
  * that's really a JPEG. Returns the files it wrote: the picture, and the
  * thumbnail apart.
  */
-export async function writeImage(record: { image: DuetImage; data: string; thumb: string | null }, dir: string, writer: ImageWriter): Promise<string[]> {
+export async function writeImage(record: { image: AssistantImage; data: string; thumb: string | null }, dir: string, writer: ImageWriter): Promise<string[]> {
   const bytes = Buffer.from(record.data, 'base64');
   const info = imageInfo(bytes);
   if (!info || info.mime !== record.image.mime) return [];

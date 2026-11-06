@@ -236,8 +236,8 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
     CHORD_HOME_URL: `${site.origin}/`,
     CHORD_E2E_HOOKS: '1',
     // The assistant's panel opens without looking for a real Claude Code or Codex on this machine (paths that don't exist).
-    CHORD_DUET_CLAUDE: join(profile, 'no-claude'),
-    CHORD_DUET_CODEX: join(profile, 'no-codex'),
+    CHORD_ASSISTANT_CLAUDE: join(profile, 'no-claude'),
+    CHORD_ASSISTANT_CODEX: join(profile, 'no-codex'),
     ...env,
   };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
@@ -1014,25 +1014,25 @@ for (const tabs of [20, 200]) {
         await frameChange('Collapse the sidebar', toggleSidebar, docked, () => expect(showSidebar).toBeVisible());
         await frameChange('Dock the sidebar', toggleSidebar, collapsed, () => expect(hideSidebar).toBeVisible());
         await docked();
-        const duetPanel = shell.getByRole('complementary', { name: 'Assistant' });
-        const toggleDuet = () => runAction(shell, 'duet.toggle');
-        const duetClosed = async () => {
-          if (await duetPanel.isVisible()) {
-            await toggleDuet();
+        const assistantPanel = shell.getByRole('complementary', { name: 'Assistant' });
+        const toggleAssistant = () => runAction(shell, 'assistant.toggle');
+        const assistantClosed = async () => {
+          if (await assistantPanel.isVisible()) {
+            await toggleAssistant();
             await settle();
           }
-          await expect(duetPanel).toBeHidden();
+          await expect(assistantPanel).toBeHidden();
         };
-        const duetOpen = async () => {
-          if (!(await duetPanel.isVisible())) {
-            await toggleDuet();
+        const assistantOpen = async () => {
+          if (!(await assistantPanel.isVisible())) {
+            await toggleAssistant();
             await settle();
           }
-          await expect(duetPanel).toBeVisible();
+          await expect(assistantPanel).toBeVisible();
         };
-        await frameChange('Open the assistant', toggleDuet, duetClosed, () => expect(duetPanel).toBeVisible());
-        await frameChange('Close the assistant', toggleDuet, duetOpen, () => expect(duetPanel).toBeHidden());
-        await duetClosed();
+        await frameChange('Open the assistant', toggleAssistant, assistantClosed, () => expect(assistantPanel).toBeVisible());
+        await frameChange('Close the assistant', toggleAssistant, assistantOpen, () => expect(assistantPanel).toBeHidden());
+        await assistantClosed();
 
         // Pinning: the row travels into Pinned.
         await interaction(s, 'Pin a tab', repeat(3, (i) => ({
@@ -1481,7 +1481,7 @@ for (const into of ['a profile with data', 'a new profile'] as const) {
           if (!opened.ok) return { phase: 'unread', readMs: 0, importMs: 0, undoMs: 0, pages: 0, newProfile: false };
           const t1 = performance.now();
           const finished = next(['done', 'failed']);
-          const run = await api.run(chosen.fileId!, { history: true, duet: true, effects: true, settings: false });
+          const run = await api.run(chosen.fileId!, { history: true, assistant: true, effects: true, settings: false });
           if (!run.ok) return { phase: 'refused', readMs: t1 - t0, importMs: 0, undoMs: 0, pages: 0, newProfile: opened.preview.newProfile };
           const done = await finished;
           const t2 = performance.now();
@@ -1766,7 +1766,7 @@ test('sync: keystrokes during a large merge', async () => {
     }),
     ...Array.from({ length: 24 }, (_, i): DataRecord => ({ type: 'favorite', id: `fav${i}`, at: stamp(), set: { url: `https://fav${i}.test/`, title: `Favorite ${i}`, icon: icons[i]!.id, rank: `a${String(i).padStart(2, '0')}V`, created: 1 } })),
     ...Array.from({ length: 30 }, (_, i): DataRecord => ({ type: 'route', id: `route${i}.test`, at: stamp(), set: { chord: `c${i % 12}`, created: 1 } })),
-    ...Array.from({ length: 40 }, (_, i): DataRecord => ({ type: 'effects', id: `fx${i}.test`, at: stamp(), set: { wet: true, css: `h1 { color: rgb(${i}, 0, 0) }`, cssOn: true, hidden: [], presets: [], duet: [] } })),
+    ...Array.from({ length: 40 }, (_, i): DataRecord => ({ type: 'effects', id: `fx${i}.test`, at: stamp(), set: { wet: true, css: `h1 { color: rgb(${i}, 0, 0) }`, cssOn: true, hidden: [], presets: [], assistant: [] } })),
   ];
   let own: OwnSegment = await writeSnapshot(fs, { generation: 1, device: OTHER }, [setup], root, { app: '0.5.0', device: [setup[0]!] }, nodeCrypto);
   let generation = 0;

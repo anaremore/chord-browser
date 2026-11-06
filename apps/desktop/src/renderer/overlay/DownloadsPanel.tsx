@@ -19,7 +19,7 @@ import type { Rect, ScreenshotItem } from '@chord/ipc';
 import { Copy, Download as SaveIcon, File, FolderOpen, Pause, Play, RotateCcw, ShieldAlert, Trash2, X } from 'lucide-react';
 import { motion, type Transition } from 'motion/react';
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
-import { DuetIcon } from '../shared/icons';
+import { AssistantIcon } from '../shared/icons';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 
@@ -135,7 +135,7 @@ function Row({ download }: { download: Download }) {
 /** `onAsk`: it went to the assistant's composer, so the panel steps aside for its panel. */
 function ShotRow({ shot, onChange, onAsk }: { shot: ScreenshotItem; onChange(): void; onAsk(): void }) {
   const name = shot.title || shot.url || 'Screenshot';
-  const act = (action: 'copy' | 'save' | 'delete' | 'duet') => void api.screenshots.act(shot.id, action).then(() => action === 'delete' && onChange());
+  const act = (action: 'copy' | 'save' | 'delete' | 'assistant') => void api.screenshots.act(shot.id, action).then(() => action === 'delete' && onChange());
   return (
     <li className={styles.download}>
       <div className={styles.downloadMain}>
@@ -149,18 +149,18 @@ function ShotRow({ shot, onChange, onAsk }: { shot: ScreenshotItem; onChange(): 
       </div>
       <div className={styles.downloadActions}>
         {/* Only where the assistant may see that page, in this window's chord. */}
-        {shot.duet && (
+        {shot.assistant && (
           <button
             type="button"
             className={styles.smallButton}
             aria-label={`Ask about the screenshot of ${name}`}
             title="Ask about this screenshot"
             onClick={() => {
-              act('duet');
+              act('assistant');
               onAsk();
             }}
           >
-            <DuetIcon {...ICON} />
+            <AssistantIcon {...ICON} />
           </button>
         )}
         <button type="button" className={styles.smallButton} aria-label={`Copy screenshot of ${name}`} title="Copy" onClick={() => act('copy')}>

@@ -95,8 +95,8 @@ test('Effects: your CSS, a hidden element, a preset, Dry/Wet, navigating, an uns
   const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
   const env = {
     CHORD_HOME_URL: `${site.origin}/news`,
-    CHORD_DUET_CLAUDE: fakeClaude,
-    CHORD_DUET_CODEX: join(config, 'no-codex'),
+    CHORD_ASSISTANT_CLAUDE: fakeClaude,
+    CHORD_ASSISTANT_CODEX: join(config, 'no-codex'),
     CLAUDE_CONFIG_DIR: config,
     FAKE_CLAUDE_EVIL: evil.url,
   };
@@ -187,11 +187,11 @@ test('Effects: your CSS, a hidden element, a preset, Dry/Wet, navigating, an uns
     await navigate(shell, `${site.origin}/news`);
     news = await pageAt(app, `${site.origin}/news`);
     await expect.poll(() => style(news, 'h1', 'color')).toBe('rgb(255, 0, 0)');
-    await runAction(shell, 'duet.toggle');
+    await runAction(shell, 'assistant.toggle');
     const panel = shell.getByRole('complementary', { name: 'Assistant' });
     await panel.getByRole('button', { name: 'Use this' }).first().click();
     await panel.getByRole('button', { name: 'Got it' }).click();
-    await runAction(shell, 'duet.toggle');
+    await runAction(shell, 'assistant.toggle');
     card = await openCard(shell, popover);
     const ask = card.getByRole('textbox', { name: 'Restyle this site' });
     await ask.fill('Make the headline green');
@@ -354,18 +354,18 @@ test('Effects: your CSS, a hidden element, a preset, Dry/Wet, navigating, an uns
     // Nothing from the private window was saved; nothing ever reached the server a fetch would.
     const db = new DatabaseSync(join(profile, 'chord.db'), { readOnly: true });
     try {
-      const rows = db.prepare('SELECT host, css, css_on, hidden, duet, compiled FROM effect').all() as { host: string; css: string; css_on: number; hidden: string; duet: string; compiled: string }[];
+      const rows = db.prepare('SELECT host, css, css_on, hidden, assistant, compiled FROM effect').all() as { host: string; css: string; css_on: number; hidden: string; assistant: string; compiled: string }[];
       expect(rows.map((r) => r.host)).toEqual([host()]);
       expect(rows[0]!.css).toContain('rgb(255, 0, 0)');
       expect(rows[0]!.css).not.toContain('rgb(0, 0, 255)');
       expect(rows[0]!.css_on).toBe(1);
       expect((JSON.parse(rows[0]!.hidden) as { selector: string; label: string; on: boolean }[]).map(({ selector, label, on }) => ({ selector, label, on }))).toEqual([{ selector: 'aside#promo', label: 'Promo', on: true }]);
-      expect((JSON.parse(rows[0]!.duet) as { summary: string; on: boolean }[]).map(({ summary, on }) => ({ summary, on }))).toEqual([
+      expect((JSON.parse(rows[0]!.assistant) as { summary: string; on: boolean }[]).map(({ summary, on }) => ({ summary, on }))).toEqual([
         { summary: 'Green headline', on: false },
         { summary: 'Night sky', on: true },
       ]);
       // Your edited patch is kept as you wrote it; what's inserted never has what would fetch.
-      expect(rows[0]!.duet).toContain('edited.png');
+      expect(rows[0]!.assistant).toContain('edited.png');
       expect(rows[0]!.compiled).not.toMatch(/url\(|@import/i);
       expect(rows[0]!.compiled).toContain('rgb(20, 20, 60)');
       expect(rows[0]!.compiled).not.toContain('rgb(0, 128, 0)');

@@ -179,7 +179,7 @@ export const MIGRATIONS: readonly string[] = [
   `,
   // 9: the assistant (ARCHITECTURE.md §11): Chord's own transcript is the source of truth; a provider's
   // session (provider_session_id) is a cache, resumed when it works. Message bodies are JSON
-  // (packages/core/src/duet.ts); text is what the command bar's @duet searches.
+  // (packages/core/src/assistant.ts); text is what the command bar's @chats searches. Named duet_* until 22.
   `
   CREATE TABLE duet_thread (
     id TEXT PRIMARY KEY, chord_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
@@ -228,7 +228,7 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX IF NOT EXISTS history_visit_url ON history_visit(url_id, id);
   `,
   // 13: Effects (ARCHITECTURE.md §9, D13): your styles for a site, by host (`www.` folded, a port kept), shared by every
-  // chord. css is what you wrote; hidden, presets and duet are JSON; compiled is all of it as the sanitizer made it (what
+  // chord. css is what you wrote; hidden, presets and duet (assistant since 22) are JSON; compiled is all of it as the sanitizer made it (what
   // main inserts), with that sanitizer's version, so a newer one makes it again. Private windows' Effects are never here.
   `
   CREATE TABLE IF NOT EXISTS effect (
@@ -329,5 +329,38 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE IF NOT EXISTS row_origin (k TEXT NOT NULL, id TEXT NOT NULL, origin TEXT NOT NULL, at INTEGER, PRIMARY KEY (k, id)) STRICT;
   CREATE TABLE IF NOT EXISTS write_intent (id TEXT NOT NULL, part INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (id, part)) STRICT;
   CREATE TABLE IF NOT EXISTS sync_noted (k TEXT NOT NULL, id TEXT NOT NULL, at INTEGER, base TEXT, live INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (k, id)) STRICT;
+  `,
+  // 22: the assistant's names inside (0.7.0). A one-time move for profiles from 0.6.x, which called it duet: its tables,
+  // their indexes and triggers, three columns and its settings row (with who last wrote it). Renaming a table rewrites the triggers and foreign
+  // keys that name it, but not an FTS5 table's content= or an index's name, so the search index and the triggers that
+  // feed it are made again and filled from the messages, and the indexes are made again under their new names.
+  `
+  DROP TRIGGER duet_message_ai;
+  DROP TRIGGER duet_message_ad;
+  DROP TRIGGER duet_message_au;
+  DROP TABLE duet_fts;
+  DROP INDEX duet_thread_chord;
+  DROP INDEX duet_message_thread;
+  ALTER TABLE duet_thread RENAME TO assistant_thread;
+  ALTER TABLE duet_message RENAME TO assistant_message;
+  CREATE INDEX assistant_thread_chord ON assistant_thread(chord_id, last_used_at DESC);
+  CREATE INDEX assistant_message_thread ON assistant_message(thread_id, created_at, rid);
+  CREATE VIRTUAL TABLE assistant_fts USING fts5(text, content='assistant_message', content_rowid='rid', tokenize='unicode61 remove_diacritics 2');
+  INSERT INTO assistant_fts(assistant_fts) VALUES ('rebuild');
+  CREATE TRIGGER assistant_message_ai AFTER INSERT ON assistant_message BEGIN
+    INSERT INTO assistant_fts(rowid, text) VALUES (new.rid, new.text);
+  END;
+  CREATE TRIGGER assistant_message_ad AFTER DELETE ON assistant_message BEGIN
+    INSERT INTO assistant_fts(assistant_fts, rowid, text) VALUES ('delete', old.rid, old.text);
+  END;
+  CREATE TRIGGER assistant_message_au AFTER UPDATE OF text ON assistant_message BEGIN
+    INSERT INTO assistant_fts(assistant_fts, rowid, text) VALUES ('delete', old.rid, old.text);
+    INSERT INTO assistant_fts(rowid, text) VALUES (new.rid, new.text);
+  END;
+  ALTER TABLE chord RENAME COLUMN duet_enabled TO assistant_enabled;
+  ALTER TABLE window_state RENAME COLUMN duet_width TO assistant_width;
+  ALTER TABLE effect RENAME COLUMN duet TO assistant;
+  UPDATE setting SET key = 'assistant' WHERE key = 'duet';
+  UPDATE row_origin SET id = 'assistant' WHERE k = 'setting' AND id = 'duet';
   `,
 ];

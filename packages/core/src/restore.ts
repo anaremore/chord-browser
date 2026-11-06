@@ -5,7 +5,7 @@
  * chords or tabs are dropped, settings fill in from defaults, and there is
  * always at least one chord and one window.
  */
-import { isDuetScope } from './duet';
+import { isAssistantScope } from './assistant';
 import {
   DEFAULT_PROFILE,
   defaultSettings,
@@ -236,18 +236,18 @@ export function restoreSettings(saved: Record<string, unknown>, platform?: Platf
       if (typeof value === 'boolean') settings.motion[key] = value;
     }
   }
-  const duet = saved['duet'] as Record<string, unknown> | undefined;
-  if (duet && typeof duet === 'object') {
-    if (typeof duet['enabled'] === 'boolean') settings.duet.enabled = duet['enabled'];
-    if (duet['provider'] === 'claude' || duet['provider'] === 'codex') settings.duet.provider = duet['provider'];
-    if (typeof duet['model'] === 'string' && duet['model'].length <= 100) settings.duet.model = duet['model'];
-    if (duet['keep'] === 'forever' || duet['keep'] === '90d' || duet['keep'] === '30d') settings.duet.keep = duet['keep'];
-    if (isDuetScope(duet['scope'])) settings.duet.scope = duet['scope'];
-    if (typeof duet['readsNothing'] === 'boolean') settings.duet.readsNothing = duet['readsNothing'];
+  const assistant = saved['assistant'] as Record<string, unknown> | undefined;
+  if (assistant && typeof assistant === 'object') {
+    if (typeof assistant['enabled'] === 'boolean') settings.assistant.enabled = assistant['enabled'];
+    if (assistant['provider'] === 'claude' || assistant['provider'] === 'codex') settings.assistant.provider = assistant['provider'];
+    if (typeof assistant['model'] === 'string' && assistant['model'].length <= 100) settings.assistant.model = assistant['model'];
+    if (assistant['keep'] === 'forever' || assistant['keep'] === '90d' || assistant['keep'] === '30d') settings.assistant.keep = assistant['keep'];
+    if (isAssistantScope(assistant['scope'])) settings.assistant.scope = assistant['scope'];
+    if (typeof assistant['readsNothing'] === 'boolean') settings.assistant.readsNothing = assistant['readsNothing'];
     const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length <= 300).slice(0, 500) : []);
-    settings.duet.neverSites = strings(duet['neverSites']);
-    settings.duet.offChords = strings(duet['offChords']);
-    if (typeof duet['codexImages'] === 'boolean') settings.duet.codexImages = duet['codexImages'];
+    settings.assistant.neverSites = strings(assistant['neverSites']);
+    settings.assistant.offChords = strings(assistant['offChords']);
+    if (typeof assistant['codexImages'] === 'boolean') settings.assistant.codexImages = assistant['codexImages'];
   }
   settings.reader = cleanReaderSettings(settings.reader, saved['reader']);
   const effects = saved['effects'] as Record<string, unknown> | undefined;

@@ -257,9 +257,9 @@ export class AppWindow {
   private peekSeq = 0;
   private peekTimer: ReturnType<typeof setTimeout> | undefined;
   /** The assistant's panel on the right (0 when closed): the page's frame ends before it, with a gap. */
-  private duetWidth = 0;
+  private assistantWidth = 0;
   /** The assistant's openings and closings waiting for their frame change, oldest first. */
-  private readonly duetChanges: { width: number; publish(): void }[] = [];
+  private readonly assistantChanges: { width: number; publish(): void }[] = [];
   /** Views waiting for the shell's first paint to load (`deferViews`). */
   private deferred: { view: WebContentsView; surface: UiSurface }[] = [];
 
@@ -683,7 +683,7 @@ export class AppWindow {
   /** The content frame, in UI units from the window's corner (left of the assistant's panel when it's open). */
   private frameRect(): Rect {
     const { width: windowWidth, height } = this.contentSize();
-    const width = this.duetWidth > 0 ? Math.max(0, windowWidth - this.duetWidth - space[2]) : windowWidth;
+    const width = this.assistantWidth > 0 ? Math.max(0, windowWidth - this.assistantWidth - space[2]) : windowWidth;
     const x = Math.round(this.origin.left);
     const y = Math.round(this.origin.top);
     return { x, y, width: Math.max(0, width - x - size.frameInset), height: Math.max(0, height - y - size.frameInset) };
@@ -1099,19 +1099,19 @@ export class AppWindow {
    * held back while the frame's change waits for its pictures, so the panel
    * and the page move together.
    */
-  setDuet(width: number, publish: () => void, animate: boolean): void {
-    const waiting = this.duetChanges.at(-1);
-    if (waiting ? waiting.width === width : this.duetWidth === width) {
+  setAssistant(width: number, publish: () => void, animate: boolean): void {
+    const waiting = this.assistantChanges.at(-1);
+    if (waiting ? waiting.width === width : this.assistantWidth === width) {
       // Nothing changes size: what the panel shows goes now, or with the change it waits for.
       if (waiting) waiting.publish = publish;
       else publish();
       return;
     }
     const next = { width, publish };
-    this.duetChanges.push(next);
+    this.assistantChanges.push(next);
     this.changeFrame(() => {
-      this.duetChanges.splice(this.duetChanges.indexOf(next), 1);
-      this.duetWidth = next.width;
+      this.assistantChanges.splice(this.assistantChanges.indexOf(next), 1);
+      this.assistantWidth = next.width;
       this.closeFloating();
       next.publish();
     }, animate);

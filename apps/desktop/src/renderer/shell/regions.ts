@@ -12,7 +12,7 @@
 import type { FocusRegionEvent } from '@chord/ipc';
 import { api } from './api';
 
-type Region = 'sidebar' | 'page' | 'devtools' | 'popover' | 'duet' | 'bar';
+type Region = 'sidebar' | 'page' | 'devtools' | 'popover' | 'assistant' | 'bar';
 
 const TABBABLE = 'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]';
 const last = new Map<Region, HTMLElement>();
@@ -47,7 +47,7 @@ function entry(region: Region): HTMLElement | null {
   const start =
     region === 'sidebar'
       ? root.querySelector<HTMLElement>('[role="treeitem"][aria-selected="true"]')
-      : region === 'duet'
+      : region === 'assistant'
         ? root.querySelector<HTMLElement>('textarea')
         : root.querySelector<HTMLElement>('[data-address]');
   return start && visible(start) ? start : firstTabbable(root);
@@ -59,7 +59,7 @@ function regionsShown(popover: boolean, devtools: boolean): Region[] {
   shown.push('page');
   if (devtools) shown.push('devtools');
   if (popover) shown.push('popover');
-  if (entry('duet')) shown.push('duet');
+  if (entry('assistant')) shown.push('assistant');
   if (entry('bar')) shown.push('bar');
   return shown;
 }

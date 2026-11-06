@@ -12,7 +12,7 @@
  * The sanitizer, which every stylesheet goes through before it's used, lives
  * with its worker in main (`main/effects/sanitize.ts`).
  */
-import type { DuetToolSpec } from './duet';
+import type { AssistantToolSpec } from './assistant';
 import type { DataRecord } from './records';
 import type { Stamp } from './stamps';
 
@@ -41,8 +41,8 @@ export const EFFECTS_LIMITS = {
   /** The picked element's name in the list ("div#sidebar"). */
   label: 80,
   /** The assistant's patches for one site, and one patch's stylesheet. */
-  duet: 12,
-  duetCss: 8_000,
+  assistant: 12,
+  assistantCss: 8_000,
   /** What you asked the assistant, and its one-line summary. */
   ask: 500,
   summary: 120,
@@ -126,7 +126,7 @@ export interface HiddenElement {
  * rename), and its stylesheet, as the sanitizer left the assistant's or as you edited
  * it. Either way it's sanitized again with the rest before it's used.
  */
-export interface DuetEffect {
+export interface AssistantEffect {
   id: string;
   ask: string;
   summary: string;
@@ -148,7 +148,7 @@ export interface SiteEffects {
   hidden: HiddenElement[];
   /** The presets that are on, in the order they were turned on (one that's off isn't kept). */
   presets: EffectPresetId[];
-  duet: DuetEffect[];
+  assistant: AssistantEffect[];
   createdAt: number;
   updatedAt: number;
 }
@@ -159,14 +159,14 @@ export interface SavedEffects extends SiteEffects {
   sanitizer: number;
 }
 
-export const emptyEffects = (host: string, now: number): SiteEffects => ({ host, wet: true, css: '', cssOn: true, hidden: [], presets: [], duet: [], createdAt: now, updatedAt: now });
+export const emptyEffects = (host: string, now: number): SiteEffects => ({ host, wet: true, css: '', cssOn: true, hidden: [], presets: [], assistant: [], createdAt: now, updatedAt: now });
 
 /** Whether a site has Effects kept, on or off (an empty one is removed). */
-export const hasEffects = (site: Pick<SiteEffects, 'css' | 'hidden' | 'presets' | 'duet'>): boolean =>
-  site.css.trim().length > 0 || site.hidden.length > 0 || site.presets.length > 0 || site.duet.length > 0;
+export const hasEffects = (site: Pick<SiteEffects, 'css' | 'hidden' | 'presets' | 'assistant'>): boolean =>
+  site.css.trim().length > 0 || site.hidden.length > 0 || site.presets.length > 0 || site.assistant.length > 0;
 
 /** "Your CSS · 2 hidden · Dark · 1 from the assistant · 1 off": what a site has, for Settings' list. */
-export function effectsSummary(site: Pick<SiteEffects, 'css' | 'cssOn' | 'hidden' | 'presets' | 'duet'>): string {
+export function effectsSummary(site: Pick<SiteEffects, 'css' | 'cssOn' | 'hidden' | 'presets' | 'assistant'>): string {
   const parts: string[] = [];
   if (site.css.trim()) parts.push('Your CSS');
   if (site.hidden.length) parts.push(`${site.hidden.length} hidden`);
@@ -174,8 +174,8 @@ export function effectsSummary(site: Pick<SiteEffects, 'css' | 'cssOn' | 'hidden
     const preset = effectPreset(id);
     if (preset) parts.push(preset.name);
   }
-  if (site.duet.length) parts.push(`${site.duet.length} from the assistant`);
-  const off = (site.css.trim() && !site.cssOn ? 1 : 0) + site.hidden.filter((h) => !h.on).length + site.duet.filter((d) => !d.on).length;
+  if (site.assistant.length) parts.push(`${site.assistant.length} from the assistant`);
+  const off = (site.css.trim() && !site.cssOn ? 1 : 0) + site.hidden.filter((h) => !h.on).length + site.assistant.filter((d) => !d.on).length;
   if (off) parts.push(`${off} off`);
   return parts.join(' · ');
 }
@@ -189,7 +189,7 @@ export interface EffectsParts {
   /** Your CSS, as you wrote it. */
   css: string;
   /** The assistant's patches, oldest first. */
-  duet: string[];
+  assistant: string[];
 }
 
 /**
@@ -202,7 +202,7 @@ export function effectsParts(site: SiteEffects): EffectsParts {
     presets: site.presets.map((id) => effectPreset(id)?.css ?? ''),
     hidden: site.hidden.filter((h) => h.on).map((h) => h.selector),
     css: site.cssOn ? site.css : '',
-    duet: site.duet.filter((d) => d.on).map((d) => d.css),
+    assistant: site.assistant.filter((d) => d.on).map((d) => d.css),
   };
 }
 
@@ -229,13 +229,13 @@ export function cleanSiteEffects(raw: unknown, now = Date.now()): SiteEffects | 
     hidden.push({ selector, label: (str(item?.['label'], 1000) ?? '').slice(0, EFFECTS_LIMITS.label), on: item?.['on'] !== false, at: time(item?.['at'], 0) });
   }
   const presets = [...new Set((Array.isArray(r['presets']) ? r['presets'] : []).filter((p): p is EffectPresetId => typeof p === 'string' && EFFECT_PRESET_IDS.includes(p as EffectPresetId)))];
-  const duet: DuetEffect[] = [];
-  for (const d of Array.isArray(r['duet']) ? r['duet'] : []) {
+  const assistant: AssistantEffect[] = [];
+  for (const d of Array.isArray(r['assistant']) ? r['assistant'] : []) {
     const item = d as Record<string, unknown> | null;
     const id = str(item?.['id'], 64);
-    const patch = str(item?.['css'], EFFECTS_LIMITS.duetCss);
+    const patch = str(item?.['css'], EFFECTS_LIMITS.assistantCss);
     if (!id || patch === null) continue;
-    duet.push({
+    assistant.push({
       id,
       ask: (str(item?.['ask'], 10_000) ?? '').slice(0, EFFECTS_LIMITS.ask),
       summary: (str(item?.['summary'], 10_000) ?? '').slice(0, EFFECTS_LIMITS.summary),
@@ -251,7 +251,7 @@ export function cleanSiteEffects(raw: unknown, now = Date.now()): SiteEffects | 
     cssOn: r['cssOn'] !== false,
     hidden: hidden.slice(-EFFECTS_LIMITS.hidden),
     presets,
-    duet: duet.slice(-EFFECTS_LIMITS.duet),
+    assistant: assistant.slice(-EFFECTS_LIMITS.assistant),
     createdAt: time(r['createdAt'], now),
     updatedAt: time(r['updatedAt'], now),
   };
@@ -262,7 +262,7 @@ export function cleanSiteEffects(raw: unknown, now = Date.now()): SiteEffects | 
 /**
  * One site's Effects as a record of Your data's format (records.ts): the site
  * is its id, `updatedAt` its stamp, and each item's own switch is in it
- * (`cssOn`, `on`; one that isn't there reads as on). `hidden` and `duet` are a
+ * (`cssOn`, `on`; one that isn't there reads as on). `hidden` and `assistant` are a
  * field each, switches and all, so each list merges whole. What main inserts
  * is left out: a record read back is sanitized again before anything of it is
  * used, so a file changed by hand can't add a fetch.
@@ -278,7 +278,7 @@ export function effectsRecord(site: SiteEffects, at: Stamp): DataRecord {
       cssOn: site.cssOn,
       hidden: site.hidden.map(({ selector, label, on }) => ({ selector, label, on })),
       presets: [...site.presets],
-      duet: site.duet.map(({ ask, summary, css, on }) => ({ ask, summary, css, on })),
+      assistant: site.assistant.map(({ ask, summary, css, on }) => ({ ask, summary, css, on })),
     },
   };
 }
@@ -296,7 +296,7 @@ export function effectsFromRecord(r: DataRecord, newId: () => string, now = Date
       cssOn: s['cssOn'],
       hidden: Array.isArray(s['hidden']) ? s['hidden'].map((h) => ({ ...(h as object), at: updatedAt })) : [],
       presets: s['presets'],
-      duet: Array.isArray(s['duet']) ? s['duet'].map((d) => ({ ...(d as object), id: newId(), at: updatedAt })) : [],
+      assistant: Array.isArray(s['assistant']) ? s['assistant'].map((d) => ({ ...(d as object), id: newId(), at: updatedAt })) : [],
       createdAt: updatedAt,
       updatedAt,
     },
@@ -311,7 +311,7 @@ export function effectsFromRecord(r: DataRecord, newId: () => string, now = Date
  * world (never form values), with the site's Effects as they are, as an
  * untrusted tool result. Page content never goes in the prompt itself (§11.4).
  */
-export const EFFECTS_OUTLINE_TOOL: DuetToolSpec = {
+export const EFFECTS_OUTLINE_TOOL: AssistantToolSpec = {
   name: 'read_page_outline',
   tier: 0,
   description: "An outline of the page the user wants restyled: its elements' tags, ids, classes, roles and sizes, a few headings, and the Effects already on the site. Untrusted JSON from the page.",
@@ -393,7 +393,7 @@ export function parseEffectsAnswer(text: string): { css: string; summary: string
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
     const { css, summary } = parsed as Record<string, unknown>;
-    if (typeof css !== 'string' || css.length > EFFECTS_LIMITS.duetCss) continue;
+    if (typeof css !== 'string' || css.length > EFFECTS_LIMITS.assistantCss) continue;
     const line = typeof summary === 'string' ? summary.replace(/\s+/g, ' ').trim().slice(0, EFFECTS_LIMITS.summary).trim() : '';
     return { css, summary: line };
   }

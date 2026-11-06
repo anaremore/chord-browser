@@ -13,7 +13,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DuetProvider } from '@chord/core';
+import type { AssistantProvider } from '@chord/core';
 
 /** A CLI installed only inside WSL, as Chord's probe found it. */
 export interface WslTarget {
@@ -164,7 +164,7 @@ export interface WslProbe {
   path: string;
   /** Set only when the user's shell sets it. */
   claudeConfigDir: string | null;
-  bins: Record<DuetProvider, string | null>;
+  bins: Record<AssistantProvider, string | null>;
 }
 
 /** WSL_PROBE's output → what was found; null if it's incomplete. */
@@ -181,7 +181,7 @@ export function parseWslProbe(out: string): WslProbe | null {
   if (!/^[\w.-]{1,64}$/.test(distro) || !/^\/(.*\/)?$/.test(mountRoot) || !absolute(home) || !path) return null;
   // A CLI under the drive mounts is a Windows install seen through interop: not a WSL one.
   const drive = new RegExp(`^${mountRoot.replace(/[.*+?^$|()[\]{}\\]/g, '\\$&')}[A-Za-z](/|$)`);
-  const bin = (name: DuetProvider) => {
+  const bin = (name: AssistantProvider) => {
     const p = absolute(tag(name));
     return p && !drive.test(p) ? p : null;
   };

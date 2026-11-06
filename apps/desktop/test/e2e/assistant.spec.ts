@@ -11,8 +11,8 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { DUET_WORLD, EXTRACT_SCRIPT } from '../../src/main/duet/extract';
-import { formScripts } from '../../src/main/duet/forms';
+import { ASSISTANT_WORLD, EXTRACT_SCRIPT } from '../../src/main/assistant/extract';
+import { formScripts } from '../../src/main/assistant/forms';
 import { buildPdf, SAMPLE_PDF_PAGES } from '../fixtures/pdf';
 import { isOverlay, isPopover, isSettings, isShell, newPage, pageWhere } from './a11y-kit';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
@@ -135,9 +135,9 @@ async function launch(setup: Setup, home: string, env: Record<string, string> = 
     ...(process.env as Record<string, string>),
     CHORD_USER_DATA: setup.profile,
     CHORD_HOME_URL: `${site.origin}${home}`,
-    CHORD_DUET_CLAUDE: fake,
+    CHORD_ASSISTANT_CLAUDE: fake,
     // No Codex in these tests (a path that doesn't exist).
-    CHORD_DUET_CODEX: join(setup.config, 'no-codex'),
+    CHORD_ASSISTANT_CODEX: join(setup.config, 'no-codex'),
     CLAUDE_CONFIG_DIR: setup.config,
     ...env,
   };
@@ -152,8 +152,8 @@ async function shellOf(app: ElectronApplication): Promise<Page> {
 
 const runAction = (shell: Page, action: string) => shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
 
-async function openDuet(shell: Page): Promise<Locator> {
-  await runAction(shell, 'duet.toggle');
+async function openAssistant(shell: Page): Promise<Locator> {
+  await runAction(shell, 'assistant.toggle');
   const panel = shell.getByRole('complementary', { name: 'Assistant' });
   await expect(panel).toBeVisible();
   return panel;
@@ -187,7 +187,7 @@ test('what the assistant can read: "Ask every time" attaches nothing for you; "N
   const app = await launch(setup, '/article');
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await setUp(panel);
     // One button says what the chat reads; its menu has the ladder, each choice with what it means.
     const reads = panel.getByRole('button', { name: /^(Reads |Asks before reading)/ });
@@ -197,7 +197,7 @@ test('what the assistant can read: "Ask every time" attaches nothing for you; "N
     await expect(ladder.getByRole('menuitemradio')).toHaveText([/^Ask every time/, /^The tab you’re on/, /^Tabs in this chord/, /^All your tabs/]);
     await expect(ladder.getByRole('menuitemradio', { name: 'The tab you’re on' })).toHaveAttribute('aria-checked', 'true');
     await expect(ladder.getByRole('menuitemradio', { name: 'Tabs in this chord' })).toHaveAccessibleDescription('It reads this chord’s tabs, history and Archive without asking.');
-    await panel.screenshot({ path: join(capturesDir, 'duet-reads-menu.png') });
+    await panel.screenshot({ path: join(capturesDir, 'assistant-reads-menu.png') });
     const chip = panel.getByText(/^Reading 127\.0\.0\.1/);
     await expect(chip).toBeVisible();
     // Ask every time: nothing goes with a message unless you attach it.
@@ -216,7 +216,7 @@ test('what the assistant can read: "Ask every time" attaches nothing for you; "N
     await choice.getByRole('radio', { name: /^Nothing/ }).click();
     await expect(choice.getByRole('radio', { name: /^Nothing/ })).toHaveAttribute('aria-checked', 'true');
     mkdirSync(capturesDir, { recursive: true });
-    await settings.screenshot({ path: join(capturesDir, 'settings-duet-reading.png') });
+    await settings.screenshot({ path: join(capturesDir, 'settings-assistant-reading.png') });
 
     // The panel says so, with no choice per chat, nothing attached and no way to attach.
     await expect(reads).toHaveCount(0);
@@ -224,7 +224,7 @@ test('what the assistant can read: "Ask every time" attaches nothing for you; "N
     await expect(panel.getByRole('button', { name: 'Change in Settings' })).toBeVisible();
     await expect(panel.getByRole('button', { name: 'Attach a tab' })).toHaveCount(0);
     await expect(chip).toHaveCount(0);
-    await panel.screenshot({ path: join(capturesDir, 'duet-reads-nothing.png') });
+    await panel.screenshot({ path: join(capturesDir, 'assistant-reads-nothing.png') });
 
     // Claude gets no tools and no page; a read it tries anyway is refused, and it's told why.
     await send(panel, 'What can you see?');
@@ -264,7 +264,7 @@ test('Assistant: set up, ask about the page with a citation, gate reads, stop, a
   let app = await launch(setup, '/article');
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await expect(panel.getByText('Chat about your pages.')).toBeVisible();
     await setUp(panel);
 
@@ -319,20 +319,20 @@ test('Assistant: set up, ask about the page with a citation, gate reads, stop, a
   app = await launch(setup, '/article');
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     // The chat was used just now, so it's still there.
     await expect(panel.getByText('Here is the gist.')).toBeVisible();
     await send(panel, 'hello again');
     await expect(panel.getByText('Hello from the fake.')).toBeVisible();
     expect(fakeLog(setup).at(-1)).toMatchObject({ resume: first });
 
-    // @duet finds the chat by its words.
+    // @chats finds the chat by its words.
     const overlay = app.windows().find((p) => p.url().startsWith('chord://overlay') || p.url().includes('/overlay/index.html'))!;
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
     await expect(overlay.getByRole('dialog')).toBeVisible();
     // The space sets the filter itself; Enter on a half-typed one raced the results on a slow machine.
-    await overlay.keyboard.type('@duet ');
-    await expect(overlay.getByTestId('scope-chip')).toHaveText('Assistant chats');
+    await overlay.keyboard.type('@chats ');
+    await expect(overlay.getByTestId('scope-chip')).toHaveText('Chats');
     await overlay.keyboard.type('gist');
     await expect(overlay.getByRole('option').first()).toContainText('Summarize this page');
   } finally {
@@ -345,7 +345,7 @@ test('Assistant: a lost session continues from a summary; after the idle window 
   let app = await launch(setup, '/article');
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await setUp(panel);
     await send(panel, 'Summarize this page');
     await expect(panel.getByText('Here is the gist.')).toBeVisible();
@@ -358,7 +358,7 @@ test('Assistant: a lost session continues from a summary; after the idle window 
   app = await launch(setup, '/article');
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await send(panel, 'hello');
     await expect(panel.getByText('Continued with a summary')).toBeVisible();
     await expect(panel.getByText('Hello from the fake.')).toBeVisible();
@@ -368,17 +368,17 @@ test('Assistant: a lost session continues from a summary; after the idle window 
     expect(earlier.at(-1)!.trust).toBe('untrusted');
     expect(earlier.at(-1)!.turns.map((t) => [t.role, t.text.trim()])).toEqual([
       ['user', 'Summarize this page'],
-      ['duet', 'Here is the gist.'],
+      ['assistant', 'Here is the gist.'],
     ]);
   } finally {
     await app.close();
   }
 
   // Past the idle window, the panel starts fresh and offers to continue.
-  app = await launch(setup, '/article', { CHORD_DUET_IDLE_MS: '1' });
+  app = await launch(setup, '/article', { CHORD_ASSISTANT_IDLE_MS: '1' });
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await expect(panel.getByText('Ask about this page, your tabs, or anything you’re working on.')).toBeVisible();
     await panel.getByRole('button', { name: 'Continue “Summarize this page”' }).click();
     await expect(panel.getByText('Here is the gist.')).toBeVisible();
@@ -405,7 +405,7 @@ test('The assistant reads text in display: contents wrappers, off-screen section
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(15_000);
     const read = (await app.evaluate(
       ({ webContents }, { url, world, code }) => webContents.getAllWebContents().find((w) => w.getURL() === url)!.executeJavaScriptInIsolatedWorld(world, [{ code }]),
-      { url, world: DUET_WORLD, code: EXTRACT_SCRIPT },
+      { url, world: ASSISTANT_WORLD, code: EXTRACT_SCRIPT },
     )) as { text: string };
     for (const shown of ['Top of a long page.', '# Wrapped', 'Inside a display-contents wrapper.', 'A section that renders only on screen.', 'Bottom of the page.']) expect(read.text).toContain(shown);
     for (const hidden of ['hidden-attribute', 'display-none', 'visibility-hidden', 'opacity-zero', 'moved-off-screen', 'hidden-contents-wrapper']) expect(read.text).not.toContain(hidden);
@@ -419,7 +419,7 @@ test('Assistant: form values never leave the page, and a Never site is refused e
   const app = await launch(setup, '/form');
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await setUp(panel);
     await send(panel, 'what does the secret page say');
     const reply = panel.getByText(/The page says:/);
@@ -493,7 +493,7 @@ test('The assistant fills a form you ask it to: you check and change its values 
       (document.getElementById('email') as HTMLInputElement).value = 'old@example.com';
       (document.getElementById('bio') as HTMLTextAreaElement).value = 'draft-bio-secret';
     });
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await setUp(panel);
     await send(panel, "Fill in this sign-up form for me: I'm Ada Lovelace, ada@example.com, in the UK, on the Pro plan, send me news, and my bio is Mathematician.");
     const host = new URL(site.origin).host;
@@ -538,7 +538,7 @@ test('The assistant fills a form you ask it to: you check and change its values 
     await card.getByRole('checkbox', { name: 'Fill “Bio”' }).uncheck();
     await expect(card.getByRole('textbox', { name: 'Bio' })).toBeDisabled();
     mkdirSync(capturesDir, { recursive: true });
-    await card.screenshot({ path: join(capturesDir, `duet-${process.platform}-${process.arch}-fill-card.png`) });
+    await card.screenshot({ path: join(capturesDir, `assistant-${process.platform}-${process.arch}-fill-card.png`) });
     await tab.evaluate(() => window.scrollTo(0, 0));
     await card.getByRole('button', { name: 'Fill 6 fields' }).click();
 
@@ -581,7 +581,7 @@ test('The assistant fills nothing it shouldn’t: a form that changed, another t
   try {
     const shell = await shellOf(app);
     const tab = await pageWhere(app, (url) => url === `${site.origin}/signup`);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await setUp(panel);
     const card = panel.getByRole('group', { name: `Fill this form on ${new URL(site.origin).host}` });
     const empty = { name: '', email: '', country: '', plan: 'free', news: false, bio: '' };
@@ -621,7 +621,7 @@ test('The assistant fills nothing it shouldn’t: a form that changed, another t
     expect(await signupState(tab)).toMatchObject(empty);
 
     // Reading nothing: the assistant has no tools at all, and a read it tries anyway is refused.
-    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ duet: { readsNothing: true } }));
+    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ assistant: { readsNothing: true } }));
     await send(panel, 'Fill it, please');
     await expect(panel.getByText(/^I can't read the form: The user set you to read nothing/)).toBeVisible();
     expect(JSON.parse(readFileSync(join(setup.config, 'fill-tools.json'), 'utf8'))).toEqual([]);
@@ -630,10 +630,10 @@ test('The assistant fills nothing it shouldn’t: a form that changed, another t
     // A private window has no assistant to ask: main says so to its shell, which shows no panel.
     await runAction(shell, 'window.newPrivate');
     const privateShell = await newPage(app, isShell, [shell]);
-    const view = await privateShell.evaluate(() => (window as unknown as { chord: { duet: { view(): Promise<{ enabled: boolean; messages: unknown[] }> } } }).chord.duet.view());
+    const view = await privateShell.evaluate(() => (window as unknown as { chord: { assistant: { view(): Promise<{ enabled: boolean; messages: unknown[] }> } } }).chord.assistant.view());
     expect(view).toMatchObject({ enabled: false, messages: [] });
-    await runAction(privateShell, 'duet.toggle');
-    await expect.poll(() => privateShell.evaluate(() => (window as unknown as { chord: { duet: { view(): Promise<{ open: boolean }> } } }).chord.duet.view().then((v) => v.open))).toBe(true);
+    await runAction(privateShell, 'assistant.toggle');
+    await expect.poll(() => privateShell.evaluate(() => (window as unknown as { chord: { assistant: { view(): Promise<{ open: boolean }> } } }).chord.assistant.view().then((v) => v.open))).toBe(true);
     // Long enough for main's push (33 ms) and a frame: a panel that was coming would be here.
     await privateShell.waitForTimeout(500);
     await expect(privateShell.getByRole('complementary', { name: 'Assistant' })).toHaveCount(0);
@@ -661,7 +661,7 @@ test('The assistant reads the form on a page of 5,000 fields in a moment, and st
         }
         return runs;
       },
-      { url, world: DUET_WORLD, code: formScripts.read('0123456789abcdef0123TOKEN') },
+      { url, world: ASSISTANT_WORLD, code: formScripts.read('0123456789abcdef0123TOKEN') },
     )) as { ms: number; read: { controls: unknown[]; truncated: boolean } }[];
     console.log(`read_form on 5,000 fields: ${timed.map((t) => t.ms.toFixed(1)).join(' / ')} ms, ${timed[0]!.read.controls.length} described`);
     for (const { ms, read } of timed) {
@@ -679,7 +679,7 @@ test('Assistant: a Claude Code too old for browse mode isn’t asked whether it�
   const app = await launch(setup, '/article', { FAKE_CLAUDE_VERSION: '1.0.34' });
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await expect(panel.getByText('Installed 1.0.34 · Needs an update')).toBeVisible();
     await expect(panel.getByRole('button', { name: 'How to update' })).toBeVisible();
     await expect(panel.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
@@ -695,15 +695,15 @@ const openUrls = (app: ElectronApplication) => app.evaluate(({ webContents }) =>
 
 test('The assistant sees an image: pasted in the command bar, or a screenshot from its toast or the recent list; not a Never site’s; kept with the chat, and deleted with it', async () => {
   const setup = fresh();
-  const images = join(setup.profile, 'duet', 'images');
+  const images = join(setup.profile, 'assistant', 'images');
   const toastOf = (shell: Page) => shell.getByRole('region', { name: 'Notifications' }).getByRole('group', { name: 'Screenshot copied' });
   let app = await launch(setup, '/article');
   try {
     const shell = await shellOf(app);
     const overlay = await pageWhere(app, isOverlay);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await setUp(panel);
-    await runAction(shell, 'duet.toggle');
+    await runAction(shell, 'assistant.toggle');
     await expect(panel).toBeHidden();
 
     // Pasted in the command bar: searching by it comes first, then the assistant. Words typed make the assistant's row the first.
@@ -781,7 +781,7 @@ test('The assistant sees an image: pasted in the command bar, or a screenshot fr
   app = await launch(setup, '/second');
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await expect(panel.getByRole('img', { name: 'Image you sent, 1000 × 563' })).toBeVisible();
     await expect(panel.getByRole('img', { name: /^Image you sent/ })).toHaveCount(3);
     await panel.getByRole('button', { name: 'Chats' }).click();
@@ -797,13 +797,13 @@ test('The assistant makes images with Codex: Claude says it can’t and offers C
   const setup = fresh();
   const codexHome = join(setup.config, 'codex');
   const downloads = mkdtempSync(join(tmpdir(), 'chord-downloads-'));
-  const images = join(setup.profile, 'duet', 'images');
-  const env = { CHORD_DUET_CODEX: fakeCodex, CODEX_HOME: codexHome, CHORD_DOWNLOADS_DIR: downloads };
+  const images = join(setup.profile, 'assistant', 'images');
+  const env = { CHORD_ASSISTANT_CODEX: fakeCodex, CODEX_HOME: codexHome, CHORD_DOWNLOADS_DIR: downloads };
   const made = (panel: Locator) => panel.getByRole('img', { name: 'Generated image: A cartoon of the page' });
   let app = await launch(setup, '/article', env);
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await setUp(panel);
 
     // Claude can't: it says so, and the reply offers Codex, which is asked again and makes it.
@@ -820,7 +820,7 @@ test('The assistant makes images with Codex: Claude says it can’t and offers C
     // Copy puts it on the clipboard; Save puts it in Downloads.
     await made(panel).hover();
     mkdirSync(capturesDir, { recursive: true });
-    await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-made-image.png`) });
+    await shell.screenshot({ path: resolve(capturesDir, `assistant-${process.platform}-${process.arch}-made-image.png`) });
     await panel.getByRole('button', { name: 'Copy image' }).click();
     await expect
       .poll(() =>
@@ -840,7 +840,7 @@ test('The assistant makes images with Codex: Claude says it can’t and offers C
   app = await launch(setup, '/article', env);
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     // Kept with the chat, shown from Chord's own copy.
     await expect.poll(() => made(panel).evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBe(64);
     await panel.getByRole('button', { name: 'Chats' }).click();
@@ -852,7 +852,7 @@ test('The assistant makes images with Codex: Claude says it can’t and offers C
     // Off in Settings: Claude still says it can't, and nothing offers Codex.
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
-    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ duet: { codexImages: false } }));
+    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ assistant: { codexImages: false } }));
     await shell.bringToFront();
     await send(panel, 'draw a cartoon of this page');
     await expect(panel.getByText("Claude can't make images.")).toBeVisible();
@@ -871,7 +871,7 @@ test('Assistant: reads a PDF through the tab’s own session, cites its page, an
     // The tab signs in, then shows the PDF in Chromium's viewer.
     await expect.poll(() => pdfRequests.length, { timeout: 20_000 }).toBeGreaterThan(0);
     await expect.poll(async () => (await openUrls(app)).some((u) => u.endsWith('/guide.pdf'))).toBe(true);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await setUp(panel);
     // No meter before the CLI has reported anything.
     await expect(panel.getByRole('meter', { name: 'Context used' })).toHaveCount(0);
@@ -915,17 +915,17 @@ test('Assistant: Claude Code inside WSL is offered in Setup, answers through wsl
   const config = `/tmp/chord-e2e-wsl-${Date.now()}`;
   const sessions = () => wsl(['-e', 'sh', '-c', `ls ${config}/projects/*/*.jsonl 2>/dev/null`]).then((out) => out.trim().split('\n').filter(Boolean));
   const app = await launch(fresh(), '/article', {
-    CHORD_DUET_CLAUDE: '',
-    CHORD_DUET_CLAUDE_WSL: `node ${linuxFake}`,
+    CHORD_ASSISTANT_CLAUDE: '',
+    CHORD_ASSISTANT_CLAUDE_WSL: `node ${linuxFake}`,
     CLAUDE_CONFIG_DIR: config,
     WSLENV: [process.env['WSLENV'], 'CLAUDE_CONFIG_DIR/u'].filter(Boolean).join(':'),
   });
   try {
     const shell = await shellOf(app);
-    const panel = await openDuet(shell);
+    const panel = await openAssistant(shell);
     await expect(panel.getByText(/^Claude Code in WSL \(.+\)$/)).toBeVisible({ timeout: 60_000 });
     await expect(panel.getByText('Installed 2.1.309 · Signed in')).toBeVisible();
-    await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-wsl-setup.png`) });
+    await shell.screenshot({ path: resolve(capturesDir, `assistant-${process.platform}-${process.arch}-wsl-setup.png`) });
     await setUp(panel);
     await send(panel, 'Summarize this page');
     await expect(panel.getByText('Here is the gist.')).toBeVisible({ timeout: 30_000 });
@@ -1014,7 +1014,7 @@ for (const appearance of ['light', 'dark'] as const) {
         )
         .toBe(true);
       await new Promise((r) => setTimeout(r, 1000));
-      const panel = await openDuet(shell);
+      const panel = await openAssistant(shell);
       await setUp(panel);
       await send(panel, 'What does this PDF say about triads?');
       const pill = panel.getByRole('button', { name: /^Source 1, page 2:/ });
@@ -1033,7 +1033,7 @@ for (const appearance of ['light', 'dark'] as const) {
       await new Promise((r) => setTimeout(r, 600));
       const viewer = app.windows().find((p) => p.url().endsWith('/guide.pdf'))!;
       mkdirSync(capturesDir, { recursive: true });
-      const name = (step: string) => resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-${step}.png`);
+      const name = (step: string) => resolve(capturesDir, `assistant-${process.platform}-${process.arch}-${appearance}-${step}.png`);
       writeFileSync(name('4-pdf-citation-and-context'), await windowPicture(app, shell, viewer));
       // Close up: the header's meter and the reply's "1 · p. 2", twice as large.
       const box = (await panel.boundingBox())!;
@@ -1052,13 +1052,13 @@ for (const appearance of ['light', 'dark'] as const) {
     try {
       const shell = await shellOf(app);
       await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe(appearance);
-      const panel = await openDuet(shell);
+      const panel = await openAssistant(shell);
       const capture = async (step: string) => {
         await shell.evaluate(() => document.fonts.ready);
         // The panel slides in (DESIGN.md §6.5): captured once it has landed.
         let last = '';
         await expect.poll(async () => (last === (last = JSON.stringify(await panel.boundingBox())) ? 'still' : 'moving'), { intervals: [100] }).toBe('still');
-        await shell.screenshot({ path: resolve(capturesDir, `duet-${process.platform}-${process.arch}-${appearance}-${step}.png`) });
+        await shell.screenshot({ path: resolve(capturesDir, `assistant-${process.platform}-${process.arch}-${appearance}-${step}.png`) });
       };
       await expect(panel.getByText('Chat about your pages.')).toBeVisible();
       await capture('1-setup');

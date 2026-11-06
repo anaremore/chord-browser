@@ -10,8 +10,8 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { DuetContextUsage, DuetToolSpec } from '@chord/core';
-import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionImage, type SessionOptions, type ToolOutput } from './adapter';
+import type { AssistantContextUsage, AssistantToolSpec } from '@chord/core';
+import { errorCopy, killTree, type AssistantSession, type ProviderError, type SessionEvents, type SessionImage, type SessionOptions, type ToolOutput } from './adapter';
 import { cliPath, spawnSpec } from './launch';
 
 const SERVER = 'chord';
@@ -71,7 +71,7 @@ const inContext = (u: TokenUsage | null | undefined) => (u ? count(u.input_token
  * tokens are the turn's last request (`usage.iterations`, else the last
  * message's usage). No window reported, no meter: sizes are never guessed.
  */
-export function claudeContextUsage(result: Record<string, unknown>, model: string | null, lastMessage: TokenUsage | null = null): DuetContextUsage | null {
+export function claudeContextUsage(result: Record<string, unknown>, model: string | null, lastMessage: TokenUsage | null = null): AssistantContextUsage | null {
   const models = result['modelUsage'];
   if (!models || typeof models !== 'object') return null;
   const windows = Object.entries(models as Record<string, { contextWindow?: unknown } | null>).filter(([, m]) => count(m?.contextWindow) > 0);
@@ -85,7 +85,7 @@ export function claudeContextUsage(result: Record<string, unknown>, model: strin
 }
 
 /** The MCP side of Chord's tools, answered on the control channel. */
-async function mcpReply(message: { id?: unknown; method?: string; params?: Record<string, unknown> }, tools: readonly DuetToolSpec[], call: (name: string, args: Record<string, unknown>) => Promise<ToolOutput>) {
+async function mcpReply(message: { id?: unknown; method?: string; params?: Record<string, unknown> }, tools: readonly AssistantToolSpec[], call: (name: string, args: Record<string, unknown>) => Promise<ToolOutput>) {
   const { id, method, params } = message;
   if (method === 'initialize') {
     return { jsonrpc: '2.0', id, result: { protocolVersion: (params?.['protocolVersion'] as string) ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'chord', version: '1' } } };
@@ -107,7 +107,7 @@ async function mcpReply(message: { id?: unknown; method?: string; params?: Recor
   return { jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown method ${method}` } };
 }
 
-export class ClaudeSession implements DuetSession {
+export class ClaudeSession implements AssistantSession {
   readonly provider = 'claude' as const;
   private readonly child: ChildProcess;
   private turnRunning = false;

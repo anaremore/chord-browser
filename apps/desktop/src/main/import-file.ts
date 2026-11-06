@@ -15,7 +15,7 @@
  */
 import { rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { importedText, sortedChords, uuidv7, type Command, type DuetThread, type MergePart, type Platform, type SiteEffects, type State, type WindowId } from '@chord/core';
+import { importedText, sortedChords, uuidv7, type Command, type AssistantThread, type MergePart, type Platform, type SiteEffects, type State, type WindowId } from '@chord/core';
 import { ImportedSettings, type FileChooseResult, type FileImportChoices, type FileImportCounts, type FileImportProgress, type FileOpenResult, type FileRunResult, type Toast } from '@chord/ipc';
 import { dialog, type BaseWindow, type MessagePortMain, type OpenDialogOptions } from 'electron';
 import { IMAGE_FILE } from '../import-file/images';
@@ -38,7 +38,7 @@ export interface FileImporterOptions {
   /** The import process's script, as built (out/main/import-file.js). */
   workerPath: string;
   database: string;
-  /** `<userData>/duet/images`. */
+  /** `<userData>/assistant/images`. */
   images: string;
   platform: Platform;
   /** Where the open dialog starts the first time. */
@@ -46,10 +46,10 @@ export interface FileImporterOptions {
   state(): State;
   dispatch(command: Command): void;
   /** chord-data: what's pending written first, this computer's id, a port for history and chats, and an import's Undo (the chats it took away come back). */
-  data: { flush(): Promise<void>; device(): Promise<string>; port(importId: string): Promise<MessagePortMain>; undo(importId: string): Promise<DuetThread[]> };
+  data: { flush(): Promise<void>; device(): Promise<string>; port(importId: string): Promise<MessagePortMain>; undo(importId: string): Promise<AssistantThread[]> };
   effects: { importSites(importId: string, sites: SiteEffects[]): Promise<void>; undoImport(importId: string): Promise<void> };
   /** The assistant's lists follow chats that came in or went; ones that went end their sessions. */
-  duet(): { importChanged(removed?: readonly DuetThread[]): Promise<void> } | undefined;
+  assistant(): { importChanged(removed?: readonly AssistantThread[]): Promise<void> } | undefined;
   toast(windowId: WindowId, toast: Toast): void;
   /** Shared with another browser's importer: one import at a time. */
   gate: ImportGate;
@@ -219,7 +219,7 @@ export class FileImporter {
       const state = this.options.state();
       const chordId = state.windows[windowId]?.activeChordId ?? sortedChords(state)[0]?.id ?? '';
       report('setup');
-      const planned = await process.ask({ type: 'plan', choices, chordId, scope: state.settings.duet.scope }, STEP_TIMEOUT_MS);
+      const planned = await process.ask({ type: 'plan', choices, chordId, scope: state.settings.assistant.scope }, STEP_TIMEOUT_MS);
       if (planned?.type !== 'plan') throw new Error('no plan');
       Object.assign(counts, planned.counts);
       total = planned.history;
@@ -233,8 +233,8 @@ export class FileImporter {
       }
       if (running.cancelled) return;
       if (part?.type !== 'planned') throw new Error('the plan stopped');
-      if (choices.history || choices.duet) {
-        report(total > 0 ? 'history' : 'duet');
+      if (choices.history || choices.assistant) {
+        report(total > 0 ? 'history' : 'assistant');
         process.send({ type: 'rest' }, [await within(this.options.data.port(importId), STEP_TIMEOUT_MS)]);
         for (;;) {
           const reply = await process.next(STEP_TIMEOUT_MS);
@@ -248,13 +248,13 @@ export class FileImporter {
           }
           if (reply?.type === 'chats') {
             counts.chats += reply.threads.length;
-            report('duet');
+            report('assistant');
             continue;
           }
           if (reply?.type !== 'done') failed = true;
           break;
         }
-        if (choices.duet) await this.options.duet()?.importChanged();
+        if (choices.assistant) await this.options.assistant()?.importChanged();
       }
     } catch (error) {
       if (running.cancelled) return;
@@ -287,8 +287,8 @@ export class FileImporter {
       this.options.dispatch({ t: 'import.undo', importId, limit: UNDO_PART });
       await new Promise((resolve) => setImmediate(resolve));
     }
-    const removed = await within(this.options.data.undo(importId), STEP_TIMEOUT_MS).catch(() => [] as DuetThread[]);
-    await this.options.duet()?.importChanged(removed);
+    const removed = await within(this.options.data.undo(importId), STEP_TIMEOUT_MS).catch(() => [] as AssistantThread[]);
+    await this.options.assistant()?.importChanged(removed);
     await this.options.effects.undoImport(importId);
     // The image files it wrote, each checked again to be one (a name, never a path), and nothing else.
     await Promise.all([...record.files].filter((name) => IMAGE_FILE.test(name)).map((name) => rm(join(this.options.images, name), { force: true }))).catch(() => undefined);

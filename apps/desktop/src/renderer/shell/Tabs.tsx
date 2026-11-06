@@ -76,7 +76,7 @@ import {
 import { createPortal } from 'react-dom';
 import { useRoving } from '../shared/a11y';
 import { Favicon } from '../shared/Favicon';
-import { DuetIcon } from '../shared/icons';
+import { AssistantIcon } from '../shared/icons';
 import { INSTANT, type MotionMode, type SpringFor } from '../shared/motion';
 import { displayHost, pageTitle } from '../shared/site';
 import { announce } from './announce';
@@ -85,7 +85,7 @@ import styles from './App.module.css';
 import { SlidingPill } from './SlidingPill';
 import { canFly, flashArchive, flyToArchive, MAX_FLIGHTS, takeArchived } from './ArchiveArc';
 import { enter, leave, slideFrom, type Leaving } from './today-motion';
-import { DuetReadTabs } from './duet-context';
+import { AssistantReadTabs } from './assistant-context';
 import { EdgeScroller } from './edge-scroll';
 import { useKeys } from './keys';
 import { SPLIT_DROP, splitDropFor, type SplitDrop } from './split-drop';
@@ -641,14 +641,14 @@ interface TabRowProps extends RowBase {
   section: Section;
   isActive: boolean;
   /** The assistant read it (DESIGN.md §7.8). */
-  duetRead: boolean;
+  assistantRead: boolean;
   /** Picked up with the keyboard (Space). */
   moving: boolean;
   /** Where it would land while it's dragged in Pinned. */
   projected: Drop | null;
 }
 
-const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, pos, size: count, isActive, duetRead, moving, projected, ctx }: TabRowProps) {
+const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, pos, size: count, isActive, assistantRead, moving, projected, ctx }: TabRowProps) {
   // The row's surface is the drag handle; the <li> is the tree item that takes focus.
   const { element, handle, isDragging, isDropTarget, binder } = useRowSortable({ id: tab.id, index, group: section, type: 'tab' }, shows);
   const { windowId, appearance, spring } = ctx;
@@ -712,7 +712,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
       >
         <TabFace tab={tab} live={live} appearance={appearance} />
         <Count unread={unread} />
-        {duetRead && <DuetIcon className={styles.duetRead} size={12} strokeWidth={2} role="img" aria-label="Read by the assistant" />}
+        {assistantRead && <AssistantIcon className={styles.assistantRead} size={12} strokeWidth={2} role="img" aria-label="Read by the assistant" />}
       </div>
       {sharing ? (
         <button
@@ -1406,7 +1406,7 @@ export function SidebarTabs({
       }),
     [],
   );
-  const readTabs = useContext(DuetReadTabs);
+  const readTabs = useContext(AssistantReadTabs);
   const { keycap, withKeys } = useKeys(info);
   const pinnedTree = useRoving<HTMLUListElement>(TREE_ROVING);
   const todayTree = useRoving<HTMLUListElement>(TREE_ROVING);
@@ -1583,7 +1583,7 @@ export function SidebarTabs({
     const shows = section === 'pinned' || inSpan(inView, at) || drag.moving || active?.id === e.id;
     switch (node.kind) {
       case 'tab':
-        return <TabRow key={e.id} tab={node} live={state.live[e.id]} index={e.index} shows={shows} section={section} isActive={e.id === activeId} duetRead={readTabs.has(e.id)} {...drag} {...base} />;
+        return <TabRow key={e.id} tab={node} live={state.live[e.id]} index={e.index} shows={shows} section={section} isActive={e.id === activeId} assistantRead={readTabs.has(e.id)} {...drag} {...base} />;
       case 'folder':
         return <FolderRow key={e.id} folder={node} unread={node.collapsed ? countWithin(state, e.id) : null} index={e.index} renaming={renaming === e.id} {...drag} {...base} />;
       case 'split': {

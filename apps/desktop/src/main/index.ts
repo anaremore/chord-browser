@@ -30,7 +30,7 @@ import { FILTER_LISTS } from './ad-blocking/lists';
 import { AfterLaunch } from './after-launch';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
-import { DuetService } from './duet/service';
+import { AssistantService } from './assistant/service';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { Exporter } from './export';
 import { APP_ID, configureAppIdentity, inFlatpak } from './identity';
@@ -51,7 +51,7 @@ import { seedForPerformance } from './perf-seed';
 import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { platform, systemInfo, uiScale } from './platform';
-import { handleChordProtocol, registerSchemes, serveDuetImages, serveReaderImages } from './protocol';
+import { handleChordProtocol, registerSchemes, serveAssistantImages, serveReaderImages } from './protocol';
 import { appBadgeShown, watchAppBadge } from './app-badge';
 import { SAFE_BROWSING_KEY } from './safe-browsing/key';
 import { listsFile, SafeBrowsing, safeBrowsingEndpoint } from './safe-browsing/service';
@@ -66,7 +66,7 @@ import { DiskShots } from './screenshots/store';
 import { mark, watchLaunch } from './launch-timeline';
 import { chromiumUserAgent } from './user-agent';
 import { targetFor } from '@chord/player-protocol';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { PlayerInstaller } from './player/installer';
 import { playerRoot } from './player/paths';
 import { UPDATE_PUBLIC_KEY } from './update-key';
@@ -95,7 +95,7 @@ function devNumber(name: string): number | null {
 
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
-let duet: DuetService | undefined;
+let assistant: AssistantService | undefined;
 let importer: Importer | undefined;
 let exporter: Exporter | undefined;
 let fileImporter: FileImporter | undefined;
@@ -267,8 +267,8 @@ function registerIpc(): void {
     if (command.t === 'import.undo') return fileImporter?.owns(command.importId) ? fileImporter.undo(command.importId) : importer!.undo(command.importId);
     // A toast's Undo for Effects: they live in main, not in the store.
     if (command.t === 'effects.undo') return browser!.effects.undo(command.token);
-    // A toast's Undo for a form the assistant filled: the page puts back what it had (main/duet).
-    if (command.t === 'duet.undoFill') return duet?.undoFill(command.token);
+    // A toast's Undo for a form the assistant filled: the page puts back what it had (main/assistant).
+    if (command.t === 'assistant.undoFill') return assistant?.undoFill(command.token);
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
     if (command.t === 'sync.open') return browser!.openSettings('data');
@@ -417,25 +417,25 @@ function registerIpc(): void {
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
   handle('find:close', (_request, sender) => browser!.findFor(sender)?.close());
   handle('permission:respond', ({ id, decision }) => permissions.respond(id, decision));
-  handle('duet:view', (_request, sender) => duet!.view(senderWindow(sender).id, true));
-  handle('duet:ask', ({ text, image }, sender) => duet!.askAboutImage(senderWindow(sender).id, text, { mime: 'image/jpeg', ...image }));
-  handle('duet:do', (action, sender) => duet!.act(senderWindow(sender).id, action));
-  handle('duet:search', async ({ query }, sender) => {
+  handle('assistant:view', (_request, sender) => assistant!.view(senderWindow(sender).id, true));
+  handle('assistant:ask', ({ text, image }, sender) => assistant!.askAboutImage(senderWindow(sender).id, text, { mime: 'image/jpeg', ...image }));
+  handle('assistant:do', (action, sender) => assistant!.act(senderWindow(sender).id, action));
+  handle('assistant:search', async ({ query }, sender) => {
     if (fromPrivateWindow(sender) || presenting()) return [];
-    const hits = await duet!.search(query);
+    const hits = await assistant!.search(query);
     return presenting() ? [] : hits;
   });
-  handle('duet:openHit', ({ chordId, threadId }, sender) => duet!.openHit(senderWindow(sender).id, chordId, threadId));
-  handle('settings:duet', async (request) => {
+  handle('assistant:openHit', ({ chordId, threadId }, sender) => assistant!.openHit(senderWindow(sender).id, chordId, threadId));
+  handle('settings:assistant', async (request) => {
     if (request.do === 'signIn') {
-      await duet!.signIn(request.provider);
-      return duet!.providerStatuses;
+      await assistant!.signIn(request.provider);
+      return assistant!.providerStatuses;
     }
     if (request.do === 'clearAll') {
-      await duet!.clearAll();
-      return duet!.providerStatuses;
+      await assistant!.clearAll();
+      return assistant!.providerStatuses;
     }
-    return duet!.refreshProviders();
+    return assistant!.refreshProviders();
   });
   handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
   handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
@@ -574,7 +574,7 @@ if (!app.requestSingleInstanceLock()) {
     // Chord Player quits by itself once Chord's channel closes: nothing to wait for.
     browser?.player.stopUpdates();
     browser?.effects.stop();
-    void Promise.all([duet?.quit(), adBlocking.stop()])
+    void Promise.all([assistant?.quit(), adBlocking.stop()])
       .catch(() => undefined)
       .then(() => imports)
       .then(() => persistence!.close())
@@ -756,8 +756,8 @@ if (!app.requestSingleInstanceLock()) {
       keep: () => browser?.store.state.settings.keepScreenshots ?? true,
       disk: shots,
       saveFile: async (filename, bytes, url, privateWindow) => void (await downloads.addFile(filename, bytes, 'image/png', url, privateWindow)),
-      duetReady: (w, url) => Boolean(duet?.canAskAbout(w.id, url)),
-      askDuet: (windowId, image) => duet?.attachImage(windowId, image),
+      assistantReady: (w, url) => Boolean(assistant?.canAskAbout(w.id, url)),
+      askAssistant: (windowId, image) => assistant?.attachImage(windowId, image),
     });
     browser = new Browser({
       initial,
@@ -883,20 +883,30 @@ if (!app.requestSingleInstanceLock()) {
     for (const profileId of profilesInUse) if (!isPrivateProfile(profileId)) profileSession(profileId);
     // Before any of Chord's own pages loads (a text field there is what starts a dictionary download).
     applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
-    duet = new DuetService(browser, persistence, app.getPath('userData'), {
+    // One-time move for profiles from 0.6.x, whose assistant kept its files (panel.json, images, its empty working
+    // folder) in userData/duet. A chat's Claude session was keyed by that folder, so it continues with a summary.
+    const oldAssistantFolder = join(app.getPath('userData'), 'duet');
+    if (existsSync(oldAssistantFolder) && !existsSync(join(app.getPath('userData'), 'assistant'))) {
+      try {
+        renameSync(oldAssistantFolder, join(app.getPath('userData'), 'assistant'));
+      } catch (error) {
+        console.error('[chord] Couldn’t move the assistant’s folder:', error);
+      }
+    }
+    assistant = new AssistantService(browser, persistence, app.getPath('userData'), {
       save: async (filename, bytes, mime) => void (await downloads.addFile(filename, bytes, mime, '', null)),
     });
-    browser.duet = duet;
-    afterLaunch.run(() => void duet!.afterLaunch());
+    browser.assistant = assistant;
+    afterLaunch.run(() => void assistant!.afterLaunch());
     // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
     // from before gets it switched off once, through the store, so it's saved like any other change.
     if (!browser.store.state.settings.autoPipDefaultOff) browser.store.dispatch({ t: 'settings.set', settings: { autoPip: false, autoPipDefaultOff: true } });
     // Effects asking the assistant: the assistant's own reading rules, one request at a time, nothing kept.
-    browser.effects.duet = {
-      available: (windowId, url) => duet!.effectsProvider(windowId, url),
-      ask: (request) => duet!.oneShot(request),
+    browser.effects.assistant = {
+      available: (windowId, url) => assistant!.effectsProvider(windowId, url),
+      ask: (request) => assistant!.oneShot(request),
     };
-    serveDuetImages((url) => duet!.serveImage(url));
+    serveAssistantImages((url) => assistant!.serveImage(url));
     // One import at a time, of either kind: the other is told it's busy.
     const importGate = new ImportGate();
     importer = new Importer({
@@ -914,7 +924,7 @@ if (!app.requestSingleInstanceLock()) {
     exporter = new Exporter({
       workerPath: join(import.meta.dirname, 'export.js'),
       database: join(app.getPath('userData'), 'chord.db'),
-      images: join(app.getPath('userData'), 'duet', 'images'),
+      images: join(app.getPath('userData'), 'assistant', 'images'),
       app: app.getVersion(),
       platform,
       folder: () => app.getPath('documents'),
@@ -924,14 +934,14 @@ if (!app.requestSingleInstanceLock()) {
     fileImporter = new FileImporter({
       workerPath: join(import.meta.dirname, 'import-file.js'),
       database: join(app.getPath('userData'), 'chord.db'),
-      images: join(app.getPath('userData'), 'duet', 'images'),
+      images: join(app.getPath('userData'), 'assistant', 'images'),
       platform,
       folder: () => app.getPath('documents'),
       state: () => browser!.store.state,
       dispatch: (command) => browser!.store.dispatch(command),
       data: { flush: () => store.flush(), device: () => store.device(), port: (importId) => store.importPort(importId), undo: (importId) => store.undoImport(importId) },
       effects: { importSites: (importId, sites) => browser!.effects.importSites(importId, sites), undoImport: (importId) => browser!.effects.undoImport(importId) },
-      duet: () => duet,
+      assistant: () => assistant,
       toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
       gate: importGate,
     });

@@ -41,9 +41,9 @@ import {
   zoomRecord,
   type Chord,
   type DataRecord,
-  type DuetImage,
-  type DuetMessage,
-  type DuetThread,
+  type AssistantImage,
+  type AssistantMessage,
+  type AssistantThread,
   type Favorite,
   type FolderNode,
   type Settings,
@@ -98,7 +98,7 @@ const { muted: _muted, ...unmuted } = pinned;
 const today: TabNode = { ...unmuted, id: 't2', section: 'today', parentId: 's1', pinnedUrl: null, customTitle: null, favicon: null };
 const split: SplitNode = { kind: 'split', id: 's1', chordId: chord.id, section: 'today', parentId: null, rank: 'a2', direction: 'column', sizes: [0.4, 0.6], createdAt: 1700000000300 };
 const favorite: Favorite = { id: 'fav1', url: 'https://calendar.example/', title: 'Calendar', favicon: 'data:image/png;base64,AAAA', rank: 'a0', createdAt: 1700000000400 };
-const thread: DuetThread = {
+const thread: AssistantThread = {
   id: 'th1',
   chordId: chord.id,
   title: 'Trip planning',
@@ -110,7 +110,7 @@ const thread: DuetThread = {
   updatedAt: 1764000001000,
   lastUsedAt: 1764000002000,
 };
-const image: DuetImage = { id: '0123456789abcdef01234567', mime: 'image/png', width: 640, height: 480, prompt: 'A lighthouse at dusk', codexCopy: 'C:\\Users\\me\\.codex\\generated_images\\x.png' };
+const image: AssistantImage = { id: '0123456789abcdef01234567', mime: 'image/png', width: 640, height: 480, prompt: 'A lighthouse at dusk', codexCopy: 'C:\\Users\\me\\.codex\\generated_images\\x.png' };
 const effects: SiteEffects = {
   host: 'news.test',
   wet: true,
@@ -118,7 +118,7 @@ const effects: SiteEffects = {
   cssOn: true,
   hidden: [{ selector: '#ad', label: 'div#ad', on: false, at: 1764511391204 }],
   presets: ['dark'],
-  duet: [],
+  assistant: [],
   createdAt: 1764511391204,
   updatedAt: 1764511391204,
 };
@@ -146,7 +146,7 @@ describe('every type, model → record → model', () => {
     expect(decode(viaFile(r))).toEqual(expected);
   });
 
-  it.each<[string, DuetMessage, DuetMessage]>([
+  it.each<[string, AssistantMessage, AssistantMessage]>([
     [
       'what you wrote, with a tab and an image you attached',
       { id: 'm1', threadId: 'th1', createdAt: 1, body: { role: 'user', text: 'Plan it', attachments: [{ ref: 't3', url: 'https://maps.example/', title: 'Maps' }], images: [image] } },
@@ -203,7 +203,7 @@ describe('never in a record', () => {
 
   it('live state, back/forward history and paths on this computer, anywhere in the text', () => {
     const live = { ...pinned, live: { loading: true, audible: true }, nav: { entries: [{ url: 'https://mail.example/', pageState: 'FORM-SECRET' }], index: 0 } } as TabNode;
-    const message: DuetMessage = { id: 'm1', threadId: 'th1', createdAt: 1, body: { role: 'user', text: 'x', attachments: [], images: [image] } };
+    const message: AssistantMessage = { id: 'm1', threadId: 'th1', createdAt: 1, body: { role: 'user', text: 'x', attachments: [], images: [image] } };
     const text = JSON.stringify([nodeRecord(live, at, ICON), threadRecord(thread), messageRecord(message)]);
     for (const never of ['FORM-SECRET', 'pageState', 'loading', 'audible', 'lastActiveAt', 'favicon', 'data:image', 'secret-session', 'providerSessionId', 'codexCopy', 'generated_images']) {
       expect(text).not.toContain(never);
@@ -230,7 +230,7 @@ describe('which settings travel', () => {
     themes: [{ id: 'theme-1', name: 'Late Night', stops: [{ l: 0.5, c: 0.2, h: 280 }], grain: 0.3 }],
     shortcuts: { 'tab.new': ['Ctrl+Alt+T'] },
     adBlocking: { enabled: true, offSites: ['nytimes.com'] },
-    duet: { ...defaultSettings().duet, provider: 'claude', model: 'opus', neverSites: ['https://bank.example'] },
+    assistant: { ...defaultSettings().assistant, provider: 'claude', model: 'opus', neverSites: ['https://bank.example'] },
     proxy: { mode: 'pac', server: null, pac: 'https://wpad.corp.example/proxy.pac' },
     encryptExports: true,
   };
@@ -243,7 +243,7 @@ describe('which settings travel', () => {
   it.each<[string, string, unknown]>([
     ['the search engine', 'searchEngine', 'duckduckgo'],
     ['a group’s part, by a dotted name', 'adBlocking.offSites', ['nytimes.com']],
-    ['The assistant’s Never list', 'duet.neverSites', ['https://bank.example']],
+    ['The assistant’s Never list', 'assistant.neverSites', ['https://bank.example']],
     ['the proxy for every chord, whole (exported, never synced)', 'proxy', { mode: 'pac', server: null, pac: 'https://wpad.corp.example/proxy.pac' }],
     ['whether exports are encrypted', 'encryptExports', true],
     ['Windows’ and Linux’s shortcuts, as their family', 'shortcuts.other', { 'tab.new': ['Ctrl+Alt+T'] }],
@@ -259,8 +259,8 @@ describe('which settings travel', () => {
     ['the one-time switch-off', 'autoPipDefaultOff'],
     ['the mini window’s size', 'miniWindowSize'],
     ['developer tools’ side', 'devtools.side'],
-    ['The assistant’s app', 'duet.provider'],
-    ['The assistant’s model', 'duet.model'],
+    ['The assistant’s app', 'assistant.provider'],
+    ['The assistant’s model', 'assistant.model'],
     ['themes, which are records of their own', 'themes'],
     ['a Mac’s shortcuts, on Windows', 'shortcuts.mac'],
   ])('out: %s', (_what, field) => {
@@ -282,7 +282,7 @@ describe('which settings travel', () => {
     const back = settingsFromFields(fields, 'darwin');
     expect(back['searchEngine']).toBe('duckduckgo');
     expect(back['adBlocking']).toEqual({ enabled: true, offSites: ['nytimes.com'] });
-    expect(back['duet']).toEqual({ enabled: true, keep: 'forever', scope: 'ask', readsNothing: false, neverSites: ['https://bank.example'], offChords: [], codexImages: true });
+    expect(back['assistant']).toEqual({ enabled: true, keep: 'forever', scope: 'ask', readsNothing: false, neverSites: ['https://bank.example'], offChords: [], codexImages: true });
     expect(back['shortcuts']).toEqual({ 'tab.new': ['Ctrl+Alt+T'] });
     expect(back['proxy']).toEqual(settings.proxy);
     expect(settingsFromFields(fields, 'linux')['shortcuts']).toBeUndefined();
@@ -290,7 +290,7 @@ describe('which settings travel', () => {
   });
 
   it('fields that aren’t settings, or don’t travel, aren’t read', () => {
-    expect(settingsFromFields({ uiScale: 1.5, 'motion.nothing': true, 'searchEngine.x': 1, unknown: 2, 'duet.provider': 'claude' }, 'win32')).toEqual({});
+    expect(settingsFromFields({ uiScale: 1.5, 'motion.nothing': true, 'searchEngine.x': 1, unknown: 2, 'assistant.provider': 'claude' }, 'win32')).toEqual({});
     expect(settingFields('nothing', 1, 'win32')).toBeNull();
   });
 

@@ -130,7 +130,7 @@ async function session(appearance: 'light' | 'dark') {
   // The assistant's stand-in keeps its session files here; no Codex (a path that doesn't exist).
   const config = mkdtempSync(join(tmpdir(), 'chord-shots-claude-'));
   const app = await launch(
-    { CHORD_APPEARANCE: appearance, CHORD_HOME_URL: PAGES.chord, CHORD_DUET_CLAUDE: demoClaude, CHORD_DUET_CODEX: join(config, 'no-codex'), CLAUDE_CONFIG_DIR: config },
+    { CHORD_APPEARANCE: appearance, CHORD_HOME_URL: PAGES.chord, CHORD_ASSISTANT_CLAUDE: demoClaude, CHORD_ASSISTANT_CODEX: join(config, 'no-codex'), CLAUDE_CONFIG_DIR: config },
     { args: [`--force-device-scale-factor=${SCALE}`] },
   );
   const shell = await pageWhere(app, isShell);
@@ -205,7 +205,7 @@ test('light: the window, the assistant beside the article, and split view', asyn
   try {
     await capture(app, 'Chord', 'chord-light');
 
-    await runAction(shell, 'duet.toggle');
+    await runAction(shell, 'assistant.toggle');
     const panel = shell.getByRole('complementary', { name: 'Assistant' });
     await panel.getByRole('button', { name: 'Use this' }).first().click();
     await panel.getByRole('button', { name: 'Got it' }).click();
@@ -214,8 +214,8 @@ test('light: the window, the assistant beside the article, and split view', asyn
     await input.press('Enter');
     await panel.getByText('In the article').waitFor({ timeout: 20_000 });
     await rest(shell);
-    await capture(app, 'Chord', 'duet');
-    await runAction(shell, 'duet.toggle');
+    await capture(app, 'Chord', 'assistant');
+    await runAction(shell, 'assistant.toggle');
     await panel.waitFor({ state: 'hidden' });
 
     await dispatch(shell, { t: 'split.add', windowId, withId: article.id, url: PAGES.html });

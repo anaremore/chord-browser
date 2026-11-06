@@ -6,28 +6,28 @@
  * codes, ID numbers, hidden fields), and how values map back to the fields
  * Chord read, checked when the assistant proposes them and again when you press Fill.
  * The page side, which reads and fills from Chord's isolated world, is
- * main/duet/forms.ts. Everything here is unit-tested.
+ * main/assistant/forms.ts. Everything here is unit-tested.
  */
 
 // Core compiles without DOM types; URL is a global in Node and every browser.
 declare const URL: new (url: string) => { origin: string; href: string; hash: string };
 
 /** Fields the assistant is offered from one read: a real form has far fewer. */
-export const DUET_FORM_MAX_FIELDS = 100;
+export const ASSISTANT_FORM_MAX_FIELDS = 100;
 /** Fields the page script describes (offered and left out together); past it, it stops. */
-export const DUET_FORM_MAX_CONTROLS = 300;
+export const ASSISTANT_FORM_MAX_CONTROLS = 300;
 /** Controls the page script looks at, and how long it may look, before it stops: a page with 5,000 inputs stays responsive. */
-export const DUET_FORM_SCAN = 2000;
-export const DUET_FORM_SCAN_MS = 250;
+export const ASSISTANT_FORM_SCAN = 2000;
+export const ASSISTANT_FORM_SCAN_MS = 250;
 /** Choices listed for one select or radio group. One with more isn't offered (it's not a form field you'd ask the assistant for). */
-export const DUET_FORM_MAX_OPTIONS = 400;
+export const ASSISTANT_FORM_MAX_OPTIONS = 400;
 /** The longest value Chord puts in a one-line field, and in a text area (a field's own maxlength can be less). */
-export const DUET_FORM_TEXT_MAX = 500;
-export const DUET_FORM_AREA_MAX = 5000;
+export const ASSISTANT_FORM_TEXT_MAX = 500;
+export const ASSISTANT_FORM_AREA_MAX = 5000;
 /** The tool result's size: what read_tab's ranges keep to (Claude saves larger results to a file a browse thread can't open). */
 const RESULT_MAX = 40_000;
 
-/** One field as the page script describes it (main/duet/forms.ts): its structure, never what's in it. */
+/** One field as the page script describes it (main/assistant/forms.ts): its structure, never what's in it. */
 export interface FormControl {
   /** The page script's handle for it in this read. */
   key: number;
@@ -45,22 +45,22 @@ export interface FormControl {
   readOnly: boolean;
   /** The field's own maxlength, when it sets one. */
   maxLength: number | null;
-  /** A select's options, or a radio group's buttons, by label; null when there are more than DUET_FORM_MAX_OPTIONS. */
+  /** A select's options, or a radio group's buttons, by label; null when there are more than ASSISTANT_FORM_MAX_OPTIONS. */
   options: string[] | null;
   /** The form it's in (an index into the read's forms), or -1. */
   form: number;
 }
 
-export type DuetFieldKind = 'text' | 'textarea' | 'select' | 'checkbox' | 'radio';
+export type AssistantFieldKind = 'text' | 'textarea' | 'select' | 'checkbox' | 'radio';
 /** Fields named on the card, so you know to fill them yourself. */
-export type DuetFieldSensitive = 'password' | 'payment' | 'code' | 'identity';
+export type AssistantFieldSensitive = 'password' | 'payment' | 'code' | 'identity';
 /** Why a field is never offered: sensitive, hidden, or not a kind Chord fills (files, ranges, multiple choice lists, locked fields). */
-export type DuetFieldLeftOut = DuetFieldSensitive | 'hidden' | 'unsupported';
+export type AssistantFieldLeftOut = AssistantFieldSensitive | 'hidden' | 'unsupported';
 
 const TEXT_TYPES = new Set(['text', 'email', 'tel', 'url', 'search', 'number', 'date', 'time', 'datetime-local', 'month', 'week']);
 
 /** `autocomplete` tokens that mark a sensitive field (any `cc-…` is payment too). */
-const AUTOCOMPLETE: Record<string, DuetFieldSensitive> = {
+const AUTOCOMPLETE: Record<string, AssistantFieldSensitive> = {
   'current-password': 'password',
   'new-password': 'password',
   webauthn: 'password',
@@ -76,7 +76,7 @@ const AUTOCOMPLETE: Record<string, DuetFieldSensitive> = {
  * so ` ?` stands for both. First match wins. Generous on purpose: a field left
  * out is one you type yourself; one filled wrongly isn't.
  */
-const WORDS: readonly (readonly [DuetFieldSensitive, RegExp])[] = [
+const WORDS: readonly (readonly [AssistantFieldSensitive, RegExp])[] = [
   ['code', /\b(otp|totp|hotp|mfa|2fa|one ?time ?(code|password|passcode|pin)|verification ?code|auth(entication|orization)? ?code|sms ?code)\b/],
   ['password', /\b(password|passwd|pwd|pass|passcode|passphrase|pin)\b/],
   [
@@ -98,7 +98,7 @@ function words(text: string): string {
 }
 
 /** Whether a field is sensitive, and why: by its type, its `autocomplete`, then the words it's named with. */
-export function sensitiveField(c: Pick<FormControl, 'type' | 'autocomplete' | 'name' | 'id' | 'label' | 'placeholder'>): DuetFieldSensitive | null {
+export function sensitiveField(c: Pick<FormControl, 'type' | 'autocomplete' | 'name' | 'id' | 'label' | 'placeholder'>): AssistantFieldSensitive | null {
   if (c.type === 'password') return 'password';
   for (const token of c.autocomplete.toLowerCase().split(/\s+/)) {
     if (AUTOCOMPLETE[token]) return AUTOCOMPLETE[token];
@@ -116,7 +116,7 @@ export function sensitiveField(c: Pick<FormControl, 'type' | 'autocomplete' | 'n
  * radio groups. Everything else (files, ranges, colors, multiple-choice
  * lists, a select with too many options) isn't a kind Chord fills.
  */
-export function classifyField(c: FormControl): { kind: DuetFieldKind } | { leftOut: DuetFieldLeftOut } {
+export function classifyField(c: FormControl): { kind: AssistantFieldKind } | { leftOut: AssistantFieldLeftOut } {
   if (c.type === 'hidden' || !c.visible) return { leftOut: 'hidden' };
   if (c.disabled || c.readOnly) return { leftOut: 'unsupported' };
   const sensitive = sensitiveField(c);
@@ -129,12 +129,12 @@ export function classifyField(c: FormControl): { kind: DuetFieldKind } | { leftO
 }
 
 /** A field the assistant may fill, as Chord keeps it from a read. */
-export interface DuetFormField {
+export interface AssistantFormField {
   /** Chord's id for it: unique in the chat, so an id from an earlier read is caught, never taken for another field. */
   id: string;
   /** The page script's handle for it in that read. */
   key: number;
-  kind: DuetFieldKind;
+  kind: AssistantFieldKind;
   /** An input's type, for text fields (email, tel, date…). */
   type: string;
   label: string;
@@ -148,12 +148,12 @@ export interface DuetFormField {
 }
 
 /** A form as the assistant read it: the fields it may fill, and the ones you'd see that it may not. */
-export interface DuetFormRead {
+export interface AssistantFormRead {
   url: string;
   forms: string[];
-  fields: DuetFormField[];
+  fields: AssistantFormField[];
   /** Sensitive fields on screen: the card names them, so you fill them yourself. */
-  leftOut: { label: string; why: DuetFieldSensitive }[];
+  leftOut: { label: string; why: AssistantFieldSensitive }[];
   /** The page had more than the assistant is offered, or took too long to look through. */
   truncated: boolean;
 }
@@ -165,19 +165,19 @@ const clip = (value: unknown, max: number): string => {
 
 /**
  * What the page script answered, checked as anything from a page is: each
- * control's strings clipped, its flags booleans, at most DUET_FORM_MAX_CONTROLS.
+ * control's strings clipped, its flags booleans, at most ASSISTANT_FORM_MAX_CONTROLS.
  */
 export function cleanFormPage(raw: unknown): { url: string; forms: string[]; controls: FormControl[]; truncated: boolean } | null {
   if (!raw || typeof raw !== 'object') return null;
   const page = raw as Record<string, unknown>;
   if (typeof page['url'] !== 'string' || !Array.isArray(page['controls'])) return null;
-  const forms = Array.isArray(page['forms']) ? page['forms'].slice(0, DUET_FORM_MAX_CONTROLS).map((f) => clip(f, 80)) : [];
+  const forms = Array.isArray(page['forms']) ? page['forms'].slice(0, ASSISTANT_FORM_MAX_CONTROLS).map((f) => clip(f, 80)) : [];
   const controls: FormControl[] = [];
-  for (const item of page['controls'].slice(0, DUET_FORM_MAX_CONTROLS)) {
+  for (const item of page['controls'].slice(0, ASSISTANT_FORM_MAX_CONTROLS)) {
     if (!item || typeof item !== 'object') continue;
     const c = item as Record<string, unknown>;
     if (typeof c['key'] !== 'number' || !Number.isInteger(c['key'])) continue;
-    const options = Array.isArray(c['options']) && c['options'].length <= DUET_FORM_MAX_OPTIONS ? c['options'].map((o) => clip(o, 100)) : null;
+    const options = Array.isArray(c['options']) && c['options'].length <= ASSISTANT_FORM_MAX_OPTIONS ? c['options'].map((o) => clip(o, 100)) : null;
     const maxLength = typeof c['maxLength'] === 'number' && Number.isInteger(c['maxLength']) && c['maxLength'] >= 0 ? c['maxLength'] : null;
     controls.push({
       key: c['key'],
@@ -199,12 +199,12 @@ export function cleanFormPage(raw: unknown): { url: string; forms: string[]; con
   return { url: page['url'], forms, controls, truncated: page['truncated'] === true };
 }
 
-const SENSITIVE_NAMES: Record<DuetFieldSensitive, string> = { password: 'Password', payment: 'Card details', code: 'One-time code', identity: 'ID number' };
+const SENSITIVE_NAMES: Record<AssistantFieldSensitive, string> = { password: 'Password', payment: 'Card details', code: 'One-time code', identity: 'ID number' };
 
 /** A read's fields: those the assistant may fill, numbered from `firstId`, and the sensitive ones on screen, named for the card. */
-export function formRead(page: { url: string; forms: string[]; controls: readonly FormControl[]; truncated: boolean }, firstId: number): DuetFormRead {
-  const fields: DuetFormField[] = [];
-  const leftOut: DuetFormRead['leftOut'] = [];
+export function formRead(page: { url: string; forms: string[]; controls: readonly FormControl[]; truncated: boolean }, firstId: number): AssistantFormRead {
+  const fields: AssistantFormField[] = [];
+  const leftOut: AssistantFormRead['leftOut'] = [];
   let truncated = page.truncated;
   for (const c of page.controls) {
     const verdict = classifyField(c);
@@ -213,7 +213,7 @@ export function formRead(page: { url: string; forms: string[]; controls: readonl
       if (verdict.leftOut !== 'hidden' && verdict.leftOut !== 'unsupported') leftOut.push({ label: label || SENSITIVE_NAMES[verdict.leftOut], why: verdict.leftOut });
       continue;
     }
-    if (fields.length >= DUET_FORM_MAX_FIELDS) {
+    if (fields.length >= ASSISTANT_FORM_MAX_FIELDS) {
       truncated = true;
       continue;
     }
@@ -252,14 +252,14 @@ export const samePage = (a: string, b: string): boolean => pageAddress(a) === pa
  * what was left out (never which, or why beyond the kind); at most
  * RESULT_MAX characters, cut at a field, saying so.
  */
-export function formResult(read: DuetFormRead, page: { ref: string; retrievedAt: number }): string {
+export function formResult(read: AssistantFormRead, page: { ref: string; retrievedAt: number }): string {
   let origin = '';
   try {
     origin = new URL(read.url).origin;
   } catch {
     // An address that doesn't parse has no origin to give.
   }
-  const counts: Partial<Record<DuetFieldSensitive, number>> = {};
+  const counts: Partial<Record<AssistantFieldSensitive, number>> = {};
   for (const l of read.leftOut) counts[l.why] = (counts[l.why] ?? 0) + 1;
   const many = new Set(read.fields.map((f) => f.form)).size > 1;
   const head = {
@@ -300,9 +300,9 @@ export function formResult(read: DuetFormRead, page: { ref: string; retrievedAt:
 }
 
 /** A field on the fill card: what Chord read of it, and the value that goes in (the assistant's, then yours). */
-export interface DuetFillField {
+export interface AssistantFillField {
   id: string;
-  kind: DuetFieldKind;
+  kind: AssistantFieldKind;
   type: string;
   label: string;
   required: boolean;
@@ -313,13 +313,13 @@ export interface DuetFillField {
 }
 
 /** The card, in memory only (Chord never saves the values): its fields, what it left out, and how it ended. */
-export interface DuetFillCard {
+export interface AssistantFillCard {
   status: 'pending' | 'filled' | 'undone' | 'dismissed' | 'expired';
   /** The tab's title and site, as the card names them. */
   title: string;
   site: string;
-  fields: DuetFillField[];
-  leftOut: { label: string; why: DuetFieldSensitive }[];
+  fields: AssistantFillField[];
+  leftOut: { label: string; why: AssistantFieldSensitive }[];
   truncated: boolean;
   /** Chord's one sentence about it: why it ended, or (still pending) what to do before Fill can work. */
   note?: string;
@@ -345,7 +345,7 @@ const FORMATS: Record<string, { test(value: string): boolean; like: string }> = 
  * of a select's or radio group's choices (by its label, any case), or true or
  * false for a checkbox. The problem says why not, for the assistant or for the card.
  */
-export function fieldValue(field: Pick<DuetFormField, 'kind' | 'type' | 'maxLength' | 'options'>, value: unknown): { ok: true; value: string | boolean; choice?: number } | { ok: false; problem: string } {
+export function fieldValue(field: Pick<AssistantFormField, 'kind' | 'type' | 'maxLength' | 'options'>, value: unknown): { ok: true; value: string | boolean; choice?: number } | { ok: false; problem: string } {
   if (field.kind === 'checkbox') return typeof value === 'boolean' ? { ok: true, value } : { ok: false, problem: 'needs true (checked) or false (not checked)' };
   if (typeof value !== 'string') return { ok: false, problem: field.kind === 'select' || field.kind === 'radio' ? 'needs one of its choices' : 'needs text' };
   if (field.kind === 'select' || field.kind === 'radio') {
@@ -359,7 +359,7 @@ export function fieldValue(field: Pick<DuetFormField, 'kind' | 'type' | 'maxLeng
   // Control characters hide in text; a one-line field takes no line breaks.
   // eslint-disable-next-line no-control-regex -- control characters are exactly what this refuses
   if (/[\u0000-\u0008\u000B-\u001F\u007F]/.test(text) || (!area && /[\n\t]/.test(text))) return { ok: false, problem: area ? 'has characters a text field can’t take' : 'needs to be one line' };
-  const max = Math.min(area ? DUET_FORM_AREA_MAX : DUET_FORM_TEXT_MAX, field.maxLength ?? Infinity);
+  const max = Math.min(area ? ASSISTANT_FORM_AREA_MAX : ASSISTANT_FORM_TEXT_MAX, field.maxLength ?? Infinity);
   if (text.length > max) return { ok: false, problem: `is longer than the field takes (${max} characters)` };
   const format = FORMATS[field.type];
   if (format && text !== '' && !format.test(text)) return { ok: false, problem: `needs ${format.like}` };
@@ -369,17 +369,17 @@ export function fieldValue(field: Pick<DuetFormField, 'kind' | 'type' | 'maxLeng
 /**
  * propose_fill's values mapped back to the last read: each to a field Chord
  * gave an id (one from an earlier read, or one never given, is refused), at
- * most DUET_FORM_MAX_FIELDS, none twice, each value one the field takes, and
+ * most ASSISTANT_FORM_MAX_FIELDS, none twice, each value one the field takes, and
  * the page still at the address it was read at. Every problem comes back at
  * once, so the assistant can fix them all.
  */
-export function proposedFill(read: DuetFormRead, args: Record<string, unknown>, currentUrl: string): { ok: true; fields: DuetFillField[] } | { ok: false; problems: string[] } {
+export function proposedFill(read: AssistantFormRead, args: Record<string, unknown>, currentUrl: string): { ok: true; fields: AssistantFillField[] } | { ok: false; problems: string[] } {
   if (!samePage(read.url, currentUrl)) return { ok: false, problems: ['The page changed since you read its form: it’s at a different address now. Read the form again.'] };
   const values = args['values'];
   if (!Array.isArray(values) || values.length === 0) return { ok: false, problems: ['Give values as a list of {field, value}, with the field ids from read_form.'] };
-  if (values.length > DUET_FORM_MAX_FIELDS) return { ok: false, problems: [`At most ${DUET_FORM_MAX_FIELDS} fields at once.`] };
+  if (values.length > ASSISTANT_FORM_MAX_FIELDS) return { ok: false, problems: [`At most ${ASSISTANT_FORM_MAX_FIELDS} fields at once.`] };
   const problems: string[] = [];
-  const fields: DuetFillField[] = [];
+  const fields: AssistantFillField[] = [];
   const seen = new Set<string>();
   for (const entry of values) {
     const id = entry && typeof entry === 'object' ? (entry as Record<string, unknown>)['field'] : undefined;
@@ -407,7 +407,7 @@ export function proposedFill(read: DuetFormRead, args: Record<string, unknown>, 
 /** One field to fill, as the page script takes it: its handle, and the text, the choice or whether it's checked. */
 export interface FillWrite {
   key: number;
-  kind: DuetFieldKind;
+  kind: AssistantFieldKind;
   text?: string;
   checked?: boolean;
   choice?: number;
@@ -418,11 +418,11 @@ export interface FillWrite {
  * (the panel is trusted no more than the assistant): only fields on the card, each
  * value one the field takes. The problems name each field by its label.
  */
-export function fillWrites(read: DuetFormRead, card: readonly DuetFillField[], edits: readonly { id: string; value: string | boolean }[]): { ok: true; writes: FillWrite[] } | { ok: false; problems: string[] } {
+export function fillWrites(read: AssistantFormRead, card: readonly AssistantFillField[], edits: readonly { id: string; value: string | boolean }[]): { ok: true; writes: FillWrite[] } | { ok: false; problems: string[] } {
   const problems: string[] = [];
   const writes: FillWrite[] = [];
   const seen = new Set<string>();
-  for (const edit of edits.slice(0, DUET_FORM_MAX_FIELDS + 1)) {
+  for (const edit of edits.slice(0, ASSISTANT_FORM_MAX_FIELDS + 1)) {
     const field = card.some((f) => f.id === edit.id) ? read.fields.find((f) => f.id === edit.id) : undefined;
     if (!field || seen.has(edit.id)) continue;
     seen.add(edit.id);
@@ -438,12 +438,12 @@ export function fillWrites(read: DuetFormRead, card: readonly DuetFillField[], e
   return problems.length ? { ok: false, problems } : { ok: true, writes };
 }
 
-const LEFT_OUT_KINDS: Record<DuetFieldSensitive, string> = { password: 'passwords', payment: 'payment details', code: 'one-time codes', identity: 'ID numbers' };
+const LEFT_OUT_KINDS: Record<AssistantFieldSensitive, string> = { password: 'passwords', payment: 'payment details', code: 'one-time codes', identity: 'ID numbers' };
 
 const list = (items: readonly string[]): string => (items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
 
 /** The card's line about what it left out: "Left out: Password and Card number. Chord never fills passwords or payment details." */
-export function fillLeftOutNote(leftOut: readonly { label: string; why: DuetFieldSensitive }[]): string {
+export function fillLeftOutNote(leftOut: readonly { label: string; why: AssistantFieldSensitive }[]): string {
   if (leftOut.length === 0) return '';
   const labels = leftOut.slice(0, 4).map((l) => l.label);
   if (leftOut.length > 4) labels.push(`${leftOut.length - 4} more`);

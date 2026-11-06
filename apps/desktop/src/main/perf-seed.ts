@@ -60,7 +60,7 @@ export function seedForPerformance(
     const host = `effects${i}.perf.test`;
     const css = `/* ${host} */\n${'main article p { color: rgb(20, 20, 20); line-height: 1.6 }\n'.repeat(EFFECTS_LIMITS.css)}`.slice(0, EFFECTS_LIMITS.css);
     const hidden = Array.from({ length: 50 }, (_, h) => ({ selector: `.perf-${i}-${h}`, label: `div.perf-${h}`, on: true, at }));
-    effect(host, { host, wet: true, css, cssOn: true, hidden, presets: [], duet: [], createdAt: at, updatedAt: at, compiled: '', sanitizer: 0 });
+    effect(host, { host, wet: true, css, cssOn: true, hidden, presets: [], assistant: [], createdAt: at, updatedAt: at, compiled: '', sanitizer: 0 });
   }
   // Oldest first, five minutes apart, as a few weeks of browsing would leave them.
   for (let i = visits; i >= 1; i--) history({ k: 'visit', ...page(((i - 1) % Math.max(1, pages)) + 1), at: at - i * 5 * 60_000 });

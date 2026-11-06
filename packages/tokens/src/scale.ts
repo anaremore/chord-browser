@@ -37,9 +37,9 @@ export const size = {
   sidebarWidth: 248,
   sidebarMin: 200,
   sidebarMax: 400,
-  duetWidth: 380,
-  duetMin: 320,
-  duetMax: 560,
+  assistantWidth: 380,
+  assistantMin: 320,
+  assistantMax: 560,
   /** The bezel around the content frame: as thin as possible while the rounded corners still read. */
   frameInset: 4,
   /** The Windows/Linux top strip and the minimal-mode bar. */

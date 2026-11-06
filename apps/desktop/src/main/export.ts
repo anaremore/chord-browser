@@ -95,7 +95,7 @@ export class Exporter {
       app: this.options.app,
       platform: this.options.platform,
       history: request.history,
-      duet: request.duet,
+      assistant: request.assistant,
       passphrase: request.passphrase,
     };
     const child = utilityProcess.fork(this.options.workerPath, [], { serviceName: 'Chord Export', stdio: 'ignore' });

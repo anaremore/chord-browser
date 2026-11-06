@@ -15,7 +15,7 @@ type Sql = (text: string) => StatementSync;
 /** This computer's setup and Today tabs as records, with their icons: what an export without history or chats holds. */
 export function localRecords(sql: Sql, options: { device: string; platform: Platform; sha256(bytes: Uint8Array): string }): DataRecord[] {
   const records: DataRecord[] = [];
-  for (const item of exportRecords(sql, { ...options, history: false, duet: false, image: () => null })) records.push(item.record);
+  for (const item of exportRecords(sql, { ...options, history: false, assistant: false, image: () => null })) records.push(item.record);
   return records;
 }
 
@@ -36,11 +36,11 @@ export function amountsHere(sql: Sql, upto: number): { pages: number; chats: num
   const count = (statement: StatementSync, ...params: (string | number)[]) => Number((statement.get(...params) as { n: number }).n);
   return {
     pages: count(sql('SELECT COUNT(*) AS n FROM (SELECT 1 FROM history_url WHERE profile_id = ? LIMIT ?)'), DEFAULT_PROFILE, upto),
-    chats: count(sql('SELECT COUNT(*) AS n FROM (SELECT 1 FROM duet_thread LIMIT ?)'), upto),
+    chats: count(sql('SELECT COUNT(*) AS n FROM (SELECT 1 FROM assistant_thread LIMIT ?)'), upto),
   };
 }
 
 /** The assistant chats here already, by id. */
 export function chatsHere(sql: Sql): Set<string> {
-  return new Set((sql('SELECT id FROM duet_thread').all() as { id: string }[]).map((r) => r.id));
+  return new Set((sql('SELECT id FROM assistant_thread').all() as { id: string }[]).map((r) => r.id));
 }

@@ -3,7 +3,7 @@
  * chatting about the page and your tabs. Main owns everything (threads,
  * sessions, what may be read); this renders the view it pushes and sends
  * actions back. Patterns taken from T3 Code's conversation UI (see
- * docs/research/duet.md §4.1): grouped tool activity per turn, follow-to-
+ * docs/research/assistant.md §4.1): grouped tool activity per turn, follow-to-
  * bottom with a "Jump to latest" pill, queued follow-ups, ↑ to recall the
  * last message, copy, elapsed time while working.
  *
@@ -14,41 +14,41 @@ import {
   citationIsQuoted,
   contextLabel,
   contextPercent,
-  DUET_FORM_AREA_MAX,
-  DUET_FORM_TEXT_MAX,
-  DUET_PROVIDER_NAMES,
-  DUET_SCOPE_HINTS,
-  DUET_SCOPE_NAMES,
-  DUET_SCOPE_SHORT,
-  DUET_SCOPES,
+  ASSISTANT_FORM_AREA_MAX,
+  ASSISTANT_FORM_TEXT_MAX,
+  ASSISTANT_PROVIDER_NAMES,
+  ASSISTANT_SCOPE_HINTS,
+  ASSISTANT_SCOPE_NAMES,
+  ASSISTANT_SCOPE_SHORT,
+  ASSISTANT_SCOPES,
   fieldCount,
   fillLeftOutNote,
   nameTabs,
   splitCitations,
   stripCitations,
-  type DuetContextUsage,
-  type DuetFillCard,
-  type DuetFillField,
-  type DuetImage,
-  type DuetMessage,
-  type DuetProvider,
+  type AssistantContextUsage,
+  type AssistantFillCard,
+  type AssistantFillField,
+  type AssistantImage,
+  type AssistantMessage,
+  type AssistantProvider,
 } from '@chord/core';
-import type { DuetAction, DuetView, SystemInfo } from '@chord/ipc';
+import type { AssistantAction, AssistantView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Download, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useMenu } from '../shared/a11y';
-import { DuetIcon } from '../shared/icons';
+import { AssistantIcon } from '../shared/icons';
 import { announce } from './announce';
 import { api } from './api';
 import styles from './Assistant.module.css';
 
-const act = (action: DuetAction) => void api.duet.act(action);
+const act = (action: AssistantAction) => void api.assistant.act(action);
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
 /** Follow new output unless you've scrolled further up than this (T3 Code's re-arm distance). */
 const FOLLOW_PX = 40;
 
-const MODELS: Record<DuetProvider, { value: string | null; label: string }[]> = {
+const MODELS: Record<AssistantProvider, { value: string | null; label: string }[]> = {
   claude: [
     { value: null, label: 'Default' },
     { value: 'sonnet', label: 'Sonnet' },
@@ -163,7 +163,7 @@ function Markdown({ text, onLink, marks }: { text: string; onLink(url: string): 
 }
 
 /** A reply: Markdown with numbered citation pills, in the sentence where the assistant quoted a tab. */
-function Reply({ message, onLink, names, offerCodex }: { message: DuetMessage; onLink(url: string): void; names: DuetView['tabNames']; offerCodex: boolean }) {
+function Reply({ message, onLink, names, offerCodex }: { message: AssistantMessage; onLink(url: string): void; names: AssistantView['tabNames']; offerCodex: boolean }) {
   if (message.body.role !== 'assistant') return null;
   const numbers = new Map<string, number>();
   for (const seg of splitCitations(message.body.text)) if (seg.kind === 'citation') numbers.set(`${seg.ref}:${seg.quote}`, seg.n);
@@ -232,10 +232,10 @@ function Reply({ message, onLink, names, offerCodex }: { message: DuetMessage; o
   );
 }
 
-const IMAGE_EXTENSIONS: Record<DuetImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const IMAGE_EXTENSIONS: Record<AssistantImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 
 /** An image Codex made: shown whole, from the chat's own files, with Copy and Save over its corner. */
-function MadeImage({ image }: { image: DuetImage }) {
+function MadeImage({ image }: { image: AssistantImage }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -245,7 +245,7 @@ function MadeImage({ image }: { image: DuetImage }) {
   return (
     <figure className={styles.madeImage}>
       <img
-        src={`chord://shell/duet-image/${image.id}.${IMAGE_EXTENSIONS[image.mime]}`}
+        src={`chord://shell/assistant-image/${image.id}.${IMAGE_EXTENSIONS[image.mime]}`}
         alt={image.prompt ? `Generated image: ${image.prompt}` : 'Generated image'}
         width={image.width}
         height={image.height}
@@ -274,10 +274,10 @@ function MadeImage({ image }: { image: DuetImage }) {
 
 /* ---------- Timeline ---------- */
 
-type Row = { kind: 'message'; message: DuetMessage } | { kind: 'tools'; messages: DuetMessage[] };
+type Row = { kind: 'message'; message: AssistantMessage } | { kind: 'tools'; messages: AssistantMessage[] };
 
 /** Consecutive tool activity in a turn folds into one quiet row; a fill card is a row of its own. */
-function rows(messages: readonly DuetMessage[]): Row[] {
+function rows(messages: readonly AssistantMessage[]): Row[] {
   const out: Row[] = [];
   for (const message of messages) {
     const last = out.at(-1);
@@ -289,7 +289,7 @@ function rows(messages: readonly DuetMessage[]): Row[] {
   return out;
 }
 
-function ToolRow({ messages }: { messages: DuetMessage[] }) {
+function ToolRow({ messages }: { messages: AssistantMessage[] }) {
   const [open, setOpen] = useState(false);
   const summaries = messages.map((m) => (m.body.role === 'tool' ? m.body.summary : ''));
   const reads = messages.filter((m) => m.body.role === 'tool' && (m.body.tool === 'read_tab' || m.body.tool === 'tab_screenshot')).length;
@@ -316,7 +316,7 @@ function ToolRow({ messages }: { messages: DuetMessage[] }) {
   );
 }
 
-function Approval({ message }: { message: DuetMessage }) {
+function Approval({ message }: { message: AssistantMessage }) {
   if (message.body.role !== 'approval') return null;
   const body = message.body;
   const pending = body.decision === 'pending';
@@ -367,7 +367,7 @@ function Approval({ message }: { message: DuetMessage }) {
 const EDITOR_TYPES = new Set(['email', 'tel', 'url', 'number', 'date', 'time', 'month', 'week', 'datetime-local']);
 
 /** One field's value on the card, editable: text, a choice, or checked or not. */
-function FillEditor({ field, value, disabled, onChange }: { field: DuetFillField; value: string | boolean; disabled: boolean; onChange(value: string | boolean): void }) {
+function FillEditor({ field, value, disabled, onChange }: { field: AssistantFillField; value: string | boolean; disabled: boolean; onChange(value: string | boolean): void }) {
   const common = { className: styles.fillInput, 'aria-label': field.label, disabled };
   if (field.kind === 'checkbox') {
     return (
@@ -388,7 +388,7 @@ function FillEditor({ field, value, disabled, onChange }: { field: DuetFillField
       </select>
     );
   }
-  const max = Math.min(field.kind === 'textarea' ? DUET_FORM_AREA_MAX : DUET_FORM_TEXT_MAX, field.maxLength ?? Infinity);
+  const max = Math.min(field.kind === 'textarea' ? ASSISTANT_FORM_AREA_MAX : ASSISTANT_FORM_TEXT_MAX, field.maxLength ?? Infinity);
   if (field.kind === 'textarea') {
     return <textarea {...common} rows={Math.min(5, Math.max(2, String(value).split('\n').length))} maxLength={max} value={String(value)} onChange={(e) => onChange(e.target.value)} />;
   }
@@ -396,7 +396,7 @@ function FillEditor({ field, value, disabled, onChange }: { field: DuetFillField
 }
 
 /** How a fill card ended, in a line: its fields go once it has. */
-function fillOutcome(card: DuetFillCard): string {
+function fillOutcome(card: AssistantFillCard): string {
   if (card.status === 'filled') return `Filled ${fieldCount(card.filled ?? 0)}.${card.note ? ` ${card.note}` : ''}`;
   if (card.status === 'undone') return `Filled ${fieldCount(card.filled ?? 0)}, then undone.${card.note ? ` ${card.note}` : ''}`;
   if (card.status === 'dismissed') return 'Not filled.';
@@ -410,7 +410,7 @@ function fillOutcome(card: DuetFillCard): string {
  * says not now, from inside the card only: the message field's keys never
  * write into a page.
  */
-function FillCard({ message }: { message: DuetMessage }) {
+function FillCard({ message }: { message: AssistantMessage }) {
   const card = message.body.role === 'tool' ? message.body.fill : undefined;
   const [values, setValues] = useState<Record<string, string | boolean>>(() => Object.fromEntries((card?.fields ?? []).map((f) => [f.id, f.value])));
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set(card?.fields.map((f) => f.id)));
@@ -491,7 +491,7 @@ function FillCard({ message }: { message: DuetMessage }) {
   );
 }
 
-function MessageView({ message, last, onLink, onEdit, view }: { message: DuetMessage; last: boolean; onLink(url: string): void; onEdit(message: DuetMessage): void; view: DuetView }) {
+function MessageView({ message, last, onLink, onEdit, view }: { message: AssistantMessage; last: boolean; onLink(url: string): void; onEdit(message: AssistantMessage): void; view: AssistantView }) {
   const [copied, setCopied] = useState(false);
   const copy = (text: string) => {
     void navigator.clipboard.writeText(text);
@@ -578,7 +578,7 @@ function Working({ startedAt }: { startedAt: number | null }) {
   );
 }
 
-function Timeline({ view, onLink, onEdit }: { view: DuetView; onLink(url: string): void; onEdit(message: DuetMessage): void }) {
+function Timeline({ view, onLink, onEdit }: { view: AssistantView; onLink(url: string): void; onEdit(message: AssistantMessage): void }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   const lastUser = [...view.messages].reverse().find((m) => m.body.role === 'user');
@@ -632,7 +632,7 @@ function Timeline({ view, onLink, onEdit }: { view: DuetView; onLink(url: string
 
 /* ---------- Composer ---------- */
 
-function Composer({ view, providerName, draftSeed }: { view: DuetView; providerName: string; draftSeed: { text: string; n: number } }) {
+function Composer({ view, providerName, draftSeed }: { view: AssistantView; providerName: string; draftSeed: { text: string; n: number } }) {
   const [text, setText] = useState(view.draft);
   const [picking, setPicking] = useState(false);
   const picker = useMenu(picking, () => setPicking(false));
@@ -726,7 +726,7 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
             aria-label="Attach a tab"
             aria-haspopup="menu"
             aria-expanded={picking}
-            aria-controls={picking ? 'duet-attach' : undefined}
+            aria-controls={picking ? 'assistant-attach' : undefined}
             title="Attach a tab"
             onClick={() => setPicking(!picking)}
           >
@@ -735,7 +735,7 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
         )}
       </div>
       {picking && !view.readsNothing && (
-        <ul ref={picker.ref} id="duet-attach" className={styles.picker} role="menu" aria-label="Attach a tab" onKeyDown={picker.onKeyDown}>
+        <ul ref={picker.ref} id="assistant-attach" className={styles.picker} role="menu" aria-label="Attach a tab" onKeyDown={picker.onKeyDown}>
           {view.attachable.filter((t) => !view.attachments.some((a) => a.nodeId === t.nodeId)).length === 0 && (
             <li role="none">
               <span role="menuitem" aria-disabled="true" tabIndex={-1} className={styles.muted}>
@@ -795,7 +795,7 @@ function Composer({ view, providerName, draftSeed }: { view: DuetView; providerN
  * How much of the model's context the chat has used, as the CLI reports it: a
  * small pie (a ring would read as a spinner), the details on hover or focus.
  */
-function ContextMeter({ usage, provider }: { usage: DuetContextUsage; provider: DuetProvider }) {
+function ContextMeter({ usage, provider }: { usage: AssistantContextUsage; provider: AssistantProvider }) {
   const percent = contextPercent(usage);
   const label = contextLabel(provider, usage);
   return (
@@ -822,14 +822,14 @@ function ContextMeter({ usage, provider }: { usage: DuetContextUsage; provider: 
 
 /* ---------- Setup ---------- */
 
-function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
+function Setup({ view, windowId }: { view: AssistantView; windowId: string }) {
   return (
     <div className={styles.setup}>
       <p className={styles.setupTitle}>Choose an app</p>
       <p className={styles.muted}>Use your own Claude Code or Codex app. Pick one; you can switch any time.</p>
       <ul className={styles.providers}>
         {view.providers.map((p) => {
-          const name = p.wsl ? `${DUET_PROVIDER_NAMES[p.provider]} in WSL (${p.wsl})` : DUET_PROVIDER_NAMES[p.provider];
+          const name = p.wsl ? `${ASSISTANT_PROVIDER_NAMES[p.provider]} in WSL (${p.wsl})` : ASSISTANT_PROVIDER_NAMES[p.provider];
           const ready = p.installed && p.signedIn;
           return (
             <li key={p.provider} className={styles.provider}>
@@ -884,7 +884,7 @@ function Setup({ view, windowId }: { view: DuetView; windowId: string }) {
  * answering (not each word as it streams), that it's asking to read more,
  * and that it suggests values for a form.
  */
-function useDuetAnnouncements(view: DuetView): void {
+function useAssistantAnnouncements(view: AssistantView): void {
   const wasBusy = useRef(view.busy);
   const asked = useRef(new Set(view.messages.filter((m) => m.body.role === 'approval' || (m.body.role === 'tool' && m.body.fill)).map((m) => m.id)));
   useEffect(() => {
@@ -973,7 +973,7 @@ function usePanelFocus(panel: RefObject<HTMLElement | null>, step: string, prese
 /** Off the window's right edge: where the panel slides in from and out to (DESIGN.md §6.5). */
 const OFF_RIGHT = { x: '110%' };
 
-export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId: string; info: SystemInfo; slide: { enter: Transition; exit: Transition } }) {
+export function AssistantPanel({ view, windowId, slide }: { view: AssistantView; windowId: string; info: SystemInfo; slide: { enter: Transition; exit: Transition } }) {
   // Closing, it slides out (AnimatePresence keeps it a moment): the keyboard goes back as it starts to.
   const present = useIsPresent();
   const [menu, setMenu] = useState<'thread' | 'model' | 'scope' | null>(null);
@@ -981,16 +981,16 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
   const modelMenu = useMenu(menu === 'model', () => setMenu(null));
   const threadMenu = useMenu(menu === 'thread', () => setMenu(null));
   const scopeMenu = useMenu(menu === 'scope', () => setMenu(null));
-  useDuetAnnouncements(view);
+  useAssistantAnnouncements(view);
   const thread = view.thread;
-  /** What this chat may read (DuetScope; a new chat's is "The tab you're on"). */
+  /** What this chat may read (AssistantScope; a new chat's is "The tab you're on"). */
   const scope = thread?.scope ?? 'ask';
   const ready = view.provider !== null && view.providers.some((p) => p.provider === (view.thread?.provider ?? view.provider) && p.installed && p.signedIn);
   usePanelFocus(panel, view.chordOff ? 'off' : !view.provider ? 'intro' : !ready ? 'setup' : view.firstUse ? 'first-use' : 'ready', present);
   const [renaming, setRenaming] = useState(false);
   const [seed, setSeed] = useState({ text: '', n: 0 });
   const provider = view.thread?.provider ?? view.provider ?? 'claude';
-  const providerName = DUET_PROVIDER_NAMES[provider];
+  const providerName = ASSISTANT_PROVIDER_NAMES[provider];
   const openLink = (url: string) => void api.state.dispatch({ t: 'tab.open', windowId, url });
   const modelLabel = MODELS[provider].find((m) => m.value === (view.thread?.model ?? null))?.label ?? view.thread?.model ?? 'Default';
   const empty = view.messages.length === 0;
@@ -1000,7 +1000,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
       ref={panel}
       className={styles.panel}
       aria-label="Assistant"
-      data-region="duet"
+      data-region="assistant"
       inert={!present}
       initial={OFF_RIGHT}
       animate={{ x: 0, transition: slide.enter }}
@@ -1024,7 +1024,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
             }}
           />
         ) : (
-          <span className={`${styles.title} ${styles.ellipsis}`}>{thread?.title || <DuetIcon {...ICON} aria-hidden />}</span>
+          <span className={`${styles.title} ${styles.ellipsis}`}>{thread?.title || <AssistantIcon {...ICON} aria-hidden />}</span>
         )}
         {ready && view.context && <ContextMeter usage={view.context} provider={provider} />}
         {ready && (
@@ -1033,7 +1033,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
             className={styles.chip}
             aria-haspopup="menu"
             aria-expanded={menu === 'model'}
-            aria-controls={menu === 'model' ? 'duet-model' : undefined}
+            aria-controls={menu === 'model' ? 'assistant-model' : undefined}
             onClick={() => setMenu(menu === 'model' ? null : 'model')}
           >
             {providerName} · {modelLabel}
@@ -1047,7 +1047,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
           title="Chats"
           aria-haspopup="menu"
           aria-expanded={menu === 'thread'}
-          aria-controls={menu === 'thread' ? 'duet-chats' : undefined}
+          aria-controls={menu === 'thread' ? 'assistant-chats' : undefined}
           onClick={() => setMenu(menu === 'thread' ? null : 'thread')}
         >
           <Ellipsis {...ICON} />
@@ -1058,13 +1058,13 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
       </header>
 
       {menu === 'model' && (
-        <ul ref={modelMenu.ref} id="duet-model" className={styles.menu} role="menu" aria-label="Model" onKeyDown={modelMenu.onKeyDown}>
+        <ul ref={modelMenu.ref} id="assistant-model" className={styles.menu} role="menu" aria-label="Model" onKeyDown={modelMenu.onKeyDown}>
           {(['claude', 'codex'] as const)
             .filter((p) => view.providers.some((s) => s.provider === p && s.installed && s.signedIn))
             .map((p) => (
-              <li key={p} role="group" aria-labelledby={`duet-model-${p}`} className={styles.menuGroup}>
-                <span id={`duet-model-${p}`} className={styles.menuLabel}>
-                  {DUET_PROVIDER_NAMES[p]}
+              <li key={p} role="group" aria-labelledby={`assistant-model-${p}`} className={styles.menuGroup}>
+                <span id={`assistant-model-${p}`} className={styles.menuLabel}>
+                  {ASSISTANT_PROVIDER_NAMES[p]}
                 </span>
                 {MODELS[p].map((m) => (
                   <span key={`${p}:${m.label}`} role="none">
@@ -1088,7 +1088,7 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
         </ul>
       )}
       {menu === 'thread' && (
-        <ul ref={threadMenu.ref} id="duet-chats" className={styles.menu} role="menu" aria-label="Chats" onKeyDown={threadMenu.onKeyDown}>
+        <ul ref={threadMenu.ref} id="assistant-chats" className={styles.menu} role="menu" aria-label="Chats" onKeyDown={threadMenu.onKeyDown}>
           <li role="none">
             <button type="button" role="menuitem" tabIndex={-1} className={styles.menuItem} onClick={() => {
                     act({ do: 'new' });
@@ -1126,8 +1126,8 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
             </>
           )}
           {view.threads.filter((t) => t.id !== thread?.id).length > 0 && (
-            <li role="group" aria-labelledby="duet-recent" className={styles.menuGroup}>
-              <span id="duet-recent" className={styles.menuLabel}>
+            <li role="group" aria-labelledby="assistant-recent" className={styles.menuGroup}>
+              <span id="assistant-recent" className={styles.menuLabel}>
                 Recent chats
               </span>
               {view.threads
@@ -1201,34 +1201,34 @@ export function DuetPanel({ view, windowId, slide }: { view: DuetView; windowId:
                 className={styles.chip}
                 aria-haspopup="menu"
                 aria-expanded={menu === 'scope'}
-                aria-controls={menu === 'scope' ? 'duet-scope' : undefined}
-                title={DUET_SCOPE_HINTS[scope]}
+                aria-controls={menu === 'scope' ? 'assistant-scope' : undefined}
+                title={ASSISTANT_SCOPE_HINTS[scope]}
                 onClick={() => setMenu(menu === 'scope' ? null : 'scope')}
               >
-                {DUET_SCOPE_SHORT[scope]}
+                {ASSISTANT_SCOPE_SHORT[scope]}
                 <ChevronDown size={12} strokeWidth={2} aria-hidden />
               </button>
             )}
             {menu === 'scope' && (
-              <ul ref={scopeMenu.ref} id="duet-scope" className={`${styles.menu} ${styles.scopeMenu}`} role="menu" aria-label="What it can read" onKeyDown={scopeMenu.onKeyDown}>
-                {DUET_SCOPES.map((s) => (
+              <ul ref={scopeMenu.ref} id="assistant-scope" className={`${styles.menu} ${styles.scopeMenu}`} role="menu" aria-label="What it can read" onKeyDown={scopeMenu.onKeyDown}>
+                {ASSISTANT_SCOPES.map((s) => (
                   <li key={s} role="none">
                     <button
                       type="button"
                       role="menuitemradio"
                       tabIndex={-1}
                       aria-checked={scope === s}
-                      aria-label={DUET_SCOPE_NAMES[s]}
-                      aria-describedby={`duet-scope-${s}`}
+                      aria-label={ASSISTANT_SCOPE_NAMES[s]}
+                      aria-describedby={`assistant-scope-${s}`}
                       className={`${styles.menuItem} ${styles.scopeItem}`}
                       onClick={() => {
                         act({ do: 'scope', scope: s });
                         setMenu(null);
                       }}
                     >
-                      <span>{DUET_SCOPE_NAMES[s]}</span>
-                      <span id={`duet-scope-${s}`} className={styles.scopeHint}>
-                        {DUET_SCOPE_HINTS[s]}
+                      <span>{ASSISTANT_SCOPE_NAMES[s]}</span>
+                      <span id={`assistant-scope-${s}`} className={styles.scopeHint}>
+                        {ASSISTANT_SCOPE_HINTS[s]}
                       </span>
                     </button>
                   </li>

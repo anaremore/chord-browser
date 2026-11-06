@@ -10,7 +10,7 @@ import {
   ARCHIVE_KEEP_MS,
   dayOf,
   decayOfVisits,
-  duetMessageText,
+  assistantMessageText,
   foldChoiceText,
   frecencyOn,
   HALF_LIFE_DAYS,
@@ -27,8 +27,8 @@ import {
   type Chord,
   type Choice,
   type Download,
-  type DuetMessage,
-  type DuetThread,
+  type AssistantMessage,
+  type AssistantThread,
   type ExportCounts,
   type Favorite,
   type ImportedPage,
@@ -42,7 +42,7 @@ import {
   type WindowModel,
 } from '@chord/core';
 import type { ArchiveEntry, ArchivePage, HistoryEvent, NavState, SearchResult, WriteOp } from './index';
-import { runDuet, threadOf, type DuetOp, type DuetResult } from './duet';
+import { runAssistant, threadOf, type AssistantOp, type AssistantResult } from './assistant';
 import { exportCounts } from './export';
 import { MIGRATIONS } from './migrations';
 import { chordOf, favoriteOf, iconOf, nodeOf, nodeSelect, num, parseJson, siteEffectsOf, str, strOrNull, type Row } from './rows';
@@ -768,14 +768,14 @@ export class ChordDatabase {
    * anywhere until you write in it. Returns the threads and the number of
    * messages it added.
    */
-  importDuet(importId: string, threads: readonly DuetThread[], messages: readonly DuetMessage[]): { threads: string[]; messages: number } {
+  importAssistant(importId: string, threads: readonly AssistantThread[], messages: readonly AssistantMessage[]): { threads: string[]; messages: number } {
     const added = { threads: [] as string[], messages: 0 };
     if (this.undoneImports.has(importId)) return added;
     this.importTables();
     this.transaction(() => {
       for (const t of threads) {
         const result = this.sql(
-          `INSERT INTO duet_thread (id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at, imported_at)
+          `INSERT INTO assistant_thread (id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at, imported_at)
            VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
         ).run(t.id, t.chordId, t.title, t.provider, t.model, t.scope, t.createdAt, t.updatedAt, t.lastUsedAt, t.importedAt ?? Date.now());
         if (result.changes === 0) continue;
@@ -784,11 +784,11 @@ export class ChordDatabase {
       }
       for (const m of messages) {
         if (!this.sql('SELECT 1 FROM import_thread WHERE import_id = ? AND thread_id = ?').get(importId, m.threadId)) continue;
-        const result = this.sql('INSERT INTO duet_message (id, thread_id, role, text, body, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING').run(
+        const result = this.sql('INSERT INTO assistant_message (id, thread_id, role, text, body, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING').run(
           m.id,
           m.threadId,
           m.body.role,
-          duetMessageText(m.body),
+          assistantMessageText(m.body),
           JSON.stringify(m.body),
           m.createdAt,
         );
@@ -808,8 +808,8 @@ export class ChordDatabase {
    * messages it added: the threads come back, for main to end their sessions
    * and delete the providers' copies.
    */
-  undoImport(importId: string, now = Date.now()): DuetThread[] {
-    const threads: DuetThread[] = [];
+  undoImport(importId: string, now = Date.now()): AssistantThread[] {
+    const threads: AssistantThread[] = [];
     for (;;) {
       const slice = this.undoImportSlice(importId, now);
       threads.push(...slice.threads);
@@ -824,14 +824,14 @@ export class ChordDatabase {
    * first, then its visits a batch's ids at a time, then `pages` of the
    * history pages it touched at a time. `done` once nothing of it is left.
    */
-  undoImportSlice(importId: string, now = Date.now(), pages = UNDO_SLICE): { done: boolean; threads: DuetThread[] } {
+  undoImportSlice(importId: string, now = Date.now(), pages = UNDO_SLICE): { done: boolean; threads: AssistantThread[] } {
     this.undoneImports.add(importId);
     this.importTables();
-    const threads = (this.sql('SELECT t.* FROM duet_thread t JOIN import_thread i ON i.thread_id = t.id WHERE i.import_id = ?').all(importId) as Row[]).map(threadOf);
+    const threads = (this.sql('SELECT t.* FROM assistant_thread t JOIN import_thread i ON i.thread_id = t.id WHERE i.import_id = ?').all(importId) as Row[]).map(threadOf);
     if (threads.length > 0 || this.sql('SELECT 1 FROM import_message WHERE import_id = ? LIMIT 1').get(importId)) {
       this.transaction(() => {
-        this.sql('DELETE FROM duet_message WHERE id IN (SELECT message_id FROM import_message WHERE import_id = ?)').run(importId);
-        this.sql('DELETE FROM duet_thread WHERE id IN (SELECT thread_id FROM import_thread WHERE import_id = ?)').run(importId);
+        this.sql('DELETE FROM assistant_message WHERE id IN (SELECT message_id FROM import_message WHERE import_id = ?)').run(importId);
+        this.sql('DELETE FROM assistant_thread WHERE id IN (SELECT thread_id FROM import_thread WHERE import_id = ?)').run(importId);
         this.sql('DELETE FROM import_message WHERE import_id = ?').run(importId);
         this.sql('DELETE FROM import_thread WHERE import_id = ?').run(importId);
       });
@@ -920,9 +920,9 @@ export class ChordDatabase {
     this.db.exec(`PRAGMA wal_autocheckpoint = ${this.elsewhere ? 0 : this.writingImports > 0 ? IMPORT_CHECKPOINT : DEFAULT_CHECKPOINT}`);
   }
 
-  /** The assistant's threads and messages (packages/data/src/duet.ts). */
-  duet(op: DuetOp): DuetResult {
-    return runDuet((text) => this.sql(text), op);
+  /** The assistant's threads and messages (packages/data/src/assistant.ts). */
+  assistant(op: AssistantOp): AssistantResult {
+    return runAssistant((text) => this.sql(text), op);
   }
 
   /**
@@ -1059,10 +1059,10 @@ export class ChordDatabase {
       return;
     }
     this.sql(
-      `INSERT INTO effect (host, wet, css, css_on, hidden, presets, duet, compiled, sanitizer, created_at, updated_at)
+      `INSERT INTO effect (host, wet, css, css_on, hidden, presets, assistant, compiled, sanitizer, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(host) DO UPDATE SET wet = excluded.wet, css = excluded.css, css_on = excluded.css_on, hidden = excluded.hidden, presets = excluded.presets,
-         duet = excluded.duet, compiled = excluded.compiled, sanitizer = excluded.sanitizer, updated_at = excluded.updated_at`,
+         assistant = excluded.assistant, compiled = excluded.compiled, sanitizer = excluded.sanitizer, updated_at = excluded.updated_at`,
     ).run(
       host,
       site.wet ? 1 : 0,
@@ -1070,7 +1070,7 @@ export class ChordDatabase {
       site.cssOn ? 1 : 0,
       JSON.stringify(site.hidden),
       JSON.stringify(site.presets),
-      JSON.stringify(site.duet),
+      JSON.stringify(site.assistant),
       site.compiled,
       site.sanitizer,
       site.createdAt,

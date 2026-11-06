@@ -9,7 +9,7 @@
  * a filter (`@tabs`, `@history`, …) shows only that kind. The engine's search
  * suggestions come last, so they never move the rows above them.
  */
-import { type DuetHit,
+import { type AssistantHit,
   abbreviationScore,
   habit,
   keywordFor,
@@ -39,7 +39,7 @@ import { type DuetHit,
 import type { HistorySearch } from '@chord/ipc';
 import { displayHost, pageTitle } from '../shared/site';
 
-export type Filter = 'tabs' | 'pinned' | 'history' | 'archive' | 'duet' | 'chords' | 'actions';
+export type Filter = 'tabs' | 'pinned' | 'history' | 'archive' | 'chats' | 'chords' | 'actions';
 export type Scope = { kind: 'keyword'; keyword: SiteKeyword } | { kind: 'filter'; filter: Filter };
 
 export type Result =
@@ -49,8 +49,8 @@ export type Result =
   | { kind: 'history'; key: string; title: string; detail: string; url: string }
   /** A tab in the archive: picking it brings the tab back, history and all. */
   | { kind: 'archive'; key: string; title: string; detail: string; url: string; archiveId: string }
-  /** An assistant chat whose words match (@duet): picking it opens the chat. */
-  | { kind: 'duet'; key: string; title: string; detail: string; threadId: string; chordId: string }
+  /** An assistant chat whose words match (@chats): picking it opens the chat. */
+  | { kind: 'assistant'; key: string; title: string; detail: string; threadId: string; chordId: string }
   | { kind: 'action'; key: string; title: string; action: ActionId }
   | { kind: 'chord'; key: string; title: string; chord: Chord }
   /** A way to narrow the bar: search a site, or show one kind of result. */
@@ -58,7 +58,7 @@ export type Result =
   /** A pasted or dropped image (DESIGN.md §7.3): search the web by it. */
   | { kind: 'imageSearch'; key: string; title: string; engine: ImageSearchEngine }
   /** A pasted or dropped image: ask the assistant about it, with the words typed. */
-  | { kind: 'imageDuet'; key: string; title: string };
+  | { kind: 'imageAssistant'; key: string; title: string };
 
 /** The narrowing filters (DESIGN.md §7.3), in the order `@` lists them. */
 export const FILTERS: readonly { id: Filter; token: string; name: string; placeholder: string }[] = [
@@ -66,7 +66,7 @@ export const FILTERS: readonly { id: Filter; token: string; name: string; placeh
   { id: 'pinned', token: '@pinned', name: 'Pinned', placeholder: 'Search pinned tabs' },
   { id: 'history', token: '@history', name: 'History', placeholder: 'Search history' },
   { id: 'archive', token: '@archive', name: 'Archive', placeholder: 'Search the archive' },
-  { id: 'duet', token: '@duet', name: 'Assistant chats', placeholder: 'Search assistant chats' },
+  { id: 'chats', token: '@chats', name: 'Chats', placeholder: 'Search chats' },
   { id: 'chords', token: '@chords', name: 'Chords', placeholder: 'Search chords' },
   { id: 'actions', token: '@actions', name: 'Actions', placeholder: 'Search actions' },
 ];
@@ -252,7 +252,7 @@ export function shortUrl(url: string): string {
 export function destinationOf(result: Result): string | null {
   switch (result.kind) {
     case 'imageSearch':
-    case 'imageDuet':
+    case 'imageAssistant':
       return null;
     case 'open':
       return result.search ? null : placeKey(result.url);
@@ -266,7 +266,7 @@ export function destinationOf(result: Result): string | null {
     case 'action':
       return `action:${result.action}`;
     case 'scope':
-    case 'duet':
+    case 'assistant':
       return null;
   }
 }
@@ -301,8 +301,8 @@ export interface Narrowing {
   scope?: Scope | null;
   /** The engine's suggestions for the text, newest reply. */
   suggestions?: readonly string[];
-  /** Assistant chats matching the text (@duet), newest reply. */
-  duetHits?: readonly DuetHit[];
+  /** Assistant chats matching the text (@chats), newest reply. */
+  assistantHits?: readonly AssistantHit[];
 }
 
 /**
@@ -336,7 +336,7 @@ function resultsFor(
   mode: 'new' | 'edit',
   history: HistorySearch | null,
   now: number,
-  { scope = null, suggestions = [], duetHits = [] }: Narrowing,
+  { scope = null, suggestions = [], assistantHits = [] }: Narrowing,
 ): Result[] {
   const q = query.trim();
   const win = state.windows[windowId];
@@ -357,8 +357,8 @@ function resultsFor(
   const suggestionRows = (into: (text: string) => string): Result[] =>
     suggestions.map((text) => ({ kind: 'open', key: `suggest:${text}`, title: text, detail: '', url: into(text), search: true, suggested: true }));
 
-  if (scope?.kind === 'filter' && scope.filter === 'duet') {
-    return duetHits.map((h) => ({ kind: 'duet', key: `duet:${h.messageId}`, title: h.threadTitle || 'Assistant chat', detail: h.snippet, threadId: h.threadId, chordId: h.chordId }));
+  if (scope?.kind === 'filter' && scope.filter === 'chats') {
+    return assistantHits.map((h) => ({ kind: 'assistant', key: `assistant:${h.messageId}`, title: h.threadTitle || 'Assistant chat', detail: h.snippet, threadId: h.threadId, chordId: h.chordId }));
   }
   if (scope?.kind === 'filter') return filtered(scope.filter, q, state, windowId, win?.activeChordId ?? null, activeId ?? null, tabs, tabResult, history, now);
 
@@ -608,8 +608,8 @@ function filtered(
         () => 0,
         (a) => ({ kind: 'action', key: `action:${a.action}`, title: a.title, action: a.action }),
       );
-    case 'duet':
-      // Answered by chord-data (buildResults' duetHits), not ranked here.
+    case 'chats':
+      // Answered by chord-data (buildResults' assistantHits), not ranked here.
       return [];
   }
 }

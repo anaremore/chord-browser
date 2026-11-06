@@ -10,7 +10,7 @@
  * the size and page caps hold.
  */
 import { join } from 'node:path';
-import { DUET_PDF_MAX_BYTES } from '@chord/core';
+import { ASSISTANT_PDF_MAX_BYTES } from '@chord/core';
 import { utilityProcess, type WebContents } from 'electron';
 import type { PdfReply } from '../../pdf/worker';
 
@@ -29,7 +29,7 @@ export class PdfError extends Error {
 export function pdfProblemCopy(problem: PdfProblem, detail = ''): string {
   switch (problem) {
     case 'too-big':
-      return `it’s larger than ${Math.round(DUET_PDF_MAX_BYTES / (1024 * 1024))} MB, the most Chord reads`;
+      return `it’s larger than ${Math.round(ASSISTANT_PDF_MAX_BYTES / (1024 * 1024))} MB, the most Chord reads`;
     case 'not-pdf':
       return 'the tab no longer shows a PDF';
     case 'never':
@@ -88,7 +88,7 @@ export function looksLikePdf(bytes: Uint8Array): boolean {
  * The PDF a tab shows, fetched through that tab's session. `readable` is
  * asked about the address the fetch ended at, after any redirects.
  */
-export async function fetchPdf(contents: WebContents, url: string, readable: (finalUrl: string) => boolean, maxBytes = DUET_PDF_MAX_BYTES): Promise<Uint8Array> {
+export async function fetchPdf(contents: WebContents, url: string, readable: (finalUrl: string) => boolean, maxBytes = ASSISTANT_PDF_MAX_BYTES): Promise<Uint8Array> {
   let response: Response;
   try {
     // The viewer just loaded it, so the HTTP cache usually has it; if not, it's downloaded with the tab's cookies.

@@ -53,7 +53,7 @@ export function exportText(p: ExportProgress): string {
       return 'Writing Today tabs…';
     case 'history':
       return `Writing history: ${numbers.format(p.done)} of ${plural(p.total, 'page')}`;
-    case 'duet':
+    case 'assistant':
       return `Writing assistant chats: ${numbers.format(p.done)} of ${plural(p.total, 'chat')}`;
     case 'done':
       return `Saved ${p.name}, ${fileSize(p.bytes ?? 0)}${p.skipped ? `. ${plural(p.skipped, 'thing')} too big for the file (over 32 MB) stayed out.` : ''}`;
@@ -68,7 +68,7 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
   const [open, setOpen] = useState(false);
   const [counts, setCounts] = useState<ExportCounts | null>(null);
   const [history, setHistory] = useState(true);
-  const [duet, setDuet] = useState(true);
+  const [assistant, setAssistant] = useState(true);
   const encrypt = snapshot.settings.encryptExports;
   const [passphrase, setPassphrase] = useState('');
   const [repeat, setRepeat] = useState('');
@@ -108,7 +108,7 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
     if (!ready) return setTouched(true);
     setBusy(false);
     started.current = '';
-    const result = await api.exports.run({ history, duet, passphrase: encrypt ? passphrase : null }).catch(() => ({ ok: false, problem: 'cancelled' }) as const);
+    const result = await api.exports.run({ history, assistant, passphrase: encrypt ? passphrase : null }).catch(() => ({ ok: false, problem: 'cancelled' }) as const);
     if (result.ok) {
       started.current = result.exportId;
       setProgress((p) => (p?.exportId === result.exportId ? p : { exportId: result.exportId, phase: encrypt ? 'key' : 'setup', done: 0, total: 0, share: 0, name: result.name }));
@@ -153,10 +153,10 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
             description={counts ? (counts.pages ? plural(counts.pages, 'page') : 'No history yet') : ''}
             control={<Switch label="Include history" checked={history} onChange={setHistory} />}
           />
-          <Row label="Assistant chats" description={chats} control={<Switch label="Include assistant chats" checked={duet} onChange={setDuet} />} />
+          <Row label="Assistant chats" description={chats} control={<Switch label="Include assistant chats" checked={assistant} onChange={setAssistant} />} />
           <Row
             label="Encrypt with a passphrase"
-            description={encrypt ? 'Chord can’t open the file without it, and can’t get it back for you.' : history || duet ? 'Anyone with the file can read it.' : undefined}
+            description={encrypt ? 'Chord can’t open the file without it, and can’t get it back for you.' : history || assistant ? 'Anyone with the file can read it.' : undefined}
             control={<Switch label="Encrypt with a passphrase" checked={encrypt} onChange={(encryptExports) => void api.settings.set({ encryptExports })} />}
           />
           {encrypt && (

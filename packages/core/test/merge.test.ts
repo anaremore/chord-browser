@@ -70,7 +70,7 @@ const tab = (id: string, chordId: string, extra: Partial<TabNode> = {}): TabNode
   createdAt: 1,
   ...extra,
 });
-const effects = (host: string, css: string): SiteEffects => ({ host, wet: true, css, cssOn: true, hidden: [], presets: [], duet: [], createdAt: 1, updatedAt: 1 });
+const effects = (host: string, css: string): SiteEffects => ({ host, wet: true, css, cssOn: true, hidden: [], presets: [], assistant: [], createdAt: 1, updatedAt: 1 });
 
 /** A state's setup as an export writes it: every record with `at`, and settings that differ from the defaults as rows. */
 function recordsOf(state: State, at: Stamp, extra: { effects?: SiteEffects[]; settings?: Record<string, unknown> } = {}): DataRecord[] {

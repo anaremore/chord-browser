@@ -60,12 +60,12 @@ describe('IPC contract', () => {
   it('gives Your data’s export to Settings alone: what goes in and a passphrase, never where it goes', () => {
     for (const channel of ['export:counts', 'export:run', 'export:show'] as const) expect(invokeChannels[channel].roles).toEqual(['internal']);
     const run = invokeChannels['export:run'].request;
-    expect(run.safeParse({ history: true, duet: false, passphrase: null }).success).toBe(true);
-    expect(run.safeParse({ history: true, duet: true, passphrase: 'harbor tulip velvet' }).success).toBe(true);
+    expect(run.safeParse({ history: true, assistant: false, passphrase: null }).success).toBe(true);
+    expect(run.safeParse({ history: true, assistant: true, passphrase: 'harbor tulip velvet' }).success).toBe(true);
     // At least 12 characters, as Settings says.
-    expect(run.safeParse({ history: true, duet: true, passphrase: 'too short' }).success).toBe(false);
+    expect(run.safeParse({ history: true, assistant: true, passphrase: 'too short' }).success).toBe(false);
     // Main asks where with the system's save dialog: a renderer can't name a path.
-    expect(run.safeParse({ history: true, duet: true, passphrase: null, path: '/etc/cron.d/x' }).success).toBe(false);
+    expect(run.safeParse({ history: true, assistant: true, passphrase: null, path: '/etc/cron.d/x' }).success).toBe(false);
   });
 
   it('gives import from a Chord file to Settings alone, naming a file by its id, and checks the settings a file brings', () => {
@@ -74,8 +74,8 @@ describe('IPC contract', () => {
     expect(open.safeParse({ fileId: 'f1', passphrase: null }).success).toBe(true);
     expect(open.safeParse({ fileId: 'f1', passphrase: null, path: '/etc/passwd' }).success).toBe(false);
     const run = invokeChannels['importFile:run'].request;
-    expect(run.safeParse({ fileId: 'f1', choices: { history: true, duet: false, effects: true, settings: false } }).success).toBe(true);
-    expect(run.safeParse({ fileId: 'f1', choices: { history: true, duet: false, effects: true, settings: false, permissions: 'allow' } }).success).toBe(false);
+    expect(run.safeParse({ fileId: 'f1', choices: { history: true, assistant: false, effects: true, settings: false } }).success).toBe(true);
+    expect(run.safeParse({ fileId: 'f1', choices: { history: true, assistant: false, effects: true, settings: false, permissions: 'allow' } }).success).toBe(false);
     expect(ImportedSettings.safeParse({ searchEngine: 'kagi', safeBrowsingAsked: true, reader: { font: 'serif' } }).success).toBe(true);
     for (const bad of [{ searchEngine: 'evil.example' }, { uiScale: 1.25 }, { checkForUpdates: false }, { onboarded: false }, { reader: { font: 'comic' } }]) expect(ImportedSettings.safeParse(bad).success).toBe(false);
   });

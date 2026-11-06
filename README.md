@@ -36,7 +36,7 @@ Everything here works on `main` today and comes with the latest preview.
 |---|---|
 | ![The command bar over a page, with open tabs, a site search and suggestions for "wiki"](site/public/images/command-bar-1440.webp) | ![Split view: a Wikipedia article and an MDN page side by side](site/public/images/split-view-1440.webp) |
 | **Command bar:** tabs, history, the archive and actions in one place. | **Split view:** pages side by side, one entry in the sidebar. |
-| ![The assistant beside a Wikipedia article, answering from the page with a numbered citation](site/public/images/duet-1440.webp) | ![Settings, Appearance: the color scheme and a library of themes for the chord](site/public/images/themes-860.webp) |
+| ![The assistant beside a Wikipedia article, answering from the page with a numbered citation](site/public/images/assistant-1440.webp) | ![Settings, Appearance: the color scheme and a library of themes for the chord](site/public/images/themes-860.webp) |
 | **Assistant:** answers from your tabs, with citations you can click. | **Themes:** each chord has its own colors, light or dark. |
 
 ## Try the preview

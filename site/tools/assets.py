@@ -29,7 +29,7 @@ IMAGES = OUT / "images"
 # The screenshots the page shows, by name: each a whole Chord window at 2x, 2880 x 1800
 # (Settings, 1720 x 1240). The page gives them half that as width and height, and lets
 # the browser pick the 2x file or the 1x one by the width it shows them at (srcset).
-SCREENSHOTS = ["chord-light", "chord-dark", "command-bar", "split-view", "duet", "themes"]
+SCREENSHOTS = ["chord-light", "chord-dark", "command-bar", "split-view", "assistant", "themes"]
 
 
 def webp(name: str) -> None:

@@ -101,7 +101,7 @@ export function siteEffectsOf(r: Row): SiteEffects | null {
     cssOn: num(r['css_on']) !== 0,
     hidden: parseJson<unknown>(r['hidden'], []),
     presets: parseJson<unknown>(r['presets'], []),
-    duet: parseJson<unknown>(r['duet'], []),
+    assistant: parseJson<unknown>(r['assistant'], []),
     createdAt: num(r['created_at']),
     updatedAt: num(r['updated_at']),
   });

@@ -223,7 +223,7 @@ Bundling: one variable `woff2`, preloaded. `font-display: block` is safe because
 | `size-row` | 32 | `size-icon-sm` / `size-icon` / `size-icon-lg` | 12 / 16 / 20 |
 | `size-header` | 40 | `size-favicon` | 16 |
 | `size-hit-min` | 24 (WCAG 2.2 AA target size) | `size-chord-icon` | 20 |
-| `sidebar-width` | 248 (200–400) | `duet-width` | 380 (320–560) |
+| `sidebar-width` | 248 (200–400) | `assistant-width` | 380 (320–560) |
 | `frame-inset` | 4 | `strip-height` (Win/Linux) | 40 |
 | `command-bar-width` | clamp(480, 56% of frame, 680) | `preview-width` | 280 |
 
@@ -484,14 +484,14 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 
 | Area | Components |
 |---|---|
-| Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ReaderButton` (§7.11), `EffectsButton` (§7.15), `ContentFrame` (placeholder + shadow + loading bar), `DevtoolsFrame` (header, edge; §7.16), `DuetFrame` |
+| Window | `WindowShell`, `TrafficLightInset` (macOS), `TopStrip` (Win/Linux, WCO-aware), `MinimalBar` (`SidebarToggle`, `AddressField`; §3.3), `ReaderButton` (§7.11), `EffectsButton` (§7.15), `ContentFrame` (placeholder + shadow + loading bar), `DevtoolsFrame` (header, edge; §7.16), `AssistantFrame` |
 | Sidebar | `SidebarHeader`, `NavButtons`, `UrlPill`, `ChordHeader`, `SortableTree` (wraps @dnd-kit/react), `TabRow`, `FolderRow`, `SplitRow`, `TodayDivider`, `NewTabRow`, `ExtensionsShelf` (`ExtensionButton` with badge, `PuzzleButton`, "Add to Chord" on Web Store pages), `PresentingCard` (§7.13), `NowPlayingCard` (§7.10), `SidebarFooter`, `ChordSwitcher`, `SidebarResizeHandle` |
 | Overlays | `CommandBar` (`CommandInput`, `ResultSection`, `ResultRow`, `HintBar`), `PeekCard`, `SplitDropZones`, `FindBar`, `CaptureLayer` (§7.12) |
 | Popovers | `HoverPreview` (tab and folder variants), `PermissionPrompt`, `ShareCard` (the share picker: a tab, a window or a screen, §7.13), `EffectsCard` (a site's Effects, §7.15), `DownloadsPopover`, `ExtensionsList` (the puzzle piece's list), `ExtensionPopup` (an extension's own page, sized to it) |
 | Feedback | `Toast` + `ToastStack`, `Tooltip`, `LoadingBar`, `Spinner`, `EmptyState`, `SafeBrowsingWarning` (§9), and in the popover the one-time `SafeBrowsingOffer`, the `PasskeyCard` (when a security key holds several passkeys for a site: a fingerprint glyph, *Sign in to [site] with a passkey*, a button per account with the site's display name over its account name, the first one focused, and Cancel; Escape declines), the `DrmNotice` (on a service that needs Widevine: a screen-and-play glyph, *[Service] won’t play in Chord yet*, why in a line, Chord Player first when it's offered (§7.14: its own full-width row, primary), then *Open in [browser]* for up to two other browsers on the computer, the likeliest primary when Chord Player isn't offered; × is Not now, until Chord quits) and the `AuthCard` sign-in box (a site or proxy asking for a username and password: a key, *Sign in to* the origin, the site's realm as a quote, *That username and password didn't work* in `danger` after a failed try, a warning on plain HTTP, two fields, *Cancel* · **Sign in**; Escape cancels) |
 | Settings and help | `SettingRow` (label, control, and a ↺ reset button shown only when the value differs from its default), `ShortcutSheet` (the cheat sheet, generated from the shortcut registry) |
 | Theme | `ThemePicker` (`ColorWheel`, `SwatchRow`, `PresetRow`, `GrainSlider`, `AppearanceSegmented`, `SurpriseButton`), `ChordIconPicker` |
-| Assistant | `DuetPanel`, `ThreadHeader` (title, provider/model chip, thread menu), `MessageList`, `AssistantMessage` (with `CitationPill`), `ToolActivityRow`, `ApprovalCard`, `Composer` (`ContextChips`, input, send), `DuetSetup` |
+| Assistant | `AssistantPanel`, `ThreadHeader` (title, provider/model chip, thread menu), `MessageList`, `AssistantMessage` (with `CitationPill`), `ToolActivityRow`, `ApprovalCard`, `Composer` (`ContextChips`, input, send), `AssistantSetup` |
 | Pages | `SettingsPage`, `ArchivePage`, `RecentlyDeleted`, `ReaderView` (`ReaderBar`, `TextControls`, `ArticleContent`; §7.11) |
 | Primitives (`packages/ui`) | `Button` (primary, secondary, ghost, danger), `IconButton`, `Keycap`, `Toggle`, `Segmented`, `Slider`, `TextField`, `Favicon`, `ChordIcon`, `Menu` (wraps native menus) |
 
@@ -542,7 +542,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
   - **Search [engine] for this image** (`scan-search` icon): your engine's own image search, Google Lens or Bing. An engine that has none (DuckDuckGo, Brave, Kagi, Ecosia) gets Google Lens, named on the row so sending the image there is a choice; Google-free mode gets Bing. ↵ opens it in a new tab (here, when editing an address), ⌘↵ behind.
   - **Ask about this image** (the assistant's icon), when the assistant is set up and on in this chord: the panel opens and the message goes, the image with the words you typed as the question (or *What is in this image?*). With no words typed it's the second row; with words it's the first, as *Ask about this image: [your words]*.
   Nothing leaves Chord before a row is chosen.
-- **Narrowing:** `@tabs`, `@pinned`, `@history`, `@archive`, `@chords`, `@actions` filter the results. A site keyword such as `yt` or `gh` followed by Tab switches to searching that site.
+- **Narrowing:** `@tabs`, `@pinned`, `@history`, `@archive`, `@chats`, `@chords`, `@actions` filter the results. A site keyword such as `yt` or `gh` followed by Tab switches to searching that site.
 - **Ranking** follows Crest's tested scoring (MPL-2.0; ported in M1.4): match position, recency, frecency, open/pinned bonuses, top-hit rules, and learning which result you pick for the same text.
 - **`HintBar`:** "↵ Open · ⌘↵ New tab · Tab Complete · Esc Close". It fades out for good after the user has used each hint 3 times, so beginners get guidance and experts get quiet.
 
@@ -617,7 +617,7 @@ Opened from chord ⋯ → *Edit theme*, and inline in onboarding.
   - **Contrast:** how strongly dividers, hovers and secondary text stand out.
   - **Window tint:** how much color covers the OS material.
 
-### 7.8 `DuetPanel`
+### 7.8 `AssistantPanel`
 
 As built in Phase 2. The assistant chats and reads; it never changes your tabs (ARCHITECTURE.md §11). It fills a form only when you ask, after you check its values (D16, `FillCard` below).
 
@@ -1298,7 +1298,7 @@ Hotkeys are a first-class feature. Every action in Chord is reachable from the k
   - ↑ ↓ move; ↵ opens (switching to the tab if it's already open).
   - ⌘↵ opens in a new background tab, ⇧↵ in a new window, ⌥↵ in a split (Phase 2).
   - Tab accepts the inline completion, or after a site keyword (`yt`, `gh`, …) switches to searching that site.
-  - `@tabs`, `@pinned`, `@history`, `@archive`, `@chords` and `@actions` narrow results.
+  - `@tabs`, `@pinned`, `@history`, `@archive`, `@chats`, `@chords` and `@actions` narrow results.
   - ⇧⌫ / Shift+Delete removes the selected history suggestion (Chrome's key).
   - ⌘C / Ctrl+C with no text selected copies the selected result's address.
   - Esc closes; in ⌘L mode it also restores the address.

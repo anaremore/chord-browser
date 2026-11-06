@@ -45,10 +45,10 @@ const READER_CONTENT_SECURITY_POLICY = [
   "trusted-types 'none'",
 ].join('; ');
 
-/** The assistant's chat images, by main's DuetService (none until it exists). */
-let duetImages: ((url: string) => Promise<Response>) | null = null;
-export function serveDuetImages(serve: (url: string) => Promise<Response>): void {
-  duetImages = serve;
+/** The assistant's chat images, by main's AssistantService (none until it exists). */
+let assistantImages: ((url: string) => Promise<Response>) | null = null;
+export function serveAssistantImages(serve: (url: string) => Promise<Response>): void {
+  assistantImages = serve;
 }
 
 /** Reader view's images, by main's Readers (set once it exists; until then there are none). */
@@ -68,7 +68,7 @@ export function handleChordProtocol(ses: Session): void {
   ses.protocol.handle(CHORD_SCHEME, async (request) => {
     const reader = request.url.startsWith(`${CHORD_SCHEME}://reader/`);
     if (reader && request.url.startsWith(`${CHORD_SCHEME}://reader/image/`)) return readerImages ? readerImages(request.url) : new Response('Not found', { status: 404 });
-    if (request.url.startsWith(`${CHORD_SCHEME}://shell/duet-image/`)) return duetImages ? duetImages(request.url) : new Response('Not found', { status: 404 });
+    if (request.url.startsWith(`${CHORD_SCHEME}://shell/assistant-image/`)) return assistantImages ? assistantImages(request.url) : new Response('Not found', { status: 404 });
     const file = resolveChordUrl(request.url, rendererRoot);
     if (!file) return new Response('Not found', { status: 404 });
     const response = await net.fetch(pathToFileURL(file).toString());

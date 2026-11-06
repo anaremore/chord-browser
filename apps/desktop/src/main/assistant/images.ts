@@ -1,24 +1,24 @@
 /**
- * Images in the assistant's chats, kept with them: `<userData>/duet/images/<id>.jpg`
+ * Images in the assistant's chats, kept with them: `<userData>/assistant/images/<id>.jpg`
  * (or `.png`, `.webp`), and for one you gave the assistant (a pasted image, a
  * screenshot) `<id>.thumb.jpg`, what the panel shows. One Codex made has no
- * thumbnail: the panel shows the image itself, from chord://shell/duet-image/
+ * thumbnail: the panel shows the image itself, from chord://shell/assistant-image/
  * (`file`). Deleted with their chat, with the copy Codex saved of one it made.
  * Files, not database rows, as Chord keeps its other pictures (ARCHITECTURE.md §7).
  */
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import type { DuetImage } from '@chord/core';
+import type { AssistantImage } from '@chord/core';
 
 const ID = /^[0-9a-f]{24}$/;
 
 export const newImageId = (): string => randomBytes(12).toString('hex');
 
-const EXTENSIONS: Record<DuetImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const EXTENSIONS: Record<AssistantImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 
 /** An image's type and size from its first bytes (PNG, JPEG or WebP), without decoding it; null for anything else. */
-export function imageInfo(bytes: Uint8Array): { mime: DuetImage['mime']; width: number; height: number } | null {
+export function imageInfo(bytes: Uint8Array): { mime: AssistantImage['mime']; width: number; height: number } | null {
   const b = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (b.length > 24 && b.readUInt32BE(0) === 0x89504e47) return { mime: 'image/png', width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
   if (b.length > 4 && b[0] === 0xff && b[1] === 0xd8) {
@@ -53,11 +53,11 @@ export function isCodexCopy(path: string, platform: NodeJS.Platform = process.pl
   return here && /[\\/]generated_images[\\/]/.test(path) && /\.(png|jpe?g|webp)$/i.test(path) && !/[\\/]\.\.(?:[\\/]|$)/.test(path);
 }
 
-export class DuetImages {
+export class AssistantImages {
   constructor(private readonly dir: string) {}
 
   /** `thumb`: for an image you gave the assistant; one Codex made shows itself. */
-  async save(image: DuetImage, bytes: Uint8Array, thumb?: Uint8Array): Promise<void> {
+  async save(image: AssistantImage, bytes: Uint8Array, thumb?: Uint8Array): Promise<void> {
     if (!ID.test(image.id)) return;
     await mkdir(this.dir, { recursive: true });
     await writeFile(join(this.dir, `${image.id}.${EXTENSIONS[image.mime]}`), bytes);
@@ -65,7 +65,7 @@ export class DuetImages {
   }
 
   /** What the model is sent, or what's copied and saved. */
-  async read(image: DuetImage): Promise<Buffer | null> {
+  async read(image: AssistantImage): Promise<Buffer | null> {
     return ID.test(image.id) ? readFile(join(this.dir, `${image.id}.${EXTENSIONS[image.mime]}`)).catch(() => null) : null;
   }
 
@@ -74,16 +74,16 @@ export class DuetImages {
     return ID.test(id) ? readFile(join(this.dir, `${id}.thumb.jpg`)).catch(() => null) : null;
   }
 
-  /** The file for `chord://shell/duet-image/<id>.<ext>`, or null for any other name. */
-  file(name: string): { path: string; mime: DuetImage['mime'] } | null {
+  /** The file for `chord://shell/assistant-image/<id>.<ext>`, or null for any other name. */
+  file(name: string): { path: string; mime: AssistantImage['mime'] } | null {
     const match = /^([0-9a-f]{24})\.(jpg|png|webp)$/.exec(name);
     if (!match) return null;
-    const mime = (Object.keys(EXTENSIONS) as DuetImage['mime'][]).find((m) => EXTENSIONS[m] === match[2])!;
+    const mime = (Object.keys(EXTENSIONS) as AssistantImage['mime'][]).find((m) => EXTENSIONS[m] === match[2])!;
     return { path: join(this.dir, name), mime };
   }
 
   /** `localCodex`: Codex runs on this computer (not in WSL), so the copy it saved is a path here. */
-  async remove(images: readonly DuetImage[], localCodex = true): Promise<void> {
+  async remove(images: readonly AssistantImage[], localCodex = true): Promise<void> {
     await Promise.all(
       images
         .filter((i) => ID.test(i.id))

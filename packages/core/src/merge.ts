@@ -18,7 +18,7 @@
  * from chord.db as an export would, and main applies the plan a part at a
  * time through the reducer's `data.merge`, which checks it once more.
  */
-import { DUET_SCOPE_NAMES } from './duet';
+import { ASSISTANT_SCOPE_NAMES } from './assistant';
 import { effectsFromRecord, hasEffects, type SiteEffects } from './effects';
 import { SEARCH_ENGINES } from './input';
 import {
@@ -370,13 +370,13 @@ const SETTING_NAMES: Record<string, [label: string, describe: (value: unknown) =
   'adBlocking.offSites': ['Sites where ads aren’t blocked', sites],
   'tabCounts.enabled': ['Show counts on tabs', ON_OFF],
   'tabCounts.offSites': ['Sites whose counts are hidden', sites],
-  'duet.enabled': ['Show the assistant', ON_OFF],
-  'duet.keep': ['Keep assistant chats', named({ forever: 'Forever', '90d': '90 days', '30d': '30 days' })],
-  'duet.scope': ['What the assistant can read', named(DUET_SCOPE_NAMES)],
-  'duet.readsNothing': ['The assistant reads nothing', ON_OFF],
-  'duet.neverSites': ['Sites the assistant never reads', sites],
-  'duet.offChords': ['Chords where the assistant is off', (v) => (Array.isArray(v) ? (v.length === 0 ? 'None' : `${v.length} chords`) : String(v))],
-  'duet.codexImages': ['Codex can make images', ON_OFF],
+  'assistant.enabled': ['Show the assistant', ON_OFF],
+  'assistant.keep': ['Keep assistant chats', named({ forever: 'Forever', '90d': '90 days', '30d': '30 days' })],
+  'assistant.scope': ['What the assistant can read', named(ASSISTANT_SCOPE_NAMES)],
+  'assistant.readsNothing': ['The assistant reads nothing', ON_OFF],
+  'assistant.neverSites': ['Sites the assistant never reads', sites],
+  'assistant.offChords': ['Chords where the assistant is off', (v) => (Array.isArray(v) ? (v.length === 0 ? 'None' : `${v.length} chords`) : String(v))],
+  'assistant.codexImages': ['Codex can make images', ON_OFF],
   externalLinks: ['Links from other apps open in', named({ mini: 'A mini window', tab: 'A new tab' })],
   'reader.size': ['Reader view’s text size', (v) => String(v)],
   'reader.width': ['Reader view’s line width', named({ narrow: 'Narrow', medium: 'Medium', wide: 'Wide' })],
@@ -504,7 +504,7 @@ const SETUP_FIELDS: Record<string, readonly string[]> = {
   favorite: ['url', 'title', 'icon', 'rank', 'created', 'deleted'],
   theme: ['name', 'stops', 'grain', 'deleted'],
   route: ['chord', 'created', 'deleted'],
-  effects: ['wet', 'css', 'cssOn', 'hidden', 'presets', 'duet', 'deleted'],
+  effects: ['wet', 'css', 'cssOn', 'hidden', 'presets', 'assistant', 'deleted'],
   icon: ['mime', 'data'],
   zoom: ['factor', 'deleted'],
   permission: [...PERMISSIONS, 'deleted'],
