@@ -323,9 +323,9 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
   - how it is installed and updated;
   - what signing in feels like without Chord's extensions;
   - Google-free mode (its CDM comes from Google).
-  - **Next: build it** (P2, started 2026-10-25). The maintainer's castLabs EVS account was confirmed on 2026-11-06 (the signup of 2026-10-25 was never confirmed, so it couldn't sign in), and its two secrets, `EVS_ACCOUNT_NAME` and `EVS_PASSWD`, are in the `release` environment (docs/releasing/signing.md, Chord Player). The first `player-v*` tag is the first build that VMP-signs. Code signing on Windows and macOS stays on the maintainer's track.
+  - **Next: build it** (P2, started 2026-10-25). The maintainer's castLabs EVS account was confirmed on 2026-11-06 (the signup of 2026-10-25 was never confirmed, so it couldn't sign in), and its two secrets, `EVS_ACCOUNT_NAME` and `EVS_PASSWD`, are in the `release` environment (docs/releasing/signing.md, Chord Player). Release builds VMP-sign through it (since 0.1.1), and Windows builds are code-signed with Chord's Azure setup (since 0.1.2).
   - **Built 2026-10-25: Chord Player** (ARCHITECTURE.md §9 and D4, DESIGN.md §7.14). What it does:
-    - It's `apps/player`, on castLabs ECS 44.9.3+wvcus, in a window of its own with a bar in the chord's colors. On Windows the window joins Chord's taskbar button.
+    - It's `apps/player`, on castLabs ECS 44.10.1+wvcus, in a window of its own with a bar in the chord's colors. On Windows the window joins Chord's taskbar button.
     - The DRM notice offers it first: *Install Chord Player (about N MB)*, its progress, then *Open in Chord Player*.
     - Chord installs it per user from `player-v*` releases whose manifests Chord's update key signs, checks the zip's SHA-512, and unpacks it in a worker. Updates install beside the running version, and the previous one stays until the new one starts.
     - It opens only the services and the hosts S14's census found; every other link opens in Chord, over a versioned local channel. The tab stays in Chord as *Playing in Chord Player*, and the player is on the Now playing card with *Back to the player*.
@@ -336,11 +336,13 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
     - `player-release.yml` drafts releases from `player-v*` tags. `ecs-bump.yml` opens a pull request for each newer stable `+wvcus` build, and never merges it.
     - E2E: `player.spec.ts` drives the real player from Chord, in the Linux container and CI. Hand checks per service and OS, once production VMP is on: docs/testing/widevine-player.md.
 
+    **Released:** 0.1.1 (2026-11-06, ECS 44.10.1+wvcus, VMP-signed for production on Windows and macOS) and 0.1.2 (2026-11-06, `Chord Player.exe` code-signed on Windows with Chord's Azure setup). Hand-checked 2026-11-06 on Windows: installed from Spotify's notice, signed in, played. Chord 0.7.0 adds installing from Settings, asking again after no release, and removing the player when Chord is uninstalled (Windows).
+
+    **Next, after 0.7.0: play in the tab, Windows first** (the maintainer's call, 2026-11-06). The player's window glued over the tab's content area (S14 §2 (b): an owned window follows a drag within a frame on Windows), hidden when you switch tabs or chords, and swapped for a still picture of it whenever Chord draws over the page (command bar, popovers, menus, Peek), as frame snapshots already do for animations; fullscreen and picture-in-picture as today. macOS (the window server makes it trail) and Wayland (no window positions) keep the window of its own.
+
     **Left:**
-    - the maintainer's code-signing certificates (Windows, macOS);
-    - moving the EVS secrets into the `release` environment;
-    - Chord's update key, without which no build offers the player;
-    - the hand checks;
+    - macOS code signing (with Chord's, once there's an Apple Developer account); the player's DLLs on Windows (only the `.exe` is signed);
+    - the hand checks on macOS, and Netflix;
     - Chord's shortcuts forwarded from the player;
     - an icon of its own.
 - **P1 Now playing, second round.** **Built 2026-10-24** (DESIGN.md §7.10, ARCHITECTURE.md §9): the card offers media you left playing or played from it, not a background tab's own autoplay or what you paused before leaving; several at once stack (the newest in full, up to two more as one-line rows, then "and N more"), in an order that doesn't jump when one plays again. Play and Pause read and press the site's own button where its element isn't enough (Twitch, whose player pauses its element again; SoundCloud, whose player isn't in the page; Bandcamp); YouTube and YouTube Music follow their element. Hand checks: docs/testing/media-sites.md. Then (asked the same day): each video row has picture-in-picture, so you choose which video is out; another swaps them.

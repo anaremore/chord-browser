@@ -2,6 +2,17 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.7.0 · preview · 2026-11-06
+
+- **Riff no longer has a name.** It's the assistant button now: the same icon and the same shortcut (⌘/Ctrl+E), in Settings → Assistant. Your chats and settings are all still there. Search your chats in the command bar with `@chats`.
+  - An older chat's next message continues from a summary of it, as after switching between Claude Code and Codex.
+  - Export files and sync folders from 0.6 still bring your chats, but not the assistant's settings or the styles it wrote for Effects. If you sync, update Chord on each computer.
+- **Chord Player**, the companion app that plays Netflix, Spotify and the other services that need Widevine:
+  - Install it from Settings → General → Chord Player, as well as from a service's page.
+  - Chord notices a newly published version without a restart.
+  - *Back to Chord* and *Back to the player* now bring the other window forward on Windows.
+  - Uninstalling Chord on Windows removes Chord Player too.
+
 ## 0.6.1 · security · 2026-11-05
 
 **Security.** Updates Electron to 45.2.3 (Chromium 156.0.8078.80), which fixes security issues in Chromium and the components it uses. Update as soon as you can.
