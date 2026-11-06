@@ -11,14 +11,14 @@
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { dataHeader, encryptedWriter, plainWriter, type DataFileWriter, type DataPart, type DuetImage, type Platform } from '@chord/core';
+import { dataHeader, encryptedWriter, plainWriter, type DataFileWriter, type DataPart, type AssistantImage, type Platform } from '@chord/core';
 import { nodeCrypto, sha256Hex } from '@chord/data/crypto';
 import { exportCounts, exportRecords, type ExportPhase } from '@chord/data/export';
 
 export interface ExportJob {
   /** chord.db, opened read-only. */
   database: string;
-  /** `<userData>/duet/images`, for the images in the assistant's chats. */
+  /** `<userData>/assistant/images`, for the images in the assistant's chats. */
   images: string;
   /** Where the file goes: written beside it as `.part` first. */
   target: string;
@@ -27,7 +27,7 @@ export interface ExportJob {
   app: string;
   platform: Platform;
   history: boolean;
-  duet: boolean;
+  assistant: boolean;
   /** Null for a plain file. Kept only until the key is made. */
   passphrase: string | null;
 }
@@ -49,7 +49,7 @@ const PROGRESS_MS = 100;
 /** Bytes gathered before each write to the file. */
 const CHUNK = 1024 * 1024;
 
-const EXTENSIONS: Record<DuetImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const EXTENSIONS: Record<AssistantImage['mime'], string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const readOrNull = (path: string): Uint8Array | null => {
   try {
     return readFileSync(path);
@@ -85,11 +85,11 @@ async function run(job: ExportJob): Promise<void> {
     db.exec('BEGIN');
     const sql = (text: string) => db.prepare(text);
     const counts = exportCounts(sql);
-    const messages = job.duet ? Number((db.prepare('SELECT COUNT(*) AS n FROM duet_message').get() as { n: number }).n) : 0;
+    const messages = job.assistant ? Number((db.prepare('SELECT COUNT(*) AS n FROM assistant_message').get() as { n: number }).n) : 0;
     // The bar: records written of about how many there'll be. Setup is small beside history.
     const estimate =
-      1 + counts.chords + counts.pinnedTabs + counts.folders + counts.todayTabs + counts.favorites + counts.themes + counts.routes + counts.effects + (job.history ? counts.pages : 0) + (job.duet ? counts.chats + messages + counts.images : 0);
-    const includes: DataPart[] = ['setup', 'today', ...(job.history ? (['history'] as const) : []), ...(job.duet ? (['duet'] as const) : [])];
+      1 + counts.chords + counts.pinnedTabs + counts.folders + counts.todayTabs + counts.favorites + counts.themes + counts.routes + counts.effects + (job.history ? counts.pages : 0) + (job.assistant ? counts.chats + messages + counts.images : 0);
+    const includes: DataPart[] = ['setup', 'today', ...(job.history ? (['history'] as const) : []), ...(job.assistant ? (['assistant'] as const) : [])];
     const header = dataHeader({ app: job.app, device: job.device, created: Date.now(), includes });
     let writer: DataFileWriter;
     if (job.passphrase === null) writer = plainWriter(header);
@@ -123,7 +123,7 @@ async function run(job: ExportJob): Promise<void> {
     let lastReport = 0;
     const report = (now: number) => {
       lastReport = now;
-      const total = phase === 'history' ? counts.pages : phase === 'duet' ? counts.chats : 0;
+      const total = phase === 'history' ? counts.pages : phase === 'assistant' ? counts.chats : 0;
       reply({ type: 'progress', phase, done, total, share: Math.min(0.99, written / estimate) });
     };
     report(performance.now());
@@ -131,7 +131,7 @@ async function run(job: ExportJob): Promise<void> {
       device: job.device,
       platform: job.platform,
       history: job.history,
-      duet: job.duet,
+      assistant: job.assistant,
       sha256: sha256Hex,
       image: (image) => {
         const data = readOrNull(join(job.images, `${image.id}.${EXTENSIONS[image.mime] ?? 'jpg'}`));
@@ -145,7 +145,7 @@ async function run(job: ExportJob): Promise<void> {
         phase = item.phase;
         done = 0;
       }
-      if ((phase === 'history' && item.record.type === 'page') || (phase === 'duet' && item.record.type === 'thread')) done++;
+      if ((phase === 'history' && item.record.type === 'page') || (phase === 'assistant' && item.record.type === 'thread')) done++;
       if (size >= CHUNK) {
         flush();
         // Let the progress out, and anything main sends, between chunks.

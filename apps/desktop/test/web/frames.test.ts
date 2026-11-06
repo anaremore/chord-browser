@@ -65,19 +65,19 @@ describe('one render a frame', () => {
     const log = (name: string) => () => current?.push(name);
     p.nextFrame(log('patch 1'));
     p.nextFrame(log('patch 2'));
-    p.inNextFrame<string>((v) => current?.push(v))('duet');
+    p.inNextFrame<string>((v) => current?.push(v))('assistant');
     expect(batches).toEqual([]);
     expect(p.framesAsked()).toBe(1);
 
     p.frame();
-    expect(batches).toEqual([['patch 1', 'patch 2', 'duet']]);
+    expect(batches).toEqual([['patch 1', 'patch 2', 'assistant']]);
     // Nothing left: the no-frame fallback doesn't run it twice.
     vi.advanceTimersByTime(500);
     expect(batches).toHaveLength(1);
 
     p.nextFrame(log('patch 3'));
     p.frame();
-    expect(batches).toEqual([['patch 1', 'patch 2', 'duet'], ['patch 3']]);
+    expect(batches).toEqual([['patch 1', 'patch 2', 'assistant'], ['patch 3']]);
   });
 
   it('renders what waits before a key or a click is handled', async () => {

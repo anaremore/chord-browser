@@ -57,7 +57,7 @@ const chordId = (s: State) => Object.keys(s.chords)[0]!;
 describe('migrations 19 to 21', () => {
   it('add sync’s tables, empty, and what its reader remembers of junk', () => {
     expect(db.version).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(21);
+    expect(MIGRATIONS.length).toBe(22);
     expect(db.sync.outboxSize()).toBe(0);
     expect(db.sync.meta.on).toBe(false);
     expect(db.sync.junk()).toEqual([]);
@@ -530,7 +530,7 @@ describe('stamping by origin: yours is stamped, sync’s and tidying’s never a
   it.each([
     ['a Favorite', 'favorite', 'favorite', 'their-fav', { url: 'https://theirs.test/', title: 'Theirs', rank: 'a0', created: 1 }],
     ['a route', 'route', 'linkRoute', 'theirs.test', { chord: 'their-chord', created: 1 }],
-    ['a site’s Effects', 'effects', 'effect', 'theirs.test', { wet: true, css: 'h1 { color: red }', cssOn: true, hidden: [], presets: [], duet: [] }],
+    ['a site’s Effects', 'effects', 'effect', 'theirs.test', { wet: true, css: 'h1 { color: red }', cssOn: true, hidden: [], presets: [], assistant: [] }],
     ['a chord', 'chord', 'chord', 'their-chord', chordSet],
     ['a folder', 'folder', 'node', 'their-folder', { title: 'Theirs', collapsed: false, created: 1 }],
   ])('%s you deleted before its apply was written (the write that lands is the deletion): stamped gone, and it stays gone', (_what, type, k, id, set) => {
@@ -693,7 +693,7 @@ describe('local checked against the rows', () => {
       { t: 'linkRoute.set', host: 'mail.test', chordId: chordId(state) },
     ]);
     // A site's Effects, as the Effects service writes them.
-    db.write([{ k: 'effect', id: 'mail.test', value: { host: 'mail.test', wet: true, css: 'h1 { color: red }', cssOn: true, hidden: [{ selector: '.ad', label: 'Ad', on: true, at: 1 }], presets: ['reading-width'], duet: [], createdAt: 1, updatedAt: 2, compiled: '', sanitizer: 1 } } as WriteOp]);
+    db.write([{ k: 'effect', id: 'mail.test', value: { host: 'mail.test', wet: true, css: 'h1 { color: red }', cssOn: true, hidden: [{ selector: '.ad', label: 'Ad', on: true, at: 1 }], presets: ['reading-width'], assistant: [], createdAt: 1, updatedAt: 2, compiled: '', sanitizer: 1 } } as WriteOp]);
     expect(db.atomically(() => mendAll())).toBe(0);
     void state;
   });
@@ -834,7 +834,7 @@ describe('local checked against the rows', () => {
     const steps = () => [...db.sync.driftRepairs()].length;
     const empty = db.atomically(() => steps());
     const css = (i: number) => `/* ${i} */ ${'h1 { color: red } '.repeat(3500)}`;
-    for (let i = 0; i < 24; i++) db.write([{ k: 'effect', id: `site${i}.test`, value: { host: `site${i}.test`, wet: true, css: css(i), cssOn: true, hidden: [], presets: [], duet: [], createdAt: 1, updatedAt: 2, compiled: '', sanitizer: 1 } } as WriteOp]);
+    for (let i = 0; i < 24; i++) db.write([{ k: 'effect', id: `site${i}.test`, value: { host: `site${i}.test`, wet: true, css: css(i), cssOn: true, hidden: [], presets: [], assistant: [], createdAt: 1, updatedAt: 2, compiled: '', sanitizer: 1 } } as WriteOp]);
     expect(db.atomically(() => steps())).toBeGreaterThanOrEqual(empty + 2);
   });
 });
@@ -850,7 +850,7 @@ describe('icons and reconcile pages stay small', () => {
   it('a reconcile reads no icons, and pages of about a quarter of a megabyte at most', () => {
     setUp();
     const css = (i: number) => `/* ${i} */ ${'h1 { color: red } '.repeat(9000)}`;
-    db.atomically(() => db.sync.merge(Array.from({ length: 8 }, (_, i): DataRecord => ({ type: 'effects', id: `site${i}.test`, at: [Date.now() + 1000, 0, OTHER], set: { wet: true, css: css(i), cssOn: true, hidden: [], presets: [], duet: [] } })), Date.now()));
+    db.atomically(() => db.sync.merge(Array.from({ length: 8 }, (_, i): DataRecord => ({ type: 'effects', id: `site${i}.test`, at: [Date.now() + 1000, 0, OTHER], set: { wet: true, css: css(i), cssOn: true, hidden: [], presets: [], assistant: [] } })), Date.now()));
     const pages = [...db.sync.unappliedPages()].filter((page) => page.size > 0);
     expect(pages.length).toBeGreaterThan(1);
     for (const page of pages) expect(page.size).toBeLessThanOrEqual(4);

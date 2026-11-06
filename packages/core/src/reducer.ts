@@ -288,9 +288,9 @@ export type Command =
   | { t: 'effects.undo'; token: string }
   /**
    * Undo a form the assistant filled (a toast's button): main puts the fields back
-   * from the page's own isolated world (main/duet), outside the store.
+   * from the page's own isolated world (main/assistant), outside the store.
    */
-  | { t: 'duet.undoFill'; token: string }
+  | { t: 'assistant.undoFill'; token: string }
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -1907,18 +1907,18 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const { encryptExports } = cmd.settings;
       if (encryptExports !== undefined && draft.settings.encryptExports !== encryptExports) draft.settings.encryptExports = encryptExports;
       if (colorScheme !== undefined && draft.settings.colorScheme !== colorScheme) draft.settings.colorScheme = colorScheme;
-      if (cmd.settings.duet) {
-        const duet = cmd.settings.duet;
-        const current = draft.settings.duet;
-        if (duet.enabled !== undefined && current.enabled !== duet.enabled) current.enabled = duet.enabled;
-        if (duet.provider !== undefined && current.provider !== duet.provider) current.provider = duet.provider;
-        if (duet.model !== undefined && current.model !== duet.model) current.model = duet.model;
-        if (duet.keep !== undefined && current.keep !== duet.keep) current.keep = duet.keep;
-        if (duet.scope !== undefined && current.scope !== duet.scope) current.scope = duet.scope;
-        if (duet.readsNothing !== undefined && current.readsNothing !== duet.readsNothing) current.readsNothing = duet.readsNothing;
-        if (duet.neverSites) current.neverSites = [...new Set(duet.neverSites)];
-        if (duet.offChords) current.offChords = [...new Set(duet.offChords)];
-        if (duet.codexImages !== undefined && current.codexImages !== duet.codexImages) current.codexImages = duet.codexImages;
+      if (cmd.settings.assistant) {
+        const assistant = cmd.settings.assistant;
+        const current = draft.settings.assistant;
+        if (assistant.enabled !== undefined && current.enabled !== assistant.enabled) current.enabled = assistant.enabled;
+        if (assistant.provider !== undefined && current.provider !== assistant.provider) current.provider = assistant.provider;
+        if (assistant.model !== undefined && current.model !== assistant.model) current.model = assistant.model;
+        if (assistant.keep !== undefined && current.keep !== assistant.keep) current.keep = assistant.keep;
+        if (assistant.scope !== undefined && current.scope !== assistant.scope) current.scope = assistant.scope;
+        if (assistant.readsNothing !== undefined && current.readsNothing !== assistant.readsNothing) current.readsNothing = assistant.readsNothing;
+        if (assistant.neverSites) current.neverSites = [...new Set(assistant.neverSites)];
+        if (assistant.offChords) current.offChords = [...new Set(assistant.offChords)];
+        if (assistant.codexImages !== undefined && current.codexImages !== assistant.codexImages) current.codexImages = assistant.codexImages;
       }
       const { separateSignIns, onboarded } = cmd.settings;
       if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;
@@ -2488,7 +2488,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       // Main's: sync's pending steps and Settings live outside the store.
       return;
 
-    case 'duet.undoFill':
+    case 'assistant.undoFill':
       // Main's: what a fill replaced stays in the page.
       return;
   }

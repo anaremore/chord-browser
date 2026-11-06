@@ -677,7 +677,7 @@ export function compileEffects(parts: EffectsParts): Compiled {
   const own = sanitizeCss(parts.css);
   chunks.push(own.css);
   const patches: Removal[][] = [];
-  for (const patch of parts.duet) {
+  for (const patch of parts.assistant) {
     const clean = sanitizeCss(patch);
     chunks.push(clean.css);
     patches.push(clean.removed);

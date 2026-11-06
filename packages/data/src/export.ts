@@ -32,9 +32,9 @@ import {
   validTheme,
   zoomRecord,
   type DataRecord,
-  type DuetImage,
-  type DuetMessageBody,
-  type DuetThread,
+  type AssistantImage,
+  type AssistantMessageBody,
+  type AssistantThread,
   type ExportCounts,
   type Platform,
   type SidebarNode,
@@ -48,7 +48,7 @@ type Sql = (text: string) => StatementSync;
  * The images the assistant's messages name: the ones a user gave it, and the ones Codex
  * made. Only with an id Chord makes (24 hex digits), since it becomes a file name.
  */
-function imagesOf(body: DuetMessageBody): DuetImage[] {
+function imagesOf(body: AssistantMessageBody): AssistantImage[] {
   const images = body.role === 'user' || body.role === 'assistant' ? (body.images ?? []) : [];
   return Array.isArray(images) ? images.filter((image) => typeof image?.id === 'string' && /^[0-9a-f]{24}$/.test(image.id)) : [];
 }
@@ -60,8 +60,8 @@ export function exportCounts(sql: Sql): ExportCounts {
   const tabs = (section: string) => count(`SELECT COUNT(*) AS n FROM node n JOIN tab t ON t.node_id = n.id ${LIVE_CHORD} WHERE n.deleted_at IS NULL AND n.section = ?`, section);
   const themes = parseJson<unknown>((sql(`SELECT value FROM setting WHERE key = 'themes'`).get() as Row | undefined)?.['value'], []);
   const images = new Set<string>();
-  for (const r of sql(`SELECT body FROM duet_message WHERE body LIKE '%"images":%'`).all() as Row[]) {
-    for (const image of imagesOf(parseJson<DuetMessageBody>(r['body'], { role: 'divider', text: '' }))) images.add(image.id);
+  for (const r of sql(`SELECT body FROM assistant_message WHERE body LIKE '%"images":%'`).all() as Row[]) {
+    for (const image of imagesOf(parseJson<AssistantMessageBody>(r['body'], { role: 'divider', text: '' }))) images.add(image.id);
   }
   return {
     chords: count('SELECT COUNT(*) AS n FROM chord WHERE deleted_at IS NULL'),
@@ -73,7 +73,7 @@ export function exportCounts(sql: Sql): ExportCounts {
     routes: count(`SELECT COUNT(*) AS n FROM link_route r JOIN chord c ON c.id = r.chord_id AND c.deleted_at IS NULL`),
     effects: count('SELECT COUNT(*) AS n FROM effect'),
     pages: count(`SELECT COUNT(DISTINCT url_id) AS n FROM history_visit v JOIN history_url u ON u.id = v.url_id WHERE u.profile_id = ?`, DEFAULT_PROFILE),
-    chats: count('SELECT COUNT(*) AS n FROM duet_thread'),
+    chats: count('SELECT COUNT(*) AS n FROM assistant_thread'),
     images: images.size,
   };
 }
@@ -84,15 +84,15 @@ export interface ExportOptions {
   /** Which family of keyboard shortcuts this computer writes. */
   platform: Platform;
   history: boolean;
-  duet: boolean;
+  assistant: boolean;
   /** SHA-256 of an icon's bytes, as hex: its record's id. */
   sha256(bytes: Uint8Array): string;
-  /** An image's bytes and its thumbnail, from `<userData>/duet/images/`; null when the file has gone. */
-  image(image: DuetImage): { data: Uint8Array; thumb: Uint8Array | null } | null;
+  /** An image's bytes and its thumbnail, from `<userData>/assistant/images/`; null when the file has gone. */
+  image(image: AssistantImage): { data: Uint8Array; thumb: Uint8Array | null } | null;
 }
 
-/** Where a record belongs in the file, for the progress line: `setup`, then `today` with the icons, `history`, `duet`. */
-export type ExportPhase = 'setup' | 'today' | 'history' | 'duet';
+/** Where a record belongs in the file, for the progress line: `setup`, then `today` with the icons, `history`, `assistant`. */
+export type ExportPhase = 'setup' | 'today' | 'history' | 'assistant';
 
 export interface ExportItem {
   phase: ExportPhase;
@@ -225,36 +225,36 @@ export function* exportRecords(sql: Sql, options: ExportOptions): Generator<Expo
     if (page) yield { phase: 'history', record: pageRecord(page) };
   }
 
-  if (options.duet) {
+  if (options.assistant) {
     // Each chat, then its messages, then their images, so a reader that stops part way has whole chats.
-    const messages = sql('SELECT * FROM duet_message WHERE thread_id = ? ORDER BY created_at, rid');
+    const messages = sql('SELECT * FROM assistant_message WHERE thread_id = ? ORDER BY created_at, rid');
     const imagesWritten = new Set<string>();
-    for (const t of sql('SELECT * FROM duet_thread ORDER BY created_at, id').all() as Row[]) {
-      const thread: DuetThread = {
+    for (const t of sql('SELECT * FROM assistant_thread ORDER BY created_at, id').all() as Row[]) {
+      const thread: AssistantThread = {
         id: str(t['id']),
         chordId: str(t['chord_id']),
         title: str(t['title']),
-        provider: str(t['provider']) as DuetThread['provider'],
+        provider: str(t['provider']) as AssistantThread['provider'],
         model: typeof t['model'] === 'string' ? t['model'] : null,
         providerSessionId: null,
-        scope: str(t['scope']) as DuetThread['scope'],
+        scope: str(t['scope']) as AssistantThread['scope'],
         createdAt: num(t['created_at']),
         updatedAt: num(t['updated_at']),
         lastUsedAt: num(t['last_used_at']),
       };
-      yield { phase: 'duet', record: threadRecord(thread) };
-      const images: DuetImage[] = [];
+      yield { phase: 'assistant', record: threadRecord(thread) };
+      const images: AssistantImage[] = [];
       for (const m of messages.iterate(thread.id) as Iterable<Row>) {
-        const body = parseJson<DuetMessageBody | null>(m['body'], null);
+        const body = parseJson<AssistantMessageBody | null>(m['body'], null);
         if (!body || typeof body !== 'object' || typeof body.role !== 'string') continue;
-        yield { phase: 'duet', record: messageRecord({ id: str(m['id']), threadId: thread.id, createdAt: num(m['created_at']), body }) };
+        yield { phase: 'assistant', record: messageRecord({ id: str(m['id']), threadId: thread.id, createdAt: num(m['created_at']), body }) };
         images.push(...imagesOf(body));
       }
       for (const image of images) {
         if (imagesWritten.has(image.id)) continue;
         imagesWritten.add(image.id);
         const bytes = options.image(image);
-        if (bytes) yield { phase: 'duet', record: imageRecord(image, base64(bytes.data), bytes.thumb ? base64(bytes.thumb) : null) };
+        if (bytes) yield { phase: 'assistant', record: imageRecord(image, base64(bytes.data), bytes.thumb ? base64(bytes.thumb) : null) };
       }
     }
   }

@@ -2,12 +2,12 @@
  * Reading PDFs for the assistant: pdf.js extraction on a fixture PDF (what the PDF
  * reader utility process runs), the size cap on the download, and the
  * "is this a PDF" check. The utility process and the tab's session are
- * covered end to end in duet.spec.ts.
+ * covered end to end in assistant.spec.ts.
  */
-import { DUET_PDF_MAX_BYTES, pdfPageOf, pdfText, pageResult } from '@chord/core';
+import { ASSISTANT_PDF_MAX_BYTES, pdfPageOf, pdfText, pageResult } from '@chord/core';
 import type { WebContents } from 'electron';
 import { describe, expect, it } from 'vitest';
-import { fetchPdf, looksLikePdf, PdfError, pdfProblemCopy, readCapped } from '../../src/main/duet/pdf';
+import { fetchPdf, looksLikePdf, PdfError, pdfProblemCopy, readCapped } from '../../src/main/assistant/pdf';
 import { extractPdfText, PdfReadError } from '../../src/pdf/extract';
 import { buildPdf, SAMPLE_PDF_PAGES } from '../fixtures/pdf';
 
@@ -67,7 +67,7 @@ describe('PDF download', () => {
     });
     expect(await readCapped(new Response(stream), 2500)).toBeNull();
     // A declared length over the cap isn't downloaded at all.
-    expect(await readCapped(new Response(small, { headers: { 'content-length': String(DUET_PDF_MAX_BYTES + 1) } }), DUET_PDF_MAX_BYTES)).toBeNull();
+    expect(await readCapped(new Response(small, { headers: { 'content-length': String(ASSISTANT_PDF_MAX_BYTES + 1) } }), ASSISTANT_PDF_MAX_BYTES)).toBeNull();
   });
 
   it('fetches through the tab’s own session, and refuses where a redirect lands if the assistant never reads it', async () => {

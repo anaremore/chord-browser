@@ -237,9 +237,9 @@ export class Browser {
   private recent: { windowId: WindowId; order: NodeId[]; index: number } | null = null;
   readonly idle: IdleKeeper;
   /** The assistant (set once main has it): the panel's toggle and window bookkeeping. */
-  duet: { act(windowId: WindowId, action: { do: 'toggle' }): Promise<void>; forgetWindow(windowId: WindowId): void } | null = null;
+  assistant: { act(windowId: WindowId, action: { do: 'toggle' }): Promise<void>; forgetWindow(windowId: WindowId): void } | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
-  readonly duetWidth = size.duetWidth;
+  readonly assistantWidth = size.assistantWidth;
 
   /** A window by id (the assistant acts in the window a message came from). */
   window(id: WindowId): AppWindow | undefined {
@@ -913,7 +913,7 @@ export class Browser {
       });
     }
     w.window.on('closed', () => {
-      this.duet?.forgetWindow(windowId);
+      this.assistant?.forgetWindow(windowId);
       this.options.screenshots.windowClosed(windowId);
       this.effects.forgetWindow(windowId);
       this.windows.delete(windowId);
@@ -2524,8 +2524,8 @@ export class Browser {
         if (chordId && Object.keys(this.store.state.chords).length > 1) this.deleteChord(w, chordId);
         return true;
       }
-      case 'duet.toggle':
-        void this.duet?.act(w.id, { do: 'toggle' });
+      case 'assistant.toggle':
+        void this.assistant?.act(w.id, { do: 'toggle' });
         return true;
       case 'chord.separateSignIns': {
         const chordId = this.store.state.windows[w.id]?.activeChordId;

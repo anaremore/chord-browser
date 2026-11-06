@@ -5,7 +5,7 @@
  * keeps closed tabs in its own table).
  */
 import { DEFAULT_DEVTOOLS, type DevtoolsPlace, type DevtoolsSettings } from './devtools';
-import type { DuetKeep, DuetProvider, DuetScope } from './duet';
+import type { AssistantKeep, AssistantProvider, AssistantScope } from './assistant';
 import type { ImportRecord } from './import';
 import { DEFAULT_READER, type ReaderSettings } from './reader';
 import type { ProxySettings } from './proxy';
@@ -407,7 +407,7 @@ export interface Settings {
   adBlocking: AdBlockingSettings;
   tabCounts: TabCountsSettings;
   /** The assistant, the chat panel (ARCHITECTURE.md §11). */
-  duet: DuetSettings;
+  assistant: AssistantSettings;
   /** Where links from other apps open (Chord as the default browser): a mini window, or a new tab. */
   externalLinks: ExternalLinks;
   /** The mini window's size, as you last left it; null until you resize one (DESIGN.md §7.9). */
@@ -471,16 +471,16 @@ export interface SpellcheckSettings {
   language: string | null;
 }
 
-export interface DuetSettings {
+export interface AssistantSettings {
   /** Off removes the panel, its button, shortcut and menu items; nothing is ever spawned. */
   enabled: boolean;
   /** Chosen in Setup; null until then. */
-  provider: DuetProvider | null;
+  provider: AssistantProvider | null;
   /** The provider's model alias or id; null uses its default. */
   model: string | null;
-  keep: DuetKeep;
+  keep: AssistantKeep;
   /** What new threads may read without asking. */
-  scope: DuetScope;
+  scope: AssistantScope;
   /**
    * Settings' "Nothing": the assistant reads no pages at all, whatever a chat's scope.
    * Its sessions get no tools, and nothing can be attached (ARCHITECTURE.md §11.3).
@@ -522,7 +522,7 @@ export const DEFAULT_SETTINGS: Settings = {
   safeBrowsingAsked: false,
   adBlocking: { enabled: true, offSites: [] },
   tabCounts: { enabled: true, offSites: [] },
-  duet: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', readsNothing: false, neverSites: [], offChords: [], codexImages: true },
+  assistant: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', readsNothing: false, neverSites: [], offChords: [], codexImages: true },
   externalLinks: 'mini',
   miniWindowSize: null,
   reader: DEFAULT_READER,
@@ -543,7 +543,7 @@ export const defaultSettings = (): Settings => ({
   shortcuts: {},
   adBlocking: { ...DEFAULT_SETTINGS.adBlocking, offSites: [] },
   tabCounts: { ...DEFAULT_SETTINGS.tabCounts, offSites: [] },
-  duet: { ...DEFAULT_SETTINGS.duet, neverSites: [], offChords: [] },
+  assistant: { ...DEFAULT_SETTINGS.assistant, neverSites: [], offChords: [] },
   reader: { ...DEFAULT_SETTINGS.reader },
   effects: { ...DEFAULT_SETTINGS.effects },
   devtools: { ...DEFAULT_SETTINGS.devtools },
@@ -591,7 +591,7 @@ export interface SettingsPatch {
   tabCounts?: Partial<TabCountsSettings>;
   /** Per action: its whole new list of keys, or null to go back to the registry's. */
   shortcuts?: Partial<Record<ActionId, readonly string[] | null>>;
-  duet?: Partial<DuetSettings>;
+  assistant?: Partial<AssistantSettings>;
   reader?: Partial<ReaderSettings>;
   effects?: Partial<EffectsSettings>;
   /** Sizes are clamped to their side's minimum and DEVTOOLS.max. */

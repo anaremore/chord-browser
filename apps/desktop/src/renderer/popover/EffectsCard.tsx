@@ -11,7 +11,7 @@ import { EFFECT_PRESETS, EFFECTS_LIMITS, type EffectPresetId } from '@chord/core
 import type { EffectsAction, EffectsView } from '@chord/ipc';
 import { Blend, Check, MousePointerClick, Pencil, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { DuetIcon } from '../shared/icons';
+import { AssistantIcon } from '../shared/icons';
 import { api } from './api';
 import styles from './EffectsCard.module.css';
 import base from './Popover.module.css';
@@ -23,7 +23,7 @@ const TYPING_MS = 300;
 const act = (action: EffectsAction) => void api.effects.act(action);
 
 type Hidden = EffectsView['hidden'][number];
-type Patch = EffectsView['duet'][number];
+type Patch = EffectsView['assistant'][number];
 /** Sends waiting out a pause in typing, by field. */
 type Waiting = Map<string, () => void>;
 
@@ -227,7 +227,7 @@ function PatchEditor({ item, waiting, done }: { item: Patch; waiting: Waiting; d
   const pause = usePause(waiting, 'patch');
   useFirstFocus(first);
 
-  const change = (nextName: string, nextCss: string) => pause(() => act({ do: 'editDuet', id: item.id, summary: nextName, css: nextCss }));
+  const change = (nextName: string, nextCss: string) => pause(() => act({ do: 'editAssistant', id: item.id, summary: nextName, css: nextCss }));
   const finish = () => {
     waiting.get('patch')?.();
     done();
@@ -257,7 +257,7 @@ function PatchEditor({ item, waiting, done }: { item: Patch; waiting: Waiting; d
         className={styles.css}
         value={css}
         rows={6}
-        maxLength={EFFECTS_LIMITS.duetCss}
+        maxLength={EFFECTS_LIMITS.assistantCss}
         spellCheck={false}
         aria-describedby={item.removed.length ? `${cssId}-removed` : undefined}
         onChange={(e) => {
@@ -308,7 +308,7 @@ export function EffectsCard({ opened }: { opened: number }) {
   const [draft, setDraft] = useState('');
   const sent = useRef<string | null>(null);
   const [ask, setAsk] = useState('');
-  // The one editor open: `hidden:<key>` or `duet:<id>`.
+  // The one editor open: `hidden:<key>` or `assistant:<id>`.
   const [editing, setEditing] = useState<string | null>(null);
   // Hidden elements are named by their selector, which an editor changes as you type: each row keeps a key of its own.
   const keys = useRef({ next: 0, of: new Map<string, string>() });
@@ -395,7 +395,7 @@ export function EffectsCard({ opened }: { opened: number }) {
     run({ do: 'ask', text: ask.trim() });
   };
 
-  const has = view.css.trim().length > 0 || view.hidden.length > 0 || view.presets.length > 0 || view.duet.length > 0;
+  const has = view.css.trim().length > 0 || view.hidden.length > 0 || view.presets.length > 0 || view.assistant.length > 0;
   const togglePreset = (id: EffectPresetId, on: boolean) => run({ do: 'preset', id, on });
   return (
     <div ref={root} className={`${base.card} ${styles.card}`} role="dialog" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown}>
@@ -525,7 +525,7 @@ export function EffectsCard({ opened }: { opened: number }) {
               </div>
             ) : (
               <label className={styles.ask}>
-                <DuetIcon {...ICON} aria-hidden />
+                <AssistantIcon {...ICON} aria-hidden />
                 <input value={ask} placeholder="Restyle this site…" aria-label="Restyle this site" maxLength={500} onChange={(e) => setAsk(e.target.value)} onKeyDown={onAsk} />
               </label>
             )}
@@ -537,9 +537,9 @@ export function EffectsCard({ opened }: { opened: number }) {
             {view.ask.note && <p className={styles.note}>{view.ask.note}</p>}
           </section>
         )}
-        {view.duet.length > 0 && (
+        {view.assistant.length > 0 && (
           <ul className={styles.list} aria-label="From the assistant">
-            {view.duet.map((d) => {
+            {view.assistant.map((d) => {
               const name = d.summary || d.ask;
               return (
                 <Item
@@ -547,15 +547,15 @@ export function EffectsCard({ opened }: { opened: number }) {
                   name={name}
                   spoken={`“${name}”`}
                   title={d.summary && d.summary !== d.ask ? `${d.summary}\nYou asked: ${d.ask}` : name}
-                  icon={<DuetIcon size={14} strokeWidth={1.75} aria-hidden className={styles.muted} />}
+                  icon={<AssistantIcon size={14} strokeWidth={1.75} aria-hidden className={styles.muted} />}
                   on={d.on}
                   switchLabel={`Use “${name}”`}
-                  onSwitch={(on) => run({ do: 'duetOn', id: d.id, on })}
-                  editing={editing === `duet:${d.id}`}
-                  onEdit={(open) => openEditor(`duet:${d.id}`, open)}
+                  onSwitch={(on) => run({ do: 'assistantOn', id: d.id, on })}
+                  editing={editing === `assistant:${d.id}`}
+                  onEdit={(open) => openEditor(`assistant:${d.id}`, open)}
                   onRemove={() => {
-                    if (editing === `duet:${d.id}`) setEditing(null);
-                    run({ do: 'removeDuet', id: d.id });
+                    if (editing === `assistant:${d.id}`) setEditing(null);
+                    run({ do: 'removeAssistant', id: d.id });
                   }}
                   editor={(done) => <PatchEditor item={d} waiting={waiting} done={done} />}
                 />

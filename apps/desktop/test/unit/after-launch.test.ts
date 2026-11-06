@@ -39,13 +39,13 @@ describe('AfterLaunch', () => {
     const launch = new AfterLaunch(timing);
     const order: string[] = [];
     launch.run(() => order.push('sweep'));
-    launch.run(() => order.push('duet'));
+    launch.run(() => order.push('assistant'));
     launch.opened();
     launch.shellPainted();
     launch.pageLoaded();
     vi.advanceTimersByTime(timing.settleMs);
-    expect(order).toEqual(['sweep', 'duet']);
+    expect(order).toEqual(['sweep', 'assistant']);
     launch.run(() => order.push('late'));
-    expect(order).toEqual(['sweep', 'duet', 'late']);
+    expect(order).toEqual(['sweep', 'assistant', 'late']);
   });
 });

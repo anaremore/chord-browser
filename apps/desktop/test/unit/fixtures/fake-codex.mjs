@@ -3,7 +3,7 @@
 // file (Chord must decline), and, for "run", produces a commandExecution item (the tripwire).
 // Asked to draw, it makes an image as Codex's image tool does (when Chord left the tool on),
 // saving its own copy under CODEX_HOME/generated_images. The assistant's E2E tests run it as Codex too
-// (CHORD_DUET_CODEX), so it answers `--version` and `login status` the way codex-cli does.
+// (CHORD_ASSISTANT_CODEX), so it answers `--version` and `login status` the way codex-cli does.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';

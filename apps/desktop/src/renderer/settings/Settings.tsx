@@ -7,14 +7,14 @@ import { DEFAULT_PROFILE, DEFAULT_SETTINGS, keycapFor, SEARCH_ENGINES, searchEng
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
 import { ArrowDownUp, Blend, Check, EyeOff, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { ChordMark } from '../shared/ChordMark';
-import { DuetIcon } from '../shared/icons';
+import { AssistantIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { useLive, type Live } from '../shared/live';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle } from '../shared/theme';
 import { api } from './api';
-import { DuetSettings } from './DuetSettings';
+import { AssistantSettings } from './AssistantSettings';
 import { AppearanceSection } from './Appearance';
 import { ShortcutsSection } from './Shortcuts';
 import { RadioGroup, ResetButton, Row, SectionHeader, Segmented, Switch } from './controls';
@@ -38,7 +38,7 @@ const SECTIONS = [
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
   // Export, and import from another browser or (next) a Chord file: one place for your data, in and out (S15 question 5).
   { id: 'data', label: 'Your data', icon: ArrowDownUp },
-  { id: 'duet', label: 'Assistant', icon: DuetIcon },
+  { id: 'assistant', label: 'Assistant', icon: AssistantIcon },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
 ] as const;
@@ -548,7 +548,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'data' && <YourDataSection snapshot={snapshot} info={info} onUpdates={checkForUpdates} />}
-              {section === 'duet' && <DuetSettings snapshot={snapshot} />}
+              {section === 'assistant' && <AssistantSettings snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}
             </motion.div>

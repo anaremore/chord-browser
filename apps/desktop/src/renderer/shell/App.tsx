@@ -13,10 +13,10 @@ import {
   type LoadError,
   type TabNode,
 } from '@chord/core';
-import type { ChordEdit, DuetView, SystemInfo } from '@chord/ipc';
+import type { ChordEdit, AssistantView, SystemInfo } from '@chord/ipc';
 import { durations } from '@chord/tokens';
 import { Archive, ArrowLeft, ArrowRight, Blend, BookOpenText, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
-import { DuetIcon } from '../shared/icons';
+import { AssistantIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useLive, type Live } from '../shared/live';
@@ -33,8 +33,8 @@ import { ChordHeader, ChordPane, ChordSwitcher, GhostPane, newChordLook, Tint } 
 import { ShortcutsProvider, useKeys } from './keys';
 import { DockedPane } from './Devtools';
 import { DownloadsButton, summarizeDownloads } from './Downloads';
-import { DuetPanel } from './Assistant';
-import { DuetReadTabs } from './duet-context';
+import { AssistantPanel } from './Assistant';
+import { AssistantReadTabs } from './assistant-context';
 import { ExtensionButtons, ExtensionsShelf, useExtensionsBar } from './Extensions';
 import { FrameSnapshots } from './FrameSnapshot';
 import { NowPlayingCard } from './NowPlaying';
@@ -402,29 +402,29 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   // Archived rows' favicons fly here (DESIGN.md §6.5).
   const archiveButton = <ArchiveButton title={archiveLabel} onClick={() => void api.action.run('app.history')} />;
   // The assistant's panel for this window (DESIGN.md §7.8): main pushes what it shows.
-  const [duet, setDuet] = useState<DuetView | null>(null);
+  const [assistant, setAssistant] = useState<AssistantView | null>(null);
   useEffect(() => {
     // A push can arrive before the answer and be the newer of the two (live.ts says why): it wins.
     // It renders in the frame with the state patches (shared/frames.ts).
     let pushed = false;
-    // Thumbnails arrive once each (main/duet/service.ts): kept as later views come.
-    const merge = (view: DuetView) => setDuet((was) => ({ ...view, imageThumbs: was ? { ...was.imageThumbs, ...view.imageThumbs } : view.imageThumbs }));
+    // Thumbnails arrive once each (main/assistant/service.ts): kept as later views come.
+    const merge = (view: AssistantView) => setAssistant((was) => ({ ...view, imageThumbs: was ? { ...was.imageThumbs, ...view.imageThumbs } : view.imageThumbs }));
     const show = inNextFrame(merge);
-    const unsubscribe = api.duet.onState((view) => {
+    const unsubscribe = api.assistant.onState((view) => {
       pushed = true;
       show(view);
     });
-    void api.duet.view().then((view) => {
+    void api.assistant.view().then((view) => {
       if (!pushed) merge(view);
       // A newer push wins, but the answer's thumbnails count: main sent them only in it.
-      else setDuet((was) => (was ? { ...was, imageThumbs: { ...view.imageThumbs, ...was.imageThumbs } } : view));
+      else setAssistant((was) => (was ? { ...was, imageThumbs: { ...view.imageThumbs, ...was.imageThumbs } } : view));
     });
     return unsubscribe;
   }, []);
-  const duetOpen = Boolean(duet?.enabled && duet.open);
+  const assistantOpen = Boolean(assistant?.enabled && assistant.open);
   // The panel slides in on `overlay` and out a little quicker (DESIGN.md §6.1, §6.5), with the sidebar's motion switch.
-  const duetEnter = spring('overlay', 'sidebar');
-  const duetSlide = { enter: duetEnter, exit: duetEnter === INSTANT ? INSTANT : { duration: durations.fadeBase / 1000, ease: 'easeIn' as const } };
+  const assistantEnter = spring('overlay', 'sidebar');
+  const assistantSlide = { enter: assistantEnter, exit: assistantEnter === INSTANT ? INSTANT : { duration: durations.fadeBase / 1000, ease: 'easeIn' as const } };
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
   useEffect(() => api.chords.onEdit(setChordEdit), []);
   // F6 and ⇧F6 move between the window's regions (regions.ts).
@@ -541,7 +541,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
           data-resizing={liveWidth !== null || undefined}
           // A page is sharing this window (as a window, or on a shared screen): its edge is tinted.
           data-shared-window={state.sharedWindows.includes(windowId) || undefined}
-          style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px`, '--duet-space': duetOpen ? 'calc(var(--size-duet-width) + var(--space-2))' : 'var(--space-0)' } as CSSProperties}
+          style={{ ...style, '--size-sidebar-width': `${sidebarWidth}px`, '--assistant-space': assistantOpen ? 'calc(var(--size-assistant-width) + var(--space-2))' : 'var(--space-0)' } as CSSProperties}
         >
           <div className={styles.backdrop} aria-hidden>
             {/* A swipe blends the neighbor's tint in as the fingers move, so its switch needn't crossfade again. */}
@@ -629,7 +629,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                       edit={chordEdit && chordEdit.chordId === chord?.id ? chordEdit.field : null}
                       onDone={() => setChordEdit(null)}
                     />
-                    <DuetReadTabs.Provider value={new Set(duetOpen ? (duet?.readTabIds ?? []) : [])}>
+                    <AssistantReadTabs.Provider value={new Set(assistantOpen ? (assistant?.readTabIds ?? []) : [])}>
                       <SidebarTabs
                         chordId={chord?.id ?? ''}
                         state={state}
@@ -640,7 +640,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                         spring={spring}
                         tabMotion={tabMotion}
                       />
-                    </DuetReadTabs.Provider>
+                    </AssistantReadTabs.Provider>
                   </ChordPane>
                 </AnimatePresence>
                 {/* The neighbors a swipe brings in beside the current chord. */}
@@ -748,16 +748,16 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
               {/* In the minimal bar, Downloads shows only while something downloads or just finished (DESIGN.md §3.3). */}
               {collapsed && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact undoKeys mac={info.platform === 'darwin'} />}
               {collapsed && (downloads.active > 0 || downloads.unseen) && downloadsButton}
-              {duet?.enabled && (
+              {assistant?.enabled && (
                 <button
                   type="button"
-                  className={styles.duetButton}
+                  className={styles.assistantButton}
                   aria-label="Assistant"
-                  aria-pressed={duetOpen}
-                  title={`Assistant  ${keycap('duet.toggle')}`.trim()}
-                  onClick={() => void api.duet.act({ do: 'toggle' })}
+                  aria-pressed={assistantOpen}
+                  title={`Assistant  ${keycap('assistant.toggle')}`.trim()}
+                  onClick={() => void api.assistant.act({ do: 'toggle' })}
                 >
-                  <DuetIcon {...ICON} aria-hidden />
+                  <AssistantIcon {...ICON} aria-hidden />
                 </button>
               )}
               {overlayChrome && (
@@ -850,9 +850,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
           {/* The pages' pictures while the frame changes size (ARCHITECTURE.md §5). */}
           <FrameSnapshots />
           {/* A panel already open when the shell starts is just there; opening and closing slide it. */}
-          {duet && (
+          {assistant && (
             <AnimatePresence initial={false}>
-              {duetOpen && <DuetPanel key="duet" view={duet} windowId={windowId} info={info} slide={duetSlide} />}
+              {assistantOpen && <AssistantPanel key="assistant" view={assistant} windowId={windowId} info={info} slide={assistantSlide} />}
             </AnimatePresence>
           )}
           <ArchiveFlights />

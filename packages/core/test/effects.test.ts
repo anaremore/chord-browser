@@ -16,7 +16,7 @@ import {
   hasEffects,
   outlineResult,
   parseEffectsAnswer,
-  type DuetEffect,
+  type AssistantEffect,
   type EffectsParts,
   type HiddenElement,
   type DataRecord,
@@ -46,27 +46,27 @@ describe('effectsHost', () => {
 
 const site = (over: Partial<SiteEffects> = {}): SiteEffects => ({ ...emptyEffects('news.test', 10), ...over });
 const hiddenAt = (selector: string, on = true): HiddenElement => ({ selector, label: selector, on, at: 0 });
-const patch = (id: string, css: string, on = true): DuetEffect => ({ id, ask: `ask ${id}`, summary: `patch ${id}`, css, on, at: 0 });
+const patch = (id: string, css: string, on = true): AssistantEffect => ({ id, ask: `ask ${id}`, summary: `patch ${id}`, css, on, at: 0 });
 
 describe('a site’s stylesheet', () => {
   const READING = effectPreset('reading-width')!.css;
   const DARK = effectPreset('dark')!.css;
   const full = (over: Partial<SiteEffects> = {}) =>
-    site({ css: 'h1 { color: red }', hidden: [hiddenAt('#ad'), hiddenAt('#promo')], presets: ['reading-width', 'dark'], duet: [patch('a', 'p { color: blue }'), patch('b', 'body { color: green }')], ...over });
+    site({ css: 'h1 { color: red }', hidden: [hiddenAt('#ad'), hiddenAt('#promo')], presets: ['reading-width', 'dark'], assistant: [patch('a', 'p { color: blue }'), patch('b', 'body { color: green }')], ...over });
   /** What a page gets: nothing while dry, else what's on. */
   const applied = (s: SiteEffects, everywhere: boolean): EffectsParts | null => (effectsWet(s, everywhere) ? effectsParts(s) : null);
 
   it.each<[string, SiteEffects, boolean, EffectsParts | null]>([
-    ['everything on, in the order it applies', full(), true, { presets: [READING, DARK], hidden: ['#ad', '#promo'], css: 'h1 { color: red }', duet: ['p { color: blue }', 'body { color: green }'] }],
-    ['your CSS off', full({ cssOn: false }), true, { presets: [READING, DARK], hidden: ['#ad', '#promo'], css: '', duet: ['p { color: blue }', 'body { color: green }'] }],
-    ['a hidden element off', full({ hidden: [hiddenAt('#ad', false), hiddenAt('#promo')] }), true, { presets: [READING, DARK], hidden: ['#promo'], css: 'h1 { color: red }', duet: ['p { color: blue }', 'body { color: green }'] }],
-    ['one patch off, the other kept in its place', full({ duet: [patch('a', 'p { color: blue }', false), patch('b', 'body { color: green }')] }), true, { presets: [READING, DARK], hidden: ['#ad', '#promo'], css: 'h1 { color: red }', duet: ['body { color: green }'] }],
-    ['a preset turned off (it isn’t kept)', full({ presets: ['dark'] }), true, { presets: [DARK], hidden: ['#ad', '#promo'], css: 'h1 { color: red }', duet: ['p { color: blue }', 'body { color: green }'] }],
+    ['everything on, in the order it applies', full(), true, { presets: [READING, DARK], hidden: ['#ad', '#promo'], css: 'h1 { color: red }', assistant: ['p { color: blue }', 'body { color: green }'] }],
+    ['your CSS off', full({ cssOn: false }), true, { presets: [READING, DARK], hidden: ['#ad', '#promo'], css: '', assistant: ['p { color: blue }', 'body { color: green }'] }],
+    ['a hidden element off', full({ hidden: [hiddenAt('#ad', false), hiddenAt('#promo')] }), true, { presets: [READING, DARK], hidden: ['#promo'], css: 'h1 { color: red }', assistant: ['p { color: blue }', 'body { color: green }'] }],
+    ['one patch off, the other kept in its place', full({ assistant: [patch('a', 'p { color: blue }', false), patch('b', 'body { color: green }')] }), true, { presets: [READING, DARK], hidden: ['#ad', '#promo'], css: 'h1 { color: red }', assistant: ['body { color: green }'] }],
+    ['a preset turned off (it isn’t kept)', full({ presets: ['dark'] }), true, { presets: [DARK], hidden: ['#ad', '#promo'], css: 'h1 { color: red }', assistant: ['p { color: blue }', 'body { color: green }'] }],
     [
       'every item off, presets still on',
-      full({ cssOn: false, hidden: [hiddenAt('#ad', false), hiddenAt('#promo', false)], duet: [patch('a', 'p{}', false), patch('b', 'b{}', false)] }),
+      full({ cssOn: false, hidden: [hiddenAt('#ad', false), hiddenAt('#promo', false)], assistant: [patch('a', 'p{}', false), patch('b', 'b{}', false)] }),
       true,
-      { presets: [READING, DARK], hidden: [], css: '', duet: [] },
+      { presets: [READING, DARK], hidden: [], css: '', assistant: [] },
     ],
     ['dry on its own switch, everything on', full({ wet: false }), true, null],
     ['dry everywhere, everything on', full(), false, null],
@@ -78,8 +78,8 @@ describe('a site’s stylesheet', () => {
 
   it('switching an item off and on again gives the same stylesheet', () => {
     const before = full();
-    const off = full({ duet: before.duet.map((d) => (d.id === 'a' ? { ...d, on: false } : d)) });
-    const on = { ...off, duet: off.duet.map((d) => ({ ...d, on: true })) };
+    const off = full({ assistant: before.assistant.map((d) => (d.id === 'a' ? { ...d, on: false } : d)) });
+    const on = { ...off, assistant: off.assistant.map((d) => ({ ...d, on: true })) };
     expect(effectsParts(off)).not.toEqual(effectsParts(before));
     expect(effectsParts(on)).toEqual(effectsParts(before));
   });
@@ -95,9 +95,9 @@ describe('what a site has', () => {
 
   it('is summed up for Settings, with how many are switched off', () => {
     const hidden = [hiddenAt('#a'), hiddenAt('#b')];
-    const duet = [patch('1', '')];
-    expect(effectsSummary(site({ css: 'p{}', hidden, presets: ['dark', 'no-sticky'], duet }))).toBe('Your CSS · 2 hidden · Dark · No sticky bars · 1 from the assistant');
-    expect(effectsSummary(site({ css: 'p{}', cssOn: false, hidden: [hidden[0]!, { ...hidden[1]!, on: false }], duet: [{ ...duet[0]!, on: false }] }))).toBe('Your CSS · 2 hidden · 1 from the assistant · 3 off');
+    const assistant = [patch('1', '')];
+    expect(effectsSummary(site({ css: 'p{}', hidden, presets: ['dark', 'no-sticky'], assistant }))).toBe('Your CSS · 2 hidden · Dark · No sticky bars · 1 from the assistant');
+    expect(effectsSummary(site({ css: 'p{}', cssOn: false, hidden: [hidden[0]!, { ...hidden[1]!, on: false }], assistant: [{ ...assistant[0]!, on: false }] }))).toBe('Your CSS · 2 hidden · 1 from the assistant · 3 off');
     // Your CSS emptied and off isn't counted: there's nothing of it to be off.
     expect(effectsSummary(site({ cssOn: false, presets: ['dark'] }))).toBe('Dark');
     expect(effectsSummary(site())).toBe('');
@@ -130,7 +130,7 @@ describe('cleanSiteEffects', () => {
         css: 'x'.repeat(EFFECTS_LIMITS.css + 1),
         hidden: [{ selector: '#a', label: 'A'.repeat(500) }, { selector: '#a', label: 'again' }, { selector: '' }, null, { selector: 7 }],
         presets: ['dark', 'dark', 'neon', 3],
-        duet: [{ id: 'd', ask: 'q', summary: 's', css: 'p{}' }, { id: 'no-css' }, { css: 'no id' }],
+        assistant: [{ id: 'd', ask: 'q', summary: 's', css: 'p{}' }, { id: 'no-css' }, { css: 'no id' }],
         createdAt: -5,
         updatedAt: 'later',
       },
@@ -143,20 +143,20 @@ describe('cleanSiteEffects', () => {
       cssOn: true,
       hidden: [{ selector: '#a', label: 'A'.repeat(EFFECTS_LIMITS.label), on: true, at: 0 }],
       presets: ['dark'],
-      duet: [{ id: 'd', ask: 'q', summary: 's', css: 'p{}', on: true, at: 0 }],
+      assistant: [{ id: 'd', ask: 'q', summary: 's', css: 'p{}', on: true, at: 0 }],
       createdAt: 99,
       updatedAt: 99,
     });
   });
 
-  it.each<[string, Record<string, unknown>, { cssOn: boolean; hidden: boolean[]; duet: boolean[] }]>([
-    ['a row from before the switches: everything on', { css: 'p{}', hidden: [{ selector: '#a' }], duet: [{ id: 'd', css: 'p{}' }] }, { cssOn: true, hidden: [true], duet: [true] }],
-    ['switches off', { css: 'p{}', cssOn: false, hidden: [{ selector: '#a', on: false }, { selector: '#b', on: true }], duet: [{ id: 'd', css: 'p{}', on: false }] }, { cssOn: false, hidden: [false, true], duet: [false] }],
+  it.each<[string, Record<string, unknown>, { cssOn: boolean; hidden: boolean[]; assistant: boolean[] }]>([
+    ['a row from before the switches: everything on', { css: 'p{}', hidden: [{ selector: '#a' }], assistant: [{ id: 'd', css: 'p{}' }] }, { cssOn: true, hidden: [true], assistant: [true] }],
+    ['switches off', { css: 'p{}', cssOn: false, hidden: [{ selector: '#a', on: false }, { selector: '#b', on: true }], assistant: [{ id: 'd', css: 'p{}', on: false }] }, { cssOn: false, hidden: [false, true], assistant: [false] }],
     // Only `false` is off: anything else a hand-edited row holds reads as on, as `wet` does.
-    ['switches that aren’t booleans', { css: 'p{}', cssOn: 0, hidden: [{ selector: '#a', on: 'no' }], duet: [{ id: 'd', css: 'p{}', on: null }] }, { cssOn: true, hidden: [true], duet: [true] }],
+    ['switches that aren’t booleans', { css: 'p{}', cssOn: 0, hidden: [{ selector: '#a', on: 'no' }], assistant: [{ id: 'd', css: 'p{}', on: null }] }, { cssOn: true, hidden: [true], assistant: [true] }],
   ])('reads %s', (_what, fields, expected) => {
     const cleaned = cleanSiteEffects({ host: 'news.test', ...fields })!;
-    expect({ cssOn: cleaned.cssOn, hidden: cleaned.hidden.map((h) => h.on), duet: cleaned.duet.map((d) => d.on) }).toEqual(expected);
+    expect({ cssOn: cleaned.cssOn, hidden: cleaned.hidden.map((h) => h.on), assistant: cleaned.assistant.map((d) => d.on) }).toEqual(expected);
   });
 
   it('keeps the newest past a list’s limit', () => {
@@ -180,7 +180,7 @@ describe('the record (Your data, S15 §1)', () => {
         { selector: '#promo', label: 'Promo', on: false, at: 5 },
       ],
       presets: ['reading-width'],
-      duet: [
+      assistant: [
         { id: 'old', ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }', on: false, at: 6 },
         { id: 'older', ask: 'Blue links', summary: 'Blue links', css: 'a { color: blue }', on: true, at: 6 },
       ],
@@ -200,7 +200,7 @@ describe('the record (Your data, S15 §1)', () => {
           { selector: '#promo', label: 'Promo', on: false },
         ],
         presets: ['reading-width'],
-        duet: [
+        assistant: [
           { ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }', on: false },
           { ask: 'Blue links', summary: 'Blue links', css: 'a { color: blue }', on: true },
         ],
@@ -213,7 +213,7 @@ describe('the record (Your data, S15 §1)', () => {
     expect(after).toEqual({
       ...before,
       hidden: before.hidden.map((h) => ({ ...h, at: 1234 })),
-      duet: before.duet.map((d, i) => ({ ...d, id: `new-${i + 1}`, at: 1234 })),
+      assistant: before.assistant.map((d, i) => ({ ...d, id: `new-${i + 1}`, at: 1234 })),
       createdAt: 1234,
     });
   });
@@ -228,14 +228,14 @@ describe('the record (Your data, S15 §1)', () => {
         css: 'h1 { color: red }',
         hidden: [{ selector: '#ad', label: 'div#ad' }],
         presets: [],
-        duet: [{ ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }' }],
+        assistant: [{ ask: 'Bigger text', summary: 'Bigger body text', css: 'body { font-size: 20px }' }],
       },
     };
     const after = effectsFromRecord(old, () => 'new-id')!;
     expect(after.cssOn).toBe(true);
     expect(after.hidden.map((h) => h.on)).toEqual([true]);
-    expect(after.duet.map((d) => d.on)).toEqual([true]);
-    expect(effectsParts(after)).toEqual({ presets: [], hidden: ['#ad'], css: 'h1 { color: red }', duet: ['body { font-size: 20px }'] });
+    expect(after.assistant.map((d) => d.on)).toEqual([true]);
+    expect(effectsParts(after)).toEqual({ presets: [], hidden: ['#ad'], css: 'h1 { color: red }', assistant: ['body { font-size: 20px }'] });
   });
 
   it.each<[string, DataRecord]>([
@@ -257,7 +257,7 @@ describe('Asking the assistant', () => {
     ['empty css, a reason', '{"css":"","summary":"CSS can\'t reorder the comments."}', { css: '', summary: "CSS can't reorder the comments." }],
     ['css not a string', '{"css": 5}', null],
     ['an array of strings', '["a{}"]', null],
-    ['too much css', `{"css":"${'a'.repeat(EFFECTS_LIMITS.duetCss + 1)}"}`, null],
+    ['too much css', `{"css":"${'a'.repeat(EFFECTS_LIMITS.assistantCss + 1)}"}`, null],
     ['not JSON', 'h1 { color: green }', null],
   ])('%s', (_what, text, expected) => {
     expect(parseEffectsAnswer(text)).toEqual(expected);

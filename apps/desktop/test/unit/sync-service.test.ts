@@ -260,7 +260,7 @@ describe('an apply that fails', () => {
         return {};
       });
       // The store throws applying it (here, effects that can't be applied).
-      const effects = { host: 'x.test', wet: true, css: '', cssOn: true, hidden: [], presets: [], duet: [], updatedAt: 1 };
+      const effects = { host: 'x.test', wet: true, css: '', cssOn: true, hidden: [], presets: [], assistant: [], updatedAt: 1 };
       (h.service as unknown as { options: { effects: { syncSites(): Promise<void> } } }).options.effects.syncSites = async () => {
         throw new Error('the sanitizer failed');
       };

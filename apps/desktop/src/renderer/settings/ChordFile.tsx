@@ -85,7 +85,7 @@ export function importText(p: FileImportProgress): string {
       return 'Adding your setup…';
     case 'history':
       return `Adding history: ${new Intl.NumberFormat('en-US').format(p.done)} of ${plural(p.total, 'page')}`;
-    case 'duet':
+    case 'assistant':
       return 'Adding assistant chats…';
     case 'done':
       return `${importedText(p.counts)}.`;
@@ -144,7 +144,7 @@ export function FromChordFile({ onUpdates }: { onUpdates(): void }) {
     if (n !== reads.current) return;
     if (result.ok) {
       const { preview } = result;
-      setChoices({ history: preview.history.pages > 0, duet: preview.duet.chats > 0, effects: preview.effects.length > 0, settings: preview.newProfile });
+      setChoices({ history: preview.history.pages > 0, assistant: preview.assistant.chats > 0, effects: preview.effects.length > 0, settings: preview.newProfile });
       setStep({ at: 'preview', preview });
     } else if (result.problem === 'needs-passphrase') setStep({ at: 'locked', fileId, name });
     else setStep({ at: 'problem', fileId, name, problem: result.problem });
@@ -255,11 +255,11 @@ function Preview({
   const changesId = useId();
   const locked = progress !== null;
   const set = (key: keyof FileImportChoices) => (value: boolean) => !locked && onChoose({ ...choices, [key]: value });
-  const { history, duet } = preview;
+  const { history, assistant } = preview;
   // Every page here already can still bring visits Chord doesn't have.
   const pages =
     history.pages === 0 ? '' : history.newPages > 0 ? `${plural(history.newPages, 'new page')}, for search in every chord` : `${plural(history.pages, 'page')}, all visited here too. Only visits Chord doesn’t have come in.`;
-  const chats = duet.newChats > 0 ? `${plural(duet.newChats, 'new chat')}${duet.images ? `, ${plural(duet.images, 'image')}` : ''}. Nothing is sent anywhere until you write in one.` : `${plural(duet.chats, 'chat')}, all here already`;
+  const chats = assistant.newChats > 0 ? `${plural(assistant.newChats, 'new chat')}${assistant.images ? `, ${plural(assistant.images, 'image')}` : ''}. Nothing is sent anywhere until you write in one.` : `${plural(assistant.chats, 'chat')}, all here already`;
   const finished = progress?.phase === 'done' || progress?.phase === 'failed';
   const readable = countsText(sum(preview.counts.new, preview.counts.newer), false);
   return (
@@ -267,7 +267,7 @@ function Preview({
       <Row label="From" description={fromText(preview)} control={null} />
       <Row label="What comes in" description={whatComesIn(preview, choices.effects)} control={null} />
       {pages && <Row label="History" description={pages} control={<Switch label="Import history" checked={choices.history} onChange={set('history')} />} />}
-      {duet.chats > 0 && <Row label="Assistant chats" description={chats} control={<Switch label="Import assistant chats" checked={choices.duet} onChange={set('duet')} />} />}
+      {assistant.chats > 0 && <Row label="Assistant chats" description={chats} control={<Switch label="Import assistant chats" checked={choices.assistant} onChange={set('assistant')} />} />}
       {preview.effects.length > 0 && (
         <Row
           label="Effects"

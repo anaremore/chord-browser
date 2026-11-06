@@ -18,9 +18,9 @@ import {
   UI_SCALES,
   PASSPHRASE_MAX,
   passphraseProblem,
-  DUET_FORM_AREA_MAX,
-  DUET_FORM_MAX_FIELDS,
-  DUET_SCOPES,
+  ASSISTANT_FORM_AREA_MAX,
+  ASSISTANT_FORM_MAX_FIELDS,
+  ASSISTANT_SCOPES,
   type ActionId as CoreActionId,
   type ArchiveAfter,
   type ArchivedTab,
@@ -31,14 +31,14 @@ import {
   type LinkRoute,
   type Command,
   type DownloadAction,
-  type DuetContextUsage,
-  type DuetTabName,
+  type AssistantContextUsage,
+  type AssistantTabName,
   type EffectPresetId,
   type ExportCounts,
-  type DuetHit,
-  type DuetMessage,
-  type DuetProvider,
-  type DuetScope,
+  type AssistantHit,
+  type AssistantMessage,
+  type AssistantProvider,
+  type AssistantScope,
   type ImportBrowser,
   type ImportChoices,
   type ImportOverview,
@@ -137,8 +137,8 @@ export const CustomThemeSchema = z.strictObject({
   grain: z.number().min(0).max(1),
 });
 /** An emoji, a symbol, or a letter: one or two grapheme clusters at most. */
-/** What an assistant chat may read without asking (core's DUET_SCOPES). */
-const duetScope = z.enum(DUET_SCOPES);
+/** What an assistant chat may read without asking (core's ASSISTANT_SCOPES). */
+const assistantScope = z.enum(ASSISTANT_SCOPES);
 const chordIcon = z.string().min(1).max(16);
 const chordName = z.string().max(64);
 
@@ -229,7 +229,7 @@ export const RendererCommand = z.discriminatedUnion('t', [
   // A toast's Undo for a change to a site's Effects (main takes it over: Effects live outside the store).
   z.object({ t: z.literal('effects.undo'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // A toast's Undo for a form the assistant filled (main takes it over: what was there before stays in the page).
-  z.object({ t: z.literal('duet.undoFill'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
+  z.object({ t: z.literal('assistant.undoFill'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // Presenting mode's indicator turns it off. Only yours: shares start and end it in main.
   z.object({ t: z.literal('presenting.set'), on: z.boolean(), by: z.literal('you') }),
   // Sync (S15 §8): Undo for turning it off or removing a computer, before either happens (main takes it over);
@@ -303,13 +303,13 @@ export const SettingsPatch = z.strictObject({
   proxy: ProxySettingsSchema.optional(),
   // Settings → Your data → Export: whether the card starts with Encrypt with a passphrase on.
   encryptExports: z.boolean().optional(),
-  duet: z
+  assistant: z
     .strictObject({
       enabled: z.boolean(),
       provider: z.enum(['claude', 'codex']).nullable(),
       model: z.string().max(100).nullable(),
       keep: z.enum(['forever', '90d', '30d']),
-      scope: duetScope,
+      scope: assistantScope,
       readsNothing: z.boolean(),
       neverSites: z.array(z.string().max(300)).max(500),
       offChords: z.array(z.string().max(64)).max(500),
@@ -422,7 +422,7 @@ export interface EffectsView {
   hidden: { selector: string; label: string; on: boolean; usable: boolean }[];
   presets: EffectPresetId[];
   /** Each of the assistant's patches: its stylesheet (as the assistant or you wrote it), its own switch, and what was left out of it while it's on. */
-  duet: { id: string; ask: string; summary: string; css: string; on: boolean; removed: EffectsRemoval[] }[];
+  assistant: { id: string; ask: string; summary: string; css: string; on: boolean; removed: EffectsRemoval[] }[];
   /**
    * Asking the assistant: offered only where the assistant may read the page (set up, on in this
    * chord, not a Never site, not a private window); how a request is going.
@@ -458,9 +458,9 @@ export const EffectsAction = z.discriminatedUnion('do', [
   }),
   z.object({ do: z.literal('unhide'), selector: z.string().min(1).max(EFFECTS_LIMITS.selector) }),
   /** One of the assistant's patches by its id: on or off, edited (its name and CSS), or removed. */
-  z.object({ do: z.literal('duetOn'), id: z.string().min(1).max(64), on: z.boolean() }),
-  z.object({ do: z.literal('editDuet'), id: z.string().min(1).max(64), summary: z.string().max(EFFECTS_LIMITS.summary), css: z.string().max(EFFECTS_LIMITS.duetCss) }),
-  z.object({ do: z.literal('removeDuet'), id: z.string().min(1).max(64) }),
+  z.object({ do: z.literal('assistantOn'), id: z.string().min(1).max(64), on: z.boolean() }),
+  z.object({ do: z.literal('editAssistant'), id: z.string().min(1).max(64), summary: z.string().max(EFFECTS_LIMITS.summary), css: z.string().max(EFFECTS_LIMITS.assistantCss) }),
+  z.object({ do: z.literal('removeAssistant'), id: z.string().min(1).max(64) }),
   z.object({ do: z.literal('clear') }),
   /** Hide an element: the card steps aside for the picker. */
   z.object({ do: z.literal('pick') }),
@@ -865,7 +865,7 @@ export interface ArchiveSnapshot {
 export type GesturePhase = 'begin' | 'end' | 'fling';
 
 /** What a toast's button does: a command in the shell's store (Undo), "Restart to update", or a screenshot's Save or Ask about it. */
-export type ToastAction = { label: string; command: RendererCommand } | { label: string; update: 'restart' } | { label: string; screenshot: { id: string; do: 'save' | 'duet' } };
+export type ToastAction = { label: string; command: RendererCommand } | { label: string; update: 'restart' } | { label: string; screenshot: { id: string; do: 'save' | 'assistant' } };
 
 export interface Toast {
   id: string;
@@ -908,7 +908,7 @@ export type ScreenshotChoice = z.infer<typeof ScreenshotChoice>;
 export interface ScreenshotItem extends ScreenshotEntry {
   thumb: string | null;
   /** The assistant may be asked about it here (it's set up, and may read the page it's of). */
-  duet: boolean;
+  assistant: boolean;
 }
 
 export interface ChordEdit {
@@ -977,18 +977,18 @@ export interface StatePatchEvent {
 
 /* ---------- Assistant (ARCHITECTURE.md §11) ---------- */
 
-export const DuetProviderSchema = z.enum(['claude', 'codex']);
+export const AssistantProviderSchema = z.enum(['claude', 'codex']);
 
 /** What the panel asks main to do. Everything is checked again in main (scope, private, never-sites). */
-export const DuetAction = z.discriminatedUnion('do', [
+export const AssistantAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('toggle'), open: z.boolean().optional() }),
   /** Settings → Assistant, from the panel (what it can read). */
   z.object({ do: z.literal('settings') }),
   z.object({ do: z.literal('dismissFirstUse') }),
-  z.object({ do: z.literal('setup'), provider: DuetProviderSchema }),
+  z.object({ do: z.literal('setup'), provider: AssistantProviderSchema }),
   /** The assistant off (or back on) in the window's current chord. */
   z.object({ do: z.literal('chordOff'), off: z.boolean() }),
-  z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }),
+  z.object({ do: z.literal('signIn'), provider: AssistantProviderSchema }),
   z.object({ do: z.literal('refresh') }),
   z.object({ do: z.literal('send'), text: z.string().min(1).max(50_000) }),
   z.object({ do: z.literal('stop') }),
@@ -1000,8 +1000,8 @@ export const DuetAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('continue') }),
   z.object({ do: z.literal('delete'), threadId: id }),
   z.object({ do: z.literal('rename'), threadId: id, title: z.string().min(1).max(80) }),
-  z.object({ do: z.literal('scope'), scope: duetScope }),
-  z.object({ do: z.literal('model'), provider: DuetProviderSchema, model: z.string().max(100).nullable() }),
+  z.object({ do: z.literal('scope'), scope: assistantScope }),
+  z.object({ do: z.literal('model'), provider: AssistantProviderSchema, model: z.string().max(100).nullable() }),
   z.object({ do: z.literal('attach'), nodeId: id }),
   z.object({ do: z.literal('detach'), nodeId: id }),
   z.object({ do: z.literal('unattachImage'), id: z.string().regex(/^[0-9a-f]{24}$/) }),
@@ -1023,17 +1023,17 @@ export const DuetAction = z.discriminatedUnion('do', [
     do: z.literal('fill'),
     messageId: id,
     fields: z
-      .array(z.strictObject({ id: z.string().regex(/^f[0-9]{1,6}$/), value: z.union([z.string().max(DUET_FORM_AREA_MAX), z.boolean()]) }))
-      .max(DUET_FORM_MAX_FIELDS),
+      .array(z.strictObject({ id: z.string().regex(/^f[0-9]{1,6}$/), value: z.union([z.string().max(ASSISTANT_FORM_AREA_MAX), z.boolean()]) }))
+      .max(ASSISTANT_FORM_MAX_FIELDS),
   }),
   /** A fill card's Not now. */
   z.object({ do: z.literal('dismissFill'), messageId: id }),
   z.object({ do: z.literal('export') }),
 ]);
-export type DuetAction = z.infer<typeof DuetAction>;
+export type AssistantAction = z.infer<typeof AssistantAction>;
 
-export interface DuetProviderInfo {
-  provider: DuetProvider;
+export interface AssistantProviderInfo {
+  provider: AssistantProvider;
   installed: boolean;
   path: string | null;
   version: string | null;
@@ -1044,22 +1044,22 @@ export interface DuetProviderInfo {
   wsl: string | null;
 }
 
-/** What one window's assistant panel shows (pushed as `duet:state`). */
-export interface DuetView {
+/** What one window's assistant panel shows (pushed as `assistant:state`). */
+export interface AssistantView {
   /** The assistant is on (Settings) and this isn't a private window. */
   enabled: boolean;
   open: boolean;
-  provider: DuetProvider | null;
-  providers: DuetProviderInfo[];
+  provider: AssistantProvider | null;
+  providers: AssistantProviderInfo[];
   chordOff: boolean;
   /** Settings → Assistant's "Nothing": no tabs, pages or images, and no scope to choose per chat. */
   readsNothing: boolean;
   /** The transparency card hasn't been dismissed yet. */
   firstUse: boolean;
-  thread: { id: string | null; title: string; scope: DuetScope; provider: DuetProvider; model: string | null } | null;
+  thread: { id: string | null; title: string; scope: AssistantScope; provider: AssistantProvider; model: string | null } | null;
   continueFrom: { id: string; title: string } | null;
   threads: { id: string; title: string; lastUsedAt: number }[];
-  messages: DuetMessage[];
+  messages: AssistantMessage[];
   busy: boolean;
   startedAt: number | null;
   queue: string[];
@@ -1069,7 +1069,7 @@ export interface DuetView {
   error: { kind: string; message: string } | null;
   draft: string;
   /** How full the chat's context is, when the provider's CLI reports it (null hides the meter). */
-  context: DuetContextUsage | null;
+  context: AssistantContextUsage | null;
   /** Images waiting in the composer, to go with the next message (a pasted image, a screenshot). */
   pendingImages: { id: string }[];
   /**
@@ -1080,9 +1080,9 @@ export interface DuetView {
   /** Codex can make images (allowed, installed, signed in): Claude's "can't" offers it. */
   codexImages: boolean;
   /** The chat's tabs by handle ("t1"), so a reply that mentions one shows its name. */
-  tabNames: Record<string, DuetTabName>;
+  tabNames: Record<string, AssistantTabName>;
   /** Providers Setup is still looking for inside WSL (Windows). */
-  lookingInWsl: DuetProvider[];
+  lookingInWsl: AssistantProvider[];
 }
 
 /* ---------- Import from other browsers (ARCHITECTURE.md §9) ---------- */
@@ -1165,7 +1165,7 @@ export interface ExportProgress {
    * `key` while the passphrase becomes the file's key, then each part as it's
    * written (setup, Today tabs and icons, history, the assistant), then `done` or `failed`.
    */
-  phase: 'key' | 'setup' | 'today' | 'history' | 'duet' | 'done' | 'failed';
+  phase: 'key' | 'setup' | 'today' | 'history' | 'assistant' | 'done' | 'failed';
   /** History's pages, or the assistant's chats, written so far, of `total`. */
   done: number;
   total: number;
@@ -1183,7 +1183,7 @@ export interface ExportProgress {
 /** What goes in, and how (a passphrase only when Encrypt with a passphrase is on). Main checks the passphrase's length again. */
 export const ExportRequestSchema = z.strictObject({
   history: z.boolean(),
-  duet: z.boolean(),
+  assistant: z.boolean(),
   passphrase: z
     .string()
     .max(PASSPHRASE_MAX * 4)
@@ -1219,7 +1219,7 @@ export interface FileImportPreview {
   /** Setup that's new, and newer than yours; everything else is here already. */
   counts: { new: MergeCounts; newer: MergeCounts };
   history: { pages: number; newPages: number };
-  duet: { chats: number; newChats: number; images: number };
+  assistant: { chats: number; newChats: number; images: number };
   /** Sites with Effects that are new or newer, for the switch's list. */
   effects: { host: string; new: boolean }[];
   /** Each setting the file would change, and each chord's own proxy, named. */
@@ -1236,7 +1236,7 @@ export type FileChooseResult = { ok: true; fileId: string; name: string } | { ok
 export type FileOpenResult = { ok: true; preview: FileImportPreview } | { ok: false; problem: FileImportProblem };
 
 /** The preview's switches. Main checks the file again, and the reducer every part of it. */
-export const FileImportChoicesSchema = z.strictObject({ history: z.boolean(), duet: z.boolean(), effects: z.boolean(), settings: z.boolean() });
+export const FileImportChoicesSchema = z.strictObject({ history: z.boolean(), assistant: z.boolean(), effects: z.boolean(), settings: z.boolean() });
 export type FileImportChoices = z.infer<typeof FileImportChoicesSchema>;
 export type FileRunResult = { ok: true; importId: string } | { ok: false; problem: 'missing' | 'busy' };
 
@@ -1246,8 +1246,8 @@ export type FileImportCounts = ImportedCounts;
 /** How an import from a Chord file is going, pushed to Settings (`importFile:progress`). */
 export interface FileImportProgress {
   importId: string;
-  /** `setup` while chords and tabs land, `history` while pages are written (`done` of `total`), `duet`, then `done`; `failed` keeps what landed; `undone` after Undo. */
-  phase: 'setup' | 'history' | 'duet' | 'done' | 'failed' | 'undone';
+  /** `setup` while chords and tabs land, `history` while pages are written (`done` of `total`), `assistant`, then `done`; `failed` keeps what landed; `undone` after Undo. */
+  phase: 'setup' | 'history' | 'assistant' | 'done' | 'failed' | 'undone';
   done: number;
   total: number;
   counts: FileImportCounts;
@@ -1321,16 +1321,16 @@ export const invokeChannels = {
   'importFile:run': { roles: ['internal'], request: z.strictObject({ fileId: id, choices: FileImportChoicesSchema }), response: z.custom<FileRunResult>() },
   /** Settings' Undo (the window's toast dispatches import.undo). */
   'importFile:undo': { roles: ['internal'], request: z.strictObject({ importId: id }), response: z.void() },
-  'duet:view': { roles: ['shell'], request: z.void(), response: z.custom<DuetView>() },
-  'duet:do': { roles: ['shell'], request: DuetAction, response: z.void() },
-  /** The command bar's @duet. */
-  'duet:search': { roles: ['overlay'], request: z.strictObject({ query: z.string().max(200) }), response: z.custom<DuetHit[]>() },
-  'duet:openHit': { roles: ['overlay'], request: z.strictObject({ chordId: id, threadId: id }), response: z.void() },
+  'assistant:view': { roles: ['shell'], request: z.void(), response: z.custom<AssistantView>() },
+  'assistant:do': { roles: ['shell'], request: AssistantAction, response: z.void() },
+  /** The command bar's @chats. */
+  'assistant:search': { roles: ['overlay'], request: z.strictObject({ query: z.string().max(200) }), response: z.custom<AssistantHit[]>() },
+  'assistant:openHit': { roles: ['overlay'], request: z.strictObject({ chordId: id, threadId: id }), response: z.void() },
   /** Settings → Assistant: the providers on this computer, sign in, clear all chats. */
-  'settings:duet': {
+  'settings:assistant': {
     roles: ['internal'],
-    request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: DuetProviderSchema }), z.object({ do: z.literal('clearAll') })]),
-    response: z.custom<DuetProviderInfo[]>(),
+    request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: AssistantProviderSchema }), z.object({ do: z.literal('clearAll') })]),
+    response: z.custom<AssistantProviderInfo[]>(),
   },
   'system:info': { roles: ['shell', 'overlay', 'popover', 'internal', 'archive', 'preview', 'mini', 'reader', 'devtools'], request: z.void(), response: SystemInfo },
   'preview:hover': { roles: ['shell'], request: PreviewTarget, response: z.void() },
@@ -1386,14 +1386,14 @@ export const invokeChannels = {
   'settings:effects': { roles: ['internal'], request: EffectsSiteChange, response: z.void() },
   // The recent screenshots, in the downloads panel (the window's own, for a private window), and the toast's Save.
   'screenshots:list': { roles: ['overlay'], request: z.void(), response: z.custom<ScreenshotItem[]>() },
-  'screenshots:do': { roles: ['overlay', 'shell'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{24}$/), do: z.enum(['copy', 'save', 'delete', 'duet']) }), response: z.void() },
+  'screenshots:do': { roles: ['overlay', 'shell'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{24}$/), do: z.enum(['copy', 'save', 'delete', 'assistant']) }), response: z.void() },
   'screenshots:clear': { roles: ['overlay'], request: z.void(), response: z.void() },
   /** The command bar's history and learned picks for what was typed (in the window's chord). */
   'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
   /** Search suggestions while typing, from the chosen engine (or a keyword's engine); empty when they're off. */
   /** "Search … for this image" in the command bar: the window opens the engine's upload (main/image-search.ts). */
-  /** "Ask about this image" in the command bar: the assistant opens with the image and the words typed (main/duet/service.ts). */
-  'duet:ask': {
+  /** "Ask about this image" in the command bar: the assistant opens with the image and the words typed (main/assistant/service.ts). */
+  'assistant:ask': {
     roles: ['overlay'],
     request: z.strictObject({
       text: z.string().max(50_000),
@@ -1620,7 +1620,7 @@ export interface EventPayloads {
   'overlay:warm': null;
   /** Peek's page moved on (title, address) or its card moved (the window resized). */
   'peek:state': PeekState;
-  'duet:state': DuetView;
+  'assistant:state': AssistantView;
   /** The frame changes size by its snapshot (ARCHITECTURE.md §5): pictures of the pages to show, move, then drop. */
   'frame:snapshot': FrameSnapshotEvent;
   /** An import from another browser, to the view that started it. */
@@ -1732,7 +1732,7 @@ export interface ShellApi {
   /** "Restart to update" from a toast. */
   updates: { restart(): Promise<void> };
   /** A screenshot toast's Save and Ask about it. */
-  screenshots: { act(id: string, action: 'save' | 'duet'): Promise<void> };
+  screenshots: { act(id: string, action: 'save' | 'assistant'): Promise<void> };
   extensions: {
     state(): Promise<ExtensionsBarState>;
     onState(listener: (state: ExtensionsBarState) => void): () => void;
@@ -1743,7 +1743,7 @@ export interface ShellApi {
   /** First run's "Open links in Chord?" (DESIGN.md §8.1). */
   defaultBrowser: { status(): Promise<DefaultBrowserStatus>; make(): Promise<DefaultBrowserStatus> };
   /** The assistant's panel in this window (ARCHITECTURE.md §11). */
-  duet: { view(): Promise<DuetView>; act(action: DuetAction): Promise<void>; onState(listener: (view: DuetView) => void): () => void };
+  assistant: { view(): Promise<AssistantView>; act(action: AssistantAction): Promise<void>; onState(listener: (view: AssistantView) => void): () => void };
   /** Stop a tab's share (its sidebar row shows it's sharing), or the shares of a tab that's being shared. */
   share: { stop(nodeId: string): Promise<void> };
   /** A tab that plays in Chord Player: back to the player, or show its page here instead. */
@@ -1842,7 +1842,7 @@ export interface SettingsApi {
     restartToUpdate(): Promise<void>;
     about(): Promise<AboutInfo>;
     /** Settings → Assistant: which providers are installed and signed in; sign in; clear all chats. */
-    duet(request: { do: 'detect' } | { do: 'signIn'; provider: DuetProvider } | { do: 'clearAll' }): Promise<DuetProviderInfo[]>;
+    assistant(request: { do: 'detect' } | { do: 'signIn'; provider: AssistantProvider } | { do: 'clearAll' }): Promise<AssistantProviderInfo[]>;
     openUrl(url: string): Promise<void>;
     /** Settings → Privacy → Safe Browsing: available in this build, and how its lists are doing. */
     safeBrowsing(): Promise<SafeBrowsingStatus>;
@@ -2063,9 +2063,9 @@ export interface OverlayApi {
     onState(listener: (state: PeekState) => void): () => void;
     expand(): Promise<void>;
   };
-  /** @duet: assistant chats by their words, and opening one; and asking about a pasted image. */
-  duet: {
-    search(query: string): Promise<DuetHit[]>;
+  /** @chats: assistant chats by their words, and opening one; and asking about a pasted image. */
+  assistant: {
+    search(query: string): Promise<AssistantHit[]>;
     open(chordId: string, threadId: string): Promise<void>;
     ask(text: string, image: { bytes: Uint8Array<ArrayBuffer>; thumb: Uint8Array<ArrayBuffer>; width: number; height: number }): Promise<void>;
   };
@@ -2081,7 +2081,7 @@ export interface OverlayApi {
   /** The recent screenshots, in the downloads panel. */
   screenshots: {
     list(): Promise<ScreenshotItem[]>;
-    act(id: string, action: 'copy' | 'save' | 'delete' | 'duet'): Promise<void>;
+    act(id: string, action: 'copy' | 'save' | 'delete' | 'assistant'): Promise<void>;
     clear(): Promise<void>;
   };
 }

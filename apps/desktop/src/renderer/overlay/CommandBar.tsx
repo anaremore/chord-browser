@@ -7,14 +7,14 @@
  * keyword or `@filter` followed by Tab narrows the bar to a chip, and the
  * engine's suggestions slot in under the local rows when they arrive.
  */
-import { imageSearchFor, keycapFor, parseInput, type ActionId, type DuetHit, type SearchEngineId } from '@chord/core';
+import { imageSearchFor, keycapFor, parseInput, type ActionId, type AssistantHit, type SearchEngineId } from '@chord/core';
 import type { CaptureStart, HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
 import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, Network, PanelBottom, PanelLeft, Pin, Presentation, Printer, RotateCcw, RotateCw, ScanSearch, Search, Settings, SquareTerminal, TextSearch, Trash2, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { Favicon } from '../shared/Favicon';
-import { DuetIcon } from '../shared/icons';
+import { AssistantIcon } from '../shared/icons';
 import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
@@ -110,10 +110,10 @@ const ACTION_ICONS: Partial<Record<ActionId, typeof X>> = {
   'split.focusNext': Columns2,
   'split.focusPrevious': Columns2,
   'app.shortcuts': Keyboard,
-  'duet.toggle': DuetIcon,
+  'assistant.toggle': AssistantIcon,
 };
 
-const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, archive: Archive, duet: DuetIcon, chords: Layers, actions: Command };
+const FILTER_ICONS: Record<Filter, typeof X> = { tabs: AppWindow, pinned: Pin, history: History, archive: Archive, chats: AssistantIcon, chords: Layers, actions: Command };
 const scopeIcon = (scope: Scope) => (scope.kind === 'filter' ? FILTER_ICONS[scope.filter] : Search);
 
 /** Anchored panels are at least this wide, so results have room beside a narrow sidebar. */
@@ -126,7 +126,7 @@ const PRECONNECT_AFTER_MS = 150;
 
 function hintFor(result: Result, mode: Session['mode']): { text: string; key: string } {
   if (result.kind === 'imageSearch') return { text: 'Search', key: '↵' };
-  if (result.kind === 'imageDuet') return { text: 'Ask', key: '↵' };
+  if (result.kind === 'imageAssistant') return { text: 'Ask', key: '↵' };
   if (result.kind === 'scope') return { text: result.scope.kind === 'keyword' ? `Search ${scopeLabel(result.scope).name}` : 'Show only these', key: result.scope.kind === 'keyword' ? 'Tab' : '↵' };
   if (mode === 'split') return { text: 'Open in split', key: '↵' };
   if (result.kind === 'tab') return { text: 'Switch to tab', key: '↵' };
@@ -134,7 +134,7 @@ function hintFor(result: Result, mode: Session['mode']): { text: string; key: st
   if (result.kind === 'chord') return { text: 'Switch to chord', key: '↵' };
   if (result.kind === 'history') return { text: mode === 'edit' ? 'Go' : 'Open', key: '↵' };
   if (result.kind === 'archive') return { text: 'Bring back', key: '↵' };
-  if (result.kind === 'duet') return { text: 'Open chat', key: '↵' };
+  if (result.kind === 'assistant') return { text: 'Open chat', key: '↵' };
   if (result.search) return { text: 'Search', key: '↵' };
   return { text: mode === 'edit' ? 'Go' : 'Open', key: '↵' };
 }
@@ -253,19 +253,19 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   // dropped; until the new one lands, the last reply keeps rows from flickering away. `@history`
   // asks even before anything is typed, as does `@archive`: recent pages, newest archived tabs.
   const [history, setHistory] = useState<HistorySearch | null>(null);
-  // @duet: assistant chats by their words, from chord-data.
-  const [duetHits, setDuetHits] = useState<DuetHit[]>([]);
-  const duetFilter = scope?.kind === 'filter' && scope.filter === 'duet';
+  // @chats: assistant chats by their words, from chord-data.
+  const [assistantHits, setAssistantHits] = useState<AssistantHit[]>([]);
+  const assistantFilter = scope?.kind === 'filter' && scope.filter === 'chats';
   useEffect(() => {
-    if (!duetFilter || !query.trim()) return setDuetHits([]);
+    if (!assistantFilter || !query.trim()) return setAssistantHits([]);
     let current = true;
-    void api.duet.search(query.trim()).then((hits) => {
-      if (current) setDuetHits(hits);
+    void api.assistant.search(query.trim()).then((hits) => {
+      if (current) setAssistantHits(hits);
     });
     return () => {
       current = false;
     };
-  }, [duetFilter, query]);
+  }, [assistantFilter, query]);
   const searchSeq = useRef(0);
   const keystroke = useRef<Keystroke | null>(null);
   /** The reply that answers the timed keystroke: when its search went out, and how long chord-data took. */
@@ -337,21 +337,21 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   const textResults = useMemo(
     () =>
       isCommandBar(session)
-        ? buildResults(query, state, windowId, session.mode, presenting ? null : history, Date.now(), { scope, suggestions, duetHits: presenting ? [] : duetHits })
+        ? buildResults(query, state, windowId, session.mode, presenting ? null : history, Date.now(), { scope, suggestions, assistantHits: presenting ? [] : assistantHits })
         : [],
-    [session, query, state, windowId, history, scope, suggestions, duetHits, presenting],
+    [session, query, state, windowId, history, scope, suggestions, assistantHits, presenting],
   );
   const imageEngine = imageSearchFor(state.settings.searchEngine, state.settings.googleFree);
   // The assistant, where it can be asked: set up, reading pages (an image is one), this chord not turned off for it, and not a private window.
-  const duetReady = Boolean(win && !win.private && state.settings.duet.enabled && !state.settings.duet.readsNothing && state.settings.duet.provider && !state.settings.duet.offChords.includes(win.activeChordId));
+  const assistantReady = Boolean(win && !win.private && state.settings.assistant.enabled && !state.settings.assistant.readsNothing && state.settings.assistant.provider && !state.settings.assistant.offChords.includes(win.activeChordId));
   const results = useMemo<Result[]>(() => {
     if (!image) return textResults;
     const search: Result = { kind: 'imageSearch', key: 'image-search', title: `Search ${imageEngine.label} for this image`, engine: imageEngine.engine };
     const words = query.trim();
-    const duet: Result = { kind: 'imageDuet', key: 'image-duet', title: words ? `Ask about this image: ${words}` : 'Ask about this image' };
+    const assistant: Result = { kind: 'imageAssistant', key: 'image-assistant', title: words ? `Ask about this image: ${words}` : 'Ask about this image' };
     // With words typed, they're most likely a question for the assistant.
-    return duetReady ? (words ? [duet, search] : [search, duet]) : [search];
-  }, [image, imageEngine.label, imageEngine.engine, textResults, duetReady, query]);
+    return assistantReady ? (words ? [assistant, search] : [search, assistant]) : [search];
+  }, [image, imageEngine.label, imageEngine.engine, textResults, assistantReady, query]);
   const takeImage = (file: File | null) => {
     if (!file) return false;
     void prepareImage(file).then((ready) => {
@@ -433,8 +433,8 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
       close();
       return;
     }
-    if (result.kind === 'imageDuet') {
-      if (image) void api.duet.ask(query.trim(), { bytes: image.bytes, thumb: image.thumb, width: image.width, height: image.height });
+    if (result.kind === 'imageAssistant') {
+      if (image) void api.assistant.ask(query.trim(), { bytes: image.bytes, thumb: image.thumb, width: image.width, height: image.height });
       close();
       return;
     }
@@ -464,8 +464,8 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
       void dispatch({ t: 'chord.activate', windowId, chordId: result.chord.id });
     } else if (result.kind === 'archive') {
       void api.archive.restore(result.archiveId);
-    } else if (result.kind === 'duet') {
-      void api.duet.open(result.chordId, result.threadId);
+    } else if (result.kind === 'assistant') {
+      void api.assistant.open(result.chordId, result.threadId);
     }
     close();
     // Actions run after the bar closes, so focus is back on the page (print, devtools, zoom act on it).
@@ -586,7 +586,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   const InputIcon = query && results[0]?.kind === 'open' && !results[0].search ? Globe : Search;
   const label = scope ? scopeLabel(scope) : null;
   const placeholder = image
-    ? duetReady
+    ? assistantReady
       ? 'Press Enter to search, or ask about it'
       : 'Press Enter to search by this image'
     : (label?.placeholder ?? (session.mode === 'split' ? 'Split with a tab or a page' : 'Search or enter address'));
@@ -699,14 +699,14 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                       ? (ACTION_ICONS[result.action] ?? CornerDownLeft)
                       : result.kind === 'imageSearch'
                         ? ScanSearch
-                      : result.kind === 'imageDuet'
-                        ? DuetIcon
+                      : result.kind === 'imageAssistant'
+                        ? AssistantIcon
                       : result.kind === 'history'
                         ? History
                         : result.kind === 'archive'
                           ? ArchiveRestore
-                          : result.kind === 'duet'
-                            ? DuetIcon
+                          : result.kind === 'assistant'
+                            ? AssistantIcon
                           : result.kind === 'scope'
                             ? scopeIcon(result.scope)
                             : result.kind === 'open'
@@ -743,7 +743,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
                       {result.kind === 'scope' && <span className={styles.chip}>{result.detail}</span>}
                       {result.kind === 'chord' && <span className={styles.resultDetail}>Chord</span>}
                       {result.kind === 'archive' && <span className={styles.chip}>Archived</span>}
-                      {result.kind === 'duet' && <span className={styles.resultDetail}>{result.detail}</span>}
+                      {result.kind === 'assistant' && <span className={styles.resultDetail}>{result.detail}</span>}
                       {result.kind === 'tab' && result.chordName && <span className={styles.chip}>{result.chordName}</span>}
                       {result.kind === 'action' && <kbd className={styles.keycap}>{keycapFor(result.action, info.platform, state.settings.shortcuts)}</kbd>}
                       {isSelected && (

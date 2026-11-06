@@ -28,7 +28,7 @@ import { constants, setPriority } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import {
   DATA_HEAD,
-  DUET_SCOPES,
+  ASSISTANT_SCOPES,
   FRESH_PAGES,
   imageFromRecord,
   mergeParts,
@@ -43,10 +43,10 @@ import {
   type DataFileOpen,
   type DataFileProblem,
   type DataRecord,
-  type DuetImage,
-  type DuetMessage,
-  type DuetScope,
-  type DuetThread,
+  type AssistantImage,
+  type AssistantMessage,
+  type AssistantScope,
+  type AssistantThread,
   type ImportedPage,
   type MergePart,
   type Platform,
@@ -64,7 +64,7 @@ export interface FileJob {
   path: string;
   /** chord.db, opened read-only. */
   database: string;
-  /** `<userData>/duet/images`, where a chat's images go. */
+  /** `<userData>/assistant/images`, where a chat's images go. */
   images: string;
   /** This computer's id: a file it wrote says so. */
   device: string;
@@ -75,7 +75,7 @@ export type FileRequest =
   /** Open the file (with its passphrase, if it's encrypted) and count what it would bring. */
   | { type: 'open'; job: FileJob; passphrase: string | null }
   /** Plan the import against what's here now; `chordId` is the chord you're in, for chats whose chord isn't here; `scope`, what a new chat may read. */
-  | { type: 'plan'; choices: FileImportChoices; chordId: string; scope: DuetScope }
+  | { type: 'plan'; choices: FileImportChoices; chordId: string; scope: AssistantScope }
   /** The plan's next part. */
   | { type: 'more' }
   /** History and chats to chord-data, over the port that comes with this request. */
@@ -159,7 +159,7 @@ process.on('unhandledRejection', (error) => {
 
 /** The file opened, and what of it is kept: its setup, and the choices the plan was made with. */
 let opened: { job: FileJob; file: DataFileOpen; setup: DataRecord[]; pages: number } | null = null;
-let planned: { parts: FileReply[]; at: number; chordIds: Set<string>; chordId: string; choices: FileImportChoices; scope: DuetScope } | null = null;
+let planned: { parts: FileReply[]; at: number; chordIds: Set<string>; chordId: string; choices: FileImportChoices; scope: AssistantScope } | null = null;
 
 const yieldNow = () => new Promise((resolve) => setImmediate(resolve));
 /** An image's files named to main (`writing`), waiting for its `write`. */
@@ -242,7 +242,7 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
   const setup: DataRecord[] = [];
   let chars = 0;
   const history = { pages: 0, newPages: 0 };
-  const duet = { chats: 0, newChats: 0, images: 0 };
+  const assistant = { chats: 0, newChats: 0, images: 0 };
   let unknown = 0;
   let tooMuch = false;
   const problem = await withDatabase(job.database, (sql) => {
@@ -258,9 +258,9 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
         } else if (r.type === 'thread') {
           const thread = threadFromRecord(r);
           if (!thread) continue;
-          duet.chats++;
-          if (!chats.has(thread.id)) duet.newChats++;
-        } else if (r.type === 'image') duet.images++;
+          assistant.chats++;
+          if (!chats.has(thread.id)) assistant.newChats++;
+        } else if (r.type === 'image') assistant.images++;
         else if (SETUP.has(r.type)) {
           const kept = tooMuch ? null : setupRecord(r, job.platform);
           if (!kept) continue;
@@ -295,7 +295,7 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
       newProfile: plan.newProfile,
       counts: plan.counts,
       history,
-      duet,
+      assistant,
       effects: plan.effectsSites,
       settings: plan.changes,
       skipped: unknown + plan.skipped,
@@ -344,10 +344,10 @@ async function plan(request: Extract<FileRequest, { type: 'plan' }>): Promise<Fi
 }
 
 /** What a chat imported from a file may read: the narrower of what it could and what a new chat may (Settings → Assistant), never more. */
-const narrower = (a: DuetScope, b: DuetScope): DuetScope => (DUET_SCOPES.indexOf(a) <= DUET_SCOPES.indexOf(b) ? a : b);
+const narrower = (a: AssistantScope, b: AssistantScope): AssistantScope => (ASSISTANT_SCOPES.indexOf(a) <= ASSISTANT_SCOPES.indexOf(b) ? a : b);
 
 /** The images a message names. */
-const imagesOf = (message: DuetMessage): DuetImage[] => (message.body.role === 'user' || message.body.role === 'assistant' ? (message.body.images ?? []) : []);
+const imagesOf = (message: AssistantMessage): AssistantImage[] => (message.body.role === 'user' || message.body.role === 'assistant' ? (message.body.images ?? []) : []);
 
 /** History and chats, the file's second pass, straight to chord-data a batch at a time: the next once it has written the last. */
 async function rest(port: MessagePortMain): Promise<void> {
@@ -392,12 +392,12 @@ async function rest(port: MessagePortMain): Promise<void> {
     pages = [];
     visits = 0;
   };
-  let threads: DuetThread[] = [];
-  let messages: DuetMessage[] = [];
+  let threads: AssistantThread[] = [];
+  let messages: AssistantMessage[] = [];
   const wanted = new Set<string>();
   const flushChats = async () => {
     if (threads.length === 0 && messages.length === 0) return;
-    const answer = await send({ duet: { threads, messages } });
+    const answer = await send({ assistant: { threads, messages } });
     if (!answer.ok) throw new Error(answer.error);
     reply({ type: 'chats', threads: answer.threads ?? [] });
     threads = [];
@@ -426,20 +426,20 @@ async function rest(port: MessagePortMain): Promise<void> {
             if (i === shares.length - 1) queued++;
             if (pages.length >= PAGES_PER_BATCH || visits >= VISITS_PER_BATCH) await flushPages();
           }
-        } else if (r.type === 'thread' && choices.duet) {
+        } else if (r.type === 'thread' && choices.assistant) {
           await flushPages();
           const thread = threadFromRecord(r);
           if (!thread) continue;
           // Into a chord that's here once it's in, else the one you're in; reading no more than a new chat would; marked, so its turns stay data.
           threads.push({ ...thread, chordId: chordIds.has(thread.chordId) ? thread.chordId : chordId, scope: narrower(thread.scope, scope), providerSessionId: null, importedAt: now });
           if (threads.length + messages.length >= CHATS_PER_BATCH) await flushChats();
-        } else if (r.type === 'message' && choices.duet) {
+        } else if (r.type === 'message' && choices.assistant) {
           const message = messageFromRecord(r);
           if (!message) continue;
           messages.push(message);
           for (const image of imagesOf(message)) wanted.add(image.id);
           if (threads.length + messages.length >= CHATS_PER_BATCH) await flushChats();
-        } else if (r.type === 'image' && choices.duet) {
+        } else if (r.type === 'image' && choices.assistant) {
           const image = imageFromRecord(r);
           if (!image || !wanted.has(image.image.id)) continue;
           await writeImage(image, job.images, writer);

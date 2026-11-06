@@ -11,7 +11,7 @@
  * that's a path on this computer.
  */
 import { generateKeyBetween } from 'fractional-indexing';
-import { DUET_PROVIDERS, isDuetScope, type DuetAttachment, type DuetCitation, type DuetImage, type DuetMessage, type DuetMessageBody, type DuetThread } from './duet';
+import { ASSISTANT_PROVIDERS, isAssistantScope, type AssistantAttachment, type AssistantCitation, type AssistantImage, type AssistantMessage, type AssistantMessageBody, type AssistantThread } from './assistant';
 import { routeKey } from './links';
 import {
   DEFAULT_PROFILE,
@@ -372,7 +372,7 @@ export const SETTING_TRAVEL: Record<keyof Settings, SettingTravel> = {
   safeBrowsingAsked: 'sync',
   adBlocking: 'sync',
   tabCounts: 'sync',
-  duet: 'sync',
+  assistant: 'sync',
   externalLinks: 'sync',
   miniWindowSize: 'computer',
   reader: 'sync',
@@ -387,10 +387,10 @@ export const SETTING_TRAVEL: Record<keyof Settings, SettingTravel> = {
  * (`adBlocking.offSites`): the groups a settings change merges into part by
  * part. A setting that's replaced whole (the proxy, a list) is one field.
  */
-const GROUPS = ['motion', 'interface', 'spellcheck', 'adBlocking', 'tabCounts', 'duet', 'reader', 'effects'] as const;
+const GROUPS = ['motion', 'interface', 'spellcheck', 'adBlocking', 'tabCounts', 'assistant', 'reader', 'effects'] as const;
 type Group = (typeof GROUPS)[number];
 /** The assistant's app and model depend on which CLI is installed on this computer. */
-const NOT_EXPORTED: Partial<Record<Group, readonly string[]>> = { duet: ['provider', 'model'] };
+const NOT_EXPORTED: Partial<Record<Group, readonly string[]>> = { assistant: ['provider', 'model'] };
 
 const isGroup = (key: string): key is Group => (GROUPS as readonly string[]).includes(key);
 const groupParts = (group: Group): string[] => Object.keys(DEFAULT_SETTINGS[group]).filter((part) => !NOT_EXPORTED[group]?.includes(part));
@@ -523,7 +523,7 @@ export function pageFromRecord(r: DataRecord): PageFacts | null {
 /* ---------- Assistant ---------- */
 
 /** A chat, without its provider session: that's the CLI's own cache, and an imported chat starts a new one. */
-export function threadRecord(thread: DuetThread): DataRecord {
+export function threadRecord(thread: AssistantThread): DataRecord {
   return record('thread', thread.id, {
     chord: thread.chordId,
     title: thread.title,
@@ -536,43 +536,43 @@ export function threadRecord(thread: DuetThread): DataRecord {
   });
 }
 
-export function threadFromRecord(r: DataRecord): DuetThread | null {
+export function threadFromRecord(r: DataRecord): AssistantThread | null {
   const s = r.set;
   const title = text(s['title'], 1000);
   const created = time(s['created']);
   if (r.type !== 'thread' || !isId(r.id) || !isId(s['chord']) || title === null || created === null) return null;
-  if (!DUET_PROVIDERS.includes(s['provider'] as DuetThread['provider'])) return null;
+  if (!ASSISTANT_PROVIDERS.includes(s['provider'] as AssistantThread['provider'])) return null;
   return {
     id: r.id,
     chordId: s['chord'],
     title,
-    provider: s['provider'] as DuetThread['provider'],
+    provider: s['provider'] as AssistantThread['provider'],
     model: text(s['model'], 100),
     providerSessionId: null,
-    scope: isDuetScope(s['scope']) ? s['scope'] : 'ask',
+    scope: isAssistantScope(s['scope']) ? s['scope'] : 'ask',
     createdAt: created,
     updatedAt: time(s['updated']) ?? created,
     lastUsedAt: time(s['lastUsed']) ?? created,
   };
 }
 
-const IMAGE_MIMES: readonly DuetImage['mime'][] = ['image/jpeg', 'image/png', 'image/webp'];
+const IMAGE_MIMES: readonly AssistantImage['mime'][] = ['image/jpeg', 'image/png', 'image/webp'];
 const isImageId = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{24}$/.test(v);
 
 /** An image as a message names it: never where Codex saved its own copy, a path on this computer. */
-function imageRef(image: DuetImage): DuetImage {
+function imageRef(image: AssistantImage): AssistantImage {
   return { id: image.id, mime: image.mime, width: image.width, height: image.height, ...(image.prompt ? { prompt: image.prompt } : {}) };
 }
 
-function imageRefFrom(raw: unknown): DuetImage | null {
+function imageRefFrom(raw: unknown): AssistantImage | null {
   if (!raw || typeof raw !== 'object') return null;
   const i = raw as Record<string, unknown>;
   const size = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v > 0 && v <= 100_000 ? v : null);
   const width = size(i['width']);
   const height = size(i['height']);
-  if (!isImageId(i['id']) || !IMAGE_MIMES.includes(i['mime'] as DuetImage['mime']) || !width || !height) return null;
+  if (!isImageId(i['id']) || !IMAGE_MIMES.includes(i['mime'] as AssistantImage['mime']) || !width || !height) return null;
   const prompt = text(i['prompt'], 4000);
-  return { id: i['id'], mime: i['mime'] as DuetImage['mime'], width, height, ...(prompt ? { prompt } : {}) };
+  return { id: i['id'], mime: i['mime'] as AssistantImage['mime'], width, height, ...(prompt ? { prompt } : {}) };
 }
 
 /**
@@ -580,7 +580,7 @@ function imageRefFrom(raw: unknown): DuetImage | null {
  * this moment: a citation's tab, a fill card's values (never saved anyway),
  * how many images a reply was still making, and Codex's own copy of one.
  */
-export function exportedBody(body: DuetMessageBody): DuetMessageBody {
+export function exportedBody(body: AssistantMessageBody): AssistantMessageBody {
   // As stored, which an older Chord may have written with less in it.
   switch (body.role) {
     case 'user':
@@ -598,7 +598,7 @@ export function exportedBody(body: DuetMessageBody): DuetMessageBody {
   }
 }
 
-export function messageRecord(message: DuetMessage): DataRecord {
+export function messageRecord(message: AssistantMessage): DataRecord {
   return record('message', message.id, { thread: message.threadId, created: message.createdAt, body: exportedBody(message.body) });
 }
 
@@ -614,18 +614,18 @@ const MAX_PER_MESSAGE = 200;
  * what Chord itself writes; links that aren't http(s) are dropped, as they
  * would be on import (S15 §5), so a file's `javascript:` never becomes a link.
  */
-function bodyFrom(raw: unknown): DuetMessageBody | null {
+function bodyFrom(raw: unknown): AssistantMessageBody | null {
   if (!raw || typeof raw !== 'object') return null;
   const b = raw as Record<string, unknown>;
   const list = (v: unknown) => (Array.isArray(v) ? v.slice(0, MAX_PER_MESSAGE) : []).filter((x): x is Record<string, unknown> => Boolean(x) && typeof x === 'object');
-  const images = Array.isArray(b['images']) ? list(b['images']).map(imageRefFrom).filter((i): i is DuetImage => i !== null) : null;
+  const images = Array.isArray(b['images']) ? list(b['images']).map(imageRefFrom).filter((i): i is AssistantImage => i !== null) : null;
   switch (b['role']) {
     case 'user': {
       const value = text(b['text'], 200_000);
       if (value === null) return null;
       const attachments = list(b['attachments'])
         .filter((a) => isTabRef(a['ref']) && isWebUrl(a['url']) && text(a['title'], 10_000) !== null)
-        .map((a): DuetAttachment => ({ ref: a['ref'] as string, url: a['url'] as string, title: a['title'] as string }));
+        .map((a): AssistantAttachment => ({ ref: a['ref'] as string, url: a['url'] as string, title: a['title'] as string }));
       return { role: 'user', text: value, attachments, ...(images ? { images } : {}) };
     }
     case 'assistant': {
@@ -633,7 +633,7 @@ function bodyFrom(raw: unknown): DuetMessageBody | null {
       if (value === null) return null;
       const citations = list(b['citations'])
         .filter((c) => Number.isInteger(c['n']) && (c['n'] as number) > 0 && isTabRef(c['ref']) && isWebUrl(c['url']) && text(c['title'], 10_000) !== null && text(c['quote'], 2000) !== null)
-        .map((c): DuetCitation => ({
+        .map((c): AssistantCitation => ({
           n: c['n'] as number,
           ref: c['ref'] as string,
           url: c['url'] as string,
@@ -668,7 +668,7 @@ function bodyFrom(raw: unknown): DuetMessageBody | null {
   }
 }
 
-export function messageFromRecord(r: DataRecord): DuetMessage | null {
+export function messageFromRecord(r: DataRecord): AssistantMessage | null {
   const body = bodyFrom(r.set['body']);
   const created = time(r.set['created']);
   if (r.type !== 'message' || !isId(r.id) || !isId(r.set['thread']) || !body || created === null) return null;
@@ -676,14 +676,14 @@ export function messageFromRecord(r: DataRecord): DuetMessage | null {
 }
 
 /** An image in a chat, with its bytes and (one you gave the assistant) its thumbnail, in base64. */
-export function imageRecord(image: DuetImage, data: string, thumb: string | null): DataRecord {
+export function imageRecord(image: AssistantImage, data: string, thumb: string | null): DataRecord {
   return record('image', image.id, { mime: image.mime, width: image.width, height: image.height, data, thumb, prompt: image.prompt ?? null });
 }
 
 /** A line is at most 32 MB (S15 §5), and an image's bytes are nearly all of its line. */
 const MAX_IMAGE_BASE64 = 32_000_000;
 
-export function imageFromRecord(r: DataRecord): { image: DuetImage; data: string; thumb: string | null } | null {
+export function imageFromRecord(r: DataRecord): { image: AssistantImage; data: string; thumb: string | null } | null {
   const image = imageRefFrom({ ...r.set, id: r.id });
   const data = text(r.set['data'], MAX_IMAGE_BASE64);
   const thumb = text(r.set['thumb'], MAX_ICON_BASE64);

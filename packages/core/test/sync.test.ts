@@ -454,7 +454,7 @@ describe('what a change does here', () => {
     const { ctx, changed } = context([
       rec('tab', 't', at(1), { pos: pos('w', null), pinnedUrl: 'https://t.test/', title: 'T' }),
       rec('tab', 't', at(2), { deleted: true }),
-      rec('effects', 'news.test', at(1), { css: 'h1 { color: red }', hidden: [], presets: [], duet: [] }),
+      rec('effects', 'news.test', at(1), { css: 'h1 { color: red }', hidden: [], presets: [], assistant: [] }),
       rec('effects', 'news.test', at(2), { css: '' }),
       rec('widget', 'w1', at(1), { size: 3 }),
     ]);

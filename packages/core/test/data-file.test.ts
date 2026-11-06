@@ -30,7 +30,7 @@ const none = new Proxy({} as DataCrypto, {
   },
 });
 const DEVICE = '9f2c4e1a7b3d5c60';
-const header = dataHeader({ app: '0.5.0', device: DEVICE, created: Date.UTC(2026, 10, 30, 14, 3, 11, 204), includes: ['setup', 'today', 'history', 'duet'] });
+const header = dataHeader({ app: '0.5.0', device: DEVICE, created: Date.UTC(2026, 10, 30, 14, 3, 11, 204), includes: ['setup', 'today', 'history', 'assistant'] });
 const records: DataRecord[] = [
   { type: 'chord', id: 'c1', at: [1, 0, DEVICE], set: { name: 'Work' } },
   { type: 'tab', id: 't1', at: [2, 0, DEVICE], set: { url: 'https://a.test/', title: 'Line\nbreak and “quotes”' } },
@@ -49,7 +49,7 @@ describe('a plain file', () => {
   it('is a header line, a line per record, and the end, each ending in \\n', () => {
     const lines = plainFile().split('\n');
     expect(lines[0]).toBe(
-      `{"chord":"data","format":1,"kind":"export","app":"0.5.0","device":"${DEVICE}","created":"2026-11-30T14:03:11.204Z","includes":["setup","today","history","duet"],"about":"${DATA_FORMAT_ABOUT}"}`,
+      `{"chord":"data","format":1,"kind":"export","app":"0.5.0","device":"${DEVICE}","created":"2026-11-30T14:03:11.204Z","includes":["setup","today","history","assistant"],"about":"${DATA_FORMAT_ABOUT}"}`,
     );
     expect(lines[1]).toBe(`{"type":"chord","id":"c1","at":[1,0,"${DEVICE}"],"set":{"name":"Work"}}`);
     expect(lines[3]).toBe('{"type":"page","id":"https://a.test/","set":{"title":"A","visits":[1,2],"typed":0}}');

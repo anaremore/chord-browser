@@ -14,7 +14,7 @@ import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
 
 /** Chord's isolated world for the assistant's reads (extension popups' sizer uses 4321). */
-export const DUET_WORLD = 4400;
+export const ASSISTANT_WORLD = 4400;
 
 export interface PageRead {
   title: string;
@@ -86,7 +86,7 @@ const READ_MS = 8000;
 export async function readPage(contents: WebContents): Promise<PageRead | null> {
   if (contents.isDestroyed()) return null;
   // A long page takes a moment to read; a hung one is unreadable, not a turn that never ends.
-  const result = (await pageCall(contents.executeJavaScriptInIsolatedWorld(DUET_WORLD, [{ code: EXTRACT_SCRIPT }]), null, READ_MS)) as PageRead | null;
+  const result = (await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: EXTRACT_SCRIPT }]), null, READ_MS)) as PageRead | null;
   return result && typeof result.text === 'string' ? result : null;
 }
 

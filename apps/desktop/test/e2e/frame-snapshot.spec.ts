@@ -26,7 +26,7 @@ const framesDir = resolve(appDir, 'test-results', 'frame-snapshot');
 /** The page's color, to find in its picture: rgb(200, 40, 120). */
 const COLOR = [200, 40, 120] as const;
 /** The assistant's panel and the gap before it (DESIGN.md §7.8). */
-const DUET_SPACE = 380 + 8;
+const ASSISTANT_SPACE = 380 + 8;
 
 let site: { server: Server; origin: string };
 test.beforeAll(async () => {
@@ -55,8 +55,8 @@ async function launch(home = '/', profile = mkdtempSync(join(tmpdir(), 'chord-e2
     CHORD_E2E_HOOKS: '1',
     CHORD_HOME_URL: `${site.origin}${home}`,
     // The assistant's panel opens without looking for a real Claude Code or Codex (paths that don't exist).
-    CHORD_DUET_CLAUDE: join(profile, 'no-claude'),
-    CHORD_DUET_CODEX: join(profile, 'no-codex'),
+    CHORD_ASSISTANT_CLAUDE: join(profile, 'no-claude'),
+    CHORD_ASSISTANT_CODEX: join(profile, 'no-codex'),
   };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
   return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
@@ -301,13 +301,13 @@ test("The assistant's panel slides in while the page's frame narrows by its snap
     const full = (await pages(app)).views[0]!.width;
     const panel = shell.getByRole('complementary', { name: 'Assistant' });
 
-    for (const [name, width] of [['duet-open', full - DUET_SPACE], ['duet-close', full]] as const) {
+    for (const [name, width] of [['assistant-open', full - ASSISTANT_SPACE], ['assistant-close', full]] as const) {
       await watch(app);
       await recordPictures(shell);
-      await glide(app, shell, name, () => runAction(shell, 'duet.toggle'));
+      await glide(app, shell, name, () => runAction(shell, 'assistant.toggle'));
       await expect.poll(async () => (await pages(app)).views[0]!.width).toBe(width);
       await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(248);
-      if (name === 'duet-open') await expect(panel).toBeVisible();
+      if (name === 'assistant-open') await expect(panel).toBeVisible();
       else await expect(panel).toBeHidden();
       await expect.poll(() => picturesNow(shell)).toBe(0);
       expect((await picturesSeen(shell)).count).toBe(1);
@@ -465,9 +465,9 @@ test('with reduced motion, or "Animate the sidebar" off, nothing is pictured and
     await expect.poll(async () => (await pages(app)).views[0]!.x).toBe(4);
     expect((await watched(app)).captures).toBe(0);
     expect((await picturesSeen(shell)).count).toBe(0);
-    await runAction(shell, 'duet.toggle');
+    await runAction(shell, 'assistant.toggle');
     await expect(shell.getByRole('complementary', { name: 'Assistant' })).toBeVisible();
-    await expect.poll(async () => (await pages(app)).views[0]!.width).toBe((await pages(app)).width - 4 - 4 - DUET_SPACE);
+    await expect.poll(async () => (await pages(app)).views[0]!.width).toBe((await pages(app)).width - 4 - 4 - ASSISTANT_SPACE);
     expect((await watched(app)).captures).toBe(0);
     expect((await picturesSeen(shell)).count).toBe(0);
   } finally {

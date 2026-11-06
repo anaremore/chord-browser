@@ -6,11 +6,11 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { DUET_TOOLS, type DuetContextUsage } from '@chord/core';
+import { ASSISTANT_TOOLS, type AssistantContextUsage } from '@chord/core';
 import { afterAll, describe, expect, it } from 'vitest';
-import type { MadeImage, ProviderError, SessionEvents, SessionOptions, ToolOutput } from '../../src/main/duet/adapter';
-import { ClaudeSession, claudeArgs, claudeContextUsage, claudeError } from '../../src/main/duet/claude';
-import { CodexSession, codexArgs, codexContextUsage, codexError, imageLimitError } from '../../src/main/duet/codex';
+import type { MadeImage, ProviderError, SessionEvents, SessionOptions, ToolOutput } from '../../src/main/assistant/adapter';
+import { ClaudeSession, claudeArgs, claudeContextUsage, claudeError } from '../../src/main/assistant/claude';
+import { CodexSession, codexArgs, codexContextUsage, codexError, imageLimitError } from '../../src/main/assistant/codex';
 
 const fakeClaude = resolve(import.meta.dirname, '../e2e/fake-claude.mjs');
 const fakeCodex = resolve(import.meta.dirname, 'fixtures/fake-codex.mjs');
@@ -28,7 +28,7 @@ afterAll(() => {
 });
 
 function options(script: string, extra: Partial<SessionOptions> = {}): SessionOptions {
-  const dir = mkdtempSync(join(tmpdir(), 'chord-duet-unit-'));
+  const dir = mkdtempSync(join(tmpdir(), 'chord-assistant-unit-'));
   dirs.push(dir);
   const instructionsFile = join(dir, 'instructions.md');
   writeFileSync(instructionsFile, 'Assistant test instructions');
@@ -40,7 +40,7 @@ function options(script: string, extra: Partial<SessionOptions> = {}): SessionOp
     instructionsFile,
     resumeId: null,
     newSessionId: '11111111-2222-4333-8444-555555555555',
-    tools: DUET_TOOLS,
+    tools: ASSISTANT_TOOLS,
     ...extra,
   };
 }
@@ -52,7 +52,7 @@ function recorder(tool: (name: string, args: Record<string, unknown>) => ToolOut
     ends: [] as { status: string; error?: ProviderError }[],
     exits: [] as (ProviderError | null)[],
     session: '',
-    usage: [] as DuetContextUsage[],
+    usage: [] as AssistantContextUsage[],
     images: [] as (MadeImage | null)[],
     imageStarts: 0,
   };

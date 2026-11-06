@@ -16,10 +16,10 @@ const api: OverlayApi = {
   },
   action: { run: (action) => invoke('action:run', { action }) },
   downloads: downloadsApi,
-  duet: {
-    search: (query) => invoke('duet:search', { query }),
-    open: (chordId, threadId) => invoke('duet:openHit', { chordId, threadId }),
-    ask: (text, image) => invoke('duet:ask', { text, image }),
+  assistant: {
+    search: (query) => invoke('assistant:search', { query }),
+    open: (chordId, threadId) => invoke('assistant:openHit', { chordId, threadId }),
+    ask: (text, image) => invoke('assistant:ask', { text, image }),
   },
   history: {
     search: (query) => invoke('history:search', { query }),

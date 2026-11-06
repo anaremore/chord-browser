@@ -11,8 +11,8 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { DuetContextUsage } from '@chord/core';
-import { errorCopy, killTree, type DuetSession, type ProviderError, type SessionEvents, type SessionImage, type SessionOptions } from './adapter';
+import type { AssistantContextUsage } from '@chord/core';
+import { errorCopy, killTree, type AssistantSession, type ProviderError, type SessionEvents, type SessionImage, type SessionOptions } from './adapter';
 import { cliPath, spawnSpec } from './launch';
 
 /** Default-on features that add tools (research §3.3). Unknown names are ignored by older versions. */
@@ -71,7 +71,7 @@ export function codexError(info: string, message: string): ProviderError {
  * number | null}`): the last request's tokens against the window Codex
  * reports. A null window hides the meter; sizes are never guessed.
  */
-export function codexContextUsage(params: Record<string, unknown>): DuetContextUsage | null {
+export function codexContextUsage(params: Record<string, unknown>): AssistantContextUsage | null {
   const info = params['tokenUsage'] as { last?: { totalTokens?: unknown }; modelContextWindow?: unknown } | undefined;
   const window = info?.modelContextWindow;
   const used = info?.last?.totalTokens;
@@ -79,7 +79,7 @@ export function codexContextUsage(params: Record<string, unknown>): DuetContextU
   return { used, window };
 }
 
-export class CodexSession implements DuetSession {
+export class CodexSession implements AssistantSession {
   readonly provider = 'codex' as const;
   private readonly child: ChildProcess;
   private nextId = 1;

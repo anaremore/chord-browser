@@ -6,7 +6,7 @@
  * server and no token to leak; the process is the thread's scope.
  */
 import { execFile } from 'node:child_process';
-import type { DuetContextUsage, DuetProvider, DuetToolSpec } from '@chord/core';
+import type { AssistantContextUsage, AssistantProvider, AssistantToolSpec } from '@chord/core';
 import type { Launch } from './detect';
 
 export interface ToolOutput {
@@ -32,7 +32,7 @@ export interface SessionEvents {
   onTool(name: string, args: Record<string, unknown>): Promise<ToolOutput>;
   onTurnEnd(outcome: { status: 'done' | 'interrupted' | 'error'; error?: ProviderError }): void;
   /** How full the model's context is, when the CLI reports both the tokens and the window. */
-  onUsage?(usage: DuetContextUsage): void;
+  onUsage?(usage: AssistantContextUsage): void;
   /** Codex started making an image (its image tool); `onImage` follows with it, or without one if it failed. */
   onImageStart?(callId: string): void;
   onImage?(callId: string, image: MadeImage | null): void;
@@ -51,7 +51,7 @@ export interface SessionOptions {
   /** A provider session to resume, or null to start one (Claude uses `newSessionId`). */
   resumeId: string | null;
   newSessionId: string;
-  tools: readonly DuetToolSpec[];
+  tools: readonly AssistantToolSpec[];
   /** Codex's image tool is on (Settings → Assistant). */
   images?: boolean;
 }
@@ -70,8 +70,8 @@ export interface SessionImage {
   data: string;
 }
 
-export interface DuetSession {
-  readonly provider: DuetProvider;
+export interface AssistantSession {
+  readonly provider: AssistantProvider;
   /** A turn is running. */
   readonly busy: boolean;
   readonly alive: boolean;
@@ -84,7 +84,7 @@ export interface DuetSession {
 }
 
 /** DESIGN.md §7.8's error copy, per provider. */
-export function errorCopy(provider: DuetProvider, kind: ProviderErrorKind, detail = ''): string {
+export function errorCopy(provider: AssistantProvider, kind: ProviderErrorKind, detail = ''): string {
   const name = provider === 'claude' ? 'Claude Code' : 'Codex';
   const login = provider === 'claude' ? 'claude auth login' : 'codex login';
   switch (kind) {

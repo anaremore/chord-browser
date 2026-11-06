@@ -11,7 +11,7 @@ UTF-8 [JSON Lines](https://jsonlines.org): one JSON value per line, each line en
 1. **The header**, the first line:
 
    ```json
-   {"chord":"data","format":1,"kind":"export","app":"0.5.0","device":"9f2c4e1a7b3d5c60","created":"2026-11-30T14:03:11.204Z","includes":["setup","today","history","duet"],"about":"https://github.com/anaremore/chord-browser/blob/main/docs/data-format.md"}
+   {"chord":"data","format":1,"kind":"export","app":"0.5.0","device":"9f2c4e1a7b3d5c60","created":"2026-11-30T14:03:11.204Z","includes":["setup","today","history","assistant"],"about":"https://github.com/anaremore/chord-browser/blob/main/docs/data-format.md"}
    ```
 
    | Field | What it is |
@@ -22,7 +22,7 @@ UTF-8 [JSON Lines](https://jsonlines.org): one JSON value per line, each line en
    | `app` | The Chord version that wrote it. |
    | `device` | The computer that wrote it: 64 random bits as 16 hex digits. Its stamps carry the same id. |
    | `created` | When, in UTC (ISO 8601). |
-   | `includes` | What's in it, in order: `setup`, `today`, and `history` and `duet` unless you switched them off. |
+   | `includes` | What's in it, in order: `setup`, `today`, and `history` and `assistant` unless you switched them off. |
    | `about` | This page. |
 
 2. **Records**, one per line, in this order: setup (chords, Pinned's folders, tabs and splits, Favorites, themes, settings, link routes, Effects, zoom, permissions), then Today's tabs and splits, then the icons they and Favorites use, then history, then the assistant's chats. A reader that only wants setup can stop early.
@@ -62,7 +62,7 @@ UTF-8 [JSON Lines](https://jsonlines.org): one JSON value per line, each line en
 | `theme` | its id | A theme you made: `name`; `stops`; `grain` |
 | `settings` | `settings` | One field per setting ([below](#settings)) |
 | `route` | the site, maybe with a path (`github.com/acme`) | `chord` (where its links open); `created` |
-| `effects` | the site: its host without `www.`, with its port if any | `wet` (the site's Dry/Wet); `css` (your CSS, as written); `cssOn`; `hidden` (`[{"selector", "label", "on"}]`); `presets` (`"reading-width"`, `"dark"`, `"no-sticky"`: the ones that are on); `duet` (the assistant's patches: `[{"ask", "summary", "css", "on"}]`). A switch that isn't there is on. Chord checks every stylesheet again before it uses it. |
+| `effects` | the site: its host without `www.`, with its port if any | `wet` (the site's Dry/Wet); `css` (your CSS, as written); `cssOn`; `hidden` (`[{"selector", "label", "on"}]`); `presets` (`"reading-width"`, `"dark"`, `"no-sticky"`: the ones that are on); `assistant` (the assistant's patches: `[{"ask", "summary", "css", "on"}]`). A switch that isn't there is on. Chord checks every stylesheet again before it uses it. |
 | `icon` | `sha256-` and the hex of the bytes' SHA-256 | `mime` (`image/png`, …); `data` (the bytes, base64). Only icons a record above uses. |
 | `zoom` | host | `factor` (0.25–5) |
 | `permission` | origin (`https://meet.example`) | One field per permission (`camera`, `microphone`, `location`, `notifications`, `clipboard-read`): `"allow"` or `"block"`. Chord imports only blocks. |
@@ -89,7 +89,7 @@ Each setting that travels is a field of the `settings` record. A group's parts a
 | `spellcheck.enabled`, `spellcheck.language` | `true`/`false`; a language like `"en-US"`, or `null` for the system's |
 | `adBlocking.enabled`, `adBlocking.offSites` | `true`/`false`; the sites it's off for |
 | `tabCounts.enabled`, `tabCounts.offSites` | `true`/`false`; the hosts whose counts are hidden |
-| `duet.enabled`, `duet.keep`, `duet.scope`, `duet.readsNothing`, `duet.neverSites`, `duet.offChords`, `duet.codexImages` | The assistant's settings (`keep`: `"forever"`, `"90d"`, `"30d"`) |
+| `assistant.enabled`, `assistant.keep`, `assistant.scope`, `assistant.readsNothing`, `assistant.neverSites`, `assistant.offChords`, `assistant.codexImages` | The assistant's settings (`keep`: `"forever"`, `"90d"`, `"30d"`) |
 | `externalLinks` | `"mini"` or `"tab"` |
 | `reader.size`, `reader.width`, `reader.theme`, `reader.font` | reader view's look |
 | `effects.wet` | Dry/Wet for every site |

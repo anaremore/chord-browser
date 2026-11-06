@@ -62,10 +62,10 @@ describe('restoreState', () => {
   });
 
   it('what the assistant can read: Nothing and every scope come back as saved; anything else is the default', () => {
-    const duet = (saved: Record<string, unknown>) => restoreState({ chords: [], nodes: [], windows: [], settings: { duet: saved } }, seed).settings.duet;
-    expect(duet({ readsNothing: true, scope: 'every' })).toMatchObject({ readsNothing: true, scope: 'every' });
-    expect(duet({ scope: 'all' })).toMatchObject({ readsNothing: false, scope: 'all' });
-    expect(duet({ readsNothing: 'yes', scope: 'nothing' })).toMatchObject({ readsNothing: false, scope: DEFAULT_SETTINGS.duet.scope });
+    const assistant = (saved: Record<string, unknown>) => restoreState({ chords: [], nodes: [], windows: [], settings: { assistant: saved } }, seed).settings.assistant;
+    expect(assistant({ readsNothing: true, scope: 'every' })).toMatchObject({ readsNothing: true, scope: 'every' });
+    expect(assistant({ scope: 'all' })).toMatchObject({ readsNothing: false, scope: 'all' });
+    expect(assistant({ readsNothing: 'yes', scope: 'nothing' })).toMatchObject({ readsNothing: false, scope: DEFAULT_SETTINGS.assistant.scope });
   });
 
   it('brings back chords, tabs, windows and settings as saved, with idle engine state', () => {

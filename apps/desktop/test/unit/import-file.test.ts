@@ -31,7 +31,7 @@ import { fetches, HOSTILE } from './fixtures/hostile-css';
 
 const THERE = '00000000000000bb';
 const at = [1_760_000_000_000, 0, THERE] as const;
-const header = dataHeader({ app: '0.5.0', device: THERE, created: Date.UTC(2026, 10, 30), includes: ['setup', 'today', 'history', 'duet'] });
+const header = dataHeader({ app: '0.5.0', device: THERE, created: Date.UTC(2026, 10, 30), includes: ['setup', 'today', 'history', 'assistant'] });
 
 /** A plain file of these lines (records, or anything at all). */
 function file(lines: readonly (DataRecord | string)[], end = true): Uint8Array {
@@ -56,7 +56,7 @@ const chord: DataRecord = { type: 'chord', id: 'c1', at: [...at], set: { name: '
 
 describe('a hostile Chord file', () => {
   it.each(HOSTILE)('Effects: %s comes in only as the sanitizer leaves it, as your CSS or as a patch', async (_what, css) => {
-    const { records } = await read(file([{ type: 'effects', id: 'news.test', at: [...at], set: { css, duet: [{ ask: 'x', summary: 'y', css, on: true }] } }]));
+    const { records } = await read(file([{ type: 'effects', id: 'news.test', at: [...at], set: { css, assistant: [{ ask: 'x', summary: 'y', css, on: true }] } }]));
     const [site] = plan(records).effects;
     expect(site).toBeDefined();
     // What main's Effects service does with each site before any of it is used.

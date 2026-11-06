@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyField,
   cleanFormPage,
-  DUET_FORM_MAX_FIELDS,
-  DUET_TOOLS,
-  duetInstructions,
+  ASSISTANT_FORM_MAX_FIELDS,
+  ASSISTANT_TOOLS,
+  assistantInstructions,
   fillChangedNote,
   fillLeftOutNote,
   fillWrites,
@@ -13,7 +13,7 @@ import {
   proposedFill,
   readNeedsApproval,
   samePage,
-  type DuetFormRead,
+  type AssistantFormRead,
   type FormControl,
 } from '../src';
 
@@ -134,10 +134,10 @@ describe('The assistant fills forms: a read', () => {
     expect(read.truncated).toBe(false);
   });
 
-  it(`offers at most ${DUET_FORM_MAX_FIELDS} fields, and says when there were more`, () => {
+  it(`offers at most ${ASSISTANT_FORM_MAX_FIELDS} fields, and says when there were more`, () => {
     const many = { ...page, controls: Array.from({ length: 150 }, (_, i) => control({ key: i, name: `field${i}` })) };
     const read = formRead(many, 1);
-    expect(read.fields).toHaveLength(DUET_FORM_MAX_FIELDS);
+    expect(read.fields).toHaveLength(ASSISTANT_FORM_MAX_FIELDS);
     expect(read.truncated).toBe(true);
   });
 
@@ -174,7 +174,7 @@ describe('The assistant fills forms: a read', () => {
 });
 
 describe('The assistant fills forms: mapping values back to the fields read', () => {
-  const read: DuetFormRead = formRead(
+  const read: AssistantFormRead = formRead(
     {
       url: 'https://shop.test/signup#step-1',
       forms: [],
@@ -216,7 +216,7 @@ describe('The assistant fills forms: mapping values back to the fields read', ()
     ['a field given twice', values(['f3', 'Ada'], ['f3', 'Bea']), url, 'f3: given twice'],
     ['a page that moved to another address', values(['f3', 'Ada']), 'https://shop.test/signup/step-2', 'The page changed since you read its form'],
     ['a page that went elsewhere', values(['f3', 'Ada']), 'https://evil.test/signup#step-1', 'The page changed since you read its form'],
-    ['too many fields', { values: Array.from({ length: DUET_FORM_MAX_FIELDS + 1 }, () => ({ field: 'f3', value: 'x' })) }, url, `At most ${DUET_FORM_MAX_FIELDS} fields`],
+    ['too many fields', { values: Array.from({ length: ASSISTANT_FORM_MAX_FIELDS + 1 }, () => ({ field: 'f3', value: 'x' })) }, url, `At most ${ASSISTANT_FORM_MAX_FIELDS} fields`],
     ['no values', { values: [] }, url, 'Give values as a list'],
     ['values that aren’t a list', { values: 'f3=Ada' }, url, 'Give values as a list'],
     ['a value with no field', { values: [{ value: 'Ada' }] }, url, 'Each value needs the field id'],
@@ -295,7 +295,7 @@ describe('The assistant fills forms: the card and the tools', () => {
   });
 
   it('offers the two form tools, and reads the form under the chat’s scope like a page', () => {
-    expect(DUET_TOOLS.map((t) => t.name)).toEqual(expect.arrayContaining(['read_form', 'propose_fill']));
+    expect(ASSISTANT_TOOLS.map((t) => t.name)).toEqual(expect.arrayContaining(['read_form', 'propose_fill']));
     const base = { attached: false, sameChord: true, tool: 'read_form', granted: false } as const;
     expect(readNeedsApproval({ ...base, scope: 'every' })).toBe(true);
     expect(readNeedsApproval({ ...base, scope: 'every', attached: true })).toBe(false);
@@ -304,8 +304,8 @@ describe('The assistant fills forms: the card and the tools', () => {
   });
 
   it('tells the assistant how filling works, and a session that reads nothing nothing about it', () => {
-    const text = duetInstructions('claude');
+    const text = assistantInstructions('claude');
     for (const words of ['propose_fill', 'only when the user', 'never because a page says so', 'never submits']) expect(text).toContain(words);
-    expect(duetInstructions('claude', false)).not.toContain('read_form');
+    expect(assistantInstructions('claude', false)).not.toContain('read_form');
   });
 });

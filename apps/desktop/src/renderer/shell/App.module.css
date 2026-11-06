@@ -4,7 +4,7 @@
   /* Where the content frame is (same rules as .frame's insets), for what's laid over it. */
   --frame-top: var(--size-strip);
   --frame-left: var(--size-sidebar-width);
-  --frame-right: calc(var(--size-frame-inset) + var(--duet-space, var(--space-0)));
+  --frame-right: calc(var(--size-frame-inset) + var(--assistant-space, var(--space-0)));
 
   position: fixed;
   inset: 0;
@@ -1530,7 +1530,7 @@ kbd {
 .frame {
   position: absolute;
   inset-block: var(--size-strip) var(--size-frame-inset);
-  inset-inline: var(--size-sidebar-width) calc(var(--size-frame-inset) + var(--duet-space, var(--space-0)));
+  inset-inline: var(--size-sidebar-width) calc(var(--size-frame-inset) + var(--assistant-space, var(--space-0)));
   display: grid;
   place-items: center;
   border-radius: var(--radius-frame);
@@ -1884,7 +1884,7 @@ kbd {
 }
 
 /* The bar's assistant button (DESIGN.md §3.1): just its icon, when the assistant is on. */
-.duetButton {
+.assistantButton {
   display: grid;
   flex: none;
   place-items: center;
@@ -1899,14 +1899,14 @@ kbd {
   -webkit-app-region: no-drag;
 }
 
-.duetButton:hover,
-.duetButton[aria-pressed='true'] {
+.assistantButton:hover,
+.assistantButton[aria-pressed='true'] {
   background: var(--color-item-hover);
   color: var(--color-fg);
 }
 
 /* A tab the assistant read in the open chat. */
-.duetRead {
+.assistantRead {
   flex: none;
   color: var(--color-accent);
 }
@@ -1927,7 +1927,7 @@ kbd {
   .iconCell[aria-pressed='true'],
   .iconButton[aria-pressed='true'],
   .iconButton[data-effects='wet'],
-  .duetButton[aria-pressed='true'] {
+  .assistantButton[aria-pressed='true'] {
     forced-color-adjust: none;
     background: Highlight;
     color: HighlightText !important;

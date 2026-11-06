@@ -1,5 +1,5 @@
 /**
- * The assistant's chat images (main/duet/images.ts): an image's type and size read
+ * The assistant's chat images (main/assistant/images.ts): an image's type and size read
  * from its header (Codex's never decoded in main), the names the panel may
  * load, and which of Codex's paths Chord may delete with a chat.
  */
@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DuetImages, imageInfo, isCodexCopy } from '../../src/main/duet/images';
+import { AssistantImages, imageInfo, isCodexCopy } from '../../src/main/assistant/images';
 
 /** Just enough of each format's header for its size. */
 const PNG = (w: number, h: number) => {
@@ -59,10 +59,10 @@ describe('isCodexCopy: only a picture in a generated_images folder is deleted wi
   });
 });
 
-describe('DuetImages', () => {
+describe('AssistantImages', () => {
   it('serves only its own names, and deletes an image with Codex’s copy of it', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'chord-duet-images-'));
-    const images = new DuetImages(join(dir, 'images'));
+    const dir = mkdtempSync(join(tmpdir(), 'chord-assistant-images-'));
+    const images = new AssistantImages(join(dir, 'images'));
     const id = 'a'.repeat(24);
     expect(images.file(`${id}.png`)).toEqual({ path: join(dir, 'images', `${id}.png`), mime: 'image/png' });
     for (const name of [`${id}.gif`, `${id}.thumb.jpg`, `../${id}.png`, `${'g'.repeat(24)}.png`, 'index.json']) expect(images.file(name)).toBeNull();

@@ -99,7 +99,7 @@ describe('compileEffects', () => {
       hidden: ['#ad', `a url(${EVIL})`],
       css: `h1 { color: red } body { background: url(${EVIL}) }`,
       // The second as you might edit it: a fetch on its second line.
-      duet: ['h1 { color: green }', `p { color: blue }\nbody { background: image-set("${EVIL}" 1x) }`],
+      assistant: ['h1 { color: green }', `p { color: blue }\nbody { background: image-set("${EVIL}" 1x) }`],
     });
     const order = ['max-width: 70ch', '#ad {', 'color: red', 'color: green', 'color: blue'].map((s) => css.indexOf(s));
     expect(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1]!))).toBe(true);
@@ -112,7 +112,7 @@ describe('compileEffects', () => {
   });
 
   it('can’t be broken out of by an unclosed part', () => {
-    const { css } = compileEffects({ presets: [], hidden: [], css: '@media screen { p { color: red', duet: [`} } @import "${EVIL}"; q { color: blue }`] });
+    const { css } = compileEffects({ presets: [], hidden: [], css: '@media screen { p { color: red', assistant: [`} } @import "${EVIL}"; q { color: blue }`] });
     expect(fetches(css)).toEqual([]);
     expect(verify(css)).toBe(true);
   });

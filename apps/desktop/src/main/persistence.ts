@@ -6,7 +6,7 @@
  */
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ArchiveReason, DuetThread, ExportCounts, PersistedState, SavedEffects, State } from '@chord/core';
+import type { ArchiveReason, AssistantThread, ExportCounts, PersistedState, SavedEffects, State } from '@chord/core';
 import {
   opKey,
   opOrigin,
@@ -16,8 +16,8 @@ import {
   type ArchiveEntry,
   type ArchivePage,
   type DataRequest,
-  type DuetOp,
-  type DuetResult,
+  type AssistantOp,
+  type AssistantResult,
   type DataPush,
   type DataResponse,
   type HistoryEvent,
@@ -421,10 +421,10 @@ export class Persistence {
   }
 
   /** Take back what an import added to history and the assistant (its Undo): the chats it took away, for the assistant to end their sessions. */
-  async undoImport(importId: string): Promise<DuetThread[]> {
+  async undoImport(importId: string): Promise<AssistantThread[]> {
     const response = await this.request({ type: 'import.undo', importId });
     if (!response.ok) throw new Error(response.error);
-    return response.duet?.removed ?? [];
+    return response.assistant?.removed ?? [];
   }
 
   /** This computer's id, for an export's header and stamps (made the first time it's asked for). */
@@ -443,10 +443,10 @@ export class Persistence {
   }
 
   /** The assistant's threads and messages. Throws if chord-data can't answer, so the assistant can say so. */
-  async duet(op: DuetOp): Promise<DuetResult> {
-    const response = await this.request({ type: 'duet', op });
+  async assistant(op: AssistantOp): Promise<AssistantResult> {
+    const response = await this.request({ type: 'assistant', op });
     if (!response.ok) throw new Error(response.error);
-    return response.duet ?? {};
+    return response.assistant ?? {};
   }
 
   /** The archive page's entries. History's happenings waiting go first, so a tab archived a moment ago is there. */

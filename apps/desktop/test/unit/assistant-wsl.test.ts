@@ -8,11 +8,11 @@ import { execFile } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { DUET_TOOLS } from '@chord/core';
+import { ASSISTANT_TOOLS } from '@chord/core';
 import { describe, expect, it } from 'vitest';
-import type { SessionEvents } from '../../src/main/duet/adapter';
-import { ClaudeSession, claudeArgs } from '../../src/main/duet/claude';
-import { codexArgs } from '../../src/main/duet/codex';
+import type { SessionEvents } from '../../src/main/assistant/adapter';
+import { ClaudeSession, claudeArgs } from '../../src/main/assistant/claude';
+import { codexArgs } from '../../src/main/assistant/codex';
 import {
   asWslTarget,
   cliPath,
@@ -31,7 +31,7 @@ import {
   wslTarget,
   type Launch,
   type WslTarget,
-} from '../../src/main/duet/launch';
+} from '../../src/main/assistant/launch';
 
 const target: WslTarget = {
   distro: 'Ubuntu',
@@ -46,7 +46,7 @@ const inWsl: Launch = { command: 'C:\\Windows\\System32\\wsl.exe', prefix: [], e
 
 describe('WSL paths', () => {
   it('turns Windows paths into the distro’s', () => {
-    expect(toWslPath('C:\\Users\\me\\AppData\\Roaming\\Chord\\duet\\empty', '/mnt/')).toBe('/mnt/c/Users/me/AppData/Roaming/Chord/duet/empty');
+    expect(toWslPath('C:\\Users\\me\\AppData\\Roaming\\Chord\\assistant\\empty', '/mnt/')).toBe('/mnt/c/Users/me/AppData/Roaming/Chord/assistant/empty');
     expect(toWslPath('D:\\', '/mnt/')).toBe('/mnt/d');
     expect(toWslPath('z:/Projects/a b/', '/mnt')).toBe('/mnt/z/Projects/a b');
     // A custom automount root (wsl.conf root = /).
@@ -69,14 +69,14 @@ describe('Starting a CLI', () => {
   });
 
   it('runs a WSL install through wsl.exe with the same restricted flags, its own PATH, and the variables as env arguments', () => {
-    const args = claudeArgs({ model: null, instructionsFile: cliPath(inWsl, 'C:\\Users\\me\\duet\\instructions\\t.md'), resumeId: null, newSessionId: 'abc' });
-    const spec = spawnSpec(inWsl, args, { cwd: 'C:\\Users\\me\\duet\\empty', env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } });
+    const args = claudeArgs({ model: null, instructionsFile: cliPath(inWsl, 'C:\\Users\\me\\assistant\\instructions\\t.md'), resumeId: null, newSessionId: 'abc' });
+    const spec = spawnSpec(inWsl, args, { cwd: 'C:\\Users\\me\\assistant\\empty', env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } });
     expect(spec.command).toBe(inWsl.command);
     expect(spec.args.slice(0, 10)).toEqual([
       '-d',
       'Ubuntu',
       '--cd',
-      '/mnt/c/Users/me/duet/empty',
+      '/mnt/c/Users/me/assistant/empty',
       '-e',
       'env',
       'PATH=/home/me/.local/bin:/usr/bin:/bin',
@@ -87,7 +87,7 @@ describe('Starting a CLI', () => {
     // Every browse-mode flag reaches the CLI unchanged, the empty --tools included.
     expect(spec.args.slice(10)).toEqual(args);
     expect(spec.args[spec.args.indexOf('--tools') + 1]).toBe('');
-    expect(spec.args[spec.args.indexOf('--append-system-prompt-file') + 1]).toBe('/mnt/c/Users/me/duet/instructions/t.md');
+    expect(spec.args[spec.args.indexOf('--append-system-prompt-file') + 1]).toBe('/mnt/c/Users/me/assistant/instructions/t.md');
     // Windows' own variables stay on wsl.exe's side.
     expect(spec.env).toEqual({ PATH: 'C:\\Windows' });
   });
@@ -168,9 +168,9 @@ describe('Finding a CLI inside WSL', () => {
   });
 
   it('deletes a session where Claude Code keeps it inside WSL', () => {
-    expect(wslClaudeSessionPaths(target, 'C:\\Users\\me\\AppData\\Roaming\\Chord\\duet\\empty', '0b1c-22')).toEqual([
-      '/home/me/.claude/projects/-mnt-c-Users-me-AppData-Roaming-Chord-duet-empty/0b1c-22.jsonl',
-      '/home/me/.claude/projects/-mnt-c-Users-me-AppData-Roaming-Chord-duet-empty/0b1c-22',
+    expect(wslClaudeSessionPaths(target, 'C:\\Users\\me\\AppData\\Roaming\\Chord\\assistant\\empty', '0b1c-22')).toEqual([
+      '/home/me/.claude/projects/-mnt-c-Users-me-AppData-Roaming-Chord-assistant-empty/0b1c-22.jsonl',
+      '/home/me/.claude/projects/-mnt-c-Users-me-AppData-Roaming-Chord-assistant-empty/0b1c-22',
     ]);
   });
 
@@ -200,10 +200,10 @@ describe.runIf(realWsl)('Through real WSL (opt-in)', () => {
     const fake = toWslPath(resolve(import.meta.dirname, '../e2e/fake-claude.mjs'), probe.mountRoot)!;
     const config = `/tmp/chord-wsl-test-${Date.now()}`;
     const t = { ...wslTarget(probe, ['node', fake]), env: { CLAUDE_CONFIG_DIR: config }, claudeConfigDir: config };
-    const dir = mkdtempSync(join(tmpdir(), 'chord-duet-wsl-'));
+    const dir = mkdtempSync(join(tmpdir(), 'chord-assistant-wsl-'));
     const instructionsFile = join(dir, 'instructions.md');
     writeFileSync(instructionsFile, 'Assistant test instructions');
-    const options = { launch: wslLaunch(t), cwd: dir, model: null, instructions: '', instructionsFile, resumeId: null as string | null, newSessionId: '22222222-3333-4444-8555-666666666666', tools: DUET_TOOLS };
+    const options = { launch: wslLaunch(t), cwd: dir, model: null, instructions: '', instructionsFile, resumeId: null as string | null, newSessionId: '22222222-3333-4444-8555-666666666666', tools: ASSISTANT_TOOLS };
     const turn = async (resumeId: string | null, text: string) => {
       const seen = { text: '', tools: [] as string[], session: '', status: '', exited: false };
       let ended!: () => void;
