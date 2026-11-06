@@ -163,6 +163,13 @@ export class PlayerWindow {
     if (this.window.isDestroyed()) return;
     if (this.window.isMinimized()) this.window.restore();
     this.window.show();
+    // Windows ignores focus() from an app that isn't in front (its foreground lock), and Chord is when you ask for
+    // the player. Being on top a moment is allowed, so the window at least comes forward, even if Windows keeps the
+    // keyboard where it was.
+    if (process.platform === 'win32') {
+      this.window.setAlwaysOnTop(true);
+      this.window.setAlwaysOnTop(false);
+    }
     this.window.focus();
     this.page.webContents.focus();
   }
