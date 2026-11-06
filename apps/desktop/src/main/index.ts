@@ -440,6 +440,7 @@ function registerIpc(): void {
   handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
   handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
   handle('media:view', (_request, sender) => browser!.nowPlaying(senderWindow(sender).id));
+  handle('player:view', () => browser!.player.frame());
   handle('media:do', ({ nodeId, action }, sender) => browser!.mediaAction(senderWindow(sender), nodeId, action));
   handle('auth:respond', ({ id, credentials }) => httpAuth.respond(id, credentials));
   handle('passkey:respond', ({ id, credentialId }) => passkeys.respond(id, credentialId));
@@ -829,6 +830,13 @@ if (!app.requestSingleInstanceLock()) {
             : {}),
           verbose: !app.isPackaged,
         },
+        // Windows: the helper that lets the player play in the tab (player/dock.ts), beside the app; a development
+        // build has it in out/ (scripts/build-window-owner.mjs). Without it, the player keeps a window of its own.
+        dockHelper: (() => {
+          if (process.platform !== 'win32' || devEnv('CHORD_PLAYER_NO_DOCK') === '1') return null;
+          const helper = app.isPackaged ? join(process.resourcesPath, 'window-owner.exe') : join(app.getAppPath(), 'out/window-owner/window-owner.exe');
+          return existsSync(helper) ? helper : null;
+        })(),
         // Kept running for the player with every window closed (below): once it's gone, Chord goes too.
         closed: () => {
           if (process.platform !== 'darwin' && browser?.windowCount === 0) app.quit();

@@ -338,13 +338,14 @@ Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned
 
     **Released:** 0.1.1 (2026-11-06, ECS 44.10.1+wvcus, VMP-signed for production on Windows and macOS) and 0.1.2 (2026-11-06, `Chord Player.exe` code-signed on Windows with Chord's Azure setup). Hand-checked 2026-11-06 on Windows: installed from Spotify's notice, signed in, played. Chord 0.7.0 adds installing from Settings, asking again after no release, and removing the player when Chord is uninstalled (Windows).
 
-    **Next, after 0.7.0: play in the tab, Windows first** (the maintainer's call, 2026-11-06). The player's window glued over the tab's content area (S14 §2 (b): an owned window follows a drag within a frame on Windows), hidden when you switch tabs or chords, and swapped for a still picture of it whenever Chord draws over the page (command bar, popovers, menus, Peek), as frame snapshots already do for animations; fullscreen and picture-in-picture as today. macOS (the window server makes it trail) and Wayland (no window positions) keep the window of its own.
+    **Built 2026-11-06: play in the tab, on Windows** (the maintainer's call; ARCHITECTURE.md §9, *Playing in the tab*). The player's page in a borderless window glued over the tab's content area (S14 §2 (b)), owned by Chord's window through a 5 KB helper (`window-owner.exe`, built with Windows' own C# compiler). It hides when you switch tabs or chords, and a still picture of it stands in whenever Chord draws over the page. Chord's shortcuts reach Chord from it, and closing the tab closes it. Fullscreen and picture-in-picture as before. It needs Chord Player 0.2.0; macOS (the window server makes it trail) and Wayland (no window positions) keep the window of its own. Hand checks: docs/testing/widevine-player.md, *In the tab*.
 
     **Left:**
     - macOS code signing (with Chord's, once there's an Apple Developer account);
     - a player release with its DLLs code-signed on Windows too (set up 2026-11-06, as Chord's: every `.exe` and `.dll` is checked; 0.1.2 signs only the `.exe`);
     - the hand checks on macOS, and Netflix;
-    - Chord's shortcuts forwarded from the player;
+    - Chord's shortcuts forwarded from the player's window of its own (docked, they are);
+    - in the tab, Chord's window looks inactive while the player has the keyboard;
     - an icon of its own.
 - **P1 Now playing, second round.** **Built 2026-10-24** (DESIGN.md §7.10, ARCHITECTURE.md §9): the card offers media you left playing or played from it, not a background tab's own autoplay or what you paused before leaving; several at once stack (the newest in full, up to two more as one-line rows, then "and N more"), in an order that doesn't jump when one plays again. Play and Pause read and press the site's own button where its element isn't enough (Twitch, whose player pauses its element again; SoundCloud, whose player isn't in the page; Bandcamp); YouTube and YouTube Music follow their element. Hand checks: docs/testing/media-sites.md. Then (asked the same day): each video row has picture-in-picture, so you choose which video is out; another swaps them.
 - **P2 Pop out every video** (asked 2026-10-24). Chromium has one picture-in-picture window, so "pop them all out" needs Chord's own floating players.

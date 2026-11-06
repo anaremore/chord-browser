@@ -122,7 +122,8 @@ const config: Configuration = {
   // The bundler inlines every dependency (electron.vite.config.ts), so the
   // app is just the build output; electron-builder would otherwise copy the
   // production node_modules too. package.json is always added.
-  files: ['out/**/*', '!**/node_modules/**/*'],
+  // The window-owner helper goes beside the archive instead (win, below): a program can't run from inside it.
+  files: ['out/**/*', '!**/node_modules/**/*', '!out/window-owner/**/*'],
   // Chord's licenses travel with every copy: MIT, plus MPL-2.0 for core/rank.ts (adapted from Crest)
   // and Ghostery's adblocker engine (out/main/ad-blocking.js), GPL-3.0 for the extensions library and
   // EasyList (out/main/ad-blocking), and Apache-2.0 for pdf.js (the assistant's PDF reader, out/main/pdf.js) and
@@ -161,6 +162,9 @@ const config: Configuration = {
   win: {
     target: 'nsis',
     icon: 'build/icon.ico',
+    // Chord Player in the tab (ARCHITECTURE.md §9): the helper that makes the player's window Chord's own
+    // (scripts/build-window-owner.mjs). An .exe, so it's code-signed with Chord.exe.
+    extraResources: [{ from: 'out/window-owner/window-owner.exe', to: 'window-owner.exe' }],
     ...winSigning(process.env),
   },
   nsis: {

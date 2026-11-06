@@ -500,7 +500,7 @@ function DrmNoticeCard({ notice }: { notice: DrmNotice }) {
       </div>
       <p id={`${id}-notice`} className={styles.offerNotice}>
         {player
-          ? 'It needs Widevine, the copy protection streaming services use. Chord Player, a companion app with Widevine, plays it in a window of its own.'
+          ? `It needs Widevine, the copy protection streaming services use. Chord Player, a companion app with Widevine, plays it ${notice.inTab ? 'right here, in this tab' : 'in a window of its own'}.`
           : 'It needs Widevine, the copy protection streaming services use, which Chord doesn’t include yet.'}
         {player && notice.linux ? ' On Linux, some services play only in lower quality, or not at all.' : ''}
         {!player && !first ? ' Another browser can play it for now.' : ''}

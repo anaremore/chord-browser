@@ -38,6 +38,7 @@ import {
   splitMembers,
   splitOf,
   SPLIT,
+  findShortcut,
   tabsInOrder,
   uuidv7,
   type ActionId,
@@ -52,8 +53,8 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, DevtoolsAction, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
-import { THEME_VARS, type Theme } from '@chord/player-protocol';
+import type { ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
+import { THEME_VARS, type KeyReport, type Theme } from '@chord/player-protocol';
 import { createChordTheme, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -73,7 +74,7 @@ import type { WebStore } from './extensions/webstore';
 import { FindInPage } from './find';
 import { send } from './ipc';
 import { attachShortcuts, type KeyboardHandlers } from './keyboard';
-import { setShortcutOverrides } from './shortcut-overrides';
+import { setShortcutOverrides, shortcutOverrides } from './shortcut-overrides';
 import { IdleKeeper, type IdleTiming } from './idle';
 import { MiniWindows } from './mini-window';
 import { MediaWatcher } from './media';
@@ -175,6 +176,8 @@ export interface BrowserOptions {
   player: {
     installer: PlayerInstaller;
     host: ChordPlayerDeps['host'];
+    /** Windows: the window-owner helper, so the player plays in the tab (player/dock.ts); null: a window of its own. */
+    dockHelper: string | null;
     /** The player quit: with no windows left (Windows, Linux), Chord quits too. */
     closed(): void;
   };
@@ -497,6 +500,16 @@ export class Browser {
       changed: () => this.syncPopovers(),
       mediaChanged: () => this.syncMedia(),
       closed: () => options.player.closed(),
+      dockHelper: options.player.dockHelper,
+      dockWindows: (nodeId) => {
+        const contents = this.tabs.get(nodeId)?.webContents;
+        return contents ? [...this.windows.values()].filter((w) => !w.isPrivate).map((w) => w.dockFor(contents)) : [];
+      },
+      frameChanged: () => {
+        const frame = this.player.frame();
+        for (const w of this.windows.values()) send(w.shell.webContents, 'player:state', frame);
+      },
+      key: (input, nodeId) => this.playerKey(input, nodeId),
     });
     const sessionForChord = (chordId: string) => options.profileSession(this.store.state.chords[chordId]?.profileId ?? DEFAULT_PROFILE);
     this.peeks = new Peeks({
@@ -874,6 +887,8 @@ export class Browser {
       deferViews,
     });
     this.windows.set(windowId, w);
+    // Chord Player docked in a tab follows the window and whatever covers its pages (player/dock.ts).
+    w.onPlacement = () => this.player?.placementChanged();
     this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));
     // A load can finish after its window has closed (quitting right after launch): only an open window syncs.
     w.popover.webContents.on('did-finish-load', () => {
@@ -902,6 +917,8 @@ export class Browser {
       this.options.windowFocused?.();
     });
     w.window.on('blur', () => this.options.windowBlurred?.());
+    // Windows destroys a window's owned windows with it: Chord Player, docked in one of its tabs, lets go first.
+    w.window.on('close', () => this.player.dock.ownerClosing(w.window.getNativeWindowHandle().readBigUInt64LE(0).toString()));
     for (const contents of [w.shell.webContents, w.overlay.webContents]) {
       attachShortcuts(contents, this.keyboard);
       attachContextMenu(contents, {
@@ -917,6 +934,7 @@ export class Browser {
       this.options.screenshots.windowClosed(windowId);
       this.effects.forgetWindow(windowId);
       this.windows.delete(windowId);
+      this.player.placementChanged();
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
       this.mediaSent.delete(windowId);
@@ -1325,7 +1343,7 @@ export class Browser {
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
       // A tab whose service plays in Chord Player says so in its frame instead.
-      drm: state.settings.onboarded || w.isPrivate ? (this.tabInPlayer(w) ? null : this.drm.noticeFor(this.activeUrl(w.id), w.isPrivate ? null : this.playerOffer())) : null,
+      drm: state.settings.onboarded || w.isPrivate ? (this.tabInPlayer(w) ? null : this.drmNotice(w)) : null,
       effects: this.effects.cardFor(w.id),
     };
   }
@@ -1334,6 +1352,12 @@ export class Browser {
   private setEffectsLive(nodeId: NodeId, effects: LiveTab['effects']): void {
     const live = this.store.state.live[nodeId];
     if (this.store.state.nodes[nodeId]?.kind === 'tab' && (live?.effects ?? null) !== effects) this.store.dispatch({ t: 'tab.live', nodeId, live: { effects } });
+  }
+
+  /** The DRM notice for the window's page, saying where Chord Player would play it (in the tab, on Windows). */
+  private drmNotice(w: AppWindow): DrmNotice | null {
+    const notice = this.drm.noticeFor(this.activeUrl(w.id), w.isPrivate ? null : this.playerOffer());
+    return notice && this.player.dock.available ? { ...notice, inTab: true } : notice;
   }
 
   private tabInPlayer(w: AppWindow): boolean {
@@ -1467,8 +1491,27 @@ export class Browser {
   /** A tab that plays in Chord Player: back to the player, or its page here instead. Only a tab the window's card or frame shows. */
   async playerAction(w: AppWindow, nodeId: NodeId, action: 'show' | 'release'): Promise<void> {
     if (nodeId !== this.player.nodeId || mediaVisibleTo(this.store.state, w.id, [{ nodeId }]).length === 0) return;
-    if (action === 'show') await this.player.focus();
-    else this.player.release(nodeId);
+    if (action === 'release') return this.player.release(nodeId);
+    // Docked, the player is its tab: going back to it is going to the tab, in the window the card's in when it can be.
+    if (this.player.docked) {
+      const showing = this.windows.get(this.windowShowing(nodeId) ?? '') ?? w;
+      this.store.dispatch({ t: 'tab.activate', windowId: showing.id, nodeId });
+      showing.window.focus();
+      return;
+    }
+    await this.player.focus();
+  }
+
+  /**
+   * A key pressed in the docked player: one of Chord's reserved shortcuts runs for the tab it plays in, as if
+   * pressed in the tab (⌘T, ⌘L, ⌘W, Ctrl+Tab…). Page-first keys stay the page's, as in any tab.
+   */
+  private playerKey(input: KeyReport, nodeId: NodeId): void {
+    const contents = this.tabs.get(nodeId)?.webContents;
+    if (!contents || contents.isDestroyed()) return;
+    if (input.type === 'keyUp') return this.keyboard.onControlUp(contents);
+    const shortcut = findShortcut(input, platform, 'reserved', shortcutOverrides());
+    if (shortcut) this.keyboard.run(shortcut.id, contents);
   }
 
   /** Everything that plays in a window's chords: Chord Player (for its tab) and the tabs themselves, newest first. */

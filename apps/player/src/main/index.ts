@@ -5,14 +5,31 @@
  * link back to Chord. Chord starts it, installed per user, and talks to it
  * over the control channel (@chord/player-protocol): Chord opens pages,
  * plays, pauses and mutes; the player reports what plays, links for Chord,
- * Back to Chord, and that it's closing.
+ * Back to Chord, and that it's closing. On Windows, Chord docks it in the
+ * tab: the page in a borderless window glued over the tab's content area
+ * (window.ts), with Chord's shortcuts passed back to Chord.
  *
  * Started without Chord, it does nothing and exits. It quits when its window
  * closes or Chord goes away: a second engine left idle is a quarter to half
  * a gigabyte for nothing (S14 §8).
  */
 import './guard';
-import { connect, makeLock, parseTheme, parseUrl, PROTOCOL, rateLimiter, readLaunch, type Launch, type LinkReason, type Lock, type Peer } from '@chord/player-protocol';
+import {
+  connect,
+  makeLock,
+  mayBeShortcut,
+  parseDock,
+  parseTheme,
+  parseUrl,
+  PROTOCOL,
+  rateLimiter,
+  readLaunch,
+  type KeyReport,
+  type Launch,
+  type LinkReason,
+  type Lock,
+  type Peer,
+} from '@chord/player-protocol';
 import electron, { app, BrowserWindow, Menu, session, type BrowserWindowConstructorOptions } from 'electron';
 import { lockContents, lockSession } from './lock';
 import { MediaWatch } from './media';
@@ -116,6 +133,14 @@ class Player {
         if (theme) this.window.setTheme(theme);
       }),
     );
+    peer.handle('dock', later((m) => this.dock(m)));
+    peer.handle(
+      'undock',
+      later(() => {
+        this.window.undock();
+        return true;
+      }),
+    );
     peer.handle('close', () => {
       setTimeout(() => this.quit('chord'), 20);
       return true;
@@ -141,6 +166,12 @@ class Player {
       onClosed: () => this.quit('closed'),
     });
     lockContents(this.window.page.webContents, deps);
+    // Docked, the page is a tab in Chord: Chord's shortcuts pressed in it go to Chord (the page sees them too).
+    this.window.page.webContents.on('before-input-event', (_event, input) => {
+      if (!this.window.isDocked || (input.type !== 'keyDown' && input.type !== 'keyUp')) return;
+      const key: KeyReport = { type: input.type, key: input.key, code: input.code, control: input.control, shift: input.shift, alt: input.alt, meta: input.meta };
+      if (mayBeShortcut(key)) peer.send('key', { ...key });
+    });
     this.media = new MediaWatch(this.window.page.webContents, {
       service: () => this.serviceName,
       report: (media) => peer.send('media', { ...media }),
@@ -163,20 +194,34 @@ class Player {
     return ready;
   }
 
-  /** A page Chord asks for: a service's, or refused. The window comes forward either way. */
+  /** A page Chord asks for: a service's, or refused. The window comes forward either way, unless it's docked in a tab (Chord shows that). */
   private async open(value: unknown): Promise<{ ok: boolean; why?: string }> {
     const url = parseUrl(value);
     const service = url ? this.lock.service(url) : null;
     if (!url || !service) return { ok: false, why: 'not-a-service' };
     this.serviceName = service.name;
     this.window.update({ service: service.name, status: this.cdmState === 'installing' ? 'cdm' : this.cdmState === 'failed' ? 'failed' : 'ready' });
-    this.focus();
+    if (!this.window.isDocked) this.focus();
     // EME needs the CDM in place before the page asks for it.
     const ready = await this.cdm;
     if (!ready) return { ok: false, why: 'cdm' };
     this.window.update({ status: 'ready' });
     void this.window.page.webContents.loadURL(url).catch(() => {});
     return { ok: true };
+  }
+
+  /**
+   * Chord's `dock` (Windows): the page in the tab at these bounds, or hidden there. Hiding for something
+   * of Chord's over the tab sends a still picture of the page first, for Chord to show in its place.
+   */
+  private async dock(m: Record<string, unknown>): Promise<{ handle: string | null }> {
+    const dock = parseDock(m);
+    if (process.platform !== 'win32' || !dock) return { handle: null };
+    if (!dock.bounds && dock.still && this.window.isDocked) {
+      const data = await this.window.still();
+      if (data) this.peer.send('still', { data });
+    }
+    return { handle: this.window.dock(dock.bounds, dock.radius) };
   }
 
   private focus(): { focused: boolean } {
@@ -234,6 +279,7 @@ class Player {
       handoffs: this.handoffs,
       bar: this.window.barState,
       windows: BrowserWindow.getAllWindows().length,
+      docked: this.window.dockState(),
     };
   }
 
@@ -254,6 +300,12 @@ class Player {
         return true;
       case 'capture':
         return (await this.window.capture()).toString('base64');
+      case 'key': {
+        // A key pressed in the page, as a person's (docked, Chord's shortcuts go to Chord).
+        const modifiers = (['control', 'shift', 'alt', 'meta'] as const).filter((k) => m[k] === true);
+        for (const type of ['keyDown', 'keyUp'] as const) page.sendInputEvent({ type, keyCode: String(m['key']), modifiers });
+        return true;
+      }
       case 'close-window':
         this.window.close();
         return true;

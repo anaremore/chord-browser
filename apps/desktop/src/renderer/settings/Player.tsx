@@ -13,7 +13,9 @@ import { api } from './api';
 import { Row } from './controls';
 import styles from './Settings.module.css';
 
-const DESCRIPTION = 'Plays Netflix, Spotify and the other services that need Widevine, in a window of its own.';
+/** Where it plays: in the tab on Windows, in a window of its own elsewhere (ARCHITECTURE.md §9). */
+const where = (status: PlayerStatus | null) => (status?.inTab ? 'right in the tab' : 'in a window of its own');
+const description = (status: PlayerStatus | null) => `Plays Netflix, Spotify and the other services that need Widevine, ${where(status)}.`;
 
 export function PlayerSettings() {
   const [status, setStatus] = useState<PlayerStatus | null>(null);
@@ -59,7 +61,7 @@ export function PlayerSettings() {
     row = (
       <Row
         label={`Chord Player ${installed.version}`}
-        description={`Plays Netflix, Spotify and the other services that need Widevine, in a window of its own, on castLabs ECS ${installed.ecs.replace('+wvcus', '')}.${status.pending ? ` Version ${status.pending} starts the next time it opens.` : ''} Removing it signs you out of them there.`}
+        description={`Plays Netflix, Spotify and the other services that need Widevine, ${where(status)}, on castLabs ECS ${installed.ecs.replace('+wvcus', '')}.${status.pending ? ` Version ${status.pending} starts the next time it opens.` : ''} Removing it signs you out of them there.`}
         control={
           <button type="button" className={styles.linkButton} disabled={removing} onClick={remove}>
             {removing ? 'Removing…' : confirm ? 'Remove it and its sign-ins?' : 'Remove'}
@@ -73,7 +75,7 @@ export function PlayerSettings() {
     row = (
       <Row
         label="Chord Player"
-        description={`${DESCRIPTION} The download is about ${megabytes(install.size)} MB.`}
+        description={`${description(status)} The download is about ${megabytes(install.size)} MB.`}
         control={
           <button type="button" className={styles.linkButton} disabled={installing} onClick={startInstall}>
             {install.update ? 'Update' : 'Install'}
@@ -94,7 +96,7 @@ export function PlayerSettings() {
       />
     );
   } else {
-    row = <Row label="Chord Player" description={`${DESCRIPTION} It installs from the notice on their pages.`} control={null} />;
+    row = <Row label="Chord Player" description={`${description(status)} It installs from the notice on their pages.`} control={null} />;
   }
   return (
     <>

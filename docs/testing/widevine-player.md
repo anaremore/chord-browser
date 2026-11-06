@@ -78,7 +78,19 @@ What to expect with production VMP (S14 §1). "Refuses" means its player shows a
 
 ## Each OS
 
-**Windows 11**
+**Windows 11, in the tab** (Chord 0.8 and Chord Player 0.2 or later)
+- The page plays where the tab's page would be, its corners rounded like the frame's. No second taskbar button, nothing extra in Alt+Tab.
+- Drag Chord's window, snap it, maximize it, resize it from an edge: the video stays in place over the tab, with no visible lag.
+- Minimize Chord: the video goes with it, and comes back on restore.
+- Switch tabs, switch chords, open Settings: the video hides; back on its tab, it's there again.
+- Ctrl+L or Ctrl+T, Peek, a pinned tab's hover preview, an extension's popup, the sidebar sliding over: a still picture of the page stands in until it closes. Netflix's may be black: protected video doesn't picture.
+- Click the video (space pauses), then press Ctrl+T, Ctrl+L, Ctrl+W, Ctrl+Tab: Chord does each.
+- Fullscreen fills the screen; Esc puts it back over the tab.
+- Close its tab: the player closes. Navigate the tab elsewhere from the address bar: the same.
+- Two monitors with different scaling: drag the window across; the video lands over the tab.
+- Close the Chord window it plays in while another is open: it goes to a window of its own, still playing (and back into the tab when you go to it).
+
+**Windows 11, a window of its own** (an older Chord Player, or `CHORD_PLAYER_NO_DOCK=1` in a development build)
 - The player's window joins Chord's taskbar button: one button, two windows on hover. It's in Alt+Tab.
 - The window controls in the bar are Windows' own, with Snap layouts on the maximize button.
 - The window isn't blank after sleep or a display change.

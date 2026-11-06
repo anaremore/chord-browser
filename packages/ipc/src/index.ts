@@ -655,6 +655,21 @@ export interface NowPlaying {
   muted?: boolean;
 }
 
+/**
+ * What the frame of a tab that plays in Chord Player shows (DESIGN.md §7.14). Docked (Windows), the
+ * player's page is glued over the frame, so the frame shows only what's left when it isn't there:
+ * that it's starting, or a still picture of the page while something of Chord's covers it.
+ */
+export interface PlayerFrame {
+  nodeId: string;
+  /** It plays in the tab (Windows), not in a window of its own. */
+  docked: boolean;
+  /** Widevine isn't ready yet, so the page can't show. */
+  starting: boolean;
+  /** Docked: a JPEG data URL of the page, from the last time it hid for something of Chord's. */
+  still: string | null;
+}
+
 /** What the Now playing card's buttons ask main to do (a tab's mute and Go to tab are commands; Chord Player's mute is `mute`/`unmute`). */
 export const MediaAction = z.enum(['play', 'pause', 'pictureInPicture', 'mute', 'unmute']);
 export type MediaAction = z.infer<typeof MediaAction>;
@@ -733,6 +748,8 @@ export interface DrmNotice {
   player: PlayerOffer | null;
   /** Linux: some services refuse it or play it at lower quality (S14 §1). */
   linux: boolean;
+  /** Windows: Chord Player plays it in the tab itself, not in a window of its own (ARCHITECTURE.md §9). */
+  inTab?: boolean;
 }
 
 /**
@@ -764,6 +781,8 @@ export interface PlayerStatus {
   running: boolean;
   /** While it isn't installed: Install, its progress, or why it failed. Null in Google-free mode, where it can't run, while Chord finds out, and when no release was found. */
   install: PlayerInstallOffer | null;
+  /** Windows: it plays in the tab, not in a window of its own. */
+  inTab?: boolean;
 }
 
 /**
@@ -1543,6 +1562,8 @@ export const invokeChannels = {
   'share:stop': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   // Now playing (DESIGN.md §7.10): what the window's card offers, and its play, pause and picture-in-picture buttons.
   'media:view': { roles: ['shell'], request: z.void(), response: z.custom<NowPlaying[]>() },
+  /** What the frame of the tab that plays in Chord Player shows; null when no tab does. */
+  'player:view': { roles: ['shell'], request: z.void(), response: z.custom<PlayerFrame | null>() },
   'media:do': { roles: ['shell'], request: z.strictObject({ nodeId: id, action: MediaAction }), response: z.void() },
   // The popover: find bar and permission prompts, over the page (ARCHITECTURE.md §5).
   'popover:state': { roles: ['popover'], request: z.void(), response: z.custom<PopoverState>() },
@@ -1639,6 +1660,8 @@ export interface EventPayloads {
   'sync:status': SyncView;
   /** Tabs in the window's chords playing media (or paused a moment ago), newest first, when that changes. */
   'media:state': NowPlaying[];
+  /** The frame of the tab that plays in Chord Player changed (docked, starting, its still picture), or no tab does (null). */
+  'player:state': PlayerFrame | null;
   /** A reader view's look changed: its chord's colors, its controls, reduced motion. */
   'reader:look': ReaderLook;
   /** The Effects card's site changed (or the card closed: null). */
@@ -1752,8 +1775,8 @@ export interface ShellApi {
   assistant: { view(): Promise<AssistantView>; act(action: AssistantAction): Promise<void>; onState(listener: (view: AssistantView) => void): () => void };
   /** Stop a tab's share (its sidebar row shows it's sharing), or the shares of a tab that's being shared. */
   share: { stop(nodeId: string): Promise<void> };
-  /** A tab that plays in Chord Player: back to the player, or show its page here instead. */
-  player: { act(nodeId: string, action: 'show' | 'release'): Promise<void> };
+  /** A tab that plays in Chord Player: back to the player, or show its page here instead; and what its frame shows. */
+  player: { act(nodeId: string, action: 'show' | 'release'): Promise<void>; view(): Promise<PlayerFrame | null>; onState(listener: (frame: PlayerFrame | null) => void): () => void };
   /** The Now playing card: the window's media as main pushes it, and the card's own buttons. */
   media: {
     view(): Promise<NowPlaying[]>;

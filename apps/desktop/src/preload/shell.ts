@@ -59,7 +59,7 @@ const api: ShellApi = {
   },
   defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
   share: { stop: (nodeId) => invoke('share:stop', { nodeId }) },
-  player: { act: (nodeId, action) => invoke('player:do', { nodeId, action }) },
+  player: { act: (nodeId, action) => invoke('player:do', { nodeId, action }), view: () => invoke('player:view'), onState: (listener) => subscribe('player:state', listener) },
   media: {
     view: () => invoke('media:view'),
     onState: (listener) => subscribe('media:state', listener),
