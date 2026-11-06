@@ -237,6 +237,10 @@ for (const [what, path] of [
       const media = path === '/audio' ? 'audio' : 'video';
       const isPaused = () => page.evaluate((m) => document.querySelector<HTMLMediaElement>(m)!.paused, media);
       await expect.poll(isPaused).toBe(false);
+      // Chord has heard it (its row has the speaker): what's paused next is something it knew was playing.
+      await expect(row(shell, path === '/audio' ? 'Audio' : 'Talk').locator('[aria-label="Mute tab"]')).toBeVisible();
+      // Paused at once, often before Chord has read the page: Chromium goes on reporting its sound for a moment,
+      // and the read when you leave must take that as the paused player's (media.ts, wasPlaying), not sound from elsewhere.
       await page.evaluate((m) => document.querySelector<HTMLMediaElement>(m)!.pause(), media);
       await expect.poll(isPaused).toBe(true);
       // You left it paused: nothing to want controls for.

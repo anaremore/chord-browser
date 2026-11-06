@@ -56,6 +56,7 @@ const READ = `(() => {${SITE_CONTROLS}
     album: clip(m && m.album),
     artwork: m ? [...m.artwork].slice(0, 8).map((a) => ({ src: clip(a.src, ${Math.ceil((MAX_ARTWORK_BYTES * 4) / 3) + 64}), sizes: clip(a.sizes), type: clip(a.type) })) : [],
     playing: siteButton ? sitePlays() : players.some(heard),
+    played: players.some((el) => el.played.length > 0 && !el.muted && el.volume > 0),
     video: players.some((el) => el instanceof HTMLVideoElement && heard(el) && el.readyState >= 2 && !el.disablePictureInPicture && big(el)),
     players: players.length + (siteButton ? 1 : 0),
     pip: Boolean(document.pictureInPictureElement),
@@ -99,6 +100,8 @@ interface PageMedia {
   album: string;
   artwork: MediaImage[];
   playing: boolean;
+  /** One of its own players has played, unmuted, at some point (it may be paused now). */
+  played: boolean;
   video: boolean;
   /** Media elements in the page itself: the ones Chord can pause and play. */
   players: number;
@@ -114,6 +117,8 @@ interface Session {
   page: PageMedia | null;
   /** When the page's own players last stopped (null while they play). */
   quietAt: number | null;
+  /** Sound started since the last read: no read has seen whether the page's own players were what made it. */
+  heardUnread: boolean;
   artwork: { src: string; data: string | null } | null;
   /** Lets it go a while after it paused. */
   linger: ReturnType<typeof setTimeout> | null;
@@ -242,10 +247,11 @@ export class MediaWatcher {
     if (s && s.contents !== contents) this.end(nodeId);
     s = this.sessions.get(nodeId);
     if (!s) {
-      s = { contents, since: Date.now(), playing: true, page: null, quietAt: null, artwork: null, linger: null, pending: null, reading: false, again: false, reads: 0, leftAt: null, shown: '' };
+      s = { contents, since: Date.now(), playing: true, page: null, quietAt: null, heardUnread: true, artwork: null, linger: null, pending: null, reading: false, again: false, reads: 0, leftAt: null, shown: '' };
       this.sessions.set(nodeId, s);
       this.poll();
     }
+    s.heardUnread = true;
     this.soon(nodeId, SETTLE_MS);
   }
 
@@ -268,10 +274,14 @@ export class MediaWatcher {
     }
     s.reading = true;
     const read = ++s.reads;
+    const heardUnread = s.heardUnread;
+    s.heardUnread = false;
     const page = await readPage(s.contents);
     s.reading = false;
     if (this.sessions.get(nodeId) !== s || s.contents.isDestroyed()) return;
-    const wasPlaying = s.page?.playing ?? false;
+    // Its players were playing at the last read; or the sound began since, and they've played: started and
+    // stopped again before any read saw them (paused at once, then left), the sound still reported is theirs.
+    const wasPlaying = (s.page?.playing ?? false) || (heardUnread && Boolean(page?.played));
     if (page) s.page = page;
     const now = Date.now();
     const audible = s.contents.isCurrentlyAudible();

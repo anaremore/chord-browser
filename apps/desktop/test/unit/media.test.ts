@@ -10,6 +10,7 @@ interface Page {
   album: string;
   artwork: { src: string; sizes: string; type: string }[];
   playing: boolean;
+  played: boolean;
   video: boolean;
   players: number;
   pip: boolean;
@@ -21,7 +22,7 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 class FakePage extends EventEmitter {
   destroyed = false;
   audible = false;
-  page: Page = { title: 'Song', artist: 'Artist', album: 'Album', artwork: [], playing: true, video: false, players: 1, pip: false };
+  page: Page = { title: 'Song', artist: 'Artist', album: 'Album', artwork: [], playing: true, played: true, video: false, players: 1, pip: false };
   reads = 0;
   scripts: { world: number; gesture: boolean | undefined; kind: string }[] = [];
   artwork = { type: 'image/png', bytes: PNG };
@@ -255,6 +256,25 @@ describe('MediaWatcher', () => {
     // Played from a card (another window's, say): offered again.
     await media.act('t1' as never, 'play');
     expect(media.list()[0]).toMatchObject({ nodeId: 't1', playing: true });
+    media.stop();
+  });
+
+  // Left while Chromium still reports sound, before any read of the page: its own players decide whose sound that is.
+  it.each([
+    ['paused in the page before its first read (its player played): its sound is that player’s tail, so not offered', true, []],
+    ['its own players never played (an embedded frame’s plays): offered at once, not pausable', false, [{ playing: true, pausable: false }]],
+  ] as const)('%s', async (_, played, offered) => {
+    const { media, open } = setUp();
+    const page = open('t1', false);
+    page.page = { ...page.page, playing: false, played };
+    page.sound(true);
+    media.left('t1' as never);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(media.list()).toMatchObject(offered);
+    // Once the sound settles either way, the decision stands.
+    page.sound(false);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(media.list()).toHaveLength(offered.length);
     media.stop();
   });
 
