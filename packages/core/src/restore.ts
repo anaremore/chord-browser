@@ -103,7 +103,9 @@ function restoreZoom(saved: Record<string, number> | undefined): Record<string, 
 function restoreFavorites(saved: Favorite[] | undefined): Record<string, Favorite> {
   const out: Record<string, Favorite> = {};
   for (const f of saved ?? []) {
-    if (typeof f.id === 'string' && /^https?:/i.test(f.url) && typeof f.rank === 'string') out[f.id] = f;
+    if (typeof f.id !== 'string' || !/^https?:/i.test(f.url) || typeof f.rank !== 'string') continue;
+    const { chordId, ...rest } = f;
+    out[f.id] = typeof chordId === 'string' && chordId ? { ...rest, chordId } : rest;
   }
   return out;
 }

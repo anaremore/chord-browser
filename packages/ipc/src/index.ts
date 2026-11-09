@@ -173,7 +173,7 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('folder.restore'), nodeId: id }),
   // Dragging a tab onto the Favorites row; the shell picks the id (a UUID).
   z.object({ t: z.literal('favorite.add'), favoriteId: z.uuid(), nodeId: id, index: z.number().int().min(0).max(1000).optional() }),
-  z.object({ t: z.literal('favorite.move'), favoriteId: id, index: z.number().int().min(0).max(1000) }),
+  z.object({ t: z.literal('favorite.move'), favoriteId: id, index: z.number().int().min(0).max(1000), chordId: id.optional() }),
   z.object({ t: z.literal('favorite.open'), windowId: id, favoriteId: id }),
   // Undo for Clear.
   z.object({ t: z.literal('closed.restore'), windowId: id, nodeIds: z.array(id).max(500), activate: id.nullable().optional() }),

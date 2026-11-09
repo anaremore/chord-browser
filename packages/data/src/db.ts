@@ -1160,11 +1160,11 @@ export class ChordDatabase {
     }
     const iconKey = favorite.favicon ? this.storeFavicon(favorite.favicon, now) : null;
     this.sql(
-      `INSERT INTO favorite (id, url, title, favicon_key, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET url = excluded.url, title = excluded.title, favicon_key = excluded.favicon_key, rank = excluded.rank,
-         updated_at = CASE WHEN url IS excluded.url AND title IS excluded.title AND favicon_key IS excluded.favicon_key AND rank IS excluded.rank
+      `INSERT INTO favorite (id, url, title, favicon_key, rank, created_at, updated_at, chord_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET url = excluded.url, title = excluded.title, favicon_key = excluded.favicon_key, rank = excluded.rank, chord_id = excluded.chord_id,
+         updated_at = CASE WHEN url IS excluded.url AND title IS excluded.title AND favicon_key IS excluded.favicon_key AND rank IS excluded.rank AND chord_id IS excluded.chord_id
                            THEN updated_at ELSE excluded.updated_at END`,
-    ).run(id, favorite.url, favorite.title, iconKey, favorite.rank, favorite.createdAt, now);
+    ).run(id, favorite.url, favorite.title, iconKey, favorite.rank, favorite.createdAt, now, favorite.chordId ?? null);
   }
 
   close(): void {

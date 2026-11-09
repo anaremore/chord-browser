@@ -32,7 +32,7 @@ import {
   countText,
   countWithin,
   isInternalUrl,
-  sortedFavorites,
+  favoritesFor,
   splitMembers,
   sumCounts,
   tabForFavorite,
@@ -273,7 +273,7 @@ export function SidebarDnd({
           // Favorites: reorder among themselves.
           if (source.type === 'favorite') {
             if (isSortable(source) && source.group === 'favorites') {
-              void api.state.dispatch({ t: 'favorite.move', favoriteId: String(source.id).slice(FAVORITE.length), index: source.index });
+              void api.state.dispatch({ t: 'favorite.move', favoriteId: String(source.id).slice(FAVORITE.length), index: source.index, chordId: c });
             }
             return;
           }
@@ -298,7 +298,7 @@ export function SidebarDnd({
           // Onto Favorites: a new favorite, where it was dropped.
           if (targetId === FAVORITES_ZONE || (isSortable(target) && target.group === 'favorites')) {
             if (node.kind !== 'tab') return;
-            const order = sortedFavorites(s);
+            const order = favoritesFor(s, c);
             const at = isSortable(target) ? order.findIndex((f) => FAVORITE + f.id === targetId) : order.length;
             const box = target?.shape?.boundingRectangle;
             const after = box ? position.current.x > box.left + box.width / 2 : true;
@@ -1148,13 +1148,14 @@ function FavoritesDropZone() {
 }
 
 /**
- * Favorites (ROADMAP.md Q5): sites every chord shares, as tiles at the top of
- * the sidebar. A tile switches to this chord's tab on that site, or opens it.
+ * Favorites (ROADMAP.md Q5): tiles at the top of the sidebar, the ones every
+ * chord shares and this chord's own, in one order. A tile switches to this
+ * chord's tab on that site, or opens it.
  */
 export function FavoritesRow({ state, windowId, activeId, appearance }: { state: State; windowId: string; activeId: string | null; appearance: Appearance }) {
   const { active } = useDrag();
-  const favorites = sortedFavorites(state);
   const chordId = state.windows[windowId]?.activeChordId;
+  const favorites = chordId ? favoritesFor(state, chordId) : [];
   if (favorites.length === 0) return active?.type === 'tab' ? <FavoritesDropZone /> : null;
   return (
     <FavoritesList>

@@ -522,6 +522,22 @@ describe('chord-data', () => {
     backup.close();
   });
 
+  it('upgrades a version-22 profile to 23: its Favorites stay in every chord, and one can be a chord’s own', () => {
+    const v22 = new DatabaseSync(file);
+    for (const migration of MIGRATIONS.slice(0, 22)) v22.exec(migration);
+    v22.exec('PRAGMA user_version = 22');
+    v22.prepare(`INSERT INTO favorite (id, url, title, favicon_key, rank, created_at) VALUES ('old', 'https://mail.test/', 'Mail', NULL, 'a0', 1)`).run();
+    v22.close();
+    const db = new ChordDatabase(file);
+    expect(db.load()!.favorites).toEqual([{ id: 'old', url: 'https://mail.test/', title: 'Mail', favicon: null, rank: 'a0', createdAt: 1 }]);
+    db.write([{ k: 'favorite', id: 'own', value: { id: 'own', url: 'https://docs.test/', title: 'Docs', favicon: null, rank: 'a1', createdAt: 2, chordId: 'work' } }]);
+    expect(db.load()!.favorites!.find((f) => f.id === 'own')!.chordId).toBe('work');
+    // In every chord again.
+    db.write([{ k: 'favorite', id: 'own', value: { id: 'own', url: 'https://docs.test/', title: 'Docs', favicon: null, rank: 'a1', createdAt: 2 } }]);
+    expect(db.load()!.favorites!.find((f) => f.id === 'own')).not.toHaveProperty('chordId');
+    db.close();
+  });
+
   it('upgrades a version-13 profile to 14: assistant chats keep their messages, and a chat can be set to ask every time', () => {
     const v13 = new DatabaseSync(file);
     for (const migration of MIGRATIONS.slice(0, 13)) v13.exec(migration);

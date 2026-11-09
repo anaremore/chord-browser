@@ -372,7 +372,12 @@ export function buildSplitMenu(a: { pinned: boolean; canPin: boolean; togglePin(
   ]);
 }
 
-/** Right-click on a favorite. */
-export function buildFavoriteMenu(a: { remove(): void }): Menu {
-  return Menu.buildFromTemplate([{ label: 'Remove from Favorites', click: a.remove }]);
+/** Right-click on a favorite: where it shows (this chord only, or every chord), and Remove. */
+export function buildFavoriteMenu(a: { chordName: string; everyChord: boolean; onlyHere(): void; inEveryChord(): void; remove(): void }): Menu {
+  return Menu.buildFromTemplate([
+    { label: `Only in ${a.chordName}`, type: 'radio', checked: !a.everyChord, click: a.onlyHere },
+    { label: 'In every chord', type: 'radio', checked: a.everyChord, click: a.inEveryChord },
+    { type: 'separator' },
+    { label: 'Remove from Favorites', click: a.remove },
+  ]);
 }

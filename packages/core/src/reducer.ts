@@ -15,7 +15,6 @@ import {
   DEFAULT_PROFILE,
   GOOGLE_FREE_ENGINE,
   IDLE_LIVE,
-  MAX_FAVORITES,
   MAX_ZOOM,
   MIN_ZOOM,
   SIDEBAR_WIDTH,
@@ -62,7 +61,7 @@ import { cleanProxy, sameProxy, type ProxySettings } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
 import type { SyncApply, SyncGone } from './sync';
-import { children, chordsFor, descendants, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
+import { children, chordsFor, descendants, favoriteFits, favoritesFor, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
 
 enablePatches();
@@ -121,7 +120,10 @@ export type Command =
   /** Add a tab's page to Favorites, at `index` (the end when absent). */
   | { t: 'favorite.add'; favoriteId: string; nodeId: NodeId; index?: number }
   | { t: 'favorite.remove'; favoriteId: string }
-  | { t: 'favorite.move'; favoriteId: string; index: number }
+  /** To `index` in `chordId`'s row (the one it was dragged in); without it, among all of them. */
+  | { t: 'favorite.move'; favoriteId: string; index: number; chordId?: ChordId }
+  /** Show it in one chord's row only, or in every chord's (null). */
+  | { t: 'favorite.scope'; favoriteId: string; chordId: ChordId | null }
   /** Switch to the chord's tab on that site, or open the favorite in Today. */
   | { t: 'favorite.open'; windowId: WindowId; favoriteId: string }
   /** Undo Clear: these tabs come back from the ⌘⇧T list to where they were; `activate` is shown again. */
@@ -758,8 +760,7 @@ function mergeIn(draft: Draft<State>, cmd: Extract<Command, { t: 'data.merge' }>
       draft.favorites[favorite.id] = { ...favorite, favicon: favorite.favicon ?? existing.favicon, createdAt: existing.createdAt };
       continue;
     }
-    const order = Object.values(draft.favorites);
-    if (order.length >= MAX_FAVORITES || order.some((f) => f.url === favorite.url)) continue;
+    if (favoriteFits(draft as State, favorite.url, favorite.chordId ?? null) !== 'fits') continue;
     draft.favorites[favorite.id] = favorite;
     record.favoriteIds.push(favorite.id);
   }
@@ -1160,12 +1161,11 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
     if (!/^https?:\/\//i.test(favorite.url)) continue;
     const existing = draft.favorites[favorite.id];
     if (existing) {
-      if (Object.values(draft.favorites).some((f) => f.id !== favorite.id && f.url === favorite.url)) continue;
+      if (favoriteFits(draft as State, favorite.url, favorite.chordId ?? null, favorite.id) === 'taken') continue;
       draft.favorites[favorite.id] = { ...favorite, favicon: favorite.favicon ?? existing.favicon, createdAt: existing.createdAt };
       continue;
     }
-    const order = Object.values(draft.favorites);
-    if (order.length >= MAX_FAVORITES || order.some((f) => f.url === favorite.url)) continue;
+    if (favoriteFits(draft as State, favorite.url, favorite.chordId ?? null) !== 'fits') continue;
     draft.favorites[favorite.id] = favorite;
   }
 
@@ -1631,20 +1631,21 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'favorite.add': {
       const tab = draft.nodes[cmd.nodeId];
-      // Favorites are kept and shared; nothing from a private window becomes one.
+      // Favorites are kept; nothing from a private window becomes one.
       if (tab?.kind !== 'tab' || draft.favorites[cmd.favoriteId] || isPrivateChord(draft as State, tab.chordId)) return;
       const url = tab.pinnedUrl ?? tab.url;
-      const order = sortedFavorites(draft as State);
-      // Web pages only, one favorite per page, and a sane limit.
-      if (!/^https?:/i.test(url) || order.length >= MAX_FAVORITES || order.some((f) => f.url === url)) return;
-      const at = Math.max(0, Math.min(cmd.index ?? order.length, order.length));
+      // A new one is its chord's own (its menu shows it in every chord). Web pages only, once per row, and a sane limit.
+      if (!/^https?:/i.test(url) || favoriteFits(draft as State, url, tab.chordId) !== 'fits') return;
+      const row = favoritesFor(draft as State, tab.chordId);
+      const at = Math.max(0, Math.min(cmd.index ?? row.length, row.length));
       draft.favorites[cmd.favoriteId] = {
         id: cmd.favoriteId,
         url,
         title: tab.customTitle ?? tab.title,
         favicon: tab.favicon,
-        rank: rankBetween(order[at - 1]?.rank ?? null, order[at]?.rank ?? null),
+        rank: rankBetween(row[at - 1]?.rank ?? null, row[at]?.rank ?? null),
         createdAt: ctx.now,
+        chordId: tab.chordId,
       };
       return;
     }
@@ -1656,11 +1657,27 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'favorite.move': {
       const favorite = draft.favorites[cmd.favoriteId];
       if (!favorite) return;
-      const order = sortedFavorites(draft as State);
+      // Among the row it was moved in: its own chord's, the one named, or (neither) all of them.
+      const rowOf = favorite.chordId ?? (cmd.chordId && draft.chords[cmd.chordId] ? cmd.chordId : null);
+      const order = rowOf ? favoritesFor(draft as State, rowOf) : sortedFavorites(draft as State);
       const others = order.filter((f) => f.id !== favorite.id);
       const at = Math.max(0, Math.min(cmd.index, others.length));
       if (order.findIndex((f) => f.id === favorite.id) === at) return;
       favorite.rank = rankBetween(others[at - 1]?.rank ?? null, others[at]?.rank ?? null);
+      return;
+    }
+
+    case 'favorite.scope': {
+      const favorite = draft.favorites[cmd.favoriteId];
+      if (!favorite || (favorite.chordId ?? null) === cmd.chordId) return;
+      if (cmd.chordId === null) {
+        // In every chord: another chord's own for the same page would be in its row twice, so this one takes its place.
+        for (const other of Object.values(draft.favorites)) if (other.id !== favorite.id && other.url === favorite.url) delete draft.favorites[other.id];
+        delete favorite.chordId;
+        return;
+      }
+      if (!draft.chords[cmd.chordId] || isPrivateChord(draft as State, cmd.chordId)) return;
+      favorite.chordId = cmd.chordId;
       return;
     }
 
@@ -2091,7 +2108,15 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         delete win.activeTab[cmd.chordId];
       }
       const nodes = Object.values(draft.nodes).filter((n) => n.chordId === cmd.chordId);
-      draft.deletedChords.unshift({ chord: { ...draft.chords[cmd.chordId]! }, nodes: nodes.map((n) => ({ ...n })), deletedAt: ctx.now });
+      // Its own Favorites go with it, and come back with Undo.
+      const favorites = Object.values(draft.favorites).filter((f) => f.chordId === cmd.chordId);
+      draft.deletedChords.unshift({
+        chord: { ...draft.chords[cmd.chordId]! },
+        nodes: nodes.map((n) => ({ ...n })),
+        deletedAt: ctx.now,
+        ...(favorites.length > 0 ? { favorites: favorites.map((f) => ({ ...f })) } : {}),
+      });
+      for (const favorite of favorites) delete draft.favorites[favorite.id];
       if (draft.deletedChords.length > MAX_DELETED_CHORDS) draft.deletedChords.length = MAX_DELETED_CHORDS;
       for (const node of nodes) {
         if (node.kind === 'tab') effects.push({ e: 'view.destroy', nodeId: node.id });
@@ -2108,6 +2133,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const [deleted] = draft.deletedChords.splice(index, 1);
       draft.chords[cmd.chordId] = deleted!.chord;
       for (const node of deleted!.nodes) draft.nodes[node.id] = node;
+      // Its Favorites, unless that page became a Favorite in its row meanwhile.
+      for (const favorite of deleted!.favorites ?? []) {
+        if (!draft.favorites[favorite.id] && favoriteFits(draft as State, favorite.url, cmd.chordId) !== 'taken') draft.favorites[favorite.id] = favorite;
+      }
       switchChord(draft, cmd.windowId, cmd.chordId, ctx, effects);
       return;
     }
@@ -2398,8 +2427,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (node.parentId === null && !made.has(node.chordId)) record.nodeIds.push(node.id);
       }
       for (const favorite of cmd.favorites ?? []) {
-        const order = Object.values(draft.favorites);
-        if (draft.favorites[favorite.id] || !/^https?:/i.test(favorite.url) || order.length >= MAX_FAVORITES || order.some((f) => f.url === favorite.url)) continue;
+        if (draft.favorites[favorite.id] || !/^https?:/i.test(favorite.url) || favoriteFits(draft as State, favorite.url, favorite.chordId ?? null) !== 'fits') continue;
         draft.favorites[favorite.id] = favorite;
         record.favoriteIds.push(favorite.id);
       }
@@ -2475,6 +2503,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         delete draft.chords[chordId];
         for (const win of Object.values(draft.windows)) delete win.activeTab[chordId];
         for (const [host, route] of Object.entries(draft.linkRoutes)) if (route.chordId === chordId) delete draft.linkRoutes[host];
+        for (const favorite of Object.values(draft.favorites)) if (favorite.chordId === chordId) delete draft.favorites[favorite.id];
       }
       for (const id of record.favoriteIds) delete draft.favorites[id];
       delete draft.imports[cmd.importId];

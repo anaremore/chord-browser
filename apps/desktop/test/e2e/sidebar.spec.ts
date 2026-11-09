@@ -127,6 +127,26 @@ const point = async (target: Locator, dy: number, dx = 0) => {
   return { x: b.x + b.width / 2 + dx, y: b.y + dy };
 };
 
+/**
+ * Native menus can't be clicked from a test: main keeps the last one it would have popped up instead, and a test
+ * reads its items and clicks one as a person would (Electron's own handling of the click, radio items included).
+ */
+async function stubMenus(app: ElectronApplication) {
+  await app.evaluate(({ Menu }) => {
+    Menu.prototype.popup = function (this: Electron.Menu) {
+      (globalThis as unknown as { lastMenu: Electron.Menu }).lastMenu = this;
+    };
+  });
+}
+const menuItems = (app: ElectronApplication) =>
+  app.evaluate(() => (globalThis as unknown as { lastMenu: Electron.Menu }).lastMenu.items.map((i) => ({ label: i.label, checked: i.checked })));
+const clickMenuItem = (app: ElectronApplication, label: string) =>
+  app.evaluate((_electron, label) => {
+    const item = (globalThis as unknown as { lastMenu: Electron.Menu }).lastMenu.items.find((i) => i.label === label);
+    if (!item) throw new Error(`No menu item ${label}`);
+    item.click();
+  }, label);
+
 test('folders: made around a tab, dragged into, folded, renamed and deleted with Undo, all from the keyboard too', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
@@ -246,7 +266,7 @@ test('a row moves with the keyboard: Space picks it up, arrows move it, Space dr
   }
 });
 
-test('Favorites: added by action or by dragging, shared by chords, and a favorite switches to its tab or opens it', async () => {
+test('Favorites: added by action or by dragging, a chord’s own or in every chord, and a favorite switches to its tab or opens it', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     // First page on one site, Second on another.
@@ -278,10 +298,35 @@ test('Favorites: added by action or by dragging, shared by chords, and a favorit
     await expect(today.getByRole('treeitem').first()).toContainText('First page');
     await expect(today.getByRole('treeitem', { name: 'First page', exact: true })).toHaveAttribute('aria-current', 'page');
 
-    // Every chord shares them.
+    // They're this chord's own: a new chord's row is empty.
+    const personal = (await shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { selected: true }).getAttribute('aria-label'))!;
     await shell.getByRole('button', { name: 'New chord' }).click();
     await shell.getByRole('textbox', { name: 'Chord name' }).press('Enter');
+    await expect(favorites.getByRole('listitem')).toHaveCount(0);
+    await shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { name: personal }).click();
     await expect(favorites.getByRole('listitem')).toHaveCount(2);
+
+    // Its menu shows one in every chord; the new chord's row has it, and its menu says so.
+    await stubMenus(app);
+    await favorites.getByRole('button', { name: 'Second page' }).click({ button: 'right' });
+    expect(await menuItems(app)).toEqual([
+      { label: expect.stringMatching(/^Only in /), checked: true },
+      { label: 'In every chord', checked: false },
+      { label: '', checked: false },
+      { label: 'Remove from Favorites', checked: false },
+    ]);
+    await clickMenuItem(app, 'In every chord');
+    await shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { selected: false }).click();
+    await expect(favorites.getByRole('listitem')).toHaveCount(1);
+    await expect(favorites.getByRole('button', { name: 'Second page' })).toBeVisible();
+    await favorites.getByRole('button', { name: 'Second page' }).click({ button: 'right' });
+    expect((await menuItems(app))[1]).toEqual({ label: 'In every chord', checked: true });
+    // Back to only this chord: gone from the other's row.
+    await clickMenuItem(app, (await menuItems(app))[0]!.label);
+    await expect(favorites.getByRole('listitem')).toHaveCount(1);
+    await shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { name: personal }).click();
+    await expect(favorites.getByRole('listitem')).toHaveCount(1);
+    await expect(favorites.getByRole('button', { name: 'First page' })).toBeVisible();
   } finally {
     await app.close();
   }
@@ -603,7 +648,7 @@ test('minimal mode: off by default, the window’s edge does nothing; turned on 
   }
 });
 
-test('⌘L edits the address at the top of the window: the pill docked, the bar’s address with the sidebar hidden; a click edits the one clicked', async () => {
+test('⌘L edits the address at the top of the window: the top strip’s, or the pill docked on macOS, or the bar’s with the sidebar hidden; a click edits the one clicked', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
@@ -611,27 +656,41 @@ test('⌘L edits the address at the top of the window: the pill docked, the bar�
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
     await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
     const dialog = overlay.getByRole('dialog', { name: 'Edit address' });
-    /** The command bar opens over `address`: its input where the address was. */
+    // The shell and the command bar are views at the same place in the window, so their pages' coordinates compare.
+    const at = (await views(app)).filter((v) => isShell(v.url) || isOverlay(v.url));
+    expect(at).toHaveLength(2);
+    expect([at[0]!.x, at[0]!.y]).toEqual([at[1]!.x, at[1]!.y]);
+    /** The command bar opens over `address`: its input row exactly where the address was (DESIGN.md §7.3, *Anchored*). */
     const opensOver = async (address: Locator) => {
       await expect(dialog).toBeVisible();
-      const at = await settledBox(address);
-      const panel = await settledBox(dialog);
-      // Its input lines up with the address, give or take the panel's padding.
-      expect(Math.abs(panel.x - at.x)).toBeLessThanOrEqual(16);
-      expect(Math.abs(panel.y - at.y)).toBeLessThanOrEqual(16);
+      const want = await settledBox(address);
+      const row = await settledBox(dialog.getByRole('combobox').locator('..'));
+      expect({ x: Math.round(row.x), y: Math.round(row.y), height: Math.round(row.height) }).toEqual({
+        x: Math.round(want.x),
+        y: Math.round(want.y),
+        height: Math.round(want.height),
+      });
       await overlay.keyboard.press('Escape');
       await expect(dialog).toBeHidden();
     };
 
     const pill = sidebar.getByRole('button', { name: /^Address/ });
+    const barAddress = shell.locator('[data-region="bar"] [data-address]');
+    // Docked, Windows and Linux have a top strip with the address in it too (macOS has none): ⌘L edits that one,
+    // at the top of the window, and a click edits whichever was clicked.
+    const topStrip = (await barAddress.count()) > 0;
+    expect(topStrip).toBe(process.platform !== 'darwin');
     await runAction(shell, 'address.edit');
-    await opensOver(pill);
+    await opensOver(topStrip ? barAddress : pill);
     await pill.click();
     await opensOver(pill);
+    if (topStrip) {
+      await barAddress.click();
+      await opensOver(barAddress);
+    }
 
     await shell.getByRole('button', { name: 'Hide sidebar' }).click();
     await expect(sidebar).toBeHidden();
-    const barAddress = shell.locator('[data-region="bar"] [data-address]');
     await runAction(shell, 'address.edit');
     await opensOver(barAddress);
     await barAddress.click();
@@ -660,9 +719,21 @@ test('a tab’s reload button, on hover, reloads that tab without switching to i
     const { shell, today } = await setUp(app, ['/second']);
     const background = today.getByRole('treeitem', { name: /count 1/ });
     await expect(background).toBeVisible();
-    await background.hover();
     const reload = background.getByRole('button', { name: 'Reload count 1', includeHidden: true });
-    await expect(reload).toBeVisible();
+    const closeButton = background.getByRole('button', { name: 'Close count 1', includeHidden: true });
+    // Hidden until the row is pointed at (Playwright counts opacity 0 as visible, so the opacity is what says).
+    await shell.mouse.move(600, 500);
+    await expect(reload).toHaveCSS('opacity', '0');
+    await background.hover();
+    await expect(reload).toHaveCSS('opacity', '1');
+    // Just before ×, on the same line, not over it; and the title makes room for both.
+    const r = await settledBox(reload);
+    const x = await settledBox(closeButton);
+    expect(Math.round(r.x + r.width)).toBeLessThanOrEqual(Math.round(x.x));
+    expect(Math.round(r.y)).toBe(Math.round(x.y));
+    const title = await settledBox(background.locator('[data-activate]'));
+    const padEnd = await background.locator('[data-activate]').evaluate((el) => parseFloat(getComputedStyle(el).paddingInlineEnd));
+    expect(Math.round(title.x + title.width - padEnd)).toBeLessThanOrEqual(Math.round(r.x));
     await reload.click();
     await expect(today.getByRole('treeitem', { name: /count 2/ })).toBeVisible();
     // It stayed in the background.

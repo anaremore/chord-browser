@@ -252,6 +252,16 @@ describe('the merge planner', () => {
     check(p);
   });
 
+  it('a chord’s own Favorite comes with its chord; one whose chord is neither here nor in the file comes in every chord', () => {
+    const there = used();
+    there.favorites['own'] = { id: 'own', url: 'https://docs.test/', title: 'Docs', favicon: null, rank: 'a1', createdAt: 1, chordId: 'work' };
+    there.favorites['lost'] = { id: 'lost', url: 'https://wiki.test/', title: 'Wiki', favicon: null, rank: 'a2', createdAt: 1, chordId: 'gone' };
+    const s = applyPlan(fresh(), plan(recordsOf(fresh(), late), recordsOf(there, old)));
+    expect(s.favorites['own']!.chordId).toBe('work');
+    expect(s.favorites['lost']).not.toHaveProperty('chordId');
+    expect(s.favorites['fav']).not.toHaveProperty('chordId');
+  });
+
   it('weighs field by field: the newer stamp wins, ours stays where it’s newer', () => {
     const here = used();
     const local = recordsOf(here, mid);

@@ -58,7 +58,7 @@ UTF-8 [JSON Lines](https://jsonlines.org): one JSON value per line, each line en
 | `folder` | UUIDv7 | `pos` (always Pinned); `title`; `collapsed`; `created` |
 | `tab` | UUIDv7 | `pos`; `url` (where it is: a web address, or `chord://archive/`, Chord's archive page); `pinnedUrl` (a pinned tab's home, or `null`); `title`; `customTitle` (or `null`); `icon` (an `icon` record's id, or `null`); `muted`; `created` |
 | `split` | UUIDv7 | `pos`; `direction` (`"row"`: side by side, or `"column"`); `sizes` (each pane's share, in pane order, adding up to 1); `created`. Its panes are the tabs whose `pos.parent` is the split, in rank order. |
-| `favorite` | UUIDv7 | `url`; `title`; `icon`; `rank`; `created` |
+| `favorite` | UUIDv7 | `url`; `title`; `icon`; `rank`; `created`; `chord`: the id of the chord it belongs to, or `null` for one in every chord (0.9.0; a file from before has none, and every Favorite in it is in every chord) |
 | `theme` | its id | A theme you made: `name`; `stops`; `grain` |
 | `settings` | `settings` | One field per setting ([below](#settings)) |
 | `route` | the site, maybe with a path (`github.com/acme`) | `chord` (where its links open); `created` |

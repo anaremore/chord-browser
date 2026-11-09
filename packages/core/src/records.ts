@@ -264,8 +264,9 @@ export function nodeFromRecord(r: DataRecord, now: number): { node: SidebarNode;
   return { node: tab, icon: typeof s['icon'] === 'string' && isIconId(s['icon']) ? s['icon'] : null };
 }
 
+/** `chord`: the chord it belongs to, or null for one in every chord's row (an older Chord, which doesn't know the field, shows every one in every chord). */
 export function favoriteRecord(favorite: Favorite, at: Stamp, icon: string | null = null): DataRecord {
-  return record('favorite', favorite.id, { url: favorite.url, title: favorite.title, icon, rank: favorite.rank, created: favorite.createdAt }, at);
+  return record('favorite', favorite.id, { url: favorite.url, title: favorite.title, icon, rank: favorite.rank, created: favorite.createdAt, chord: favorite.chordId ?? null }, at);
 }
 
 export function favoriteFromRecord(r: DataRecord): { favorite: Favorite; icon: string | null } | null {
@@ -273,7 +274,7 @@ export function favoriteFromRecord(r: DataRecord): { favorite: Favorite; icon: s
   const title = text(s['title'], 1000);
   if (r.type !== 'favorite' || !isId(r.id) || !isWebUrl(s['url']) || title === null || !isRank(s['rank'])) return null;
   return {
-    favorite: { id: r.id, url: s['url'], title, favicon: null, rank: s['rank'], createdAt: time(s['created']) ?? 0 },
+    favorite: { id: r.id, url: s['url'], title, favicon: null, rank: s['rank'], createdAt: time(s['created']) ?? 0, ...(isId(s['chord']) ? { chordId: s['chord'] } : {}) },
     icon: typeof s['icon'] === 'string' && isIconId(s['icon']) ? s['icon'] : null,
   };
 }

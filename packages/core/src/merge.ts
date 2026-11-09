@@ -167,7 +167,7 @@ export interface MergePlan {
   skipped: number;
   /** Things that didn't read as what they say, or point at nothing: left out. */
   unreadable: number;
-  /** Favorites past the row's limit (48), left out. */
+  /** Favorites past a row's limit (48), left out. */
   favoritesFull: number;
   /** What `IMPORT_LIMITS` left out or moved. */
   capped: MergeCapped;
@@ -502,7 +502,7 @@ const SETUP_FIELDS: Record<string, readonly string[]> = {
   folder: ['pos', 'title', 'collapsed', 'created', 'deleted'],
   split: ['pos', 'direction', 'sizes', 'created', 'deleted'],
   tab: ['pos', 'url', 'pinnedUrl', 'title', 'customTitle', 'icon', 'muted', 'created', 'deleted'],
-  favorite: ['url', 'title', 'icon', 'rank', 'created', 'deleted'],
+  favorite: ['url', 'title', 'icon', 'rank', 'created', 'chord', 'deleted'],
   theme: ['name', 'stops', 'grain', 'deleted'],
   route: ['chord', 'created', 'deleted'],
   effects: ['wet', 'css', 'cssOn', 'hidden', 'presets', 'assistant', 'deleted'],
@@ -761,7 +761,16 @@ export function planMerge({ local: localRecords, file: fileRecords, here, choice
   const byUrl = new Map(localFavorites.map((t) => [String(t.fields.get('url')?.value), t]));
   const urls = new Set<string>();
   const updated = new Set<string>();
-  let favorites = localFavorites.length;
+  // How full each row is: the shared ones, and each chord's own (a chord's row is both).
+  const rowOf = (t: Thing) => {
+    const chord = t.fields.get('chord')?.value;
+    return typeof chord === 'string' ? chord : null;
+  };
+  let shared = localFavorites.filter((t) => rowOf(t) === null).length;
+  const own = new Map<string, number>();
+  for (const t of localFavorites) if (rowOf(t) !== null) own.set(rowOf(t)!, (own.get(rowOf(t)!) ?? 0) + 1);
+  const full = (chordId: string | null) => shared + (chordId ? (own.get(chordId) ?? 0) : Math.max(0, ...own.values())) >= MAX_FAVORITES;
+  const knownChords = new Set([...ofType(local, 'chord').map((t) => t.id), ...things('chord').map((t) => t.id)]);
   for (const thing of things('favorite')) {
     const url = thing.fields.get('url')?.value;
     const mine = mineOf(thing) ?? (typeof url === 'string' ? byUrl.get(url) : undefined);
@@ -775,11 +784,18 @@ export function planMerge({ local: localRecords, file: fileRecords, here, choice
       plan.unreadable++;
       continue;
     }
-    if (!mine && favorites >= MAX_FAVORITES) {
+    // One chord's own, of a chord left out (past the limit): left out with it. Of a chord neither here nor in the file: in every chord.
+    const chordId = read.favorite.chordId;
+    if (chordId && cappedChords.has(chordId)) continue;
+    if (chordId && !knownChords.has(chordId)) delete read.favorite.chordId;
+    if (!mine && full(read.favorite.chordId ?? null)) {
       plan.favoritesFull++;
       continue;
     }
-    if (!mine) favorites++;
+    if (!mine) {
+      if (read.favorite.chordId) own.set(read.favorite.chordId, (own.get(read.favorite.chordId) ?? 0) + 1);
+      else shared++;
+    }
     urls.add(read.favorite.url);
     read.favorite.favicon = mine && !won.has('icon') ? null : read.icon ? (icons.get(read.icon) ?? null) : null;
     plan.favorites.push(read.favorite);

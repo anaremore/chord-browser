@@ -1,5 +1,5 @@
 /** Read-only queries over State, shared by main and renderers. */
-import type { Chord, ChordId, Download, Favorite, NodeId, Section, SidebarNode, State, TabNode, WindowId } from './model';
+import { MAX_FAVORITES, type Chord, type ChordId, type Download, type Favorite, type NodeId, type Section, type SidebarNode, type State, type TabNode, type WindowId } from './model';
 import { children } from './nodes';
 import { placeKey } from './rank';
 import { shownTabs } from './split';
@@ -58,9 +58,35 @@ export function isWithin(state: State, nodeId: NodeId, ancestorId: NodeId): bool
   return false;
 }
 
-/** The Favorites row in order. */
+/** Every favorite, every chord's and the shared ones, in order. */
 export function sortedFavorites(state: State): Favorite[] {
   return Object.values(state.favorites).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.id < b.id ? -1 : 1));
+}
+
+/** Whether a favorite shows in a chord's row: shared by every chord, or that chord's own. */
+export const favoriteIn = (favorite: Pick<Favorite, 'chordId'>, chordId: ChordId): boolean => !favorite.chordId || favorite.chordId === chordId;
+
+/** Whether two favorites, by where they belong (a chord, or every chord: null), would ever share a row. */
+export const favoritesMeet = (a: ChordId | null | undefined, b: ChordId | null | undefined): boolean => !a || !b || a === b;
+
+/** A chord's Favorites row in order: the shared ones and its own. */
+export function favoritesFor(state: State, chordId: ChordId): Favorite[] {
+  return sortedFavorites(state).filter((f) => favoriteIn(f, chordId));
+}
+
+/**
+ * Whether a favorite for `url` can be added for a chord, or for every chord
+ * (null): not when a row it would show in has that page already (`taken`), or
+ * has no room (`full`). `except`: the favorite being changed, which doesn't count.
+ */
+export function favoriteFits(state: Pick<State, 'favorites' | 'chords'>, url: string, chordId: ChordId | null, except?: string): 'fits' | 'taken' | 'full' {
+  const others = Object.values(state.favorites).filter((f) => f.id !== except);
+  if (others.some((f) => f.url === url && favoritesMeet(f.chordId, chordId))) return 'taken';
+  const shared = others.filter((f) => !f.chordId).length;
+  const own = (id: ChordId) => others.filter((f) => f.chordId === id).length;
+  // A chord's own goes in its row; a shared one in every row, so the fullest decides.
+  const fullest = chordId ? own(chordId) : Math.max(0, ...Object.keys(state.chords).map(own));
+  return shared + fullest >= MAX_FAVORITES ? 'full' : 'fits';
 }
 
 /**

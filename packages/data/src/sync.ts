@@ -164,9 +164,10 @@ interface RowThing {
  * How rows are projected into what sync keeps (core's `local*Fields`, the icon
  * cap, which settings sync): raised whenever that changes, so the first drift
  * check under a new one only refreshes `local` and never stamps a change no
- * one made. 1: icons past SYNC_LIMITS.iconChars read as none.
+ * one made. 1: icons past SYNC_LIMITS.iconChars read as none. 2: a Favorite's
+ * `chord` (null for one in every chord).
  */
-const PROJECTION = 1;
+const PROJECTION = 2;
 
 /**
  * About this much of the copy (its JSON) a reconcile's page reads: 512 KB took
@@ -1044,7 +1045,7 @@ export class SyncStore {
         return node ? { k, id, value: node } : null;
       }
       case 'favorite': {
-        const row = this.sql('SELECT f.id, f.url, f.title, f.rank, f.created_at, i.mime AS icon_mime, i.data AS icon_data FROM favorite f LEFT JOIN favicon i ON i.key = f.favicon_key WHERE f.id = ?').get(id) as Row | undefined;
+        const row = this.sql('SELECT f.id, f.url, f.title, f.rank, f.created_at, f.chord_id, i.mime AS icon_mime, i.data AS icon_data FROM favorite f LEFT JOIN favicon i ON i.key = f.favicon_key WHERE f.id = ?').get(id) as Row | undefined;
         return row ? { k, id, value: favoriteOf(row, iconOf(row)) } : null;
       }
       case 'linkRoute': {
@@ -1176,7 +1177,7 @@ export class SyncStore {
     }
     for (const rows of this.paged(
       'SELECT f.id AS key, coalesce(length(i.data), 0) + octet_length(f.url) + octet_length(f.title) + 100 AS chars FROM favorite f LEFT JOIN favicon i ON i.key = f.favicon_key WHERE f.id > ? ORDER BY f.id LIMIT ?',
-      `SELECT f.id, f.url, f.title, f.rank, f.created_at, f.updated_at, i.mime AS icon_mime, i.data AS icon_data, o.origin, o.at AS origin_at FROM favorite f
+      `SELECT f.id, f.url, f.title, f.rank, f.created_at, f.updated_at, f.chord_id, i.mime AS icon_mime, i.data AS icon_data, o.origin, o.at AS origin_at FROM favorite f
          LEFT JOIN favicon i ON i.key = f.favicon_key LEFT JOIN row_origin o ON o.k = 'favorite' AND o.id = f.id WHERE f.id > ? AND f.id <= ? ORDER BY f.id`,
       size,
     )) {

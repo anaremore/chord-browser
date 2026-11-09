@@ -1,6 +1,6 @@
 import { applyPatches, enablePatches } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { apply, children, emptyState, sortedFavorites, tabsInOrder, type Command, type Context, type State, type TabNode } from '../src';
+import { apply, children, emptyState, favoritesFor, MAX_FAVORITES, sortedFavorites, tabsInOrder, type Command, type Context, type State, type TabNode } from '../src';
 
 enablePatches();
 
@@ -662,6 +662,102 @@ describe('favorites', () => {
   });
 });
 
+describe('favorites per chord', () => {
+  const theme = { stops: [{ l: 0.72, c: 0.12, h: 30 }], grain: 0.2, appearance: 'auto' as const };
+  /** Personal (c1) and Work, each with a tab on `url`; the window ends in Personal. */
+  function twoChords(...urls: string[]) {
+    const t = setup();
+    const tabs: Record<string, Record<string, string>> = { c1: {}, work: {} };
+    for (const url of urls) {
+      t.run({ t: 'tab.open', windowId: 'w1', url });
+      tabs['c1']![url] = t.state.windows['w1']!.activeTab['c1']!;
+    }
+    t.run({ t: 'chord.create', windowId: 'w1', name: 'Work', icon: 'W', theme });
+    const work = Object.values(t.state.chords).find((c) => c.name === 'Work')!.id;
+    t.run({ t: 'chord.activate', windowId: 'w1', chordId: work });
+    for (const url of urls) {
+      t.run({ t: 'tab.open', windowId: 'w1', url });
+      tabs['work']![url] = t.state.windows['w1']!.activeTab[work]!;
+    }
+    t.run({ t: 'chord.activate', windowId: 'w1', chordId: 'c1' });
+    expect(t.state.windows['w1']!.activeChordId).toBe('c1');
+    const row = (chordId: string) => favoritesFor(t.state, chordId).map((f) => f.id);
+    return { t, work, tab: (chord: 'c1' | 'work', url: string) => tabs[chord]![url]!, row };
+  }
+
+  it('a new one is its chord’s own; a chord’s row is the shared ones and its own, in one order', () => {
+    const { t, work, tab, row } = twoChords('https://mail.test/', 'https://docs.test/');
+    t.run({ t: 'favorite.add', favoriteId: 'mail', nodeId: tab('c1', 'https://mail.test/') });
+    expect(t.state.favorites['mail']!.chordId).toBe('c1');
+    expect(row('c1')).toEqual(['mail']);
+    expect(row(work)).toEqual([]);
+    // In every chord: Work's row has it too.
+    t.run({ t: 'favorite.scope', favoriteId: 'mail', chordId: null });
+    expect(t.state.favorites['mail']!.chordId).toBeUndefined();
+    expect(row(work)).toEqual(['mail']);
+    // Work's own, dropped before the shared one: first in Work's row, and not in Personal's.
+    t.run({ t: 'favorite.add', favoriteId: 'docs', nodeId: tab('work', 'https://docs.test/'), index: 0 });
+    expect(row(work)).toEqual(['docs', 'mail']);
+    expect(row('c1')).toEqual(['mail']);
+    // Back to Personal's only.
+    t.run({ t: 'favorite.scope', favoriteId: 'mail', chordId: 'c1' });
+    expect(row(work)).toEqual(['docs']);
+    expect(row('c1')).toEqual(['mail']);
+  });
+
+  it('the same page can be each chord’s own, never twice in one row; in every chord, it takes the others’ place', () => {
+    const { t, work, tab, row } = twoChords('https://mail.test/');
+    t.run({ t: 'favorite.add', favoriteId: 'mine', nodeId: tab('c1', 'https://mail.test/') });
+    t.run({ t: 'favorite.add', favoriteId: 'theirs', nodeId: tab('work', 'https://mail.test/') });
+    expect(row('c1')).toEqual(['mine']);
+    expect(row(work)).toEqual(['theirs']);
+    t.run({ t: 'favorite.scope', favoriteId: 'mine', chordId: null });
+    expect(Object.keys(t.state.favorites)).toEqual(['mine']);
+    expect(row(work)).toEqual(['mine']);
+    // Shared now: Work can't add it again.
+    expect(t.run({ t: 'favorite.add', favoriteId: 'again', nodeId: tab('work', 'https://mail.test/') }).patches).toEqual([]);
+  });
+
+  it('moves within the row it was moved in, past favorites other chords can’t see', () => {
+    const { t, work, tab, row } = twoChords('https://a.test/', 'https://b.test/', 'https://c.test/');
+    t.run({ t: 'favorite.add', favoriteId: 'a', nodeId: tab('c1', 'https://a.test/') });
+    t.run({ t: 'favorite.scope', favoriteId: 'a', chordId: null });
+    t.run({ t: 'favorite.add', favoriteId: 'b', nodeId: tab('work', 'https://b.test/') });
+    t.run({ t: 'favorite.add', favoriteId: 'c', nodeId: tab('c1', 'https://c.test/') });
+    expect(row('c1')).toEqual(['a', 'c']);
+    expect(row(work)).toEqual(['a', 'b']);
+    // The shared one, dragged to the end of Personal's row.
+    t.run({ t: 'favorite.move', favoriteId: 'a', index: 1, chordId: 'c1' });
+    expect(row('c1')).toEqual(['c', 'a']);
+    // Work's own, dragged to the start of Work's.
+    t.run({ t: 'favorite.move', favoriteId: 'b', index: 0, chordId: work });
+    expect(row(work)).toEqual(['b', 'a']);
+  });
+
+  it('a row’s limit counts the shared ones and that chord’s own', () => {
+    const t = setup();
+    const urls = Array.from({ length: MAX_FAVORITES + 1 }, (_, i) => `https://s${i}.test/`);
+    for (const [i, url] of urls.entries()) {
+      t.run({ t: 'tab.open', windowId: 'w1', url });
+      t.run({ t: 'favorite.add', favoriteId: `f${i}`, nodeId: t.state.windows['w1']!.activeTab['c1']! });
+    }
+    expect(favoritesFor(t.state, 'c1')).toHaveLength(MAX_FAVORITES);
+  });
+
+  it('deleting a chord takes its own Favorites, and Undo brings them back; the shared ones stay', () => {
+    const { t, work, tab, row } = twoChords('https://mail.test/', 'https://docs.test/');
+    t.run({ t: 'favorite.add', favoriteId: 'mail', nodeId: tab('c1', 'https://mail.test/') });
+    t.run({ t: 'favorite.scope', favoriteId: 'mail', chordId: null });
+    t.run({ t: 'favorite.add', favoriteId: 'docs', nodeId: tab('work', 'https://docs.test/') });
+    t.run({ t: 'chord.delete', chordId: work });
+    expect(Object.keys(t.state.favorites)).toEqual(['mail']);
+    t.run({ t: 'chord.restore', windowId: 'w1', chordId: work });
+    expect(row(work)).toEqual(['mail', 'docs']);
+    expect(t.state.favorites['docs']!.chordId).toBe(work);
+  });
+
+});
+
 describe('moving tabs between chords', () => {
   const twoChords = (profile: string) => {
     const t = setup();
@@ -714,6 +810,15 @@ describe('the private line, and several windows', () => {
     expect(t.run({ t: 'folder.create', folderId: 'f', chordId: 'p', title: 'F', tabId: secret }).patches).toEqual([]);
     expect(t.run({ t: 'favorite.add', favoriteId: 'fav', nodeId: secret }).patches).toEqual([]);
     expect(t.run({ t: 'node.move', nodeId: secret, section: 'pinned', index: 0 }).patches).toEqual([]);
+  });
+
+  it('never makes a favorite a private window’s chord’s own, or a chord’s that isn’t there', () => {
+    const { t } = withPrivate();
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://mail.test/' });
+    t.run({ t: 'favorite.add', favoriteId: 'mail', nodeId: t.state.windows['w1']!.activeTab['c1']! });
+    t.run({ t: 'favorite.scope', favoriteId: 'mail', chordId: null });
+    expect(t.run({ t: 'favorite.scope', favoriteId: 'mail', chordId: 'p' }).patches).toEqual([]);
+    expect(t.run({ t: 'favorite.scope', favoriteId: 'mail', chordId: 'nowhere' }).patches).toEqual([]);
   });
 
   it('lands every window showing a tab that moves to other sign-ins, and closes its page once', () => {

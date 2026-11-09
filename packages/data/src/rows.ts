@@ -89,7 +89,16 @@ export function nodeOf(r: Row, favicon: string | null): SidebarNode | null {
 }
 
 export function favoriteOf(r: Row, favicon: string | null): Favorite {
-  return { id: str(r['id']), url: str(r['url']), title: str(r['title']), favicon, rank: str(r['rank']), createdAt: num(r['created_at']) };
+  const chordId = r['chord_id'];
+  return {
+    id: str(r['id']),
+    url: str(r['url']),
+    title: str(r['title']),
+    favicon,
+    rank: str(r['rank']),
+    createdAt: num(r['created_at']),
+    ...(typeof chordId === 'string' && chordId ? { chordId } : {}),
+  };
 }
 
 /** A site's Effects as saved, checked as an import would be (core's cleanSiteEffects); null for a row that isn't one. */

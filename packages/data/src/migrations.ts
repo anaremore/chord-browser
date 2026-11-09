@@ -363,4 +363,8 @@ export const MIGRATIONS: readonly string[] = [
   UPDATE setting SET key = 'assistant' WHERE key = 'duet';
   UPDATE row_origin SET id = 'assistant' WHERE k = 'setting' AND id = 'duet';
   `,
+  // 23: a Favorite can be one chord's own (0.9.0); null, as every one was before, is in every chord's row.
+  `
+  ALTER TABLE favorite ADD COLUMN chord_id TEXT;
+  `,
 ];

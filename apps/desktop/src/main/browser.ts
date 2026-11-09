@@ -34,6 +34,7 @@ import {
   routeHost,
   shareableTabs,
   shownTabs,
+  favoriteFits,
   sortedChords,
   splitMembers,
   splitOf,
@@ -2086,14 +2087,25 @@ export class Browser {
 
   openFavoriteMenu(contents: WebContents, favoriteId: string, at: { x: number; y: number }): void {
     const w = this.windowFor(contents);
-    if (!w || !this.store.state.favorites[favoriteId]) return;
-    w.popupMenu(buildFavoriteMenu({ remove: () => this.store.dispatch({ t: 'favorite.remove', favoriteId }) }), { ...at, width: 0, height: 0 });
+    const favorite = this.store.state.favorites[favoriteId];
+    const chordId = w ? this.store.state.windows[w.id]?.activeChordId : undefined;
+    const chord = chordId ? this.store.state.chords[chordId] : undefined;
+    if (!w || !favorite || !chord) return;
+    const menu = buildFavoriteMenu({
+      chordName: chord.name,
+      everyChord: !favorite.chordId,
+      // In a chord's row, a favorite that's another chord's own isn't shown: this one is this chord's or every chord's.
+      onlyHere: () => this.store.dispatch({ t: 'favorite.scope', favoriteId, chordId: chord.id }),
+      inEveryChord: () => this.store.dispatch({ t: 'favorite.scope', favoriteId, chordId: null }),
+      remove: () => this.store.dispatch({ t: 'favorite.remove', favoriteId }),
+    });
+    w.popupMenu(menu, { ...at, width: 0, height: 0 });
   }
 
-  /** A web page that isn't a favorite yet. */
+  /** A web page that isn't a favorite yet in its chord's row, and that row has room. */
   private canFavorite(tab: TabNode): boolean {
     const url = tab.pinnedUrl ?? tab.url;
-    return /^https?:/i.test(url) && !Object.values(this.store.state.favorites).some((f) => f.url === url);
+    return /^https?:/i.test(url) && favoriteFits(this.store.state, url, tab.chordId) === 'fits';
   }
 
   /**

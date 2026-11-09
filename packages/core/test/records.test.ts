@@ -132,6 +132,7 @@ describe('every type, model → record → model', () => {
     ['a Today tab in a split', nodeRecord(today, at), (r) => nodeFromRecord(r, NOW), { node: { ...today, lastActiveAt: NOW }, icon: null }],
     ['a split', nodeRecord(split, at), (r) => nodeFromRecord(r, NOW), { node: split, icon: null }],
     ['a Favorite', favoriteRecord(favorite, at, ICON), favoriteFromRecord, { favorite: { ...favorite, favicon: null }, icon: ICON }],
+    ['one chord’s own Favorite', favoriteRecord({ ...favorite, chordId: 'c1' }, at, ICON), favoriteFromRecord, { favorite: { ...favorite, favicon: null, chordId: 'c1' }, icon: ICON }],
     ['a theme', themeRecord({ id: 'theme-1', name: 'Late Night', stops: [{ l: 0.5, c: 0.2, h: 280 }], grain: 0.3 }, at), themeFromRecord, { id: 'theme-1', name: 'Late Night', stops: [{ l: 0.5, c: 0.2, h: 280 }], grain: 0.3 }],
     ['a link route with a path', routeRecord({ host: 'github.com/acme', chordId: chord.id, createdAt: 5 }, at), routeFromRecord, { host: 'github.com/acme', chordId: chord.id, createdAt: 5 }],
     ['a site’s Effects', effectsRecord(effects, at), (r) => effectsFromRecord(r, () => 'x', NOW), effects],
@@ -194,7 +195,7 @@ describe('never in a record', () => {
     ['a tab', nodeRecord(pinned, at, ICON), ['pos', 'url', 'pinnedUrl', 'title', 'customTitle', 'icon', 'muted', 'created']],
     ['a folder', nodeRecord(folder, at), ['pos', 'title', 'collapsed', 'created']],
     ['a split', nodeRecord(split, at), ['pos', 'direction', 'sizes', 'created']],
-    ['a Favorite', favoriteRecord(favorite, at, null), ['url', 'title', 'icon', 'rank', 'created']],
+    ['a Favorite', favoriteRecord(favorite, at, null), ['url', 'title', 'icon', 'rank', 'created', 'chord']],
     ['an assistant chat', threadRecord(thread), ['chord', 'title', 'provider', 'model', 'scope', 'created', 'updated', 'lastUsed']],
     ['an image', imageRecord(image, 'AAAA', null), ['mime', 'width', 'height', 'data', 'thumb', 'prompt']],
   ])('%s has exactly its fields', (_what, r, fields) => {

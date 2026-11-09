@@ -160,9 +160,10 @@ export type SidebarNode = TabNode | FolderNode | SplitNode;
 export const SPLIT = { maxPanes: 4, minPane: 320, gap: 8 } as const;
 
 /**
- * A site in the Favorites row at the top of the sidebar, shared by every
- * chord (ROADMAP.md Q5). Opening one switches to a tab already showing that
- * site in the current chord, or opens it there.
+ * A site in the Favorites row at the top of the sidebar (ROADMAP.md Q5):
+ * shared by every chord, or one chord's own (`chordId`). Opening one switches
+ * to a tab already showing that site in the current chord, or opens it there.
+ * A chord's row is the shared ones and its own, in one order (`rank`).
  */
 export interface Favorite {
   id: string;
@@ -171,9 +172,11 @@ export interface Favorite {
   favicon: string | null;
   rank: string;
   createdAt: number;
+  /** Only in this chord's row. Absent: in every chord's. */
+  chordId?: ChordId;
 }
 
-/** The most favorites; the row wraps well before this. */
+/** The most favorites in one chord's row (the shared ones and its own); the row wraps well before this. */
 export const MAX_FAVORITES = 48;
 
 /** The sidebar's width range (DESIGN.md §3.1): resizable, with a detent at the default. */
@@ -639,7 +642,7 @@ export interface State {
    * deletedChords, so deleting chords here never pushes one out.
    */
   syncUndo: DeletedChord[];
-  /** The Favorites row, shared by every chord. */
+  /** The Favorites: shared by every chord, or one chord's own. */
   favorites: Record<string, Favorite>;
   /** Folders deleted this session, with what was in them, for Undo (newest first; not persisted). */
   deletedFolders: DeletedFolder[];
@@ -672,6 +675,8 @@ export interface DeletedChord {
   id?: string;
   /** Sync took some of its pinned tabs and folders away, not the chord (another computer deleted them): Undo puts them back in it. */
   nodesOnly?: boolean;
+  /** Its own Favorites, which went with it: Undo puts them back. */
+  favorites?: Favorite[];
 }
 
 export const emptyState = (): State => ({

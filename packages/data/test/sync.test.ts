@@ -57,7 +57,7 @@ const chordId = (s: State) => Object.keys(s.chords)[0]!;
 describe('migrations 19 to 21', () => {
   it('add sync’s tables, empty, and what its reader remembers of junk', () => {
     expect(db.version).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(22);
+    expect(MIGRATIONS.length).toBe(23);
     expect(db.sync.outboxSize()).toBe(0);
     expect(db.sync.meta.on).toBe(false);
     expect(db.sync.junk()).toEqual([]);
@@ -88,6 +88,18 @@ describe('the stamping hook', () => {
     expect(record).toMatchObject({ type: 'chord', id: chordId(state), set: { name: 'Work' } });
     expect(Object.keys(record!.set)).toEqual(['name']);
     expect(record!.at![2]).toBe(db.device());
+  });
+
+  it('a Favorite’s chord syncs as one field: a chord’s own, then in every chord (null)', () => {
+    let state = setUp();
+    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    state = drive(state, [{ t: 'favorite.add', favoriteId: 'fav', nodeId: tab }]);
+    expect(outbox().find((r) => r.type === 'favorite')!.set['chord']).toBe(chordId(state));
+    const before = outbox().length;
+    drive(state, [{ t: 'favorite.scope', favoriteId: 'fav', chordId: null }]);
+    const changed = outbox().slice(before);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]!.set).toEqual({ chord: null });
   });
 
   it('what came from another computer is saved, and never stamped', () => {
