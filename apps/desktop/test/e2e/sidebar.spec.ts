@@ -695,6 +695,14 @@ test('⌘L edits the address at the top of the window: the top strip’s, or the
     await opensOver(barAddress);
     await barAddress.click();
     await opensOver(barAddress);
+
+    // Shown again: back where it was docked (on Windows and Linux the same address, moved back: measured again).
+    await shell.getByRole('button', { name: 'Show sidebar' }).click();
+    await expect(sidebar).toBeVisible();
+    // Once its slide-in settles: pressed mid-slide, the bar opens where the pill was then, and stays.
+    await settledBox(pill);
+    await runAction(shell, 'address.edit');
+    await opensOver(topStrip ? barAddress : pill);
   } finally {
     await app.close();
   }

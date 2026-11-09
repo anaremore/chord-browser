@@ -166,7 +166,8 @@ function editAddressAt(el: HTMLElement) {
 
 /**
  * Reports where the address sits so ⌘L can grow the command bar out of it.
- * Re-measures on resize and after the sidebar's slide settles.
+ * Re-measures when it or its parent resizes, the window resizes, and after the
+ * sidebar's slide settles.
  */
 function anchorRef(el: HTMLElement | null) {
   if (!el) return;
@@ -187,6 +188,9 @@ function anchorRef(el: HTMLElement | null) {
   report();
   const observer = new ResizeObserver(report);
   observer.observe(el);
+  // It moves without changing size when what holds it does: the top strip's address, as the sidebar is hidden or
+  // resized (the strip starts after it). Its parent changes width then, so watching that catches the move.
+  if (el.parentElement) observer.observe(el.parentElement);
   window.addEventListener('resize', report);
   window.addEventListener('transitionend', settled);
   return () => {
