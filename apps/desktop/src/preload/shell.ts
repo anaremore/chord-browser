@@ -25,6 +25,7 @@ const api: ShellApi = {
   downloads: downloadsApi,
   layout: {
     anchor: (rect) => invoke('layout:anchor', rect),
+    onOverlay: (listener) => subscribe('overlay:shown', listener),
     peek: (open) => invoke('layout:peek', { open }),
     lift: (lifted) => invoke('layout:lift', { lifted }),
     onSnapshot: (listener) => subscribe('frame:snapshot', listener),

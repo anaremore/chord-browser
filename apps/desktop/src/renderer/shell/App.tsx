@@ -467,6 +467,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const assistantSlide = { enter: assistantEnter, exit: assistantEnter === INSTANT ? INSTANT : { duration: durations.fadeBase / 1000, ease: 'easeIn' as const } };
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
   useEffect(() => api.chords.onEdit(setChordEdit), []);
+  // The command bar or Peek is open over the window: the drag regions stand down (App.module.css).
+  const [overlayShown, setOverlayShown] = useState(false);
+  useEffect(() => api.layout.onOverlay(setOverlayShown), []);
   // F6 and ⇧F6 move between the window's regions (regions.ts).
   useEffect(() => {
     const untrack = trackRegions();
@@ -580,6 +583,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
           className={styles.window}
           data-sidebar={collapsed ? 'collapsed' : 'docked'}
           data-peek={peeking || undefined}
+          data-overlay={overlayShown || undefined}
           data-lifted={lifted || undefined}
           data-resizing={liveWidth !== null || undefined}
           // A page is sharing this window (as a window, or on a shared screen): its edge is tinted.

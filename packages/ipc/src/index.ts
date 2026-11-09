@@ -1623,6 +1623,8 @@ export interface EventPayloads {
   /** What the hover preview shows, or null to clear it. */
   'preview:card': PreviewCard | null;
   'toast:show': Toast;
+  /** The command bar or Peek is open over the window (true) or closed: the shell's drag regions stand down meanwhile. */
+  'overlay:shown': boolean;
   /** F6 or ⇧F6 (DESIGN.md §10): move the keyboard to the next or previous region, starting from `from`. */
   'focus:region': FocusRegionEvent;
   /** The shell's trackpad gesture phases, for the chord swipe's release (DESIGN.md §6.4). */
@@ -1729,6 +1731,8 @@ export interface ShellApi {
   downloads: DownloadsApi;
   layout: {
     anchor(rect: Rect | null): Promise<void>;
+    /** Whether the command bar or Peek is open over the window. */
+    onOverlay(listener: (shown: boolean) => void): () => void;
     /** Minimal mode's sidebar peek: main lifts the shell above the page while it's open. */
     peek(open: boolean): Promise<void>;
     /** While a tab is dragged, the shell sits above the page so split view's drop zones show over it. */

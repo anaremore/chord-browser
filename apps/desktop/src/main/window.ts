@@ -398,6 +398,7 @@ export class AppWindow {
       const pending = this.pendingToasts;
       this.pendingToasts = [];
       for (const toast of pending) send(this.shell.webContents, 'toast:show', toast);
+      if (this.overlayVisible) send(this.shell.webContents, 'overlay:shown', true);
     });
     // Loading again (a reload, or after a crash), the command bar isn't listening until it says so.
     this.overlay.webContents.on('did-start-loading', () => {
@@ -607,8 +608,7 @@ export class AppWindow {
     const root = this.window.contentView;
     root.removeChildView(this.popover);
     root.addChildView(this.popover);
-    this.overlayVisible = true;
-    this.overlay.setVisible(true);
+    this.showOverlay(true);
     // Esc and ⌘↵ work from the first frame; the page takes focus once it's in the card.
     this.overlay.webContents.focus();
     this.peekSeq = ++this.overlaySeq;
@@ -643,10 +643,7 @@ export class AppWindow {
     // Back where it lives: above the pages, below the hover preview and the command bar.
     root.removeChildView(this.popover);
     root.addChildView(this.popover, root.children.indexOf(this.preview));
-    if (this.overlayVisible) {
-      this.overlayVisible = false;
-      this.overlay.setVisible(false);
-    }
+    if (this.overlayVisible) this.showOverlay(false);
     this.layout();
     (this.tabView?.webContents ?? this.shell.webContents).focus();
     return view;
@@ -915,6 +912,17 @@ export class AppWindow {
     step();
   }
 
+  /**
+   * The command bar's view shown or hidden, and the shell told: on Windows and Linux the window's drag regions are
+   * the shell's whatever covers them, so a click on the bar's backdrop over the top strip would drag the window
+   * instead of closing the bar. The shell turns them off while it's open.
+   */
+  private showOverlay(visible: boolean): void {
+    this.overlayVisible = visible;
+    this.overlay.setVisible(visible);
+    if (this.shellLoaded) send(this.shell.webContents, 'overlay:shown', visible);
+  }
+
   setAnchor(rect: Rect | null): void {
     this.anchor = rect;
   }
@@ -934,8 +942,7 @@ export class AppWindow {
       this.pendingOpen = { mode, url, anchor, requestedAt, ...(capture ? { capture } : {}) };
       return;
     }
-    this.overlayVisible = true;
-    this.overlay.setVisible(true);
+    this.showOverlay(true);
     this.overlay.webContents.focus();
     send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? (anchor ?? this.anchor) : anchor, url, seq: ++this.overlaySeq, requestedAt, ...(capture ? { capture } : {}) });
     this.placementChanged();
@@ -978,8 +985,7 @@ export class AppWindow {
     if (!this.overlayVisible || seq !== this.overlaySeq) return;
     // Peek's chrome closes with Peek (Browser does both).
     if (this.peek && seq === this.peekSeq) return;
-    this.overlayVisible = false;
-    this.overlay.setVisible(false);
+    this.showOverlay(false);
     const back = dismissed && this.overlayFrom === 'shell' ? this.shell : (this.tabView ?? this.shell);
     back.webContents.focus();
     this.placementChanged();

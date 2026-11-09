@@ -696,6 +696,22 @@ test('⌘L edits the address at the top of the window: the top strip’s, or the
     await barAddress.click();
     await opensOver(barAddress);
 
+    // A click outside it closes it, the top strip beside it included. On Windows and Linux the window's drag regions
+    // are the shell's whatever covers them, so they stand down while it's open, or that click would drag the window.
+    const dragOf = () => shell.locator('[data-region="bar"]').evaluate((el) => getComputedStyle(el).getPropertyValue('-webkit-app-region'));
+    expect(await dragOf()).toBe('drag');
+    for (const at of [
+      { x: 900, y: 20 },
+      { x: 600, y: 400 },
+    ]) {
+      await runAction(shell, 'address.edit');
+      await expect(dialog).toBeVisible();
+      await expect.poll(dragOf).toBe('no-drag');
+      await overlay.mouse.click(at.x, at.y);
+      await expect(dialog).toBeHidden();
+      await expect.poll(dragOf).toBe('drag');
+    }
+
     // Shown again: back where it was docked (on Windows and Linux the same address, moved back: measured again).
     await shell.getByRole('button', { name: 'Show sidebar' }).click();
     await expect(sidebar).toBeVisible();
