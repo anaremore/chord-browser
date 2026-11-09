@@ -733,15 +733,23 @@ describe('two copies of one profile, writing under one id', () => {
     const shared = own();
     const mine = await appendRecords(fs, shared, [chord('a1', 'Mine', 3)], root, { app: '0.5.0', device: [] }, nodeCrypto);
     if (!mine.ok) throw new Error(mine.problem);
-    // A copy, offline, appends a frame of its own to the shared segment, as long as this one's (a name found that makes it so).
+    // A copy, offline, appends a frame of its own to the shared segment, as long as this one's (a name found that makes it
+    // so). Frames are deflated, and zlib builds pack a few bytes differently (Node's own, or the system's in Homebrew's
+    // Node), so which name fits depends on the zlib: names of several lengths are tried, and some length always fits.
+    const names = [2, 3, 4, 5, 6].flatMap((length) => Array.from({ length: 40 }, (_, n) => `C${n.toString(36)}`.padEnd(length, 'x').slice(0, length)));
     let offline = new MemoryFolder();
-    for (let n = 0; n < 200; n++) {
+    let found = false;
+    for (const name of new Set(names)) {
       offline = new MemoryFolder();
       for (const [path, file] of fs.files) if (!path.endsWith(segmentName(1))) offline.files.set(path, { ...file, bytes: new Uint8Array(file.bytes) });
       offline.files.set(`1/${A}/${segmentName(1)}`, { bytes: new Uint8Array(fs.files.get(`1/${A}/${segmentName(1)}`)!.bytes.subarray(0, shared.size)), mtime: 1 });
-      const theirs = await appendRecords(offline, shared, [chord('c1', `Copy ${n}`, 3)], root, { app: '0.5.0', device: [] }, nodeCrypto);
-      if (theirs.ok && theirs.own.size === mine.own.size) break;
+      const theirs = await appendRecords(offline, shared, [chord('c1', name, 3)], root, { app: '0.5.0', device: [] }, nodeCrypto);
+      if (theirs.ok && theirs.own.size === mine.own.size) {
+        found = true;
+        break;
+      }
     }
+    expect(found, 'no name made a frame as long as this computer’s').toBe(true);
     expect(offline.files.get(`1/${A}/${segmentName(1)}`)!.bytes.length).toBe(mine.own.size);
     expect(ids(await reader.pass())).toContain('a1');
     expect(ids(await reader.pass())).toEqual([]);
