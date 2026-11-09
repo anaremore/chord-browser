@@ -2,6 +2,14 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.9.0 · preview · 2026-11-09
+
+0.8.1 was never published: its reload button on tabs and the ⌘L fix below come in this release.
+
+- **Favorites for each chord.** A Favorite can be one chord's own or in every chord. Right-click one: *Only in Work* or *In every chord*. A new one belongs to the chord you add it in; the Favorites you have stay in every chord. Deleting a chord takes its own Favorites, and Undo brings them back.
+  - Sync and Chord files carry it. An older Chord on another of your computers shows every Favorite in every chord until it's updated.
+- **⌘L / Ctrl+L with the sidebar hidden** now opens the address bar exactly over the address, instead of 4 px lower.
+
 ## 0.8.1 · preview · 2026-11-09
 
 - **Reload a tab from the sidebar.** Point at a tab and a reload button shows beside its ×: it reloads that tab without switching to it. Turn it off in Settings → Appearance → *Show a reload button on tabs*.
