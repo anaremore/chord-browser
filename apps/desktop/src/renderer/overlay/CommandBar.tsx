@@ -580,6 +580,8 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
           left: anchor.x,
           top: anchor.y,
           inlineSize: Math.min(Math.max(anchor.width, ANCHORED_MIN_WIDTH), window.innerWidth - anchor.x - EDGE),
+          // The input row takes the address's height: the pill's 36 px, or the minimal bar's shorter field.
+          ['--anchor-height' as string]: `${anchor.height}px`,
         }
       : undefined;
   const entrance = anchored ? { opacity: 0, y: -4 } : { opacity: 0, scale: 0.97, y: -8 };
