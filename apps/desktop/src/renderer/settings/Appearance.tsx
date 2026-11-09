@@ -587,6 +587,19 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
             />
           }
         />
+        <Row
+          label="Show a reload button on tabs"
+          description="Pointing at a tab in the sidebar shows a reload button beside its ×, to reload that tab without switching to it."
+          changed={settings.tabReloadButton !== DEFAULT_SETTINGS.tabReloadButton}
+          onReset={() => void api.settings.set({ tabReloadButton: DEFAULT_SETTINGS.tabReloadButton })}
+          control={
+            <Switch
+              label="Show a reload button on tabs"
+              checked={settings.tabReloadButton}
+              onChange={(tabReloadButton) => void api.settings.set({ tabReloadButton })}
+            />
+          }
+        />
       </div>
     </>
   );

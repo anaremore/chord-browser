@@ -360,6 +360,7 @@ const SETTING_NAMES: Record<string, [label: string, describe: (value: unknown) =
   pagePreviews: ['Show page previews', ON_OFF],
   presentingHidesSidebar: ['Hide the sidebar while presenting', ON_OFF],
   sidebarPeek: ['Show the sidebar when you point at the window’s edge', ON_OFF],
+  tabReloadButton: ['Show a reload button on tabs', ON_OFF],
   keepScreenshots: ['Keep recent screenshots', ON_OFF],
   'spellcheck.enabled': ['Check spelling as you type', ON_OFF],
   'spellcheck.language': ['Spelling language', (v) => (typeof v === 'string' ? v : 'The system’s')],

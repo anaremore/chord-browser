@@ -502,7 +502,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 | State | Treatment |
 |---|---|
 | Default | `fg`; title `text-body` |
-| Hover | `item-hover` background; close × visible |
+| Hover | `item-hover` background; close × visible. *(2026-11-09:)* A reload button (`rotate-cw`) just before × (or before the audio slot) reloads that tab without switching to it; Settings → Appearance → *Show a reload button on tabs* turns it off. |
 | Active | `item-active-bg` + `shadow-raised`; title `text-label` |
 | Focus-visible | 2 px `focus-ring`, inset 2 px |
 | Loading | Favicon replaced by a 16 px spinner ring (accent, 1.5 px stroke) |
@@ -528,7 +528,7 @@ Speed beats animation. Settings → Motion lets people switch off each larger an
 - **Size and placement:** width `command-bar-width`; top at 18% of the frame height (min 64 px); radius `radius-lg`; padding `space-2`; `surface-raised` with `shadow-modal`.
 - **Two placements:**
   - **Centered** (⌘T, new tab): the size and position above.
-  - **Anchored** (⌘L, edit this tab's address): the input sits exactly over the URL pill, or over the minimal bar's address field, showing the full URL selected. The results panel drops beneath it, at least 480 px wide, extending over the page. Esc restores the address.
+  - **Anchored** (⌘L, edit this tab's address): the input sits exactly over the URL pill, or over the minimal bar's address field, showing the full URL selected. *(2026-11-09:)* ⌘L uses the address at the top of the window: the top strip's on Windows and Linux even with the sidebar docked, the pill on macOS docked or while the sidebar peeks. A click edits the address that was clicked. The results panel drops beneath it, at least 480 px wide, extending over the page. Esc restores the address.
 - **Input row:** 56 px (centered) or the pill's own height (anchored), `text-input`. Placeholder: "Search or enter address".
 - **Results:** rows of 40 px with `radius-sm`.
   - Row anatomy: `[icon or favicon 16] [title] [— domain, fg-muted, text-small] … [chord chip if another chord] [hint]`.

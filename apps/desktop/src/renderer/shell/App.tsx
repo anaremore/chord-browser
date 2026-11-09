@@ -158,6 +158,12 @@ function PageState({ tab, live, windowId }: { tab: TabNode; live: LiveTab | unde
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
+/** A click edits the address where it was clicked, whichever of the two it was. */
+function editAddressAt(el: HTMLElement) {
+  const r = el.getBoundingClientRect();
+  void api.overlay.open('edit', { x: r.x, y: r.y, width: r.width, height: r.height });
+}
+
 /**
  * Reports where the address sits so ⌘L can grow the command bar out of it.
  * Re-measures on resize and after the sidebar's slide settles.
@@ -532,6 +538,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
     return () => clearTimeout(timer);
   }, [peek]);
   const peeking = collapsed && peek;
+  // ⌘L edits the address the window shows at the top: the bar's, whenever there is one (Windows and Linux beside a
+  // docked sidebar, or the minimal bar), and the sidebar's pill otherwise or while it peeks over the bar.
+  const addressInBar = (overlayChrome || collapsed) && !peeking;
 
   // The chord swipe (DESIGN.md §6.4): two fingers sideways on the sidebar or the minimal bar.
   const rootRef = useRef<HTMLDivElement>(null);
@@ -623,13 +632,13 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
 
             <div className={styles.urlRow}>
               <button
-                ref={collapsed ? undefined : anchorRef}
+                ref={addressInBar ? undefined : anchorRef}
                 type="button"
                 className={styles.urlPill}
                 title={active?.url ?? ''}
                 // Its name is the address, not the keycap beside it; whether it's secure is said too.
                 aria-label={host ? `Address: ${host}${secure ? ', secure' : ''}` : 'Search or enter address'}
-                onClick={() => void api.overlay.open('edit')}
+                onClick={(e) => editAddressAt(e.currentTarget)}
               >
                 {internal ? (
                   <Archive size={12} strokeWidth={2} aria-hidden />
@@ -734,13 +743,13 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                 </div>
               )}
               <button
-                ref={collapsed ? anchorRef : undefined}
+                ref={addressInBar ? anchorRef : undefined}
                 type="button"
                 className={styles.address}
                 data-address
                 aria-label={host ? `Address: ${host}${title ? `, ${title}` : ''}` : 'Search or enter address'}
                 title={active?.url ?? ''}
-                onClick={() => void api.overlay.open('edit')}
+                onClick={(e) => editAddressAt(e.currentTarget)}
               >
                 {host ? (
                   <>

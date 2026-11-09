@@ -80,7 +80,7 @@ Each setting that travels is a field of the `settings` record. A group's parts a
 | Fields | Values |
 |---|---|
 | `searchEngine` | `"google"`, `"duckduckgo"`, `"bing"`, `"brave"`, `"kagi"`, `"ecosia"` |
-| `searchSuggestions`, `separateSignIns`, `sleepTabs`, `autoPip`, `pagePreviews`, `presentingHidesSidebar`, `sidebarPeek`, `keepScreenshots`, `googleFree`, `safeBrowsing`, `safeBrowsingAsked`, `encryptExports` | `true` or `false` |
+| `searchSuggestions`, `separateSignIns`, `sleepTabs`, `autoPip`, `pagePreviews`, `presentingHidesSidebar`, `sidebarPeek`, `tabReloadButton`, `keepScreenshots`, `googleFree`, `safeBrowsing`, `safeBrowsingAsked`, `encryptExports` | `true` or `false` |
 | `colorScheme` | `"system"`, `"light"`, `"dark"` |
 | `interface.contrast`, `interface.glass` | 0–1 |
 | `motion.followSystem`, `motion.commandBar`, `motion.chordSlide`, `motion.tabMoves`, `motion.sidebar`, `motion.colorBlend` | `true` or `false` |

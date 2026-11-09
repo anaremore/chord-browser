@@ -602,3 +602,84 @@ test('minimal mode: off by default, the window’s edge does nothing; turned on 
     await app.close();
   }
 });
+
+test('⌘L edits the address at the top of the window: the pill docked, the bar’s address with the sidebar hidden; a click edits the one clicked', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
+    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    const dialog = overlay.getByRole('dialog', { name: 'Edit address' });
+    /** The command bar opens over `address`: its input where the address was. */
+    const opensOver = async (address: Locator) => {
+      await expect(dialog).toBeVisible();
+      const at = await settledBox(address);
+      const panel = await settledBox(dialog);
+      // Its input lines up with the address, give or take the panel's padding.
+      expect(Math.abs(panel.x - at.x)).toBeLessThanOrEqual(16);
+      expect(Math.abs(panel.y - at.y)).toBeLessThanOrEqual(16);
+      await overlay.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+    };
+
+    const pill = sidebar.getByRole('button', { name: /^Address/ });
+    await runAction(shell, 'address.edit');
+    await opensOver(pill);
+    await pill.click();
+    await opensOver(pill);
+
+    await shell.getByRole('button', { name: 'Hide sidebar' }).click();
+    await expect(sidebar).toBeHidden();
+    const barAddress = shell.locator('[data-region="bar"] [data-address]');
+    await runAction(shell, 'address.edit');
+    await opensOver(barAddress);
+    await barAddress.click();
+    await opensOver(barAddress);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a tab’s reload button, on hover, reloads that tab without switching to it; Settings → Appearance turns it off', async () => {
+  let loads = 0;
+  const counter = createServer((req, res) => {
+    if (req.url !== '/count') {
+      res.writeHead(404).end();
+      return;
+    }
+    loads += 1;
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(`<title>count ${loads}</title>`);
+  });
+  await new Promise<void>((done) => counter.listen(0, '127.0.0.1', done));
+  const counterOrigin = `http://127.0.0.1:${(counter.address() as AddressInfo).port}`;
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
+  try {
+    await setUp(app, ['/count'], () => counterOrigin);
+    const { shell, today } = await setUp(app, ['/second']);
+    const background = today.getByRole('treeitem', { name: /count 1/ });
+    await expect(background).toBeVisible();
+    await background.hover();
+    const reload = background.getByRole('button', { name: 'Reload count 1', includeHidden: true });
+    await expect(reload).toBeVisible();
+    await reload.click();
+    await expect(today.getByRole('treeitem', { name: /count 2/ })).toBeVisible();
+    // It stayed in the background.
+    await expect(today.getByRole('treeitem', { name: /Second page/ })).toHaveAttribute('aria-selected', 'true');
+
+    const reloadSwitch = (settings: Page) => settings.getByRole('switch', { name: 'Show a reload button on tabs' });
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Appearance' }).click();
+    await expect(reloadSwitch(settings)).toHaveAttribute('aria-checked', 'true');
+    await reloadSwitch(settings).click();
+    await expect(reloadSwitch(settings)).toHaveAttribute('aria-checked', 'false');
+    await closeSettings(app);
+    await today.getByRole('treeitem', { name: /count 2/ }).hover();
+    await expect(today.getByRole('button', { name: /^Reload/, includeHidden: true })).toHaveCount(0);
+  } finally {
+    await app.close();
+    counter.close();
+  }
+});

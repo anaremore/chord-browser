@@ -439,6 +439,7 @@ function registerIpc(): void {
   });
   handle('share:respond', ({ id, sourceId, audio }) => screenShare.respond(id, sourceId, audio));
   handle('share:stop', ({ nodeId }) => screenShare.stop(nodeId));
+  handle('tab:reload', ({ nodeId }) => browser!.reloadTab(nodeId));
   handle('media:view', (_request, sender) => browser!.nowPlaying(senderWindow(sender).id));
   handle('player:view', () => browser!.player.frame());
   handle('media:do', ({ nodeId, action }, sender) => browser!.mediaAction(senderWindow(sender), nodeId, action));

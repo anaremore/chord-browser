@@ -920,8 +920,8 @@ export class AppWindow {
   }
 
   /**
-   * `anchor` places the downloads panel by its button; ⌘L uses the address the
-   * shell reported. `from`: where the keyboard was, so dismissing it (Esc, a
+   * `anchor` places the downloads panel by its button, or the address bar on the
+   * address that was clicked; ⌘L uses the address the shell reported. `from`: where the keyboard was, so dismissing it (Esc, a
    * click outside) gives the focus back there (DESIGN.md §10). `requestedAt` is
    * when the opening was asked for: the command bar's open budget counts from it.
    */
@@ -937,7 +937,7 @@ export class AppWindow {
     this.overlayVisible = true;
     this.overlay.setVisible(true);
     this.overlay.webContents.focus();
-    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? this.anchor : anchor, url, seq: ++this.overlaySeq, requestedAt, ...(capture ? { capture } : {}) });
+    send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? (anchor ?? this.anchor) : anchor, url, seq: ++this.overlaySeq, requestedAt, ...(capture ? { capture } : {}) });
     this.placementChanged();
   }
 

@@ -1913,6 +1913,12 @@ export class Browser {
     w.window.focus();
   }
 
+  /** A sidebar row's reload button. A tab asleep or not loaded yet has no page to reload. */
+  reloadTab(nodeId: string): void {
+    const contents = this.tabs.get(nodeId)?.webContents;
+    if (contents && !contents.isDestroyed()) contents.reload();
+  }
+
   openAppMenu(contents: WebContents, anchor: Rect): void {
     this.windowFor(contents)?.popupMenu(this.appMenu, anchor, OPTIONS_MENU_WIDTH);
   }

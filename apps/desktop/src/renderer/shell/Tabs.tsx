@@ -54,7 +54,7 @@ import { DragDropProvider, useDraggable, useDragDropMonitor, useDroppable } from
 import { isSortable, useSortable } from '@dnd-kit/react/sortable';
 import type { SystemInfo } from '@chord/ipc';
 import { size, type Appearance } from '@chord/tokens';
-import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture, Plus, ScreenShare, Undo2, Volume2, VolumeX, X } from 'lucide-react';
+import { Archive, ChevronRight, Folder, FolderOpen, PictureInPicture, Plus, RotateCw, ScreenShare, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { PresenceContext } from 'motion/react';
 import {
   createContext,
@@ -421,6 +421,8 @@ interface RowContext {
   closeTitle: { pinned: string; today: string };
   /** The speaker's tooltips, keycap included. */
   muteTitle: { mute: string; unmute: string };
+  /** Hovering a row with a page shows a reload button beside its × (Settings → Appearance). */
+  reloadButton: boolean;
 }
 
 /**
@@ -609,6 +611,23 @@ const splitTitle = (panes: readonly TabNode[]) => panes.map((p) => pageTitle(p) 
  * For the pointer, like the row's other buttons: the keyboard has the row's
  * menu and Mute or unmute tab's keys. The row's description says what it shows.
  */
+/** Shown on hover just before × (or before the audio slot): reloads that tab's page, on screen or not. */
+function ReloadButton({ tab }: { tab: TabNode }) {
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-hidden
+      className={styles.reload}
+      aria-label={`Reload ${tab.title || 'tab'}`}
+      title="Reload tab"
+      onClick={() => void api.tab.reload(tab.id)}
+    >
+      <RotateCw size={13} strokeWidth={2} />
+    </button>
+  );
+}
+
 function Speaker({ tab, ctx }: { tab: TabNode; ctx: RowContext }) {
   const muted = Boolean(tab.muted);
   const Glyph = muted ? VolumeX : Volume2;
@@ -670,6 +689,8 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
   const unread = live?.badge ?? null;
   const dispatch = api.state.dispatch;
   const close = () => void dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
+  // Only a tab whose page is loaded has something to reload.
+  const reloads = ctx.reloadButton && Boolean(live);
   const shownDepth = isDragging && projected ? projected.depth : depth;
   return (
     <li
@@ -689,6 +710,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
       data-unloaded={unloaded || undefined}
       data-asleep={asleep || undefined}
       data-slot={popped || sharing || audible || undefined}
+      data-reload={reloads || undefined}
       data-dragging={lifted || undefined}
       data-drop-target={(isDropTarget && !isDragging) || undefined}
       onMouseDown={(e: MouseEvent) => {
@@ -751,6 +773,7 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
       )}
       {audible && <Speaker tab={tab} ctx={ctx} />}
       <UnreadWords id={tab.id} unread={unread} />
+      {reloads && <ReloadButton tab={tab} />}
       {away ? (
         <button
           type="button"
@@ -966,6 +989,7 @@ const SplitMemberRow = memo(function SplitMemberRow({ tab, live, depth, pos, siz
       data-parent={tab.parentId ?? undefined}
       data-focused-pane={focused || undefined}
       data-slot={audible || undefined}
+      data-reload={(ctx.reloadButton && Boolean(live)) || undefined}
       data-dragging={isDragging || undefined}
       onAuxClick={(e: MouseEvent) => {
         if (e.button === 1) close();
@@ -986,6 +1010,7 @@ const SplitMemberRow = memo(function SplitMemberRow({ tab, live, depth, pos, siz
       </div>
       {audible && <Speaker tab={tab} ctx={ctx} />}
       <UnreadWords id={tab.id} unread={unread} />
+      {ctx.reloadButton && live && <ReloadButton tab={tab} />}
       <button type="button" tabIndex={-1} aria-hidden className={styles.close} aria-label={`Close ${tab.title || 'tab'}`} title={ctx.closeTitle.today} onClick={close}>
         <X size={14} strokeWidth={2} />
       </button>
@@ -1464,9 +1489,10 @@ export function SidebarTabs({
   const closePinned = withKeys('Close (stays pinned)', 'tab.close');
   const mute = withKeys('Mute tab', 'tab.mute');
   const unmute = withKeys('Unmute tab', 'tab.mute');
+  const reloadButton = state.settings.tabReloadButton;
   const ctx = useMemo<RowContext>(
-    () => ({ windowId, info, appearance, spring, setRenaming, toggleSplit, closeTitle: { today: closeToday, pinned: closePinned }, muteTitle: { mute, unmute } }),
-    [windowId, info, appearance, spring, toggleSplit, closeToday, closePinned, mute, unmute],
+    () => ({ windowId, info, appearance, spring, setRenaming, toggleSplit, closeTitle: { today: closeToday, pinned: closePinned }, muteTitle: { mute, unmute }, reloadButton }),
+    [windowId, info, appearance, spring, toggleSplit, closeToday, closePinned, mute, unmute, reloadButton],
   );
 
   useLayoutEffect(() => {

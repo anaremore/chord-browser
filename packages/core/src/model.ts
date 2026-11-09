@@ -383,6 +383,8 @@ export interface Settings {
   presentingHidesSidebar: boolean;
   /** Minimal mode: pointing at the window's left edge, or resting on the sidebar button, shows the hidden sidebar over the page (DESIGN.md §3.3). Off unless you turn it on. */
   sidebarPeek: boolean;
+  /** Hovering a tab's sidebar row shows a reload button beside its × (DESIGN.md §7.2). On unless you turn it off. */
+  tabReloadButton: boolean;
   /** Recent screenshots are kept in `<userData>/Screenshots/` for the downloads panel's list (DESIGN.md §7.12); off deletes them. */
   keepScreenshots: boolean;
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
@@ -513,6 +515,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pagePreviews: true,
   presentingHidesSidebar: false,
   sidebarPeek: false,
+  tabReloadButton: true,
   keepScreenshots: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
@@ -577,6 +580,7 @@ export interface SettingsPatch {
   pagePreviews?: boolean;
   presentingHidesSidebar?: boolean;
   sidebarPeek?: boolean;
+  tabReloadButton?: boolean;
   keepScreenshots?: boolean;
   spellcheck?: Partial<SpellcheckSettings>;
   externalLinks?: ExternalLinks;

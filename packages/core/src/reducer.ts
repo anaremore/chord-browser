@@ -1903,6 +1903,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         draft.settings.presentingHidesSidebar = presentingHidesSidebar;
       }
       if (sidebarPeek !== undefined && draft.settings.sidebarPeek !== sidebarPeek) draft.settings.sidebarPeek = sidebarPeek;
+      const { tabReloadButton } = cmd.settings;
+      if (tabReloadButton !== undefined && draft.settings.tabReloadButton !== tabReloadButton) draft.settings.tabReloadButton = tabReloadButton;
       if (keepScreenshots !== undefined && draft.settings.keepScreenshots !== keepScreenshots) draft.settings.keepScreenshots = keepScreenshots;
       const { encryptExports } = cmd.settings;
       if (encryptExports !== undefined && draft.settings.encryptExports !== encryptExports) draft.settings.encryptExports = encryptExports;

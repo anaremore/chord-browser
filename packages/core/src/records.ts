@@ -364,6 +364,7 @@ export const SETTING_TRAVEL: Record<keyof Settings, SettingTravel> = {
   pagePreviews: 'sync',
   presentingHidesSidebar: 'sync',
   sidebarPeek: 'sync',
+  tabReloadButton: 'sync',
   keepScreenshots: 'sync',
   shortcuts: 'family',
   spellcheck: 'sync',
