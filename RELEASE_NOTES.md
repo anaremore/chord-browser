@@ -2,6 +2,11 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.8.1 · preview · 2026-11-09
+
+- **Reload a tab from the sidebar.** Point at a tab and a reload button shows beside its ×: it reloads that tab without switching to it. Turn it off in Settings → Appearance → *Show a reload button on tabs*.
+- **⌘L / Ctrl+L opens the address bar at the top of the window** on Windows and Linux with the sidebar showing, where the address is, rather than over the sidebar. Clicking an address edits the one you clicked.
+
 ## 0.8.0 · preview · 2026-11-06
 
 - **Netflix, Spotify and the other services that need Widevine play right in the tab, on Windows.** With Chord Player 0.2, which Chord updates to by itself, the page plays where the tab's page would be: no second window. It moves and resizes with Chord's window, minimizes with it, and stays out of the taskbar and Alt+Tab.
