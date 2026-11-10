@@ -2088,3 +2088,14 @@ kbd {
 .item[data-reload][data-slot]:focus-visible > .row {
   padding-inline-end: calc(var(--space-2) + var(--size-hit-min) * 3);
 }
+
+/*
+ * The command bar or Peek open over the window: on Windows and Linux the window's drag regions are the shell's
+ * whatever covers them, so a click on the bar's backdrop over the top strip would drag the window instead of
+ * closing the bar. None while it's open.
+ */
+.window[data-overlay] .header,
+.window[data-overlay] .bar,
+.window[data-overlay] .topDrag {
+  -webkit-app-region: no-drag;
+}
