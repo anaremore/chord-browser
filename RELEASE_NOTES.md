@@ -2,6 +2,11 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.9.1 · preview · 2026-11-09
+
+- **Clicking outside the address bar closes it** on Windows and Linux. Before, a click on the strip beside it dragged the window instead.
+- **Ctrl+L after hiding or resizing the sidebar** opens the address bar over the address on Windows and Linux, rather than where the address had been.
+
 ## 0.9.0 · preview · 2026-11-09
 
 0.8.1 was never published: its reload button on tabs and the ⌘L fix below come in this release.
