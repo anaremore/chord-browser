@@ -633,6 +633,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
             <header className={styles.header}>
               <SidebarToggle collapsed={collapsed} info={info} onToggle={toggleSidebar} />
               {!overlayChrome && <span className={styles.flex} />}
+              {/* Windows and Linux: the buttons sit by the top strip's address, unless Settings → Appearance keeps them by the toggle. The gap still drags the window. */}
+              {overlayChrome && state.settings.navButtonsByAddress && <span className={styles.headerGap} />}
               <NavButtons live={live} hasTab={Boolean(active)} info={info} />
               {/* macOS has no title bar beside a docked sidebar: its header row is the title bar. */}
               {inTitleBar && !overlayChrome && <ExtensionButtons bar={extensionsBar} puzzleOnly={false} />}

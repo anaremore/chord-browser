@@ -388,6 +388,8 @@ export interface Settings {
   sidebarPeek: boolean;
   /** Hovering a tab's sidebar row shows a reload button beside its × (DESIGN.md §7.2). On unless you turn it off. */
   tabReloadButton: boolean;
+  /** Windows and Linux, sidebar showing: Back, Forward and Reload sit at the sidebar header's right edge, beside the top strip's address, not beside the sidebar button (DESIGN.md §3.2). On unless you turn it off. */
+  navButtonsByAddress: boolean;
   /** Recent screenshots are kept in `<userData>/Screenshots/` for the downloads panel's list (DESIGN.md §7.12); off deletes them. */
   keepScreenshots: boolean;
   /** Your changes to the keyboard shortcuts (Settings → Keyboard shortcuts); actions not listed keep the registry's keys. */
@@ -519,6 +521,7 @@ export const DEFAULT_SETTINGS: Settings = {
   presentingHidesSidebar: false,
   sidebarPeek: false,
   tabReloadButton: true,
+  navButtonsByAddress: true,
   keepScreenshots: true,
   spellcheck: { enabled: true, language: null },
   shortcuts: {},
@@ -584,6 +587,7 @@ export interface SettingsPatch {
   presentingHidesSidebar?: boolean;
   sidebarPeek?: boolean;
   tabReloadButton?: boolean;
+  navButtonsByAddress?: boolean;
   keepScreenshots?: boolean;
   spellcheck?: Partial<SpellcheckSettings>;
   externalLinks?: ExternalLinks;

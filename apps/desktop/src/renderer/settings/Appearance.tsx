@@ -600,6 +600,22 @@ export function AppearanceSection({ snapshot, info, editColors }: { snapshot: Se
             />
           }
         />
+        {/* macOS has no top strip: its buttons are always at the header's end, beside the traffic lights' row. */}
+        {info.windowChrome.kind === 'overlay' && (
+          <Row
+            label="Keep Back, Forward and Reload beside the address"
+            description="With the sidebar showing, the buttons sit at its right edge, next to the address at the top of the window. Off, they sit at the left, beside the sidebar button."
+            changed={settings.navButtonsByAddress !== DEFAULT_SETTINGS.navButtonsByAddress}
+            onReset={() => void api.settings.set({ navButtonsByAddress: DEFAULT_SETTINGS.navButtonsByAddress })}
+            control={
+              <Switch
+                label="Keep Back, Forward and Reload beside the address"
+                checked={settings.navButtonsByAddress}
+                onChange={(navButtonsByAddress) => void api.settings.set({ navButtonsByAddress })}
+              />
+            }
+          />
+        )}
       </div>
     </>
   );

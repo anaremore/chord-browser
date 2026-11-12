@@ -206,6 +206,7 @@ export function restoreSettings(saved: Record<string, unknown>, platform?: Platf
   if (typeof saved['presentingHidesSidebar'] === 'boolean') settings.presentingHidesSidebar = saved['presentingHidesSidebar'];
   if (typeof saved['sidebarPeek'] === 'boolean') settings.sidebarPeek = saved['sidebarPeek'];
   if (typeof saved['tabReloadButton'] === 'boolean') settings.tabReloadButton = saved['tabReloadButton'];
+  if (typeof saved['navButtonsByAddress'] === 'boolean') settings.navButtonsByAddress = saved['navButtonsByAddress'];
   if (typeof saved['keepScreenshots'] === 'boolean') settings.keepScreenshots = saved['keepScreenshots'];
   if (isUiScale(saved['uiScale'])) settings.uiScale = saved['uiScale'];
   const spellcheck = saved['spellcheck'] as Record<string, unknown> | undefined;
