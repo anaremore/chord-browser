@@ -191,6 +191,7 @@ describe('reducer', () => {
     ['checkForUpdates', true],
     ['sidebarPeek', false],
     ['tabReloadButton', true],
+    ['navButtonsByAddress', true],
   ] as const)('turns %s over from its default (%s) and back', (key, initial) => {
     const t = setup();
     expect(t.state.settings[key]).toBe(initial);

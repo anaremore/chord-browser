@@ -127,6 +127,12 @@
   -webkit-app-region: no-drag;
 }
 
+/* Pushes Back, Forward and Reload to the header's end, and stays part of the drag region. */
+.header > .headerGap {
+  flex: 1;
+  -webkit-app-region: drag;
+}
+
 .iconButton {
   display: grid;
   place-items: center;
