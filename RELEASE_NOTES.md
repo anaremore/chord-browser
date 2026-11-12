@@ -2,6 +2,10 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.10.0 · preview · 2026-11-12
+
+- **Back, Forward and Reload sit beside the address** on Windows and Linux. With the sidebar showing, they're at its top right, next to the address, instead of beside the sidebar button. Settings → Appearance → *Keep Back, Forward and Reload beside the address* puts them back.
+
 ## 0.9.1 · preview · 2026-11-09
 
 - **Clicking outside the address bar closes it** on Windows and Linux. Before, a click on the strip beside it dragged the window instead.
