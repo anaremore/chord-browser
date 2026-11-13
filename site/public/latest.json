@@ -2,6 +2,51 @@
   "version": "0.10.0",
   "tag": "v0.10.0",
   "url": "https://github.com/anaremore/chord-browser/releases/tag/v0.10.0",
-  "published": "2026-11-13T00:04:35Z",
-  "files": {}
+  "published": "2026-11-13T00:05:41Z",
+  "files": {
+    "win-x64": {
+      "name": "Chord-0.10.0-win-x64-setup.exe",
+      "size": 137455088
+    },
+    "win-arm64": {
+      "name": "Chord-0.10.0-win-arm64-setup.exe",
+      "size": 131685848
+    },
+    "mac-arm64": {
+      "name": "Chord-0.10.0-mac-arm64.dmg",
+      "size": 126195075
+    },
+    "mac-x64": {
+      "name": "Chord-0.10.0-mac-x64.dmg",
+      "size": 133183471
+    },
+    "deb-amd64": {
+      "name": "Chord-0.10.0-linux-amd64.deb",
+      "size": 106248784
+    },
+    "deb-arm64": {
+      "name": "Chord-0.10.0-linux-arm64.deb",
+      "size": 101060760
+    },
+    "rpm-x86_64": {
+      "name": "Chord-0.10.0-linux-x86_64.rpm",
+      "size": 94749493
+    },
+    "rpm-aarch64": {
+      "name": "Chord-0.10.0-linux-aarch64.rpm",
+      "size": 89721325
+    },
+    "appimage-x86_64": {
+      "name": "Chord-0.10.0-linux-x86_64.AppImage",
+      "size": 123304276
+    },
+    "appimage-arm64": {
+      "name": "Chord-0.10.0-linux-arm64.AppImage",
+      "size": 123423542
+    },
+    "checksums": {
+      "name": "SHA256SUMS.txt",
+      "size": 2268
+    }
+  }
 }
