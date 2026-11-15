@@ -486,10 +486,18 @@ kbd {
   pointer-events: none;
 }
 
-/* Pinned, and its rows on their way out over it (it shrinks at once, so they aren't clipped to it). */
+/*
+ * Pinned, and its rows on their way out over it (it shrinks at once, so they aren't clipped to it). It grows
+ * with its rows up to its share of the chord's pane, then its list scrolls on its own and Today keeps the rest
+ * (DESIGN.md §6.7).
+ */
 .pinnedBox {
   position: relative;
+  display: flex;
   flex: none;
+  flex-direction: column;
+  max-block-size: var(--share-pinned-max);
+  min-block-size: 0;
 }
 
 .pinnedExits {
@@ -546,14 +554,28 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
-/* Pinned tabs sit above the Today divider and size to their rows; Today takes the rest. */
+/* Pinned tabs sit above the Today divider and size to their rows, up to Pinned's cap; Today takes the rest. */
 .pinnedList {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
   flex-direction: column;
+  min-block-size: 0;
   margin: 0;
   padding: 0;
+  overflow: hidden auto;
   list-style: none;
+  scrollbar-color: var(--color-divider) transparent;
+  scrollbar-width: thin;
+}
+
+/* At its cap with more below, its lower edge fades out (DESIGN.md §6.7). */
+.pinnedList[data-more] {
+  mask-image: linear-gradient(to top, transparent, var(--color-mask) var(--size-pinned-fade));
+}
+
+/* Reduce transparency (DESIGN.md §10): a hard edge instead. */
+:root[data-reduced-transparency] .pinnedList[data-more] {
+  mask-image: none;
 }
 
 /* Picked up: a little lift, as if held (DESIGN.md §6.5). */

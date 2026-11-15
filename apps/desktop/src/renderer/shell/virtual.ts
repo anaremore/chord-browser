@@ -86,6 +86,32 @@ export function moveId(ids: readonly string[], source: string, target: string): 
   return next;
 }
 
+/**
+ * A drag's order (`ids`) brought up to date with the list's rows (`base`, in
+ * the state's order) when they change under it, as when a folder springs open
+ * mid-drag: the rows in `base`'s order, with `moved` just after the row that
+ * was before it in `ids` (the first that's still there). The same array when
+ * `ids` already holds exactly `base`'s rows.
+ */
+export function reconcile(ids: readonly string[], base: readonly string[], moved: string): readonly string[] {
+  if (ids.length === base.length) {
+    const have = new Set(base);
+    if (ids.every((id) => have.has(id))) return ids;
+  }
+  if (!base.includes(moved)) return base;
+  const rest = base.filter((id) => id !== moved);
+  const there = new Set(rest);
+  let after: string | null = null;
+  for (let i = ids.indexOf(moved) - 1; i >= 0; i--) {
+    if (there.has(ids[i]!)) {
+      after = ids[i]!;
+      break;
+    }
+  }
+  const at = after === null ? 0 : rest.indexOf(after) + 1;
+  return [...rest.slice(0, at), moved, ...rest.slice(at)];
+}
+
 /** `items` in the order of `ids`, if `ids` holds exactly their IDs; else `items` as they are. */
 export function inOrder<T extends { id: string }>(items: readonly T[], ids: readonly string[] | null): readonly T[] {
   if (!ids || ids.length !== items.length) return items;

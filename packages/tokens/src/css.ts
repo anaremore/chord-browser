@@ -3,15 +3,17 @@
  * these variables (enforced by stylelint), never raw values.
  */
 import { durations, easing, springs, springToCss } from './motion';
-import { fontFamily, fontMono, frameRadius, radius, shadow, size, space, type, zIndex, type Platform } from './scale';
+import { fontFamily, fontMono, frameRadius, radius, shadow, share, size, space, type, zIndex, type Platform } from './scale';
 
 const kebab = (s: string) => s.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
 const px = (n: number) => `${n}px`;
 
 function rootVars(): Record<string, string> {
-  const root: Record<string, string> = { '--font-family': fontFamily, '--font-mono': fontMono };
+  // `--color-mask`: what a mask keeps (only its alpha counts), for fades over content (DESIGN.md §6.7).
+  const root: Record<string, string> = { '--font-family': fontFamily, '--font-mono': fontMono, '--color-mask': '#000' };
   for (const [k, v] of Object.entries(space)) root[`--space-${k}`] = px(v);
   for (const [k, v] of Object.entries(size)) root[`--size-${kebab(k)}`] = px(v);
+  for (const [k, v] of Object.entries(share)) root[`--share-${kebab(k)}`] = `${v * 100}%`;
   for (const [k, v] of Object.entries(radius)) root[`--radius-${k}`] = px(v);
   for (const [k, v] of Object.entries(type)) {
     root[`--text-${k}`] = `${v.weight} ${v.size}px/${v.line}px var(--font-family)`;

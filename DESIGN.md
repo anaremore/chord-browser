@@ -96,7 +96,7 @@ macOS                                            Windows / Linux
 | Header | 40 | macOS: traffic lights (≈ 68 px reserved, `trafficLightPosition` centered in the row) then back/forward/reload. Windows/Linux: app menu ≡ (native menu) then back/forward/reload. |
 | URL pill | 36 | Site-info icon + registrable domain (full URL on hover). Click or ⌘L edits the address **in place**: the pill becomes a text field with the URL selected, and results drop down beneath it (§7.3). Hover reveals copy link · page actions. *(2026-10-24:)* On macOS with the sidebar docked, reader view's button (§7.11) sits just right of the pill while the page reads as an article; with a top strip (Windows, Linux) or the minimal bar, it's there instead. *(2026-10-25:)* Effects' button (§7.15) sits after it while the site has Effects. |
 | Chord header | 28 | Chord icon (16) + name (`text-label`). Hover shows the ⋯ menu (Edit theme, Rename, Keep sign-ins separate, Delete). |
-| Pinned | 32 / row | Pinned tabs and folders, nestable; indent 12 px per level, visually capped at 4 levels. |
+| Pinned | 32 / row | Pinned tabs and folders, nestable; indent 12 px per level, visually capped at 4 levels. *(2026-11-15:)* Grows with its rows up to half the chord's pane (`share-pinned-max`), then scrolls on its own, with a thin scrollbar as Today's; while there's more below, its lower edge fades out over `size-pinned-fade` (14 px), a hard edge with reduce transparency. Below the cap it's as it was. Today keeps the rest. Each chord's Pinned and Today stay where you scrolled them while Chord runs. |
 | Favorites | 40 + 8 | *(As built, M1.2.)* Tiles, in a wrapping grid, each a site's icon on an `item-hover` square (`radius-md`). The one for the tab you're on is raised. A tile switches to this chord's tab on that site, or opens it in Today. Drag a tab onto the row to add it; right-click to remove. *(2026-11-09:)* A Favorite is one chord's own or in every chord: a new one is the chord's you added it in, and right-click offers *Only in {chord}* · *In every chord*. A chord's row is the shared ones and its own, in one order. Deleting a chord takes its own (Undo brings them back). *(2026-10-24:)* A tile whose tab makes sound wears a small speaker on its corner (`volume-x` while muted); its row mutes it. |
 | Today divider | 24 | Hairline + "Clear" (`text-micro`), which appears on hover or focus and archives all Today tabs. |
 | New tab | 32 | "+ New tab", muted. Same as ⌘T. |
@@ -445,7 +445,7 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 ### 6.7 Performance rules
 
 - Keep under 50 nodes animating at once. Layout animations are skipped for rows outside the viewport.
-- The Today list virtualizes beyond 150 rows; reorder animations apply only to mounted rows.
+- The Today and Pinned lists virtualize beyond 150 rows (Pinned scrolls on its own past half the pane); reorder animations apply only to mounted rows.
 - `will-change: transform` is set only during an animation, never at rest.
 - Every interaction in §6.5 has a scripted trace test. Long Animation Frames over 8 ms (120 Hz) or 16 ms (60 Hz) fail locally on reference hardware.
 - Input never waits for motion: a field is focused and typeable on the first frame of its entrance animation.
@@ -453,12 +453,14 @@ The command bar scrim is `oklch(0 0 0 / .18)` light and `oklch(0 0 0 / .36)` dar
 - **Web content moves at most twice per frame-size change** (out of sight at its new size, then into place), never per frame; the perf spec counts it.
 
 *As built* (`shell/virtual.ts`, `shell/today-motion.ts`, `shell/Tabs.tsx`):
-- **The window.** Above 150 rows, Today mounts the rows in view and 3 more past each edge; spacers stand in for the rest, so the scrollbar is true. The rows past the edges come a frame after the list mounts (a chord switch), since they don't show.
+- **The window.** Above 150 rows, a list mounts the rows in view and 3 more past each edge; spacers stand in for the rest, so the scrollbar is true. The rows past the edges come a frame after the list mounts (a chord switch), since they don't show.
+- **Pinned's cap** (2026-11-15). Pinned grows with its rows up to half the chord's pane (`share-pinned-max`), then scrolls on its own and is windowed as Today is (so 5,000 pinned tabs mount about 14 rows); Today keeps the rest of the pane. At the cap, while there's more below, its lower edge fades out over 14 px (`size-pinned-fade`, a mask); with reduce transparency it's a hard edge. Below the cap nothing changes. Before, a Pinned taller than the window ran out of it, under the footer: Today was hidden, and pinned rows past the window couldn't be reached.
+- **Where you left them.** Each chord's Pinned and Today keep where they were scrolled while Chord runs (not across restarts), so switching back to a chord finds its lists as they were, the rows there mounted before the first frame.
 - **Always mounted,** wherever they are: the tab on screen (its pill glides from there, and it's the trees' Tab stop), a row being dragged, a row picked up with Space, and the row with the keyboard (or about to get it).
 - **Rows aren't Motion components,** in Pinned or Today: mounting one costs about as much as the rest of the row. The lists animate their rows with the Web Animations API, from their indices (every row is 32 px), so nothing is measured. Only rows near the viewport animate. A second move before the first settles adds onto it, so the row carries on from where it is. The active pill is still a Motion `layoutId`.
-- **Drag and drop** (dnd-kit) is set up only for rows on screen, a frame after they mount: a drag starting measures every one. While a row is dragged, dnd-kit moves the rows. Drags keep global indices, scroll at the list's edges, and land among rows that weren't mounted when they began.
+- **Drag and drop** (dnd-kit) is set up only for rows on screen, a frame after they mount: a drag starting measures every one. Within a list, rows make room through React, in the order the drag has them so far (a folder springing open mid-drag keeps the dragged row where it was), and stay in that order until main has the move. Drags keep global indices, scroll at either list's edges (not a list already at that end), and land among rows that weren't mounted when they began, across the lists and into folders too.
 - **Leaving.** A row that leaves its list animates out in its own element, put back where it was; rows that scroll out of the window just go.
-- **The keyboard** walks the trees in state order, not the DOM's, and scrolls a row into view (mounting it) before focusing it.
+- **The keyboard** walks the trees in state order, not the DOM's, and scrolls a row into view in its own list (mounting it) before focusing it.
 
 ### 6.8 Motion settings
 

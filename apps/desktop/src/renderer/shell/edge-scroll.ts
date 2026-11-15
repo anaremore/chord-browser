@@ -39,8 +39,12 @@ export function edgeSpeed(x: number, y: number, box: Box): number {
 export class EdgeScroller extends Plugin<DragDropManager> {
   constructor(manager: DragDropManager) {
     super(manager);
-    /** `carry`: the part of a pixel not scrolled yet, so a slow creep near the edge still moves. */
-    let lists: { element: HTMLElement; box: Box; carry: number }[] = [];
+    /**
+     * `carry`: the part of a pixel not scrolled yet, so a slow creep near the edge still moves. `top` and `max`:
+     * how far it's scrolled and can be, kept from its scroll events, so a list already at that end (or one too
+     * short to scroll, like a short Pinned) isn't scrolled: `scrollBy` lays the list out even when it can't move.
+     */
+    let lists: { element: HTMLElement; box: Box; carry: number; top: number; max: number; off: () => void }[] = [];
     let frame = 0;
     let last = 0;
 
@@ -54,14 +58,17 @@ export class EdgeScroller extends Plugin<DragDropManager> {
       last = now;
       let atEdge = false;
       speeds().forEach((speed, i) => {
-        if (speed === 0) return;
-        atEdge = true;
         const list = lists[i]!;
+        if (speed === 0 || (speed < 0 && list.top <= 0) || (speed > 0 && list.top >= list.max)) return;
+        atEdge = true;
         const delta = list.carry + speed * elapsed;
         const whole = Math.trunc(delta);
         list.carry = delta - whole;
         // Written, never read: no layout here. Past the end of the list it's a no-op.
-        if (whole !== 0) list.element.scrollBy({ top: whole, behavior: 'instant' });
+        if (whole !== 0) {
+          list.element.scrollBy({ top: whole, behavior: 'instant' });
+          list.top = Math.max(0, Math.min(list.max, list.top + whole));
+        }
       });
       // Away from every edge: wait for the pointer to move again.
       frame = atEdge ? requestAnimationFrame(tick) : 0;
@@ -69,12 +76,23 @@ export class EdgeScroller extends Plugin<DragDropManager> {
     const stop = () => {
       cancelAnimationFrame(frame);
       frame = 0;
+      for (const list of lists) list.off();
       lists = [];
     };
 
     const off = [
       manager.monitor.addEventListener('dragstart', () => {
-        lists = [...document.querySelectorAll<HTMLElement>('[data-edge-scroll]')].map((element) => ({ element, box: element.getBoundingClientRect(), carry: 0 }));
+        lists = [...document.querySelectorAll<HTMLElement>('[data-edge-scroll]')].map((element) => {
+          const list = { element, box: element.getBoundingClientRect(), carry: 0, top: element.scrollTop, max: element.scrollHeight - element.clientHeight, off: () => {} };
+          // Scrolled some other way too (the wheel, rows mounting): read where it is, when it's laid out anyway.
+          const scrolled = () => {
+            list.top = element.scrollTop;
+            list.max = element.scrollHeight - element.clientHeight;
+          };
+          element.addEventListener('scroll', scrolled, { passive: true });
+          list.off = () => element.removeEventListener('scroll', scrolled);
+          return list;
+        });
       }),
       // dragmove comes before the move is applied (it can be prevented), so the next frame decides: the loop
       // stops itself away from the edges.

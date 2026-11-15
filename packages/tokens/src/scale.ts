@@ -57,6 +57,8 @@ export const size = {
   /** The tallest a popover card grows (the Effects card, DESIGN.md §7.15) before it scrolls inside. */
   popoverMax: 520,
   /** A mini window (DESIGN.md §7.9): its bar, and its size until you resize one. */
+  /** Pinned at its tallest (`share.pinnedMax`): its lower edge fades out over this while there's more below (DESIGN.md §6.7). */
+  pinnedFade: 14,
   miniBar: 36,
   miniWidth: 900,
   miniHeight: 640,
@@ -82,6 +84,12 @@ export const size = {
   sliderWidth: 200,
   hairline: 1,
   focusRing: 2,
+} as const;
+
+/** Parts of a container, as fractions of it (CSS: `--share-*`, a percentage). */
+export const share = {
+  /** Pinned grows to at most this much of the chord's pane, then scrolls on its own; Today keeps the rest (DESIGN.md §6.7). */
+  pinnedMax: 0.5,
 } as const;
 
 export const radius = {
