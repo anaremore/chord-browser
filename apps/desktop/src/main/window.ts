@@ -23,6 +23,9 @@ import { applyMaterial, onUiScale, platform, systemInfo, titleBarOverlay, traffi
 import { lockToOrigins } from './security';
 import { originOf } from './urls';
 
+/** A view's page that's still there: a view whose page was destroyed has none at all on macOS. */
+const live = (contents: WebContents | undefined): contents is WebContents => Boolean(contents && !contents.isDestroyed());
+
 export type SidebarMode = WindowModel['sidebar'];
 
 export interface AppWindowOptions {
@@ -1000,7 +1003,8 @@ export class AppWindow {
     if (this.window.isDestroyed()) return;
     const tools = this.devtools[this.focusedPane];
     if (to === 'popover' && this.popover.getVisible()) this.popover.webContents.focus();
-    else if (to === 'devtools' && tools && !tools.view.webContents.isDestroyed()) tools.view.webContents.focus();
+    // A destroyed DevTools page leaves its view with no webContents on macOS.
+    else if (to === 'devtools' && live(tools?.view.webContents)) tools!.view.webContents.focus();
     else if (to === 'page' && this.tabView?.getVisible()) this.tabView.webContents.focus();
     else this.shell.webContents.focus();
   }

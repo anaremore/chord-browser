@@ -51,6 +51,11 @@ interface Entry {
   nodeId: NodeId;
   page: WebContents;
   view: WebContentsView;
+  /**
+   * The DevTools page in that view, kept from when it was made: once it is destroyed (quitting with DevTools
+   * open), `view.webContents` is undefined on macOS, while this object still answers `isDestroyed()`.
+   */
+  contents: WebContents;
   place: DevtoolsPlace;
   window: DevtoolsWindow | null;
   unwatch(): void;
@@ -76,6 +81,8 @@ export function isToggleKey(input: Pick<Electron.Input, 'type' | 'key' | 'code' 
 class DevtoolsWindow {
   readonly window: BaseWindow;
   readonly bar: WebContentsView;
+  /** The bar's page, kept from when it was made (as Entry.contents is: the view forgets it once it's destroyed). */
+  readonly barContents: WebContents;
   /** Their DevTools left for the tab's window: closing this one doesn't close them. */
   private released = false;
 
@@ -96,9 +103,10 @@ class DevtoolsWindow {
       ...miniWindowChromeOptions(),
     });
     this.bar = createUiView(deps.uiSession, 'devtools');
-    deps.wire(this.bar.webContents, entry.nodeId);
+    this.barContents = this.bar.webContents;
+    deps.wire(this.barContents, entry.nodeId);
     // ⌘⇧D / Ctrl+Shift+D docks them from the bar too.
-    this.bar.webContents.on('before-input-event', (event, input) => {
+    this.barContents.on('before-input-event', (event, input) => {
       if (!isToggleKey(input)) return;
       event.preventDefault();
       onToggle();
@@ -108,7 +116,7 @@ class DevtoolsWindow {
     this.window.contentView.addChildView(this.bar);
     this.layout();
     this.window.on('resize', () => this.layout());
-    const onTheme = () => send(this.bar.webContents, 'system:changed', systemInfo());
+    const onTheme = () => send(this.barContents, 'system:changed', systemInfo());
     nativeTheme.on('updated', onTheme);
     const stopScale = onUiScale(() => {
       if (this.window.isDestroyed()) return;
@@ -120,14 +128,14 @@ class DevtoolsWindow {
     this.window.on('closed', () => {
       stopScale();
       nativeTheme.off('updated', onTheme);
-      if (!this.bar.webContents.isDestroyed()) this.bar.webContents.close();
+      if (!this.barContents.isDestroyed()) this.barContents.close();
       if (!this.released) this.onClosed();
     });
-    this.bar.webContents.once('did-finish-load', () => {
+    this.barContents.once('did-finish-load', () => {
       if (this.window.isDestroyed()) return;
       this.push();
       this.window.show();
-      if (!entry.view.webContents.isDestroyed()) entry.view.webContents.focus();
+      if (!entry.contents.isDestroyed()) entry.contents.focus();
     });
   }
 
@@ -157,7 +165,7 @@ class DevtoolsWindow {
   push(): void {
     if (this.window.isDestroyed()) return;
     this.window.setTitle(this.title());
-    send(this.bar.webContents, 'devtools:bar', barState(this.entry.page, this.deps.settings()));
+    send(this.barContents, 'devtools:bar', barState(this.entry.page, this.deps.settings()));
   }
 
   /** Let their DevTools go (docking, or closing them), then close. */
@@ -192,13 +200,13 @@ export class DevTools {
 
   /** The tab whose DevTools (or DevTools window's bar) this is. */
   nodeOf(contents: WebContents): NodeId | undefined {
-    for (const entry of this.open.values()) if (entry.view.webContents === contents || entry.window?.bar.webContents === contents) return entry.nodeId;
+    for (const entry of this.open.values()) if (entry.contents === contents || entry.window?.barContents === contents) return entry.nodeId;
     return undefined;
   }
 
   /** The tab whose DevTools window has this bar. */
   nodeOfBar(contents: WebContents): NodeId | undefined {
-    for (const entry of this.open.values()) if (entry.window?.bar.webContents === contents) return entry.nodeId;
+    for (const entry of this.open.values()) if (entry.window?.barContents === contents) return entry.nodeId;
     return undefined;
   }
 
@@ -240,7 +248,7 @@ export class DevTools {
     // Before they've navigated anywhere (Electron's rule): the page loads DevTools into this view.
     page.setDevToolsWebContents(contents);
     page.openDevTools({ mode: 'detach', activate: false });
-    const entry: Entry = { nodeId, page, view, place, window: null, unwatch: () => {} };
+    const entry: Entry = { nodeId, page, view, contents, place, window: null, unwatch: () => {} };
     entry.unwatch = this.watch(entry);
     this.open.set(nodeId, entry);
     this.deps.wire(contents, nodeId);
@@ -261,7 +269,7 @@ export class DevTools {
     // Out of the window that showed them first, then gone.
     this.deps.changed(nodeId, null);
     if (!entry.page.isDestroyed()) entry.page.closeDevTools();
-    if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
+    if (!entry.contents.isDestroyed()) entry.contents.close();
   }
 
   /** Into a window of their own, as they are (nothing reloads); the next ones open there too. */
@@ -311,9 +319,9 @@ export class DevTools {
   }
 
   private focus(entry: Entry): void {
-    if (entry.view.webContents.isDestroyed()) return;
+    if (entry.contents.isDestroyed()) return;
     if (entry.window && !entry.window.window.isDestroyed()) entry.window.window.focus();
-    entry.view.webContents.focus();
+    entry.contents.focus();
   }
 
   private windowFor(entry: Entry): DevtoolsWindow {
@@ -334,7 +342,7 @@ export class DevTools {
   /** What ends a tab's DevTools (their page going, their own renderer failing), and what they ask of Chord. */
   private watch(entry: Entry): () => void {
     const { page, nodeId } = entry;
-    const contents = entry.view.webContents;
+    const contents = entry.contents;
     const gone = () => {
       if (this.open.get(nodeId) === entry) this.close(nodeId);
     };
