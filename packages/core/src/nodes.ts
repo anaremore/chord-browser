@@ -4,7 +4,7 @@
  * Fast on a very large profile (ARCHITECTURE.md §6.1, *Large profiles*):
  * - In the reducer, `state` is an Immer draft, and reading every value of a
  *   draft makes a draft of each, which Immer then has to finalize: with 5,000
- *   pinned tabs one close took 1.5 s. These read the draft's own copy instead
+ *   pinned tabs one close took 1.4 s. These read the draft's own copy instead
  *   (`nodeList`), where nodes already changed are drafts and the rest are
  *   as they were, and hand out drafts only for what they return.
  * - A state that's done (frozen) never changes, so its children are found in
@@ -38,23 +38,43 @@ export function valuesOf<T>(record: Readonly<Record<string, T>>): T[] {
 /** Every node, to read (see `valuesOf`): change one through `state.nodes[id]`. */
 export const nodeList = (state: Pick<State, 'nodes'>): SidebarNode[] => valuesOf(state.nodes);
 
-const groupKey = (chordId: ChordId, section: Section, parentId: NodeId | null) => `${chordId}\u0000${section}\u0000${parentId ?? ''}`;
+/** Children by chord, section and parent (null: the section's root), each list sorted when first asked for. */
+type Groups = Map<ChordId, Map<Section, Map<NodeId | null, { nodes: SidebarNode[]; sorted: boolean }>>>;
 
-/** A frozen state's children by parent, sorted when first asked for. */
-const groups = new WeakMap<object, Map<string, { nodes: SidebarNode[]; sorted: boolean }>>();
-
-function groupsOf(nodes: Record<NodeId, SidebarNode>): Map<string, { nodes: SidebarNode[]; sorted: boolean }> {
-  let found = groups.get(nodes);
-  if (!found) {
-    found = new Map();
-    for (const node of Object.values(nodes)) {
-      const key = groupKey(node.chordId, node.section, node.parentId);
-      const group = found.get(key);
-      if (group) group.nodes.push(node);
-      else found.set(key, { nodes: [node], sorted: false });
-    }
-    groups.set(nodes, found);
+/** One pass over `nodes` (only `chordId`'s, when given). */
+function group(nodes: readonly SidebarNode[], chordId?: ChordId): Groups {
+  const groups: Groups = new Map();
+  for (const node of nodes) {
+    if (chordId !== undefined && node.chordId !== chordId) continue;
+    let sections = groups.get(node.chordId);
+    if (!sections) groups.set(node.chordId, (sections = new Map()));
+    let parents = sections.get(node.section);
+    if (!parents) sections.set(node.section, (parents = new Map()));
+    const found = parents.get(node.parentId);
+    if (found) found.nodes.push(node);
+    else parents.set(node.parentId, { nodes: [node], sorted: false });
   }
+  return groups;
+}
+
+function sortedIn(groups: Groups, chordId: ChordId, section: Section, parentId: NodeId | null): SidebarNode[] {
+  const found = groups.get(chordId)?.get(section)?.get(parentId);
+  if (!found) return [];
+  if (!found.sorted) {
+    found.nodes.sort(byRank);
+    found.sorted = true;
+  }
+  return found.nodes.slice();
+}
+
+/** A frozen state's groups, kept for as long as its `nodes` is around. */
+const frozenGroups = new WeakMap<object, Groups>();
+
+/** The groups of a state that's done, from one pass when first asked; null for one that can still change (a draft too). */
+function groupsOf(state: Pick<State, 'nodes'>): Groups | null {
+  if (!Object.isFrozen(state.nodes)) return null;
+  let found = frozenGroups.get(state.nodes);
+  if (!found) frozenGroups.set(state.nodes, (found = group(Object.values(state.nodes))));
   return found;
 }
 
@@ -64,15 +84,8 @@ function groupsOf(nodes: Record<NodeId, SidebarNode>): Map<string, { nodes: Side
  * originals for the ones not changed yet. A new array each time.
  */
 export function childrenToRead(state: Pick<State, 'nodes'>, chordId: ChordId, section: Section, parentId: NodeId | null = null): SidebarNode[] {
-  if (Object.isFrozen(state.nodes)) {
-    const group = groupsOf(state.nodes).get(groupKey(chordId, section, parentId));
-    if (!group) return [];
-    if (!group.sorted) {
-      group.nodes.sort(byRank);
-      group.sorted = true;
-    }
-    return group.nodes.slice();
-  }
+  const groups = groupsOf(state);
+  if (groups) return sortedIn(groups, chordId, section, parentId);
   return nodeList(state)
     .filter((n) => n.chordId === chordId && n.section === section && n.parentId === parentId)
     .sort(byRank);
@@ -85,18 +98,10 @@ export function children(state: State, chordId: ChordId, section: Section, paren
 }
 
 /**
- * Every node of a chord grouped by parent, from one pass, for walking its
- * tree: children of `parentId` in `section` (sorted when asked), to read.
+ * A chord's children by parent, from one pass, for walking its tree:
+ * children of `parentId` in `section`, in order, to read.
  */
 export function childrenIndex(state: Pick<State, 'nodes'>, chordId: ChordId): (section: Section, parentId: NodeId | null) => SidebarNode[] {
-  if (Object.isFrozen(state.nodes)) return (section, parentId) => childrenToRead(state, chordId, section, parentId);
-  const index = new Map<string, SidebarNode[]>();
-  for (const node of nodeList(state)) {
-    if (node.chordId !== chordId) continue;
-    const key = groupKey(chordId, node.section, node.parentId);
-    const list = index.get(key);
-    if (list) list.push(node);
-    else index.set(key, [node]);
-  }
-  return (section, parentId) => (index.get(groupKey(chordId, section, parentId)) ?? []).slice().sort(byRank);
+  const groups = groupsOf(state) ?? group(nodeList(state), chordId);
+  return (section, parentId) => sortedIn(groups, chordId, section, parentId);
 }

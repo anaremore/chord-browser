@@ -1,6 +1,6 @@
 import { isDraft, produce } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { children, childrenToRead, descendants, emptyState, nodeList, tabsInOrder, type SidebarNode, type State } from '../src';
+import { children, childrenToRead, descendants, emptyState, nodeList, tabsInOrder, type SidebarNode, type State, type TabNode } from '../src';
 
 const tab = (id: string, rank: string, parentId: string | null = null, section: 'pinned' | 'today' = 'pinned'): SidebarNode => ({
   kind: 'tab',
@@ -80,14 +80,16 @@ describe('reading nodes', () => {
     expect(ids(children(next, 'c1', 'pinned'))).toEqual(['f', 'b', 'a']);
   });
 
-  it('drafts no node it only reads', () => {
-    const state = base();
-    const next = produce(state, (d) => {
-      tabsInOrder(d as State, 'c1');
-      childrenToRead(d as State, 'c1', 'pinned');
+  it('drafts no node it only reads, only the ones changed', () => {
+    produce(base(), (d) => {
+      const draft = d as State;
+      (draft.nodes['b'] as TabNode).title = 'changed';
+      // Read through Immer's own copy (nodes.ts): if Immer ever stores it differently, these would be drafts.
+      for (const read of [nodeList(draft), childrenToRead(draft, 'c1', 'pinned'), childrenToRead(draft, 'c1', 'pinned', 'f'), tabsInOrder(draft, 'c1'), descendants(draft, 'f')]) {
+        expect(read.length).toBeGreaterThan(0);
+        for (const n of read) expect(isDraft(n), n.id).toBe(n.id === 'b');
+      }
     });
-    // Nothing changed, and nothing was copied.
-    expect(next).toBe(state);
   });
 
   it('gives a new array each time from a frozen state', () => {

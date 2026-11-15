@@ -1,3 +1,4 @@
+import { produce } from 'immer';
 import { describe, expect, it } from 'vitest';
 import {
   apply,
@@ -267,6 +268,55 @@ describe('splits and the rest of the sidebar', () => {
     expect(splitMembers(state, 's').map((p) => p.id)).toEqual(['t1', 't2', 't3']);
     expect((state.nodes['s'] as SplitNode).sizes).toHaveLength(3);
     expect(changed.size).toBe(3);
+  });
+
+  // A split inside a split (old or damaged data): which one settles first follows the nodes' order, and either way
+  // nothing is lost and every split ends whole. In a draft too, as the reducer runs it.
+  const nested = (order: string[], inner: number) => {
+    const state = emptyState();
+    const tab = (id: string, parentId: string | null, rank: string): TabNode => ({ kind: 'tab', id, chordId: 'c1', section: 'today', parentId, rank, url: `https://${id}.test/`, title: id, pinnedUrl: null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 });
+    const made: Record<string, State['nodes'][string]> = {
+      s1: { kind: 'split', id: 's1', chordId: 'c1', section: 'today', parentId: 's2', rank: 'a0', direction: 'row', sizes: [], createdAt: 0 },
+      s2: { kind: 'split', id: 's2', chordId: 'c1', section: 'today', parentId: null, rank: 'a0', direction: 'row', sizes: [0.5, 0.5], createdAt: 0 },
+      x2: tab('x2', 's2', 'a1'),
+      x3: tab('x3', 's2', 'a2'),
+    };
+    for (let i = 1; i <= inner; i++) made[`t${i}`] = tab(`t${i}`, 's1', `a${i}`);
+    for (const id of order) for (const key of Object.keys(made).filter((k) => k.startsWith(id))) state.nodes[key] = made[key]!;
+    return state;
+  };
+  const shape = (state: State) =>
+    Object.fromEntries(
+      Object.values(state.nodes)
+        .filter((n): n is SplitNode => n.kind === 'split')
+        .map((n) => [n.id, { parent: n.parentId, panes: splitMembers(state, n.id).map((p) => p.id), sizes: n.sizes.length }]),
+    );
+  it.each([
+    { name: 'the inner one of one tab first: it dissolves into the outer', order: ['s1', 't', 's2', 'x'], inner: 1, splits: { s2: { parent: null, panes: ['t1', 'x2', 'x3'], sizes: 3 } } },
+    { name: 'the outer first: the inner steps out, then dissolves', order: ['s2', 'x', 's1', 't'], inner: 1, splits: { s2: { parent: null, panes: ['x2', 'x3'], sizes: 2 } } },
+    {
+      name: 'the inner one of six first: its extras go to the outer, which it then steps out of',
+      order: ['s1', 't', 's2', 'x'],
+      inner: 6,
+      splits: { s1: { parent: null, panes: ['t1', 't2', 't3', 't4'], sizes: 4 }, s2: { parent: null, panes: ['t5', 't6', 'x2', 'x3'], sizes: 4 } },
+    },
+    {
+      name: 'the outer first, the inner of six',
+      order: ['s2', 'x', 's1', 't'],
+      inner: 6,
+      splits: { s1: { parent: null, panes: ['t1', 't2', 't3', 't4'], sizes: 4 }, s2: { parent: null, panes: ['x2', 'x3'], sizes: 2 } },
+    },
+  ])('settles nested splits: $name', ({ order, inner, splits }) => {
+    const plain = nested(order, inner);
+    settleSplits(plain);
+    const drafted = produce(nested(order, inner), (d) => void settleSplits(d as State));
+    for (const state of [plain, drafted]) {
+      expect(shape(state)).toEqual(splits);
+      const tabs = Object.values(state.nodes).filter((n) => n.kind === 'tab');
+      expect(tabs).toHaveLength(inner + 2);
+      // Every tab's parent is there.
+      for (const t of tabs) if (t.parentId) expect(state.nodes[t.parentId]).toBeDefined();
+    }
   });
 
   it('restores splits whole, and one window keeps a split another one also shows', () => {

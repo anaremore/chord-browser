@@ -8,7 +8,7 @@ import { generateNKeysBetween } from 'fractional-indexing';
 import { applyPatches, enablePatches } from 'immer';
 import { writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { apply, emptyState, IDLE_LIVE, type Command, type Context, type SidebarNode, type State } from '@chord/core';
+import { apply, childrenToRead, emptyState, IDLE_LIVE, type Command, type Context, type SidebarNode, type State } from '@chord/core';
 
 enablePatches();
 
@@ -76,7 +76,7 @@ interface Timing {
   patches: number;
 }
 
-/** A command applied to `base` again and again: its store change, and a mirror applying what it sent. */
+/** A command applied to `base` again and again: its store change, and a mirror applying what it sent, each with its first read of the tree. */
 function time(base: State, command: Command, runs = 9): Timing {
   const store: number[] = [];
   const mirror: number[] = [];
@@ -84,10 +84,12 @@ function time(base: State, command: Command, runs = 9): Timing {
   // A mirror's copy came over IPC: its own, not frozen.
   const copy = structuredClone(base);
   for (let i = 0; i < runs + 2; i++) {
+    // Each side then reads the new state's tree once, as main's listeners and the sidebar do: the first read of a new state builds its index.
     const t0 = performance.now();
     const result = apply(base, command, ctx());
+    childrenToRead(result.state, 'c0', 'pinned');
     const t1 = performance.now();
-    applyPatches(copy, result.patches);
+    childrenToRead(applyPatches(copy, result.patches), 'c0', 'pinned');
     const t2 = performance.now();
     patches = result.patches.length;
     // The first two warm up.

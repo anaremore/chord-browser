@@ -556,9 +556,11 @@ function shownByOther(draft: Draft<State>, nodeId: NodeId, windowId: WindowId): 
 
 /** A chord's most recently used tab that no other window is showing (and isn't `skip`). */
 function recentFree(draft: Draft<State>, chordId: ChordId, windowId: WindowId, skip: NodeId | null = null): NodeId | null {
+  // What the other windows show, once, rather than once a tab.
+  const others = new Set(Object.values(draft.windows).flatMap((w) => (w.id === windowId ? [] : shownTabs(draft as State, w.id))));
   return (
     tabsInOrder(draft as State, chordId)
-      .filter((t) => t.id !== skip && !shownByOther(draft, t.id, windowId))
+      .filter((t) => t.id !== skip && !others.has(t.id))
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0]?.id ?? null
   );
 }
@@ -960,6 +962,14 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
     .filter((n) => n.chordId === chordId && n.kind === 'tab' && n.section === 'pinned' && open.has(n.id))
     .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
   const going = [...today, ...opened];
+  // Each split's panes, from one pass.
+  const panesOf = new Map<NodeId, NodeId[]>();
+  for (const n of nodeList(draft as State)) {
+    if (n.parentId === null || n.chordId !== chordId) continue;
+    const list = panesOf.get(n.parentId);
+    if (list) list.push(n.id);
+    else panesOf.set(n.parentId, [n.id]);
+  }
   const ranks = generateNKeysBetween(null, childrenToRead(draft as State, to, 'today', null)[0]?.rank ?? null, going.length);
   const resign = chord.profileId !== target.profileId;
   const moved = new Set<NodeId>();
@@ -984,7 +994,7 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
       if (node.kind === 'tab') node.pinnedUrl = null;
     }
     // A split in Today brings its panes.
-    if (node.kind === 'split') for (const inner of nodeList(draft as State)) if (inner.parentId === node.id && inner.chordId === chordId) carry(draft.nodes[inner.id]!);
+    if (node.kind === 'split') for (const id of panesOf.get(node.id) ?? []) carry(draft.nodes[id]!);
   });
   // Windows on it go to `to`, showing what they showed if it moved.
   for (const win of Object.values(draft.windows)) {
@@ -1358,7 +1368,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       // Closing a pane: the split's other panes stay on screen, and the window lands on one of them.
       const split = splitOf(draft as State, node.id);
       const panes = split ? splitMembers(draft as State, split.id).map((t) => t.id) : [];
-      const order = tabsInOrder(draft as State, node.chordId);
+      // The chord's tabs in order, before anything moves: only needed when a window lands somewhere else.
+      const shown = Object.values(draft.windows).some((w) => Object.values(w.activeTab).includes(node.id));
+      const order = shown ? tabsInOrder(draft as State, node.chordId) : [];
       const index = order.findIndex((t) => t.id === node.id);
       // Arc's rule: land on the tab below, or above if this was the last one (one no other window shows).
       const isClosing = (t: TabNode) => t.id === node.id;
