@@ -520,7 +520,7 @@ Also here:
 
 Each phase ships by itself and leaves nothing half-on. Times are guesses ⚠.
 
-**M0. Spike (about 4 days).** Throwaway code in `spikes/s17-passwords`, findings appended here.
+**M0. Spike (about 4 days).** Throwaway code in `spikes/s17-passwords`. *Done 2026-11-15: see [M0 findings](#m0-findings-2026-11-15) at the end.*
 1. A session-registered sandboxed preload wakes a script in world 4440 with `webFrame`, and bridges it with `exposeInIsolatedWorld`. Yes or no.
 2. The world can read a same-origin frame's fields and fill them.
 3. A card in the popover placed under a field, tracking zoom, scroll and split view; keys through `before-input-event` with focus left in the page.
@@ -622,3 +622,259 @@ Questions 1, 3 and 4 were answered on 2026-11-15 (top of this document).
 - FIDO Credential Exchange Format: https://fidoalliance.org/specs/cx/cxf-v1.0-ps-20250814.html
 - 1Password export: https://support.1password.com/export/
 - Crest: https://github.com/pauljoda/Crest
+
+---
+
+## M0 findings (2026-11-15)
+
+*The spike of §15, run on 2026-11-15. Code: `spikes/s17-passwords/` (its README says how to run each part). Nothing in `apps/` or `packages/` changed, and no window opened on a desktop.*
+
+**Marks here.** ✅ measured, saying where: *the container* is the Linux E2E container (`scripts/e2e-linux`; X11 under Xvfb with openbox unless it says Wayland, which is headless Weston; *4 CPUs* where it was pinned to four, as perf baselines are); *CI* is the spike's own job (`.github/workflows/s17-spike.yml`). ⚠ inferred, or not measured. Every Electron number is Electron 45.2.3 with the page sandboxed, context-isolated and its preloads registered on the session, as Chord's tabs are. The container shared the machine with other runs, so times are compared only within one run, with the conditions alternated.
+
+### In short
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | A session-registered sandboxed preload wakes a script in world 4440 and bridges it with `exposeInIsolatedWorld` | **Yes** ✅ (container, X11 and Wayland; CI, Windows and macOS). The fallback isn't needed |
+| 2 | That world reads and fills a same-origin frame's fields, React-controlled ones included | **Yes** ✅ (container; CI, Windows and macOS), from the top frame's world. Another site's frame and a sandboxed one are out of reach, as expected |
+| 3 | A card under the field through zoom, scroll, resize and split view; keys through `before-input-event`, focus left in the page | **Yes** ✅ (container): placed to the pixel, 0–6 ms behind the page; keys routed with focus kept (X11). **But a click on the card takes focus from the page.** Main can give it back, at the cost of one blur on the field |
+| 4 | The bake-off: Chromium's heuristics beside DuckDuckGo's own, on DuckDuckGo's corpus | **Option B holds.** The bare port finds the username and password fields as well as DuckDuckGo does (precision 98%, recall 85% and 98%, against 99% / 84% and 99.7%). It lags only at telling a new password from the current one, and S17 §4's additions close most of that: whole files right, 81% against DuckDuckGo's 83% |
+| 5 | The cost of `nodeIntegrationInSubFrames` on a page with many ad frames | 61 frames: **+17% load time, +71 MB (+6%) in renderers, +25% renderer CPU** ✅ (container, 4 CPUs). Windows +5%, +124 MB; macOS +3% ✅ (CI). **Not affordable as a switch on every tab** |
+| 6 | The preload's cost with the sentinel, as perf.spec measures | **Nothing measurable** ✅ (container, 4 CPUs): 0.1 ms to run, page memory within noise. Waking the agent costs 4–6 ms after parsing and +0.35 MB |
+| 7 | Can `PerformanceObserver` in the isolated world see a fetch finish, with its status? | **Yes, with a condition** ✅: it sees exactly what the page's own observer sees, `responseStatus` included. A fetch shows up only once its body has been read |
+
+### 1. The sentinel and world 4440
+
+**Measured** ✅ (container, X11 and Wayland, the *world* probe in `probes/main.mjs`; with and without Chord's own built `page.cjs` and the extension library's preload registered beside it):
+- `probes/preload.cjs` is registered with `session.registerPreloadScript({ type: 'frame' })`, as `preload/page.ts` is. It asks main for the agent with `ipcRenderer.invoke`, then calls `contextBridge.exposeInIsolatedWorld(4440, 'chordPasswords', …)` (four functions, with callbacks both ways), `webFrame.setIsolatedWorldInfo(4440, …)` and `webFrame.executeJavaScriptInIsolatedWorld(4440, …)`. All of them work from the sandboxed preload. The `invoke` took 1.7–4.1 ms and the agent's run 0.2–2.1 ms (React sign-in page, nine launches).
+- **Who sees what:** the agent's globals and the bridge exist in 4440 only. The page's main world, the assistant's 4400 and the preload's own 999 all see `undefined` for both; the agent sees `undefined` for the page's globals (`window.reactState`, `window.React`).
+- Main gets each message with `event.senderFrame.origin`, which §5's policy needs, and can tell whether it came from the top frame.
+- **A strict page** (`default-src 'self'; script-src 'self'; require-trusted-types-for 'script'`): the agent wakes, scans and fills as on any other page. The page's CSP doesn't apply to code run with `executeJavaScriptInIsolatedWorld`.
+- **The sentinel stays asleep** on a page with only a search box, even when the box is focused. It wakes on a password field once the document is parsed (in every run, React 19 had rendered the form by `DOMContentLoaded`). It also wakes on focus in an email field, which is wider than it needs to be but cheap.
+- **Turning the feature off needs no restart:** `session.unregisterPreloadScript(id)`, and registering it again, take effect from the next navigation. That answers §8's ⚠ on how the preload learns the feature is off: register the sentinel only while it's on.
+- **The fallback** (the agent compiled into the preload and run in 999) also works. It costs every page about 1.9 ms more to load (§6 below), and it isn't needed.
+
+### 2. Frames
+
+**Measured** ✅ (container, X11 and Wayland):
+- From the top frame's 4440, `iframe.contentDocument` can be reached for a **same-origin frame** and a **`srcdoc` frame**. It is `null` for **another site's frame** and for a **sandboxed frame** without `allow-same-origin`. A frame's elements belong to the frame's own realm: its `HTMLInputElement` isn't the top frame's.
+- **Filling a React 19 controlled form in the same-origin frame works** the way §11.6 fills, whether the native setter and `Event` come from the top frame's world or from the frame's own. Either way, the frame's page saw `input` and `change` on each field, and React's state held the values.
+- Once the top frame's agent listens on the frame's document, focus in the frame's field reaches it. The rect it reports in the tab's coordinates, with the frame's position added, matches the page's own measurement exactly (X11; on Wayland a scripted `.focus()` fires no focus events, since Weston never activates the window).
+- **Phase 3 has to add two things.** The preload doesn't run inside the frame (no agent woke in a subframe), so:
+  - the sentinel has to look inside same-origin frames itself and add its `focusin` listener to their windows. The spike's sentinel does this at `load`: it woke with `password-in-frame-at-load` on a page whose only password field was in a frame;
+  - the agent has to do the same for a frame that's added or navigated later.
+
+### 3. The card, and keys
+
+**Measured** ✅ (container, the *card* probe in `probes/main.mjs`). The probe lays out a `BaseWindow` as Chord does: a 240 px sidebar view, one or two page views, and the popover view above them, sized to the card only. The agent sends the focused field's rect in its page's CSS pixels. Main places the card at the view's origin plus the rect times the page's zoom factor, 4 px under the field. The system pointer (xdotool, X11) checks each placement: a click at the field's centre must land on the field (the page's own `click` listener reports it), and a press just under the field's bottom-left corner must land on the card.
+
+| State | Card under the field (±1 px), X11 and Wayland | Pointer on the field / on the card (X11) |
+|---|---|---|
+| 100% | ✅ | ✅ / ✅ |
+| Zoom 150% | ✅ | ✅ / ✅ |
+| Zoom 80% | ✅ | ✅ / ✅ |
+| Scrolled 120 px | ✅ | ✅ / ✅ |
+| Window resized (1400×900 → 1100×760) | ✅ | ✅ / ✅ |
+| Split view, right pane | ✅ | ✅ / ✅ |
+
+- **Following the page:** zoom, resize and scroll each reach the agent as the page's own `resize` or `scroll` event. The card moved 0–6 ms after the page's event (79 placements over three runs on X11, 15 on Wayland). Closing the menu on scroll, as §9 has it, is still the simpler choice, but following the field works too.
+- **Keys** ✅ (X11): with the card open and the field focused, real key presses (xdotool) of ↓ ↓ ↑ Enter went to main's `before-input-event`, which took them with `preventDefault`. The card's highlight moved to the second row, Enter filled the React field, and **the page's own `keydown` listener saw none of the four keys**. Typing `zz` afterwards reached the page as usual: the field held the filled username plus `zz`, and focus stayed in the field throughout (`document.hasFocus()`, `activeElement`). The routing is a pure function (`probes/keys.mjs`), unit-tested in `probes/keys.test.mjs` with 11 cases: closed menu, key up, both ends of the list, Enter, Escape, Tab (closes the menu and goes to the page), letters and modifiers.
+- **Electron's own synthetic keys do reach `before-input-event`** ✅ (X11 and Wayland): the handler took `webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Down' })`. So Chord's E2E *can* press the menu's keys end to end through a test hook, which corrects half of §13's ⚠: Playwright's key presses still don't arrive there.
+- **A click on the card takes focus from the page** ✅ (X11). The card's view gets focus on the press, the field gets `focusout`, and `document.hasFocus()` goes false. Two remedies were measured:
+  - main focuses the page again once the press is over (on the popover webContents' `focus` event, then `setTimeout(0)`);
+  - main takes the press in the popover's `before-mouse-event`, so the card never sees the click, and focuses the page on mouse up.
+
+  **Both put focus back in the field, and with both the field still gets one `focusout` and then `focusin`.** A site that validates on blur ("Enter a valid email") will react to that. The keyboard path has none of this.
+
+### 4. The bake-off
+
+**The corpus.** `corpus.mjs` fetches DuckDuckGo's `duckduckgo-autofill` at release 19.2.1 (commit `4d5848619462c863d6bb7553cb090fc74b172be2`) into the git-ignored `spikes/s17-passwords/.cache/`. It checks the tarball's SHA-256 (`9c3e0f78efd8cce6844242963e8319c978dc7512377a4ec15516747f88fbfe56`) and, because GitHub doesn't promise a tarball's bytes stay the same, the tree hash of `test-forms/` (every file's path and SHA-256: `5cceaedd7cdf11ec9999565e78bba313fd69e2c1c04bccbafa946acb120630ce`). Nothing from the corpus is committed.
+
+**Chord's side** ✅ (container, Playwright's headless Chromium, no Electron). Each of the 563 forms is loaded the way DuckDuckGo's harness loads it (`body > div > snapshot`, with its index's title), with the page's scripts blocked and every other request aborted. `agent/scan.js` turns each form into field records, grouped as Chromium groups them (3,160 fields). Two classifiers then run in Node:
+- (a) **Chromium:** a TypeScript port of `form_data_parser.cc` in `chromium/form-parser.ts` (BSD-3, `chromium/chromium@4e452b6233bdb0e5cbd67d8837a54cc3e407de91`), 353 lines. It covers `autocomplete`, the base heuristics, the HTML username detector with Chromium's vocabulary, conflicts and `Sanitize`, and gives no suggestions for an `only_for_fallback` parse.
+- (b) **Chord:** the same, plus §4's additions in `chord-detector.ts`:
+  - the form's kind, from its buttons, headings, attributes and title;
+  - a password field's own words (*new*, *confirm*, *current*);
+  - the username-only first step;
+  - vetoes for search, code and newsletter fields;
+  - the email field preferred as username when the nearest field was chosen only for being nearest.
+
+The port with the additions, the scan and the agent come to 46 KB of source, 15 KB gzipped, unminified.
+
+**DuckDuckGo's side** ✅ (container): DuckDuckGo's own classifier, run through its own Jest and jsdom harness (`src/Form/input-classifiers.test.js`) at the same commit. The harness passed exactly as published. `ddg-run.mjs` adds one line so that it keeps every field's score, not only the failures.
+
+**Scoring** (`bakeoff.ts`) goes field by field over DuckDuckGo's `data-manual-scoring` labels: 2,476 labelled fields, 13 of which aren't inputs the scan takes and so count as missed for Chord.
+- *username* and *username OR emailAddress* count as username.
+- *password.current* and *password.new* count as that variant.
+- A plain *password* label counts as any password. In the variant rows it counts as current in a `_login` file, and as new in a `_signup` or change file.
+- *emailAddress* isn't scored as username: it's the username when there's a password to save with it, and nothing otherwise. It does count against a system that makes it a password.
+- Every other field must get no credential role.
+
+**A correction to §13:** DuckDuckGo's "expected failures on 176 of 563" includes 157 fields labelled *username OR emailAddress*, which its harness can never match, because it compares the label as a single type. Its real misses are about 70 fields.
+
+**Precision / recall, all 563 forms** (a plain *password* takes the variant its file's type implies):
+
+| Role | n | Chromium port | Chromium + Chord's additions | DuckDuckGo |
+|---|---|---|---|---|
+| Username | 427 | 98.1% / 84.8% | 98.1% / 86.2% | 99.2% / 84.1% |
+| Password (any) | 596 | 98.5% / 97.8% | 98.5% / 97.8% | 99.7% / 99.7% |
+| Current password | 315 | 69.2% / 94.3% | 90.6% / 91.7% | 93.3% / 92.7% |
+| New password | 270 | 87.5% / 49.3% | 89.3% / 86.7% | 91.2% / 91.9% |
+
+Counting only the fields whose label names a variant (59 current, 85 new), precision / recall in the same column order:
+- current: 73.6 / 89.8, 87.3 / 93.2, 100 / 100;
+- new: 85.1 / 74.1, 88.0 / 85.9, 97.7 / 98.8.
+
+**By form type** (precision / recall):
+
+| Type (files) | Role (n) | Chromium port | + Chord's additions | DuckDuckGo |
+|---|---|---|---|---|
+| Sign-in (282) | Username (320) | 99.3 / 90.6 | 99.3 / 92.2 | 99.6 / 88.1 |
+| | Password (304) | 100 / 98.4 | 100 / 98.4 | 100 / 99.7 |
+| | Current (301) | 100 / 94.0 | 100 / 91.4 | 100 / 92.4 |
+| Sign-up (150) | Username (96) | 94.1 / 66.7 | 94.3 / 68.8 | 98.5 / 69.8 |
+| | Password (232) | 99.6 / 97.4 | 99.6 / 97.4 | 100 / 100 |
+| | New (231) | 99.0 / 44.6 | 99.5 / 87.0 | 100 / 92.6 |
+| Change, reset (17) | Password (43) | 100 / 95.3 | 100 / 95.3 | 100 / 97.7 |
+| | New (34) | 100 / 73.5 | 100 / 82.4 | 100 / 85.3 |
+
+**Whole files right** (every labelled field right, variant included, over the 457 files that have credential fields):
+
+| Files | Chromium port | + Chord's additions | DuckDuckGo |
+|---|---|---|---|
+| All (457) | 297 (65.0%) | 369 (80.7%) | 380 (83.2%) |
+| Sign-in (291) | 86.9% | 86.6% | 84.9% |
+| Sign-up (135) | 17.0% | 70.4% | 78.5% |
+
+**The two halves apart.** Chord's additions were written from about a dozen failures read across the whole corpus, so the corpus was also scored in two halves (alternate files of DuckDuckGo's index). F1, first half / second half:
+
+| Role | Chromium port | + Chord's additions | DuckDuckGo |
+|---|---|---|---|
+| Username | 90.7 / 91.2 | 91.2 / 92.3 | 91.1 / 91.0 |
+| Current password | 76.5 / 83.0 | 93.7 / 88.9 | 93.6 / 92.4 |
+| New password | 61.4 / 64.9 | 92.4 / 82.8 | 92.9 / 89.9 |
+
+On the first half the additions match DuckDuckGo, so they don't merely fit the failures that were read. On the second, Chord is 3.5 points behind on current passwords and 7 on new ones.
+
+**Where each fails most** (number of fields; examples are a corpus file and a field):
+
+| Failure | Chromium port | + Chord's | DuckDuckGo | Examples |
+|---|---|---|---|---|
+| A new password taken as current (sign-up forms) | 129 | 28 | 21 | `yahoo_signup` `usernamereg-password`, `usps_signup` `tPassword` |
+| A current password taken as new | 13 | 21 | 22 | `pinterest_login` (`autocomplete=new-password` on a sign-in form), `hackernews_login_signup` |
+| Username missed: another field chosen | 33 | 33 | 60 | `ifixit_signup` (a *Name* field named `reg-username` wins), `fanfiction_signup` (`penname`) |
+| Username missed: no password in its form (first steps) | 24 | 18 | 7 | `homedepot_login`, `microsoft_signup` `MemberName` |
+| A field that isn't a credential given a credential role | 16 | 16 | 5 | security answers and tax ids as `type=password` (`usps_signup` `tsecAnswer1`, `irsgov_refund` `TIN2`), a PIN (`hulu_account-pin`), a nickname or a phone number as username |
+| A password field not chosen | 9 | 9 | 0 | decoys such as `regPassword-prevent` (`reddit_signup`) and `hiddenPassword` (`nytimes_login_signup`) |
+
+Other counts:
+- **Card codes typed as `type=password`** (`walmart_checkout` `cvv`, `containerstore_checkout`) get no role from either port. Chromium's CVC rule rejects them, and the only parse that keeps them is a fallback one, which gets no suggestions.
+- **Email fields taken as username:** 85 of the 263 *emailAddress* fields, all but four of them in forms with a password. That's Chrome's behaviour, and it's what saving needs. DuckDuckGo did this for 3.
+- **Unlabelled fields given a credential role** (not in the scores; mostly honeypots and decoys): Chromium port 32, with Chord's additions 41, DuckDuckGo 43.
+
+**What it means.** The bare port already matches DuckDuckGo on what decides a fill: which field is the username and which the password, above all on sign-in forms. Its one large gap is the password's variant, which Chromium gets from Google's servers, and the local rules S17 §4 planned close most of it. DuckDuckGo is still better on sign-up forms and at ignoring odd `type=password` fields, mostly thanks to its vocabulary (its matching config), which §3 already allows Chord to copy with its notice. **So option B is confirmed, and C's matching code isn't needed.** Two cautions: the variant matters for generating and saving passwords (phase 2) much more than for phase 1's fill; and these are DuckDuckGo's labels on 563 forms that DuckDuckGo collected for its own detector.
+
+### 5. `nodeIntegrationInSubFrames`
+
+**Measured** ✅ (container, 4 CPUs, the *frames* probe in `probes/main.mjs`).
+- **The page:** a synthetic news front page of 30 stories. Each story has an ad frame from a site of its own (`adN.test`) running a 40 KB script, and each ad nests a 1×1 frame from a third site. That's 61 frames, and with site isolation 61 renderer processes.
+- **The preloads:** Chord's own built `page.cjs` and the extension library's preload, registered on the session beside the sentinel, as Chord would have them.
+- **The runs:** five launches with the switch off and five with it on, alternated, three loads in each. Memory is counted as perf.spec counts it (`RssAnon + VmSwap`), 3 s after the last load.
+
+| | Switch off | Switch on | Difference |
+|---|---|---|---|
+| Frames that ran the session's preloads | 1 | 61 | |
+| First load, median | 1,507 ms | 1,764 ms | +257 ms (+17%) |
+| Reloads, median | 1,659 ms | 1,881 ms | +222 ms (+13%) |
+| Renderers' private memory, median | 1,171 MB | 1,243 MB | +71 MB (+6%), about 1.2 MB a frame; every run within 2 MB |
+| All processes | 1,310 MB | 1,381 MB | +71 MB |
+| Renderers' CPU time over the launch | 3.42 s | 4.26 s | +25% |
+
+The sentinel itself ran in 0.2 ms a frame (13 ms over 61 frames). Most of the cost is probably a preload context in every frame, plus Chord's other two preloads running there ⚠ (the two weren't measured apart). A real news site's ads share fewer sites, so it would have fewer processes, but just as many frames and so just as many preload runs ⚠. The switch belongs to a `webContents` and is fixed when the webContents is created, so it can't be turned on only for a page that needs it.
+
+**Verdict: not affordable as a switch on every tab.** Phase 4 (other sites' frames) should wait for a cheaper route ⚠: either Electron running a preload in subframes per script rather than per `webContents`, or an isolated-world call on `WebFrameMain`. Neither exists today.
+
+### 6. The preload's cost, in perf.spec's terms
+
+**Measured** ✅ (container, 4 CPUs, the *preload* probe in `probes/main.mjs`). Two measures:
+- **memory:** the page process's private memory (`RssAnon + VmSwap`), 3 s after load and after a garbage collection, the median of five launches. That's perf.spec's *Memory at idle* for *the page*;
+- **load time:** each page load, 19 reloads per launch on the plain page and 4 on the sign-in page.
+
+The conditions were alternated each round.
+
+| Session's preloads | Plain page: memory | Load | Sign-in page: memory | Load |
+|---|---|---|---|---|
+| None | 23.35 MB | 8.9 ms | | |
+| Chord's (`page.cjs`, extensions) | 24.75 MB | 11.0 ms | 22.95 MB | 22.5 ms |
+| Chord's + the sentinel | 24.44 MB | 11.3 ms | 23.30 MB (agent woken) | 22.2 ms |
+| Chord's + the agent compiled in (the fallback) | 24.51 MB | 12.9 ms | 22.86 MB | 23.1 ms |
+
+- **The sentinel costs nothing measurable.** It runs in 0.1 ms, and the page's memory stays within the spread between runs (±0.3 MB).
+- **On a sign-in page,** the woken agent adds about 0.35 MB. Waking it took 4–6 ms, all after the page was parsed. Probably none of that is on the main thread's way to first paint ⚠ (not traced).
+- **The fallback** would cost about 1.9 ms on every page load, for parsing the agent. Given question 1's answer, it isn't needed.
+- **An aside:** Chord's two existing preloads cost 1.4 MB and about 2 ms a page, compared with no preloads at all.
+
+### 7. `PerformanceObserver` from the isolated world
+
+**Measured** ✅ (container, X11 and Wayland). An observer for `resource` entries ran in world 4440 while the page (its main world) made five requests:
+- a failing and a successful `fetch` sign-in (401, then 200);
+- an XHR (204);
+- another site's `fetch` with CORS (200);
+- another site's `fetch` without it (`no-cors`).
+
+The page's own observer was the control. What was seen:
+- **The isolated world sees exactly what the page's own observer sees,** `responseStatus` included: 401, 200, 204, and 200 across sites with CORS.
+- **A `fetch` shows up only once its body has been read.** When the page read only `.status`, neither observer had the fetches 1.5 s later, nor did `performance.getEntriesByType`; the XHR was there. An app that never reads the reply's body (rare for a sign-in, which usually reads its JSON) leaves no entry ⚠.
+- A `no-cors` request to another site left no entry.
+
+So it's a good **extra** signal for step 3 of §6: after a submit signal, a 2xx from a request to the form's own origin makes success likelier, and a 4xx makes failure likelier. It should never be the only signal, since an entry carries no request body and doesn't say what the request was for.
+
+### What changes in the plan
+
+**Option B is confirmed**, and so is the shape of the decision. For phase 1:
+1. **Register the sentinel only while passwords are on,** with `registerPreloadScript` and `unregisterPreloadScript` (no restart needed). The preload then has no flag to read.
+2. **Ship the port with §4's additions, and take DuckDuckGo's vocabulary early** (Apache-2.0, §3), for the password variant and for odd `type=password` fields such as security answers, tax ids and PINs. That's where the remaining gap is. The corpus baseline in CI starts from this spike's numbers: about 81% of files right.
+3. **Score *username OR emailAddress* as either one,** or the baseline counts 157 failures that no detector can fix.
+4. **Clicking a row:** main takes the press in the popover's `before-mouse-event` and focuses the page again. The agent ignores the one blur that main announces, so the menu doesn't close on it and the fill goes ahead. Pressing Enter needs none of this.
+5. **E2E presses the menu's keys with `webContents.sendInputEvent`** through a test hook. That lifts half of §13's ⚠.
+6. **Nothing else in phase 1 changes.** Other sites' frames move out of the plan: with `nodeIntegrationInSubFrames`, **phase 4's frames aren't affordable**. Until Electron offers a per-frame route, *Copy* from Settings remains the answer for them.
+7. **For phase 3's same-origin frames,** the sentinel looks into same-origin frames itself and listens there, and the agent follows frames added later (§2 above).
+
+### Windows and macOS
+
+**Measured** ✅ (CI, run 43768098813: `windows-latest` x64 and `macos-26` arm64, three rounds each, artifacts `s17-probes-*`). CI's runners have no system pointer, so the card was checked by arithmetic only, and keys only through `sendInputEvent`.
+
+- **Questions 1, 2 and 7 come out the same on both:** the agent wakes in 4440 and is invisible to the main world; the React fill works in the top frame and in the same-origin frame; the same-origin and `srcdoc` frames can be reached and the other two can't; the observer sees 401, 200, 204 and 200 once the bodies are read. The same holds with Chord's own preloads registered beside the sentinel.
+- **Question 3:** the card sits under the field in all six states, and `sendInputEvent` reaches `before-input-event`, on both.
+- **Question 5** (61 frames, switch off → on, medians):
+
+| | Windows x64 | macOS arm64 |
+|---|---|---|
+| First load | 3,054 → 3,220 ms (+5%) | 5,548 → 5,720 ms (+3%) |
+| Reloads | 1,718 → 1,829 ms (+6%) | 2,436 → 2,798 ms (+15%) |
+| Renderers' memory | 1,617 → 1,741 MB (+124 MB, +8%, about 2 MB a frame) | 5,407 → 5,687 MB (+280 MB, +5%; resident set, shared pages included, so it isn't comparable with the others) |
+
+- **Question 6** (page memory, medians of three; Windows private bytes, macOS resident set):
+
+| Session's preloads | Windows | macOS |
+|---|---|---|
+| None | 29.84 MB (28.66–32.44) | 97.61 MB |
+| Chord's | 30.80 MB (30.76–30.87) | 100.94 MB |
+| Chord's + the sentinel | 31.91 MB (30.88–33.34) | 101.27 MB |
+| Chord's + the agent compiled in | 30.95 MB | 101.61 MB |
+
+  On macOS the sentinel costs 0.3 MB. On Windows three launches can't resolve it: the bare page alone spread over 3.8 MB, and the sentinel's lowest launch equals Chord's own. ⚠ Five launches or more, or perf.spec's own memory test once the sentinel is in the app, will settle it. The sentinel ran in 0.1–0.2 ms on both, and waking the agent took 3–11 ms on macOS and 4–9 ms on Windows.
+
+The workflow runs only on pushes to this branch and goes with the spike.
+
+### What the owner checks by hand
+
+Only what a real desktop can show; everything else above was measured.
+- **Keys and focus with a real keyboard and pointer, on macOS and Windows.** CI has no system pointer, and the container runs Linux. These checks need phase 1's menu, since the spike has no product UI. Then, in Chord:
+  1. Focus a sign-in field and press ↓ ↓ ↑ Enter. The page must see none of the four keys, and the field must keep its caret.
+  2. Click a row. Focus must come back to the field.
+  3. Do both again at 150% zoom, and again in split view.
+
+  Before then, the spike's placement checks can be run on a machine nobody is using; it opens a window for about 20 s: `pnpm install`, `pnpm --filter @chord/desktop build`, then `node spikes/s17-passwords/probes/run.mjs --only world,card`. The results land in `spikes/s17-passwords/results/probes/`.
+- **A Wayland desktop** (GNOME or KDE): the same checks, since headless Weston never activates a window.
+- **A real news site** for question 5's ratio, if wanted: the page measured here was synthetic, and real ads share sites.
