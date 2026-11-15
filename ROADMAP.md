@@ -74,7 +74,7 @@ Released: **0.1.0** (2026-10-24) and **0.2.1** (2026-10-25), both previews; 0.2.
 | Phase 4 | Windows signing (live since 0.2.1); macOS signing and notarization, built and off | | yours: an Apple Developer account, then Mac in-app updates; a Store submission; Electron 47 |
 | After 0.1 | 0.1.x's gaps, 0.2's cleaner pages, Effects, form filling, Chord Player (waiting on its hand checks and its first release), DevTools in the window, counts on tabs, battery, CI checks for launch time and memory, a proxy per chord, Your data's design, its export, import from a Chord file and sync (2026-10-26) | the P0 performance pass: a lighter launch | Clear Today's slow frames; the back/forward cache (Electron upstream); Your data's hand checks with real sync apps |
 
-**Next, in order:** sync's hand checks with real sync apps; the performance pass's costs with 5,000 pinned tabs (the store's update and an unwindowed sidebar); then the password-manager pass, after Your data (export in 0.5.0, import and sync in 0.6.0). Electron 46 comes first whenever it lands, on the 72-hour clock.
+**Next, in order:** sync's hand checks with real sync apps; the performance pass's costs with 5,000 pinned tabs (the store's update and an unwindowed sidebar); then Chord's own password manager ([S17](docs/decisions/S17-passwords.md), decided 2026-11-15): its M0 spike, then phase 1, save and fill on plain sign-in forms behind a vault passphrase. Electron 46 comes first whenever it lands, on the 72-hour clock.
 
 ---
 
@@ -471,7 +471,7 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
 ## Not planned (decided 2026-10-22, updated 2026-10-24)
 
 - **Arc import.**
-- **A built-in password store** (D12): no `.kdbx` reader and no keychain store. KeePassXC-Browser covers `.kdbx` files.
+- ~~**A built-in password store** (D12)~~ Reversed 2026-11-15: Chord builds its own ([S17](docs/decisions/S17-passwords.md)); see *Next, in order* above.
 - **Assistant developer mode, your own API keys, local models.** The assistant stays a chat that can read the browser; Effects use the same apps.
 - **Connect an agent** (the Chord MCP server for your own Claude Code or Codex) is parked, not deleted. It goes beyond chat, and can come back if you want it.
 - *Moved to After 0.1 on 2026-10-24:* built-in ad blocking (D5 reversed) and importing from other browsers.
