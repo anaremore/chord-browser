@@ -75,8 +75,32 @@ const fake = resolve(import.meta.dirname, 'fake-claude.mjs');
 const fakeCodex = resolve(import.meta.dirname, '../unit/fixtures/fake-codex.mjs');
 const capturesDir = resolve(appDir, 'test-results', 'captures');
 
+/**
+ * A page with problems for page_diagnostics: a console error and warning, an uncaught exception, a 404 image
+ * and a fetch to a port nothing listens on, each address with a query that must never reach the model, and a
+ * cookie. `window.done` once all of it has happened.
+ */
+const brokenPage = (closedPort: number) => `<title>Broken</title><h1>A broken page</h1>
+<img src="/missing.png?sig=QUERY-SECRET-1">
+<script>
+  document.cookie = 'chord_diag=COOKIE-SECRET; path=/';
+  console.log('just-info-message');
+  console.error('Render failed for', { id: 7 });
+  console.warn('Old API used');
+  fetch('http://127.0.0.1:${closedPort}/api?key=QUERY-SECRET-2').catch(() => undefined).finally(() => {
+    setTimeout(() => { throw new Error('kaboom near https://x.example/p?token=QUERY-SECRET-3'); });
+    setTimeout(() => { window.done = true; }, 50);
+  });
+</script>`;
+
 let site: { server: Server; origin: string };
+/** A port nothing listens on: a request there is refused. */
+let closedPort = 0;
 test.beforeAll(async () => {
+  const probe = createServer();
+  await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done));
+  closedPort = (probe.address() as AddressInfo).port;
+  await new Promise<void>((done) => probe.close(() => done()));
   const pages: Record<string, string> = {
     '/article': '<title>Article</title><h1>Chords</h1><p>Chords are three notes played together, and they sound full.</p>',
     '/second': '<title>Second page</title><p>Another page.</p>',
@@ -112,6 +136,17 @@ test.beforeAll(async () => {
       // no-store: the assistant's own copy has to come through the network, with the tab's cookies.
       res.writeHead(signedIn ? 200 : 403, { 'content-type': signedIn ? 'application/pdf' : 'text/plain', 'cache-control': 'no-store' });
       res.end(signedIn ? Buffer.from(buildPdf(SAMPLE_PDF_PAGES, { title: 'Field guide' })) : 'sign in first');
+      return;
+    }
+    // The 404 that page_diagnostics reports: its header, cookie and body must never reach the model.
+    if (req.url?.startsWith('/missing.png')) {
+      res.writeHead(404, { 'content-type': 'text/plain', 'x-diag-secret': 'HEADER-SECRET', 'set-cookie': 'srv=SERVER-COOKIE-SECRET; Path=/' });
+      res.end('BODY-SECRET');
+      return;
+    }
+    if (req.url === '/broken' || req.url === '/noisy') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(req.url === '/broken' ? brokenPage(closedPort) : '<title>Noisy</title><script>console.error("noisy-tab-error")</script>');
       return;
     }
     const port = (server.address() as AddressInfo).port;
@@ -671,6 +706,94 @@ test('The assistant reads the form on a page of 5,000 fields in a moment, and st
     }
   } finally {
     await app.close();
+  }
+});
+
+test('The assistant reads the problems of the tab on screen, and only that tab’s: console errors, exceptions and failed requests, without queries, cookies, headers or bodies; and DevTools open on it keep working', async () => {
+  const setup = fresh();
+  // A background tab with an error of its own, which the assistant never asks about.
+  const app = await launch(setup, '/noisy');
+  try {
+    const shell = await shellOf(app);
+    await pageWhere(app, (url) => url === `${site.origin}/noisy`);
+    // Every debugger Chord attaches, by the page it belongs to (pages made later too).
+    await app.evaluate(({ app: electronApp, webContents }) => {
+      const g = globalThis as unknown as { attachedTo: string[] };
+      g.attachedTo = [];
+      const watch = (c: Electron.WebContents) => {
+        const attach = c.debugger.attach.bind(c.debugger);
+        c.debugger.attach = (version?: string) => {
+          g.attachedTo.push(c.getURL());
+          attach(version);
+        };
+      };
+      for (const c of webContents.getAllWebContents()) watch(c);
+      electronApp.on('web-contents-created', (_e, c) => watch(c));
+    });
+    await shell.evaluate(async (url) => {
+      const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string }>; dispatch(c: unknown): Promise<void> } } }).chord;
+      await chord.state.dispatch({ t: 'tab.open', windowId: (await chord.state.snapshot()).windowId, url });
+    }, `${site.origin}/broken`);
+    const tab = await pageWhere(app, (url) => url === `${site.origin}/broken`);
+    // Everything went wrong before anyone asked: Chromium kept it, with no debugger listening.
+    await expect.poll(() => tab.evaluate(() => (window as unknown as { done?: boolean }).done === true)).toBe(true);
+    const attachedTo = () => app.evaluate(() => (globalThis as unknown as { attachedTo: string[] }).attachedTo);
+    const debugging = () => app.evaluate(({ webContents }) => webContents.getAllWebContents().filter((c) => !c.isDestroyed() && c.debugger.isAttached()).map((c) => c.getURL()));
+    expect(await attachedTo()).toEqual([]);
+
+    const panel = await openAssistant(shell);
+    await setUp(panel);
+    await send(panel, 'Why is this page broken?');
+    await expect(panel.getByText(/^I see \d+ problems\.$/)).toBeVisible();
+    await expect(panel.getByText(/Checked “Broken” for problems/)).toBeVisible();
+    const asked = () =>
+      readFileSync(join(setup.config, 'diagnostics.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((l) => JSON.parse(l) as { tools: string[]; result: string });
+    const first = asked()[0]!;
+    expect(first.tools).toContain('page_diagnostics');
+    const result = JSON.parse(first.result) as { source: string; trust: string; url: string; entries: Record<string, unknown>[] };
+    expect(result).toMatchObject({ source: 'page_diagnostics', trust: 'untrusted', url: `${site.origin}/broken` });
+    const entries = result.entries;
+    // The console calls and the exception came before Runtime.enable, which replays them (ARCHITECTURE.md §11.3);
+    // an object logged then comes back by its class alone, with no preview of what's in it.
+    expect(entries).toContainEqual(expect.objectContaining({ kind: 'console', level: 'error', source: 'console', text: 'Render failed for Object' }));
+    expect(entries).toContainEqual(expect.objectContaining({ kind: 'console', level: 'warning', text: 'Old API used' }));
+    expect(entries).toContainEqual(expect.objectContaining({ kind: 'exception', text: 'Uncaught Error: kaboom near https://x.example/p' }));
+    // The failed loads come from the log, which Log.enable replays.
+    expect(entries).toContainEqual(expect.objectContaining({ kind: 'request', url: `${site.origin}/missing.png`, status: 404, type: 'image' }));
+    expect(entries).toContainEqual(expect.objectContaining({ kind: 'request', url: `http://127.0.0.1:${closedPort}/api`, error: 'net::ERR_CONNECTION_REFUSED' }));
+    for (const never of ['just-info-message', 'QUERY-SECRET', 'COOKIE-SECRET', 'HEADER-SECRET', 'BODY-SECRET', 'chord_diag', 'x-diag-secret', 'noisy-tab-error']) expect(first.result).not.toContain(never);
+    // Only the tab it asked about was attached, and it was let go.
+    expect(await attachedTo()).toEqual([`${site.origin}/broken`]);
+    expect(await debugging()).toEqual([]);
+
+    // DevTools docked on the tab: the read still works, and DevTools stay connected after it (their console
+    // still hears the page).
+    await runAction(shell, 'app.devtools');
+    const devtoolsHeard = () =>
+      app.evaluate(async ({ webContents }, u) => {
+        const tools = webContents.getAllWebContents().find((c) => !c.isDestroyed() && c.getURL() === u)?.devToolsWebContents;
+        if (!tools || tools.isDestroyed() || !tools.getURL().startsWith('devtools://devtools/')) return null;
+        return (await tools.executeJavaScript(
+          `import('devtools://devtools/bundled/core/sdk/sdk.js').then((SDK) => SDK.TargetManager.TargetManager.instance().models(SDK.ConsoleModel.ConsoleModel).flatMap((m) => m.messages().map((x) => x.messageText))).catch((e) => ['failed: ' + e])`,
+        )) as string[];
+      }, `${site.origin}/broken`);
+    await expect.poll(async () => (await devtoolsHeard())?.some((t) => t.startsWith('Render failed')), { timeout: 20_000 }).toBe(true);
+    await send(panel, 'Is it still broken?');
+    await expect.poll(() => asked().length).toBe(2);
+    const second = JSON.parse(asked()[1]!.result) as { entries?: unknown[]; data?: { refused?: string } };
+    expect(second.data?.refused).toBeUndefined();
+    expect(second.entries).toContainEqual(expect.objectContaining({ kind: 'request', status: 404 }));
+    await tab.evaluate(() => console.error('logged-after-the-read'));
+    await expect.poll(async () => (await devtoolsHeard())?.includes('logged-after-the-read'), { timeout: 10_000 }).toBe(true);
+    expect(await debugging()).toEqual([]);
+    expect((await attachedTo()).every((u) => u === `${site.origin}/broken`)).toBe(true);
+  } finally {
+    await app.close();
+    rmSync(setup.profile, { recursive: true, force: true });
+    rmSync(setup.config, { recursive: true, force: true });
   }
 });
 
