@@ -1,0 +1,39 @@
+# Spike S17 M0 (spikes/s17-passwords): its Electron probes on CI's Windows and macOS runners,
+# for the numbers the Linux container can't give. Runs only on pushes to the spike's branch,
+# and goes with the spike.
+name: S17 spike
+
+on:
+  push:
+    branches: [spike/s17-passwords-m0]
+    paths: ['spikes/s17-passwords/**', '.github/workflows/s17-spike.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  probes:
+    name: S17 probes · ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x64, os: windows-latest }
+          - { name: macOS arm64, os: macos-26 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @chord/desktop build
+      - run: node spikes/s17-passwords/probes/run.mjs --rounds 3
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: s17-probes-${{ runner.os }}-${{ runner.arch }}
+          path: spikes/s17-passwords/results/probes/
