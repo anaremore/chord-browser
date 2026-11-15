@@ -1,16 +1,17 @@
 /** Read-only queries over State, shared by main and renderers. */
 import { MAX_FAVORITES, type Chord, type ChordId, type Download, type Favorite, type NodeId, type Section, type SidebarNode, type State, type TabNode, type WindowId } from './model';
-import { children } from './nodes';
+import { children, childrenIndex, childrenToRead, nodeList } from './nodes';
 import { placeKey } from './rank';
 import { shownTabs } from './split';
 
-export { children };
+export { children, childrenToRead, nodeList };
 
-/** Every tab of a chord in visual order: pinned (depth-first through folders and splits), then Today. */
+/** Every tab of a chord in visual order: pinned (depth-first through folders and splits), then Today. To read (in a draft, see `nodeList`). */
 export function tabsInOrder(state: State, chordId: ChordId): TabNode[] {
   const out: TabNode[] = [];
+  const childrenOf = childrenIndex(state, chordId);
   const walk = (section: Section, parentId: NodeId | null) => {
-    for (const node of children(state, chordId, section, parentId)) {
+    for (const node of childrenOf(section, parentId)) {
       if (node.kind === 'tab') out.push(node);
       // A split's panes are always in order (its row lists them when opened); a closed folder's aren't.
       else if (node.kind === 'split' || !node.collapsed) walk(section, node.id);
@@ -21,13 +22,14 @@ export function tabsInOrder(state: State, chordId: ChordId): TabNode[] {
   return out;
 }
 
-/** Everything inside a folder (or a split), at any depth, parents before their children. */
+/** Everything inside a folder (or a split), at any depth, parents before their children. To read (in a draft, see `nodeList`). */
 export function descendants(state: State, folderId: NodeId): SidebarNode[] {
   const folder = state.nodes[folderId];
   if (folder?.kind !== 'folder' && folder?.kind !== 'split') return [];
   const out: SidebarNode[] = [];
+  const childrenOf = childrenIndex(state, folder.chordId);
   const walk = (parentId: NodeId) => {
-    for (const node of children(state, folder.chordId, folder.section, parentId)) {
+    for (const node of childrenOf(folder.section, parentId)) {
       out.push(node);
       if (node.kind !== 'tab') walk(node.id);
     }
@@ -95,7 +97,7 @@ export function favoriteFits(state: Pick<State, 'favorites' | 'chords'>, url: st
  * the same site.
  */
 export function tabForFavorite(state: State, chordId: ChordId, url: string): TabNode | null {
-  const tabs = Object.values(state.nodes).filter((n): n is TabNode => n.kind === 'tab' && n.chordId === chordId);
+  const tabs = nodeList(state).filter((n): n is TabNode => n.kind === 'tab' && n.chordId === chordId);
   const place = placeKey(url);
   const same = place ? tabs.filter((t) => placeKey(t.url) === place) : [];
   const host = siteOf(url);

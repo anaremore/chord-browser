@@ -5,7 +5,7 @@
  */
 import { generateNKeysBetween } from 'fractional-indexing';
 import { SPLIT, type NodeId, type SidebarNode, type SplitDirection, type SplitNode, type State, type TabNode, type WindowId } from './model';
-import { children } from './nodes';
+import { byRank, children, nodeList } from './nodes';
 
 export interface PaneRect {
   x: number;
@@ -120,11 +120,19 @@ export const fitsPanes = (along: number, n: number, gap: number = SPLIT.gap, min
 export function settleSplits(state: State): Set<NodeId> {
   const changed = new Set<NodeId>();
   const nodes = state.nodes as Record<NodeId, SidebarNode>;
-  for (const split of Object.values(nodes).filter((n): n is SplitNode => n.kind === 'split')) {
+  // Read without making a draft of every node (nodes.ts); what changes is taken from `nodes`, as a draft.
+  const all = nodeList(state);
+  const splits = all.filter((n): n is SplitNode => n.kind === 'split');
+  if (splits.length === 0) return changed;
+  const inSplits = new Map<NodeId, SidebarNode[]>(splits.map((n) => [n.id, []]));
+  for (const n of all) if (n.parentId !== null) inSplits.get(n.parentId)?.push(n);
+  for (const found of splits) {
+    const split = nodes[found.id] as SplitNode;
+    const inside = inSplits.get(split.id)!;
     // A split holds only tabs, of its own chord and section; anything else steps out, just after it.
-    const strays = Object.values(nodes).filter((n) => n.parentId === split.id && (n.kind !== 'tab' || n.chordId !== split.chordId || n.section !== split.section));
-    stepOut(state, split, strays, changed);
-    const members = splitMembers(state, split.id);
+    const pane = (n: SidebarNode) => n.kind === 'tab' && n.chordId === split.chordId && n.section === split.section;
+    stepOut(state, split, inside.filter((n) => !pane(n)).map((n) => nodes[n.id]!), changed);
+    const members = inside.filter(pane).sort(byRank).map((n) => nodes[n.id] as TabNode);
     if (members.length === 0) {
       delete nodes[split.id];
       continue;
