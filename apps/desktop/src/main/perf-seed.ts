@@ -5,7 +5,8 @@
  * full sidebar and a used history. Pages are on the home page's site,
  * `/perf/1` and up: one per visit, or `CHORD_PERF_PAGES` of them visited in
  * turn (an export's run: 50,000 visits on 15,000 pages, as S15 sizes a profile).
- * `CHORD_PERF_PINNED` pinned tabs, each with an icon of its own (4 KB), and
+ * `CHORD_PERF_PINNED` pinned tabs, each with an icon of its own (4 KB), the
+ * last of them in `CHORD_PERF_FOLDERS` folders of 20 (every other one open), and
  * `CHORD_PERF_EFFECTS` sites with Effects at their largest (64 KB of CSS, 50
  * hidden elements): a setup that's big for sync to read.
  */
@@ -23,6 +24,7 @@ export function seedForPerformance(
     visits,
     pages = visits,
     pinned = 0,
+    folders = 0,
     effects = 0,
     homeUrl,
     newId,
@@ -33,6 +35,8 @@ export function seedForPerformance(
     visits: number;
     pages?: number;
     pinned?: number;
+    /** Folders of 20 at the end of Pinned, holding its last tabs; every other one open. */
+    folders?: number;
     effects?: number;
     homeUrl: string;
     newId: () => string;
@@ -54,6 +58,18 @@ export function seedForPerformance(
       const icon = Buffer.concat(Array.from({ length: 94 }, (_, k) => createHash('sha256').update(`${i}:${k}`).digest()));
       state.nodes[id] = { ...tab, section: 'pinned', pinnedUrl: tab.url, favicon: `data:image/png;base64,${icon.toString('base64')}` };
       i++;
+    }
+    // The last pinned tabs, 20 to a folder, in folders after the rest.
+    const seeded = Object.keys(state.nodes).filter((id) => !before.has(id));
+    const last = seeded.reduce((r, id) => (state.nodes[id]!.rank > r ? state.nodes[id]!.rank : r), '');
+    const count = Math.min(folders, Math.floor(seeded.length / 20));
+    for (let f = 0; f < count; f++) {
+      const folderId = newId();
+      // Ranks after every seeded one (a key followed by more characters sorts after it), in order.
+      state.nodes[folderId] = { kind: 'folder', id: folderId, chordId, section: 'pinned', parentId: null, rank: `${last}V${String(f).padStart(5, '0')}`, title: `Folder ${f + 1}`, collapsed: f % 2 === 1, createdAt: at };
+      seeded.slice(seeded.length - (count - f) * 20, seeded.length - (count - f - 1) * 20).forEach((id, k) => {
+        state.nodes[id] = { ...(state.nodes[id] as TabNode), parentId: folderId, rank: `a${String(k).padStart(3, '0')}` };
+      });
     }
   }
   for (let i = 0; i < effects; i++) {
