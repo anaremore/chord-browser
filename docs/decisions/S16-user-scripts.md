@@ -1,6 +1,8 @@
 # S16: User scripts (Tampermonkey)
 
-*2026-10-25 · ROADMAP.md, Later · for review: nothing is built, and nothing here is decided until the maintainer says so.*
+*2026-10-25 · ROADMAP.md, Later · nothing is built yet.*
+
+**Decided 2026-11-15 by the maintainer: (d), upstream first.** Turn Chromium's userScripts implementation on in Electron, then use it in Chord. If Electron says no, or the patch isn't merged by mid-December, build (b) in Chord instead.
 
 **In short.** In Manifest V3, Tampermonkey runs your scripts through Chrome's `chrome.userScripts`. In Chord that API is undefined, so Tampermonkey says "Please enable the `Allow User Scripts` extension setting" and your scripts don't run.
 
