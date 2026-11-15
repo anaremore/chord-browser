@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, BaseWindow, ipcMain, session, WebContentsView } from 'electron';
+import { routeKey } from './keys.mjs';
 
 const arg = (name, fallback) => {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -260,18 +261,21 @@ async function card() {
   const routed = [];
   for (const p of panes) {
     p.webContents.on('before-input-event', (event, input) => {
-      if (!open || input.type !== 'keyDown') return;
-      if (!['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(input.key)) return;
-      event.preventDefault();
-      routed.push(input.key);
-      if (input.key === 'ArrowDown') open.index = Math.min(2, open.index + 1);
-      if (input.key === 'ArrowUp') open.index = Math.max(0, open.index - 1);
-      void popover.webContents.executeJavaScript(`highlight(${open.index})`);
-      if (input.key === 'Enter') void ask(p.webContents, 'fill', { values: { user: 'ada@example.com' }, realm: 'mine' });
-      if (input.key === 'Enter' || input.key === 'Escape') {
-        popover.setVisible(false);
-        open = null;
+      if (!open) return;
+      const next = routeKey({ index: open.index, rows: 3 }, input);
+      if (!next.take && next.menu) return;
+      if (next.take) {
+        event.preventDefault();
+        routed.push(input.key);
       }
+      if (next.menu) {
+        open.index = next.menu.index;
+        void popover.webContents.executeJavaScript(`highlight(${open.index})`);
+        return;
+      }
+      if (next.choose !== undefined) void ask(p.webContents, 'fill', { values: { user: 'ada@example.com' }, realm: 'mine' });
+      popover.setVisible(false);
+      open = null;
     });
   }
 
