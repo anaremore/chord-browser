@@ -213,14 +213,21 @@ describe('import reducer', () => {
     const p = plan(t.state, { groups: { 'r0/1': 'new', 'r1/1': 'chord:c1', r1: 'chord:c1' }, tabs: 'chord:c1', history: false });
     t.run({ t: 'import.add', importId: p.importId, chords: p.chords, nodes: p.nodes });
     const total = p.nodes.length;
+    const parentOf = new Map(nodeList(t.state).map((n) => [n.id, n.parentId]));
+    const partOf = new Map<string, number>();
     let parts = 0;
     while (t.state.imports[p.importId]) {
+      const was = new Set(nodeIds(t.state));
       t.run({ t: 'import.undo', importId: p.importId, limit: 2 });
       parts++;
+      for (const id of was) if (!nodeOf(t.state, id)) partOf.set(id, parts);
       for (const node of nodeList(t.state)) if (node.parentId) expect(nodeOf(t.state, node.parentId)).toBeDefined();
       if (t.state.imports[p.importId]) expect(t.state.chords[p.chords[0]!.id]).toBeDefined();
     }
     expect(parts).toBe(Math.ceil(total / 2));
+    // Siblings in a folder go by id, the last first, whatever bucket each lands in.
+    for (const [a, pa] of partOf)
+      for (const [b, pb] of partOf) if (a < b && parentOf.get(a) && parentOf.get(a) === parentOf.get(b)) expect(pb).toBeLessThanOrEqual(pa);
     expect(nodeIds(t.state)).toEqual(['t1']);
     expect(Object.keys(t.state.chords)).toEqual(['c1']);
   });

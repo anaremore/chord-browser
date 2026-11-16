@@ -2478,15 +2478,20 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       // so a part never leaves anything without its folder.
       const inside = new Map<NodeId, NodeId[]>();
       const roots: NodeId[] = record.nodeIds.filter((id) => nodeOf(draft, id) && !gone.has(nodeOf(draft, id)!.chordId));
+      const goneRoots: NodeId[] = [];
       for (const node of nodeList(draft as State)) {
         if (!node.parentId) {
-          if (gone.has(node.chordId)) roots.push(node.id);
+          if (gone.has(node.chordId)) goneRoots.push(node.id);
           continue;
         }
         const list = inside.get(node.parentId);
         if (list) list.push(node.id);
         else inside.set(node.parentId, [node.id]);
       }
+      // The buckets walk in hash order: by id, so a partial undo takes the same part it always did.
+      const byId = (a: NodeId, b: NodeId) => (a < b ? -1 : a > b ? 1 : 0);
+      roots.push(...goneRoots.sort(byId));
+      for (const list of inside.values()) list.sort(byId);
       const listed: NodeId[] = [];
       const seen = new Set<NodeId>();
       for (let i = 0, queue = roots; i < queue.length; i++) {
