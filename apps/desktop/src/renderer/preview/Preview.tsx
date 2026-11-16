@@ -10,7 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLive, type Live } from '../shared/live';
 import { Favicon } from '../shared/Favicon';
 import { displayHost } from '../shared/site';
-import { chordStyle } from '../shared/theme';
+import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
 import styles from './Preview.module.css';
 
@@ -87,6 +87,8 @@ export function Preview({ info: infoSource }: { info: Live<SystemInfo> }) {
   }, [card]);
 
   const { style, appearance } = chordStyle(card ? { theme: card.theme } : null, info, card?.interface);
+
+  useRootColorScheme(appearance);
   return (
     <div ref={root} className={styles.root} style={style} data-still={(card && !card.animate) || undefined}>
       {card && (

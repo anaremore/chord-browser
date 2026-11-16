@@ -11,7 +11,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { useLive, type Live } from '../shared/live';
 import { displayHost, pageTitle } from '../shared/site';
-import { chordStyle } from '../shared/theme';
+import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
 import styles from './Archive.module.css';
 import { groupByDay } from './days';
@@ -51,6 +51,8 @@ export function ArchivePage({ info: infoSource, snapshot: snapshotSource }: { in
   }, [query, limit]);
 
   const { style, appearance } = chordStyle(snapshot.theme ? { theme: snapshot.theme } : null, info, snapshot.interface);
+
+  useRootColorScheme(appearance);
   const chords = new Map(snapshot.chords.map((c) => [c.id, c]));
   const items = (list?.items ?? []).filter((t) => !gone.has(t.id));
   // Which chord a tab was in only matters when the archive has more than one.

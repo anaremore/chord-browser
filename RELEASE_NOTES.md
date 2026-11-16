@@ -2,6 +2,26 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.11.0 · preview · 2026-11-16
+
+0.10.2 was never published: its update comes in this release.
+
+- **Passwords, built in.** Chord keeps your passwords in a vault on this computer, locked with a passphrase only you know. Chord can't get it back for you: forget it and the vault can't be opened, though *Start over* in Settings → Passwords begins a new one.
+  - **Filling.** Click into a sign-in field and a menu under it lists your accounts for the site: pick one with ↓ ↑ and Enter, or a click. The page never sees those keys, and nothing is filled until you choose. While the vault is locked, the menu offers *Unlock passwords*.
+  - **Saving.** After a sign-in that worked, a card offers to save the password, or to update the one you have. The first password you save chooses the passphrase. Closed the card too soon? The key beside the address brings it back for a few minutes. *Never for this site* stops it asking there.
+  - **Locking.** The vault locks each time Chord starts and after 30 minutes unused (*Lock after*, in Settings → Passwords), or at once with *Lock now*. *Keep unlocked on this computer* lets your system keep it open for you instead; it's off unless you turn it on, and isn't offered on Linux without a keyring.
+  - **Settings → Passwords** lists them to search, show, copy, change or delete, with Undo. Showing or copying asks for the passphrase again after 5 minutes, and a copied password leaves the clipboard after a minute. Windows' clipboard history still keeps it, so copy sparingly there.
+  - **A switch for each chord**, under *Offer to save and fill passwords*. In a chord where a password manager such as Bitwarden or 1Password is installed, Chord's stands aside, and that chord's switch says why. Turn it on there to have both.
+  - **Private windows** fill from the vault, and never save.
+  - **Your passwords stay on this computer.** Sync and Chord files never carry them.
+  - **When Chord can't tell where a form's password goes**, it fills nothing and says so, rather than half the form.
+  - Not there yet: importing and exporting passwords, a password generator, the sign-in box a site or proxy shows before its page (HTTP sign-in), and sign-in forms inside another site's frame. Sign-up and change-password forms come with the generator.
+- **Huge sidebars stay quick.** With 5,000 pinned tabs and 30,000 bookmarks, opening, closing, pinning, moving or renaming a tab now takes about a millisecond, well under a frame; in 0.10.1, closing one took over a second. Deleting a chord, or its Undo, takes about 30 ms.
+- **A long Pinned scrolls on its own.** Pinned stops at half the sidebar and scrolls, its lower edge fading while there's more below, so Today always has the rest. Before, a Pinned taller than the window ran under the chord switcher, hid Today, and its last tabs couldn't be reached. A Pinned that fits looks as it did, and each chord keeps where you'd scrolled.
+  - With 5,000 pinned tabs, switching to their chord no longer stalls for about 2 seconds, and Chord's window is ready in less than half the time.
+- **Dropdowns are readable in a dark chord** when your system is light. Their lists came up white, with text too pale to read, in Settings and elsewhere.
+- **Security.** Updates Electron to 45.3.2 (Chromium 156.0.8078.100), which fixes security issues in Chromium and the components it uses. Update as soon as you can.
+
 ## 0.10.2 · security · 2026-11-16
 
 0.10.1 was never published: its update comes in this release.

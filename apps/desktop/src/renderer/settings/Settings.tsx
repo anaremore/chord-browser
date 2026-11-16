@@ -12,7 +12,7 @@ import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { useLive, type Live } from '../shared/live';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
-import { chordStyle } from '../shared/theme';
+import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
 import { AssistantSettings } from './AssistantSettings';
 import { AppearanceSection } from './Appearance';
@@ -495,6 +495,8 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
   useEffect(() => applyMotion(snapshot.settings, info.prefersReducedMotion), [snapshot.settings, info.prefersReducedMotion]);
 
   const { style, appearance } = chordStyle(snapshot.chord, info, snapshot.settings.interface);
+
+  useRootColorScheme(appearance);
   const spring = springsFor(snapshot.settings, info.prefersReducedMotion);
 
   return (

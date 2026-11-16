@@ -27,7 +27,7 @@ import { applyMotion, INSTANT, motionMode, reducedMotionMode, springsFor } from 
 import { inNextFrame, noteRender } from '../shared/frames';
 import { markRender } from '../shared/perf';
 import { displayHost, pageTitle } from '../shared/site';
-import { chordStyle } from '../shared/theme';
+import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
 import styles from './App.module.css';
 import { ArchiveButton, ArchiveFlights } from './ArchiveArc';
@@ -397,6 +397,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   // A private window: its own chord only, no pinning, no archive, and nothing kept.
   const isPrivate = Boolean(win?.private);
   const { style, appearance } = chordStyle(chord, info, state.settings.interface);
+  useRootColorScheme(appearance);
   const activeId = activeTabId(state, windowId);
   const active = activeId ? (nodeOf(state, activeId) as TabNode | undefined) : undefined;
   const live = activeId ? state.live[activeId] : undefined;

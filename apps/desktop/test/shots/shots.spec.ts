@@ -4,7 +4,7 @@
  * scripts/dev/shots.mjs, on Xvfb, so no window opens on your desktop.
  *
  * Each launch has a throwaway profile (in the run's temp folder, removed when it ends) and real
- * public pages. Chord runs at 2× (--force-device-scale-factor), its window 1440 × 900 CSS pixels
+ * public pages (the passwords picture's sign-in page is a stand-in, served from this machine). Chord runs at 2× (--force-device-scale-factor), its window 1440 × 900 CSS pixels
  * at the screen's top left, so a picture is 2880 × 1800. A picture is the whole window as the
  * screen shows it: the shell, the pages over it and the caption buttons, from desktopCapturer's
  * copy of the screen cropped to the window, taken once two copies in a row agree (loads, fonts
@@ -14,11 +14,13 @@
  * CHORD_E2E_SCREEN for that.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:https';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { appDir, dispatch, isOverlay, isSettings, isShell, launch, pageWhere, runAction, type ChordGlobal } from '../e2e/a11y-kit';
+import { appDir, dispatch, isOverlay, isPopover, isSettings, isShell, launch, pageWhere, runAction, type ChordGlobal } from '../e2e/a11y-kit';
 import { failOnMainErrors } from '../e2e/main-errors';
 
 failOnMainErrors();
@@ -126,12 +128,12 @@ async function tabFor(shell: Page, url: string) {
 /** Playwright's mouse, which the page it's given thinks is the pointer, rested where nothing hovers. */
 const rest = (page: Page) => page.mouse.move(SIZE.width - 10, SIZE.height - 10);
 
-async function session(appearance: 'light' | 'dark') {
+async function session(appearance: 'light' | 'dark', env: Record<string, string> = {}, args: string[] = []) {
   // The assistant's stand-in keeps its session files here; no Codex (a path that doesn't exist).
   const config = mkdtempSync(join(tmpdir(), 'chord-shots-claude-'));
   const app = await launch(
-    { CHORD_APPEARANCE: appearance, CHORD_HOME_URL: PAGES.chord, CHORD_ASSISTANT_CLAUDE: demoClaude, CHORD_ASSISTANT_CODEX: join(config, 'no-codex'), CLAUDE_CONFIG_DIR: config },
-    { args: [`--force-device-scale-factor=${SCALE}`] },
+    { CHORD_APPEARANCE: appearance, CHORD_HOME_URL: PAGES.chord, CHORD_ASSISTANT_CLAUDE: demoClaude, CHORD_ASSISTANT_CODEX: join(config, 'no-codex'), CLAUDE_CONFIG_DIR: config, ...env },
+    { args: [`--force-device-scale-factor=${SCALE}`, ...args] },
   );
   const shell = await pageWhere(app, isShell);
   await shell.evaluate(() => document.fonts.ready);
@@ -250,5 +252,79 @@ test('dark: the window, the command bar, and Settings → Appearance', async () 
     await capture(app, 'Chord Settings', 'themes');
   } finally {
     await app.close();
+  }
+});
+
+/**
+ * The passwords picture's sign-in page: no real site. A server on this machine answers for
+ * https://accounts.example.com (--host-resolver-rules, a throwaway self-signed certificate and
+ * --ignore-certificate-errors), so the address and the menu read as a site's would.
+ */
+const SIGN_IN_HOST = 'accounts.example.com';
+const SIGN_IN_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#3d6be0"/><path d="M9 23 16 8l7 15" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const SIGN_IN_STYLE =
+  '<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f3f5f9;font:16px/1.4 system-ui,sans-serif;color:#1d2433}' +
+  'main{width:380px;background:#fff;border-radius:14px;padding:36px 32px;box-shadow:0 1px 2px #0000000f,0 8px 28px #00000014}' +
+  '.brand{display:flex;align-items:center;gap:10px;font-weight:650;font-size:18px;margin-bottom:22px}.brand img{width:28px;height:28px}' +
+  'h1{font-size:24px;margin:0 0 6px}p{margin:0 0 22px;color:#5b6475}label{display:block;font-size:14px;font-weight:600;margin:14px 0 6px}' +
+  'input{width:100%;padding:11px 12px;border:1px solid #c9cfda;border-radius:8px;font:inherit}input:focus{outline:2px solid #3d6be0;outline-offset:-1px;border-color:transparent}' +
+  'button{margin-top:22px;width:100%;padding:12px;border:0;border-radius:8px;background:#3d6be0;color:#fff;font:inherit;font-weight:600}</style>';
+const SIGN_IN_PAGE =
+  '<!doctype html><title>Sign in · Acme</title><link rel="icon" href="/favicon.svg">' + SIGN_IN_STYLE +
+  '<main><div class="brand"><img src="/favicon.svg" alt="">Acme</div><h1>Sign in</h1><p>Welcome back.</p>' +
+  '<form action="/session" method="post"><label for="u">Email</label><input id="u" name="email" type="email" autocomplete="username">' +
+  '<label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password"><button>Sign in</button></form></main>';
+const SIGNED_IN_PAGE = '<!doctype html><title>Acme</title><link rel="icon" href="/favicon.svg">' + SIGN_IN_STYLE + '<main><h1>You’re signed in</h1><p>Welcome back.</p></main>';
+
+test('light: passwords, the menu under a sign-in field', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'chord-shots-cert-'));
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', `/CN=${SIGN_IN_HOST}`, '-addext', `subjectAltName=DNS:${SIGN_IN_HOST}`, '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem')], { stdio: 'ignore' });
+  const server = createServer({ key: readFileSync(join(dir, 'key.pem')), cert: readFileSync(join(dir, 'cert.pem')) }, (req, res) => {
+    const path = new URL(req.url ?? '/', `https://${SIGN_IN_HOST}`).pathname;
+    if (path === '/favicon.svg') {
+      res.writeHead(200, { 'content-type': 'image/svg+xml' });
+      res.end(SIGN_IN_ICON);
+      return;
+    }
+    const body = req.method === 'POST' ? SIGNED_IN_PAGE : path === '/login' ? SIGN_IN_PAGE : null;
+    req.resume();
+    res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(body ?? 'not found');
+  });
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const { port } = server.address() as AddressInfo;
+  // No keyring in the container: the vault starts with no passphrase, as on a computer without one.
+  const { app, shell } = await session('light', { CHORD_E2E_NO_KEYRING: '1' }, [`--host-resolver-rules=MAP ${SIGN_IN_HOST} 127.0.0.1:${port}`, '--ignore-certificate-errors']);
+  try {
+    const login = `https://${SIGN_IN_HOST}/login`;
+    // In the article's tab: Playwright drives the pages Chord opened at launch, not a tab opened since.
+    const page = await pageWhere(app, (u) => u === PAGES.chord);
+    await page.goto(login);
+    const popover = await pageWhere(app, (u) => isPopover(u) && !u.includes('#'));
+
+    // A sign-in, and the card that keeps it, choosing the passphrase.
+    await page.fill('#u', 'ada@example.com');
+    await page.fill('#p', 'Zq9-shots-Sekrit');
+    await page.press('#p', 'Enter');
+    await page.waitForURL(`https://${SIGN_IN_HOST}/session`);
+    const save = popover.getByRole('dialog', { name: `Save this password for ${SIGN_IN_HOST}?` });
+    await save.waitFor({ timeout: 15_000 });
+    await save.getByLabel('Passphrase', { exact: true }).fill('correct horse battery staple');
+    await save.getByLabel('Again').fill('correct horse battery staple');
+    await save.getByRole('button', { name: 'Save' }).click();
+    await save.waitFor({ state: 'detached' });
+    await shell.getByText('Saved. It’s in Settings → Passwords.').waitFor({ state: 'hidden', timeout: 15_000 });
+
+    // Back at the form: the email field's focus opens the menu under it.
+    await page.goto(login);
+    await page.focus('#u');
+    const menu = (await pageWhere(app, (u) => isPopover(u) && u.endsWith('#menu'))).getByRole('listbox', { name: `Passwords for ${SIGN_IN_HOST}` });
+    await menu.waitFor({ timeout: 10_000 });
+    await rest(shell);
+    await iconsLoaded(shell);
+    await capture(app, 'Chord', 'passwords');
+  } finally {
+    await app.close();
+    server.close();
   }
 });

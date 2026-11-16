@@ -19,7 +19,7 @@ import { useLive, type Live } from '../shared/live';
 import { useMirror, type Mirror } from '../shared/mirror';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { afterNextPaint, fromEpoch, measureSince } from '../shared/perf';
-import { chordStyle } from '../shared/theme';
+import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
 import styles from './CommandBar.module.css';
 import { CaptureLayer } from './Capture';
@@ -151,6 +151,7 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
   const windowId = mirror.windowId;
   const win = state.windows[windowId];
   const { style, appearance } = chordStyle(win ? state.chords[win.activeChordId] : undefined, info, state.settings.interface);
+  useRootColorScheme(appearance);
   const spring = springsFor(state.settings, info.prefersReducedMotion);
   useEffect(() => applyMotion(state.settings, info.prefersReducedMotion), [state.settings, info.prefersReducedMotion]);
 
