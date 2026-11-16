@@ -1,0 +1,10 @@
+<!doctype html>
+<!-- A bank or airline that signs in with a member number and a PIN: the PIN is the password. -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<h1>Log in to your account</h1>
+<form>
+  <input name="memberNumber" placeholder="Member number" data-chord-expect="username">
+  <input type="password" name="memberPin" placeholder="PIN" data-chord-expect="current-password">
+  <button>Log in</button>
+</form>
+</body></html>

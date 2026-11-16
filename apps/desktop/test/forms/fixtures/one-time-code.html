@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- A one-time-code step after the password, and six one-character boxes: never a credential. -->
+<html><head><meta charset="utf-8"><title>Example</title></head><body>
+<h2>Enter the code we sent you</h2>
+<form>
+  <input name="otp" autocomplete="one-time-code" inputmode="numeric" data-chord-expect="none">
+  <button>Verify</button>
+</form>
+<form>
+  <input type="tel" maxlength="1" name="d1" data-chord-expect="none"><input type="tel" maxlength="1" name="d2" data-chord-expect="none">
+  <input type="tel" maxlength="1" name="d3" data-chord-expect="none"><input type="tel" maxlength="1" name="d4" data-chord-expect="none">
+  <input type="tel" maxlength="1" name="d5" data-chord-expect="none"><input type="tel" maxlength="1" name="d6" data-chord-expect="none">
+  <button>Verify</button>
+</form>
+</body></html>

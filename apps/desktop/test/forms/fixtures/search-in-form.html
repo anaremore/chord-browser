@@ -1,0 +1,10 @@
+<!doctype html>
+<!-- A search field inside the sign-in form, just before the password: vetoed, so the username before it is chosen. -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<form>
+  <input name="username" placeholder="Username" data-chord-expect="username">
+  <input type="search" name="site-search" placeholder="Search the site" data-chord-expect="none">
+  <input type="password" name="password" placeholder="Password" data-chord-expect="current-password">
+  <button>Log in</button>
+</form>
+</body></html>

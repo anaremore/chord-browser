@@ -1,0 +1,13 @@
+<!doctype html>
+<!-- Sign-up: names, an email, a password and its confirmation. -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-up"></head><body>
+<h1>Create your account</h1>
+<form>
+  <input name="first" placeholder="First name" data-chord-expect="none">
+  <input name="last" placeholder="Last name" data-chord-expect="none">
+  <input type="email" name="email" placeholder="Email" data-chord-expect="username">
+  <input type="password" name="password" placeholder="Password" data-chord-expect="new-password">
+  <input type="password" name="password2" placeholder="Confirm password" data-chord-expect="confirmation-password">
+  <button>Create account</button>
+</form>
+</body></html>
