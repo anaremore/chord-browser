@@ -194,7 +194,7 @@ describe('page_diagnostics: what each kind of event becomes', () => {
       // The same extension in the page: the page's.
       9: { origin: 'chrome-extension://abc', frameId: 'top' },
     };
-    const never = { sites: ['mail.example.com'], contexts };
+    const never = { sites: ['mail.example.com'], contexts, page: 'https://www.example.com/home' };
     const error = (extra: object): DiagnosticsEvent => ({ kind: 'console', call: { type: 'error', args: [{ type: 'string', value: 'x' }], executionContextId: 1, ...extra } });
     const thrown = (extra: object): DiagnosticsEvent => ({ kind: 'exception', thrown: { exceptionDetails: { text: 'Uncaught', executionContextId: 1, ...extra } } });
     const failed = (url: string): DiagnosticsEvent => ({ kind: 'log', entry: { source: 'network', level: 'error', text: 'net::ERR_FAILED', url } });
@@ -218,14 +218,33 @@ describe('page_diagnostics: what each kind of event becomes', () => {
       ['a failed request to another host, with the frame in the page', failed('https://api.mailcdn.net/v1/messages/123'), false],
     ])('%s', (_, event, kept) => {
       expect(diagnosticsEntries([event], {}, never).entries).toHaveLength(kept ? 1 : 0);
-      // With no Never read sites, nothing is left out.
-      expect(diagnosticsEntries([event], {}, { sites: [], contexts }).entries).toHaveLength(1);
+      // With no Never read sites, or only a blank one, nothing is left out.
+      expect(diagnosticsEntries([event], {}, { ...never, sites: [] }).entries).toHaveLength(1);
+      expect(diagnosticsEntries([event], {}, { ...never, sites: ['  ', ''] }).entries).toHaveLength(1);
     });
 
-    it('without such a frame in the page, its Log entries are kept', () => {
-      const pageOnly = { sites: ['mail.example.com'], contexts: { 1: page } };
-      expect(diagnosticsEntries([failed('https://api.mailcdn.net/v1/messages/123')], {}, pageOnly).entries).toHaveLength(1);
-      expect(diagnosticsEntries([failed('https://mail.example.com/api')], {}, pageOnly).entries).toHaveLength(0);
+    // A Never read frame shares the page's process only when it's the page's own site: then no Log entry can be
+    // trusted, even once the frame is gone (Log.enable replays a removed frame's failed requests).
+    it.each<[string, string, string, boolean]>([
+      ['a same-site page, the frame removed before the read', 'https://www.example.com/home', 'https://api.mailcdn.net/v1/messages/123', false],
+      ['a same-site page, an entry about the page itself', 'https://www.example.com/home', 'https://www.example.com/missing.png', false],
+      ['a Never entry written with its scheme', 'https://example.com/', 'https://cdn.example.net/a.js', false],
+      ['a page of another site: its own failed request', 'https://www.other.net/', 'https://cdn.example.net/a.js', true],
+      ['a page of another site: a request to the Never site', 'https://www.other.net/', 'https://mail.example.com/api', false],
+    ])('Log entries, %s', (_, pageUrl, address, kept) => {
+      const sites = pageUrl === 'https://example.com/' ? ['https://mail.example.com/'] : ['mail.example.com'];
+      expect(diagnosticsEntries([failed(address)], {}, { sites, contexts: { 1: { origin: pageUrl.replace(/^(https?:\/\/[^/]+).*$/, '$1'), frameId: 'top' } }, page: pageUrl }).entries).toHaveLength(kept ? 1 : 0);
+    });
+
+    // A data: or sandboxed srcdoc frame has an opaque origin and a frame of its own: it could sit inside the Never frame.
+    it.each<[string, string]>([
+      ['null (a sandboxed srcdoc frame)', 'null'],
+      ['none (a data: frame)', ''],
+      ['about:blank’s, with no origin of its own', 'about:blank'],
+    ])('a console call from a context whose origin is %s: left out', (_, origin) => {
+      const withChild = { ...never, contexts: { ...contexts, 12: { origin, frameId: 'child' } } };
+      expect(diagnosticsEntries([error({ executionContextId: 12 })], {}, withChild).entries).toEqual([]);
+      expect(diagnosticsEntries([thrown({ executionContextId: 12 })], {}, withChild).entries).toEqual([]);
     });
 
     it('keeps the context through shrinkEvent', () => {

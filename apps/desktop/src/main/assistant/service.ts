@@ -1446,7 +1446,7 @@ export class AssistantService {
     const after = blocked(url);
     if (after) return refuse(after);
     // A frame of a *Never read* site inside the page (mail.example.com in www.example.com): its problems are left out.
-    const { entries, total } = diagnosticsEntries(read.events, read.types, { sites: this.settings.neverSites, contexts: read.contexts });
+    const { entries, total } = diagnosticsEntries(read.events, read.types, { sites: this.settings.neverSites, contexts: read.contexts, page: url });
     state.read.add(node.id);
     const note = total > entries.length ? `The page has ${total} problems; the newest ${entries.length} are here.` : entries.length ? '' : 'Chromium kept no errors, warnings or failed requests for this page since it loaded.';
     await this.activity(state, 'page_diagnostics', `Checked “${title}” for problems`, diagnosticsSummary(entries));

@@ -8,6 +8,7 @@ import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
 import { blockingSite, cleanOffSites } from './ad-blocking';
 import { cleanCountSites, countSite } from './tab-counts';
+import { cleanNeverSites } from './assistant';
 import { cleanKeys } from './bindings';
 import { cleanDevtoolsSettings } from './devtools';
 import { isInternalUrl, visibleTabs } from './idle';
@@ -1947,7 +1948,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (assistant.keep !== undefined && current.keep !== assistant.keep) current.keep = assistant.keep;
         if (assistant.scope !== undefined && current.scope !== assistant.scope) current.scope = assistant.scope;
         if (assistant.readsNothing !== undefined && current.readsNothing !== assistant.readsNothing) current.readsNothing = assistant.readsNothing;
-        if (assistant.neverSites) current.neverSites = [...new Set(assistant.neverSites)];
+        if (assistant.neverSites) current.neverSites = cleanNeverSites(assistant.neverSites);
         if (assistant.offChords) current.offChords = [...new Set(assistant.offChords)];
         if (assistant.codexImages !== undefined && current.codexImages !== assistant.codexImages) current.codexImages = assistant.codexImages;
       }

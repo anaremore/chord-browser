@@ -8,6 +8,7 @@
  * asked for (no Network domain), so they can't be here.
  */
 import { cleanPageText, isNeverReadable } from './assistant';
+import { hostOf, siteOf } from './links';
 
 /** Core runs without DOM types. */
 declare const URL: new (url: string) => { protocol: string; origin: string; host: string; pathname: string };
@@ -312,7 +313,7 @@ const INITIATOR_TYPES: Record<string, string> = {
 export function diagnosticsEntries(
   events: readonly DiagnosticsEvent[],
   types: Readonly<Record<string, string>> = {},
-  never: NeverFrames = { sites: [], contexts: {} },
+  never: NeverFrames = { sites: [], contexts: {}, page: '' },
 ): { entries: DiagnosticsEntry[]; total: number } {
   const all: { at: number; entry: DiagnosticsEntry }[] = [];
   const fromNever = neverJudge(never);
@@ -364,16 +365,32 @@ export interface DiagnosticsContext {
  * readable page can hold a same-site frame of a site that isn't (`mail.example.com` inside `www.example.com`),
  * and with any *Never read* sites set, the rule fails closed:
  * - an event at such an address, or with any frame of its stack there, is left out;
- * - a console call or exception is kept only from a context Chord was told about, in a frame that isn't such a
- *   site's: an unknown context (0, or a frame since removed or reloaded) could be anyone's, and every context in
- *   a *Never read* frame (an extension's content script there too) is that frame's;
- * - while a *Never read* frame is in the page, no `Log` entry is kept: none says which frame it came from, so a
- *   failed request the frame made to another host can't be told from the page's.
+ * - a console call or exception is kept only from a context Chord was told about, with a web or extension
+ *   origin, in a frame that isn't such a site's: an unknown context (0, or a frame since removed or reloaded)
+ *   could be anyone's, an opaque one (a `data:` or sandboxed `srcdoc` frame) could sit inside such a frame,
+ *   and every context in a *Never read* frame (an extension's content script there too) is that frame's;
+ * - when such a site is the page's own site (`mail.example.com` and `www.example.com`), the only case in which
+ *   its frame shares the page's process, no `Log` entry is kept: none says which frame it came from, and a frame
+ *   removed before the read still has its failed requests replayed. Also when such a frame is in the page anyway.
  */
 export interface NeverFrames {
   sites: readonly string[];
   contexts: Readonly<Record<number, DiagnosticsContext>>;
+  /** The page's own address (its main frame's). */
+  page: string;
 }
+
+/** A *Never read* entry's host, as `isNeverReadable` matches it (`https://www.mail.example.com/x` → `mail.example.com`). */
+const neverHost = (site: string) =>
+  site
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/[/:].*$/, '');
+
+/** Origins a frame of the web, or an extension, has; not an opaque one (`null`, or none). */
+const SITE_ORIGIN = /^(https?|file|chrome-extension):\/\//i;
 
 /** Whether an address is a *Never read* site's. Addresses that aren't a site's (eval'd code, `about:`, an extension's) aren't. */
 function onNeverSite(address: string | undefined, sites: readonly string[]): boolean {
@@ -384,20 +401,24 @@ function onNeverSite(address: string | undefined, sites: readonly string[]): boo
 }
 
 /** Which events NeverFrames leaves out. */
-function neverJudge({ sites, contexts }: NeverFrames): (e: DiagnosticsEvent) => boolean {
+function neverJudge({ sites: all, contexts, page }: NeverFrames): (e: DiagnosticsEvent) => boolean {
+  // A blank entry names no site.
+  const sites = all.filter((s) => neverHost(s));
   if (!sites.length) return () => false;
+  const pageHost = hostOf(page);
+  const pageSite = pageHost ? siteOf(pageHost) : null;
   const known = Object.values(contexts);
   const neverFrames = new Set(known.filter((c) => c.frameId !== undefined && onNeverSite(c.origin, sites)).map((c) => c.frameId));
-  const neverInPage = known.some((c) => onNeverSite(c.origin, sites));
+  const logsMixed = (pageSite !== null && sites.some((s) => siteOf(neverHost(s)) === pageSite)) || known.some((c) => onNeverSite(c.origin, sites));
   const allowedContext = (id: number | undefined) => {
     const c = id ? contexts[id] : undefined;
-    return Boolean(c && !onNeverSite(c.origin, sites) && !(c.frameId !== undefined && neverFrames.has(c.frameId)));
+    return Boolean(c && SITE_ORIGIN.test(c.origin) && !onNeverSite(c.origin, sites) && !(c.frameId !== undefined && neverFrames.has(c.frameId)));
   };
   return (e) => {
     const trace = e.kind === 'log' ? e.entry.stackTrace : e.kind === 'console' ? e.call.stackTrace : e.thrown.exceptionDetails?.stackTrace;
     const url = e.kind === 'log' ? e.entry.url : e.kind === 'exception' ? e.thrown.exceptionDetails?.url : undefined;
     if ([url, ...(trace?.callFrames ?? []).map((f) => f.url)].some((a) => onNeverSite(a, sites))) return true;
-    if (e.kind === 'log') return neverInPage;
+    if (e.kind === 'log') return logsMixed;
     return !allowedContext(e.kind === 'console' ? e.call.executionContextId : e.thrown.exceptionDetails?.executionContextId);
   };
 }
