@@ -152,6 +152,8 @@ export class PasswordService {
   private lockTimer: unknown = null;
   /** *Lock now*: the kept key isn't used again until the passphrase is typed. */
   private lockedByYou = false;
+  /** Counts locks (yours and idle ones): a step that was typed before one doesn't count as the passphrase typed after it. */
+  private locks = 0;
   /** What's on the clipboard from *Copy*, by its hash, and when it goes. */
   private copied: { hash: string; timer: unknown } | null = null;
   /** Deleted this session, newest first, for Undo: their address and username only. */
@@ -207,6 +209,7 @@ export class PasswordService {
 
   /** Unused for *Lock after*: the key goes from memory. With the key kept here, the next use opens it again unasked. */
   private async lockIdle(): Promise<void> {
+    this.locks++;
     const { status } = await this.data({ op: 'lock' }).catch((): PasswordResult => ({}));
     // A password Settings shows goes, always.
     this.options.hide?.();
@@ -328,6 +331,7 @@ export class PasswordService {
   /** *Lock now*: locked until the passphrase is typed again, even with the key kept here. */
   async lock(): Promise<PasswordsView> {
     this.lockedByYou = true;
+    this.locks++;
     this.typedAt = null;
     if (this.lockTimer !== null) this.clearTimer(this.lockTimer);
     this.lockTimer = null;
@@ -362,7 +366,11 @@ export class PasswordService {
   }
 
   changePassphrase(current: string, next: string): Promise<PasswordStepResult> {
-    return this.step({ op: 'passphrase', current, next }, () => this.typed());
+    const locks = this.locks;
+    // Locked while scrypt ran: the lock holds (chord-data keeps `held` too), so this isn't the passphrase typed after it.
+    return this.step({ op: 'passphrase', current, next }, () => {
+      if (locks === this.locks) this.typed();
+    });
   }
 
   /**

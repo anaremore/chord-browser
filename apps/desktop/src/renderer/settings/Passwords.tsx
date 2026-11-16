@@ -124,14 +124,16 @@ function LoginDetail({ login, hideSeq, onView, onDeleted }: { login: LoginSummar
     revealed.current = null;
     setPassword(null);
   }, [hideSeq]);
+  // The 5 minutes count from the last change, so typing a new password never loses it; one not saved yet is saved first.
   useEffect(() => {
     if (password === null) return;
     const timer = setTimeout(() => {
+      if (password && password !== revealed.current) void api.passwords.edit(login.id, { password });
       revealed.current = null;
       setPassword(null);
     }, PASSWORD_REAUTH_MS);
     return () => clearTimeout(timer);
-  }, [password === null]);
+  }, [password, login.id]);
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(null), 2000);

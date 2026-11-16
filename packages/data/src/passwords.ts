@@ -154,6 +154,8 @@ interface VaultMeta {
 }
 
 const VERSION = 1;
+/** A checkpoint another connection held up is tried again this often. */
+const CHECKPOINT_RETRY_MS = 2000;
 const NONCE = 12;
 const TAG = 16;
 const KEY = 32;
@@ -279,8 +281,9 @@ export class PasswordStore {
    * A change to the key's copies, written so the old ones don't linger:
    * SQLite zeroes what it frees while it's written (`secure_delete`), the
    * write-ahead log is checkpointed and truncated, and the backups are
-   * rewritten. Best effort past the write itself: a reader holding the log
-   * (an export) leaves it for the next checkpoint.
+   * rewritten. A checkpoint another connection holds up (an export reading,
+   * sync's own checkpoint) answers `busy` without throwing: it's tried again
+   * every CHECKPOINT_RETRY_MS, and at close, until it goes through.
    */
   private setKeyMeta(write: () => void): void {
     this.sql('PRAGMA secure_delete = ON').run();
@@ -289,17 +292,40 @@ export class PasswordStore {
     } finally {
       this.sql('PRAGMA secure_delete = OFF').run();
     }
+    this.truncate();
+    // Backups get the vault as it is, but never the OS-kept copy, nor *Lock now* (a backup restored by hand asks for the passphrase).
+    const meta = this.meta;
     try {
-      this.sql('PRAGMA wal_checkpoint(TRUNCATE)').get();
-    } catch {
-      // Busy: the next checkpoint takes it.
-    }
-    const row = this.sql(`SELECT value FROM meta WHERE key = 'passwords'`).get() as Row | undefined;
-    try {
-      this.scrub(row ? str(row['value']) : null);
+      this.scrub(meta ? JSON.stringify({ ...meta, kept: null, held: undefined }) : null);
     } catch {
       // A backup that can't be opened stays as it is; S17's honest limits say so.
     }
+  }
+
+  /** Whether the write-ahead log still holds frames from before a change to the key's copies. */
+  private truncatePending = false;
+  private truncateTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Checkpoints and truncates the log; when another connection holds it up, tries again later, and at close. */
+  private truncate(): boolean {
+    let done: boolean;
+    try {
+      const result = this.sql('PRAGMA wal_checkpoint(TRUNCATE)').get() as Row | undefined;
+      done = num(result?.['busy']) === 0;
+    } catch {
+      done = false;
+    }
+    this.truncatePending = !done;
+    if (this.truncateTimer) clearTimeout(this.truncateTimer);
+    this.truncateTimer = null;
+    if (!done) {
+      this.truncateTimer = setTimeout(() => {
+        this.truncateTimer = null;
+        if (this.truncatePending) this.truncate();
+      }, CHECKPOINT_RETRY_MS);
+      this.truncateTimer.unref?.();
+    }
+    return done;
   }
 
   private wrapKey(passphrase: string, salt: Buffer, params: ScryptParams): Promise<Buffer> {
@@ -476,8 +502,10 @@ export class PasswordStore {
           return { problem: 'locked', status: this.status() };
         }
         this.install(root);
-        // The passphrase was typed: *Lock now* holds no longer.
-        if (meta.held) this.setMeta({ ...meta, held: false });
+        // The passphrase was typed: *Lock now* holds no longer. Read again: meta may have changed while scrypt ran
+        // (*Keep unlocked* turned off), and only `held` is this op's to write.
+        const latest = this.meta;
+        if (latest?.held) this.setMeta({ ...latest, held: false });
         return { status: this.status() };
       }
       case 'open': {
@@ -527,8 +555,8 @@ export class PasswordStore {
         // The kept copy is of K, which doesn't change: it stays.
         const latest = this.meta;
         if (!latest || latest.key !== meta.key) return { problem: 'refused' };
-        // The old wrap opens with the old passphrase: it mustn't stay anywhere.
-        this.setKeyMeta(() => this.setMeta({ ...latest, ...wrapped, held: false }));
+        // The old wrap opens with the old passphrase: it mustn't stay anywhere. A *Lock now* that came in meanwhile holds.
+        this.setKeyMeta(() => this.setMeta({ ...latest, ...wrapped }));
         return { status: this.status() };
       }
       case 'key':
@@ -544,6 +572,8 @@ export class PasswordStore {
       case 'kept':
         return { blob: this.meta?.kept ?? null };
       case 'startOver':
+        // Open, nothing is forgotten: starting over is for a passphrase that's lost.
+        if (this.keys) return { problem: 'refused', status: this.status() };
         this.generation++;
         this.wipe();
         this.deleted.clear();
@@ -685,5 +715,11 @@ export class PasswordStore {
     this.generation++;
     this.wipe();
     this.deleted.clear();
+    if (this.truncateTimer) clearTimeout(this.truncateTimer);
+    this.truncateTimer = null;
+    // The last try before the connection goes (closing checkpoints too, once no other connection reads).
+    if (this.truncatePending) this.truncate();
+    if (this.truncateTimer) clearTimeout(this.truncateTimer);
+    this.truncateTimer = null;
   }
 }

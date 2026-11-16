@@ -223,6 +223,15 @@ describe('Keep unlocked on this computer', () => {
     expect(hides).toBe(2);
   });
 
+  it('Lock now during a passphrase change holds, with the key kept', async () => {
+    await oneLogin();
+    await service.keep(true);
+    const changing = service.changePassphrase(PASSPHRASE, 'a brand new passphrase');
+    await service.lock();
+    expect((await changing).ok).toBe(true);
+    expect((await service.view()).state).toBe('locked');
+  });
+
   it('Lock now holds across a relaunch with the key kept', async () => {
     await oneLogin();
     await service.keep(true);

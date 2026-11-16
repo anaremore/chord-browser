@@ -234,7 +234,8 @@ export class ChordDatabase {
       if (!name.startsWith(prefix) || !name.endsWith('.bak')) continue;
       const backup = new DatabaseSync(join(dir, name));
       try {
-        backup.exec('PRAGMA secure_delete = ON');
+        // No journal on disk to hold the old row a moment, and what's freed is zeroed.
+        backup.exec('PRAGMA journal_mode = MEMORY; PRAGMA secure_delete = ON');
         const has = backup.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'`).get();
         if (!has) continue;
         if (meta) backup.prepare(`UPDATE meta SET value = ? WHERE key = 'passwords'`).run(meta);

@@ -264,6 +264,67 @@ describe('sealing', () => {
     backup.close();
   });
 
+  it('an unlock in flight doesn’t bring back the kept key when Keep unlocked goes off meanwhile', async () => {
+    await withLogin();
+    await run({ op: 'keep', blob: 'S0VQVC1SQUNF' });
+    await run({ op: 'lock', held: true });
+    const unlocking = run({ op: 'unlock', passphrase: PASSPHRASE });
+    await run({ op: 'keep', blob: null });
+    expect((await unlocking).status!.state).toBe('open');
+    expect((await run({ op: 'kept' })).blob).toBeNull();
+    expect((await run({ op: 'status' })).held).toBe(false);
+  });
+
+  it('Lock now during a passphrase change holds', async () => {
+    await withLogin();
+    const changing = run({ op: 'passphrase', current: PASSPHRASE, next: 'a brand new passphrase' });
+    await run({ op: 'lock', held: true });
+    expect((await changing).problem).toBeUndefined();
+    expect((await run({ op: 'status' })).held).toBe(true);
+  });
+
+  it('won’t start over while open', async () => {
+    await withLogin();
+    expect((await run({ op: 'startOver' })).problem).toBe('refused');
+    expect((await run({ op: 'status' })).status!.count).toBe(1);
+  });
+
+  it('a checkpoint another connection holds up is tried again: the old copy goes once it can', async () => {
+    await withLogin();
+    const KEPT = 'S0VQVC1CVVNZLUNIRUNLUE9JTlQ=';
+    await run({ op: 'keep', blob: KEPT });
+    // An export's read, holding the log.
+    const reader = raw();
+    reader.exec('BEGIN');
+    reader.prepare('SELECT COUNT(*) FROM login').get();
+    await run({ op: 'keep', blob: null });
+    expect(readFileSync(file).includes(Buffer.from(KEPT)), 'still in chord.db while the reader holds the log').toBe(true);
+    reader.exec('COMMIT');
+    reader.close();
+    db.close();
+    for (const name of readdirSync(dir).filter((n) => n.startsWith('chord.db'))) {
+      expect(readFileSync(join(dir, name)).includes(Buffer.from(KEPT)), `the kept copy in ${name}`).toBe(false);
+    }
+    db = new ChordDatabase(file, 'linux', KDF);
+  });
+
+  it('a backup never gets the OS-kept copy, nor Lock now', async () => {
+    await withLogin();
+    raw().exec(`VACUUM INTO '${join(dir, 'chord.db.v24.bak').replaceAll("'", "''")}'`);
+    const KEPT = 'S0VQVC1JTi1CQUNLVVA=';
+    await run({ op: 'keep', blob: KEPT });
+    await run({ op: 'lock', held: true });
+    await run({ op: 'unlock', passphrase: PASSPHRASE });
+    await run({ op: 'passphrase', current: PASSPHRASE, next: 'a brand new passphrase' });
+    const bak = join(dir, 'chord.db.v24.bak');
+    expect(readFileSync(bak).includes(Buffer.from(KEPT))).toBe(false);
+    expect(existsSync(`${bak}-journal`)).toBe(false);
+    const backup = new DatabaseSync(bak);
+    const meta = JSON.parse((backup.prepare(`SELECT value FROM meta WHERE key = 'passwords'`).get() as { value: string }).value) as { kept: unknown; held?: unknown };
+    backup.close();
+    expect([meta.kept, meta.held]).toEqual([null, undefined]);
+  });
+
   it('starting over takes the vault out of the backups too', async () => {
     await withLogin();
     raw().exec(`VACUUM INTO '${join(dir, 'chord.db.v24.bak').replaceAll("'", "''")}'`);
@@ -311,6 +372,7 @@ describe('tags', () => {
   it('tags with the vault’s own key: another vault tags the same site differently', async () => {
     await withLogin('https://github.com');
     const first = (raw().prepare('SELECT hex(site_tag) AS t FROM login').get() as { t: string }).t;
+    await run({ op: 'lock' });
     await run({ op: 'startOver' });
     await withLogin('https://github.com');
     expect((raw().prepare('SELECT hex(site_tag) AS t FROM login').get() as { t: string }).t).not.toBe(first);
