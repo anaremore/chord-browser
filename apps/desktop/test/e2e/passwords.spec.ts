@@ -87,7 +87,7 @@ for (const mode of ['light', 'dark'] as const) {
       await expect(row).toContainText('Today');
       await row.click();
       const detail = main.getByRole('group', { name: `vault-e2e.example, ${USERNAME}` });
-      await expect(detail.getByRole('img', { name: 'Password, hidden' })).toBeVisible();
+      await expect(detail.getByRole('img', { name: 'Password hidden' })).toBeVisible();
       // Settings has no password until Show: none in the page now.
       expect(await settings.content()).not.toContain(PASSWORD);
       findings.push(...(await audit(settings, `Settings → Passwords, a row open (${mode})`, { appearance: mode })));

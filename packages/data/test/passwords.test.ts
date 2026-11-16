@@ -4,7 +4,7 @@
  * page's origin, saving and updating, Delete's Undo, and that nothing of a
  * password or a site reaches chord.db's bytes in the clear.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -115,6 +115,25 @@ describe('the passphrase and the key', () => {
     expect((await run({ op: 'open', key: key!, generation: now })).status!.state).toBe('open');
   });
 
+  it('Lock now holds across a relaunch: the kept key waits for the passphrase', async () => {
+    await withLogin();
+    const { key } = await run({ op: 'key' });
+    await run({ op: 'lock', held: true });
+    db.close();
+    db = new ChordDatabase(file, 'linux', KDF);
+    expect((await run({ op: 'status' })).held).toBe(true);
+    expect((await run({ op: 'open', key: new Uint8Array(key!) })).problem).toBe('locked');
+    await run({ op: 'unlock', passphrase: PASSPHRASE });
+    expect((await run({ op: 'status' })).held).toBe(false);
+    await run({ op: 'lock' });
+    expect((await run({ op: 'open', key: key! })).status!.state).toBe('open');
+  });
+
+  it('a fill says which origin the sign-in was saved for, so main checks the match too', async () => {
+    const id = await withLogin('https://github.com');
+    expect(await run({ op: 'fill', id, origin: 'https://gist.github.com', chordId: null })).toEqual({ password: PASSWORD, loginOrigin: 'https://github.com' });
+  });
+
   it('a stored check of the wrong length fails closed, and throws nothing', async () => {
     await run({ op: 'setup', passphrase: PASSPHRASE });
     const { key } = await run({ op: 'key' });
@@ -219,13 +238,50 @@ describe('sealing', () => {
     expect(blob(a).equals(blob(b))).toBe(false);
   });
 
+  it('an old copy of the key doesn’t linger: not the OS’s after Keep unlocked goes off, not the old wrap after a new passphrase, in chord.db, its log or a backup', async () => {
+    await withLogin();
+    const KEPT = 'S0VQVC1CWS1USEUtT1MtZm9yLXRoaXMtdGVzdA==';
+    await run({ op: 'keep', blob: KEPT });
+    const metaOf = (r = raw()) => JSON.parse((r.prepare(`SELECT value FROM meta WHERE key = 'passwords'`).get() as { value: string }).value) as { key: string };
+    const oldWrap = metaOf().key;
+    // A migration's backup made while both were current (a later Chord's migration would make one).
+    raw().exec(`VACUUM INTO '${join(dir, 'chord.db.v24.bak').replaceAll("'", "''")}'`);
+    await run({ op: 'keep', blob: null });
+    await run({ op: 'passphrase', current: PASSPHRASE, next: 'a brand new passphrase' });
+    for (const h of handles) if (h.isOpen) h.close();
+    handles = [];
+    const files = readdirSync(dir).filter((n) => n.startsWith('chord.db'));
+    expect(files).toContain('chord.db.v24.bak');
+    for (const name of files) {
+      const bytes = readFileSync(join(dir, name));
+      expect(bytes.includes(Buffer.from(KEPT)), `the kept copy in ${name}`).toBe(false);
+      expect(bytes.includes(Buffer.from(oldWrap)), `the old wrap in ${name}`).toBe(false);
+    }
+    // The backup has the vault as it is now: the new passphrase opens it, the old one doesn't.
+    expect(metaOf(raw()).key).not.toBe(oldWrap);
+    const backup = new DatabaseSync(join(dir, 'chord.db.v24.bak'));
+    expect(metaOf(backup).key).toBe(metaOf(raw()).key);
+    backup.close();
+  });
+
+  it('starting over takes the vault out of the backups too', async () => {
+    await withLogin();
+    raw().exec(`VACUUM INTO '${join(dir, 'chord.db.v24.bak').replaceAll("'", "''")}'`);
+    await run({ op: 'lock' });
+    await run({ op: 'startOver' });
+    const backup = new DatabaseSync(join(dir, 'chord.db.v24.bak'));
+    expect(backup.prepare(`SELECT COUNT(*) AS n FROM meta WHERE key = 'passwords'`).get()).toEqual({ n: 0 });
+    backup.close();
+  });
+
   it('chord.db, its write-ahead log and its backups never hold a password, a username or a site in the clear', async () => {
     const id = await withLogin('https://secret-site.example', 'ada.lovelace@acme.dev');
     await run({ op: 'edit', id, patch: { password: 'second-Password-Qx7', note: 'the note is sealed too' } });
     await run({ op: 'never', origin: 'https://never-here.example' });
     db.close();
     db = new ChordDatabase(file, 'linux', KDF);
-    for (const path of [file, `${file}-wal`, `${file}-shm`]) {
+    raw().exec(`VACUUM INTO '${join(dir, 'chord.db.v24.bak').replaceAll("'", "''")}'`);
+    for (const path of [file, `${file}-wal`, `${file}-shm`, join(dir, 'chord.db.v24.bak')]) {
       if (!existsSync(path)) continue;
       const bytes = readFileSync(path);
       for (const secret of [PASSWORD, 'second-Password-Qx7', 'ada.lovelace@acme.dev', 'secret-site', 'never-here', 'the note is sealed', PASSPHRASE]) {

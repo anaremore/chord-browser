@@ -1736,6 +1736,12 @@ export class Browser {
     if (contents && !contents.isDestroyed()) send(contents, 'passwords:changed', null);
   }
 
+  /** The vault locked: Settings hides a password it shows, without asking for its view again. */
+  passwordsHide(): void {
+    const contents = this.settingsWindow?.view.webContents;
+    if (contents && !contents.isDestroyed()) send(contents, 'passwords:changed', { hide: true });
+  }
+
   syncChanged(view: SyncView): void {
     const contents = this.settingsWindow?.view.webContents;
     if (contents && !contents.isDestroyed()) send(contents, 'sync:status', view);

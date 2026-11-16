@@ -393,8 +393,12 @@ export const SETTING_TRAVEL: Record<keyof Settings, SettingTravel> = {
  */
 const GROUPS = ['motion', 'interface', 'spellcheck', 'adBlocking', 'tabCounts', 'assistant', 'reader', 'effects', 'passwords'] as const;
 type Group = (typeof GROUPS)[number];
-/** The assistant's app and model depend on which CLI is installed on this computer. */
-const NOT_EXPORTED: Partial<Record<Group, readonly string[]>> = { assistant: ['provider', 'model'] };
+/**
+ * Parts of a group that stay on this computer: the assistant's app and model
+ * depend on which CLI is installed here; when passwords lock is a security
+ * setting of each computer's (*Never* on one mustn't stop locking on the others).
+ */
+const NOT_EXPORTED: Partial<Record<Group, readonly string[]>> = { assistant: ['provider', 'model'], passwords: ['lockAfter'] };
 
 const isGroup = (key: string): key is Group => (GROUPS as readonly string[]).includes(key);
 const groupParts = (group: Group): string[] => Object.keys(DEFAULT_SETTINGS[group]).filter((part) => !NOT_EXPORTED[group]?.includes(part));

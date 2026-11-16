@@ -117,6 +117,7 @@ const passwords = new PasswordService({
   keys: osKeys(process.platform, { noKeyring: !app.isPackaged && process.env['CHORD_E2E_NO_KEYRING'] === '1' }),
   clipboard: { writeText: (text) => clipboard.writeText(text), readText: () => clipboard.readText() },
   changed: () => browser?.passwordsChanged(),
+  hide: () => browser?.passwordsHide(),
   chord: (chordId) => browser?.store.state.chords[chordId] ?? null,
   extensions: () => browser?.store.state.extensions ?? {},
 });
@@ -466,12 +467,12 @@ function registerIpc(): void {
   handle('passwords:setup', ({ passphrase }) => passwords.setup(passphrase));
   handle('passwords:unlock', ({ passphrase }) => passwords.unlock(passphrase));
   handle('passwords:lock', () => passwords.lock());
-  handle('passwords:keep', ({ on }) => passwords.keep(on));
+  handle('passwords:keep', ({ on, passphrase }) => passwords.keep(on, passphrase));
   handle('passwords:passphrase', ({ current, next }) => passwords.changePassphrase(current, next));
   handle('passwords:reveal', ({ id, passphrase }) => passwords.reveal(id, passphrase));
   handle('passwords:copy', ({ id, passphrase }) => passwords.copy(id, passphrase));
   handle('passwords:add', (login) => passwords.add(login));
-  handle('passwords:edit', ({ id, patch }) => passwords.edit(id, patch));
+  handle('passwords:edit', ({ id, patch, passphrase }) => passwords.edit(id, patch, passphrase));
   handle('passwords:delete', ({ id }) => passwords.remove(id));
   handle('passwords:undelete', ({ id }) => passwords.undo(id));
   handle('passwords:forgetNever', ({ site }) => passwords.forgetNever(site));

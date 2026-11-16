@@ -28,8 +28,6 @@ export const DEFAULT_PASSWORD_SETTINGS: PasswordSettings = { enabled: true, lock
 export const PASSWORD_REAUTH_MS = 5 * 60_000;
 /** A copied password leaves the clipboard after this, if it's still what's there. */
 export const PASSWORD_CLIPBOARD_MS = 60_000;
-/** A deleted password's Undo lasts as long as a toast's (ARCHITECTURE.md §6.3), and only this session. */
-export const PASSWORD_UNDO_MS = 6000;
 
 /** What one sign-in may hold, in characters (S17 §8). Longer is refused, never cut: a cut password is a wrong one. */
 export const PASSWORD_LIMITS = { username: 500, password: 1000, note: 4000, realm: 200, origin: 2048 } as const;

@@ -82,7 +82,8 @@ export type PasswordOp =
   | { op: 'unlock'; passphrase: string }
   /** The kept copy of the key, unwrapped by main; refused if the vault was locked since `generation` (from `status`). */
   | { op: 'open'; key: Uint8Array; generation?: number }
-  | { op: 'lock' }
+  /** `held`: *Lock now*, which holds until the passphrase is typed, across launches too. */
+  | { op: 'lock'; held?: boolean }
   /** Whether this is the passphrase (Show and Copy ask again after a while); the vault stays as it is. */
   | { op: 'verify'; passphrase: string }
   | { op: 'passphrase'; current: string; next: string }
@@ -132,6 +133,10 @@ export interface PasswordResult {
   never?: boolean;
   /** From `status`: how many locks chord-data has seen, for `open`. */
   generation?: number;
+  /** From `status`: *Lock now* holds (the kept copy waits for the passphrase). */
+  held?: boolean;
+  /** From `fill`: the sign-in's own origin, so main checks the match too. */
+  loginOrigin?: string;
 }
 
 /** What `meta` keeps under `passwords`. */
@@ -144,6 +149,8 @@ interface VaultMeta {
   check: string;
   /** The OS-wrapped copy (safeStorage), base64, or null. */
   kept: string | null;
+  /** *Lock now*: the kept copy isn't used until the passphrase is typed, across launches too. */
+  held?: boolean;
 }
 
 const VERSION = 1;
@@ -188,11 +195,13 @@ interface Keys {
   root: Buffer;
   item: Buffer;
   index: Buffer;
+  /** Seals the names of sites you said never to save for: a key of its own, apart from sign-ins'. */
+  never: Buffer;
 }
 
 function keysOf(root: Buffer): Keys {
   const derive = (label: string) => Buffer.from(hkdfSync('sha256', root, Buffer.alloc(0), label, KEY));
-  return { root, item: derive('chord passwords v1 item'), index: derive('chord passwords v1 index') };
+  return { root, item: derive('chord passwords v1 item'), index: derive('chord passwords v1 index'), never: derive('chord passwords v1 never') };
 }
 
 /** Whether a key is this vault's: its check matches (a stored check of the wrong length fails closed, never throws). */
@@ -202,7 +211,13 @@ const checks = (root: Buffer, meta: { check: string }): boolean => {
   return want.length === got.length && timingSafeEqual(got, want);
 };
 
-const checkOf = (root: Buffer) => createHmac('sha256', Buffer.from(hkdfSync('sha256', root, Buffer.alloc(0), 'chord passwords v1 check', KEY))).update(CHECK_WORD).digest();
+/** The check of a key: an HMAC under a key made from it, which is wiped once used. */
+function checkOf(root: Buffer): Buffer {
+  const key = Buffer.from(hkdfSync('sha256', root, Buffer.alloc(0), 'chord passwords v1 check', KEY));
+  const check = createHmac('sha256', key).update(CHECK_WORD).digest();
+  key.fill(0);
+  return check;
+}
 
 /** A sealed sign-in's JSON, as it may come out: anything else is unreadable. */
 function secretOf(plain: Buffer | null): LoginSecret | null {
@@ -233,6 +248,13 @@ export class PasswordStore {
     private readonly sql: Sql,
     /** S15's scrypt parameters; tests pass smaller ones. */
     private readonly kdf: ScryptParams = SCRYPT,
+    /**
+     * After the key's copies changed (a new passphrase, *Keep unlocked* on or
+     * off, *Start over*): chord.db's write-ahead log is checkpointed and cut
+     * back, and its migration backups get the vault's row as it is now
+     * (ChordDatabase.scrubBackups), so no old copy stays readable there.
+     */
+    private readonly scrub: (meta: string | null) => void = () => undefined,
   ) {}
 
   /* ---------- meta and the key ---------- */
@@ -251,6 +273,33 @@ export class PasswordStore {
   private setMeta(meta: VaultMeta | null): void {
     if (meta) this.sql(`INSERT INTO meta (key, value) VALUES ('passwords', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(JSON.stringify(meta));
     else this.sql(`DELETE FROM meta WHERE key = 'passwords'`).run();
+  }
+
+  /**
+   * A change to the key's copies, written so the old ones don't linger:
+   * SQLite zeroes what it frees while it's written (`secure_delete`), the
+   * write-ahead log is checkpointed and truncated, and the backups are
+   * rewritten. Best effort past the write itself: a reader holding the log
+   * (an export) leaves it for the next checkpoint.
+   */
+  private setKeyMeta(write: () => void): void {
+    this.sql('PRAGMA secure_delete = ON').run();
+    try {
+      write();
+    } finally {
+      this.sql('PRAGMA secure_delete = OFF').run();
+    }
+    try {
+      this.sql('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    } catch {
+      // Busy: the next checkpoint takes it.
+    }
+    const row = this.sql(`SELECT value FROM meta WHERE key = 'passwords'`).get() as Row | undefined;
+    try {
+      this.scrub(row ? str(row['value']) : null);
+    } catch {
+      // A backup that can't be opened stays as it is; S17's honest limits say so.
+    }
   }
 
   private wrapKey(passphrase: string, salt: Buffer, params: ScryptParams): Promise<Buffer> {
@@ -289,6 +338,7 @@ export class PasswordStore {
     this.keys.root.fill(0);
     this.keys.item.fill(0);
     this.keys.index.fill(0);
+    this.keys.never.fill(0);
     this.keys = null;
   }
 
@@ -393,7 +443,7 @@ export class PasswordStore {
   async run(op: PasswordOp, now = Date.now()): Promise<PasswordResult> {
     switch (op.op) {
       case 'status':
-        return { status: this.status(), generation: this.generation };
+        return { status: this.status(), generation: this.generation, held: this.meta?.held === true };
       case 'setup': {
         if (this.meta) return { problem: 'exists', status: this.status() };
         if (passphraseProblem(op.passphrase) !== null) return { problem: 'invalid' };
@@ -426,6 +476,8 @@ export class PasswordStore {
           return { problem: 'locked', status: this.status() };
         }
         this.install(root);
+        // The passphrase was typed: *Lock now* holds no longer.
+        if (meta.held) this.setMeta({ ...meta, held: false });
         return { status: this.status() };
       }
       case 'open': {
@@ -438,6 +490,10 @@ export class PasswordStore {
           root.fill(0);
           return { problem: 'locked', status: this.status() };
         }
+        if (meta.held) {
+          root.fill(0);
+          return { problem: 'locked', status: this.status() };
+        }
         if (root.length !== KEY || !checks(root, meta)) {
           root.fill(0);
           return { problem: 'wrong', status: this.status() };
@@ -445,10 +501,13 @@ export class PasswordStore {
         this.install(root);
         return { status: this.status() };
       }
-      case 'lock':
+      case 'lock': {
         this.generation++;
         this.wipe();
+        const meta = this.meta;
+        if (op.held && meta && !meta.held) this.setMeta({ ...meta, held: true });
         return { status: this.status() };
+      }
       case 'verify': {
         const meta = this.meta;
         if (!meta) return { problem: 'none' };
@@ -468,7 +527,8 @@ export class PasswordStore {
         // The kept copy is of K, which doesn't change: it stays.
         const latest = this.meta;
         if (!latest || latest.key !== meta.key) return { problem: 'refused' };
-        this.setMeta({ ...latest, ...wrapped });
+        // The old wrap opens with the old passphrase: it mustn't stay anywhere.
+        this.setKeyMeta(() => this.setMeta({ ...latest, ...wrapped, held: false }));
         return { status: this.status() };
       }
       case 'key':
@@ -477,7 +537,8 @@ export class PasswordStore {
       case 'keep': {
         const meta = this.meta;
         if (!meta) return { problem: 'none' };
-        this.setMeta({ ...meta, kept: op.blob });
+        // Turned off, the OS-wrapped copy mustn't stay anywhere.
+        this.setKeyMeta(() => this.setMeta({ ...meta, kept: op.blob }));
         return { status: this.status() };
       }
       case 'kept':
@@ -486,9 +547,11 @@ export class PasswordStore {
         this.generation++;
         this.wipe();
         this.deleted.clear();
-        this.sql('DELETE FROM login').run();
-        this.sql('DELETE FROM login_never').run();
-        this.setMeta(null);
+        this.setKeyMeta(() => {
+          this.sql('DELETE FROM login').run();
+          this.sql('DELETE FROM login_never').run();
+          this.setMeta(null);
+        });
         return { status: this.status() };
       default:
         if (!this.keys) return { problem: this.meta ? 'locked' : 'none' };
@@ -523,7 +586,7 @@ export class PasswordStore {
         // Never for a page whose origin it doesn't match, whoever asks (S17 §5): main checks too.
         if (matchLogin(op.origin, secret.origin) === null) return { problem: 'refused' };
         if (op.chordId) this.use(op.id, op.chordId, now);
-        return { password: secret.password };
+        return { password: secret.password, loginOrigin: secret.origin };
       }
       case 'used':
         if (!this.rowById(op.id)) return { problem: 'missing' };
@@ -594,7 +657,7 @@ export class PasswordStore {
         const site = loginSite(op.origin);
         if (!site) return { problem: 'invalid' };
         const tag = this.tag(site);
-        this.sql('INSERT OR IGNORE INTO login_never (site_tag, sealed, created_at) VALUES (?, ?, ?)').run(tag, seal(this.keys!.item, utf8(site), neverAad(tag)), now);
+        this.sql('INSERT OR IGNORE INTO login_never (site_tag, sealed, created_at) VALUES (?, ?, ?)').run(tag, seal(this.keys!.never, utf8(site), neverAad(tag)), now);
         return { never: true };
       }
       case 'isNever': {
@@ -604,7 +667,7 @@ export class PasswordStore {
       case 'nevers': {
         const nevers: string[] = [];
         for (const row of this.sql('SELECT site_tag, sealed FROM login_never ORDER BY created_at DESC').all() as Row[]) {
-          const site = open(this.keys!.item, bytes(row['sealed']), neverAad(bytes(row['site_tag'])));
+          const site = open(this.keys!.never, bytes(row['sealed']), neverAad(bytes(row['site_tag'])));
           if (site) nevers.push(site.toString('utf8'));
         }
         return { nevers };

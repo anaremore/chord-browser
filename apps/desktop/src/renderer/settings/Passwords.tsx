@@ -6,7 +6,7 @@
  * when it was typed more than 5 minutes ago; *Copy* never brings it here.
  * Delete has Undo for the session. Import and Export come in phase 2.
  */
-import { DEFAULT_PASSWORD_SETTINGS, lockAfterText, PASSWORD_LOCK_AFTER, passwordsOffBecause, passwordsOffText, type LoginSummary, type PasswordLockAfter } from '@chord/core';
+import { DEFAULT_PASSWORD_SETTINGS, lockAfterText, PASSWORD_LOCK_AFTER, PASSWORD_REAUTH_MS, passwordsOffBecause, passwordsOffText, type LoginSummary, type PasswordLockAfter } from '@chord/core';
 import type { PasswordRevealResult, PasswordStepResult, PasswordsView, SettingsSnapshot } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
 import { Search } from 'lucide-react';
@@ -28,7 +28,7 @@ const PROBLEMS: Record<Exclude<PasswordStepResult, { ok: true }>['problem'] | Ex
   missing: 'That password is gone.',
   keyring: 'This computer has no keyring for Chord to keep it in.',
   io: 'Chord couldn’t do that. Try again.',
-  passphrase: 'Changing the address asks for your passphrase: Show the password first, then change it.',
+  passphrase: 'Enter your passphrase first.',
 };
 
 const KEEP_WHY = 'Then other programs you run could read your passwords, on Windows and Linux.';
@@ -104,12 +104,12 @@ function PassphraseAsk({ text, button, problem, onSubmit, onCancel }: { text: st
 }
 
 /** A row opened: the address, username, password (dots, Show, Copy), the note, the site's change-password page, Delete. */
-function LoginDetail({ login, onView, onDeleted }: { login: LoginSummary; onView(view: PasswordsView): void; onDeleted(): void }) {
+function LoginDetail({ login, hideSeq, onView, onDeleted }: { login: LoginSummary; hideSeq: number; onView(view: PasswordsView): void; onDeleted(): void }) {
   const ids = useId();
   const [password, setPassword] = useState<string | null>(null);
   /** The password as Show brought it: editing it saves only what changed. */
   const revealed = useRef<string | null>(null);
-  const [asking, setAsking] = useState<'show' | 'copy' | null>(null);
+  const [asking, setAsking] = useState<'show' | 'copy' | 'address' | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [copied, setCopied] = useState<'username' | 'password' | null>(null);
   const [origin, setOrigin] = useState(login.origin);
@@ -119,6 +119,19 @@ function LoginDetail({ login, onView, onDeleted }: { login: LoginSummary; onView
   useEffect(() => setOrigin(login.origin), [login.origin]);
   useEffect(() => setUsername(login.username), [login.username]);
   useEffect(() => setNote(login.note), [login.note]);
+  // The vault locked (main says so), or the shown password has been on screen as long as the passphrase lasts: it goes.
+  useEffect(() => {
+    revealed.current = null;
+    setPassword(null);
+  }, [hideSeq]);
+  useEffect(() => {
+    if (password === null) return;
+    const timer = setTimeout(() => {
+      revealed.current = null;
+      setPassword(null);
+    }, PASSWORD_REAUTH_MS);
+    return () => clearTimeout(timer);
+  }, [password === null]);
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(null), 2000);
@@ -132,6 +145,17 @@ function LoginDetail({ login, onView, onDeleted }: { login: LoginSummary; onView
     } else setProblem(PROBLEMS[result.problem]);
   };
   const save = (patch: Partial<{ origin: string; username: string; password: string; note: string }>) => void api.passwords.edit(login.id, patch).then(answered);
+  /** A new address asks for the passphrase as Show does, inline. */
+  const moveTo = async (next: string, passphrase?: string) => {
+    const result = await api.passwords.edit(login.id, { origin: next }, passphrase);
+    if (!result.ok && (result.problem === 'passphrase' || result.problem === 'wrong')) {
+      setAsking('address');
+      setProblem(result.problem === 'wrong' ? PROBLEMS.wrong : null);
+      return;
+    }
+    setAsking(null);
+    answered(result);
+  };
 
   const act = async (what: 'show' | 'copy', passphrase?: string) => {
     const result = what === 'show' ? await api.passwords.reveal(login.id, passphrase) : await api.passwords.copy(login.id, passphrase);
@@ -167,7 +191,7 @@ function LoginDetail({ login, onView, onDeleted }: { login: LoginSummary; onView
           value={origin}
           spellCheck={false}
           onChange={(e) => setOrigin(e.target.value)}
-          onBlur={() => origin.trim() !== login.origin && save({ origin: origin.trim() })}
+          onBlur={() => origin.trim() !== login.origin && void moveTo(origin.trim())}
         />
         <span />
       </div>
@@ -189,11 +213,20 @@ function LoginDetail({ login, onView, onDeleted }: { login: LoginSummary; onView
         </button>
       </div>
       <div className={local.field}>
-        <label className={local.fieldLabel} htmlFor={`${ids}-password`} id={`${ids}-password-label`}>
-          Password
-        </label>
         {password === null ? (
-          <span id={`${ids}-password`} className={`${local.value} ${local.dots}`} role="img" aria-label="Password, hidden">
+          <span id={`${ids}-password-label`} className={local.fieldLabel}>
+            Password
+          </span>
+        ) : (
+          <label className={local.fieldLabel} htmlFor={`${ids}-password`} id={`${ids}-password-label`}>
+            Password
+          </label>
+        )}
+        {password === null ? (
+          <span id={`${ids}-password`} className={`${local.value} ${local.dots}`} role="img" aria-labelledby={`${ids}-password-label ${ids}-password-hidden`}>
+            <span id={`${ids}-password-hidden`} hidden>
+              hidden
+            </span>
             ••••••••••
           </span>
         ) : (
@@ -229,11 +262,12 @@ function LoginDetail({ login, onView, onDeleted }: { login: LoginSummary; onView
       </div>
       {asking && (
         <PassphraseAsk
-          text={asking === 'show' ? 'Enter your passphrase to show it.' : 'Enter your passphrase to copy it.'}
-          button={asking === 'show' ? 'Show' : 'Copy'}
+          text={asking === 'show' ? 'Enter your passphrase to show it.' : asking === 'copy' ? 'Enter your passphrase to copy it.' : 'Enter your passphrase to change the address.'}
+          button={asking === 'show' ? 'Show' : asking === 'copy' ? 'Copy' : 'Change'}
           problem={problem}
-          onSubmit={(passphrase) => void act(asking, passphrase)}
+          onSubmit={(passphrase) => void (asking === 'address' ? moveTo(origin.trim(), passphrase) : act(asking, passphrase))}
           onCancel={() => {
+            if (asking === 'address') setOrigin(login.origin);
             setAsking(null);
             setProblem(null);
           }}
@@ -358,7 +392,7 @@ function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view:
   const ids = useId();
   const settings = snapshot.settings.passwords;
   const [problem, setProblem] = useState<string | null>(null);
-  const [step, setStep] = useState<'choose' | 'change' | 'startOver' | null>(null);
+  const [step, setStep] = useState<'choose' | 'change' | 'startOver' | 'keep' | null>(null);
   const [fresh, setFresh] = useState<PassphraseValue>(EMPTY_PASSPHRASE);
   const [current, setCurrent] = useState('');
   const [busy, setBusy] = useState(false);
@@ -450,7 +484,11 @@ function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view:
               describedBy={`${ids}-keep`}
               checked={view.kept}
               // Turning it on needs the key, so the vault open; turning it off doesn't.
-              onChange={(on) => (on && view.state !== 'open' ? setProblem(PROBLEMS.locked) : void api.passwords.keep(on).then(answered))}
+              onChange={(on) =>
+                on && view.state !== 'open'
+                  ? setProblem(PROBLEMS.locked)
+                  : void api.passwords.keep(on).then((result) => (!result.ok && result.problem === 'passphrase' ? setStep('keep') : answered(result)))
+              }
             />
           )}
         </div>
@@ -484,6 +522,22 @@ function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view:
           )}
         </div>
       </div>
+      {step === 'keep' && (
+        <div className={local.block}>
+          <PassphraseAsk
+            text="Enter your passphrase to keep your passwords unlocked on this computer."
+            button="Keep unlocked"
+            problem={problem}
+            onSubmit={(passphrase) =>
+              void api.passwords.keep(true, passphrase).then((result) => (!result.ok && result.problem === 'wrong' ? setProblem(PROBLEMS.wrong) : answered(result)))
+            }
+            onCancel={() => {
+              setStep(null);
+              setProblem(null);
+            }}
+          />
+        </div>
+      )}
       {view.state === 'locked' && step !== 'startOver' && (
         <div className={local.block}>
           <PassphraseAsk text="Enter your passphrase to see and change your passwords." button="Unlock" problem={problem} onSubmit={(passphrase) => void api.passwords.unlock(passphrase).then(answered)} />
@@ -561,11 +615,13 @@ export function PasswordsSection({ snapshot, appearance }: { snapshot: SettingsS
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [nevers, setNevers] = useState(false);
+  /** Counts the vault's locks main told of: a shown password goes at each. */
+  const [hideSeq, setHideSeq] = useState(0);
   useEffect(() => {
     let live = true;
     const refresh = () => void api.passwords.view().then((v) => live && setView(v));
     refresh();
-    const off = api.passwords.onChange(refresh);
+    const off = api.passwords.onChange((change) => (change?.hide ? setHideSeq((n) => n + 1) : refresh()));
     window.addEventListener('focus', refresh);
     return () => {
       live = false;
@@ -617,7 +673,7 @@ export function PasswordsSection({ snapshot, appearance }: { snapshot: SettingsS
                       </span>
                       <span className={local.when}>{whenText(login.lastUsed ?? login.updatedAt)}</span>
                     </button>
-                    {expanded && <LoginDetail login={login} onView={setView} onDeleted={() => setOpen(null)} />}
+                    {expanded && <LoginDetail login={login} hideSeq={hideSeq} onView={setView} onDeleted={() => setOpen(null)} />}
                   </li>
                 );
               })}

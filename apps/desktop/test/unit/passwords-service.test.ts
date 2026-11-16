@@ -74,6 +74,7 @@ let keys: FakeKeys;
 let clipboard: { text: string; writeText(t: string): void; readText(): string };
 let settings: PasswordSettings;
 let changes: number;
+let hides: number;
 let service: PasswordService;
 const extensions: Record<string, InstalledExtension> = {};
 
@@ -92,6 +93,7 @@ function make(): PasswordService {
     keys,
     clipboard,
     changed: () => void changes++,
+    hide: () => void hides++,
     now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -114,6 +116,7 @@ beforeEach(() => {
   };
   settings = { ...DEFAULT_PASSWORD_SETTINGS, onChords: [] };
   changes = 0;
+  hides = 0;
   service = make();
 });
 afterEach(() => {
@@ -187,6 +190,50 @@ describe('Keep unlocked on this computer', () => {
     expect(view.state).toBe('locked');
     expect((await service.accountsForPage(github, extensions)).state).toBe('locked');
     await service.unlock(PASSPHRASE);
+    expect((await service.view()).state).toBe('open');
+  });
+
+  it('turning it on asks for the passphrase when it was typed more than 5 minutes ago', async () => {
+    settings.lockAfter = 'never';
+    await oneLogin();
+    await clock.advance(5 * MIN);
+    expect(await service.keep(true)).toEqual({ ok: false, problem: 'passphrase' });
+    expect(await service.keep(true, 'not it at all')).toEqual({ ok: false, problem: 'wrong' });
+    expect((await service.keep(true, PASSPHRASE)).ok).toBe(true);
+  });
+
+  it('opened unasked, the lock clock starts: a Never site’s candidate after an idle lock doesn’t leave it open', async () => {
+    await oneLogin();
+    await service.keep(true);
+    await service.never({ origin: 'https://example.com', chord: { id: 'work', profileId: 'default' }, private: false });
+    await clock.advance(31 * MIN);
+    expect((await db.passwords.run({ op: 'status' })).status!.state).toBe('locked');
+    expect(await service.candidateFor({ origin: 'https://example.com', username: 'a', password: 'b', chordId: 'work' })).toEqual({ kind: 'never' });
+    expect((await db.passwords.run({ op: 'status' })).status!.state).toBe('open');
+    await clock.advance(30 * MIN);
+    expect((await db.passwords.run({ op: 'status' })).status!.state).toBe('locked');
+  });
+
+  it('an idle lock hides a shown password in Settings, kept or not; Lock now too', async () => {
+    await oneLogin();
+    await service.keep(true);
+    await clock.advance(30 * MIN);
+    expect(hides).toBe(1);
+    await service.lock();
+    expect(hides).toBe(2);
+  });
+
+  it('Lock now holds across a relaunch with the key kept', async () => {
+    await oneLogin();
+    await service.keep(true);
+    await service.lock();
+    db.close();
+    db = new ChordDatabase(join(dir, 'chord.db'), 'linux', KDF);
+    service = make();
+    expect((await service.view()).state).toBe('locked');
+    expect((await service.unlock(PASSPHRASE)).ok).toBe(true);
+    await db.passwords.run({ op: 'lock' });
+    service = make();
     expect((await service.view()).state).toBe('open');
   });
 
@@ -332,6 +379,36 @@ describe('Settings’ list', () => {
     expect(changes).toBe(0);
   });
 
+  it('an address change asks inline, as Show does', async () => {
+    settings.lockAfter = 'never';
+    const id = await oneLogin();
+    await clock.advance(6 * MIN);
+    expect(await service.edit(id, { origin: 'https://gitlab.com' }, 'not it at all')).toEqual({ ok: false, problem: 'wrong' });
+    expect((await service.edit(id, { origin: 'https://gitlab.com' }, PASSPHRASE)).ok).toBe(true);
+  });
+
+  it('shows no deletions while locked', async () => {
+    const id = await oneLogin();
+    await service.remove(id);
+    expect((await service.view()).deleted).toHaveLength(1);
+    await service.lock();
+    expect((await service.view()).deleted).toEqual([]);
+  });
+
+  it('starts over only while locked', async () => {
+    await oneLogin();
+    expect((await service.startOver()).count).toBe(1);
+    await service.lock();
+    expect((await service.startOver()).count).toBe(0);
+  });
+
+  it('forgets its Undo when chord-data starts again', async () => {
+    const id = await oneLogin();
+    await service.remove(id);
+    service.restarted();
+    expect((await service.view()).deleted).toEqual([]);
+  });
+
   it('refuses what can’t be saved', async () => {
     await service.setup(PASSPHRASE);
     expect(await service.add({ origin: 'chord://settings', username: 'a', password: 'b', note: '' })).toEqual({ ok: false, problem: 'invalid' });
@@ -340,6 +417,7 @@ describe('Settings’ list', () => {
 
   it('starts over: nothing left, and a new passphrase can be chosen', async () => {
     await oneLogin();
+    await service.lock();
     expect(await service.startOver()).toMatchObject({ state: 'none', count: 0 });
     expect((await service.setup('another good passphrase')).ok).toBe(true);
   });
@@ -401,8 +479,12 @@ describe('the API agreed with the detector (origin from senderFrame, a chord id)
   it('saveCandidate: the first sets the passphrase; then update, same; never in a private window, an unknown chord or for a proxy', async () => {
     const at = { origin: 'https://github.com', username: 'ada', password: 'one', chordId: 'work' };
     expect(await service.saveCandidate(at)).toEqual({ ok: false, problem: 'none' });
-    for (const refused of [{ ...at, chordId: 'priv' }, { ...at, chordId: 'gone' }, { ...at, chordId: null }, { ...at, proxy: true }]) {
+    for (const refused of [{ ...at, chordId: 'priv' }, { ...at, proxy: true }]) {
       expect(await service.saveCandidate({ ...refused, passphrase: PASSPHRASE })).toEqual({ ok: false, problem: 'refused' });
+    }
+    // A chord main doesn't know gets nothing at all.
+    for (const unknown of [{ ...at, chordId: 'gone' }, { ...at, chordId: null }]) {
+      expect(await service.saveCandidate({ ...unknown, passphrase: PASSPHRASE })).toEqual({ ok: false, problem: 'off' });
     }
     const first = await service.saveCandidate({ ...at, passphrase: PASSPHRASE });
     expect(first).toEqual({ ok: true, id: expect.any(String), kind: 'new' });
@@ -413,6 +495,15 @@ describe('the API agreed with the detector (origin from senderFrame, a chord id)
     expect(await service.candidateFor({ ...at, username: 'grace' })).toEqual({ kind: 'new', setup: false });
     await service.never({ origin: 'https://example.com', chord: { id: 'work', profileId: 'default' }, private: false });
     expect(await service.saveCandidate({ ...at, origin: 'https://example.com' })).toEqual({ ok: false, problem: 'never' });
+  });
+
+  it('a chord main doesn’t know gets nothing; a private window’s fills', async () => {
+    const id = await oneLogin();
+    expect(await service.accountsFor('https://github.com', 'gone')).toEqual({ state: 'off' });
+    expect(await service.accountsFor('https://github.com', null)).toEqual({ state: 'off' });
+    expect(await service.passwordFor(id, 'https://github.com', 'gone')).toBeNull();
+    expect(await service.candidateFor({ origin: 'https://github.com', username: 'x', password: 'y', chordId: 'gone' })).toEqual({ kind: 'off' });
+    expect((await service.accountsFor('https://github.com', 'priv')).state).toBe('open');
   });
 
   it('tells the detector which sign-ins to watch, only when that changes', () => {

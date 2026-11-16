@@ -62,6 +62,8 @@ export interface PasswordServiceOptions {
   clipboard: { writeText(text: string): void; readText(): string | Promise<string> };
   /** Something Settings or a popover shows changed: they ask again. */
   changed(): void;
+  /** The vault locked: Settings hides any password it shows, without asking for its view again. */
+  hide?(): void;
   /** A chord by id (its sign-ins' profile, whether it's a private window's), for the detector's API; null when there's none. */
   chord?(chordId: string): { id: string; profileId: string; private?: boolean } | null;
   /** The installed extensions, for the extension rule. */
@@ -206,8 +208,10 @@ export class PasswordService {
   /** Unused for *Lock after*: the key goes from memory. With the key kept here, the next use opens it again unasked. */
   private async lockIdle(): Promise<void> {
     const { status } = await this.data({ op: 'lock' }).catch((): PasswordResult => ({}));
-    // Kept unlocked: nothing you see changes (the next use opens it again unasked), so Settings isn't told, and doesn't
-    // open it again at once by asking for its view.
+    // A password Settings shows goes, always.
+    this.options.hide?.();
+    // Kept unlocked: the list doesn't change (the next use opens it again unasked), so Settings isn't asked to look
+    // again, which would open it again at once.
     if (!status?.kept) this.options.changed();
   }
 
@@ -219,7 +223,9 @@ export class PasswordService {
    */
   private async ensureOpen(): Promise<VaultState> {
     this.opening ??= (async () => {
-      const { status, generation } = await this.data({ op: 'status' });
+      const { status, generation, held } = await this.data({ op: 'status' });
+      // *Lock now*, this launch or an earlier one: the kept key waits for the passphrase.
+      if (held) this.lockedByYou = true;
       if (!status || status.state !== 'locked' || !status.kept || this.lockedByYou) return status?.state ?? 'locked';
       const { blob } = await this.data({ op: 'kept' });
       if (!blob) return 'locked';
@@ -232,15 +238,18 @@ export class PasswordService {
         console.error('Passwords: the key kept on this computer couldn’t be read');
         return 'locked';
       }
-      // *Lock now* while the OS answered: locked it stays (chord-data checks too, by `generation`).
-      if (this.lockedByYou) {
+      try {
+        // *Lock now* while the OS answered: locked it stays (chord-data checks too, by `generation`).
+        if (this.lockedByYou) return 'locked';
+        const opened = await this.data({ op: 'open', key, ...(generation !== undefined ? { generation } : {}) });
+        if (opened.problem && opened.problem !== 'locked') console.error('Passwords: the key kept on this computer isn’t this vault’s');
+        const state = opened.status?.state ?? 'locked';
+        // Opened unasked: *Lock after* counts from now, whatever opened it.
+        if (state === 'open') this.touch();
+        return state;
+      } finally {
         key.fill(0);
-        return 'locked';
       }
-      const opened = await this.data({ op: 'open', key, ...(generation !== undefined ? { generation } : {}) });
-      key.fill(0);
-      if (opened.problem) console.error('Passwords: the key kept on this computer isn’t this vault’s');
-      return opened.status?.state ?? 'locked';
     })()
       .catch(() => 'locked' as const)
       .finally(() => {
@@ -269,7 +278,8 @@ export class PasswordService {
       logins: [],
       unreadable: 0,
       nevers: [],
-      deleted: this.deleted,
+      // Which sites and usernames were deleted is shown only while the vault is open.
+      deleted: [],
     };
     if (view.state === 'open') {
       const list = await this.data({ op: 'list', chordId: null }).catch(() => ({}) as PasswordResult);
@@ -277,6 +287,7 @@ export class PasswordService {
       view.logins = sortLogins(list.logins ?? []);
       view.unreadable = list.unreadable ?? 0;
       view.nevers = nevers.nevers ?? [];
+      view.deleted = this.deleted;
       this.shown = new Map(view.logins.map((l) => [l.id, { origin: l.origin, username: l.username }]));
       this.touch();
     }
@@ -320,16 +331,23 @@ export class PasswordService {
     this.typedAt = null;
     if (this.lockTimer !== null) this.clearTimer(this.lockTimer);
     this.lockTimer = null;
-    await this.data({ op: 'lock' }).catch(() => undefined);
+    // Held in chord.db too, so a relaunch with the key kept still waits for the passphrase.
+    await this.data({ op: 'lock', held: true }).catch(() => undefined);
+    this.options.hide?.();
     this.options.changed();
     return this.view();
   }
 
-  /** *Keep unlocked on this computer*: a second copy of the key, wrapped by the OS; or that copy forgotten. */
-  async keep(on: boolean): Promise<PasswordStepResult> {
+  /**
+   * *Keep unlocked on this computer*: a second copy of the key, wrapped by the
+   * OS; or that copy forgotten. Turning it on lowers protection at rest, so it
+   * asks for the passphrase as *Show* does (typed in the last 5 minutes, or now).
+   */
+  async keep(on: boolean, passphrase?: string): Promise<PasswordStepResult> {
     if (!on) return this.step({ op: 'keep', blob: null });
     if (!(await this.options.keys.available().catch(() => false))) return { ok: false, problem: 'keyring' };
-    if ((await this.ensureOpen()) !== 'open') return { ok: false, problem: 'locked' };
+    const stop = await this.gate(passphrase);
+    if (stop) return { ok: false, problem: stop.problem === 'missing' ? 'io' : stop.problem };
     const { key, problem } = await this.data({ op: 'key' }).catch(() => ({ key: undefined, problem: 'locked' as const }));
     if (!key) return { ok: false, problem: problem === 'none' ? 'none' : 'locked' };
     let blob: string;
@@ -406,8 +424,11 @@ export class PasswordService {
    * A sign-in changed in Settings. Its address decides which pages it fills, so changing it needs the passphrase
    * typed in the last 5 minutes, as *Show* does: someone at an unlocked computer can't point a sign-in at their site.
    */
-  async edit(id: string, patch: Partial<{ origin: string; username: string; password: string; note: string }>): Promise<PasswordStepResult> {
-    if (patch.origin !== undefined && passphraseDue(this.now(), this.typedAt)) return { ok: false, problem: 'passphrase' };
+  async edit(id: string, patch: Partial<{ origin: string; username: string; password: string; note: string }>, passphrase?: string): Promise<PasswordStepResult> {
+    if (patch.origin !== undefined) {
+      const stop = await this.gate(passphrase);
+      if (stop) return { ok: false, problem: stop.problem === 'missing' ? 'io' : stop.problem };
+    }
     return this.step({ op: 'edit', id, patch }, () => this.touch());
   }
 
@@ -431,8 +452,9 @@ export class PasswordService {
     return this.step({ op: 'forgetNever', site });
   }
 
-  /** A forgotten passphrase: every password goes, and the key with it. */
+  /** A forgotten passphrase: every password goes, and the key with it. Only while locked: open, there's nothing forgotten. */
   async startOver(): Promise<PasswordsView> {
+    if ((await this.ensureOpen()) === 'open') return this.view();
     await this.data({ op: 'startOver' }).catch(() => undefined);
     this.typedAt = null;
     this.lockedByYou = false;
@@ -552,7 +574,10 @@ export class PasswordService {
     const chordId = page.private ? null : (page.chord?.id ?? null);
     const result = await this.data({ op: 'fill', id, origin: page.origin, chordId }).catch(() => ({}) as PasswordResult);
     this.touch();
-    return result.password ?? null;
+    // Main checks the match itself too (S17 §5), on the sign-in's own origin as chord-data opened it.
+    if (result.password === undefined || result.loginOrigin === undefined) return null;
+    if ((await sites()).matchLogin(page.origin, result.loginOrigin) === null) return null;
+    return result.password;
   }
 
   /** What a sign-in that worked is to the vault: which card, or none. Never in a private window, never for a proxy. */
@@ -619,12 +644,13 @@ export class PasswordService {
 
   /**
    * A page as the detector reports it: its origin (`event.senderFrame.origin`,
-   * which main gives and this trusts) and its tab's chord. No chord, or one
-   * main doesn't know, counts as a private window's: fill only.
+   * which main gives and this trusts) and its tab's chord. A private window's
+   * chord is fill only; a chord id main doesn't know (or none) gets nothing.
    */
-  private pageOf(origin: string, chordId: string | null): PasswordPage {
+  private pageOf(origin: string, chordId: string | null): PasswordPage | null {
     const chord = chordId ? (this.options.chord?.(chordId) ?? null) : null;
-    if (!chord || chord.private) return { origin, chord: null, private: true };
+    if (!chord) return null;
+    if (chord.private) return { origin, chord: null, private: true };
     return { origin, chord: { id: chord.id, profileId: chord.profileId }, private: false };
   }
 
@@ -634,7 +660,8 @@ export class PasswordService {
 
   /** The menu under a focused field: usernames and hosts, this chord's recent first; or off, none (no vault yet), locked. */
   accountsFor(origin: string, chordId: string | null): Promise<AccountsAnswer> {
-    return this.accountsForPage(this.pageOf(origin, chordId), this.installed());
+    const page = this.pageOf(origin, chordId);
+    return page ? this.accountsForPage(page, this.installed()) : Promise.resolve({ state: 'off' });
   }
 
   /**
@@ -642,13 +669,16 @@ export class PasswordService {
    * null unless the sign-in matches it (S17 §5, checked here and again in
    * chord-data). `chordId` records the use; a private window's isn't.
    */
-  passwordFor(accountId: string, origin: string, chordId: string | null = null): Promise<string | null> {
-    return this.passwordForPage(this.pageOf(origin, chordId), accountId, this.installed());
+  passwordFor(accountId: string, origin: string, chordId: string | null): Promise<string | null> {
+    const page = this.pageOf(origin, chordId);
+    return page ? this.passwordForPage(page, accountId, this.installed()) : Promise.resolve(null);
   }
 
   /** Which card a sign-in that worked gets: new (with the passphrase step when there's no vault yet), update, or none. */
   candidateFor(candidate: { origin: string; username: string; password: string; chordId: string | null }): Promise<CandidateAnswer> {
-    return this.candidate({ ...this.pageOf(candidate.origin, candidate.chordId), username: candidate.username, password: candidate.password }, this.installed());
+    const page = this.pageOf(candidate.origin, candidate.chordId);
+    if (!page) return Promise.resolve({ kind: 'off' });
+    return this.candidate({ ...page, username: candidate.username, password: candidate.password }, this.installed());
   }
 
   /**
@@ -660,6 +690,7 @@ export class PasswordService {
    */
   async saveCandidate(candidate: { origin: string; username: string; password: string; chordId: string | null; passphrase?: string; proxy?: boolean }): Promise<SaveAnswer> {
     const page = this.pageOf(candidate.origin, candidate.chordId);
+    if (!page) return { ok: false, problem: 'off' };
     const extensions = this.installed();
     const request: SaveRequest = {
       ...page,
@@ -719,6 +750,9 @@ export class PasswordService {
 
   /** chord-data started again (after a crash): the key went with it, so the vault is locked. */
   restarted(): void {
+    // Its Undo copies went with it.
+    this.deleted = [];
+    this.options.hide?.();
     this.options.changed();
   }
 

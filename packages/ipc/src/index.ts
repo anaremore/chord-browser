@@ -1382,15 +1382,20 @@ export const invokeChannels = {
   'passwords:setup': { roles: ['internal'], request: z.strictObject({ passphrase: newPassphrase }), response: z.custom<PasswordStepResult>() },
   'passwords:unlock': { roles: ['internal'], request: z.strictObject({ passphrase: typedPassphrase }), response: z.custom<PasswordStepResult>() },
   'passwords:lock': { roles: ['internal'], request: z.void(), response: z.custom<PasswordsView>() },
-  /** *Keep unlocked on this computer*; turning it on needs the vault open. */
-  'passwords:keep': { roles: ['internal'], request: z.strictObject({ on: z.boolean() }), response: z.custom<PasswordStepResult>() },
+  /** *Keep unlocked on this computer*; turning it on needs the vault open and the passphrase typed lately (`passphrase` when it asks). */
+  'passwords:keep': { roles: ['internal'], request: z.strictObject({ on: z.boolean(), passphrase: typedPassphrase.optional() }), response: z.custom<PasswordStepResult>() },
   'passwords:passphrase': { roles: ['internal'], request: z.strictObject({ current: typedPassphrase, next: newPassphrase }), response: z.custom<PasswordStepResult>() },
   /** *Show*: the password, or `passphrase` when it must be typed again first (then sent with it). */
   'passwords:reveal': { roles: ['internal'], request: z.strictObject({ id: loginId, passphrase: typedPassphrase.optional() }), response: z.custom<PasswordRevealResult>() },
   /** *Copy*: main puts it on the clipboard (it leaves after a minute); Settings never gets it. */
   'passwords:copy': { roles: ['internal'], request: z.strictObject({ id: loginId, passphrase: typedPassphrase.optional() }), response: z.custom<PasswordRevealResult>() },
   'passwords:add': { roles: ['internal'], request: z.strictObject(loginFields), response: z.custom<PasswordStepResult>() },
-  'passwords:edit': { roles: ['internal'], request: z.strictObject({ id: loginId, patch: z.strictObject(loginFields).partial() }), response: z.custom<PasswordStepResult>() },
+  /** A change of address asks for the passphrase as *Show* does (`passphrase` when it asks). */
+  'passwords:edit': {
+    roles: ['internal'],
+    request: z.strictObject({ id: loginId, patch: z.strictObject(loginFields).partial(), passphrase: typedPassphrase.optional() }),
+    response: z.custom<PasswordStepResult>(),
+  },
   'passwords:delete': { roles: ['internal'], request: z.strictObject({ id: loginId }), response: z.custom<PasswordStepResult>() },
   'passwords:undelete': { roles: ['internal'], request: z.strictObject({ id: loginId }), response: z.custom<PasswordStepResult>() },
   'passwords:forgetNever': { roles: ['internal'], request: z.strictObject({ site: z.string().min(1).max(300) }), response: z.custom<PasswordStepResult>() },
@@ -1756,8 +1761,11 @@ export interface EventPayloads {
   'importFile:progress': FileImportProgress;
   /** Where sync stands, to Settings, whenever it changes. */
   'sync:status': SyncView;
-  /** The vault changed (locked, unlocked, a sign-in saved): Settings asks for its view again. Nothing of it rides along. */
-  'passwords:changed': null;
+  /**
+   * The vault changed (locked, unlocked, a sign-in saved): Settings asks for its view again (null). `hide`: it locked,
+   * so a password Settings shows goes, without asking (with the key kept, asking would open it again).
+   */
+  'passwords:changed': { hide: true } | null;
   /** Tabs in the window's chords playing media (or paused a moment ago), newest first, when that changes. */
   'media:state': NowPlaying[];
   /** The frame of the tab that plays in Chord Player changed (docked, starting, its still picture), or no tab does (null). */
@@ -2013,17 +2021,18 @@ export interface PasswordsApi {
   setup(passphrase: string): Promise<PasswordStepResult>;
   unlock(passphrase: string): Promise<PasswordStepResult>;
   lock(): Promise<PasswordsView>;
-  keep(on: boolean): Promise<PasswordStepResult>;
+  keep(on: boolean, passphrase?: string): Promise<PasswordStepResult>;
   changePassphrase(current: string, next: string): Promise<PasswordStepResult>;
   reveal(id: string, passphrase?: string): Promise<PasswordRevealResult>;
   copy(id: string, passphrase?: string): Promise<PasswordRevealResult>;
   add(login: { origin: string; username: string; password: string; note: string }): Promise<PasswordStepResult>;
-  edit(id: string, patch: Partial<{ origin: string; username: string; password: string; note: string }>): Promise<PasswordStepResult>;
+  edit(id: string, patch: Partial<{ origin: string; username: string; password: string; note: string }>, passphrase?: string): Promise<PasswordStepResult>;
   remove(id: string): Promise<PasswordStepResult>;
   undo(id: string): Promise<PasswordStepResult>;
   forgetNever(site: string): Promise<PasswordStepResult>;
   startOver(): Promise<PasswordsView>;
-  onChange(listener: () => void): () => void;
+  /** `hide`: the vault locked; hide any shown password, and don't ask for the view. */
+  onChange(listener: (change: { hide: true } | null) => void): () => void;
 }
 
 /** Your data's sync (Settings → Your data → Sync, docs/decisions/S15-your-data.md §8). */

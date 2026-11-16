@@ -3,7 +3,8 @@
  * utility process, never on main: `node:sqlite` is synchronous.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
   addDecay,
@@ -200,7 +201,7 @@ export class ChordDatabase {
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
     this.migrate();
     this.sync = new SyncStore((text) => this.sql(text), () => this.device(), platform);
-    this.passwords = new PasswordStore((text) => this.sql(text), passwordKdf);
+    this.passwords = new PasswordStore((text) => this.sql(text), passwordKdf, (meta) => this.scrubBackups(meta));
     // Archived tabs past their keep-by date, icons nothing uses any more, and picks unused for their lifetime.
     this.db.prepare('DELETE FROM archive_item WHERE archived_at < ?').run(Date.now() - ARCHIVE_KEEP_MS);
     this.db.exec(
@@ -218,6 +219,30 @@ export class ChordDatabase {
       this.statements.set(text, statement);
     }
     return statement;
+  }
+
+  /**
+   * The vault's row in each migration backup (`chord.db.v<n>.bak`) made the
+   * same as chord.db's now, or taken out: a backup made before a new
+   * passphrase, or before *Keep unlocked* went off, holds the old copy of
+   * the key otherwise. The rest of a backup stays as it was, for what it's for.
+   */
+  private scrubBackups(meta: string | null): void {
+    const dir = dirname(this.file);
+    const prefix = `${basename(this.file)}.v`;
+    for (const name of readdirSync(dir)) {
+      if (!name.startsWith(prefix) || !name.endsWith('.bak')) continue;
+      const backup = new DatabaseSync(join(dir, name));
+      try {
+        backup.exec('PRAGMA secure_delete = ON');
+        const has = backup.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'`).get();
+        if (!has) continue;
+        if (meta) backup.prepare(`UPDATE meta SET value = ? WHERE key = 'passwords'`).run(meta);
+        else backup.prepare(`DELETE FROM meta WHERE key = 'passwords'`).run();
+      } finally {
+        backup.close();
+      }
+    }
   }
 
   get version(): number {

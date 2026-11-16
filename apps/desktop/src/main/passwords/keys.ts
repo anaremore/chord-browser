@@ -26,7 +26,9 @@ export function osKeys(platform: NodeJS.Platform, options: { noKeyring?: boolean
     available,
     async wrap(key) {
       if (!(await available())) throw new Error('no keyring');
-      const encoded = Buffer.from(key).toString('base64');
+      const copy = Buffer.from(key);
+      const encoded = copy.toString('base64');
+      copy.fill(0);
       return (await safeStorage.encryptStringAsync(encoded)).toString('base64');
     },
     async unwrap(blob) {

@@ -37,7 +37,11 @@ process.parentPort.on('message', (event) => {
     const vault = db?.passwords;
     if (!vault) return reply({ id: request.id, ok: false, error: 'chord-data: passwords before open' });
     vault.run(request.op).then(
-      (passwords) => reply({ id: request.id, ok: true, passwords }),
+      (passwords) => {
+        reply({ id: request.id, ok: true, passwords });
+        // postMessage cloned it: this copy of the key goes now.
+        passwords.key?.fill(0);
+      },
       (error: unknown) => reply({ id: request.id, ok: false, error: `chord-data: passwords: ${error instanceof Error ? error.name : 'error'}` }),
     );
     return;
