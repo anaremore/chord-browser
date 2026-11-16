@@ -1,0 +1,12 @@
+<!doctype html>
+<!-- Sign-in and sign-up side by side, each its own form. -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-up"></head><body>
+<section><h2>Log in</h2><form id="in">
+  <input name="login_email" type="email" placeholder="Email" data-chord-expect="username">
+  <input name="login_password" type="password" placeholder="Password" data-chord-expect="current-password">
+  <button>Log in</button></form></section>
+<section><h2>New here? Create an account</h2><form id="up">
+  <input name="signup_email" type="email" placeholder="Email" data-chord-expect="username">
+  <input name="signup_password" type="password" placeholder="Choose a password" data-chord-expect="new-password">
+  <button>Sign up</button></form></section>
+</body></html>

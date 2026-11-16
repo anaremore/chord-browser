@@ -89,6 +89,7 @@ import { SafeBrowsingGuard } from './safe-browsing/guard';
 import type { ScreenShareBroker } from './screen-share';
 import type { AuthBroker } from './http-auth';
 import type { PasskeyBroker } from './passkeys';
+import type { PasswordDetector } from './passwords/detector';
 import type { Screenshots } from './screenshots/service';
 import { HistorySaver } from './history-saver';
 import { SiteZoom } from './site-zoom';
@@ -137,6 +138,8 @@ export interface BrowserOptions {
   screenshots: Screenshots;
   /** Chooses a passkey when an authenticator holds several for a site; connected here once the store exists. */
   passkeys: PasskeyBroker;
+  /** The password detector (S17): a tab's page is the only one its agent's channels answer. */
+  passwords: PasswordDetector;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
   /** A Chord window came to the front (sync looks at its folder then, S15 §6). */
@@ -367,6 +370,7 @@ export class Browser {
       },
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
+        options.passwords.attachPage(contents);
         this.extensions.tabCreated(contents, nodeId);
         this.safeBrowsing.attach(contents, nodeId);
         this.autoPip.attach(contents, nodeId);

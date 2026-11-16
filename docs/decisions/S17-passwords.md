@@ -1,6 +1,6 @@
 # S17: Passwords, built in
 
-*2026-11-15 · replaces D12 (ARCHITECTURE.md §16) and re-rates risk R2 (§17) · nothing is built yet.*
+*2026-11-15 · replaces D12 (ARCHITECTURE.md §16) and re-rates risk R2 (§17) · phase 1's detector is built ([below](#phase-1-the-detector-built-2026-11-15)).*
 
 **Decided 2026-11-15 by the maintainer:**
 1. **D12 is reversed: option B.** Chord builds its own password manager, with its own detector (§2–§4). Extensions stay supported.
@@ -890,3 +890,73 @@ Only what a real desktop can show; everything else above was measured.
   Before then, the spike's placement checks can be run on a machine nobody is using; it opens a window for about 20 s: `pnpm install`, `pnpm --filter @chord/desktop build`, then `node spikes/s17-passwords/probes/run.mjs --only world,card`. The results land in `spikes/s17-passwords/results/probes/`.
 - **A Wayland desktop** (GNOME or KDE): the same checks, since headless Weston never activates a window.
 - **A real news site** for question 5's ratio, if wanted: the page measured here was synthetic, and real ads share sites.
+
+---
+
+## Phase 1: the detector (built 2026-11-15)
+
+*Branch `feat/passwords-detector`. The half of phase 1 with no interface. The vault and Settings are being built beside it, and the menu, filling and the save cards follow both. ARCHITECTURE.md §9, *Passwords: the detector*, has the details.*
+
+**What was built**, as §4, §6 and §8 planned, with M0's changes:
+- **The classifier** in `packages/core`:
+  - `password-parser.ts` is Chromium's `form_data_parser.cc` and HTML username detector, transliterated at chromium@4e452b6 (BSD-3, `LICENSES/BSD-3-Clause-Chromium.txt`). Server and model predictions are left out, as §3 planned.
+  - `password-forms.ts` adds §4's layer: the kind of form, vetoes, the password's variant, the username-only first step.
+  - `password-vocabulary.ts` holds Chromium's word lists and regexes and DuckDuckGo's credential matchers (Apache-2.0, with its notice), as M0's change 2 asked.
+- **The sentinel** (`preload/passwords.ts`) is registered only while passwords are on (M0's change 1). It wakes **the agent** (`passwords/agent/`) in world 4440 through `exposeInIsolatedWorld`. The agent scans the main frame (`<form>` and formless), reports candidates and the focused field's box, and adds nothing to the page.
+- **Saving detection** (`main/passwords/saving.ts`): on submit and on navigation, the reappeared-form check, the form going with no navigation, and the `PerformanceObserver` as a hint only (M0 Q7).
+- **The corpus in CI** (`apps/desktop/test/forms`, the `forms` job): a hash-checked, cached download (decision 10), with a ratcheting baseline. *username OR emailAddress* is scored as either (M0's change 3).
+
+**Decided with the planning thread** (not owner decisions):
+- **No field value goes to main in this phase.** `passwords:candidate` carries the form's id, kind and signal, each role's field by type, id and name, and whether the username and password are filled. The values stay in world 4440. The save card's phase adds one optional `values` field under its own review. So until then, a sign-in that navigates can be *known*, but its password can't be saved, which nothing does yet. §6 step 1 and §8's table have the candidate carrying values; that waits for that phase.
+- **The main-side API** for the vault: `createPasswordDetector()` with `setEnabled(on, profileIds?)` (the vault owns the setting and the extension rule), `attachSession`, `attachPage`, and the events `focus` (with the page's zoom), `blur`, `submitted`, `signedIn` and `failed`.
+- **Phase 1 is the main frame only:** messages from any other frame are dropped.
+- **Private windows** never get `signedIn` or `failed`; the detector enforces it too.
+
+**How it differs from the plan:**
+- **No sign-in without a submit signal.** §6's table listed a navigation the page started after you used the form (`PROBABLE_FORM_SUBMISSION`) as a signal by itself. Review found that a link clicked after typing a password then read as a sign-in, so a navigation counts only after a submit signal, as §6 step 2 says. A navigation that never commits (a 204, a download, an aborted one) decides nothing.
+- **Rate limits.** The agent sends `forms`, focus and blur at most once an animation frame (focus at most every 100 ms, with a trailing send, so a smooth scroll's last box always gets through), the last state only and nothing unchanged, one candidate per submit, and a blur candidate only after typing (at most once a second). Main holds each page to two token buckets (20 a second, a burst of 10): one for focus and blur, one for the sign-in's messages, so focus traffic can't crowd out the candidate or the `forms` that decide a sign-in.
+- **An error vetoes success.** A request to the page's origin answered 400 or more after the submit (the `PerformanceObserver`'s hint) means no sign-in, whatever the page does next: a script that got a 401, showed *wrong password*, and was followed by a click on *Forgot password?*. The veto is sticky: a later 2xx (a captcha refreshed) doesn't lift it. A new submit (a corrected retry) starts afresh.
+- **What it can't tell:** a script's sign-in that answers 200 with an error in its body, shows *wrong password*, and is followed by a link you click within the 10 s watch reads as a sign-in. Nothing the agent can see tells it apart; the save card's own wording and the update card's previous password are the remedy.
+- **The page can clobber the document's own properties** (`<form name="addEventListener">`, `<img name="title">`): the agent and its scan read the document and forms through their prototypes. The sentinel doesn't; such a page can only keep it asleep.
+- **A plain button can submit.** In a `<form>`, a `type="button"` whose words say sign in, sign up, Next or Continue, or the form's only button, is a submit signal: React apps and banks sign in with one.
+- **The reappeared-form check matches a field by its type and its id or name.** A held password field with neither is matched by type alone, cautiously: any form on the new page with a password field reads as the form back (a failure), since a wrong failure only loses an offer to save. Matching by position would be a refinement.
+- **Channels.** §8 named `focus`, `blur`, `candidate`, `gone` and `still`. Two were added: `forms` (each credential form's fields by type, id and name, which the reappeared-form check needs once the old page is gone) and `hint` (the PerformanceObserver's status). There's no `passwords:fill` yet: it's the menu's.
+- **The agent's bridge** is one function (`send`), not four; main sends the agent nothing yet.
+- **Vetoes:** a PIN typed as a password is the password where it's the form's only one (Qantas, Deutsche Bank and McGill sign in so). It isn't one beside another password field, or as one of several (gift cards). One-character password boxes are never passwords (§4).
+- **The variant:** `autocomplete=current-password` is trusted over the page's words; `new-password` isn't, since sign-in forms carry it (M0 §4: pinterest, oppo, realme, orange).
+- **The kind of form** reads the submit buttons' words first (the scan records them apart), then the other buttons', and the nearest heading just outside a form.
+- **The username:** an email after the passwords (Chromium's HTML detector reads "Email address" as one of its technical words, `laddress`) is passed over for the username before them. A username field asked for after the passwords stays.
+
+**Measured:**
+- **The corpus**, in Playwright's Chromium (headless, Windows and Linux): **394 of 458 files wholly right (86.0%)**, and 82.1% counting *username OR emailAddress* as username only. M0's bake-off had 80.7% by that stricter count, and DuckDuckGo 83.2%. 95 of 2,476 labelled fields are wrong, and every one is in `baseline.json`. An *emailAddress* field taken as the username counts as wrong in a file with no password or username field (a newsletter's). ⚠ The additions were tuned on the whole corpus, file by file through its failures; M0 also scored them on two halves, and this pass didn't.
+- **What's still wrong**, by kind:
+  - DuckDuckGo labels hidden decoys too (reddit's `-prevent` copies, idme's hidden form);
+  - a plain *password* label scored by its file's name, where the form's own words say otherwise (a sign-up form in a `_login` file);
+  - `type=text` password fields;
+  - first steps whose field names say nothing;
+  - a few sign-up forms whose only words are a *Sign in* link.
+- **The sentinel**, in perf.spec's terms (Linux container, X11): 3.2 KB built; a plain page's memory +0.2 MB with it registered against without, within noise; load time unchanged (−3 ms, noise). Held in perf.spec: 4 KB, 1.5 MB, and 2 ms on reference hardware.
+- **The agent**: 28 KB minified, 11 KB gzipped, within §2's guess of 25–40 KB.
+
+**Tests**, layers 1 to 3 as far as the detector goes:
+- **Layer 1:**
+  - Chromium's unit-test cases, transliterated (`core/test/password-parser.test.ts`): 100 cases ported, as 116 tests, all passing with no change to the port; 95 left out, each named with its reason (73 need server predictions, 14 model predictions, 5 metrics, 3 URLs or submission events);
+  - Chord's own table of kinds, vetoes, variants and first steps (`core/test/password-forms.test.ts`);
+  - properties over 1,500 random forms;
+  - the tracker's every path, the channels and the sender checks (`apps/desktop/test/unit`).
+- **Layer 2:** the corpus, and 20 of Chord's own fixtures, all passing.
+- **Layer 3** (`test/e2e/passwords.spec.ts`, X11 and Wayland in the container):
+  - the agent asleep without a sign-in field, and gone once off;
+  - awake in 4440 only, with the DOM untouched;
+  - focus and its box;
+  - a sign-in that navigates, one that fails, and a formless one with its hint;
+  - forged payloads refused;
+  - no typed value in anything main received.
+- Firefox's test tables (MPL-2.0, they need a DOM) aren't ported yet.
+
+**Left for the next phases of phase 1:**
+- the vault and Settings (being built beside this);
+- values in the candidate, under the save card's review;
+- the menu under the field and the fill (`passwords:fill`, with M0's change 4 for clicks);
+- the save and update cards, and the parts of layer 3 that need them;
+- Firefox's tables.

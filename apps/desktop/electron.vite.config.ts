@@ -6,6 +6,7 @@ import { defineConfig } from 'electron-vite';
 import type { Plugin } from 'vite';
 import { compileLists } from './src/main/ad-blocking/compile';
 import { FILTER_LISTS, type ListId } from './src/main/ad-blocking/lists';
+import { bundleAgent } from './src/passwords/build';
 
 const src = (path: string) => resolve(import.meta.dirname, 'src', path);
 
@@ -28,6 +29,19 @@ function filterLists(): Plugin {
   };
 }
 
+/**
+ * The passwords agent (S17 §4), built into one script in out/main/passwords/agent.js: main
+ * reads it the first time a page's sentinel asks, and runs nothing of it itself.
+ */
+function passwordsAgent(): Plugin {
+  return {
+    name: 'chord-passwords-agent',
+    async generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'passwords/agent.js', source: await bundleAgent({ entry: src('passwords/agent/index.ts'), minify: !process.env['CHORD_NO_MINIFY'] }) });
+    },
+  };
+}
+
 export default defineConfig({
   main: {
     // Google's Safe Browsing API key (ARCHITECTURE.md §14.5), from the environment at build time: the
@@ -43,7 +57,7 @@ export default defineConfig({
     // articles (§9), the one that installs Chord Player (§9), Effects'
     // sanitizer (§9), the process that writes an export of your data, and the
     // one that reads a Chord file for an import (docs/decisions/S15-your-data.md §7).
-    plugins: [filterLists()],
+    plugins: [filterLists(), passwordsAgent()],
     build: {
       externalizeDeps: false,
       rolldownOptions: {
@@ -90,6 +104,8 @@ export default defineConfig({
           devtools: src('preload/devtools.ts'),
           // Every web page's: Chromium's chrome.app, and no passkey autofill dialog (ARCHITECTURE.md §9).
           page: src('preload/page.ts'),
+          // The passwords sentinel: registered on chords' sessions only while passwords are on (S17 §8).
+          passwords: src('preload/passwords.ts'),
           // Every web page's service worker's: its app badge goes to its tabs, not Chord's icon (ARCHITECTURE.md §9).
           'service-worker': src('preload/service-worker.ts'),
           // The extension library's preload (GPL-3.0, packages/chrome-extensions): extension

@@ -1,0 +1,12 @@
+<!doctype html>
+<!-- Sign-up with a security answer typed as a password: not a password. -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-up"></head><body>
+<h1>Register</h1>
+<form>
+  <input name="username" placeholder="Username" data-chord-expect="username">
+  <input type="password" name="password" placeholder="Password" data-chord-expect="new-password">
+  <input type="password" name="password_confirm" placeholder="Confirm password" data-chord-expect="confirmation-password">
+  <label>Security question: your first pet? <input type="password" name="secAnswer" placeholder="Answer" data-chord-expect="none"></label>
+  <button>Register</button>
+</form>
+</body></html>

@@ -1,0 +1,11 @@
+<!doctype html>
+<!-- A honeypot field hidden in the form, and a hidden copy of the form (the mobile one). -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<form style="display:none" id="mobile"><input name="user"><input type="password" name="pass"><button>Sign in</button></form>
+<form id="desktop">
+  <input name="user" placeholder="Username" data-chord-expect="username">
+  <input name="website" tabindex="-1" style="display:none" data-chord-expect="none">
+  <input type="password" name="pass" placeholder="Password" data-chord-expect="current-password">
+  <button>Sign in</button>
+</form>
+</body></html>

@@ -1,0 +1,13 @@
+<!doctype html>
+<!-- A search box in the header and a newsletter field below: neither is the username. -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<header><form action="/search"><input type="search" name="q" placeholder="Search" data-chord-expect="none"><button>Go</button></form></header>
+<main>
+  <form action="/login">
+    <input name="user" placeholder="Username" data-chord-expect="username">
+    <input type="password" name="pw" placeholder="Password" data-chord-expect="current-password">
+    <button>Sign in</button>
+  </form>
+</main>
+<footer><form action="/subscribe"><input type="email" name="newsletter" placeholder="Subscribe to our newsletter" data-chord-expect="none"><button>Subscribe</button></form></footer>
+</body></html>

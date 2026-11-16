@@ -34,6 +34,11 @@ const ENFORCE = process.env['CHORD_PERF_ENFORCE'] === '1';
 const PROFILE = process.env['CHORD_PERF_PROFILE'] === '1';
 /** ARCHITECTURE.md §1. */
 const BUDGET = { launchMs: 1500, commandBarOpenMs: 50, historyKeystrokeMs: 16, frameMs: 16, fastFrameMs: 8 } as const;
+/**
+ * The passwords sentinel (S17 §8; M0 §6 measured nothing: 0.1 ms, memory within ±0.3 MB): its built size, and what it adds
+ * to a page without a sign-in field, with it registered against without, alternated in one launch.
+ */
+const SENTINEL = { sizeKb: 4, pageMemoryMb: 1.5, pageLoadMs: 2 } as const;
 /** Long enough for the slowest functional spring (`gentle`, 417 ms) to settle. */
 const SETTLE_MS = 700;
 const VISITS = 2000;
@@ -52,14 +57,14 @@ interface Check {
   value: number;
   /** The budget: the value is held to at most this. */
   limit: number;
-  unit: 'ms' | 'late' | 'renders' | 'moves' | 'MB' | '×';
+  unit: 'ms' | 'late' | 'renders' | 'moves' | 'MB' | 'KB' | '×';
   status: Status;
   /** Held to this runner's baseline rather than a budget: what it measured before (`limit` adds the margin). */
   baseline?: number;
 }
 
 interface Row {
-  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view' | 'memory' | 'export' | 'import' | 'sync';
+  group: 'launch' | 'command bar' | 'frames' | 'renders' | 'page view' | 'memory' | 'passwords' | 'export' | 'import' | 'sync';
   name: string;
   scenario: string;
   motion: 'on' | 'off' | null;
@@ -217,6 +222,8 @@ function startSite(): Promise<{ server: Server; origin: string }> {
   const server = createServer((req, res) => {
     const n = /^\/perf\/(\d+)$/.exec(req.url ?? '')?.[1];
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    // A sign-in page, for the passwords agent's cost when it wakes (S17 §8).
+    if (req.url === '/signin') return void res.end('<title>Sign in</title><form><input name="email" type="email"><input name="password" type="password"><button>Sign in</button></form>');
     res.end(n ? `<title>Page ${n}</title><h1>Page ${n}</h1><p>${'Words on a page. '.repeat(40)}</p>` : '<title>Home</title><p>Home</p>');
   });
   return new Promise((done) => server.listen(0, '127.0.0.1', () => done({ server, origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` })));
@@ -517,6 +524,84 @@ test("memory: Chord's own processes, idle with one window and one page", async (
   }
   const others = Object.entries(memoryMb).filter(([name]) => !(OWN_PROCESSES as readonly string[]).includes(name));
   record({ group: 'memory', name: 'Memory at idle: other processes (reported only)', scenario: 'one window, one page', motion: null, locked: null, checks: [], detail: Object.fromEntries(others) });
+});
+
+/* ---------- Passwords ---------- */
+
+/**
+ * The passwords sentinel (S17 §8): registered on the session only while passwords are on, it adds two passive
+ * listeners and a `querySelector` to a page without a sign-in field. Held: its built size, and the page's
+ * memory with it against without (the page reloaded each time, the two alternated, the median of each).
+ * The page's load time is held only on reference hardware, as every time is. Waking the agent on a
+ * sign-in page is reported: one script compile and a scan.
+ */
+test('passwords: the sentinel on a page without a sign-in field, and the agent woken on one', async () => {
+  test.setTimeout(180_000);
+  cpuBusy = await measureCpuBusy();
+  const sizeKb = round(statSync(resolve(appDir, 'out', 'preload', 'passwords.cjs')).size / 1024);
+  const app = await launch({});
+  try {
+    await launchTimings(app);
+    const page = await pageWhere(app, (u) => u.startsWith(site.origin));
+    const enable = (on: boolean) => app.evaluate((_electron, value) => (globalThis as unknown as { chordTestHooks: { passwordsEnabled(on: boolean): void } }).chordTestHooks.passwordsEnabled(value), on);
+    /** The page loaded afresh (a preload registered or not takes effect from a load), its load time, and its renderer's memory once idle. */
+    const measure = async (url: string) => {
+      await page.goto(url);
+      const loadMs = await page.evaluate(() => {
+        const n = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+        return n ? n.loadEventEnd - n.startTime : NaN;
+      });
+      await new Promise((done) => setTimeout(done, 1500));
+      await collectGarbage(app);
+      await new Promise((done) => setTimeout(done, 500));
+      return { loadMs, memoryMb: (await processMemory(app)).get('page') ?? NaN };
+    };
+    const plain = { off: [] as { loadMs: number; memoryMb: number }[], on: [] as { loadMs: number; memoryMb: number }[] };
+    for (let pass = 0; pass < 5; pass++) {
+      for (const on of pass % 2 ? [true, false] : [false, true]) {
+        await enable(on);
+        plain[on ? 'on' : 'off'].push(await measure(`${site.origin}/perf/1`));
+      }
+    }
+    await enable(true);
+    const signIn = [];
+    for (let i = 0; i < 3; i++) signIn.push(await measure(`${site.origin}/signin`));
+    // The agent woke in world 4440 on the sign-in page: what was measured is its cost.
+    const woke = await app.evaluate(({ webContents }, from) => webContents.getAllWebContents().find((c) => c.getURL() === `${from}/signin`)!.executeJavaScriptInIsolatedWorld(4440, [{ code: 'typeof chordPasswords' }]), site.origin);
+    expect(woke).toBe('object');
+    const med = (xs: { loadMs: number; memoryMb: number }[], k: 'loadMs' | 'memoryMb') => median(xs.map((x) => x[k]).filter(Number.isFinite));
+    const memoryDelta = round(med(plain.on, 'memoryMb') - med(plain.off, 'memoryMb'));
+    const loadDelta = round(med(plain.on, 'loadMs') - med(plain.off, 'loadMs'));
+    record({
+      group: 'passwords',
+      name: 'Passwords: the sentinel',
+      scenario: 'a page, no sign-in',
+      motion: null,
+      locked: null,
+      checks: [
+        check('preload size', sizeKb, SENTINEL.sizeKb, { locked: null, unit: 'KB' }),
+        check('page memory, on − off', memoryDelta, SENTINEL.pageMemoryMb, { locked: null, unit: 'MB' }),
+        check('page load, on − off', loadDelta, SENTINEL.pageLoadMs, { locked: null }),
+      ],
+      detail: {
+        offMemoryMb: plain.off.map((x) => round(x.memoryMb)),
+        onMemoryMb: plain.on.map((x) => round(x.memoryMb)),
+        offLoadMs: plain.off.map((x) => round(x.loadMs)),
+        onLoadMs: plain.on.map((x) => round(x.loadMs)),
+      },
+    });
+    record({
+      group: 'passwords',
+      name: 'Passwords: the agent woken (reported only)',
+      scenario: 'a sign-in page',
+      motion: null,
+      locked: null,
+      checks: [],
+      detail: { memoryMb: round(med(signIn, 'memoryMb')), overPlainOffMb: round(med(signIn, 'memoryMb') - med(plain.off, 'memoryMb')), loadMs: round(med(signIn, 'loadMs')) },
+    });
+  } finally {
+    await app.close();
+  }
 });
 
 /* ---------- Interactions ---------- */
