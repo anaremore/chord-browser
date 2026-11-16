@@ -4,11 +4,27 @@
  * these cards, so the rest of the page stays clickable.
  */
 import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
-import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type DrmNotice, type FindState, type PasskeyPrompt, type PasswordUnlockPrompt, type PermissionPrompt, type PlayerOffer, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
+import {
+  SYSTEM_SHARE_SOURCE,
+  type AuthPrompt,
+  type DrmNotice,
+  type FindState,
+  type PasskeyPrompt,
+  type PasswordMenu,
+  type PasswordSaveCard,
+  type PasswordUnlockPrompt,
+  type PermissionPrompt,
+  type PlayerOffer,
+  type PopoverState,
+  type SharePrompt,
+  type ShareSource,
+  type SystemInfo,
+} from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
-import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, Fingerprint, KeyRound, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Favicon } from '../shared/Favicon';
+import { EMPTY_PASSPHRASE, PassphraseStep, passphraseReady, type PassphraseValue } from '../shared/PassphraseStep';
 import { useLive, type Live } from '../shared/live';
 import { installingLabel, megabytes, PLAYER_FAILURES } from '../shared/player';
 import { chordStyle } from '../shared/theme';
@@ -487,6 +503,183 @@ function UnlockPasswordsCard({ prompt }: { prompt: PasswordUnlockPrompt }) {
 }
 
 /**
+ * The menu under a sign-in field (docs/decisions/S17-passwords.md §9): the site's saved
+ * accounts by username, with the host under it where it isn't the page's, then *Other
+ * passwords…*; or *Unlock passwords* alone while they're locked. The page keeps the keyboard:
+ * ↓ ↑ Enter go through main, which moves the highlight here. A click chooses a row (main gives
+ * the page its focus back). Nothing here ever holds a password.
+ */
+function PasswordMenuCard({ menu }: { menu: PasswordMenu }) {
+  const ids = useId();
+  const choose = (index: number) => void api.passwords.choose(menu.id, index);
+  const rowId = (i: number) => `${ids}-row-${i}`;
+  const row = (i: number, content: ReactNode, className = styles.menuRow) => (
+    <div key={i} id={rowId(i)} role="option" aria-selected={menu.index === i} className={className} onClick={() => choose(i)}>
+      {content}
+    </div>
+  );
+  return (
+    <div className={`${styles.card} ${styles.passwordMenu}`}>
+      <div role="listbox" aria-label={`Passwords for ${menu.host}`} aria-activedescendant={rowId(menu.index)} className={styles.menuList}>
+        {menu.state === 'locked'
+          ? row(
+              0,
+              <>
+                <span className={styles.menuIcon} aria-hidden>
+                  <LockKeyhole size={12} strokeWidth={2} />
+                </span>
+                <span className={styles.menuText}>Unlock passwords</span>
+              </>,
+            )
+          : menu.accounts.map((account, i) =>
+              row(
+                i,
+                <>
+                  <span className={styles.menuIcon} aria-hidden>
+                    {[...account.username.trim()][0]?.toUpperCase() || '·'}
+                  </span>
+                  <span className={styles.menuText}>
+                    <span className={styles.menuUser}>{account.username || 'No username'}</span>
+                    {account.host && <span className={styles.menuHost}>{account.host}</span>}
+                  </span>
+                </>,
+              ),
+            )}
+        {menu.state === 'accounts' && row(menu.accounts.length, <span className={styles.menuText}>Other passwords…</span>, `${styles.menuRow} ${styles.menuMore}`)}
+      </div>
+      {menu.insecure && (
+        <p className={styles.menuWarning}>
+          <TriangleAlert size={12} strokeWidth={2} aria-hidden />
+          This page isn’t secure
+        </p>
+      )}
+    </div>
+  );
+}
+
+const DOTS = '••••••••••';
+
+/**
+ * The save and update cards (docs/decisions/S17-passwords.md §9), after a sign-in that
+ * worked: at the tab's top right, never taking focus. *Save this password for [site]?* with
+ * the username (yours to correct) and the password as dots, the eye to see it; **Save** ·
+ * *Never for this site* · ×. Updating: *Update the password for [username]?* · **Update**.
+ * The very first also chooses the passphrase (the passphrase step Settings uses). The
+ * password reaches this page only for the eye, and goes again when the card does.
+ */
+function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
+  const ids = useId();
+  const [username, setUsername] = useState(card.username);
+  const [passphrase, setPassphrase] = useState<PassphraseValue>(EMPTY_PASSPHRASE);
+  const [shown, setShown] = useState<string | null>(null);
+  const act = (action: 'save' | 'never' | 'close' | 'hold' | 'release', details?: { username?: string; passphrase?: string }) => void api.passwords.card(card.id, action, details);
+  const ready = !card.busy && (!card.setup || passphraseReady(passphrase));
+  const update = card.kind === 'update';
+  const save = () => {
+    if (card.setup && !passphraseReady(passphrase)) return setPassphrase({ ...passphrase, touched: true });
+    if (!ready) return;
+    act('save', { username, ...(card.setup ? { passphrase: passphrase.passphrase } : {}) });
+  };
+  const toggle = async () => {
+    if (shown !== null) return setShown(null);
+    const revealed = await api.passwords.reveal(card.id);
+    setShown(revealed?.password ?? null);
+  };
+  return (
+    <form
+      className={styles.card}
+      role="dialog"
+      aria-labelledby={`${ids}-title`}
+      aria-busy={card.busy || undefined}
+      onFocus={() => act('hold')}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) act('release');
+      }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        save();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          act('close');
+        }
+      }}
+    >
+      <div className={styles.permissionHead}>
+        <KeyRound className={styles.offerIcon} {...ICON} aria-hidden />
+        <p id={`${ids}-title`} className={styles.permissionTitle}>
+          {update ? (
+            <>
+              Update the password for <span className={styles.host}>{card.username}</span>?
+            </>
+          ) : (
+            <>
+              Save this password for <span className={styles.host}>{card.host}</span>?
+            </>
+          )}
+        </p>
+        <button type="button" className={styles.iconButton} aria-label="Close" title="Close" onClick={() => act('close')}>
+          <X {...ICON} />
+        </button>
+      </div>
+      <div className={styles.authFields}>
+        {!update && (
+          <>
+            <label className={styles.authLabel} htmlFor={`${ids}-username`}>
+              Username
+            </label>
+            <input
+              id={`${ids}-username`}
+              className={styles.authInput}
+              value={username}
+              maxLength={500}
+              autoComplete="off"
+              spellCheck={false}
+              autoCapitalize="off"
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </>
+        )}
+        {!card.setup && (
+          <>
+            <span className={styles.authLabel} id={`${ids}-password`}>
+              Password
+            </span>
+            <span className={styles.savedPassword}>
+              <span className={shown === null ? styles.dots : styles.revealed}>{shown ?? DOTS}</span>
+              <button type="button" className={styles.iconButton} aria-label={shown === null ? 'Show password' : 'Hide password'} onClick={() => void toggle()}>
+                {shown === null ? <Eye size={14} strokeWidth={2} /> : <EyeOff size={14} strokeWidth={2} />}
+              </button>
+            </span>
+          </>
+        )}
+      </div>
+      {card.setup && (
+        <div className={styles.saveStep}>
+          <PassphraseStep value={passphrase} onChange={setPassphrase} />
+        </div>
+      )}
+      {card.problem && (
+        <p className={styles.authRetry} role="alert">
+          Chord couldn’t save it. Try again.
+        </p>
+      )}
+      <div className={styles.actions}>
+        {!update && !card.setup && (
+          <button type="button" className={styles.link} disabled={card.busy} onClick={() => act('never')}>
+            Never for this site
+          </button>
+        )}
+        <button type="submit" className={styles.primary} disabled={card.busy}>
+          {update ? 'Update' : 'Save'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/**
  * Safe Browsing's one-time offer (ARCHITECTURE.md §14.5), for a profile from
  * before it existed: its notice in full, then on or not now. Either answer
  * is final; Settings → Privacy can change it later.
@@ -623,11 +816,19 @@ function DrmNoticeCard({ notice }: { notice: DrmNotice }) {
   );
 }
 
-export function Popover({ info: infoSource, state: stateSource }: { info: Live<SystemInfo>; state: Live<PopoverState> }) {
+/**
+ * `menuOnly`: the page in the menu's own view (loaded with `#menu`), which shows the menu under a sign-in field and
+ * nothing else; main places it under the field. The popover's own page never shows the menu, so its cards stay put
+ * and keep what's typed in them while a menu opens and closes.
+ */
+export function Popover({ info: infoSource, state: stateSource, menuOnly = false }: { info: Live<SystemInfo>; state: Live<PopoverState>; menuOnly?: boolean }) {
   const info = useLive(infoSource);
   const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
-  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.passkey || state.passwordsUnlock || state.safeBrowsingOffer || state.drm || state.effects);
+  const menu = menuOnly ? state.passwordMenu : null;
+  const hasCards = menuOnly
+    ? Boolean(menu)
+    : Boolean(state.find || state.permission || state.share || state.auth || state.passkey || state.passwordsUnlock || state.passwordSave || state.safeBrowsingOffer || state.drm || state.effects);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -644,6 +845,12 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
   }, [hasCards]);
 
   const { style, appearance } = chordStyle(state.theme ? { theme: state.theme } : null, info, state.interface);
+  if (menuOnly)
+    return (
+      <div ref={root} className={`${styles.root} ${styles.menuRoot}`} style={style}>
+        {menu && <PasswordMenuCard key={menu.id} menu={menu} />}
+      </div>
+    );
   return (
     <div ref={root} className={styles.root} style={style}>
       {state.find && <FindBar find={state.find} />}
@@ -652,6 +859,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
       {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}
       {state.passkey && <PasskeyCard key={state.passkey.id} prompt={state.passkey} />}
       {state.passwordsUnlock && <UnlockPasswordsCard key={state.passwordsUnlock.id} prompt={state.passwordsUnlock} />}
+      {state.passwordSave && <SavePasswordCardView key={state.passwordSave.id} card={state.passwordSave} />}
       {state.safeBrowsingOffer && <SafeBrowsingOffer />}
       {state.drm && <DrmNoticeCard key={state.drm.service} notice={state.drm} />}
       {state.effects && <EffectsCard key={state.effects.host} opened={state.effects.opened} />}

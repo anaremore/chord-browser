@@ -20,6 +20,7 @@ import {
   effectsHost,
   isInternalUrl,
   isPrivateChord,
+  passwordsOnIn,
   isPrivateProfile,
   privateWindowOf,
   proxyLabel,
@@ -94,6 +95,8 @@ import type { ScreenShareBroker } from './screen-share';
 import type { AuthBroker } from './http-auth';
 import type { PasskeyBroker } from './passkeys';
 import type { PasswordService } from './passwords/service';
+import { PasswordAssist, type AssistVault } from './passwords/assist';
+import { popoverSender } from './passwords/senders';
 import type { PasswordDetector } from './passwords/detector';
 import type { Screenshots } from './screenshots/service';
 import { HistorySaver } from './history-saver';
@@ -144,8 +147,8 @@ export interface BrowserOptions {
   screenshots: Screenshots;
   /** Chooses a passkey when an authenticator holds several for a site; connected here once the store exists. */
   passkeys: PasskeyBroker;
-  /** Chord's own passwords: the unlock card each window's popover may show. */
-  passwords: Pick<PasswordService, 'unlockPromptFor' | 'windowClosed'>;
+  /** Chord's own passwords: the unlock card each window's popover may show, and what the menu under a field and the save cards ask. */
+  passwords: Pick<PasswordService, 'unlockPromptFor' | 'windowClosed'> & AssistVault;
   /** The password detector (S17): a tab's page is the only one its agent's channels answer. */
   passwordDetector: PasswordDetector;
   /** Persistence hook: every change, after it's applied. */
@@ -234,6 +237,8 @@ export class Browser {
   private readonly finders = new Map<WindowId, FindInPage>();
   /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
   private readonly popoverSent = new Map<WindowId, string>();
+  /** The same, for each window's menu view (the menu under a field). */
+  private readonly menuSent = new Map<WindowId, string>();
   /** When the command bar last had each server connected ahead of Enter, by profile and origin (`preconnect`). */
   private readonly preconnected = new Map<string, number>();
   /** Tabs playing media, for the Now playing cards (DESIGN.md §7.10), and what each window's card was last sent. */
@@ -244,6 +249,10 @@ export class Browser {
   /** A popover refresh for when a young Chord Player check stops holding the DRM notice back. */
   private playerWait: ReturnType<typeof setTimeout> | null = null;
   private readonly mediaSent = new Map<WindowId, string>();
+  /** Chord's passwords in the page (S17 §9): the menu under a field, filling, and the save cards. */
+  readonly passwordAssist: PasswordAssist;
+  /** Each tab's page, to its tab: the menu and the save cards are a tab's. */
+  private readonly tabOfPage = new WeakMap<WebContents, NodeId>();
   /** The sign-in box each window last gave the keyboard to, so a box takes it once. */
   private readonly authFocused = new Map<WindowId, string>();
   /** The browser window used most recently: menus, Settings and links from Settings act on it. */
@@ -361,6 +370,47 @@ export class Browser {
     // Before any window: Chord's own views open at the interface size (DESIGN.md §10).
     setUiScale(this.store.state.settings.uiScale);
     this.appMenu = buildAppMenu((action) => this.runInFocusedWindow(action), this.store.state.presenting !== null);
+    this.passwordAssist = new PasswordAssist({
+      vault: options.passwords,
+      detector: options.passwordDetector,
+      host: {
+        tabOf: (contents) => {
+          const nodeId = this.tabOfPage.get(contents);
+          const node = nodeId ? nodeOf(this.store.state, nodeId) : undefined;
+          if (!nodeId || node?.kind !== 'tab') return null;
+          const windowId = this.windowShowing(nodeId);
+          if (!windowId) return null;
+          return { nodeId, windowId, chordId: node.chordId, private: isPrivateChord(this.store.state, node.chordId) };
+        },
+        // On screen in a pane of its window, with nothing of Chord's in front of it (Peek).
+        shown: (contents) => {
+          const w = this.windowFor(contents);
+          return !!w && w.paneContents.includes(contents) && !this.peeks.contents(w);
+        },
+        changed: (windowId) => {
+          const w = this.windows.get(windowId);
+          if (w) this.syncPopover(w);
+        },
+        focusPage: (contents) => {
+          if (!contents.isDestroyed()) contents.focus();
+        },
+        accent: (nodeId) => this.accentOf(nodeId),
+        toast: (windowId, id, message) => this.windows.get(windowId)?.toast({ id, message }),
+        openPasswords: () => this.openSettings('passwords'),
+        offer: (nodeId, on) => {
+          const live = this.store.state.live[nodeId];
+          if (nodeOf(this.store.state, nodeId)?.kind === 'tab' && Boolean(live?.passwordOffer) !== on) this.store.dispatch({ t: 'tab.live', nodeId, live: { passwordOffer: on } });
+        },
+        prepareMenu: (windowId) => void this.windows.get(windowId)?.ensureMenuView(),
+        passwordsOn: (chordId) => {
+          const state = this.store.state;
+          const chord = chordId ? state.chords[chordId] : undefined;
+          if (!chord) return false;
+          // A private window's chord: the switch alone (it never saves anyway).
+          return passwordsOnIn(state.settings.passwords, chord.private ? null : chord, state.extensions);
+        },
+      },
+    });
     this.tabs = new TabManager({
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
@@ -379,6 +429,8 @@ export class Browser {
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
         options.passwordDetector.attachPage(contents);
+        this.tabOfPage.set(contents, nodeId);
+        this.passwordAssist.attachPage(contents);
         this.extensions.tabCreated(contents, nodeId);
         this.safeBrowsing.attach(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
@@ -849,7 +901,7 @@ export class Browser {
 
   windowFor(contents: WebContents): AppWindow | undefined {
     for (const w of this.windows.values()) {
-      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.preview.webContents, w.peekContents, ...w.paneContents].includes(contents)) return w;
+      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.preview.webContents, w.peekContents, w.menuPage, ...w.paneContents].includes(contents)) return w;
     }
     const nodeId = this.tabs.nodeFor(contents);
     const windowId = nodeId ? this.windowShowing(nodeId) : undefined;
@@ -910,6 +962,16 @@ export class Browser {
       this.authFocused.delete(windowId);
       this.syncPopover(w);
     });
+    // The menu under a field has a view of its own, made the first time it's wanted: a press on it, before its page
+    // sees it, keeps the menu through the field's blur that follows (M0 §3); its state once it has loaded.
+    w.onMenuView = (contents) => {
+      contents.on('before-mouse-event', (_event, mouse) => this.passwordAssist.popoverMouse(windowId, mouse.type));
+      contents.on('did-finish-load', () => {
+        if (this.windows.get(windowId) !== w) return;
+        this.menuSent.delete(windowId);
+        this.syncPopover(w);
+      });
+    };
     w.shell.webContents.on('did-finish-load', () => {
       if (this.windows.get(windowId) !== w) return;
       this.extensions.forget(windowId);
@@ -946,11 +1008,13 @@ export class Browser {
       this.assistant?.forgetWindow(windowId);
       this.options.screenshots.windowClosed(windowId);
       this.options.passwords.windowClosed(windowId);
+      this.passwordAssist.windowClosed(windowId);
       this.effects.forgetWindow(windowId);
       this.windows.delete(windowId);
       this.player.placementChanged();
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
+      this.menuSent.delete(windowId);
       this.mediaSent.delete(windowId);
       this.authFocused.delete(windowId);
       this.extensions.forget(windowId);
@@ -1355,6 +1419,9 @@ export class Browser {
       auth: this.options.httpAuth.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
       passkey: this.options.passkeys.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
       passwordsUnlock: this.options.passwords.unlockPromptFor(w.id),
+      // The menu is its own view's (`menuState`): the cards' page doesn't re-render on every ↓ ↑.
+      passwordMenu: null,
+      passwordSave: this.passwordAssist.cardFor(activeTabId(state, w.id)),
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
       // A tab whose service plays in Chord Player says so in its frame instead.
@@ -1597,6 +1664,19 @@ export class Browser {
       if (contents && (onboarding || live?.error || live?.crashed || live?.threat || live?.player)) hidden.add(contents);
     }
     w.setHiddenPanes(hidden);
+    // The menu under a field: closed once its page isn't on screen, else the popover goes under the field.
+    this.passwordAssist.check(w.id);
+    w.setMenuAnchor(this.passwordAssist.anchorFor(w.id));
+    // The menu's own view gets the menu and the chord's look, nothing of the cards; each sent only when it changes.
+    const menuPage = w.menuPage;
+    if (menuPage) {
+      const menu = this.menuState(w);
+      const menuJson = JSON.stringify(menu);
+      if (this.menuSent.get(w.id) !== menuJson) {
+        this.menuSent.set(w.id, menuJson);
+        send(menuPage, 'popover:state', menu);
+      }
+    }
     const popover = this.popoverState(w);
     const json = JSON.stringify(popover);
     if (this.popoverSent.get(w.id) === json) return;
@@ -1738,8 +1818,44 @@ export class Browser {
   }
 
   /** Where sync stands, to Settings if it's open (Your data → Sync). */
+  /**
+   * The window whose popover page this is, for the password channels: the cards' page (`cards`: the save card, its
+   * eye) or the menu's view (`menu`: choosing a row). Neither answers for the other (passwords/senders.ts).
+   */
+  popoverWindow(sender: WebContents, view: 'cards' | 'menu'): WindowId | null {
+    const pages = [...this.windows.values()].map((w) => ({ id: w.id, cards: w.popover.webContents, menu: w.menuPage }));
+    return popoverSender(pages, sender, view);
+  }
+
+  /** What the menu's own view is sent: the menu under a field and the chord's look; every card left out. */
+  menuState(w: AppWindow): PopoverState {
+    const state = this.store.state;
+    const model = state.windows[w.id];
+    return {
+      theme: model ? (state.chords[model.activeChordId]?.theme ?? null) : null,
+      interface: state.settings.interface,
+      find: null,
+      permission: null,
+      share: null,
+      auth: null,
+      passkey: null,
+      passwordsUnlock: null,
+      passwordMenu: this.passwordAssist.menuFor(w.id),
+      passwordSave: null,
+      safeBrowsingOffer: false,
+      drm: null,
+      effects: null,
+    };
+  }
+
+  /** The state for whichever of the window's popover pages asks: the menu's view gets only the menu's. */
+  popoverStateFor(sender: WebContents, w: AppWindow): PopoverState {
+    return sender === w.menuPage ? this.menuState(w) : this.popoverState(w);
+  }
+
   /** The vault changed: popovers show the unlock card or don't, and Settings asks for its view again. */
   passwordsChanged(): void {
+    this.passwordAssist.switched();
     this.syncPopovers();
     const contents = this.settingsWindow?.view.webContents;
     if (contents && !contents.isDestroyed()) send(contents, 'passwords:changed', null);

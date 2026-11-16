@@ -728,6 +728,12 @@ export class PasswordService {
     }
   }
 
+  /** The save card's *Never for this site*, for that frame's origin and the tab's chord: false while locked (ask first) or in a private window. */
+  neverFor(origin: string, chordId: string | null): Promise<boolean> {
+    const page = this.pageOf(origin, chordId);
+    return page ? this.never(page) : Promise.resolve(false);
+  }
+
   /** The form detector, once main has made it: it's told at once which sign-ins to watch. */
   attachDetector(detector: DetectorSwitch, state: DetectorState): void {
     this.detector = detector;

@@ -91,6 +91,13 @@ export function hwndOf(window: BaseWindow): string {
   return handle.length >= 8 ? handle.readBigUInt64LE(0).toString() : '0';
 }
 
+/** Where the menu under a sign-in field goes: the field's box in its page's CSS pixels, and that page's zoom. */
+export interface PopoverAnchor {
+  readonly contents: WebContents;
+  readonly rect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
+  readonly zoom: number;
+}
+
 /** How split panes share the content frame (DESIGN.md §7.9). */
 export interface PaneLayout {
   direction: SplitDirection;
@@ -236,6 +243,16 @@ export class AppWindow {
   private readonly nudged = new Set<WebContentsView>();
   private popoverSize = { width: 0, height: 0 };
   private focusPopoverWhenShown = false;
+  /**
+   * The menu under a sign-in field (S17 §9): a small view of its own, so the popover's cards stay where they are
+   * (and keep what's typed in them). Made the first time a window needs it, then shown and hidden, never made again.
+   */
+  private menuView: WebContentsView | null = null;
+  private menuSize = { width: 0, height: 0 };
+  private menuAnchor: PopoverAnchor | null = null;
+  private readonly uiSession: Session;
+  /** The menu's view was made: main hears its presses (before-mouse-event) from then on. */
+  onMenuView: ((contents: WebContents) => void) | null = null;
   private anchor: Rect | null = null;
   private overlayVisible = false;
   /**
@@ -283,6 +300,7 @@ export class AppWindow {
 
   constructor({ id, uiSession, bounds, sidebar, sidebarWidth, private: isPrivate = false, onBounds, presenting, devtools, deferViews = false }: AppWindowOptions) {
     this.id = id;
+    this.uiSession = uiSession;
     if (devtools) this.devtoolsSettings = devtools;
     this.isPrivate = isPrivate;
     this.presenting = presenting;
@@ -376,7 +394,7 @@ export class AppWindow {
       clearTimeout(boundsTimer);
       this.snapshots.dispose();
       clearInterval(this.previewAnimation);
-      for (const view of [this.shell, this.popover, this.preview, this.overlay]) pageOf(view)?.close();
+      for (const view of [this.shell, this.popover, this.preview, this.overlay, this.menuView]) pageOf(view)?.close();
     });
 
     markLaunch('windowCreated');
@@ -834,6 +852,75 @@ export class AppWindow {
     shell.postMessage('frame:port', null, [port2]);
   }
 
+  /** The menu's page, once its view is made: it gets the popover's state, and its size comes back on `popover:size`. */
+  get menuPage(): WebContents | undefined {
+    return pageOf(this.menuView);
+  }
+
+  /**
+   * The menu's view, made the first time it's wanted (a sign-in field took focus in this window), loading while the
+   * vault answers; afterwards it's only shown and hidden.
+   */
+  ensureMenuView(): WebContents | undefined {
+    if (this.window.isDestroyed()) return undefined;
+    if (!this.menuView) {
+      this.menuView = createUiView(this.uiSession, 'popover', 'menu');
+      this.menuView.setVisible(false);
+      const root = this.window.contentView;
+      root.addChildView(this.menuView, root.children.indexOf(this.popover) + 1);
+      const contents = this.menuView.webContents;
+      contents.once('destroyed', () => {
+        this.menuView = null;
+        this.menuSize = { width: 0, height: 0 };
+      });
+      this.onMenuView?.(contents);
+    }
+    return pageOf(this.menuView);
+  }
+
+  /** The menu under a field opened, moved with its field, or closed (null). */
+  setMenuAnchor(anchor: PopoverAnchor | null): void {
+    const a = this.menuAnchor;
+    const same =
+      a === anchor ||
+      (!!a && !!anchor && a.contents === anchor.contents && a.zoom === anchor.zoom && a.rect.x === anchor.rect.x && a.rect.y === anchor.rect.y && a.rect.width === anchor.rect.width && a.rect.height === anchor.rect.height);
+    this.menuAnchor = anchor;
+    if (anchor) this.ensureMenuView();
+    if (!same) this.layout();
+  }
+
+  /** The menu's view reports its size; 0 × 0 hides it. */
+  setMenuSize(width: number, height: number): void {
+    this.menuSize = { width: Math.ceil(width), height: Math.ceil(height) };
+    this.layout();
+  }
+
+  /**
+   * The menu's view under its field, in window pixels: its card's left edge on the field's, just below it, or
+   * above it when there's no room below; never past the page's own edges, so never over the sidebar
+   * (ARCHITECTURE.md §5). Null when the field isn't on screen. The view's padding (the card's shadow) is
+   * `space[3]`, as Popover.module.css has it.
+   */
+  private menuPlacement(anchor: PopoverAnchor): Rect | null {
+    const view = this.panes.find((v) => pageOf(v) === anchor.contents);
+    if (!view?.getVisible()) return null;
+    const page = view.getBounds();
+    const s = uiScale();
+    const pad = space[3] * s;
+    const gap = space[1] * s;
+    const width = this.menuSize.width * s;
+    const height = this.menuSize.height * s;
+    const card = height - 2 * pad;
+    const left = page.x + anchor.rect.x * anchor.zoom;
+    const top = page.y + anchor.rect.y * anchor.zoom;
+    const bottom = top + anchor.rect.height * anchor.zoom;
+    if (bottom <= page.y || top >= page.y + page.height) return null;
+    const below = bottom + gap + card <= page.y + page.height || top - gap - card < page.y;
+    const y = below ? bottom + gap - pad : top - gap - card - pad;
+    const x = Math.max(page.x, Math.min(left - pad, page.x + page.width - width));
+    return { x, y, width, height };
+  }
+
   /** The popover reports its cards' size; 0 × 0 hides it. */
   setPopoverSize(width: number, height: number): void {
     this.popoverSize = { width: Math.ceil(width), height: Math.ceil(height) };
@@ -1204,6 +1291,9 @@ export class AppWindow {
       if (this.panes.includes(view) || !pageOf(view)) continue;
       place(view, this.nudged.has(view) ? { ...parkedAt, height: parkedAt.height + 1 } : parkedAt);
     }
+    // The menu under a field: its own view, under its field, and out of sight while the field is (or Peek covers it,
+    // or a frame snapshot moves the pages).
+    this.placeMenu();
     this.showPopover();
     const { width: pw, height: ph } = this.popoverSize;
     // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.
@@ -1221,6 +1311,27 @@ export class AppWindow {
     this.placementChanged();
   }
 
+  private placeMenu(): void {
+    const view = this.menuView;
+    if (!view || !pageOf(view)) return;
+    const at = this.menuAnchor && !this.peek && !this.snapshots.active && this.menuSize.width > 0 && this.menuSize.height > 0 ? this.menuPlacement(this.menuAnchor) : null;
+    if (at) {
+      place(view, at);
+      if (!view.getVisible()) {
+        // Just above the popover, which moves in the stack (Peek): the menu is never under a card.
+        const root = this.window.contentView;
+        root.removeChildView(view);
+        root.addChildView(view, root.children.indexOf(this.popover) + 1);
+        view.setVisible(true);
+        // Something of Chord's is over the pages now: a docked Chord Player steps aside (player/dock.ts).
+        this.placementChanged();
+      }
+    } else if (view.getVisible()) {
+      view.setVisible(false);
+      this.placementChanged();
+    }
+  }
+
   private placementChanged(): void {
     if (!this.window.isDestroyed()) this.onPlacement?.();
   }
@@ -1232,7 +1343,7 @@ export class AppWindow {
    * moving pictures of them.
    */
   private get pagesCovered(): boolean {
-    return this.overlayVisible || this.popover.getVisible() || this.preview.getVisible() || Boolean(this.floating) || this.shellRaised || this.snapshots.active;
+    return this.overlayVisible || this.popover.getVisible() || Boolean(this.menuView?.getVisible()) || this.preview.getVisible() || Boolean(this.floating) || this.shellRaised || this.snapshots.active;
   }
 
   /** Where Chord Player would go, docked in this tab (`contents`): its pane on screen, in DIPs (player/dock.ts). */

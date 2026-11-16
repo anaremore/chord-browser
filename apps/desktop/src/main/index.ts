@@ -441,8 +441,13 @@ function registerIpc(): void {
     await makeDefaultBrowser();
     return defaultBrowserStatus();
   });
-  handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
-  handle('popover:size', ({ width, height }, sender) => senderWindow(sender).setPopoverSize(width, height));
+  handle('popover:state', (_request, sender) => browser!.popoverStateFor(sender, senderWindow(sender)));
+  handle('popover:size', ({ width, height }, sender) => {
+    const w = senderWindow(sender);
+    // The menu under a field has a view of its own, on the popover's page and API.
+    if (sender === w.menuPage) w.setMenuSize(width, height);
+    else w.setPopoverSize(width, height);
+  });
   handle('preview:hover', (target, sender) => browser!.previewHover(senderWindow(sender), target));
   handle('preview:size', ({ width, height }, sender) => senderWindow(sender).setPreviewSize(width, height));
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
@@ -492,6 +497,22 @@ function registerIpc(): void {
   handle('passwords:forgetNever', ({ site }) => passwords.forgetNever(site));
   handle('passwords:startOver', () => passwords.startOver());
   handle('passwords:unlockCard', ({ id, passphrase, keep }) => passwords.answerUnlock(id, passphrase, keep));
+  // The menu under a field and the save card (S17 §9): each answers only its own window's page, the menu's view or the
+  // cards' popover, never the other.
+  handle('passwords:menuChoose', ({ id, index }, sender) => {
+    const windowId = browser?.popoverWindow(sender, 'menu');
+    if (windowId) browser!.passwordAssist.chooseRow(windowId, id, index);
+  });
+  handle('passwords:saveCard', async ({ id, action, username, passphrase }, sender) => {
+    const windowId = browser?.popoverWindow(sender, 'cards');
+    if (windowId) await browser!.passwordAssist.answer(windowId, id, action, { ...(username !== undefined ? { username } : {}), ...(passphrase !== undefined ? { passphrase } : {}) });
+  });
+  // The key beside the address: the sender's window's own tab's card only.
+  handle('passwords:reopenCard', ({ nodeId }, sender) => browser!.passwordAssist.reopen(senderWindow(sender).id, nodeId));
+  handle('passwords:saveCardReveal', ({ id }, sender) => {
+    const windowId = browser?.popoverWindow(sender, 'cards');
+    return windowId ? browser!.passwordAssist.reveal(windowId, id) : null;
+  });
   handle('drm:open', ({ browser: other }, sender) => browser!.drmAction(sender, { open: other }));
   handle('drm:dismiss', (_request, sender) => browser!.drmAction(sender, 'dismiss'));
   handle('drm:player', ({ action }, sender) => browser!.drmAction(sender, { player: action }));
@@ -856,6 +877,8 @@ if (!app.requestSingleInstanceLock()) {
         if (change.before && change.before.settings.passwords.lockAfter !== change.state.settings.passwords.lockAfter) passwords.settingsChanged();
         // The switch, the extension rule or the chords changed: the form detector hears which sign-ins it watches.
         passwords.stateChanged(change.state);
+        // The switch or the extension rule may have turned passwords off for a chord: its save cards go.
+        if (change.before && (change.before.settings.passwords !== change.state.settings.passwords || change.before.extensions !== change.state.extensions)) browser?.passwordAssist.switched();
       },
       windowFocused: () => syncService?.focused(),
       // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).
@@ -1058,12 +1081,13 @@ if (!app.requestSingleInstanceLock()) {
       // Right-click menus are read, not shown: their labels, newest last, by page.
       const contextMenus = new Map<number, ObservedItem[]>();
       observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
-      // The password detector's events, as plain data (the page's contents by id), oldest first.
+      // The password detector's events, as plain data (the page's contents by id), oldest first. A sign-in's values
+      // aren't kept here: only whether it had them, so a test can't leak them by printing what it read.
       const passwordEvents: Record<string, unknown>[] = [];
       for (const type of ['focus', 'blur', 'submitted', 'signedIn', 'failed'] as const) {
-        passwordDetector.events.on(type, (event: { contents: Electron.WebContents; frame?: unknown }) => {
-          const { contents, frame: _frame, ...rest } = event;
-          passwordEvents.push({ type, contentsId: contents.id, ...rest });
+        passwordDetector.events.on(type, (event: { contents: Electron.WebContents; frame?: unknown; values?: unknown }) => {
+          const { contents, frame: _frame, values, ...rest } = event;
+          passwordEvents.push({ type, contentsId: contents.id, ...rest, ...(type === 'signedIn' ? { hasValues: Boolean(values) } : {}) });
         });
       }
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {

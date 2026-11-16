@@ -131,6 +131,187 @@ describe('knowing you signed in (S17 §6)', () => {
     t.candidate(candidate(), 'https://real.example');
     t.navigationStarted(true);
     t.navigated(200);
-    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null }]);
+    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null, values: null, valuesUntil: null }]);
+  });
+});
+
+describe('what was typed (values): held for the save card, never longer', () => {
+  const typed = { username: 'ada@example.com', password: 'correct horse' };
+  const signedInValues = (outcomes: SavingOutcome[]) => outcomes.find((o) => o.type === 'signedIn') as Extract<SavingOutcome, { type: 'signedIn' }> | undefined;
+
+  it.each<[string, (t: SubmissionTracker, clock: { now: number }) => SavingOutcome[], { username: string; password: string } | null | 'no sign-in']>([
+    ['a submit with values, then the form goes: the sign-in carries them', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.gone('f1')], typed],
+    ['…through a navigation and the reappeared-form check', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.navigationStarted(true), ...t.navigated(200), ...t.settled()], typed],
+    ['a blur after the submit keeps the submit’s values', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.candidate(candidate({ signal: 'blur' }), ORIGIN), ...t.gone('f1')], typed],
+    ['a blur’s values (forged past the schema) are never held', (t) => [...t.candidate(candidate({ signal: 'blur', values: typed }), ORIGIN), ...t.candidate(candidate({ signal: 'button' }), ORIGIN), ...t.gone('f1')], null],
+    ['a submit without values: a sign-in, nothing to save', (t) => [...t.candidate(candidate(), ORIGIN), ...t.gone('f1')], null],
+    [
+      'a second submit (a corrected password) carries its own',
+      (t) => [...t.candidate(candidate({ values: { ...typed, password: 'wrong' } }), ORIGIN), ...t.still('f1'), ...t.candidate(candidate({ values: typed }), ORIGIN), ...t.gone('f1')],
+      typed,
+    ],
+    [
+      'a failed sign-in drops them: the form stays held, the next signal brings none, so nothing is saved',
+      (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.still('f1'), ...t.candidate(candidate({ signal: 'blur' }), ORIGIN), ...t.candidate(candidate({ signal: 'enter' }), ORIGIN), ...t.gone('f1')],
+      null,
+    ],
+    ['…as does an error response', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.navigationStarted(true), ...t.navigated(401), ...t.candidate(candidate({ signal: 'blur' }), ORIGIN), ...t.gone('f1')], 'no sign-in'],
+    ['a navigation of your own forgets them', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.navigationStarted(false), ...t.gone('f1')], 'no sign-in'],
+    ['…and so do 5 minutes', (t, clock) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...((clock.now += HOLD_MS + 1), []), ...t.gone('f1')], 'no sign-in'],
+  ])('%s', (_name, journey, expected) => {
+    const clock = { now: 0 };
+    const t = new SubmissionTracker(() => clock.now);
+    const signedIn = signedInValues(journey(t, clock));
+    if (expected === 'no sign-in') expect(signedIn).toBeUndefined();
+    else expect(signedIn?.values ?? null).toEqual(expected);
+  });
+
+  it('once the sign-in is reported, nothing of it is left: a late `gone` decides nothing', () => {
+    const t = new SubmissionTracker(() => 0);
+    expect(signedInValues([...t.candidate(candidate({ values: typed }), ORIGIN), ...t.gone('f1')])?.values).toEqual(typed);
+    expect(t.gone('f1')).toEqual([]);
+    expect(JSON.stringify(t)).not.toContain(typed.password);
+  });
+
+  it('a failed sign-in keeps the form, without what was typed', () => {
+    const t = new SubmissionTracker(() => 0);
+    t.candidate(candidate({ values: typed }), ORIGIN);
+    t.still('f1');
+    expect(JSON.stringify(t)).not.toContain(typed.password);
+    expect(JSON.stringify(t)).not.toContain(typed.username);
+  });
+});
+
+describe('the 5 minutes run by themselves (no later call needed)', () => {
+  const typed = { username: 'ada@example.com', password: 'correct horse' };
+  /** A clock and timers moved by hand. */
+  function clocked() {
+    const clock = { now: 0 };
+    const timers = new Map<number, { at: number; run: () => void }>();
+    let next = 1;
+    const tracker = new SubmissionTracker(() => clock.now, {
+      setTimeout: (run, ms) => (timers.set(next, { at: clock.now + ms, run }), next++),
+      clearTimeout: (id) => void timers.delete(id as number),
+    });
+    const advance = (ms: number) => {
+      clock.now += ms;
+      for (const [id, t] of [...timers]) if (t.at <= clock.now && timers.delete(id)) t.run();
+    };
+    return { tracker, advance, pending: () => timers.size };
+  }
+  const leaks = (t: SubmissionTracker) => /ada@example\.com|correct horse/.test(JSON.stringify(t));
+
+  it.each<[string, (t: SubmissionTracker) => void]>([
+    ['held, nothing else happening', () => {}],
+    ['a navigation the page started that never ends (navigating)', (t) => t.navigationStarted(true)],
+    ['an SPA route change whose watch never answers (same-document)', (t) => t.navigatedInPage()],
+    ['a new page whose forms never come (settling)', (t) => (t.navigationStarted(true), t.navigated(200))],
+  ])('%s: the values go at HOLD_MS', (_name, then) => {
+    const { tracker, advance } = clocked();
+    tracker.candidate(candidate({ values: typed }), ORIGIN);
+    then(tracker);
+    advance(HOLD_MS - 1);
+    expect(leaks(tracker)).toBe(true);
+    advance(1);
+    expect(leaks(tracker)).toBe(false);
+    // And nothing waits on the forgotten form: a late answer decides nothing.
+    expect([...tracker.gone('f1'), ...tracker.settled()]).toEqual([]);
+  });
+
+  it('a newer submit’s values count their own 5 minutes, and the older ones go with them', () => {
+    const { tracker, advance } = clocked();
+    tracker.candidate(candidate({ values: { ...typed, password: 'first try' } }), ORIGIN);
+    advance(HOLD_MS - 10);
+    tracker.candidate(candidate({ values: typed }), ORIGIN);
+    advance(20);
+    expect(leaks(tracker)).toBe(true);
+    expect(JSON.stringify(tracker)).not.toContain('first try');
+    advance(HOLD_MS);
+    expect(leaks(tracker)).toBe(false);
+  });
+
+  it('reset (passwords off there, the page gone) drops them at once, from the navigation waiting too, and stops the timer', () => {
+    const { tracker, pending } = clocked();
+    tracker.candidate(candidate({ values: typed }), ORIGIN);
+    tracker.navigationStarted(true);
+    expect(pending()).toBe(1);
+    tracker.reset();
+    expect(leaks(tracker)).toBe(false);
+    expect(pending()).toBe(0);
+  });
+});
+
+describe('the candidate’s deadline goes with its values to the save card', () => {
+  it('it’s HOLD_MS after the values were typed, not after the sign-in was decided', () => {
+    let now = 1000;
+    const t = new SubmissionTracker(() => now, { setTimeout: () => 0, clearTimeout: () => {} });
+    t.candidate(candidate({ values: { username: 'ada', password: 'pw' } }), ORIGIN);
+    now = 9000;
+    t.candidate(candidate({ signal: 'blur' }), ORIGIN);
+    now = 20_000;
+    const signedIn = t.gone('f1').find((o) => o.type === 'signedIn') as Extract<SavingOutcome, { type: 'signedIn' }>;
+    expect(signedIn.valuesUntil).toBe(1000 + HOLD_MS);
+  });
+
+  it('none without values', () => {
+    const t = new SubmissionTracker(() => 0, { setTimeout: () => 0, clearTimeout: () => {} });
+    t.candidate(candidate(), ORIGIN);
+    expect((t.gone('f1')[0] as Extract<SavingOutcome, { type: 'signedIn' }>).valuesUntil).toBeNull();
+  });
+});
+
+describe('a deadline per held copy (security review, round 2)', () => {
+  function clocked() {
+    const clock = { now: 0 };
+    const timers = new Map<number, { at: number; run: () => void }>();
+    let next = 1;
+    const tracker = new SubmissionTracker(() => clock.now, {
+      setTimeout: (run, ms) => (timers.set(next, { at: clock.now + ms, run }), next++),
+      clearTimeout: (id) => void timers.delete(id as number),
+    });
+    const advance = (ms: number) => {
+      const until = clock.now + ms;
+      for (;;) {
+        const due = [...timers].filter(([, t]) => t.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        timers.delete(due[0]);
+        clock.now = due[1].at;
+        due[1].run();
+      }
+      clock.now = until;
+    };
+    return { tracker, advance, clock };
+  }
+  const A = { username: 'ada@example.com', password: 'form-a-secret' };
+  const B = { username: 'bob@example.com', password: 'form-b-secret' };
+
+  it('form A submitted at t0, its navigation pending; the old page submits form B at t0+4m: A’s values still go at t0+5m', () => {
+    const { tracker, advance } = clocked();
+    tracker.candidate(candidate({ formId: 'f1', values: A }), ORIGIN);
+    tracker.navigationStarted(true);
+    advance(4 * 60_000);
+    tracker.candidate(candidate({ formId: 'f2', values: B }), ORIGIN);
+    const dump = () => JSON.stringify(tracker);
+    expect(dump()).toContain('form-a-secret');
+    advance(60_000);
+    // A's 5 minutes are its own: gone at t0+5m, with B's still held (until t0+9m).
+    expect(dump()).not.toContain('form-a-secret');
+    expect(dump()).toContain('form-b-secret');
+    advance(4 * 60_000 - 1);
+    expect(dump()).toContain('form-b-secret');
+    advance(1);
+    expect(dump()).not.toContain('form-b-secret');
+  });
+
+  it('…and if A’s navigation decides it before then, its card’s deadline is A’s, not B’s', () => {
+    const { tracker, advance } = clocked();
+    tracker.candidate(candidate({ formId: 'f1', values: A }), ORIGIN);
+    tracker.navigationStarted(true);
+    advance(4 * 60_000);
+    tracker.candidate(candidate({ formId: 'f2', values: B }), ORIGIN);
+    tracker.navigated(200);
+    const signedIn = tracker.settled().find((o) => o.type === 'signedIn') as Extract<SavingOutcome, { type: 'signedIn' }>;
+    expect(signedIn.values).toEqual(A);
+    expect(signedIn.valuesUntil).toBe(HOLD_MS);
   });
 });

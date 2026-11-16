@@ -14,6 +14,7 @@ const state = await live(() => api.popover.state(), (listener) => api.popover.on
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Popover info={info} state={state} />
+    {/* The menu under a sign-in field has a view of its own, on this page (`#menu`). */}
+    <Popover info={info} state={state} menuOnly={location.hash === '#menu'} />
   </StrictMode>,
 );

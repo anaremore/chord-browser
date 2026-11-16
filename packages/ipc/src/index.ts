@@ -775,6 +775,40 @@ export interface PasswordUnlockPrompt {
   busy: boolean;
 }
 
+/**
+ * The menu under a sign-in field (S17 §9): the page's saved accounts by username, and their
+ * host where it isn't the page's. Never a password. Main moves the highlight (the page keeps
+ * the keyboard: ↓ ↑ Enter go through main) and places the view under the field.
+ */
+export interface PasswordMenu {
+  id: number;
+  /** The page's host. */
+  host: string;
+  /** `locked`: one row, *Unlock passwords*. */
+  state: 'accounts' | 'locked';
+  accounts: { username: string; host: string | null }[];
+  /** The highlighted row: an account's index, `accounts.length` for *Other passwords…*, 0 when locked. */
+  index: number;
+  /** An `http:` page (S17 §5): the menu says it isn't secure. */
+  insecure: boolean;
+}
+
+/**
+ * The save and update cards (S17 §9), after a sign-in that worked: the username, never the
+ * password, which the card shows only when you ask (`passwords:saveCardReveal`).
+ */
+export interface PasswordSaveCard {
+  id: number;
+  /** `update`: the site has this username saved with another password. */
+  kind: 'new' | 'update';
+  host: string;
+  username: string;
+  /** The first password: the card chooses the passphrase too. */
+  setup: boolean;
+  busy: boolean;
+  problem: 'io' | null;
+}
+
 export interface PopoverState {
   theme: ChordThemeSpec | null;
   interface: InterfaceSettings;
@@ -785,6 +819,10 @@ export interface PopoverState {
   passkey: PasskeyPrompt | null;
   /** Unlock passwords: the passphrase card at the top of the tab (S17 §7), when something needs the vault open. */
   passwordsUnlock: PasswordUnlockPrompt | null;
+  /** The menu under a sign-in field: while it's open the popover shows it alone, placed under the field. */
+  passwordMenu: PasswordMenu | null;
+  /** Save or update a password, for the tab on screen. */
+  passwordSave: PasswordSaveCard | null;
   /** The one-time offer to turn Safe Browsing on, with its notice (profiles from before it existed). */
   safeBrowsingOffer: boolean;
   /** The page is on a service that needs Widevine, which Chord doesn't include yet (D4). */
@@ -1409,6 +1447,24 @@ export const invokeChannels = {
     request: z.strictObject({ id: z.number().int().min(1), passphrase: typedPassphrase.nullable(), keep: z.boolean() }),
     response: z.void(),
   },
+  /** The menu under a field: a row clicked (the keyboard's choices go through main). */
+  'passwords:menuChoose': { roles: ['popover'], request: z.strictObject({ id: z.number().int().min(1), index: z.number().int().min(0).max(1000) }), response: z.void() },
+  /**
+   * The save card: Save (with the username as you left it, and the passphrase on the first one), *Never for this
+   * site*, ×, and whether you're in it (`hold`: it doesn't go by itself meanwhile).
+   */
+  'passwords:saveCard': {
+    roles: ['popover'],
+    request: z.strictObject({
+      id: z.number().int().min(1),
+      action: z.enum(['save', 'never', 'close', 'hold', 'release']),
+      username: z.string().max(500).optional(),
+      passphrase: newPassphrase.optional(),
+    }),
+    response: z.void(),
+  },
+  /** The save card's eye: the password it would save, to that card's popover only, when you ask. */
+  'passwords:saveCardReveal': { roles: ['popover'], request: z.strictObject({ id: z.number().int().min(1) }), response: z.custom<{ password: string } | null>() },
   'sync:status': { roles: ['internal'], request: z.void(), response: z.custom<SyncView>() },
   'sync:chooseFolder': { roles: ['internal'], request: z.void(), response: z.custom<SyncFolderResult>() },
   'sync:setup': { roles: ['internal'], request: z.strictObject({ folderId: id, passphrase: syncPassphrase }), response: z.custom<SyncStepResult>() },
@@ -1663,6 +1719,8 @@ export const invokeChannels = {
   'share:stop': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   /** A sidebar row's reload button: reload that tab's page, on screen or not. */
   'tab:reload': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
+  /** The key beside the address: the tab's closed save card again (S17 §9). Nothing it carries is a value. */
+  'passwords:reopenCard': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   // Now playing (DESIGN.md §7.10): what the window's card offers, and its play, pause and picture-in-picture buttons.
   'media:view': { roles: ['shell'], request: z.void(), response: z.custom<NowPlaying[]>() },
   /** What the frame of the tab that plays in Chord Player shows; null when no tab does. */
@@ -1889,6 +1947,8 @@ export interface ShellApi {
   share: { stop(nodeId: string): Promise<void> };
   /** Reload a tab's page from its sidebar row. */
   tab: { reload(nodeId: string): Promise<void> };
+  /** The key beside the address: a closed save card, back. */
+  passwords: { reopen(nodeId: string): Promise<void> };
   /** A tab that plays in Chord Player: back to the player, or show its page here instead; and what its frame shows. */
   player: { act(nodeId: string, action: 'show' | 'release'): Promise<void>; view(): Promise<PlayerFrame | null>; onState(listener: (frame: PlayerFrame | null) => void): () => void };
   /** The Now playing card: the window's media as main pushes it, and the card's own buttons. */
@@ -2179,8 +2239,13 @@ export interface PopoverApi {
   auth: { respond(id: number, credentials: { username: string; password: string } | null): Promise<void> };
   /** Choosing a passkey: one the prompt offered, or null to decline. */
   passkey: { respond(id: number, credentialId: string | null): Promise<void> };
-  /** Unlock passwords: the passphrase, or null to cancel. */
-  passwords: { unlock(id: number, passphrase: string | null, keep: boolean): Promise<void> };
+  /** Unlock passwords: the passphrase, or null to cancel. The menu under a field, and the save card. */
+  passwords: {
+    unlock(id: number, passphrase: string | null, keep: boolean): Promise<void>;
+    choose(id: number, index: number): Promise<void>;
+    card(id: number, action: 'save' | 'never' | 'close' | 'hold' | 'release', details?: { username?: string; passphrase?: string }): Promise<void>;
+    reveal(id: number): Promise<{ password: string } | null>;
+  };
   /** The one-time offer: turn Safe Browsing on, or not now (either way it isn't offered again). */
   safeBrowsing: { choose(on: boolean): Promise<void> };
   /** The DRM notice: open the page in another browser or Chord Player (installing it first), or not now. */

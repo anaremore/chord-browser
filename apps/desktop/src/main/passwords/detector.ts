@@ -11,15 +11,20 @@
  * - **Who's asking:** only a tab's page (`attachPage`), only its main frame (phase 1), only an
  *   `http:` or `https:` origin, and that origin is the sender frame's as Chromium reports it
  *   (`event.senderFrame.origin`), never a word from the payload. Every payload is checked
- *   against @chord/ipc's strict schemas and a size limit; none carries a field's value.
- * - **Private windows** fill and never save (S17 §7): `signedIn` and `failed` never fire there.
+ *   against @chord/ipc's strict schemas and a size limit.
+ * - **Values:** only a candidate sent at a submit signal carries what was typed (the username
+ *   and the password to save). The tracker holds them with the form, and they leave only on
+ *   `signedIn`, for the save card. Nothing here logs, echoes or stores them.
+ * - **Private windows** fill and never save (S17 §7): `signedIn` and `failed` never fire there,
+ *   and a candidate's values are dropped as it arrives.
  * - **A page can't flood main:** each page's messages pass a token bucket (`MESSAGE_RATE`) before
  *   anything is parsed; the excess is dropped without a word. Focus and blur have one bucket and
  *   the rest (`candidate`, `forms`, `gone`, `still`, `hint`) another, so a page busy with focus
  *   can't crowd out a sign-in's messages; both start afresh with each new document. The agent
  *   sends far fewer: focus, blur and forms at most once a frame, one candidate per submit.
  *
- * Events (`events`): `focus`, `blur`, `submitted`, `signedIn`, `failed`. Nothing here logs a
+ * Events (`events`): `focus`, `blur`, `submitted`, `signedIn`, `failed`, and `filled` (the
+ * agent's answer to a fill the menu sent). Nothing here logs a
  * payload: a refused message is dropped without a word.
  */
 import { EventEmitter } from 'node:events';
@@ -75,6 +80,11 @@ export interface PasswordsBlurEvent {
   readonly contents: WebContents;
   readonly formId: string;
 }
+export interface PasswordsFilledEvent {
+  readonly contents: WebContents;
+  readonly formId: string;
+  readonly ok: boolean;
+}
 type Outcome<T extends SavingOutcome['type']> = Omit<Extract<SavingOutcome, { type: T }>, 'type'> & { readonly contents: WebContents };
 
 export interface PasswordDetectorEvents {
@@ -83,6 +93,7 @@ export interface PasswordDetectorEvents {
   submitted: [Outcome<'submitted'>];
   signedIn: [Outcome<'signedIn'>];
   failed: [Outcome<'failed'>];
+  filled: [PasswordsFilledEvent];
 }
 
 export interface PasswordDetectorOptions {
@@ -152,6 +163,14 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
   const now = options.now ?? Date.now;
 
   const isEnabled = (profileId: string) => explicit.get(profileId) ?? everyone;
+  /** Each tab's page and its tracker: turned off there, what it holds (a typed sign-in) goes at once. */
+  const pages = new Map<WebContents, SubmissionTracker>();
+  const forgetWhereOff = () => {
+    for (const [contents, tracker] of pages) {
+      const entry = sessions.get(contents.session);
+      if (!entry || !isEnabled(entry.profileId)) tracker.reset();
+    }
+  };
   const apply = (entry: SessionEntry) => {
     const on = isEnabled(entry.profileId);
     if (on && !entry.registration) entry.registration = entry.session.registerPreloadScript({ type: 'frame', id: SENTINEL_ID, filePath: options.preloadPath });
@@ -173,6 +192,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       return pageOrigin(event.senderFrame, contents.mainFrame);
     };
     const tracker = new SubmissionTracker(now);
+    pages.set(contents, tracker);
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
     const emit = (outcomes: SavingOutcome[]) => {
       const priv = entryOf()?.isPrivate ?? true;
@@ -210,11 +230,19 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       focusShown = false;
       events.emit('blur', { contents, formId: m.formId });
     });
-    on('candidate', (m, origin) => emit(tracker.candidate(m, origin)));
+    on('candidate', (m, origin) => {
+      // A private window never saves: what was typed there isn't even held.
+      if ((entryOf()?.isPrivate ?? true) && m.values) {
+        const { values: _values, ...rest } = m;
+        return emit(tracker.candidate(rest, origin));
+      }
+      emit(tracker.candidate(m, origin));
+    });
     on('forms', (m) => emit(tracker.forms(m)));
     on('gone', (m) => emit(tracker.gone(m.formId)));
     on('still', (m) => emit(tracker.still(m.formId)));
     on('hint', (m) => tracker.hint(m.formId, m.status));
+    on('filled', (m) => events.emit('filled', { contents, formId: m.formId, ok: m.ok }));
 
     contents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
@@ -253,6 +281,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
     contents.once('destroyed', () => {
       if (settleTimer) clearTimeout(settleTimer);
       tracker.reset();
+      pages.delete(contents);
     });
   }
 
@@ -278,12 +307,14 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
         explicit.clear();
       } else for (const id of profileIds) explicit.set(id, on);
       for (const entry of sessions.values()) apply(entry);
+      forgetWhereOff();
     },
     setProfiles(profileIds) {
       everyone = false;
       explicit.clear();
       for (const id of profileIds) explicit.set(id, true);
       for (const entry of sessions.values()) apply(entry);
+      forgetWhereOff();
     },
     isEnabled,
   };

@@ -239,6 +239,8 @@ export interface LiveTab {
    * a number, 'dot' for one without a number, or null. Null when counts are hidden for its site.
    */
   badge: number | 'dot' | null;
+  /** A save card you closed can come back (S17 §9): the key beside the address, while what was typed lasts. */
+  passwordOffer?: boolean;
   /**
    * Effects on its page's site (ARCHITECTURE.md §9): applied (`wet`), kept but
    * not applied (`dry`, the site's switch or the one for everywhere), or none.

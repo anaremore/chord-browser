@@ -620,3 +620,163 @@
     border: var(--size-hairline) solid CanvasText;
   }
 }
+
+/* ---------- Passwords: the menu under a field (S17 §9) ---------- */
+
+/* Placed under the field by main; its left edge is the card's, inside the view's padding. */
+.menuRoot {
+  align-items: flex-start;
+}
+
+.passwordMenu {
+  inline-size: max-content;
+  min-inline-size: var(--size-password-menu);
+  max-inline-size: var(--size-popover-card);
+  padding: var(--space-1);
+}
+
+.menuList {
+  display: flex;
+  flex-direction: column;
+}
+
+.menuRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+
+.menuRow:hover,
+.menuRow[aria-selected='true'] {
+  background: var(--color-item-hover);
+}
+
+/* Other passwords…: under the accounts, past a hairline. */
+.menuMore {
+  position: relative;
+  margin-block-start: var(--space-2);
+  color: var(--color-fg-muted);
+}
+
+.menuMore::before {
+  position: absolute;
+  inset-block-start: calc(var(--space-1) * -1);
+  inset-inline: var(--space-2);
+  block-size: var(--size-hairline);
+  background: var(--color-item-hover);
+  content: '';
+}
+
+.menuIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--space-5);
+  block-size: var(--space-5);
+  border-radius: var(--radius-full);
+  background: color-mix(in oklab, var(--color-accent) 14%, transparent);
+  color: var(--color-accent);
+  font: var(--text-micro);
+  font-weight: 650;
+}
+
+.menuText {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  font: var(--text-body);
+}
+
+.menuUser,
+.menuHost {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menuHost {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.menuWarning {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.menuWarning svg {
+  flex: none;
+  color: var(--color-danger);
+}
+
+/* ---------- Passwords: the save and update cards (S17 §9) ---------- */
+
+.savedPassword {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  min-inline-size: 0;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-3) 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  font: var(--text-small);
+}
+
+.dots,
+.revealed {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dots {
+  color: var(--color-fg-muted);
+}
+
+.revealed {
+  font-family: var(--font-mono);
+  user-select: text;
+}
+
+.saveStep {
+  margin: var(--space-3) 0 0;
+  padding: 0 var(--space-4);
+}
+
+/* A quiet action beside the primary one: Never for this site. */
+.link {
+  margin-inline-end: auto;
+  padding: 0 var(--space-1);
+  border: 0;
+  background: none;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.link:hover:not(:disabled) {
+  color: var(--color-fg);
+  text-decoration: underline;
+}
+
+@media (forced-colors: active) {
+  .menuRow[aria-selected='true'] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .menuMore::before {
+    background: CanvasText;
+  }
+}

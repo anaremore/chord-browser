@@ -17,7 +17,7 @@ import {
 } from '@chord/core';
 import type { ChordEdit, AssistantView, PlayerFrame, SystemInfo } from '@chord/ipc';
 import { durations } from '@chord/tokens';
-import { Archive, ArrowLeft, ArrowRight, Blend, BookOpenText, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
+import { Archive, ArrowLeft, ArrowRight, Blend, BookOpenText, Ellipsis, Globe, KeyRound, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
 import { AssistantIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
@@ -261,6 +261,19 @@ function EffectsButton({ live, info }: { live: LiveTab | undefined; info: System
       onClick={() => void api.action.run('effects.open')}
     >
       <Blend {...ICON} />
+    </button>
+  );
+}
+
+/**
+ * Passwords (S17 §9): a save or update card you closed can come back while what was typed
+ * lasts. The key beside the address brings it back; it goes once the card can't.
+ */
+function PasswordOfferButton({ live, nodeId }: { live: LiveTab | undefined; nodeId: string | null }) {
+  if (!live?.passwordOffer || !nodeId) return null;
+  return (
+    <button type="button" className={styles.iconButton} aria-label="Save password" title="Save password" onClick={() => void api.passwords.reopen(nodeId)}>
+      <KeyRound {...ICON} />
     </button>
   );
 }
@@ -669,6 +682,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
               {/* Beside the address when there's no bar to hold it (macOS, docked). */}
               {!overlayChrome && !collapsed && <ReaderButton live={live} info={info} />}
               {!overlayChrome && !collapsed && <EffectsButton live={live} info={info} />}
+              {!overlayChrome && !collapsed && <PasswordOfferButton live={live} nodeId={activeId ?? null} />}
             </div>
 
             {/* One drag space: tabs move between lists, onto Favorites, and onto chords in the switcher. */}
@@ -785,6 +799,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
               </button>
               <ReaderButton live={live} info={info} />
               <EffectsButton live={live} info={info} />
+              <PasswordOfferButton live={live} nodeId={activeId ?? null} />
               {/* The tab on screen makes sound: its speaker, as on its row (hidden in the sidebar now). */}
               {collapsed && active && live?.audible && (
                 <button

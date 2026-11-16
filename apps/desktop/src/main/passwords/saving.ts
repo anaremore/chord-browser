@@ -19,7 +19,15 @@
  * vetoes one: a sign-in script that got a 401 and showed "wrong password" didn't sign you in,
  * whatever the page does next.
  *
- * It never holds a field's value: candidates carry none (packages/ipc, passwords.ts).
+ * **Values.** A candidate sent at a submit signal carries what was typed (`values`: the
+ * username and the password to save). They're held here with the form, in memory only, and
+ * leave in one place: the `signedIn` that the save card is offered from. A sign-in that
+ * failed drops them (a corrected retry sends its own), and so does everything that forgets
+ * the form: a navigation of your own, the page going, passwords turned off there (`reset`).
+ * The 5 minutes are a timer of their own, started as values arrive: when it runs, they go from
+ * the held form and from the navigation waiting on it, whether or not anything else ever
+ * reaches the tracker (a watch that never answers, a message the page's rate limit dropped).
+ * A candidate sent as you leave the field never carries any.
  */
 import type { PasswordsCandidate, PasswordsFieldSignature, PasswordsForms } from '@chord/ipc';
 
@@ -29,18 +37,23 @@ export const HOLD_MS = 5 * 60_000;
 export const SETTLE_MS = 1500;
 
 export type SubmitSignal = Exclude<PasswordsCandidate['signal'], 'blur'>;
+/** What was typed in a sign-in that was submitted: the username, and the password to save. */
+export type CandidateValues = NonNullable<PasswordsCandidate['values']>;
 export type ResponseHint = 'response-ok' | 'response-error' | null;
 
 export type SavingOutcome =
   | { readonly type: 'submitted'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly signal: SubmitSignal }
-  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint }
+  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint; readonly values: CandidateValues | null; readonly valuesUntil: number | null }
   | { readonly type: 'failed'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly why: 'error-response' | 'reappeared' | 'still-shown' };
 
 interface Held {
-  readonly candidate: PasswordsCandidate;
+  /** The form as last reported; its `values` are the last submit's, dropped once a sign-in failed. */
+  candidate: PasswordsCandidate;
   /** The origin main read from the sender's frame when the candidate came. */
   readonly origin: string;
   readonly at: number;
+  /** When this copy's values were typed (their submit came): they, and the save card made from them, last until `HOLD_MS` after. */
+  valuesAt: number | null;
   submitted: boolean;
   /** The last request status seen after the submit. */
   status: number | null;
@@ -73,12 +86,89 @@ const sameField = (held: PasswordsFieldSignature | null, shown: PasswordsFieldSi
 const vetoed = (held: Held) => held.error;
 
 const hintOf = (status: number | null): ResponseHint => (status === null ? null : status < 400 ? 'response-ok' : 'response-error');
+/** The candidate without what was typed. */
+const withoutValues = ({ values: _values, ...rest }: PasswordsCandidate): PasswordsCandidate => rest;
+/** A failed sign-in: the form stays held for a retry, its values don't. */
+const failedHeld = (held: Held) => {
+  held.submitted = false;
+  held.candidate = withoutValues(held.candidate);
+  held.valuesAt = null;
+};
+/** The sign-in's values, as the save card takes them. */
+const valuesOf = (held: Held): CandidateValues | null => held.candidate.values ?? null;
+
+/** The tracker's timer: the real one in main, a fake in tests. */
+export interface TrackerTimers {
+  setTimeout(run: () => void, ms: number): unknown;
+  clearTimeout(timer: unknown): void;
+}
+const realTimers: TrackerTimers = {
+  setTimeout: (run, ms) => setTimeout(run, ms),
+  clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
 
 export class SubmissionTracker {
   private held: Held | null = null;
   private phase: Phase = { t: 'idle' };
+  /**
+   * Runs at the earliest deadline of the copies that still hold values (the held form, and the one a navigation waits
+   * on, each `HOLD_MS` after its own values came), and is set again for the next. (`#`: never in a JSON dump of the tracker.)
+   */
+  #valuesTimer: unknown = null;
+  readonly #timers: TrackerTimers;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    timers: TrackerTimers = realTimers,
+  ) {
+    this.#timers = timers;
+  }
+
+  /** The copies of a form the tracker holds: the held one, and the one a navigation waits on (often the same). */
+  private copies(): Held[] {
+    const all = [this.held, this.phase.t === 'idle' ? null : this.phase.held].filter((h): h is Held => h !== null);
+    return all[0] === all[1] ? all.slice(0, 1) : all;
+  }
+
+  /** The timer, at the earliest deadline among the copies that hold values; none when none do. */
+  private scheduleValues(): void {
+    if (this.#valuesTimer !== null) this.#timers.clearTimeout(this.#valuesTimer);
+    this.#valuesTimer = null;
+    const deadlines = this.copies().flatMap((h) => (h.candidate.values && h.valuesAt !== null ? [h.valuesAt + HOLD_MS] : []));
+    if (deadlines.length === 0) return;
+    this.#valuesTimer = this.#timers.setTimeout(() => {
+      this.#valuesTimer = null;
+      this.expireValues();
+    }, Math.max(0, Math.min(...deadlines) - this.now()));
+  }
+
+  /** A deadline came: each copy whose values are `HOLD_MS` old loses them, and a form held that long is forgotten. */
+  private expireValues(): void {
+    const now = this.now();
+    for (const held of this.copies()) {
+      if (held.valuesAt !== null && now - held.valuesAt >= HOLD_MS) {
+        held.candidate = withoutValues(held.candidate);
+        held.valuesAt = null;
+      }
+    }
+    const old = (held: Held | null) => !!held && now - held.at >= HOLD_MS;
+    if (old(this.held)) this.held = null;
+    if (this.phase.t !== 'idle' && old(this.phase.held)) this.phase = { t: 'idle' };
+    this.scheduleValues();
+  }
+
+  /** The candidate's deadline, handed to the save card with its values: the card doesn't get a fresh 5 minutes. */
+  private valuesUntil(held: Held): number | null {
+    return held.candidate.values && held.valuesAt !== null ? held.valuesAt + HOLD_MS : null;
+  }
+
+  /** What was typed goes from every copy: the held form, and the one a navigation waits on. */
+  private dropValues(): void {
+    for (const held of this.copies()) {
+      if (held.candidate.values) held.candidate = withoutValues(held.candidate);
+      held.valuesAt = null;
+    }
+  }
 
   /** The held form, if any and not expired. */
   private current(): Held | null {
@@ -96,15 +186,21 @@ export class SubmissionTracker {
     const submitted = candidate.signal !== 'blur' || already;
     // A new submit (a corrected retry) starts afresh: the last attempt's 401 isn't this one's.
     const carry = same && (already || candidate.signal === 'blur');
+    // Values come only with a submit signal. A blur after one keeps the submit's.
+    const values = candidate.signal === 'blur' ? (already ? before?.candidate.values : undefined) : candidate.values;
+    // A blur keeps the submit's values, and their deadline; new values count from now.
+    const valuesAt = !values ? null : candidate.signal === 'blur' ? (before?.valuesAt ?? this.now()) : this.now();
     this.held = {
-      candidate,
+      candidate: values ? { ...withoutValues(candidate), values } : withoutValues(candidate),
       origin,
       at: this.now(),
       submitted,
       status: carry ? before.status : null,
       error: carry ? before.error : false,
       watched: same && already ? before.watched : null,
+      valuesAt,
     };
+    this.scheduleValues();
     // One submit is one `submitted`, however many signals it made. A second submit of the same form
     // while the first is still undecided (within the agent's 10 s watch) emits nothing either: the
     // save card's phase decides what a resubmit means.
@@ -159,7 +255,7 @@ export class SubmissionTracker {
     const { held } = this.phase;
     if (code >= 400) {
       this.phase = { t: 'idle' };
-      held.submitted = false;
+      failedHeld(held);
       return [{ type: 'failed', formId: held.candidate.formId, kind: held.candidate.kind, origin: held.origin, why: 'error-response' }];
     }
     this.phase = { t: 'settling', held, forms: null };
@@ -175,11 +271,11 @@ export class SubmissionTracker {
     // The same password field shown again, in a form that isn't a first step: the sign-in didn't take.
     const reappeared = (forms ?? []).some((f) => f.kind !== 'username-only' && (sameField(c.password ?? c.newPassword, f.password) || sameField(c.newPassword ?? c.password, f.newPassword)));
     if (reappeared || vetoed(held)) {
-      held.submitted = false;
+      failedHeld(held);
       return [{ type: 'failed', formId: c.formId, kind: c.kind, origin: held.origin, why: reappeared ? 'reappeared' : 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status) }];
+    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held) }];
   }
 
   /** The main frame navigated within its document (`did-navigate-in-page`): an SPA's route change. */
@@ -202,11 +298,11 @@ export class SubmissionTracker {
     const how = this.phase.t === 'same-document' ? 'same-document' : 'form-gone';
     this.phase = { t: 'idle' };
     if (vetoed(held)) {
-      held.submitted = false;
+      failedHeld(held);
       return [{ type: 'failed', formId, kind: held.candidate.kind, origin: held.origin, why: 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status) }];
+    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held) }];
   }
 
   /** After a submit signal, the form was still shown at the end of the agent's watch. */
@@ -220,7 +316,7 @@ export class SubmissionTracker {
     }
     if (this.phase.t === 'settling') return [];
     this.phase = { t: 'idle' };
-    held.submitted = false;
+    failedHeld(held);
     return [{ type: 'failed', formId, kind: held.candidate.kind, origin: held.origin, why: 'still-shown' }];
   }
 
@@ -234,8 +330,11 @@ export class SubmissionTracker {
     return this.phase.t === 'navigating';
   }
 
+  /** Forget the form and anything typed: a navigation of your own, the page going, passwords turned off there. */
   reset(): void {
+    this.dropValues();
     this.held = null;
     this.phase = { t: 'idle' };
+    this.scheduleValues();
   }
 }
