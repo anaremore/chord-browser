@@ -54,3 +54,22 @@ export function routeMenuKey(menu: MenuKeys | null, input: MenuKeyInput): MenuKe
       return { take: false, menu };
   }
 }
+
+/**
+ * After the menu took a key's keyDown, the rest of that key is the menu's too: its keyUp, and
+ * the character Enter makes. Otherwise the page would see half a key. A form that submits on
+ * Enter's keyup would submit before the fill, and a site's own suggestion list moves on ↓'s
+ * keyup. This is asked for every event that isn't a keyDown the open menu routes, while the
+ * menu is open and once it closes. The listener goes once nothing is `taken`, or after the first
+ * event this doesn't take (one more event at most).
+ */
+export function routeTakenKey(taken: ReadonlySet<string>, input: MenuKeyInput): { take: boolean; taken: ReadonlySet<string> } {
+  if (input.type === 'keyUp' && taken.has(input.key)) {
+    const rest = new Set(taken);
+    rest.delete(input.key);
+    return { take: true, taken: rest };
+  }
+  // The character a taken key types (Enter's carriage return) goes with it; its keyUp still ends it.
+  if (input.type === 'char' && (taken.has(input.key) || (taken.has('Enter') && (input.key === '\r' || input.key === '\n')))) return { take: true, taken };
+  return { take: false, taken };
+}

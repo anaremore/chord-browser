@@ -415,9 +415,10 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const pass = elementOf(k, c.password);
     if (!user && !pass) return false;
     if (user && !usable(user)) return false;
-    if (pass && (!usable(pass) || controlType(pass) !== 'password')) return false;
+    // A password field needs the password: main leaves it out only for a first step, which has none.
+    if (pass && (!p.password || !usable(pass) || controlType(pass) !== 'password')) return false;
     if (![user, pass].some((el) => el && onScreen(el))) return false;
-    const fields = [user && p.username ? ([user, p.username] as const) : null, pass ? ([pass, p.password] as const) : null].filter((f) => f !== null);
+    const fields = [user && p.username ? ([user, p.username] as const) : null, pass && p.password ? ([pass, p.password] as const) : null].filter((f) => f !== null);
     for (const [el, value] of fields) put(el, value);
     const reduce = win.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const ring = (color: string) => ({ outline: `2px solid ${color}`, outlineOffset: '2px' });
@@ -433,7 +434,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   const onFill = (raw: unknown) => {
     const p = raw as Partial<PasswordsFill> | null;
     const h = p?.highlight as Partial<PasswordsFill['highlight']> | undefined;
-    if (!p || typeof p.formId !== 'string' || typeof p.username !== 'string' || typeof p.password !== 'string' || !p.password) return;
+    if (!p || typeof p.formId !== 'string' || typeof p.username !== 'string' || (p.password !== undefined && (typeof p.password !== 'string' || !p.password))) return;
     if (!h || typeof h.color !== 'string' || typeof h.ms !== 'number' || typeof h.stagger !== 'number' || typeof h.easing !== 'string') return;
     let ok: boolean;
     try {

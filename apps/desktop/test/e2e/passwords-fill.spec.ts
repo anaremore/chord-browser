@@ -44,8 +44,10 @@ const SIGN_IN =
   '<label for="u">Email</label><input id="u" name="email" type="email" autocomplete="username">' +
   '<label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password">' +
   '<button id="go">Sign in</button></form>' +
-  '<script>window.seen = { keys: [], inputs: [] };' +
+  '<script>window.seen = { keys: [], ups: [], presses: [], inputs: [] };' +
   "document.addEventListener('keydown', (e) => seen.keys.push(e.key), true);" +
+  "document.addEventListener('keyup', (e) => seen.ups.push(e.key), true);" +
+  "document.addEventListener('keypress', (e) => seen.presses.push(e.key), true);" +
   "document.addEventListener('input', (e) => seen.inputs.push(e.target.id), true);</script>";
 const WELCOME = '<title>Welcome</title><p>Signed in.</p>';
 
@@ -101,7 +103,13 @@ const hooks = (app: ElectronApplication) => ({
 /** Keys as Electron's own input to the page (`sendInputEvent`): they reach before-input-event, as a person's do. */
 const press = (app: ElectronApplication, keyCode: string) => pressReal(app, `${site.origin}/login`, keyCode);
 
-const seen = (page: Page) => page.evaluate(() => (window as unknown as { seen: { keys: string[]; inputs: string[] } }).seen);
+interface Seen {
+  keys: string[];
+  ups: string[];
+  presses: string[];
+  inputs: string[];
+}
+const seen = (page: Page) => page.evaluate(() => (window as unknown as { seen: Seen }).seen);
 
 async function signIn(page: Page, username: string, password: string): Promise<void> {
   await page.goto(`${site.origin}/login`);
@@ -175,7 +183,7 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     findings.push(...(await audit(popover, 'the menu under the field', { appearance: 'light' })));
     await popover.locator('body').screenshot({ path: resolve(capturesDir, 'passwords-menu-light.png') });
     // ↓ ↑ Enter: main's. The page sees none of them, and its field keeps the keyboard.
-    await page.evaluate(() => ((window as unknown as { seen: { keys: string[]; inputs: string[] } }).seen = { keys: [], inputs: [] }));
+    await page.evaluate(() => ((window as unknown as { seen: Seen }).seen = { keys: [], ups: [], presses: [], inputs: [] }));
     await press(app, 'Down');
     await expect(menu.getByRole('option', { name: 'Other passwords…' })).toHaveAttribute('aria-selected', 'true');
     await press(app, 'Up');
@@ -185,7 +193,10 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     await expect(page.locator('#u')).toHaveValue(USER);
     await expect(menu).toHaveCount(0);
     const afterFill = await seen(page);
+    // Not even half a key: no keyup (a site's own suggestion list, a form that submits on Enter's keyup), no keypress.
     expect(afterFill.keys).toEqual([]);
+    expect(afterFill.ups).toEqual([]);
+    expect(afterFill.presses).toEqual([]);
     expect(afterFill.inputs).toEqual(['u', 'p']);
     expect(await page.evaluate(() => document.activeElement?.id)).toBe('u');
     // Submitting what was filled: it's what's saved, so nothing is offered, and the site got it.

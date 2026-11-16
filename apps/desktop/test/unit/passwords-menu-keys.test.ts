@@ -1,6 +1,6 @@
 /** The menu under a field and the keyboard (menu-keys.ts; the spike's 11 cases, M0 §3, plus Shift and Alt). */
 import { describe, expect, it } from 'vitest';
-import { routeMenuKey, type MenuKeyInput, type MenuKeyResult, type MenuKeys } from '../../src/main/passwords/menu-keys';
+import { routeMenuKey, routeTakenKey, type MenuKeyInput, type MenuKeyResult, type MenuKeys } from '../../src/main/passwords/menu-keys';
 
 const open: MenuKeys = { index: 0, rows: 3 };
 const key = (k: string, extra: Partial<MenuKeyInput> = {}): MenuKeyInput => ({ type: 'keyDown', key: k, ...extra });
@@ -22,5 +22,23 @@ describe('routing a key while the menu is open', () => {
     ['Alt+↑ isn’t the menu’s', open, key('ArrowUp', { alt: true }), { take: false, menu: open }],
   ])('%s', (_name, menu, input, expected) => {
     expect(routeMenuKey(menu, input)).toEqual(expected);
+  });
+});
+
+describe('the rest of a key the menu took (its keyUp, Enter’s character)', () => {
+  const up = (k: string): MenuKeyInput => ({ type: 'keyUp', key: k });
+  it.each<[string, string[], MenuKeyInput, { take: boolean; taken: string[] }]>([
+    ['↓’s keyUp is the menu’s, and ends it', ['ArrowDown'], up('ArrowDown'), { take: true, taken: [] }],
+    ['Enter’s keyUp too', ['Enter'], up('Enter'), { take: true, taken: [] }],
+    ['Escape’s keyUp too', ['Escape'], up('Escape'), { take: true, taken: [] }],
+    ['the carriage return Enter types', ['Enter'], { type: 'char', key: '\r' }, { take: true, taken: ['Enter'] }],
+    ['a keyUp of a key it didn’t take goes to the page', ['ArrowDown'], up('a'), { take: false, taken: ['ArrowDown'] }],
+    ['a keyDown is never this one’s', ['Enter'], key('Enter'), { take: false, taken: ['Enter'] }],
+    ['nothing taken: nothing taken', [], up('Enter'), { take: false, taken: [] }],
+    ['a character with no Enter taken goes to the page', ['ArrowDown'], { type: 'char', key: '\r' }, { take: false, taken: ['ArrowDown'] }],
+    ['two keys held: one keyUp ends one', ['ArrowDown', 'ArrowUp'], up('ArrowUp'), { take: true, taken: ['ArrowDown'] }],
+  ])('%s', (_name, taken, input, expected) => {
+    const routed = routeTakenKey(new Set(taken), input);
+    expect({ take: routed.take, taken: [...routed.taken] }).toEqual(expected);
   });
 });

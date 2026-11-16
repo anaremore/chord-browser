@@ -869,6 +869,8 @@ if (!app.requestSingleInstanceLock()) {
         if (change.before && change.before.settings.passwords.lockAfter !== change.state.settings.passwords.lockAfter) passwords.settingsChanged();
         // The switch, the extension rule or the chords changed: the form detector hears which sign-ins it watches.
         passwords.stateChanged(change.state);
+        // The switch or the extension rule may have turned passwords off for a chord: its save cards go.
+        if (change.before && (change.before.settings.passwords !== change.state.settings.passwords || change.before.extensions !== change.state.extensions)) browser?.passwordAssist.switched();
       },
       windowFocused: () => syncService?.focused(),
       // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).

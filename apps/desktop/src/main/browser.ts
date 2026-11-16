@@ -20,6 +20,7 @@ import {
   effectsHost,
   isInternalUrl,
   isPrivateChord,
+  passwordsOnIn,
   isPrivateProfile,
   privateWindowOf,
   proxyLabel,
@@ -393,6 +394,13 @@ export class Browser {
         accent: (nodeId) => this.accentOf(nodeId),
         toast: (windowId, id, message) => this.windows.get(windowId)?.toast({ id, message }),
         openPasswords: () => this.openSettings('passwords'),
+        passwordsOn: (chordId) => {
+          const state = this.store.state;
+          const chord = chordId ? state.chords[chordId] : undefined;
+          if (!chord) return false;
+          // A private window's chord: the switch alone (it never saves anyway).
+          return passwordsOnIn(state.settings.passwords, chord.private ? null : chord, state.extensions);
+        },
       },
     });
     this.tabs = new TabManager({
@@ -1790,6 +1798,7 @@ export class Browser {
 
   /** The vault changed: popovers show the unlock card or don't, and Settings asks for its view again. */
   passwordsChanged(): void {
+    this.passwordAssist.switched();
     this.syncPopovers();
     const contents = this.settingsWindow?.view.webContents;
     if (contents && !contents.isDestroyed()) send(contents, 'passwords:changed', null);

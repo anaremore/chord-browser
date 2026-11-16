@@ -114,7 +114,8 @@ export const PASSWORDS_FILL = 'passwords:fill';
 export interface PasswordsFill {
   formId: string;
   username: string;
-  password: string;
+  /** Left out for a first step (`username-only`), which has no password field. */
+  password?: string;
   /** The outline that shows where the values went (as the assistant's fill: no change to the page's DOM). */
   highlight: { color: string; ms: number; stagger: number; easing: string };
 }

@@ -37,7 +37,7 @@ import { PASSWORDS_FILL, type PasswordMenu, type PasswordSaveCard, type Password
 import { durations, easing } from '@chord/tokens';
 import type { Input, WebContents, WebFrameMain } from 'electron';
 import type { PasswordDetectorEvents, PasswordsFocusEvent } from './detector';
-import { routeMenuKey } from './menu-keys';
+import { routeMenuKey, routeTakenKey } from './menu-keys';
 import type { CandidateValues } from './saving';
 import type { PasswordService } from './service';
 
@@ -74,6 +74,8 @@ export interface PasswordAssistHost {
   toast(windowId: WindowId, id: string, message: string): void;
   /** *Other passwords…*: Settings → Passwords. */
   openPasswords(windowId: WindowId): void;
+  /** Whether Chord's passwords are on for a chord now: the switch and the extension rule. */
+  passwordsOn(chordId: string | null): boolean;
 }
 
 export type AssistVault = Pick<PasswordService, 'accountsFor' | 'passwordFor' | 'candidateFor' | 'saveCandidate' | 'neverFor' | 'askUnlock'>;
@@ -108,6 +110,8 @@ interface Menu {
   readonly doc: number;
   readonly formId: string;
   readonly role: string;
+  /** The form's kind: a first step (`username-only`) has no password field, so no password is sent to it. */
+  readonly kind: string;
   rect: MenuAnchor['rect'];
   zoom: number;
   readonly host: string;
@@ -115,6 +119,11 @@ interface Menu {
   readonly insecure: boolean;
   readonly accounts: readonly { id: string; username: string; host: string | null }[];
   index: number;
+}
+
+/** A page's keys while a menu is or was just open: one listener, and the keys whose keyDown the menu took. */
+interface KeyGuard {
+  taken: ReadonlySet<string>;
   readonly onKey: (event: { preventDefault(): void }, input: Input) => void;
 }
 
@@ -170,6 +179,7 @@ export class PasswordAssist {
   private readonly grace = new Map<WindowId, { until: number; contents: WebContents }>();
   private readonly docs = new WeakMap<WebContents, number>();
   private readonly cards = new Map<string, Card>();
+  private readonly guards = new Map<WebContents, KeyGuard>();
 
   constructor(private readonly options: PasswordAssistOptions) {
     this.now = options.now ?? Date.now;
@@ -200,6 +210,7 @@ export class PasswordAssist {
     });
     contents.once('destroyed', () => {
       this.closeMenuOf(contents);
+      this.guards.delete(contents);
       this.pending.delete(contents);
       this.quiet.delete(contents);
       for (const card of [...this.cards.values()]) if (card.contents === contents) this.dropCard(card);
@@ -255,6 +266,7 @@ export class PasswordAssist {
       doc,
       formId: e.formId,
       role: e.role,
+      kind: e.kind,
       rect: pending.rect,
       zoom: pending.zoom,
       host: hostOf(e.origin),
@@ -262,11 +274,12 @@ export class PasswordAssist {
       insecure: answer.state === 'open' && answer.insecure,
       accounts,
       index: 0,
-      onKey: (event, input) => this.key(menu, event, input),
     };
+    // One menu a window: another pane's, still open, closes first (its keys with it).
+    const replaced = this.menus.get(tab.windowId);
+    if (replaced) this.close(replaced);
     this.menus.set(tab.windowId, menu);
-    // The page's keys come here first only while a menu is open: nothing runs per keystroke otherwise.
-    e.contents.prependListener('before-input-event', menu.onKey);
+    this.guardKeys(e.contents);
     host.changed(tab.windowId);
   }
 
@@ -280,10 +293,40 @@ export class PasswordAssist {
     if (menu) this.close(menu);
   }
 
-  private key(menu: Menu, event: { preventDefault(): void }, input: Input): void {
-    if (this.menus.get(menu.tab.windowId) !== menu) return;
-    const routed = routeMenuKey({ index: menu.index, rows: this.rowsOf(menu) }, input);
+  /**
+   * The page's keys come here first only while a menu is open, and until the keys it took are over (their keyUp):
+   * nothing runs per keystroke otherwise. Prepended, so before Chord's own shortcuts.
+   */
+  private guardKeys(contents: WebContents): void {
+    if (this.guards.has(contents)) return;
+    const guard: KeyGuard = { taken: new Set(), onKey: (event, input) => this.onKey(contents, guard, event, input) };
+    this.guards.set(contents, guard);
+    contents.prependListener('before-input-event', guard.onKey);
+  }
+
+  private onKey(contents: WebContents, guard: KeyGuard, event: { preventDefault(): void }, input: Input): void {
+    const menu = this.menuOf(contents);
+    if (menu && input.type === 'keyDown') return this.key(menu, guard, event, input);
+    const routed = routeTakenKey(guard.taken, input);
+    guard.taken = routed.taken;
     if (routed.take) event.preventDefault();
+    // Closed: the listener goes once the keys it took are over, or at the first event it doesn't take.
+    if (!menu && (!routed.take || guard.taken.size === 0)) this.unguardKeys(contents);
+  }
+
+  private unguardKeys(contents: WebContents): void {
+    const guard = this.guards.get(contents);
+    if (!guard) return;
+    this.guards.delete(contents);
+    if (!contents.isDestroyed()) contents.off('before-input-event', guard.onKey);
+  }
+
+  private key(menu: Menu, guard: KeyGuard, event: { preventDefault(): void }, input: Input): void {
+    const routed = routeMenuKey({ index: menu.index, rows: this.rowsOf(menu) }, input);
+    if (routed.take) {
+      event.preventDefault();
+      guard.taken = new Set([...guard.taken, input.key]);
+    }
     if (routed.choose !== undefined) return void this.choose(menu, routed.choose);
     if (!routed.menu) {
       // Escape: not again in this form until you leave it. Tab: the page moves on, and the next field may get its own.
@@ -352,7 +395,8 @@ export class PasswordAssist {
     const fill: PasswordsFill = {
       formId: menu.formId,
       username: account.username,
-      password,
+      // A first step has no password field: the password stays in main.
+      ...(menu.kind === 'username-only' ? {} : { password }),
       highlight: { color: host.accent(menu.tab.nodeId) ?? 'Highlight', ms: durations.fillHighlight, stagger: durations.stagger, easing: easing.standard },
     };
     frame.send(PASSWORDS_FILL, fill);
@@ -361,7 +405,8 @@ export class PasswordAssist {
   private close(menu: Menu): void {
     if (this.menus.get(menu.tab.windowId) !== menu) return;
     this.menus.delete(menu.tab.windowId);
-    if (!menu.contents.isDestroyed()) menu.contents.off('before-input-event', menu.onKey);
+    // The keys it took keep the listener until their keyUp; with none, it goes now.
+    if (this.guards.get(menu.contents)?.taken.size === 0 || menu.contents.isDestroyed()) this.unguardKeys(menu.contents);
     this.options.host.changed(menu.tab.windowId);
   }
 
@@ -374,6 +419,11 @@ export class PasswordAssist {
     this.pending.delete(contents);
     const menu = this.menuOf(contents);
     if (menu) this.close(menu);
+  }
+
+  /** The switch or the extension rule changed: a card for a chord where passwords are off now goes, and what was typed with it. */
+  switched(): void {
+    for (const card of [...this.cards.values()]) if (!this.options.host.passwordsOn(card.tab.chordId)) this.dropCard(card);
   }
 
   /** The window's menu as its popover shows it. */
@@ -399,7 +449,8 @@ export class PasswordAssist {
   /** The window's popover is synced: a menu whose page left the screen (another tab, another pane) closes. */
   check(windowId: WindowId): void {
     const menu = this.menus.get(windowId);
-    if (menu && (menu.contents.isDestroyed() || !this.options.host.shown(menu.contents))) this.close(menu);
+    // Gone, off screen, or moved to another window (its tab dragged out): the menu closes.
+    if (menu && (menu.contents.isDestroyed() || !this.options.host.shown(menu.contents) || this.options.host.tabOf(menu.contents)?.windowId !== windowId)) this.close(menu);
   }
 
   /* ---------- the save and update cards ---------- */

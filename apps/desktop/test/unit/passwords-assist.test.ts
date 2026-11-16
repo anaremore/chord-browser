@@ -89,6 +89,7 @@ function setup({
     accent: vi.fn(() => 'oklch(0.58 0.14 330)'),
     toast: vi.fn(),
     openPasswords: vi.fn(),
+    passwordsOn: vi.fn((_chordId: string | null) => true),
   };
   const assist = new PasswordAssist({
     vault: vault as unknown as AssistVault,
@@ -597,5 +598,110 @@ describe('a card is only for the page you’re on (security review of 0fdf159)',
     await saving;
     expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
     expect(t.host.toast).not.toHaveBeenCalled();
+  });
+});
+
+describe('a key the menu took is the menu’s to its keyUp (general review of 37bd619)', () => {
+  const up = (t: ReturnType<typeof setup>, k: string) => t.key(k, { type: 'keyUp' });
+
+  it('↓ and ↑: their keyUp never reaches the page; another key’s does', async () => {
+    const t = setup();
+    await t.focus();
+    expect([t.key('ArrowDown'), up(t, 'ArrowDown'), t.key('ArrowUp'), up(t, 'ArrowUp')]).toEqual([true, true, true, true]);
+    expect([t.key('a'), up(t, 'a')]).toEqual([false, false]);
+    expect(t.assist.menuFor('w1')).not.toBeNull();
+  });
+
+  it.each<[string, string]>([
+    ['Enter (it fills)', 'Enter'],
+    ['Escape', 'Escape'],
+  ])('%s closes the menu, and its keyUp (and Enter’s character) is still the menu’s; then the listener goes', async (_name, k) => {
+    const t = setup();
+    await t.focus();
+    expect(t.key(k)).toBe(true);
+    expect(t.assist.menuFor('w1')).toBeNull();
+    expect(t.page.listenerCount('before-input-event')).toBe(1);
+    if (k === 'Enter') expect(t.key('\r', { type: 'char' })).toBe(true);
+    expect(up(t, k)).toBe(true);
+    expect(t.page.listenerCount('before-input-event')).toBe(0);
+    // From then on the page has its keys.
+    expect(up(t, k)).toBe(false);
+  });
+
+  it('closed with a key still down: one more event at most, and the listener goes', async () => {
+    const t = setup();
+    await t.focus();
+    t.key('Escape');
+    // Escape's keyUp never comes (the window lost the keyboard): the next key is the page's.
+    expect(t.key('b')).toBe(false);
+    expect(t.page.listenerCount('before-input-event')).toBe(0);
+  });
+
+  it('closed by a blur with nothing down: the listener goes at once', async () => {
+    const t = setup();
+    await t.focus();
+    t.key('ArrowDown');
+    up(t, 'ArrowDown');
+    t.blur();
+    expect(t.page.listenerCount('before-input-event')).toBe(0);
+  });
+});
+
+describe('one menu a window, in the window its tab is in (general review of 37bd619)', () => {
+  it('another pane’s menu replaces the first, and the first page loses its key listener', async () => {
+    const t = setup();
+    const second = fakePage();
+    const secondTab: AssistTab = { nodeId: 'n2', windowId: 'w1', chordId: 'c1', private: false };
+    const firstTab = t.host.tabOf(t.contents);
+    t.host.tabOf.mockImplementation((c: WebContents) => ((c as unknown) === second ? secondTab : (c as unknown) === t.page ? firstTab : null));
+    t.assist.attachPage(second as unknown as WebContents);
+    await t.focus();
+    t.events.emit('focus', { contents: second, frame: second.mainFrame, origin: ORIGIN, zoomFactor: 1, formId: 'f1', kind: 'sign-in', role: 'username', rect: { x: 0, y: 0, width: 100, height: 20 } } as never);
+    await flush();
+    expect(t.assist.anchorFor('w1')?.contents).toBe(second);
+    expect(t.page.listenerCount('before-input-event')).toBe(0);
+    expect(second.listenerCount('before-input-event')).toBe(1);
+    // The first page's keys are its own again.
+    expect(t.key('ArrowDown')).toBe(false);
+  });
+
+  it('a tab dragged to another window: its menu closes at the next sync', async () => {
+    const t = setup();
+    await t.focus();
+    t.host.tabOf.mockReturnValue({ nodeId: 'n1', windowId: 'w2', chordId: 'c1', private: false });
+    t.assist.check('w1');
+    expect(t.assist.menuFor('w1')).toBeNull();
+    expect(t.page.listenerCount('before-input-event')).toBe(0);
+  });
+});
+
+describe('save cards follow the switch (general review of 37bd619)', () => {
+  it('passwords turned off for the chord (the switch, a password manager’s extension): its card goes, values with it', async () => {
+    const t = setup();
+    await t.signedIn();
+    const card = t.assist.cardFor('n1')!;
+    t.assist.switched();
+    expect(t.assist.cardFor('n1')).not.toBeNull();
+    t.host.passwordsOn.mockReturnValue(false);
+    t.assist.switched();
+    expect(t.host.passwordsOn).toHaveBeenCalledWith('c1');
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(t.assist.reveal('w1', card.id)).toBeNull();
+  });
+});
+
+describe('a first step gets no password (general review of 37bd619)', () => {
+  it.each<[string, string, boolean]>([
+    ['a username-only first step: the username alone', 'username-only', false],
+    ['a sign-in form: both', 'sign-in', true],
+  ])('%s', async (_name, kind, withPassword) => {
+    const t = setup();
+    await t.focus({ kind });
+    t.key('Enter');
+    await flush();
+    await flush();
+    const fill = sent(t.page)[0]![1] as Record<string, unknown>;
+    expect(fill['username']).toBe('ada@acme.dev');
+    expect('password' in fill).toBe(withPassword);
   });
 });
