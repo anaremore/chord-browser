@@ -2,6 +2,7 @@ export * from './ad-blocking';
 export * from './idle';
 export * from './assistant';
 export * from './assistant-forms';
+export * from './assistant-diagnostics';
 export * from './effects';
 export * from './ids';
 export * from './import';

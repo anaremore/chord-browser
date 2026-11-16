@@ -17,6 +17,9 @@ import {
   ASSISTANT_PROCESS_IDLE_MS,
   ASSISTANT_PROVIDERS,
   ASSISTANT_TOOLS,
+  diagnosticsEntries,
+  diagnosticsResult,
+  diagnosticsSummary,
   assistantInstructions,
   assistantPruneBefore,
   assistantTool,
@@ -75,6 +78,7 @@ import type { AssistantSession, MadeImage, ProviderError, SessionImage, ToolOutp
 import { ClaudeSession } from './claude';
 import { CodexSession } from './codex';
 import { claudeConfigDir, claudeProjectFolder, detect, detectInWsl, mayBeInWsl, notInstalled, openSignIn, rememberedInWsl, type Detected, type Launch, type ProviderStatus } from './detect';
+import { readDiagnostics } from './diagnostics';
 import { readPage, screenshot, type PageRead } from './extract';
 import { fillFormPage, readFormPage, undoFillPage, type FillOutcome } from './forms';
 import { AssistantImages, imageInfo, newImageId } from './images';
@@ -1248,6 +1252,7 @@ export class AssistantService {
     if (this.settings.readsNothing) return { text: toolResult({ refused: 'The user set you to read nothing, in Settings → Assistant.' }, false), isError: true };
     try {
       if (spec.name === 'read_form' || spec.name === 'propose_fill') return await this.formTool(state, spec.name, args);
+      if (spec.name === 'page_diagnostics') return await this.diagnosticsTool(state, args);
       return await this.readTool(state, spec.name, args);
     } catch (error) {
       return { text: toolResult({ error: error instanceof Error ? error.message : String(error) }, false), isError: true };
@@ -1389,6 +1394,61 @@ export class AssistantService {
       });
     }
     return contents.isDestroyed() ? null : contents;
+  }
+
+  /**
+   * page_diagnostics (ARCHITECTURE.md §11.3): the problems Chromium kept of the
+   * tab on screen in the window the message came from, and only where the
+   * assistant may read. The chat's scope applies as for read_tab (a card under
+   * Ask every time). Only this tab's debugger is attached, and only now.
+   */
+  private async diagnosticsTool(state: ThreadState, args: Record<string, unknown>): Promise<ToolOutput> {
+    const refuse = (why: string) => ({ text: toolResult({ refused: why }, false), isError: true });
+    const never = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
+    const offScreen = "Only the tab on screen's problems can be read. Ask the user to switch to it, then to ask again.";
+    const node = this.resolveTab(state, args['tab_id']);
+    if (!node) return refuse('No such tab. Use the tab id from "Attached:".');
+    const windowId = state.windowId;
+    const contents = this.browser.tabs.get(node.id)?.webContents;
+    /**
+     * Every rule, as things are now: asked before reading, after the approval card (the user may have moved on
+     * while it waited), and after the read (the page may have gone somewhere else meanwhile). `at`: the address
+     * it must still be at.
+     */
+    const blocked = (at?: string): string | null => {
+      const now = this.browser.store.state.nodes[node.id];
+      if (now?.kind !== 'tab' || !this.readable(now)) return never;
+      if (!windowId || this.activeTab(windowId)?.id !== node.id) return offScreen;
+      if (!contents || contents.isDestroyed()) return 'That tab could not be read.';
+      // Where the page is, which can be ahead of the tab's saved address.
+      if (isNeverReadable(contents.getURL(), this.settings.neverSites)) return never;
+      if (at !== undefined && contents.getURL() !== at) return 'The page went to another address while Chord was reading it. Ask the user to ask again once it has loaded.';
+      return null;
+    };
+    const before = blocked();
+    if (before || !contents) return refuse(before ?? 'That tab could not be read.');
+    const title = node.title || safeHost(node.url);
+    const thread = state.thread!;
+    if (readNeedsApproval({ scope: thread.scope, attached: state.attached.has(node.id), sameChord: node.chordId === state.chordId, tool: 'page_diagnostics', granted: state.grants.has(`read:${node.id}`) || state.grants.has('page_diagnostics') })) {
+      const { decision } = await this.ask(state, 'page_diagnostics', `Read the problems on “${title}”`, [node.url]);
+      if (decision === 'denied') return refuse('The user said no to reading that page’s problems. Carry on without it, or ask them.');
+    }
+    const asked = blocked();
+    if (asked) return refuse(asked);
+    const url = contents.getURL();
+    const read = await readDiagnostics(contents);
+    if (!read.ok) {
+      await this.activity(state, 'page_diagnostics', `Couldn’t check “${title}” for problems`, read.why, false);
+      return refuse(read.why);
+    }
+    // What was read belongs to the page that was asked about, still on screen and still readable.
+    const after = blocked(url);
+    if (after) return refuse(after);
+    const { entries, total } = diagnosticsEntries(read.events, read.types);
+    state.read.add(node.id);
+    const note = total > entries.length ? `The page has ${total} problems; the newest ${entries.length} are here.` : entries.length ? '' : 'Chromium kept no errors, warnings or failed requests for this page since it loaded.';
+    await this.activity(state, 'page_diagnostics', `Checked “${title}” for problems`, diagnosticsSummary(entries));
+    return { text: diagnosticsResult({ ref: this.refFor(state, node.id), url, retrievedAt: Date.now(), entries, total, ...(note ? { note } : {}) }) };
   }
 
   /* ---------- Filling forms (D16, ARCHITECTURE.md §11.6) ---------- */
