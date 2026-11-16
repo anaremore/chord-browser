@@ -29,10 +29,16 @@ interface DraftState<T> {
  * A record's values as they are now, to read: in a draft, without making a
  * draft of each. Values already changed in the draft are drafts; the others
  * are the frozen originals, so change one through `record[id]`, never this.
+ *
+ * `copy_` and `base_` are Immer's own, and its production builds rename
+ * them: there, this reads the draft itself, which is right, only slow. Chord
+ * resolves `immer` to its development build (`immer.mjs`) in every process;
+ * `immer-production.test.ts` holds both ways.
  */
 export function valuesOf<T>(record: Readonly<Record<string, T>>): T[] {
   const draft = (record as { [DRAFT_STATE]?: DraftState<Record<string, T>> })[DRAFT_STATE];
-  return Object.values(draft ? (draft.copy_ ?? draft.base_) : record);
+  const own = draft?.copy_ ?? draft?.base_;
+  return Object.values(own ?? record);
 }
 
 /** Every node, to read (see `valuesOf`): change one through `state.nodes[id]`. */

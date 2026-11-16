@@ -319,6 +319,38 @@ describe('splits and the rest of the sidebar', () => {
     }
   });
 
+  // A Today split holding a pinned tab (old or damaged data, or another computer's): the pinned tab steps out, into
+  // Today, and the split settles on the rest, as if it had never been a pane.
+  const strayPinned = (today: number, nest: boolean) => {
+    const state = emptyState();
+    const tab = (id: string, parentId: string, rank: string, section: 'pinned' | 'today'): TabNode => ({ kind: 'tab', id, chordId: 'c1', section, parentId, rank, url: `https://${id}.test/`, title: id, pinnedUrl: section === 'pinned' ? `https://${id}.test/` : null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 });
+    // Nested: s sits inside an outer Today split o with two tabs of its own, and settles first.
+    state.nodes['s'] = { kind: 'split', id: 's', chordId: 'c1', section: 'today', parentId: nest ? 'o' : null, rank: 'a0', direction: 'row', sizes: [], createdAt: 0 };
+    state.nodes['p'] = tab('p', 's', 'a0', 'pinned');
+    for (let i = 1; i <= today; i++) state.nodes[`q${i}`] = tab(`q${i}`, 's', `a${i}`, 'today');
+    if (nest) {
+      state.nodes['o'] = { kind: 'split', id: 'o', chordId: 'c1', section: 'today', parentId: null, rank: 'a0', direction: 'row', sizes: [], createdAt: 0 };
+      state.nodes['x1'] = tab('x1', 'o', 'a1', 'today');
+      state.nodes['x2'] = tab('x2', 'o', 'a2', 'today');
+    }
+    return state;
+  };
+  it.each([
+    { name: 'of 2: the split dissolves', today: 1, nest: false, splits: {}, p: null },
+    { name: 'of 3: two panes', today: 2, nest: false, splits: { s: { parent: null, panes: ['q1', 'q2'], sizes: 2 } }, p: null },
+    { name: 'of 5: four panes, none pushed out', today: 4, nest: false, splits: { s: { parent: null, panes: ['q1', 'q2', 'q3', 'q4'], sizes: 4 } }, p: null },
+    { name: 'of 2, inside another split: both tabs become its panes', today: 1, nest: true, splits: { o: { parent: null, panes: ['q1', 'p', 'x1', 'x2'], sizes: 4 } }, p: 'o' },
+  ])('settles a pinned tab in a Today split $name', ({ today, nest, splits, p }) => {
+    const plain = strayPinned(today, nest);
+    settleSplits(plain);
+    const drafted = produce(strayPinned(today, nest), (d) => void settleSplits(d as State));
+    for (const state of [plain, drafted]) {
+      expect(shape(state)).toEqual(splits);
+      expect(state.nodes['p']).toMatchObject({ section: 'today', parentId: p, pinnedUrl: null });
+      expect(Object.values(state.nodes).filter((n) => n.kind === 'tab')).toHaveLength(today + 1 + (nest ? 2 : 0));
+    }
+  });
+
   it('restores splits whole, and one window keeps a split another one also shows', () => {
     const t = setup();
     t.run({ t: 'split.add', windowId: 'w1', withId: 't1', nodeId: 't2' });

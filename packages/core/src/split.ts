@@ -137,10 +137,11 @@ export function settleSplits(state: State): Set<NodeId> {
     const inside = [...new Set(inSplits.get(split.id))].map((id) => nodes[id]).filter((n): n is SidebarNode => n?.parentId === split.id);
     // A split holds only tabs, of its own chord and section; anything else steps out, just after it.
     const pane = (n: SidebarNode) => n.kind === 'tab' && n.chordId === split.chordId && n.section === split.section;
+    // Which is which before any steps out: stepping out can give a stray tab this split's section.
     const strays = inside.filter((n) => !pane(n));
+    const members = inside.filter(pane).sort(byRank) as TabNode[];
     stepOut(state, split, strays, changed);
     moved(split.parentId, strays.map((n) => n.id));
-    const members = inside.filter(pane).sort(byRank) as TabNode[];
     if (members.length === 0) {
       delete nodes[split.id];
       continue;
