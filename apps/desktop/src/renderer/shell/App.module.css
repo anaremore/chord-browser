@@ -496,7 +496,9 @@ kbd {
   display: flex;
   flex: none;
   flex-direction: column;
-  max-block-size: var(--share-pinned-max);
+
+  /* About half the pane, down to whole rows: on the row grid, so no row shows cut at the top or bottom. */
+  max-block-size: round(down, var(--share-pinned-max), var(--size-row));
   min-block-size: 0;
 }
 

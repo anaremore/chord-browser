@@ -88,7 +88,7 @@ export const size = {
 
 /** Parts of a container, as fractions of it (CSS: `--share-*`, a percentage). */
 export const share = {
-  /** Pinned grows to at most this much of the chord's pane, then scrolls on its own; Today keeps the rest (DESIGN.md §6.7). */
+  /** Pinned grows to at most about this much of the chord's pane (down to whole rows), then scrolls on its own; Today keeps the rest (DESIGN.md §6.7). */
   pinnedMax: 0.5,
 } as const;
 

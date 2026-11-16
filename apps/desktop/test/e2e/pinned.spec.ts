@@ -119,6 +119,8 @@ for (const appearance of ['light', 'dark'] as const) {
       const box = (await pinned.boundingBox())!;
       expect(box.height).toBeLessThanOrEqual(pane / 2 + 1);
       expect(box.height).toBeGreaterThan(pane / 2 - ROW);
+      // Whole rows, on the row grid: scrolled to either end, no row shows cut.
+      expect(box.height % ROW).toBe(0);
       await expect(today.getByRole('treeitem').first()).toBeInViewport();
       expect((await today.boundingBox())!.height).toBeGreaterThan(4 * ROW);
       // The full height scrolls, so the scrollbar tells the truth.
@@ -144,6 +146,14 @@ for (const appearance of ['light', 'dark'] as const) {
       await check('at the end');
       await expect(pinned).not.toHaveAttribute('data-more');
       expect(await mask(pinned)).toBe('none');
+      // Whole rows: at the end, the first row on screen starts at Pinned's top edge.
+      expect(await pinned.evaluate((ul, row) => ul.scrollTop % row, ROW)).toBe(0);
+      // The pointer off the rows, so none shows hovered: onto the shell's own top bar (over the page, it's the
+      // page's, and the shell never hears it leave).
+      await shell.mouse.move(box.x + box.width + 400, 8);
+      await expect(pinned.locator('[data-row]:hover')).toHaveCount(0);
+      // Its hover background fades out (fade-fast) before the capture.
+      await shell.waitForTimeout(400);
       await shell.screenshot({ path: resolve(capturesDir, `pinned-cap-end-${appearance}.png`) });
       // Today didn't move.
       expect(await today.evaluate((ul) => ul.scrollTop)).toBe(0);
