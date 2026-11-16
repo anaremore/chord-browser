@@ -145,19 +145,56 @@ export function redactAddress(address: string): string {
   return `${where.slice(0, MAX_FILE)}${position}`;
 }
 
-/** Addresses inside a message (an error's text or stack) are cut the same way. */
-const ADDRESS_IN_TEXT = /\b(?:https?|wss?|file|blob:https?|chrome-extension):\/\/[^\s'"<>()[\]{}`]+|\bdata:[^\s'"<>()[\]{}`]+/gi;
 /**
- * Addresses without a scheme, with a query or fragment: protocol-relative (`//cdn.example/a.js?token=…`) and
- * relative (`/api?token=…`), where a word starts. They can't be parsed, so everything from the `?` or `#` goes,
- * but a stack's line and column stay.
+ * Where an address starts inside a message (an error's text or stack), up to its query or fragment: any scheme
+ * (`https:`, `ftp:`, `blob:https:`, …), `data:`, protocol-relative (`//cdn.example/a.js`), relative (`/api`,
+ * `./a`, `../a`), or a bare host with a path (`cdn.example.com/a.js`). A path may hold brackets; the query is
+ * found by `queryEnd`, since queries often hold brackets, braces and quotes (`?ids[]=1`, `?q={"t":"…"}`).
  */
-const RELATIVE_IN_TEXT = /(?<=^|[\s'"(=:,])\/{1,2}[^\s'"<>()[\]{}`?#]*[?#][^\s'"<>()[\]{}`]*/g;
+const ADDRESS_START =
+  /(?<=^|[\s'"(=:,`<[{])(?:(?:blob:)?[a-z][a-z0-9+.-]*:\/\/[^\s'"<>`?#]*|data:[^\s'"<>`]*|\/{1,2}[^\s'"<>`?#]*|\.{1,2}\/[^\s'"<>`?#]*|(?:[\w-]+\.)+[a-z]{2,}(?::\d+)?\/[^\s'"<>`?#]*)/gi;
+const CLOSES: Record<string, string> = { "'": "'", '"': '"', '`': '`', '(': ')', '[': ']', '{': '}', '<': '>' };
+
+/**
+ * Where a query or fragment that starts at `from` ends: at whitespace, or at the mark that closes the one the
+ * address followed (a quote, or a bracket at depth 0). Brackets and braces inside the query nest, and quotes
+ * inside it don't end it unless they close the address.
+ */
+function queryEnd(text: string, from: number, opener: string | undefined): number {
+  const close = opener ? CLOSES[opener] : undefined;
+  let depth = 0;
+  let i = from;
+  for (; i < text.length; i++) {
+    const c = text[i]!;
+    if (/\s/.test(c)) break;
+    if (c === '[' || c === '{' || (c === '(' && close !== ')')) depth++;
+    else if ((c === ']' || c === '}' || c === ')') && depth > 0) depth--;
+    else if (c === close && depth === 0) break;
+  }
+  return i;
+}
+
 export function redactText(text: string): string {
-  return text.replace(ADDRESS_IN_TEXT, (m) => redactAddress(m)).replace(RELATIVE_IN_TEXT, (m) => {
-    const at = m.search(/[?#]/);
-    return `${m.slice(0, at).slice(0, MAX_FILE)}${/(?::\d+){1,2}$/.exec(m.slice(at))?.[0] ?? ''}`;
-  });
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(ADDRESS_START)) {
+    const start = m.index;
+    if (start < last) continue;
+    const head = m[0];
+    let end = start + head.length;
+    let position = '';
+    if (text[end] === '?' || text[end] === '#') {
+      const stop = queryEnd(text, end, text[start - 1]);
+      position = /(?::\d+){1,2}$/.exec(text.slice(end, stop))?.[0] ?? '';
+      end = stop;
+    } else if (!/^(?:[a-z][a-z0-9+.-]*:|data:)/i.test(head) && !/@/.test(head)) {
+      continue; // A path with nothing to remove stays as written.
+    }
+    const kept = /^(?:blob:)?[a-z][a-z0-9+.-]*:\/\/|^data:/i.test(head) ? redactAddress(head) : head.slice(0, MAX_FILE);
+    out += text.slice(last, start) + kept + position;
+    last = end;
+  }
+  return out + text.slice(last);
 }
 
 /** At most `max` characters, and a mark where it was cut. Only what's kept is looked at, however long the text. */

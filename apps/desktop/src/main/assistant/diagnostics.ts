@@ -54,7 +54,8 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
     }
   }
   const events: DiagnosticsEvent[] = [];
-  // Cut to size as each arrives: a page can log megabytes at a time.
+  // Cut to size as each arrives: a page can log megabytes at a time. The ceiling keeps the first events, not the
+  // newest; Chromium replays at most about 1,000 console and 1,000 log entries, so a read stays under it.
   const onMessage = (_event: Electron.Event, method: string, params: unknown, sessionId?: string) => {
     if (sessionId || events.length >= DIAGNOSTICS_MAX_EVENTS) return;
     if (method === 'Log.entryAdded') events.push(shrinkEvent({ kind: 'log', entry: (params as { entry: CdpLogEntry }).entry }));
@@ -62,6 +63,8 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
     else if (method === 'Runtime.exceptionThrown') events.push(shrinkEvent({ kind: 'exception', thrown: params as CdpException }));
   };
   let detached = false;
+  // Set once the read is over: a page that answers Log.enable late must not get Runtime.enable after Chord let go.
+  let over = false;
   const onDetach = () => (detached = true);
   debug.on('message', onMessage);
   debug.on('detach', onDetach);
@@ -70,6 +73,7 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
     const asked = await pageOutcome(
       (async () => {
         await debug.sendCommand('Log.enable');
+        if (over) return;
         await debug.sendCommand('Runtime.enable');
       })(),
       ms,
@@ -79,6 +83,7 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
     const types = await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: TYPES_SCRIPT }]) as Promise<unknown>, {}, PAGE_CALL_MS);
     return { ok: true, events, types: types && typeof types === 'object' ? (types as Record<string, string>) : {} };
   } finally {
+    over = true;
     debug.off('message', onMessage);
     debug.off('detach', onDetach);
     if (!contents.isDestroyed() && debug.isAttached()) {

@@ -46,6 +46,16 @@ describe('page_diagnostics: addresses lose what carries tokens', () => {
     ['relative after a colon', 'Not found:/missing?sig=SECRET', 'Not found:/missing'],
     ['another scheme', 'ftp://files.example/a.zip?t=SECRET', 'ftp://files.example/a.zip'],
     ['a path with no query stays', 'see /docs/setup and a/b?c', 'see /docs/setup and a/b?c'],
+    ['a query with brackets', 'fetch failed https://api.x/v1?ids[]=1&api_key=SECRET', 'fetch failed https://api.x/v1'],
+    ['a relative query with brackets', 'GET /api?filter[user]=1&token=SECRET', 'GET /api'],
+    ['a query holding JSON', 'https://x.com/a?q={"t":"SECRET"} failed', 'https://x.com/a failed'],
+    ['brackets in the path', 'https://x.com/a(1)?token=SECRET', 'https://x.com/a(1)'],
+    ['relative with ./', 'load ./api?token=SECRET', 'load ./api'],
+    ['relative with ../', 'load ../x?token=SECRET', 'load ../x'],
+    ['a bare host', 'cdn.example.com/a.js?token=SECRET failed', 'cdn.example.com/a.js failed'],
+    ['a password in another scheme', 'ftp://u:SECRET@h.example/x', 'ftp://h.example/x'],
+    ['in double quotes with JSON after', 'GET "https://a.example/x?k=SECRET" {"ok":false}', 'GET "https://a.example/x" {"ok":false}'],
+    ['in parentheses with brackets', 'at f (https://a.example/a.js?x[0]=SECRET:3:9)', 'at f (https://a.example/a.js:3:9)'],
   ])('%s', (_, input, expected) => expect(redactText(input)).toBe(expected));
 });
 
