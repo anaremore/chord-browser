@@ -437,7 +437,7 @@ export interface Settings {
   proxy: ProxySettings;
   /** Settings → Your data → Export: *Encrypt with a passphrase*, remembered for next time (the passphrase never is). */
   encryptExports: boolean;
-  /** Chord's own passwords (docs/decisions/S17-passwords.md): the switch, when the vault locks, and the chords it's on in despite an extension. */
+  /** Chord's own passwords (docs/decisions/S17-passwords.md): the switch, when the vault locks, and each chord's own (on despite an extension, or off by hand). */
   passwords: PasswordSettings;
 }
 
@@ -564,7 +564,7 @@ export const defaultSettings = (): Settings => ({
   effects: { ...DEFAULT_SETTINGS.effects },
   devtools: { ...DEFAULT_SETTINGS.devtools },
   proxy: { mode: 'system', server: null, pac: null },
-  passwords: { ...DEFAULT_SETTINGS.passwords, onChords: [] },
+  passwords: { ...DEFAULT_SETTINGS.passwords, onChords: [], offChords: [] },
 });
 
 /**
@@ -618,7 +618,7 @@ export interface SettingsPatch {
   /** The whole new proxy for every chord; one that can't be used (core's cleanProxy) is ignored. */
   proxy?: ProxySettings;
   encryptExports?: boolean;
-  /** `onChords` is the whole new list. */
+  /** `onChords` and `offChords` are each the whole new list. */
   passwords?: Partial<PasswordSettings>;
 }
 

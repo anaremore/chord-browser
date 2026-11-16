@@ -116,7 +116,7 @@ beforeEach(() => {
       return this.text;
     },
   };
-  settings = { ...DEFAULT_PASSWORD_SETTINGS, onChords: [] };
+  settings = { ...DEFAULT_PASSWORD_SETTINGS, onChords: [], offChords: [] };
   changes = 0;
   hides = 0;
   service = make();
@@ -578,6 +578,18 @@ describe('the API agreed with the detector (origin from senderFrame, a chord id)
     state = { ...state, extensions: {} };
     service.stateChanged(state);
     expect([main.scripts.size, priv.scripts.size]).toEqual([1, 1]);
+    // The chord's own switch off by hand (offChords): its sentinel goes at once, and comes back on again; a private window keeps its own.
+    state = { ...state, settings: { passwords: { ...settings, offChords: ['work'] } } };
+    service.stateChanged(state);
+    expect([main.scripts.size, priv.scripts.size]).toEqual([0, 1]);
+    state = { ...state, settings: { passwords: { ...settings, offChords: [] } } };
+    service.stateChanged(state);
+    expect([main.scripts.size, priv.scripts.size]).toEqual([1, 1]);
+    // 1Password there, and the chord's switch turned on (onChords): watched despite it.
+    state = { ...state, extensions: { x: ONE_PASSWORD }, settings: { passwords: { ...settings, onChords: ['work'] } } };
+    service.stateChanged(state);
+    expect([main.scripts.size, priv.scripts.size]).toEqual([1, 1]);
+    state = { ...state, extensions: {} };
     // The switch off: off everywhere, and in profiles made later.
     state = { ...state, settings: { passwords: { ...settings, enabled: false } } };
     service.stateChanged(state);
@@ -629,6 +641,13 @@ describe('the API for the menu under the field and the save cards', () => {
     } finally {
       delete extensions['x'];
     }
+  });
+
+  it('a chord turned off by hand is offered nothing', async () => {
+    await oneLogin();
+    settings.offChords = ['work'];
+    expect(await service.accountsForPage(page(), extensions)).toEqual({ state: 'off' });
+    expect(await service.passwordForPage(page(), 'id', extensions)).toBeNull();
   });
 
   it('says locked, so the menu offers Unlock passwords', async () => {

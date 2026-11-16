@@ -93,7 +93,7 @@ Each setting that travels is a field of the `settings` record. A group's parts a
 | `externalLinks` | `"mini"` or `"tab"` |
 | `reader.size`, `reader.width`, `reader.theme`, `reader.font` | reader view's look |
 | `effects.wet` | Dry/Wet for every site |
-| `passwords.enabled`, `passwords.onChords` | Chord's own passwords: the switch (`true`/`false`); the chords they're on in although a password manager's extension is installed there (chord ids). When they lock (*Lock after*) stays on each computer |
+| `passwords.enabled`, `passwords.onChords`, `passwords.offChords` | Chord's own passwords: the switch (`true`/`false`); the chords they're on in although a password manager's extension is installed there, and the chords they're turned off in by hand (chord ids; `offChords` wins). A file without `offChords` (before 0.11.0) reads as none. When they lock (*Lock after*) stays on each computer |
 | `shortcuts.mac`, `shortcuts.other` | Your keyboard shortcuts, by action (`{"tab.new": ["Ctrl+Alt+T"]}`): a Mac writes `mac`, Windows and Linux write `other`, and each reads only its own. |
 | `proxy` | The proxy for every chord: `{"mode": "system" \| "none" \| "server" \| "pac", "server": {"scheme": "http" \| "https" \| "socks5", "host", "port", "bypass": [...]} \| null, "pac": <a PAC file's address> \| null}`. Never a password: one in a PAC file's address is taken out. Exported so a restore brings it back, but never synced: it's about the network a computer is on. A chord's own proxy, on its `chord` record, is the same shape. |
 

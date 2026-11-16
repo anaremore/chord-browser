@@ -28,9 +28,9 @@ export function ResetButton({ visible, onReset, label = 'Reset to default' }: { 
 }
 
 /** `describedBy`: the row's description, read with the switch (Row passes it). */
-export function Switch({ checked, label, onChange, describedBy }: { checked: boolean; label: string; onChange(value: boolean): void; describedBy?: string }) {
+export function Switch({ checked, label, onChange, describedBy, disabled }: { checked: boolean; label: string; onChange(value: boolean): void; describedBy?: string; disabled?: boolean }) {
   return (
-    <button type="button" role="switch" aria-checked={checked} aria-label={label} aria-describedby={describedBy} className={styles.switch} onClick={() => onChange(!checked)}>
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} aria-describedby={describedBy} className={styles.switch} disabled={disabled} onClick={() => onChange(!checked)}>
       <span className={styles.knob} />
     </button>
   );

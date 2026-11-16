@@ -18,11 +18,13 @@ export interface PasswordSettings {
   /** *Offer to save and fill passwords*: Chord's own password manager, on unless you turn it off. */
   enabled: boolean;
   lockAfter: PasswordLockAfter;
-  /** Chords where it's on although a known password manager's extension is installed there (*Turn on there too*). */
+  /** Chords where it's on although a known password manager's extension is installed there (the chord's own switch turned on). */
   onChords: string[];
+  /** Chords where it's off by hand, with no password manager to turn it off (the chord's own switch turned off). Wins over `onChords`. */
+  offChords: string[];
 }
 
-export const DEFAULT_PASSWORD_SETTINGS: PasswordSettings = { enabled: true, lockAfter: 30, onChords: [] };
+export const DEFAULT_PASSWORD_SETTINGS: PasswordSettings = { enabled: true, lockAfter: 30, onChords: [], offChords: [] };
 
 /** *Show* and *Copy* ask for the passphrase again once it was last typed longer ago than this (S17 §7). */
 export const PASSWORD_REAUTH_MS = 5 * 60_000;
@@ -127,9 +129,10 @@ export function passwordManagerIn(profileId: ProfileId, extensions: Extensions):
 }
 
 /**
- * Whether Chord offers to save and fill in a chord: the switch, unless a
- * known password manager is installed in the chord's profile and you haven't
- * turned Chord's on there too. Private windows have no chord here: they
+ * Whether Chord offers to save and fill in a chord: the switch, then the
+ * chord's own: off where you turned it off (`offChords`), and off where a
+ * known password manager is installed in the chord's profile unless you
+ * turned it on there (`onChords`). Private windows have no chord here: they
  * follow the switch alone (extensions can't run there).
  */
 export function passwordsOnIn(
@@ -139,30 +142,49 @@ export function passwordsOnIn(
 ): boolean {
   if (!settings.enabled) return false;
   if (!chord) return true;
+  if (settings.offChords.includes(chord.id)) return false;
   return settings.onChords.includes(chord.id) || passwordManagerIn(chord.profileId, extensions) === null;
 }
 
-/** The chords where Chord's own is off because of a password manager, with its name, in the order given. */
-export function passwordsOffBecause(
-  settings: PasswordSettings,
-  chords: readonly { id: ChordId; name: string; profileId: ProfileId }[],
-  extensions: Extensions,
-): { chordId: ChordId; chord: string; extension: string }[] {
-  const off: { chordId: ChordId; chord: string; extension: string }[] = [];
-  for (const chord of chords) {
-    if (settings.onChords.includes(chord.id)) continue;
-    const manager = passwordManagerIn(chord.profileId, extensions);
-    if (manager) off.push({ chordId: chord.id, chord: chord.name, extension: manager.name });
-  }
-  return off;
+/** One chord's row under the switch: whether it's on there, and the password manager keeping it off (null when none is). */
+export interface PasswordChordRow {
+  chordId: ChordId;
+  on: boolean;
+  offBecause: string | null;
 }
 
-/** *Off in Personal, where 1Password is installed.* · *Off in Personal and Work, where 1Password is installed.* */
-export function passwordsOffText(off: readonly { chord: string; extension: string }[]): string | null {
-  if (off.length === 0) return null;
-  const names = (list: readonly string[]) => (list.length <= 2 ? list.join(' and ') : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`);
-  const managers = [...new Set(off.map((o) => o.extension))];
-  return `Off in ${names(off.map((o) => o.chord))}, where ${names(managers)} ${managers.length === 1 ? 'is' : 'are'} installed.`;
+/** Each chord's row under the switch, in the order given, as if the switch were on: with it off, the rows only dim. */
+export function passwordChordRows(
+  settings: PasswordSettings,
+  chords: readonly { id: ChordId; profileId: ProfileId }[],
+  extensions: Extensions,
+): PasswordChordRow[] {
+  const switchOn = { ...settings, enabled: true };
+  return chords.map((chord) => {
+    const on = passwordsOnIn(switchOn, chord, extensions);
+    const manager = on || settings.offChords.includes(chord.id) ? null : passwordManagerIn(chord.profileId, extensions);
+    return { chordId: chord.id, on, offBecause: manager?.name ?? null };
+  });
+}
+
+/**
+ * The lists after a chord's own switch is turned. On takes it out of
+ * `offChords`, and puts it in `onChords` where a password manager would keep
+ * it off; off takes it out of `onChords`, and puts it in `offChords` where
+ * nothing else would. A chord is in one list at most.
+ */
+export function passwordChordPatch(
+  settings: PasswordSettings,
+  chord: { id: ChordId; profileId: ProfileId },
+  on: boolean,
+  extensions: Extensions,
+): Pick<PasswordSettings, 'onChords' | 'offChords'> {
+  const managed = passwordManagerIn(chord.profileId, extensions) !== null;
+  const onChords = settings.onChords.filter((id) => id !== chord.id);
+  const offChords = settings.offChords.filter((id) => id !== chord.id);
+  if (on && managed) onChords.push(chord.id);
+  if (!on && !managed) offChords.push(chord.id);
+  return { onChords, offChords };
 }
 
 /** Chord ids, as a list of them may come back (a file, an old profile): strings of an id's length, once each, at most 500. */
@@ -171,12 +193,13 @@ const cleanChordIds = (value: unknown): string[] =>
 
 /** Saved password settings as they may come back: each part that can be used, the defaults for the rest. */
 export function restorePasswordSettings(saved: unknown): PasswordSettings {
-  const settings: PasswordSettings = { ...DEFAULT_PASSWORD_SETTINGS, onChords: [] };
+  const settings: PasswordSettings = { ...DEFAULT_PASSWORD_SETTINGS, onChords: [], offChords: [] };
   if (!saved || typeof saved !== 'object') return settings;
   const s = saved as Record<string, unknown>;
   if (typeof s['enabled'] === 'boolean') settings.enabled = s['enabled'];
   if (isPasswordLockAfter(s['lockAfter'])) settings.lockAfter = s['lockAfter'];
   settings.onChords = cleanChordIds(s['onChords']);
+  settings.offChords = cleanChordIds(s['offChords']);
   return settings;
 }
 
@@ -184,9 +207,11 @@ export function restorePasswordSettings(saved: unknown): PasswordSettings {
 export function applyPasswordPatch(current: PasswordSettings, patch: Partial<PasswordSettings>): void {
   if (typeof patch.enabled === 'boolean' && current.enabled !== patch.enabled) current.enabled = patch.enabled;
   if (isPasswordLockAfter(patch.lockAfter) && current.lockAfter !== patch.lockAfter) current.lockAfter = patch.lockAfter;
-  if (patch.onChords) {
-    const clean = cleanChordIds(patch.onChords);
-    if (clean.join('\n') !== current.onChords.join('\n')) current.onChords = clean;
+  for (const list of ['onChords', 'offChords'] as const) {
+    const ids = patch[list];
+    if (!ids) continue;
+    const clean = cleanChordIds(ids);
+    if (clean.join('\n') !== current[list].join('\n')) current[list] = clean;
   }
 }
 

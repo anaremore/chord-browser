@@ -390,6 +390,7 @@ const SETTING_NAMES: Record<string, [label: string, describe: (value: unknown) =
   'passwords.enabled': ['Offer to save and fill passwords', ON_OFF],
   'passwords.lockAfter': ['Lock passwords after', (v) => (isPasswordLockAfter(v) ? lockAfterText(v) : String(v))],
   'passwords.onChords': ['Chords where passwords are on despite an extension', (v) => (Array.isArray(v) ? (v.length === 0 ? 'None' : `${v.length} chords`) : String(v))],
+  'passwords.offChords': ['Chords where passwords are off', (v) => (Array.isArray(v) ? (v.length === 0 ? 'None' : `${v.length} chords`) : String(v))],
   proxy: ['Proxy for every chord', (v) => (v && typeof v === 'object' ? proxyLabel(v as ProxySettings) : 'The system’s proxy')],
 };
 

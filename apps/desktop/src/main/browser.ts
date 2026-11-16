@@ -1892,7 +1892,7 @@ export class Browser {
       settings: state.settings,
       chord: chord ? { id: chord.id, name: chord.name, icon: chord.icon, theme: chord.theme } : null,
       extensions: this.extensions.infos(),
-      chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId, ...(c.proxy ? { proxy: c.proxy } : {}) })),
+      chords: sortedChords(state).map((c) => ({ id: c.id, name: c.name, icon: c.icon, profileId: c.profileId, theme: c.theme, ...(c.proxy ? { proxy: c.proxy } : {}) })),
       sitePermissions: state.sitePermissions,
       spellcheckLanguages: spellcheckLanguages(),
       linkRoutes: Object.values(state.linkRoutes).sort((a, b) => a.host.localeCompare(b.host)),

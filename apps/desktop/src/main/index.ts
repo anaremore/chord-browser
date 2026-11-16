@@ -17,6 +17,7 @@ import {
   restoreState,
   uuidv7,
   nodeList,
+  sortedChords,
   type Command,
   type WindowId,
 } from '@chord/core';
@@ -1094,6 +1095,17 @@ if (!app.requestSingleInstanceLock()) {
         /** Passwords (S17): turn detection on or off, as the vault's switch will; and what it has reported. */
         passwordsEnabled: (on: boolean, profileIds?: string[]) => passwordDetector.setEnabled(on, profileIds),
         passwordEvents: () => passwordEvents.slice(),
+        /**
+         * An extension recorded as installed in the first chord's sign-ins, by store id, with no files (it never loads):
+         * a known password manager's stands in for one (S17 §11), whose real package no test can sign. Its chord's name.
+         */
+        recordExtensionForTests: (id: string, name: string) => {
+          const chord = sortedChords(browser!.store.state)[0]!;
+          const now = Date.now();
+          const extension = { id, profileId: chord.profileId, name, version: '1.0.0', source: 'unpacked' as const, path: join(app.getPath('userData'), 'no-such-extension'), notifiedVersion: '1.0.0', pinned: false, installedAt: now, updatedAt: now };
+          browser!.store.dispatch({ t: 'extension.record', extension });
+          return chord.name;
+        },
         clearPasswordEvents: () => void (passwordEvents.length = 0),
         launch: () => launchTimings(),
         /** What Chord's icon shows: its tabs' counts added up. */

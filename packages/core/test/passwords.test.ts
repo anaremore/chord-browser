@@ -15,8 +15,8 @@ import {
   passphraseDue,
   passwordManagerIn,
   passwordProfiles,
-  passwordsOffBecause,
-  passwordsOffText,
+  passwordChordPatch,
+  passwordChordRows,
   passwordsOnIn,
   restorePasswordSettings,
   type LoginSummary,
@@ -64,7 +64,7 @@ const ONE_PASSWORD = 'aeblfdkhhhdcdjpifhhbdiojplfjncoa';
 const BITWARDEN = 'nngceckbapebfimnlniiiahkandclblb';
 const UBLOCK = 'cjpalhdlnbpafiamejdnhcphjbkeiagm';
 
-describe('a password manager’s extension turns Chord’s off in its chord', () => {
+describe('each chord’s own: a password manager’s extension turns Chord’s off, and so can you', () => {
   const extensions = [ext(ONE_PASSWORD, 'personal', '1Password'), ext(UBLOCK, 'default', 'uBlock Origin'), ext(BITWARDEN, 'shared', 'Bitwarden')];
   const settings = (patch: Partial<PasswordSettings> = {}): PasswordSettings => ({ ...DEFAULT_PASSWORD_SETTINGS, ...patch });
   const chords = [
@@ -73,14 +73,20 @@ describe('a password manager’s extension turns Chord’s off in its chord', ()
     { id: 'c-a', name: 'Side', profileId: 'shared' },
     { id: 'c-b', name: 'Music', profileId: 'shared' },
   ];
+  const [work, personal] = [chords[0]!, chords[1]!];
 
   it.each([
-    ['a chord with no manager', settings(), chords[0]!, true],
-    ['a chord with 1Password', settings(), chords[1]!, false],
-    ['the same, turned on there too', settings({ onChords: ['c-personal'] }), chords[1]!, true],
-    ['the switch off', settings({ enabled: false }), chords[0]!, false],
-    ['the switch off, even turned on there', settings({ enabled: false, onChords: ['c-personal'] }), chords[1]!, false],
+    ['a chord with no manager', settings(), work, true],
+    ['a chord with 1Password', settings(), personal, false],
+    ['the extension present and the chord in onChords', settings({ onChords: ['c-personal'] }), personal, true],
+    ['no extension and the chord in offChords', settings({ offChords: ['c-work'] }), work, false],
+    ['the extension present, the chord in both lists: off wins', settings({ onChords: ['c-personal'], offChords: ['c-personal'] }), personal, false],
+    ['another chord in offChords', settings({ offChords: ['c-personal'] }), work, true],
+    ['the switch off', settings({ enabled: false }), work, false],
+    ['the switch off, even in onChords', settings({ enabled: false, onChords: ['c-personal'] }), personal, false],
     ['a private window', settings(), null, true],
+    ['a private window, every chord off by hand', settings({ offChords: chords.map((c) => c.id) }), null, true],
+    ['a private window, the switch off', settings({ enabled: false }), null, false],
   ] as const)('%s: on %s', (_what, s, chord, on) => {
     expect(passwordsOnIn(s, chord, extensions)).toBe(on);
   });
@@ -91,51 +97,93 @@ describe('a password manager’s extension turns Chord’s off in its chord', ()
     expect(passwordManagerIn('personal', [ext(UBLOCK, 'personal', '1Password')])).toBeNull();
   });
 
+  const privateChord = { id: 'c-private', name: 'Private', profileId: 'private-w1', private: true };
   it.each([
-    ['on: every chord’s sign-ins but those with a manager only, and private windows’', settings(), ['default', 'private-w1']],
-    ['turned on there too: that chord’s sign-ins as well', settings({ onChords: ['c-a'] }), ['default', 'private-w1', 'shared']],
-    ['the switch off: none, private windows’ neither', settings({ enabled: false }), []],
-  ] as const)('the detector watches %s', (_what, s, profiles) => {
-    const all = [...chords, { id: 'c-private', name: 'Private', profileId: 'private-w1', private: true }];
-    expect(passwordProfiles(s, all, extensions)).toEqual(profiles);
+    ['on: every chord’s sign-ins but those with a manager only, and private windows’', settings(), chords, ['default', 'private-w1']],
+    ['the extension present and the chord in onChords: its sign-ins as well', settings({ onChords: ['c-a'] }), chords, ['default', 'private-w1', 'shared']],
+    ['no extension and the chord in offChords: its sign-ins go', settings({ offChords: ['c-work'] }), chords, ['private-w1']],
+    ['a chord in onChords and offChords: off', settings({ onChords: ['c-a'], offChords: ['c-a'] }), chords, ['default', 'private-w1']],
+    ['the switch off: none, private windows’ neither', settings({ enabled: false, onChords: ['c-a'] }), chords, []],
+    ['a chord removed: lists naming it change nothing', settings({ onChords: ['c-gone'], offChords: ['c-gone2'] }), chords, ['default', 'private-w1']],
+    ['the one chord in onChords removed: its sign-ins go', settings({ onChords: ['c-personal'] }), chords.filter((c) => c.id !== 'c-personal'), ['default', 'private-w1']],
+    ['another chord on the same sign-ins as one off by hand: they stay', settings({ offChords: ['c-work'] }), [...chords, { id: 'c-w2', name: 'Two', profileId: 'default' }], ['default', 'private-w1']],
+    ['one of two chords on shared sign-ins turned on: they’re watched', settings({ onChords: ['c-b'] }), chords, ['default', 'private-w1', 'shared']],
+    ['a private window’s chord in offChords: it follows the switch alone', settings({ offChords: ['c-private'] }), chords, ['default', 'private-w1']],
+  ] as const)('the detector watches %s', (_what, s, list, profiles) => {
+    expect(passwordProfiles(s, [...list, privateChord], extensions)).toEqual(profiles);
   });
 
-  it('says where it’s off, and why', () => {
-    const off = passwordsOffBecause(settings(), chords, extensions);
-    expect(off.map((o) => o.chordId)).toEqual(['c-personal', 'c-a', 'c-b']);
-    expect(passwordsOffText(off.slice(0, 1))).toBe('Off in Personal, where 1Password is installed.');
-    expect(passwordsOffText(off.slice(1))).toBe('Off in Side and Music, where Bitwarden is installed.');
-    expect(passwordsOffText(off)).toBe('Off in Personal, Side and Music, where 1Password and Bitwarden are installed.');
-    expect(passwordsOffText(passwordsOffBecause(settings({ onChords: ['c-personal', 'c-a', 'c-b'] }), chords, extensions))).toBeNull();
+  it('each chord’s row says whether it’s on, and which manager keeps it off', () => {
+    const s = settings({ onChords: ['c-a'], offChords: ['c-work'] });
+    const rows = [
+      { chordId: 'c-work', on: false, offBecause: null },
+      { chordId: 'c-personal', on: false, offBecause: '1Password' },
+      { chordId: 'c-a', on: true, offBecause: null },
+      { chordId: 'c-b', on: false, offBecause: 'Bitwarden' },
+    ];
+    expect(passwordChordRows(s, chords, extensions)).toEqual(rows);
+    // The switch off: the same rows, dimmed by Settings.
+    expect(passwordChordRows({ ...s, enabled: false }, chords, extensions)).toEqual(rows);
+    // Off by hand where a manager is installed too: no reason line, it's yours.
+    expect(passwordChordRows(settings({ offChords: ['c-personal'] }), [personal], extensions)).toEqual([{ chordId: 'c-personal', on: false, offBecause: null }]);
+  });
+
+  it.each([
+    ['on where a manager is', settings(), personal, true, { onChords: ['c-personal'], offChords: [] }],
+    ['off again there: back to the extension rule', settings({ onChords: ['c-personal'] }), personal, false, { onChords: [], offChords: [] }],
+    ['off where none is', settings(), work, false, { onChords: [], offChords: ['c-work'] }],
+    ['on again there', settings({ offChords: ['c-work', 'c-x'] }), work, true, { onChords: [], offChords: ['c-x'] }],
+    ['on where it was off by hand and a manager is', settings({ offChords: ['c-personal'] }), personal, true, { onChords: ['c-personal'], offChords: [] }],
+  ] as const)('a chord’s switch turned %s', (_what, s, chord, on, lists) => {
+    expect(passwordChordPatch(s, chord, on, extensions)).toEqual(lists);
+  });
+
+  it('every chord’s switch does what it shows, both ways, from any start, and only for that chord', () => {
+    const starts = [settings(), settings({ onChords: chords.map((c) => c.id) }), settings({ offChords: chords.map((c) => c.id) })];
+    for (const start of starts) {
+      for (const chord of chords) {
+        for (const on of [true, false]) {
+          const after = { ...start, ...passwordChordPatch(start, chord, on, extensions) };
+          expect(passwordsOnIn(after, chord, extensions)).toBe(on);
+          expect(passwordChordRows(after, [chord], extensions)[0]!.on).toBe(on);
+          for (const other of chords.filter((c) => c !== chord)) expect(passwordsOnIn(after, other, extensions)).toBe(passwordsOnIn(start, other, extensions));
+        }
+      }
+    }
   });
 });
 
 describe('the settings', () => {
-  it('start on, locking after 30 minutes', () => {
-    expect(DEFAULT_SETTINGS.passwords).toEqual({ enabled: true, lockAfter: 30, onChords: [] });
+  it('start on, locking after 30 minutes, with no chord’s own', () => {
+    expect(DEFAULT_SETTINGS.passwords).toEqual({ enabled: true, lockAfter: 30, onChords: [], offChords: [] });
   });
 
   it.each([
     ['nothing saved', undefined, DEFAULT_PASSWORD_SETTINGS],
-    ['every part', { enabled: false, lockAfter: 'never', onChords: ['a', 'b'] }, { enabled: false, lockAfter: 'never', onChords: ['a', 'b'] }],
+    ['every part', { enabled: false, lockAfter: 'never', onChords: ['a', 'b'], offChords: ['c'] }, { enabled: false, lockAfter: 'never', onChords: ['a', 'b'], offChords: ['c'] }],
+    ['an older one, from before offChords', { enabled: true, lockAfter: 15, onChords: ['a'] }, { enabled: true, lockAfter: 15, onChords: ['a'], offChords: [] }],
     ['a lock time Chord doesn’t offer', { lockAfter: 7 }, DEFAULT_PASSWORD_SETTINGS],
-    ['junk in the chord list', { onChords: ['a', 3, '', 'a', 'x'.repeat(101)] }, { ...DEFAULT_PASSWORD_SETTINGS, onChords: ['a'] }],
+    ['junk in the chord lists', { onChords: ['a', 3, '', 'a', 'x'.repeat(101)], offChords: 'c' }, { ...DEFAULT_PASSWORD_SETTINGS, onChords: ['a'] }],
   ])('restore %s', (_what, saved, expected) => {
     expect(restorePasswordSettings(saved)).toEqual(expected);
     expect(restoreSettings({ passwords: saved }).passwords).toEqual(expected);
   });
 
   it('a settings change sets each part it names, and nothing else', () => {
-    const current = { ...DEFAULT_PASSWORD_SETTINGS, onChords: [] };
+    const current = { ...DEFAULT_PASSWORD_SETTINGS, onChords: [], offChords: [] };
     applyPasswordPatch(current, { lockAfter: 5 });
-    expect(current).toEqual({ enabled: true, lockAfter: 5, onChords: [] });
+    expect(current).toEqual({ enabled: true, lockAfter: 5, onChords: [], offChords: [] });
     applyPasswordPatch(current, { lockAfter: 'soon' as never, onChords: ['c1', 'c1'] });
-    expect(current).toEqual({ enabled: true, lockAfter: 5, onChords: ['c1'] });
+    expect(current).toEqual({ enabled: true, lockAfter: 5, onChords: ['c1'], offChords: [] });
+    applyPasswordPatch(current, { offChords: ['c2'] });
+    expect(current).toEqual({ enabled: true, lockAfter: 5, onChords: ['c1'], offChords: ['c2'] });
   });
 
   it('goes through the reducer', () => {
-    const state = apply(emptyState(), { t: 'settings.set', settings: { passwords: { enabled: false, lockAfter: 'never' } } }, { now: 0, newId: () => 'id' }).state;
-    expect(state.settings.passwords).toEqual({ enabled: false, lockAfter: 'never', onChords: [] });
+    let state = apply(emptyState(), { t: 'settings.set', settings: { passwords: { enabled: false, lockAfter: 'never' } } }, { now: 0, newId: () => 'id' }).state;
+    expect(state.settings.passwords).toEqual({ enabled: false, lockAfter: 'never', onChords: [], offChords: [] });
+    state = apply(state, { t: 'settings.set', settings: { passwords: { onChords: ['a'], offChords: ['b'] } } }, { now: 0, newId: () => 'id' }).state;
+    expect(state.settings.passwords).toEqual({ enabled: false, lockAfter: 'never', onChords: ['a'], offChords: ['b'] });
   });
 });
 
