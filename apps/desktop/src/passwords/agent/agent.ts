@@ -25,7 +25,7 @@
  */
 import { classifyPasswordForm, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordFormKind } from '@chord/core';
 import type { PasswordsAgentChannel, PasswordsAgentMessage, PasswordsFieldSignature } from '@chord/ipc';
-import { controlType, isShown, MAX_REPORTED_FORMS, scanDocument, SKIP_TYPES, submitButtonFor, type ScannedForm } from './scan';
+import { activeElementOf, controlType, isShown, MAX_REPORTED_FORMS, scanDocument, SKIP_TYPES, submitButtonFor, type ScannedForm } from './scan';
 
 /** What the sentinel exposes in this world (contextBridge.exposeInIsolatedWorld). */
 export interface PasswordsBridge {
@@ -42,6 +42,12 @@ export const ONE_SUBMIT_MS = 1000;
 const SCAN_GAP_MS = 50;
 /** The flush runs on the next animation frame, or after this long if frames don't come. */
 const FLUSH_MS = 100;
+/**
+ * `focus` goes out at most this often, with a trailing flush: a smooth scroll moves the field every
+ * frame, and at 60 a second main's bucket (20 a second) would drop the last box. At 10 a second the
+ * last state always gets through.
+ */
+const FOCUS_GAP_MS = 100;
 /** `forms` is cut to stay within this many JSON characters: well under the channel's limit (PASSWORDS_MESSAGE_MAX). */
 const FORMS_JSON_MAX = 12_000;
 
@@ -148,6 +154,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   let told: { ref: WeakRef<HTMLInputElement>; formId: string; rect: string } | null = null;
   let frame = 0;
   let timer = 0;
+  let trailing = 0;
+  let focusSentAt = Number.NEGATIVE_INFINITY;
   const focusOn = (el: HTMLInputElement) => {
     const k = knownFor(el);
     const role = roleOf(k, el);
@@ -160,7 +168,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (scanWanted) rescan();
     const waiting = pending?.deref();
     pending = null;
-    if (waiting && doc.activeElement === waiting) focusOn(waiting);
+    if (waiting && activeElementOf(doc) === waiting) focusOn(waiting);
     const forms = formsReport();
     const json = JSON.stringify(forms);
     if (json !== lastForms) {
@@ -174,6 +182,17 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       const key = `${rect.x},${rect.y},${rect.width},${rect.height}`;
       // The same field in the same place: main knows already (a carousel scrolling elsewhere moves nothing).
       if (told?.ref.deref() === el && told.rect === key) return;
+      // Too soon after the last: the trailing flush sends the state as it is then.
+      const wait = FOCUS_GAP_MS - (performance.now() - focusSentAt);
+      if (wait > 0) {
+        if (!trailing)
+          trailing = win.setTimeout(() => {
+            trailing = 0;
+            flush();
+          }, wait);
+        return;
+      }
+      focusSentAt = performance.now();
       bridge.send('focus', { formId: focused.formId, kind: focused.kind, role: focused.role, rect });
       told = { ref: focused.ref, formId: focused.formId, rect: key };
     } else if (told) {
@@ -349,8 +368,9 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
 
   // ----- Listening -----
   const listen = <K extends keyof DocumentEventMap>(type: K, fn: (e: DocumentEventMap[K]) => void, passive = true) => {
-    doc.addEventListener(type, fn as EventListener, { capture: true, passive });
-    stops.push(() => doc.removeEventListener(type, fn as EventListener, { capture: true }));
+    // Through the prototype: a <form name="addEventListener"> clobbers the document's own.
+    EventTarget.prototype.addEventListener.call(doc, type, fn as EventListener, { capture: true, passive });
+    stops.push(() => EventTarget.prototype.removeEventListener.call(doc, type, fn as EventListener, { capture: true }));
   };
   listen('focusin', onFocusIn);
   listen('focusout', onFocusOut);
@@ -363,7 +383,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   stops.push(() => win.removeEventListener('resize', onMove));
   rescan();
   // A field focused before the agent woke (the sentinel wakes on that focus).
-  const active = doc.activeElement;
+  const active = activeElementOf(doc);
   if (isTextField(active)) onFocusIn({ composedPath: () => [active] } as unknown as FocusEvent);
 
   return () => {
@@ -371,5 +391,6 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     watching?.();
     if (frame) win.cancelAnimationFrame(frame);
     if (timer) win.clearTimeout(timer);
+    if (trailing) win.clearTimeout(trailing);
   };
 }

@@ -298,3 +298,42 @@ describe('focus traffic and a sign-in\'s messages', () => {
     expect(seen.length).toBe(2 * MESSAGE_RATE.burst);
   });
 });
+
+describe('navigations that never commit', () => {
+  it("an aborted navigation's late failure doesn't undo the one that replaced it", () => {
+    vi.useFakeTimers();
+    try {
+      const { page, seen } = setup();
+      page.send('passwords:candidate', CANDIDATE);
+      page.emitter.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator: page.contents.mainFrame });
+      page.emitter.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator: page.contents.mainFrame });
+      // The first one's ERR_ABORTED arrives late: ignored, the second is still under way.
+      page.emitter.emit('did-fail-provisional-load', {}, -3, 'ERR_ABORTED', 'https://example.com/first', true);
+      page.emitter.emit('did-navigate', {}, 'https://example.com/home', 200);
+      page.emitter.emit('did-stop-loading');
+      vi.advanceTimersByTime(SETTLE_MS);
+      expect(seen.map(([t]) => t)).toEqual(['submitted', 'signedIn']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a navigation that fails, then the agent says the form stayed: failed', () => {
+    const { page, seen } = setup();
+    page.send('passwords:candidate', CANDIDATE);
+    page.emitter.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator: page.contents.mainFrame });
+    page.emitter.emit('did-fail-provisional-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'https://nowhere.example/', true);
+    page.send('passwords:still', { formId: 'f1' });
+    expect(seen.map(([t]) => t)).toEqual(['submitted', 'failed']);
+  });
+
+  it('one aborted with nothing after it ends when loading stops', () => {
+    const { page, seen } = setup();
+    page.send('passwords:candidate', CANDIDATE);
+    page.emitter.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator: page.contents.mainFrame });
+    page.emitter.emit('did-fail-provisional-load', {}, -3, 'ERR_ABORTED', 'https://example.com/file.zip', true);
+    page.emitter.emit('did-stop-loading');
+    page.send('passwords:gone', { formId: 'f1' });
+    expect(seen.map(([t]) => t)).toEqual(['submitted', 'signedIn']);
+  });
+});

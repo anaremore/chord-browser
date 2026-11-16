@@ -50,7 +50,16 @@ const previousGetter = getter(elementProto, 'previousElementSibling');
 const tagGetter = getter(elementProto, 'tagName');
 const textGetter = getter(nodeProto, 'textContent');
 const attrOf = (el: Element, name: string): string | null => elementProto.getAttribute.call(el, name);
-const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? el.querySelectorAll(selector) : elementProto.querySelectorAll.call(el, selector))];
+const documentProto = Document.prototype;
+const bodyGetter = getter(documentProto, 'body');
+const titleGetter = getter(documentProto, 'title');
+const activeGetter = getter(documentProto, 'activeElement');
+/** A document's own properties, which named forms, images and embeds can clobber (`<form name="title">`): read through the prototype. */
+export const documentBody = (doc: Document): HTMLElement | null => bodyGetter.call(doc) as HTMLElement | null;
+export const documentTitle = (doc: Document): string => String(titleGetter.call(doc) ?? '');
+export const activeElementOf = (doc: Document): Element | null => activeGetter.call(doc) as Element | null;
+const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
+const contains = (outer: Node, inner: Node): boolean => nodeProto.contains.call(outer, inner);
 const parentOf = (el: Element): Element | null => parentGetter.call(el) as Element | null;
 const tagOf = (el: Element): string => String(tagGetter.call(el));
 const textOf = (el: Element): string => String(textGetter.call(el) ?? '');
@@ -131,7 +140,7 @@ function labeller(): (el: HTMLElement) => string {
     let byFor = byTree.get(root);
     if (!byFor) {
       byFor = new Map();
-      for (const l of root.querySelectorAll<HTMLLabelElement>('label[for]')) {
+      for (const l of (root instanceof Document ? allIn(root, 'label[for]') : [...root.querySelectorAll('label[for]')]) as HTMLLabelElement[]) {
         const id = l.htmlFor;
         const list = byFor.get(id);
         if (list) list.push(l);
@@ -150,7 +159,7 @@ function labeller(): (el: HTMLElement) => string {
       .slice(0, 4);
     const by = clip(
       ids
-        .map((id) => ('getElementById' in root ? root.getElementById(id) : null))
+        .map((id) => (root instanceof Document ? documentProto.getElementById.call(root, id) : root.getElementById(id)))
         .filter((n): n is HTMLElement => n !== null)
         .map((n) => words(n, 100))
         .join(' '),
@@ -197,15 +206,15 @@ export function submitButtonFor(target: Element, password: Element | null, form:
   // one whose words say sign in, sign up, Next or Continue, or the form's only button.
   if (form && !isSubmit(button) && !readsAsSubmit(words) && allIn(form, ANY_BUTTON).length !== 1) return null;
   if (password) {
-    if (button.contains(password)) return null;
+    if (contains(button, password)) return null;
     const controls = (attrOf(button, 'aria-controls') ?? '').split(/\s+/);
     if (password.id && controls.includes(password.id)) return null;
     // The field's own wrapper (a box holding only it and its eye): a button there toggles it.
     const wrapper = parentOf(password);
-    if (wrapper && tagOf(wrapper) !== 'FORM' && wrapper.contains(button) && allIn(wrapper, 'input, select, textarea').length === 1) return null;
+    if (wrapper && tagOf(wrapper) !== 'FORM' && contains(wrapper, button) && allIn(wrapper, 'input, select, textarea').length === 1) return null;
     if (!form) {
       const scope = formlessScope(password);
-      if (!scope || !scope.contains(button)) return null;
+      if (!scope || !contains(scope, button)) return null;
     }
   }
   return button;
@@ -229,7 +238,7 @@ function formWords(doc: Document, form: HTMLFormElement | null, firstPassword: E
   // A form a page has made odd enough to throw (a getter that throws, say) is read without words, not dropped.
   try {
     // A formless form's buttons are those near its password field, else the page's.
-    const scope = form ?? (firstPassword && formlessScope(firstPassword)) ?? doc.body;
+    const scope = form ?? (firstPassword && formlessScope(firstPassword)) ?? documentBody(doc);
     const all = scope ? allIn(scope, BUTTONS).slice(0, 40) : [];
     const buttons = all.map(buttonText).filter(Boolean);
     const submits = (form ? all.filter(isSubmit) : all.filter((b) => tagOf(b) !== 'A')).map(buttonText).filter(Boolean).slice(0, 5);
@@ -246,10 +255,10 @@ function formWords(doc: Document, form: HTMLFormElement | null, firstPassword: E
       submits,
       headings,
       attrs: form ? clip(['id', 'name', 'class', 'action'].map((k) => attrOf(form, k) ?? '').join(' '), 300) : '',
-      title: clip(doc.title, 120),
+      title: clip(documentTitle(doc), 120),
     };
   } catch {
-    return { ...NO_WORDS_AT_ALL, title: clip(doc.title, 120) };
+    return { ...NO_WORDS_AT_ALL, title: clip(documentTitle(doc), 120) };
   }
 }
 
@@ -269,7 +278,7 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
   };
   const groups = new Map<HTMLFormElement | null, { fields: PasswordField[]; elements: HTMLElement[] }>();
   let seen = 0;
-  const controls = (options.only ?? doc.querySelectorAll('input, select, textarea')) as Iterable<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
+  const controls = (options.only ?? allIn(doc, 'input, select, textarea')) as Iterable<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
   for (const el of controls) {
     if (++seen > ASSISTANT_FORM_SCAN || now() - started > ASSISTANT_FORM_SCAN_MS) break;
     const type = controlType(el);

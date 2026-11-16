@@ -8,7 +8,9 @@
  *   candidate only after typing in it, at most once a second.
  * - Buttons: a `type="button"` that signs in counts; a show-password eye doesn't.
  * - Fields added in a loop: `forms` at most once a frame.
- * - A form whose properties a page clobbered (`<input name="childNodes">`) doesn't stop detection.
+ * - A smooth scroll: focus at most every 100 ms, and the last one is the field's final box.
+ * - A form or document whose properties a page clobbered (`<input name="childNodes">`,
+ *   `<form name="addEventListener">`) doesn't stop detection.
  */
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
@@ -174,4 +176,40 @@ test('a form whose own properties a page clobbered doesn\'t stop detection', asy
   // The scan ran when the agent started: its first forms message names the real form's password.
   const reported = (await a.of('forms')).flatMap((m) => m['forms'] as Record<string, unknown>[]);
   expect(reported).toContainEqual(expect.objectContaining({ kind: 'sign-in', password: { type: 'password', id: 'p', name: 'pw' } }));
+});
+
+test('a smooth scroll: focus at most every 100 ms, and the last one is where the field ends up', async ({ page }) => {
+  const a = await open(page, `${SIGN_IN}<div style="height:3000px"></div>`);
+  await page.focus('#p');
+  await a.settle();
+  await a.clear();
+  const started = Date.now();
+  for (let i = 0; i < 30; i++) {
+    await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => (window.scrollBy(0, 5), done()))));
+  }
+  const ms = Date.now() - started;
+  await page.waitForTimeout(250);
+  const focus = await a.of('focus');
+  const box = await page.evaluate(() => {
+    const r = document.getElementById('p')!.getBoundingClientRect();
+    return { x: r.left, y: r.top, width: r.width, height: r.height };
+  });
+  expect(focus.length).toBeGreaterThan(0);
+  expect(focus.at(-1)!['rect']).toEqual(box);
+  // Within the rate main allows (20 a second, a burst of 10): at most one every 100 ms, and the trailing one.
+  expect(focus.length).toBeLessThanOrEqual(Math.ceil(ms / 100) + 2);
+});
+
+test("a document whose own properties a page clobbered doesn't stop detection", async ({ page }) => {
+  const a = await open(
+    page,
+    '<form name="addEventListener"></form><form name="querySelectorAll"></form><form name="activeElement"></form><img name="title" alt=""><img name="body" alt="">' +
+      '<form id="real"><input id="u" name="user" aria-label="Username"><input id="p" name="pw" type="password" aria-label="Password"><button>Log in</button></form>',
+  );
+  const reported = (await a.of('forms')).flatMap((m) => m['forms'] as Record<string, unknown>[]);
+  expect(reported).toContainEqual(expect.objectContaining({ kind: 'sign-in', password: { type: 'password', id: 'p', name: 'pw' } }));
+  // Its listeners are on: focus is reported.
+  await page.focus('#p');
+  await a.settle();
+  expect((await a.of('focus')).at(-1)).toMatchObject({ role: 'current-password' });
 });

@@ -38,6 +38,9 @@ import { SETTLE_MS, SubmissionTracker, type SavingOutcome } from './saving';
 /** The sentinel's registration id on each session. */
 export const SENTINEL_ID = 'chord-passwords';
 
+/** Chromium's net error for a navigation that was cancelled or replaced. */
+const ERR_ABORTED = -3;
+
 /**
  * Each page's messages to the detector: `burst` at once, then `perSecond`. A person focusing fields
  * and signing in sends a few a second; a page moving focus in a loop is held to this.
@@ -224,13 +227,14 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       focusShown = false;
       emit(tracker.navigated(code));
     });
-    // A navigation that never commits (an aborted one, a download, a 204, a mailto: link): back to waiting on the form.
-    contents.on('did-fail-load', (_event, _code, _description, _url, isMainFrame) => {
-      if (isMainFrame) emit(tracker.navigationFailed());
-    });
-    contents.on('did-fail-provisional-load', (_event, _code, _description, _url, isMainFrame) => {
-      if (isMainFrame) emit(tracker.navigationFailed());
-    });
+    // A navigation that failed without committing: back to waiting on the form. Not ERR_ABORTED (-3): an aborted
+    // navigation's late failure can arrive after another has replaced it. One aborted with nothing after it ends
+    // at did-stop-loading, below.
+    const failed = (code: number, isMainFrame: boolean) => {
+      if (isMainFrame && code !== ERR_ABORTED) emit(tracker.navigationFailed());
+    };
+    contents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => failed(code, isMainFrame));
+    contents.on('did-fail-provisional-load', (_event, code, _description, _url, isMainFrame) => failed(code, isMainFrame));
     contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
       if (isMainFrame) emit(tracker.navigatedInPage());
     });

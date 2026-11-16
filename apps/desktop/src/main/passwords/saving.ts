@@ -44,6 +44,8 @@ interface Held {
   submitted: boolean;
   /** The last request status seen after the submit. */
   status: number | null;
+  /** A request after the submit answered 400 or more. Sticky: a later 2xx (a captcha refreshed, error strings fetched) doesn't clear it. */
+  error: boolean;
   /** The agent's watch answered while a navigation was under way: applied if that navigation never commits. */
   watched: 'gone' | 'still' | null;
 }
@@ -68,7 +70,7 @@ const sameField = (held: PasswordsFieldSignature | null, shown: PasswordsFieldSi
   return held.id === shown.id && held.name === shown.name;
 };
 /** A request error after the submit: no success, whatever follows. */
-const vetoed = (held: Held) => held.status !== null && held.status >= 400;
+const vetoed = (held: Held) => held.error;
 
 const hintOf = (status: number | null): ResponseHint => (status === null ? null : status < 400 ? 'response-ok' : 'response-error');
 
@@ -92,7 +94,17 @@ export class SubmissionTracker {
     // A new candidate for the same form keeps its submit (`blur` then `submit`, or the other way round).
     const already = same && before.submitted;
     const submitted = candidate.signal !== 'blur' || already;
-    this.held = { candidate, origin, at: this.now(), submitted, status: same ? before.status : null, watched: same && already ? before.watched : null };
+    // A new submit (a corrected retry) starts afresh: the last attempt's 401 isn't this one's.
+    const carry = same && (already || candidate.signal === 'blur');
+    this.held = {
+      candidate,
+      origin,
+      at: this.now(),
+      submitted,
+      status: carry ? before.status : null,
+      error: carry ? before.error : false,
+      watched: same && already ? before.watched : null,
+    };
     // One submit is one `submitted`, however many signals it made. A second submit of the same form
     // while the first is still undecided (within the agent's 10 s watch) emits nothing either: the
     // save card's phase decides what a resubmit means.
@@ -102,7 +114,9 @@ export class SubmissionTracker {
 
   hint(formId: string, status: number): void {
     const held = this.current();
-    if (held && held.submitted && held.candidate.formId === formId) held.status = status;
+    if (!held || !held.submitted || held.candidate.formId !== formId) return;
+    held.status = status;
+    if (status >= 400) held.error = true;
   }
 
   /** The page's credential forms now: from the new document, for the reappeared-form check. */
