@@ -185,28 +185,53 @@ describe('page_diagnostics: what each kind of event becomes', () => {
 
   // A readable page holding a frame of a *Never read* site (mail.example.com inside www.example.com): that frame's problems stay out.
   describe('a Never read site’s frame inside the page', () => {
-    const never = { sites: ['mail.example.com'], origins: { 1: 'https://www.example.com', 7: 'https://mail.example.com' } };
-    const error = (extra: object): DiagnosticsEvent => ({ kind: 'console', call: { type: 'error', args: [{ type: 'string', value: 'x' }], ...extra } });
+    const page = { origin: 'https://www.example.com', frameId: 'top' };
+    const contexts = {
+      1: page,
+      7: { origin: 'https://mail.example.com', frameId: 'mail' },
+      // An extension's content script in the mail frame: the frame's, whatever its own origin.
+      8: { origin: 'chrome-extension://abc', frameId: 'mail' },
+      // The same extension in the page: the page's.
+      9: { origin: 'chrome-extension://abc', frameId: 'top' },
+    };
+    const never = { sites: ['mail.example.com'], contexts };
+    const error = (extra: object): DiagnosticsEvent => ({ kind: 'console', call: { type: 'error', args: [{ type: 'string', value: 'x' }], executionContextId: 1, ...extra } });
+    const thrown = (extra: object): DiagnosticsEvent => ({ kind: 'exception', thrown: { exceptionDetails: { text: 'Uncaught', executionContextId: 1, ...extra } } });
+    const failed = (url: string): DiagnosticsEvent => ({ kind: 'log', entry: { source: 'network', level: 'error', text: 'net::ERR_FAILED', url } });
     it.each<[string, DiagnosticsEvent, boolean]>([
-      ['the page’s own console call', error({ executionContextId: 1 }), true],
+      ['the page’s own console call', error({}), true],
+      ['the page’s own exception', thrown({}), true],
+      ['an extension’s content script in the page', error({ executionContextId: 9 }), true],
       ['a console call in the frame (its script context)', error({ executionContextId: 7 }), false],
+      ['an extension’s content script in the frame', error({ executionContextId: 8 }), false],
       ['a console call whose stack runs through the frame’s script', error({ stackTrace: { callFrames: [{ url: 'https://www.example.com/a.js' }, { url: 'https://mail.example.com/inbox.js?s=1' }] } }), false],
-      ['an exception in the frame', { kind: 'exception', thrown: { exceptionDetails: { text: 'Uncaught', executionContextId: 7 } } }, false],
-      ['an exception at the frame’s address', { kind: 'exception', thrown: { exceptionDetails: { text: 'Uncaught', url: 'https://mail.example.com/x.js' } } }, false],
-      ['a failed request to the site', { kind: 'log', entry: { source: 'network', level: 'error', text: 'net::ERR_FAILED', url: 'https://mail.example.com/api' } }, false],
+      ['an exception in the frame', thrown({ executionContextId: 7 }), false],
+      ['an exception at the frame’s address', thrown({ url: 'https://mail.example.com/x.js' }), false],
       ['a blob the frame made', error({ stackTrace: { callFrames: [{ url: 'blob:https://mail.example.com/1f2e' }] } }), false],
-      ['a failed request elsewhere', { kind: 'log', entry: { source: 'network', level: 'error', text: 'net::ERR_FAILED', url: 'https://cdn.example.net/a.js' } }, true],
-      ['eval’d code and an extension’s script: not a site', error({ stackTrace: { callFrames: [{ url: '' }, { url: 'chrome-extension://abc/c.js' }] } }), true],
-      ['a context Chord wasn’t told about', error({ executionContextId: 99 }), true],
+      // Fails closed: a removed or reloaded frame's replayed exception has a context nobody named, and could be the frame's.
+      ['an exception in a context Chord wasn’t told about, at a CDN', thrown({ executionContextId: 99, url: 'https://cdn.example.net/lib.js' }), false],
+      ['an exception in context 0', thrown({ executionContextId: 0 }), false],
+      ['a console call with no context', error({ executionContextId: undefined }), false],
+      ['eval’d code and an extension’s script in the page: not a site', error({ stackTrace: { callFrames: [{ url: '' }, { url: 'chrome-extension://abc/c.js' }] } }), true],
+      // No Log entry says which frame it came from: the frame's failed request to another host looks like the page's.
+      ['a failed request to the site', failed('https://mail.example.com/api'), false],
+      ['a failed request to another host, with the frame in the page', failed('https://api.mailcdn.net/v1/messages/123'), false],
     ])('%s', (_, event, kept) => {
       expect(diagnosticsEntries([event], {}, never).entries).toHaveLength(kept ? 1 : 0);
       // With no Never read sites, nothing is left out.
-      expect(diagnosticsEntries([event], {}, { sites: [], origins: never.origins }).entries).toHaveLength(1);
+      expect(diagnosticsEntries([event], {}, { sites: [], contexts }).entries).toHaveLength(1);
+    });
+
+    it('without such a frame in the page, its Log entries are kept', () => {
+      const pageOnly = { sites: ['mail.example.com'], contexts: { 1: page } };
+      expect(diagnosticsEntries([failed('https://api.mailcdn.net/v1/messages/123')], {}, pageOnly).entries).toHaveLength(1);
+      expect(diagnosticsEntries([failed('https://mail.example.com/api')], {}, pageOnly).entries).toHaveLength(0);
     });
 
     it('keeps the context through shrinkEvent', () => {
       expect(diagnosticsEntries([shrinkEvent(error({ executionContextId: 7 }))], {}, never).entries).toEqual([]);
-      expect(diagnosticsEntries([shrinkEvent({ kind: 'exception', thrown: { exceptionDetails: { text: 'Uncaught', executionContextId: 7 } } })], {}, never).entries).toEqual([]);
+      expect(diagnosticsEntries([shrinkEvent(error({}))], {}, never).entries).toHaveLength(1);
+      expect(diagnosticsEntries([shrinkEvent(thrown({ executionContextId: 7 }))], {}, never).entries).toEqual([]);
     });
   });
 

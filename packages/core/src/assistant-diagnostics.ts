@@ -312,11 +312,12 @@ const INITIATOR_TYPES: Record<string, string> = {
 export function diagnosticsEntries(
   events: readonly DiagnosticsEvent[],
   types: Readonly<Record<string, string>> = {},
-  never: NeverFrames = { sites: [], origins: {} },
+  never: NeverFrames = { sites: [], contexts: {} },
 ): { entries: DiagnosticsEntry[]; total: number } {
   const all: { at: number; entry: DiagnosticsEntry }[] = [];
+  const fromNever = neverJudge(never);
   for (const e of events) {
-    if (fromNeverSite(e, never)) continue;
+    if (fromNever(e)) continue;
     if (e.kind === 'log') {
       const { entry } = e;
       if (entry.level !== 'error' && entry.level !== 'warning') continue;
@@ -352,14 +353,26 @@ export function diagnosticsEntries(
   return { entries: sorted.slice(-DIAGNOSTICS_MAX_ENTRIES).map((x) => x.entry), total: sorted.length };
 }
 
+/** A script context the read was told about (Runtime.executionContextCreated): whose it is, and in which frame. */
+export interface DiagnosticsContext {
+  origin: string;
+  frameId?: string;
+}
+
 /**
- * The *Never read* sites (ARCHITECTURE.md §11.3), and each script context's origin from the read
- * (Runtime.executionContextCreated): a page that's readable can hold a frame of a site that isn't
- * (`mail.example.com` inside `www.example.com`), and that frame's problems are left out.
+ * The *Never read* sites (ARCHITECTURE.md §11.3), and the script contexts the read was told about, by id. A
+ * readable page can hold a same-site frame of a site that isn't (`mail.example.com` inside `www.example.com`),
+ * and with any *Never read* sites set, the rule fails closed:
+ * - an event at such an address, or with any frame of its stack there, is left out;
+ * - a console call or exception is kept only from a context Chord was told about, in a frame that isn't such a
+ *   site's: an unknown context (0, or a frame since removed or reloaded) could be anyone's, and every context in
+ *   a *Never read* frame (an extension's content script there too) is that frame's;
+ * - while a *Never read* frame is in the page, no `Log` entry is kept: none says which frame it came from, so a
+ *   failed request the frame made to another host can't be told from the page's.
  */
 export interface NeverFrames {
   sites: readonly string[];
-  origins: Readonly<Record<number, string>>;
+  contexts: Readonly<Record<number, DiagnosticsContext>>;
 }
 
 /** Whether an address is a *Never read* site's. Addresses that aren't a site's (eval'd code, `about:`, an extension's) aren't. */
@@ -370,13 +383,23 @@ function onNeverSite(address: string | undefined, sites: readonly string[]): boo
   return /^(https?|file):/i.test(url) && isNeverReadable(url, sites);
 }
 
-/** Whether the event came from, or names, a frame of a *Never read* site: its script context, its address, any frame of its stack. */
-function fromNeverSite(e: DiagnosticsEvent, never: NeverFrames): boolean {
-  const trace = e.kind === 'log' ? e.entry.stackTrace : e.kind === 'console' ? e.call.stackTrace : e.thrown.exceptionDetails?.stackTrace;
-  const url = e.kind === 'log' ? e.entry.url : e.kind === 'exception' ? e.thrown.exceptionDetails?.url : undefined;
-  const context = e.kind === 'console' ? e.call.executionContextId : e.kind === 'exception' ? e.thrown.exceptionDetails?.executionContextId : undefined;
-  const addresses = [url, context === undefined ? undefined : never.origins[context], ...(trace?.callFrames ?? []).map((f) => f.url)];
-  return addresses.some((a) => onNeverSite(a, never.sites));
+/** Which events NeverFrames leaves out. */
+function neverJudge({ sites, contexts }: NeverFrames): (e: DiagnosticsEvent) => boolean {
+  if (!sites.length) return () => false;
+  const known = Object.values(contexts);
+  const neverFrames = new Set(known.filter((c) => c.frameId !== undefined && onNeverSite(c.origin, sites)).map((c) => c.frameId));
+  const neverInPage = known.some((c) => onNeverSite(c.origin, sites));
+  const allowedContext = (id: number | undefined) => {
+    const c = id ? contexts[id] : undefined;
+    return Boolean(c && !onNeverSite(c.origin, sites) && !(c.frameId !== undefined && neverFrames.has(c.frameId)));
+  };
+  return (e) => {
+    const trace = e.kind === 'log' ? e.entry.stackTrace : e.kind === 'console' ? e.call.stackTrace : e.thrown.exceptionDetails?.stackTrace;
+    const url = e.kind === 'log' ? e.entry.url : e.kind === 'exception' ? e.thrown.exceptionDetails?.url : undefined;
+    if ([url, ...(trace?.callFrames ?? []).map((f) => f.url)].some((a) => onNeverSite(a, sites))) return true;
+    if (e.kind === 'log') return neverInPage;
+    return !allowedContext(e.kind === 'console' ? e.call.executionContextId : e.thrown.exceptionDetails?.executionContextId);
+  };
 }
 
 /** The activity line's detail: "2 errors · 1 warning · 2 failed requests", or "No problems". */

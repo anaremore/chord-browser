@@ -116,18 +116,23 @@ describe('page_diagnostics reads a page once and lets go', () => {
     expect(shared).toEqual(['attach', 'detach', 'attach', 'detach', 'attach', 'detach']);
   });
 
-  it('names each script context’s origin (the page’s frames), from Runtime.enable', async () => {
+  it('names each script context’s origin and frame (the page’s frames, an extension’s in them), from Runtime.enable', async () => {
     const debug = new FakeDebugger('replay');
     const send = debug.sendCommand.bind(debug);
     debug.sendCommand = (method: string) => {
       if (method === 'Runtime.enable') {
-        debug.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 1, origin: 'https://www.example.com' } });
-        debug.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 7, origin: 'https://mail.example.com' } });
+        debug.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 1, origin: 'https://www.example.com', auxData: { frameId: 'top', isDefault: true } } });
+        debug.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 7, origin: 'https://mail.example.com', auxData: { frameId: 'mail', isDefault: true } } });
+        debug.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 8, origin: 'chrome-extension://abc', auxData: { frameId: 'mail', isDefault: false } } });
       }
       return send(method);
     };
     const read = await readDiagnostics(page(debug));
-    expect(read.ok && read.origins).toEqual({ 1: 'https://www.example.com', 7: 'https://mail.example.com' });
+    expect(read.ok && read.contexts).toEqual({
+      1: { origin: 'https://www.example.com', frameId: 'top' },
+      7: { origin: 'https://mail.example.com', frameId: 'mail' },
+      8: { origin: 'chrome-extension://abc', frameId: 'mail' },
+    });
     // Contexts aren't problems.
     expect(read.ok && read.events.map((e) => e.kind)).toEqual(['log', 'console']);
   });
@@ -138,12 +143,17 @@ describe('page_diagnostics reads a page once and lets go', () => {
     ['a navigation started before the read, arriving during it', 'did-navigate', {}, false],
     ['the address changing inside the document (pushState): its events are the same page’s', 'did-start-navigation', { isMainFrame: true, isSameDocument: true }, true],
     ['a frame inside the page loading again', 'did-start-navigation', { isMainFrame: false, isSameDocument: false }, true],
+    // From the debugger itself, in order with the page's events.
+    ['the page’s contexts cleared (its main frame went to another document)', 'Runtime.executionContextsCleared', {}, false],
   ] as const)('%s', async (_, event, details, ok) => {
     const debug = new FakeDebugger('replay');
     const events = new EventEmitter();
     const send = debug.sendCommand.bind(debug);
     debug.sendCommand = (method: string) => {
-      if (method === 'Runtime.enable') events.emit(event, details);
+      if (method === 'Runtime.enable') {
+        if (event.startsWith('Runtime.')) debug.emit('message', {}, event, details);
+        else events.emit(event, details);
+      }
       return send(method);
     };
     const read = await readDiagnostics(page(debug, undefined, events));

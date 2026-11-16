@@ -12,8 +12,8 @@
  * Chord can't attach says so instead of returning nothing.
  *
  * Another document during the read (a reload, even to the same address) is a
- * refusal, so two pages' events never mix; each script context's origin comes
- * back with the events, so a *Never read* site's frame inside the page is left
+ * refusal, so two pages' events never mix; each script context's origin and frame
+ * come back with the events, so a *Never read* site's frame inside the page is left
  * out (core's NeverFrames).
  *
  * Nothing here waits on the page without a limit (ARCHITECTURE.md §1, rule 1):
@@ -21,7 +21,7 @@
  * detaches at once. Debugger work is one at a time per page (debugger-queue.ts),
  * shared with screenshots, so two clients never detach each other.
  */
-import { shrinkEvent, type CdpConsoleCall, type CdpException, type CdpLogEntry, type DiagnosticsEvent } from '@chord/core';
+import { shrinkEvent, type CdpConsoleCall, type CdpException, type CdpLogEntry, type DiagnosticsContext, type DiagnosticsEvent } from '@chord/core';
 import type { WebContents } from 'electron';
 import { withDebugger } from '../debugger-queue';
 import { PAGE_CALL_MS, pageCall, pageOutcome } from '../page-call';
@@ -38,8 +38,8 @@ const TYPES_SCRIPT = `(() => { const out = {}; for (const e of performance.getEn
 /** The refusal when the page loaded again, or went somewhere else, while it was read. */
 export const NAVIGATED = 'The page loaded again or went to another page while Chord was reading it. Ask the user to ask again once it has loaded.';
 
-/** `origins`: each script context's origin (a frame's, an extension's), so a *Never read* site's frame inside the page is left out (NeverFrames). */
-export type DiagnosticsRead = { ok: true; events: DiagnosticsEvent[]; types: Record<string, string>; origins: Record<number, string> } | { ok: false; why: string };
+/** `contexts`: each script context's origin and frame (a frame's own, an extension's in it), so a *Never read* site's frame inside the page is left out (NeverFrames). */
+export type DiagnosticsRead = { ok: true; events: DiagnosticsEvent[]; types: Record<string, string>; contexts: Record<number, DiagnosticsContext> } | { ok: false; why: string };
 
 /** What of a page's WebContents the read uses (a fake in the unit tests). */
 export type DiagnosticsContents = Pick<WebContents, 'isDestroyed' | 'executeJavaScriptInIsolatedWorld' | 'on' | 'off'> & {
@@ -63,7 +63,7 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
     }
   }
   const events: DiagnosticsEvent[] = [];
-  const origins: Record<number, string> = {};
+  const contexts: Record<number, DiagnosticsContext> = {};
   // Cut to size as each arrives (each argument and field to its own limit): a page can log megabytes at a time.
   // The ceiling keeps the first events, not the newest. Chromium replays at most about 1,000 console and 1,000 log
   // entries, so the replay stays under it; entries the page logs during the read may be dropped.
@@ -71,8 +71,15 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
     if (sessionId) return;
     // Runtime.enable names every script context (each frame's) before it replays their console calls.
     if (method === 'Runtime.executionContextCreated') {
-      const context = (params as { context?: { id?: unknown; origin?: unknown } }).context;
-      if (typeof context?.id === 'number' && typeof context.origin === 'string') origins[context.id] = context.origin.slice(0, 2048);
+      const context = (params as { context?: { id?: unknown; origin?: unknown; auxData?: { frameId?: unknown } } }).context;
+      if (typeof context?.id !== 'number' || typeof context.origin !== 'string') return;
+      const frameId = context.auxData?.frameId;
+      contexts[context.id] = { origin: context.origin.slice(0, 2048), ...(typeof frameId === 'string' ? { frameId: frameId.slice(0, 256) } : {}) };
+      return;
+    }
+    // The page's contexts all went (its main frame went to another document): noticed in order with its events.
+    if (method === 'Runtime.executionContextsCleared') {
+      navigated = true;
       return;
     }
     if (events.length >= DIAGNOSTICS_MAX_EVENTS) return;
@@ -112,7 +119,7 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
     if (!asked.ok) return { ok: false, why: 'timedOut' in asked ? 'The page took too long to answer.' : `The page didn't answer (${asked.error}).` };
     const types = await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: TYPES_SCRIPT }]) as Promise<unknown>, {}, PAGE_CALL_MS);
     if (navigated) return { ok: false, why: NAVIGATED };
-    return { ok: true, events, types: types && typeof types === 'object' ? (types as Record<string, string>) : {}, origins };
+    return { ok: true, events, types: types && typeof types === 'object' ? (types as Record<string, string>) : {}, contexts };
   } finally {
     over = true;
     debug.off('message', onMessage);
