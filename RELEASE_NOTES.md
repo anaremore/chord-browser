@@ -20,7 +20,6 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 - **A long Pinned scrolls on its own.** Pinned stops at half the sidebar and scrolls, its lower edge fading while there's more below, so Today always has the rest. Before, a Pinned taller than the window ran under the chord switcher, hid Today, and its last tabs couldn't be reached. A Pinned that fits looks as it did, and each chord keeps where you'd scrolled.
   - With 5,000 pinned tabs, switching to their chord no longer stalls for about 2 seconds, and Chord's window is ready in less than half the time.
 - **Security.** Updates Electron to 45.3.2 (Chromium 156.0.8078.100), which fixes security issues in Chromium and the components it uses. Update as soon as you can.
-- **Windows on Arm has its installer again.** 0.10.1 was published without one.
 
 ## 0.10.2 · security · 2026-11-16
 
