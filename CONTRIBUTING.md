@@ -18,6 +18,8 @@ pnpm typecheck
 pnpm lint
 ```
 
+Tests make throwaway profiles and folders in the system temp folder and remove them when they finish. To keep them off your system drive, set `CHORD_TEST_TEMP` to a folder on another drive; unit and E2E runs then make their folders there.
+
 ## Running E2E without windows
 
 `pnpm --filter @chord/desktop test:e2e` opens dozens of real Chord windows, which take focus while they work. To run the suite out of sight, run it in a Linux container on a virtual display, the way CI's Linux jobs do:

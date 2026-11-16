@@ -2,6 +2,10 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.10.1 · security · 2026-11-15
+
+**Security.** Updates Electron to 45.3.2 (Chromium 156.0.8078.100), which fixes security issues in Chromium and the components it uses. Update as soon as you can.
+
 ## 0.10.0 · preview · 2026-11-12
 
 - **Back, Forward and Reload sit beside the address** on Windows and Linux. With the sidebar showing, they're at its top right, next to the address, instead of beside the sidebar button. Settings → Appearance → *Keep Back, Forward and Reload beside the address* puts them back.
