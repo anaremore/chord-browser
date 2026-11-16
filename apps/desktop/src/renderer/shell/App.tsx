@@ -48,6 +48,7 @@ import { Announcer, announce } from './announce';
 import { cycleRegion, trackRegions } from './regions';
 import type { ToastStore } from './toast-store';
 import { useChordSwipe, type PaneMotion } from './useChordSwipe';
+import { forgetLists } from './useListWindow';
 import { usePreviewHover } from './usePreviewHover';
 
 /** What the frame shows when a page didn't load (DESIGN.md §9), instead of a blank page. */
@@ -467,6 +468,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const assistantSlide = { enter: assistantEnter, exit: assistantEnter === INSTANT ? INSTANT : { duration: durations.fadeBase / 1000, ease: 'easeIn' as const } };
   const [chordEdit, setChordEdit] = useState<ChordEdit | null>(null);
   useEffect(() => api.chords.onEdit(setChordEdit), []);
+  // A deleted chord's lists aren't kept where they were scrolled (useListWindow.ts: keys are `<chord>:<list>`).
+  const { chords } = state;
+  useEffect(() => forgetLists((key) => key.slice(0, key.lastIndexOf(':')) in chords), [chords]);
   // The command bar or Peek is open over the window: the drag regions stand down (App.module.css).
   const [overlayShown, setOverlayShown] = useState(false);
   useEffect(() => api.layout.onOverlay(setOverlayShown), []);

@@ -776,6 +776,7 @@ if (!app.requestSingleInstanceLock()) {
           visits: perfVisits,
           pages: devNumber('CHORD_PERF_PAGES') ?? perfVisits,
           pinned: devNumber('CHORD_PERF_PINNED') ?? 0,
+          folders: devNumber('CHORD_PERF_FOLDERS') ?? 0,
           effects: devNumber('CHORD_PERF_EFFECTS') ?? 0,
           homeUrl: HOME_URL,
           newId: () => uuidv7(),

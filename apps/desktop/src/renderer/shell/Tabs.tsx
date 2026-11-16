@@ -7,21 +7,18 @@
  * in the switcher moves the tab there. Every move is committed to main once,
  * on drop.
  *
- * Within a list, dnd-kit reorders rows live. Across lists it doesn't: moving
- * a DOM node into another <ul> behind React's back leaves React (and the exit
- * animation) with a node that's no longer where it put it. Instead the row it
- * would land next to shows where, and on drop React moves it.
- *
- * Today is the exception: its rows make room through React, in the order a
- * drag has them so far, because above 150 rows the list is windowed
- * (DESIGN.md §6.7, virtual.ts) and dnd-kit only knows the rows that are
- * mounted.
+ * Within a list, rows make room through React, in the order a drag has them
+ * so far, not by dnd-kit moving them in the DOM: above 150 rows either list
+ * is windowed (DESIGN.md §6.7, virtual.ts; Pinned scrolls on its own past half
+ * the pane), and dnd-kit only knows the rows that are mounted. Across lists
+ * nothing makes room: the row it would land next to shows where, and on drop
+ * React moves it.
  *
  * Rows aren't Motion components (it costs about as much to mount as the rest
  * of a row): both lists animate their rows themselves, from their indices
  * (today-motion.ts). A row that leaves its list for good (closed, archived,
  * pinned) animates out in its own element, put back where it was; rows that
- * merely scroll out of Today's window just go.
+ * merely scroll out of a list's window just go.
  *
  * Split view (DESIGN.md §8.4): a split is one row; opened, its tabs show
  * under it. A tab dropped on the page goes beside it in a split, and a split's
@@ -68,6 +65,7 @@ import {
   startTransition,
   useState,
   type CSSProperties,
+  type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -89,16 +87,16 @@ import { AssistantReadTabs } from './assistant-context';
 import { EdgeScroller } from './edge-scroll';
 import { useKeys } from './keys';
 import { SPLIT_DROP, splitDropFor, type SplitDrop } from './split-drop';
-import { CHORD_DROP, flattenPinned, levelsFor, MAX_VISUAL_DEPTH, projectDrop, type Drop, type FlatRow } from './tree';
+import { CHORD_DROP, childrenOf, flattenPinned, type Nodes, levelsFor, MAX_VISUAL_DEPTH, projectDrop, type Drop, type FlatRow } from './tree';
 import { useListWindow } from './useListWindow';
-import { grow, inOrder, inSpan, moveId, OVERSCAN, pieces, rowChanges, slotsInOrder, visibleSpan, WINDOW_ABOVE, type Placed, type RowChanges } from './virtual';
+import { grow, inOrder, inSpan, moveId, OVERSCAN, pieces, reconcile, rowChanges, visibleSpan, WINDOW_ABOVE, type Placed, type RowChanges } from './virtual';
 
 const PINNED_ZONE = 'pinned-zone';
 const FAVORITES_ZONE = 'favorites-zone';
 const FAVORITE = 'fav:';
 /** Today's rows (tabs and splits), top to bottom. */
 const todayIds = (state: State, chordId: ChordId) =>
-  children(state, chordId, 'today', null)
+  childrenOf(state, chordId, 'today', null)
     .filter((n) => n.kind !== 'folder')
     .map((n) => n.id);
 /** What each kind of row takes as a drop (constant, so dnd-kit sees the same options every render). */
@@ -121,15 +119,29 @@ interface DragState {
   /** Where a row dragged within Pinned would land, so it can show at that depth. */
   projected: Drop | null;
   /**
-   * Today's rows in the order a drag has them so far (they make room as it
-   * goes), kept after the drop until main has made the move.
+   * A list's rows in the order a drag within it has them so far (they make
+   * room as it goes), kept after the drop until main has made the move.
    */
-  order: TodayOrder | null;
+  order: ListOrder | null;
 }
 
-interface TodayOrder {
+interface ListOrder {
   chordId: string;
+  section: Section;
   ids: readonly string[];
+  /** The row dragged. */
+  moved: string;
+  /** A folder dragged in Pinned: it travels closed, and stays so until main has the move. */
+  hiding: string | null;
+}
+
+/**
+ * A list's rows in the order a drag has them so far (`order`, when it's that
+ * list's), kept up with the rows as they change under it (a folder springing
+ * open); else the rows as they are (`base`).
+ */
+function orderOf(order: ListOrder | null, section: Section, chordId: string, base: readonly string[]): readonly string[] {
+  return order?.chordId === chordId && order.section === section ? reconcile(order.ids, base, order.moved) : base;
 }
 
 const DragContext = createContext<DragState>({ active: null, projected: null, order: null });
@@ -233,14 +245,15 @@ export function SidebarDnd({
           // Live reordering stays within a list (see the note at the top).
           const { source, target } = event.operation;
           if (isSortable(source) && isSortable(target) && source.group !== target.group) event.preventDefault();
-          // Within Today, React makes room: the dragged row moves to where the row under it is.
-          if (isSortable(source) && isSortable(target) && source.group === 'today' && target.group === 'today') {
+          // Within a list, React makes room: the dragged row moves to where the row under it is.
+          if (isSortable(source) && isSortable(target) && source.group === target.group && (source.group === 'today' || source.group === 'pinned')) {
             event.preventDefault();
             const { state: s, chordId: c, drag: d } = latest.current;
-            const ids = d.order?.chordId === c ? d.order.ids : todayIds(s, c);
+            const section = source.group as Section;
+            const ids = orderOf(d.order, section, c, section === 'today' ? todayIds(s, c) : pinnedRows().map((r) => r.id));
             const next = moveId(ids, String(source.id), String(target.id));
             if (next !== ids) {
-              const order = { chordId: c, ids: next };
+              const order = { chordId: c, section, ids: next, moved: String(source.id), hiding: d.active?.type === 'folder' ? d.active.id : null };
               // A second move before React draws the first builds on it.
               latest.current = { ...latest.current, drag: { ...d, order } };
               setDrag((dd) => ({ ...dd, order }));
@@ -321,15 +334,21 @@ export function SidebarDnd({
             return;
           }
 
-          // Within Pinned: where the projection says, at the depth it showed.
+          // Within Pinned: where the projection says, at the depth it showed. The rows stay in the order the drag
+          // left them until main has the move (the move puts it there), so nothing jumps back.
           if (isSortable(source) && from === 'pinned' && (to === 'pinned' || to === null)) {
             const drop = projected ?? projectWithin(nodeId, source.index, position.current.x - position.initial.x);
-            if (drop) void api.state.dispatch({ t: 'node.move', nodeId, section: 'pinned', index: drop.index, parentId: drop.parentId });
+            if (!drop) return;
+            const held = order?.chordId === c && order.section === 'pinned' ? order : null;
+            if (held) setDrag((d) => ({ ...d, order: held }));
+            void api.state
+              .dispatch({ t: 'node.move', nodeId, section: 'pinned', index: drop.index, parentId: drop.parentId })
+              .finally(() => setDrag((d) => (held && d.order === held ? { ...d, order: null } : d)));
             return;
           }
           // Within Today: where it made room. The rows stay in that order until main has the move, so nothing jumps back.
           if (isSortable(source) && from === 'today' && (to === 'today' || to === null)) {
-            const at = order?.chordId === c ? order.ids.indexOf(nodeId) : -1;
+            const at = order?.chordId === c && order.section === 'today' ? order.ids.indexOf(nodeId) : -1;
             if (order && at >= 0) setDrag((d) => ({ ...d, order }));
             void api.state
               .dispatch({ t: 'node.move', nodeId, section: 'today', index: at >= 0 ? at : source.index })
@@ -339,7 +358,7 @@ export function SidebarDnd({
           // Across: above the row it was dropped on, or below if past its middle. The row's place
           // comes from our own order; dnd-kit's index can lag behind after earlier drops.
           if (to === 'today') {
-            const at = children(s, c, 'today', null).findIndex((n) => n.id === targetId);
+            const at = childrenOf(s, c, 'today', null).findIndex((n) => n.id === targetId);
             if (at >= 0) void api.state.dispatch({ t: 'node.move', nodeId, section: 'today', index: at + (below() ? 1 : 0) });
             return;
           }
@@ -655,7 +674,7 @@ interface TabRowProps extends RowBase {
   tab: TabNode;
   live: LiveTab | undefined;
   index: number;
-  /** It shows (in Pinned, or in Today's viewport), or it's being moved: it takes part in drag and drop. */
+  /** It shows (in its list's viewport), or it's being moved: it takes part in drag and drop. */
   shows: boolean;
   section: Section;
   isActive: boolean;
@@ -1207,6 +1226,8 @@ interface TreeKeys {
   dragging: boolean;
   moving: Moving | null;
   setMoving(moving: Moving | null): void;
+  /** A row picked up was moved with a key: it's kept in view where main's move puts it. */
+  moved(): void;
   setRenaming(id: string): void;
   openSplits: ReadonlySet<string>;
   toggleSplit(id: string, open: boolean): void;
@@ -1225,8 +1246,10 @@ function moveKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys, moving: Movi
   if (!node) return ctx.setMoving(null);
   const siblings = children(ctx.state, node.chordId, node.section, node.parentId);
   // React may move the row's element to reorder the list, which takes the focus away: give it back.
-  const move = (index: number, parentId = node.parentId, section = node.section) =>
+  const move = (index: number, parentId = node.parentId, section = node.section) => {
+    ctx.moved();
     void api.state.dispatch({ t: 'node.move', nodeId: node.id, section, index, parentId }).then(() => ctx.focus(node.id));
+  };
   switch (event.key) {
     case 'ArrowUp':
     case 'ArrowDown': {
@@ -1365,20 +1388,26 @@ interface Entry {
   member: boolean;
 }
 
+/** A split's tabs, left to right: `splitMembers` (@chord/core), from the sidebar's index of the nodes (tree.ts). */
+function membersOf(state: Nodes, splitId: string): TabNode[] {
+  const split = state.nodes[splitId];
+  return split?.kind === 'split' ? childrenOf(state, split.chordId, split.section, splitId).filter((n): n is TabNode => n.kind === 'tab') : [];
+}
+
 /** `rows` as drawn, each opened split followed by its tabs (unless a drag is moving rows around them). */
-function withMembers(state: State, rows: readonly Omit<Entry, 'member'>[], openSplits: ReadonlySet<string>, showMembers: boolean): Entry[] {
+function withMembers(state: Nodes, rows: readonly Omit<Entry, 'member'>[], openSplits: ReadonlySet<string>, showMembers: boolean): Entry[] {
   const out: Entry[] = [];
   for (const row of rows) {
     out.push({ ...row, member: false });
     if (row.node.kind !== 'split' || !showMembers || !openSplits.has(row.id)) continue;
-    const members = splitMembers(state, row.id);
+    const members = membersOf(state, row.id);
     members.forEach((m, i) => out.push({ id: m.id, node: m, depth: row.depth + 1, parent: row.id, index: -1, pos: i + 1, size: members.length, member: true }));
   }
   return out;
 }
 
 /** Pinned's rows: each one's place among its siblings in the tree. */
-function pinnedEntries(state: State, rows: readonly FlatRow[]): Omit<Entry, 'member'>[] {
+function pinnedEntries(state: Nodes, rows: readonly FlatRow[]): Omit<Entry, 'member'>[] {
   const sizes = new Map<string | null, number>();
   for (const r of rows) sizes.set(r.parentId, (sizes.get(r.parentId) ?? 0) + 1);
   const seen = new Map<string | null, number>();
@@ -1441,46 +1470,63 @@ export function SidebarTabs({
   // A split's tabs list under its opened row, except while a row is dragged (dnd-kit then moves rows around them).
   const showMembers = !active || active.member;
 
-  // The rows, as drawn: Pinned's tree flattened, and Today in the order a drag has it so far.
-  const pinned = withMembers(state, pinnedEntries(state, flattenPinned(state, chordId, active?.type === 'folder' ? active.id : null)), openSplits, showMembers);
-  const todayNodes = inOrder(
-    children(state, chordId, 'today', null).filter((n) => n.kind !== 'folder'),
-    order?.chordId === chordId ? order.ids : null,
-  );
-  const today = withMembers(
-    state,
-    todayNodes.map((node, index) => ({ id: node.id, node, depth: 0, parent: null, index, pos: index + 1, size: todayNodes.length })),
-    openSplits,
-    showMembers,
-  );
-  const todayAt = new Map(today.map((e, i) => [e.id, i]));
+  // The rows, as drawn: Pinned's tree flattened, and each list in the order a drag has it so far. A dragged folder
+  // travels closed, until main has its move.
+  // Worked out again only when they change, not on every redraw (a scroll redraws once a row): with thousands of
+  // pinned tabs, that's milliseconds.
+  const held = order?.chordId === chordId && order.section === 'pinned' ? order : null;
+  const hiding = active?.type === 'folder' ? active.id : (held?.hiding ?? null);
+  const { nodes } = state;
+  const { pinned, pinnedAt } = useMemo(() => {
+    const at = { nodes };
+    const flat = flattenPinned(at, chordId, hiding);
+    const rows = withMembers(at, pinnedEntries(at, held ? inOrder(flat, orderOf(held, 'pinned', chordId, flat.map((r) => r.id))) : flat), openSplits, showMembers);
+    return { pinned: rows, pinnedAt: new Map(rows.map((e, i) => [e.id, i])) };
+  }, [nodes, chordId, hiding, held, openSplits, showMembers]);
+  const todayOrder = order?.chordId === chordId && order.section === 'today' ? order.ids : null;
+  const { todayNodes, today, todayAt } = useMemo(() => {
+    const at = { nodes };
+    const listed = inOrder(
+      childrenOf(at, chordId, 'today', null).filter((n) => n.kind !== 'folder'),
+      todayOrder,
+    );
+    const rows = withMembers(at, listed.map((node, index) => ({ id: node.id, node, depth: 0, parent: null, index, pos: index + 1, size: listed.length })), openSplits, showMembers);
+    return { todayNodes: listed, today: rows, todayAt: new Map(rows.map((e, i) => [e.id, i])) };
+  }, [nodes, chordId, todayOrder, openSplits, showMembers]);
 
-  // Today's window (DESIGN.md §6.7): above 150 rows, only the rows near the viewport are mounted. The rows past
-  // its edges come a frame after the list mounts (a chord switch): they don't show, so they needn't hold up that frame.
-  const win = useListWindow(ROW);
+  // Each list's window (DESIGN.md §6.7): above 150 rows, only the rows near the viewport are mounted. Today scrolls
+  // in what's left of the pane, Pinned once it reaches its cap. The rows past a window's edges come a frame after the
+  // list mounts (a chord switch): they don't show, so they needn't hold up that frame. Each chord's lists are
+  // where it left them.
+  const win = useListWindow(ROW, `${chordId}:today`, today.length);
+  const pinnedWin = useListWindow(ROW, `${chordId}:pinned`, pinned.length, { capped: true });
   const overscan = useSettled() ? OVERSCAN : 0;
-  const inView = visibleSpan(win.view.top, win.view.height, ROW, today.length);
-  const near = grow(inView, overscan, today.length);
-  const windowed = today.length > WINDOW_ABOVE;
   const [focused, setFocused] = useState<string | null>(null);
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   // Mounted wherever they are: the tab on screen (its pill glides from there, and it's the trees' Tab stop), a row
   // being dragged or moved with the keyboard, and the row with the keyboard (or about to get it).
-  const keep = [activeId, activeId ? (state.nodes[activeId]?.parentId ?? null) : null, active?.id, moving?.id, focused, pendingFocus].flatMap((id) => {
-    const at = id ? todayAt.get(id) : undefined;
-    return at === undefined ? [] : [at];
-  });
-  const drawn = pieces(today.length, windowed ? near : null, keep);
+  const kept = [activeId, activeId ? (state.nodes[activeId]?.parentId ?? null) : null, active?.id, moving?.id, focused, pendingFocus];
+  const windowOf = (count: number, view: { top: number; height: number }, at: ReadonlyMap<string, number>) => {
+    const inView = visibleSpan(view.top, view.height, ROW, count);
+    const near = grow(inView, overscan, count);
+    const keep = kept.flatMap((id) => {
+      const i = id ? at.get(id) : undefined;
+      return i === undefined ? [] : [i];
+    });
+    const windowed = count > WINDOW_ABOVE;
+    return { inView, near, windowed, drawn: pieces(count, windowed ? near : null, keep) };
+  };
+  const { inView, near, windowed, drawn } = windowOf(today.length, win.view, todayAt);
+  const pinnedWindow = windowOf(pinned.length, pinnedWin.view, pinnedAt);
 
   // Where each list's rows were at the last commit (by index, mounted or not) and their elements then (a row that
-  // leaves goes out in its own), where Today sat on screen, and whether a row was dragged: what the rows animate
-  // from (today-motion.ts).
+  // leaves goes out in its own), and where Today sat on screen: what the rows animate from (today-motion.ts).
   const [presence] = useState(() => ({
     today: { slots: todayAt, shown: new Map() } as Placed<HTMLElement>,
-    pinned: { slots: new Map(pinned.map((e, i) => [e.id, i])), shown: new Map() } as Placed<HTMLElement>,
+    pinned: { slots: pinnedAt, shown: new Map() } as Placed<HTMLElement>,
     offset: null as number | null,
     pinnedRows: pinned.length,
-    dragging,
+    pinnedHeight: pinnedWin.view.height,
   }));
   const pinnedList = useRef<HTMLUListElement>(null);
   const todayExits = useRef<HTMLDivElement>(null);
@@ -1500,20 +1546,22 @@ export function SidebarTabs({
     const list = win.list;
     const before = { ...presence };
     // How far Today moved on screen since (Pinned grew or shrank above it): rows that move with it slide too. Only
-    // Pinned moves it, so it's measured only when Pinned's rows change; the first time, on the next frame, with the
-    // rest of that frame's layout (measuring now would lay out a pane that just mounted, mid-commit).
+    // Pinned moves it, so it's measured only when Pinned's rows or height change; the first time, on the next frame,
+    // with the rest of that frame's layout (measuring now would lay out a pane that just mounted, mid-commit). Only
+    // Pinned's rows changing slides Today's: a new height alone (the pane resized, so the cap did) just measures again.
     const measure = () => list?.getBoundingClientRect().top ?? null;
+    const pinnedHeight = pinnedWin.view.height;
+    const rowsChanged = before.pinnedRows !== pinned.length;
     let offset: number | null = null;
-    if (tabMotion === 'on' && before.offset !== null) offset = before.pinnedRows === pinned.length ? before.offset : measure();
+    if (tabMotion === 'on' && before.offset !== null) offset = rowsChanged || before.pinnedHeight !== pinnedHeight ? measure() : before.offset;
     else if (tabMotion === 'on')
       requestAnimationFrame(() => {
         if (presence.offset === null && presence.pinnedRows === pinned.length) presence.offset = measure();
       });
-    const shift = offset !== null && before.offset !== null ? before.offset - offset : 0;
-    const pinnedAt = new Map(pinned.map((e, i) => [e.id, i]));
+    const shift = rowsChanged && offset !== null && before.offset !== null ? before.offset - offset : 0;
     presence.offset = offset;
     presence.pinnedRows = pinned.length;
-    presence.dragging = dragging;
+    presence.pinnedHeight = pinnedHeight;
     presence.today = { slots: todayAt, shown: new Map() };
     presence.pinned = { slots: pinnedAt, shown: new Map() };
     // Which of the rows that left Today went to the archive.
@@ -1521,23 +1569,30 @@ export function SidebarTabs({
     for (const id of before.today.slots.keys()) if (!todayAt.has(id) && takeArchived(id)) archived.add(id);
     // "Animate tab moves" off: rows just change place.
     if (tabMotion === 'off' || !list) return;
-    const { top, height } = win.last.current;
-    // Today: near the viewport only (DESIGN.md §6.7), and while a row is dragged, dnd-kit moves them.
+    const { top } = win.last.current;
+    const pinnedView = pinnedWin.last.current;
+    const shows = (view: { top: number; height: number }) => (slot: number) => (slot + 1) * ROW > view.top && slot * ROW < view.top + view.height;
+    // Near the viewport only (DESIGN.md §6.7), and while a row is dragged, dnd-kit moves them.
     const inToday = rowChanges(rowsIn(list), before.today, todayAt, {
       rowHeight: ROW,
       near: (slot) => inSpan(near, slot),
-      shows: (slot) => (slot + 1) * ROW > top && slot * ROW < top + height,
+      shows: shows(win.last.current),
       shift,
       still: dragging,
       busy,
     });
-    // Pinned (its list is gone with its last row): while a row is dragged, and as it drops, dnd-kit moves Pinned's
-    // rows itself (in the DOM): after that, they're where it left them.
-    const dndMoved = dragging || before.dragging;
+    // Pinned's list is gone with its last row.
     const pinnedRows = pinnedList.current ? rowsIn(pinnedList.current) : [];
-    const inPinned = rowChanges(pinnedRows, before.pinned, pinnedAt, { rowHeight: ROW, near: () => true, shows: () => true, shift: 0, still: dndMoved, busy });
+    const inPinned = rowChanges(pinnedRows, before.pinned, pinnedAt, {
+      rowHeight: ROW,
+      near: (slot) => inSpan(pinnedWindow.near, slot),
+      shows: shows(pinnedView),
+      shift: 0,
+      still: dragging,
+      busy,
+    });
     presence.today = { slots: todayAt, shown: inToday.shown };
-    presence.pinned = { slots: dndMoved ? slotsInOrder(pinnedRows.map(([id]) => id)) : pinnedAt, shown: inPinned.shown };
+    presence.pinned = { slots: pinnedAt, shown: inPinned.shown };
     const quiet = (c: RowChanges<HTMLElement>) => c.gone.length === 0 && c.arrived.length === 0 && c.moved.length === 0;
     // Nothing to show, or a hidden sidebar (minimal mode): nothing animates.
     if ((quiet(inToday) && quiet(inPinned)) || !list.checkVisibility({ visibilityProperty: true })) return;
@@ -1555,29 +1610,61 @@ export function SidebarTabs({
       playExit(todayLayer!, el, slot * ROW - top + shift, kind, flight);
     }
     const pinnedLayer = pinnedExits.current;
-    for (const { el, slot } of pinnedLayer ? inPinned.gone : []) playExit(pinnedLayer!, el, slot * ROW, 'close', null);
+    for (const { el, slot } of pinnedLayer ? inPinned.gone : []) playExit(pinnedLayer!, el, slot * ROW - pinnedView.top, 'close', null);
     for (const [order, el] of inToday.arrived.entries()) enter(el, false, order);
     // A row that came from Today lands in Pinned with a little give (DESIGN.md §6.5, Pin).
     for (const [order, el] of inPinned.arrived.entries()) enter(el, before.today.slots.has(el.dataset['id']!), order);
     for (const { el, dy } of [...inToday.moved, ...inPinned.moved]) slideFrom(el, dy);
   });
 
+  // The tab on screen came to a row of Pinned's that doesn't show (Pinned at its cap): pinned with its key, or
+  // switched to with Ctrl+Tab or the command bar. Pinned scrolls to show it, as the keyboard's moves do. Not when the
+  // chord's lists mount (they're where they were left), not mid-drag or with a row picked up, and not for a click on
+  // one of Pinned's rows (it shows). A Today row clicked and then pinned is scrolled to: it lands at Pinned's end.
+  const activeRow = activeId && !pinnedAt.has(activeId) ? (state.nodes[activeId]?.parentId ?? null) : activeId;
+  const activeInPinned = activeRow !== null && pinnedAt.has(activeRow) ? activeRow : null;
+  const revealed = useRef(activeInPinned);
+  const clicked = useRef<{ id: string; at: number } | null>(null);
+  useLayoutEffect(() => {
+    if (revealed.current === activeInPinned) return;
+    revealed.current = activeInPinned;
+    const click = clicked.current;
+    clicked.current = null;
+    if (activeInPinned === null || dragging || moving || (click?.id === activeInPinned && performance.now() - click.at < 1000)) return;
+    pinnedWin.reveal(pinnedAt.get(activeInPinned)!);
+  });
+
+  // A row picked up and moved with a key stays in view in its list where main's move puts it: the move lands after
+  // the key, sometimes a render after the keyboard was put on the row where it was. Only after a key moved it, so
+  // scrolling away with the wheel, or rows coming and going above it (another window, a page), is left alone.
+  const movingAt = moving ? (pinnedAt.get(moving.id) ?? todayAt.get(moving.id)) : undefined;
+  const movingIn = moving && pinnedAt.has(moving.id) ? pinnedWin : win;
+  const keyMoved = useRef(false);
+  useLayoutEffect(() => {
+    if (!moving) keyMoved.current = false;
+    if (!keyMoved.current || movingAt === undefined) return;
+    keyMoved.current = false;
+    movingIn.reveal(movingAt);
+  }, [moving, movingAt]);
+
   // The keyboard asked for a row that wasn't mounted: now it is.
   useLayoutEffect(() => {
     if (!pendingFocus) return;
-    win.list?.querySelector<HTMLElement>(rowSelector(pendingFocus))?.focus({ preventScroll: true });
+    tree.current?.querySelector<HTMLElement>(rowSelector(pendingFocus))?.focus({ preventScroll: true });
     setPendingFocus(null);
-  }, [pendingFocus, win.list]);
+  }, [pendingFocus]);
 
-  /** Puts the keyboard on a row: in Today, scrolled into view (and mounted) first. */
+  /** Puts the keyboard on a row, scrolled into view in its list (and mounted) first. */
   const focusRow = (id: string) => {
-    const at = todayAt.get(id);
+    const inPinned = pinnedAt.get(id);
+    const at = inPinned ?? todayAt.get(id);
+    const list = inPinned === undefined ? win : pinnedWin;
     if (at === undefined) {
       tree.current?.querySelector<HTMLElement>(rowSelector(id))?.focus();
       return;
     }
-    win.reveal(at);
-    const el = win.list?.querySelector<HTMLElement>(rowSelector(id));
+    list.reveal(at);
+    const el = list.list?.querySelector<HTMLElement>(rowSelector(id));
     if (el) el.focus({ preventScroll: true });
     else setPendingFocus(id);
   };
@@ -1597,9 +1684,10 @@ export function SidebarTabs({
   const pinnedRef = useCallback(
     (el: HTMLUListElement | null) => {
       pinnedList.current = el;
+      pinnedWin.ref(el);
       return pinnedTree.ref(el);
     },
-    [pinnedTree.ref],
+    [pinnedWin.ref, pinnedTree.ref],
   );
 
   const rowFor = (e: Entry, section: Section, at = 0) => {
@@ -1607,14 +1695,14 @@ export function SidebarTabs({
     const base = { depth: e.depth, pos: e.pos, size: e.size, ctx };
     if (e.member && node.kind === 'tab') return <SplitMemberRow key={e.id} tab={node} live={state.live[e.id]} focused={e.id === activeId} {...base} />;
     const drag = { moving: moving?.id === e.id, projected: active?.id === e.id ? projected : null };
-    const shows = section === 'pinned' || inSpan(inView, at) || drag.moving || active?.id === e.id;
+    const shows = inSpan(section === 'pinned' ? pinnedWindow.inView : inView, at) || drag.moving || active?.id === e.id;
     switch (node.kind) {
       case 'tab':
         return <TabRow key={e.id} tab={node} live={state.live[e.id]} index={e.index} shows={shows} section={section} isActive={e.id === activeId} assistantRead={readTabs.has(e.id)} {...drag} {...base} />;
       case 'folder':
         return <FolderRow key={e.id} folder={node} unread={node.collapsed ? countWithin(state, e.id) : null} index={e.index} renaming={renaming === e.id} {...drag} {...base} />;
       case 'split': {
-        const panes = splitMembers(state, e.id);
+        const panes = membersOf(state, e.id);
         return (
           <SplitRow
             key={e.id}
@@ -1634,6 +1722,19 @@ export function SidebarTabs({
     }
   };
 
+  /** A list's rows as its window has them: one flat list of keyed children, so rows keep their elements as it moves. */
+  const rowsOf = (entries: readonly Entry[], pieces: ReturnType<typeof windowOf>['drawn'], section: Section) =>
+    pieces.flatMap((piece, i) =>
+      piece.kind === 'gap'
+        ? [<li key={`gap-${i}`} className={styles.gap} role="none" aria-hidden style={{ blockSize: (piece.last - piece.first + 1) * ROW }} />]
+        : entries.slice(piece.first, piece.last + 1).map((e, i) => rowFor(e, section, piece.first + i)),
+    );
+  /** The row with the keyboard, in either list: it stays mounted wherever its list is scrolled. */
+  const trackFocus = (e: FocusEvent<HTMLElement>) => setFocused((e.target as HTMLElement).closest<HTMLElement>('[data-row]')?.dataset['id'] ?? null);
+  const dropFocus = (e: FocusEvent<HTMLElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(null);
+  };
+
   return (
     <div
       ref={tree}
@@ -1646,6 +1747,7 @@ export function SidebarTabs({
           dragging,
           moving,
           setMoving,
+          moved: () => void (keyMoved.current = true),
           setRenaming,
           openSplits,
           toggleSplit,
@@ -1654,7 +1756,13 @@ export function SidebarTabs({
         })
       }
       // A click drops a row picked up with the keyboard.
-      onPointerDown={() => moving && setMoving(null)}
+      onPointerDown={(e) => {
+        if (moving) setMoving(null);
+        // A row of Pinned's clicked shows already: the tab it opens isn't scrolled to.
+        const row = (e.target as HTMLElement).closest<HTMLElement>('[data-row]');
+        const id = row && pinnedList.current?.contains(row) ? row.dataset['id'] : undefined;
+        clicked.current = id ? { id, at: performance.now() } : null;
+      }}
     >
       {/*
         The rows' one Motion element, the active pill, comes and goes with its row, not with the chord pane around
@@ -1663,8 +1771,23 @@ export function SidebarTabs({
       <PresenceContext.Provider value={null}>
       <div className={styles.pinnedBox}>
         {pinned.length > 0 && (
-          <ul ref={pinnedRef} className={styles.pinnedList} role="tree" aria-label="Pinned" aria-describedby={help}>
-            {pinned.map((e) => rowFor(e, 'pinned'))}
+          <ul
+            ref={pinnedRef}
+            className={styles.pinnedList}
+            // Edge scrolled only while it's at its cap (edge-scroll.ts).
+            data-edge-scroll="capped"
+            role="tree"
+            aria-label="Pinned"
+            aria-describedby={help}
+            data-windowed={pinnedWindow.windowed || undefined}
+            // At its cap with more below: its lower edge fades (DESIGN.md §6.7).
+            data-more={pinnedWin.view.more || undefined}
+            // Its rows overflow it: it scrolls (and clips); below its cap nothing does.
+            data-capped={pinnedWin.view.capped || undefined}
+            onFocus={trackFocus}
+            onBlur={dropFocus}
+          >
+            {rowsOf(pinned, pinnedWindow.drawn, 'pinned')}
           </ul>
         )}
         {/* Rows leaving Pinned go out here, where they were (playExit). */}
@@ -1696,17 +1819,10 @@ export function SidebarTabs({
           aria-label="Today"
           aria-describedby={help}
           data-windowed={windowed || undefined}
-          onFocus={(e) => setFocused((e.target as HTMLElement).closest<HTMLElement>('[data-row]')?.dataset['id'] ?? null)}
-          onBlur={(e) => {
-            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(null);
-          }}
+          onFocus={trackFocus}
+          onBlur={dropFocus}
         >
-          {/* One flat list of keyed children, so rows keep their elements as the window moves. */}
-          {drawn.flatMap((piece, i) =>
-            piece.kind === 'gap'
-              ? [<li key={`gap-${i}`} className={styles.gap} role="none" aria-hidden style={{ blockSize: (piece.last - piece.first + 1) * ROW }} />]
-              : today.slice(piece.first, piece.last + 1).map((e, i) => rowFor(e, 'today', piece.first + i)),
-          )}
+          {rowsOf(today, drawn, 'today')}
         </ul>
         {/* Rows leaving Today go out here, where they were (playExit). */}
         <div ref={todayExits} className={styles.exits} aria-hidden inert />
