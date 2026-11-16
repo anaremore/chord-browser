@@ -1625,7 +1625,7 @@ export class Browser {
    * DevTools' own.
    */
   private runInDevtools(action: ActionId, nodeId: NodeId, contents: WebContents): boolean {
-    const page = this.tabs.get(nodeId)?.webContents;
+    const page = pageOf(this.tabs.get(nodeId));
     switch (action) {
       case 'app.devtools':
         this.devtools.close(nodeId);

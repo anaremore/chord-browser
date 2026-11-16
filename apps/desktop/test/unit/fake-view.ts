@@ -39,6 +39,12 @@ export class FakeContents extends EventEmitter {
   closeDevTools: Mock = vi.fn();
   isDevToolsOpened = () => false;
   isLoading = () => false;
+  isFocused = () => false;
+  getZoomFactor = () => 1;
+  setZoomFactor: Mock = vi.fn();
+  postMessage: Mock = vi.fn();
+  /** A picture of one BGRA pixel, as the frame snapshot takes. */
+  capturePage: Mock = vi.fn(async () => ({ isEmpty: () => false, getScaleFactors: () => [1], getSize: () => ({ width: 1, height: 1 }), toBitmap: () => Buffer.from([1, 2, 3, 255]) }));
   getURL = () => 'http://127.0.0.1/broken';
   getTitle = () => 'Broken';
 }
@@ -51,6 +57,10 @@ export class FakeView {
   }
   setBackgroundColor: Mock = vi.fn();
   setBorderRadius: Mock = vi.fn();
-  setBounds: Mock = vi.fn();
-  setVisible: Mock = vi.fn();
+  private bounds = { x: 0, y: 0, width: 0, height: 0 };
+  getBounds = () => this.bounds;
+  setBounds: Mock = vi.fn((b: { x: number; y: number; width: number; height: number }) => (this.bounds = b));
+  private visible = true;
+  getVisible = () => this.visible;
+  setVisible: Mock = vi.fn((visible: boolean) => (this.visible = visible));
 }

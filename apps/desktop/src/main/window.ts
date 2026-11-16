@@ -461,7 +461,8 @@ export class AppWindow {
     this.focusedPane = focus ? next.indexOf(focus) : 0;
     this.layout();
     if (this.overlayVisible || !focusChanged) return;
-    pageOf(focus ?? this.shell)?.focus();
+    // A page that's gone leaves the keyboard with the shell.
+    (pageOf(focus) ?? pageOf(this.shell))?.focus();
   }
 
   get activeTabContents() {
@@ -656,7 +657,7 @@ export class AppWindow {
     root.addChildView(this.popover, root.children.indexOf(this.preview));
     if (this.overlayVisible) this.showOverlay(false);
     this.layout();
-    pageOf(this.tabView ?? this.shell)?.focus();
+    (pageOf(this.tabView) ?? pageOf(this.shell))?.focus();
     return view;
   }
 
@@ -1003,7 +1004,7 @@ export class AppWindow {
     if (this.peek && seq === this.peekSeq) return;
     this.showOverlay(false);
     const back = dismissed && this.overlayFrom === 'shell' ? this.shell : (this.tabView ?? this.shell);
-    pageOf(back)?.focus();
+    (pageOf(back) ?? pageOf(this.shell))?.focus();
     this.placementChanged();
   }
 
@@ -1015,10 +1016,10 @@ export class AppWindow {
   focusRegion(to: 'page' | 'devtools' | 'popover' | 'shell'): void {
     if (this.window.isDestroyed()) return;
     const tools = this.dockedDevtools(this.focusedPane);
-    if (to === 'popover' && this.popover.getVisible()) pageOf(this.popover)?.focus();
-    else if (to === 'devtools' && tools) pageOf(tools.view)?.focus();
-    else if (to === 'page' && this.tabView?.getVisible()) pageOf(this.tabView)?.focus();
-    else pageOf(this.shell)?.focus();
+    const target =
+      to === 'popover' && this.popover.getVisible() ? pageOf(this.popover) : to === 'devtools' && tools ? pageOf(tools.view) : to === 'page' && this.tabView?.getVisible() ? pageOf(this.tabView) : undefined;
+    // The shell otherwise, or when the region's page is gone.
+    (target ?? pageOf(this.shell))?.focus();
   }
 
   /** Whether a find bar or permission prompt shows over the page (it's one of F6's regions). */

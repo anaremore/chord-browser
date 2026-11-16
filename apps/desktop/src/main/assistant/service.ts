@@ -74,6 +74,7 @@ import { pathToFileURL } from 'node:url';
 import type { Browser } from '../browser';
 import { send } from '../ipc';
 import type { Persistence } from '../persistence';
+import { pageOf } from '../view-page';
 import type { AssistantSession, MadeImage, ProviderError, SessionImage, ToolOutput } from './adapter';
 import { ClaudeSession } from './claude';
 import { CodexSession } from './codex';
@@ -1312,7 +1313,7 @@ export class AssistantService {
     const ref = this.refFor(state, node.id);
     if (tool === 'tab_screenshot') {
       // What's on screen: a tab in reader view shows its article (its page waits, detached, where no picture can be taken).
-      const shot = await screenshot(this.browser.readers.viewFor(node.id)?.webContents ?? contents);
+      const shot = await screenshot(pageOf(this.browser.readers.viewFor(node.id)) ?? contents);
       await this.activity(state, tool, `Looked at “${node.title || safeHost(node.url)}”`, node.url, Boolean(shot));
       return shot ? { image: shot } : refuse('Could not take the picture.');
     }
@@ -1381,8 +1382,8 @@ export class AssistantService {
 
   /** The tab's page, loading it if it's asleep or wasn't opened since launch. */
   private async loadedContents(nodeId: NodeId) {
-    const view = this.browser.tabs.ensure(nodeId);
-    const contents = view?.webContents;
+    // A view whose page is gone (its renderer died) has none to wait on.
+    const contents = pageOf(this.browser.tabs.ensure(nodeId));
     if (!contents) return null;
     if (contents.isLoading()) {
       await new Promise<void>((done) => {
@@ -1409,7 +1410,7 @@ export class AssistantService {
     const node = this.resolveTab(state, args['tab_id']);
     if (!node) return refuse('No such tab. Use the tab id from "Attached:".');
     const windowId = state.windowId;
-    const contents = this.browser.tabs.get(node.id)?.webContents;
+    const contents = pageOf(this.browser.tabs.get(node.id));
     /**
      * Every rule, as things are now: asked before reading, after the approval card (the user may have moved on
      * while it waited), and after the read (the page may have gone somewhere else meanwhile). `at`: the address
@@ -1445,7 +1446,7 @@ export class AssistantService {
     const after = blocked(url);
     if (after) return refuse(after);
     // A frame of a *Never read* site inside the page (mail.example.com in www.example.com): its problems are left out.
-    const { entries, total } = diagnosticsEntries(read.events, read.types, { sites: this.settings.neverSites, origins: read.origins });
+    const { entries, total } = diagnosticsEntries(read.events, read.types, { sites: this.settings.neverSites, contexts: read.contexts });
     state.read.add(node.id);
     const note = total > entries.length ? `The page has ${total} problems; the newest ${entries.length} are here.` : entries.length ? '' : 'Chromium kept no errors, warnings or failed requests for this page since it loaded.';
     await this.activity(state, 'page_diagnostics', `Checked “${title}” for problems`, diagnosticsSummary(entries));
@@ -1491,7 +1492,7 @@ export class AssistantService {
     if (!form) return refuse('Read the form with read_form first.');
     if (form.nodeId !== node.id) return refuse('That isn’t the tab whose form you read. Read its form first.');
     if (state.streaming && state.fillTurn === state.streaming.id) return refuse('You already showed the user values for this message. Wait for their answer.');
-    const contents = this.browser.tabs.get(node.id)?.webContents;
+    const contents = pageOf(this.browser.tabs.get(node.id));
     if (!contents || contents.isDestroyed()) return refuse('That tab could not be read.');
     const mapped = proposedFill(form.read, args, contents.getURL());
     if (!mapped.ok) return refuse('Some values can’t go in this form. Fix them and call propose_fill again.', mapped.problems);
@@ -1541,7 +1542,7 @@ export class AssistantService {
     if (!this.readable(node)) return this.endFill(state, message, 'expired', 'This site can’t be read any more, so nothing was filled.');
     // Another tab in front: the card waits, and says how to go on.
     if (this.activeTab(windowId)?.id !== node.id) return this.noteFill(message, `Go back to “${card.title}” to fill it.`);
-    const contents = this.browser.tabs.get(node.id)?.webContents;
+    const contents = pageOf(this.browser.tabs.get(node.id));
     if (!contents || contents.isDestroyed() || !samePage(meta.read.url, contents.getURL())) return this.endFill(state, message, 'expired', FILL_PROBLEMS.navigated);
     const checked = fillWrites(meta.read, card.fields, edits);
     if (!checked.ok) return this.noteFill(message, checked.problems.join(' '));
@@ -1563,7 +1564,7 @@ export class AssistantService {
     const u = this.fillUndos.get(token);
     if (!u) return;
     this.fillUndos.delete(token);
-    const contents = this.browser.tabs.get(u.nodeId)?.webContents;
+    const contents = pageOf(this.browser.tabs.get(u.nodeId));
     const result = contents && !contents.isDestroyed() && samePage(u.url, contents.getURL()) ? await undoFillPage(contents, token) : null;
     if (!result) return this.toast(u.windowId, { id: `assistant-fill:${u.messageId}`, message: 'Couldn’t undo: the page has moved on' });
     const message = u.state.messages.find((m) => m.id === u.messageId);
@@ -1605,7 +1606,7 @@ export class AssistantService {
       const contents = await this.loadedContents(node.id);
       if (!contents) return;
       // Scroll to the quote and mark it, as find in page does (Chromium's PDF viewer included), in reader view if it's open.
-      const matches = await findMatches(this.browser.readers.viewFor(node.id)?.webContents ?? contents, citation.quote);
+      const matches = await findMatches(pageOf(this.browser.readers.viewFor(node.id)) ?? contents, citation.quote);
       // A PDF quote the viewer can't find as written (a word split across lines): open its page instead.
       // The viewer reads #page= only when it loads, so it reloads there.
       if (!matches && citation.page && !contents.isDestroyed()) {
