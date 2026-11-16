@@ -1,0 +1,242 @@
+{
+  "corpus": "duckduckgo/duckduckgo-autofill@4d5848619462c863d6bb7553cb090fc74b172be2",
+  "rightFiles": 394,
+  "scoredFiles": 458,
+  "failures": {
+    "reddit_signup.html": [
+      "0 username text#regUsername-prevent[username-prevent] → none",
+      "2 password.new password#regPassword-prevent[password-prevent] → none"
+    ],
+    "yahoo_login.html": [
+      "2 password password#-[passwd] → new-password"
+    ],
+    "yahoo_signup.html": [
+      "3 password.new password#usernamereg-password[password] → current-password"
+    ],
+    "playpiknik_login.html": [
+      "0 username text#inp_email[email] → none",
+      "1 username text#inp_confirm_email[confirm_email] → none",
+      "2 password.current text#inp_password[password] → none"
+    ],
+    "playpiknik_signup.html": [
+      "2 password.new text#inp_password[password] → none"
+    ],
+    "nytimes_login_signup.html": [
+      "1 password password#-[hiddenPassword] → none"
+    ],
+    "idme_login.html": [
+      "2 username text#username[username] → none",
+      "3 password password#password[password] → none"
+    ],
+    "hackernews_login_signup.html": [
+      "3 password password#-[pw] → new-password"
+    ],
+    "containerstore_forgot_password.html": [
+      "0 username email#email-password-update[emailAddress] → none"
+    ],
+    "techradar_newsletter.html": [
+      "0 username text#j_id0:theForm:emailInput[j_id0:theForm:emailInput] → none"
+    ],
+    "github_signup.html": [
+      "2 username text#login[user[login]] → none"
+    ],
+    "ign_signup.html": [
+      "0 unknown text#nickname[nickname] → username",
+      "2 password password#password[password] → current-password"
+    ],
+    "mylo_signup.html": [
+      "1 password.new password#password[password] → current-password"
+    ],
+    "ifixit_signup.html": [
+      "0 fullName text#reg-username[reg-username] → username",
+      "1 username text#reg-unique-username[reg-unique-username] → none"
+    ],
+    "fanfiction_signup.html": [
+      "0 username text#-[penname] → none"
+    ],
+    "thermoworks_checkout.html": [
+      "0 emailAddress email#email[email] → username"
+    ],
+    "iqgunder_guest_entry.html": [
+      "0 emailAddress email#-[-] → username"
+    ],
+    "sunlife_login.html": [
+      "2 password password#-[-] → none"
+    ],
+    "boardgamearena_signup.html": [
+      "9 password password#password_input[password] → current-password",
+      "10 username text#username[username] → none"
+    ],
+    "eventbrite_fake-signup.html": [
+      "0 emailAddress email#buyer.N-email[buyer.N-email] → username"
+    ],
+    "www_reddit_com_signup.html": [
+      "4 username text#regUsername[username] → none"
+    ],
+    "mobile_emirates_com_signup.html": [
+      "3 emailAddress email#emailAddress[emailAddress] → username"
+    ],
+    "porkbun_com_login.html": [
+      "0 username text#bypassTwoFactorEmailCode[-] → none"
+    ],
+    "cams_xnxx_com_signup.html": [
+      "1 password password#registration-password-input[login[password]] → current-password"
+    ],
+    "www_networksolutions_com_login.html": [
+      "2 password text#mat-input-2[-] → none"
+    ],
+    "www_singaporeair_com_signup.html": [
+      "11 password.new password#confirmPassword[confirmPassword] → none",
+      "13 password password#membership-2[pin] → none",
+      "15 password password#kf-pin[pin] → current-password",
+      "17 password password#user-password[password] → current-password",
+      "20 password password#forceUpdateCorpPassword[newPassword] → current-password"
+    ],
+    "www_w3_org_signup.html": [
+      "3 username text#w3c_accountsbundle_accountrequeststep1_login[w3c_accountsbundle_accountrequeststep1[login]] → none"
+    ],
+    "www_eporner_com_login.html": [
+      "3 password password#-[haslo] → new-password",
+      "4 password password#-[haslo2] → confirmation-password"
+    ],
+    "www_eporner_com_signup.html": [
+      "1 password password#-[haslo] → current-password"
+    ],
+    "account_my_com_signup.html": [
+      "0 phone text#phone1[phone] → username"
+    ],
+    "accounts_hindustantimes_com_login.html": [
+      "0 username text#lmSsoinput[-] → none"
+    ],
+    "studio_faphouse_com_signup.html": [
+      "4 password password#-[password] → current-password",
+      "6 password password#-[password] → current-password"
+    ],
+    "admissions_sa_ucsb_edu_login.html": [
+      "0 username text#PermWithCheckDigit[PermWithCheckDigit] → none",
+      "1 unknown text#UcApplicationId[UcApplicationId] → username"
+    ],
+    "reg_ebay_com_au_signup.html": [
+      "2 emailAddress text#Email[Email] → username"
+    ],
+    "www_microfocus_com_signup.html": [
+      "8 username (not scanned) → none",
+      "9 password (not scanned) → none",
+      "10 password (not scanned) → none"
+    ],
+    "editor_ettoday_net_login.html": [
+      "1 password password#-[password] → new-password"
+    ],
+    "ipv6_he_net_signup.html": [
+      "1 password password#f_pass[f_pass] → current-password"
+    ],
+    "www_parkingcrew_com_login.html": [
+      "2 username text#email[-] → none"
+    ],
+    "accounts_ukr_net_signup.html": [
+      "0 username text#-[username] → none"
+    ],
+    "lognet_nato_int_login.html": [
+      "1 password password#NewLoginPassword[NewLoginPassword] → new-password"
+    ],
+    "aisjapan_mlit_go_jp_login.html": [
+      "1 password password#-[password] → new-password"
+    ],
+    "www_ingentaconnect_com_signup.html": [
+      "13 password password#password[password] → current-password"
+    ],
+    "websso_iaea_org_login.html": [
+      "2 password password#Password[Password] → new-password",
+      "3 password password#ConfirmPassword[ConfirmPassword] → confirmation-password"
+    ],
+    "www_dianxiaomi_com_signup.html": [
+      "1 password password#exampleInputPassword[password] → current-password"
+    ],
+    "accesuniversitat_gencat_cat_login.html": [
+      "1 password password#-[contrasenya] → new-password"
+    ],
+    "printful_com_login.html": [
+      "3 password password#password2vxtp7[password] → new-password"
+    ],
+    "login_e_taxes_gov_az_login.html": [
+      "1 password password#personalCode[personalCode] → new-password",
+      "3 password password#password1[password1] → confirmation-password"
+    ],
+    "www_e1_ru_signup.html": [
+      "1 password password#-[password] → current-password",
+      "6 password password#-[password] → current-password"
+    ],
+    "access_dotvndns_vn_login.html": [
+      "1 password password#password2[password] → new-password"
+    ],
+    "en_forgeofempires_com_login.html": [
+      "3 password password#registration_password[registration[password]] → new-password"
+    ],
+    "us_forgeofempires_com_signup.html": [
+      "1 password password#login_password[login[password]] → current-password"
+    ],
+    "librarything_com_login.html": [
+      "3 password password#new_formpassword[new_formpassword] → new-password",
+      "4 password password#new_formpassword_confirm[new_formpassword_confirm] → confirmation-password"
+    ],
+    "librarything_com_signup.html": [
+      "1 password password#-[formpassword] → current-password"
+    ],
+    "depositfiles_com_login.html": [
+      "2 password password#password[password] → new-password",
+      "3 password password#re_password[re_password] → confirmation-password"
+    ],
+    "duckduckgo_cloudsave-passphrase.html": [
+      "2 username text#-[-] → none"
+    ],
+    "tigerglobal_com-investors.html": [
+      "2 username text#ctl00_cphMain_ctl00_rptSections_ctl00_ctl00_rptElement_ctl00_ctl00_ucLoginContro[ctl00$cphMain$ctl00$rptSections$ctl00$ctl00$rptElement$ctl00$ctl00$ucLoginContro] → none"
+    ],
+    "namecheap_com-login.html": [
+      "3 username text#-[LoginUserName] → none",
+      "4 password password#-[LoginPassword] → none"
+    ],
+    "namecheap_com-signup.html": [
+      "2 password password#-[LoginPassword] → current-password",
+      "3 username text#ctl00_ctl00_ctl00_ctl00_base_content_web_base_content_home_content_page_content_[ctl00$ctl00$ctl00$ctl00$base_content$web_base_content$home_content$page_content_] → none"
+    ],
+    "ikea_signup-verification.html": [
+      "0 emailAddress email#family-signup-form-email-pre-verification[email] → username"
+    ],
+    "amazon_change-password.html": [
+      "0 password password#ap_password[password] → current-password"
+    ],
+    "twitter_change-password.html": [
+      "0 password password#-[current_password] → current-password"
+    ],
+    "github_change-password.html": [
+      "1 password.new password#user_new_password[user[password]] → none",
+      "3 password.new text#-[required_field_a105] → none"
+    ],
+    "wordpress_change-password.html": [
+      "0 password.new password#password[password] → current-password"
+    ],
+    "twitchtv_signup.html": [
+      "1 password.new password#password-input[-] → current-password",
+      "2 password.new password#password-input-confirmation[-] → none"
+    ],
+    "simplii_login.html": [
+      "1 unknown text#card-description-7eaa8a0a[card-description-7eaa8a0a] → username"
+    ],
+    "myecp_login.html": [
+      "1 username text#UserName[UserName] → none"
+    ],
+    "deltamath_reset_password.html": [
+      "0 password.new password#new-password-text-field[newPasswordTextField] → current-password"
+    ],
+    "sleeper_com_signup.html": [
+      "2 password.new password#-[-] → current-password"
+    ],
+    "revolut_business_login.html": [
+      "0 password.current password#-[passcode] → new-password"
+    ],
+    "autodesk_signup.html": [
+      "1 lastName text#lastname_str[lastName] → username"
+    ]
+  }
+}

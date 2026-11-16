@@ -5,7 +5,7 @@
  * chords or tabs are dropped, settings fill in from defaults, and there is
  * always at least one chord and one window.
  */
-import { isAssistantScope } from './assistant';
+import { cleanNeverSites, isAssistantScope } from './assistant';
 import {
   DEFAULT_PROFILE,
   defaultSettings,
@@ -250,7 +250,7 @@ export function restoreSettings(saved: Record<string, unknown>, platform?: Platf
     if (isAssistantScope(assistant['scope'])) settings.assistant.scope = assistant['scope'];
     if (typeof assistant['readsNothing'] === 'boolean') settings.assistant.readsNothing = assistant['readsNothing'];
     const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length <= 300).slice(0, 500) : []);
-    settings.assistant.neverSites = strings(assistant['neverSites']);
+    settings.assistant.neverSites = cleanNeverSites(strings(assistant['neverSites']));
     settings.assistant.offChords = strings(assistant['offChords']);
     if (typeof assistant['codexImages'] === 'boolean') settings.assistant.codexImages = assistant['codexImages'];
   }

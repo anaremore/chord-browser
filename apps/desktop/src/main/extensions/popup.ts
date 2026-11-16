@@ -13,6 +13,7 @@ import { WebContentsView, type Session } from 'electron';
 import { toWindowRect, type AppWindow, type FloatingView } from '../window';
 import { POPUP_MAX, popupPosition, popupSize } from './geometry';
 import { parseSizeMessage, SIZER_SCRIPT, SIZER_WORLD } from './sizer';
+import { pageOf } from '../view-page';
 
 export interface ExtensionPopupOptions {
   extensionId: string;
@@ -127,7 +128,7 @@ export class ExtensionPopup implements FloatingView {
     this.place();
     if (this.shown) return;
     this.shown = true;
-    this.view.webContents.focus();
+    pageOf(this.view)?.focus();
   }
 
   close(reason: 'blur' | 'other' = 'other'): void {
@@ -135,8 +136,8 @@ export class ExtensionPopup implements FloatingView {
     this.closed = true;
     clearTimeout(this.showTimer);
     this.host.releaseFloating(this);
-    const contents = this.view.webContents;
-    if (!contents.isDestroyed()) {
+    const contents = pageOf(this.view);
+    if (contents) {
       if (contents.isDevToolsOpened()) contents.closeDevTools();
       contents.close();
     }

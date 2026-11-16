@@ -27,6 +27,7 @@
 import type { FrameSnapshotEvent, Rect, SnapshotPane } from '@chord/ipc';
 import { springCurve, springs } from '@chord/tokens';
 import type { Event, Input, WebContents, WebContentsView } from 'electron';
+import { pageOf } from './view-page';
 
 /** From asking for the pictures to the shell showing them. Any longer and the frame changes at once. */
 export const PREPARE_TIMEOUT_MS = 200;
@@ -105,7 +106,8 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T | null> {
  * Chromium builds for): the shell's worker turns them into RGBA, so main
  * never loops over them (ARCHITECTURE.md §1, performance rule 1).
  */
-async function picture(contents: WebContents): Promise<Omit<SnapshotPane, 'rect'> | null> {
+async function picture(contents: WebContents | undefined): Promise<Omit<SnapshotPane, 'rect'> | null> {
+  if (!contents) return null;
   const image = await contents.capturePage();
   if (image.isEmpty()) return null;
   const scale = Math.max(1, ...image.getScaleFactors());
@@ -227,7 +229,7 @@ export class FrameSnapshots {
     const seq = ++this.seq;
     this.replies.clear();
     const deadline = Date.now() + PREPARE_TIMEOUT_MS;
-    const pictures = await within(Promise.all(panes.map((p) => picture(p.view.webContents))), PREPARE_TIMEOUT_MS);
+    const pictures = await within(Promise.all(panes.map((p) => picture(pageOf(p.view)))), PREPARE_TIMEOUT_MS);
     // Something moved on while the pages were pictured (another tab, a resize): the change just happens.
     if (!pictures || pictures.some((p) => p === null) || !this.unchanged(panes)) {
       this.lastFallback = !pictures || pictures.some((p) => p === null) ? 'capture' : 'changed';
@@ -246,7 +248,7 @@ export class FrameSnapshots {
 
   private begin(seq: number): void {
     // Typing into the page brings it back first: input never waits for motion.
-    const focused = this.host.panes().find((p) => p.view.webContents.isFocused())?.view.webContents;
+    const focused = this.host.panes().map((p) => pageOf(p.view)).find((contents) => contents?.isFocused());
     const onKey = (_event: Event, input: Input) => {
       if (isTyping(input)) this.finish();
     };

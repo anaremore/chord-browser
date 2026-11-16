@@ -8,6 +8,9 @@
       "path": "./tsconfig.web.json"
     },
     {
+      "path": "./tsconfig.agent.json"
+    },
+    {
       "path": "./tsconfig.test.json"
     }
   ]

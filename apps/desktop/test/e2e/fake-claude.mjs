@@ -138,6 +138,18 @@ async function turn(sent, images = []) {
     writeFileSync(join(config, 'fill-again.json'), toolText(await callTool('propose_fill', { tab_id: tab, values })));
     return finish(await say('Check the values in the card, then press Fill. You send the form yourself.'));
   }
+  // Why a page is broken: the tools it was offered and what page_diagnostics gave it, on the attached tab (t1 when
+  // nothing's attached), kept where the test can see them.
+  if (/\bbroken\b/i.test(text)) {
+    const tools = (await mcp('tools/list', {}))?.mcp_response?.result?.tools ?? [];
+    // Nothing attached (Ask every time): it finds the tab in the list first, as a model would.
+    let tab = ref;
+    if (!tab) tab = JSON.parse(toolText(await callTool('list_tabs', {})) || '{}').data?.tabs?.find((t) => t.title === 'Broken')?.tab_id ?? 't1';
+    const result = toolText(await callTool('page_diagnostics', { tab_id: tab }));
+    appendFileSync(join(config, 'diagnostics.jsonl'), `${JSON.stringify({ tools: tools.map((t) => t.name), result })}\n`);
+    const data = JSON.parse(result || '{}');
+    return finish(await say(data.entries ? `I see ${data.entries.length} problems.` : `I couldn't check: ${data.data?.refused ?? 'no answer'}`));
+  }
   // An Effects request (main/effects): it reads the page's outline through Chord's one tool, keeps what it got
   // where the test can see it, and answers in Effects' fixed shape. Its patch tries a fetch too
   // (FAKE_CLAUDE_EVIL: a server that counts requests), which Chord has to take out.

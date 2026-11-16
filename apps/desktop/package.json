@@ -1,7 +1,7 @@
 {
   "name": "@chord/desktop",
   "private": true,
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Chord: a calm, colorful browser",
   "homepage": "https://github.com/anaremore/chord-browser",
   "author": {
@@ -21,6 +21,7 @@
     "test:e2e": "playwright test",
     "test:e2e:linux": "node ../../scripts/e2e-linux/run.mjs",
     "test:perf": "playwright test perf",
+    "test:forms": "playwright test --config playwright.forms.config.ts",
     "perf:baseline": "node scripts/perf-baseline.mjs",
     "test:packaged": "playwright test --config playwright.packaged.config.ts",
     "package": "node scripts/electron-vite.mjs build && electron-builder --config electron-builder.config.ts --publish never",
@@ -40,6 +41,7 @@
     "electron-builder": "26.18.0",
     "electron-vite": "6.0.0",
     "linkedom": "0.18.13",
+    "rolldown": "1.2.15",
     "vite": "8.3.5"
   },
   "dependencies": {

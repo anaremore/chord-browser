@@ -1,251 +1,190 @@
 /**
- * Chord's own passwords, the vault (docs/decisions/S17-passwords.md §7, §9,
- * §13 layer 3), end to end, in light and dark:
+ * The password detector in Chord (S17 §13, layer 3, as far as phase 1's detector goes; the
+ * menu, the save card and filling come with the vault). With detection turned on through the
+ * test hook, as the vault's switch will:
  *
- * 1. Settings → Passwords with nothing saved: *Add a password…* asks for the
- *    passphrase too, since the first password sets it. The row opens to Show
- *    and Copy (no passphrase again: it was typed a moment ago); Copy puts it on
- *    the clipboard and never in the page; Delete has Undo. chord.db and its
- *    write-ahead log, searched as bytes, hold neither the password nor the
- *    username nor the site. Lock now locks.
- * 2. Relaunched, the vault is locked. The unlock card shows at the top of
- *    the tab (as the menu under a field will ask for it); a wrong passphrase
- *    says so and keeps the card, the right one opens the vault and the card goes.
- *
- * axe checks Settings → Passwords and the card, and each is captured.
- * The menu under the field, filling and the save cards come with the
- * detector (phase 1's other half), so this spec stops at the vault.
+ * - a page with no sign-in field never wakes the agent, and turning detection off takes it
+ *   away at the next load;
+ * - on a sign-in page the agent wakes in world 4440 only: the page's own world sees no
+ *   bridge, and the page's DOM is exactly as it was;
+ * - focus reports the field's role and box; a sign-in that navigates to a page without the
+ *   form is `signedIn`, one that shows the form again is `failed`; a formless sign-in whose
+ *   form goes after its `fetch` is `signedIn`, with the request's status as a hint;
+ * - a show-password toggle and a "Forgot password?" button aren't submits, and one submit
+ *   (a click that submits the form) is one `submitted`;
+ * - a sign-in form inside a frame gets no agent and sends nothing (phase 1 is the main frame);
+ * - a forged message (an origin or a value in the payload) is refused;
+ * - **no event carries a value**: the username and password typed never reach main.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { audit, capturesDir, closeSettings, expectClean, isPopover, isSettings, isShell, launch, pageWhere, runAction, startSite, type Finding, type Site } from './a11y-kit';
+import { launch, pageWhere, startSite, type Site } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
 
-const PASSPHRASE = 'correct horse battery staple';
-const PASSWORD = 'Zq9-hunter2-Sekrit';
-const USERNAME = 'ada@acme-e2e.dev';
-const SITE = 'https://vault-e2e.example';
+const USER = 'ada@example.com';
+/** Longer than main waits after a page stops loading to decide a sign-in (saving.ts, SETTLE_MS). */
+const SETTLE_WAIT_MS = 2000;
+const SECRET = 'correct horse battery staple';
+
+const signIn = (action: string) =>
+  `<title>Sign in</title><h1>Sign in</h1><form id="f" action="${action}" method="post">` +
+  '<label for="u">Email</label><input id="u" name="email" type="email">' +
+  '<label for="p">Password</label><input id="p" name="password" type="password">' +
+  '<button id="go">Sign in</button></form>';
+const PAGES = {
+  '/nothing': '<title>Nothing</title><form><input type="search" id="q" placeholder="Search"></form><p>No sign-in here.</p>',
+  '/plain': signIn('/welcome'),
+  '/welcome': '<title>Welcome</title><p>Signed in.</p>',
+  // A sign-in that fails: the same form comes back.
+  '/wrong': signIn('/wrong'),
+  // No <form>: a script signs in with fetch, reads the reply and takes the form away.
+  '/spa':
+    '<title>App</title><div id="box"><h2>Log in</h2><input id="u" type="email" aria-label="Email"><input id="p" type="password" aria-label="Password">' +
+    '<button id="go" type="button">Log in</button></div>' +
+    "<script>document.getElementById('go').addEventListener('click', async () => { const r = await fetch('/api/session', { method: 'POST' }); await r.text(); document.getElementById('box').remove(); });</script>",
+  '/api/session': '{"ok":true}',
+  // A show-password toggle and a help button in the form, beside its submit button.
+  '/toggle':
+    '<title>Log in</title><h1>Log in</h1><form action="/welcome" method="post">' +
+    '<input id="u" name="email" type="email" aria-label="Email">' +
+    '<span class="field"><input id="p" name="password" type="password" aria-label="Password"><button id="eye" type="button" aria-label="Show password">\u{1F441}</button></span>' +
+    '<button id="forgot" type="button">Forgot password?</button><button id="go">Log in</button></form>',
+  // The only sign-in form is in a same-origin frame.
+  '/framed': '<title>Framed</title><p>A page with a frame.</p><iframe id="frame" src="/plain" width="600" height="400"></iframe>',
+};
+
+interface Hooks {
+  passwordsEnabled(on: boolean, profileIds?: string[]): void;
+  passwordEvents(): Record<string, unknown>[];
+  clearPasswordEvents(): void;
+}
+const enable = (app: ElectronApplication, on: boolean) => app.evaluate((_electron, value) => (globalThis as unknown as { chordTestHooks: Hooks }).chordTestHooks.passwordsEnabled(value), on);
+const clear = (app: ElectronApplication) => app.evaluate(() => (globalThis as unknown as { chordTestHooks: Hooks }).chordTestHooks.clearPasswordEvents());
+const events = (app: ElectronApplication) => app.evaluate(() => (globalThis as unknown as { chordTestHooks: Hooks }).chordTestHooks.passwordEvents());
+const types = async (app: ElectronApplication) => (await events(app)).map((e) => e['type']);
+
+/** Runs `code` in the page's world 4440 (the agent's), from main. */
+const inAgentWorld = (app: ElectronApplication, url: string, code: string) =>
+  app.evaluate(({ webContents }, [u, c]) => webContents.getAllWebContents().find((w) => !w.isDestroyed() && w.getURL().startsWith(u))!.executeJavaScriptInIsolatedWorld(4440, [{ code: c }]), [url, code] as const);
 
 let site: Site;
 test.beforeAll(async () => {
-  site = await startSite({ '/': '<title>Home page</title><p>Home</p>' });
-  mkdirSync(capturesDir, { recursive: true });
+  site = await startSite(PAGES);
 });
 test.afterAll(() => site.server.close());
 
-async function chord(profile: string, mode: 'light' | 'dark'): Promise<{ app: ElectronApplication; shell: Page }> {
-  // No keyring on any system (a development build's switch), as on Linux without one: nothing keeps the key, so a
-  // relaunch is locked, and the card doesn't offer to keep it unlocked.
-  const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1', CHORD_APPEARANCE: mode, CHORD_E2E_NO_KEYRING: '1' }, { profile });
-  return { app, shell: await pageWhere(app, isShell) };
-}
-
-async function openPasswords(app: ElectronApplication, shell: Page): Promise<Page> {
-  await runAction(shell, 'app.settings');
-  const settings = await pageWhere(app, isSettings);
-  await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Passwords' }).click();
-  await expect(settings.getByRole('heading', { name: 'Passwords', level: 1 })).toBeVisible();
-  return settings;
-}
-
-const readClipboard = (app: ElectronApplication) => app.evaluate(({ clipboard }) => clipboard.readText());
-
-for (const mode of ['light', 'dark'] as const) {
-  test(`passwords: the first one sets the passphrase; Show, Copy, Delete and Undo; never in chord.db's bytes; a relaunch is locked and the card unlocks it (${mode})`, async () => {
-    test.setTimeout(150_000);
-    const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-passwords-'));
-    const findings: Finding[] = [];
-    let { app, shell } = await chord(profile, mode);
-    try {
-      let settings = await openPasswords(app, shell);
-      const main = settings.getByRole('main');
-      await expect(main.getByText('No passwords yet. Sign in somewhere and Chord offers to keep it.')).toBeVisible();
-      findings.push(...(await audit(settings, `Settings → Passwords, empty (${mode})`, { appearance: mode })));
-
-      // The first password: its card asks for the passphrase as well.
-      await main.getByRole('button', { name: 'Add a password…' }).click();
-      const add = main.getByRole('form', { name: 'Add a password' });
-      await add.getByLabel('Address').fill(SITE);
-      await add.getByLabel('Username').fill(USERNAME);
-      await add.getByLabel('Password', { exact: true }).fill(PASSWORD);
-      await expect(add.getByText('Choose a passphrase to lock your passwords. Chord can’t get it back for you.')).toBeVisible();
-      await add.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
-      await add.getByLabel('Again').fill('not the same');
-      await add.getByLabel('Again').blur();
-      await expect(add.getByText('The two don’t match.')).toBeVisible();
-      findings.push(...(await audit(settings, `Settings → Passwords, adding the first (${mode})`, { appearance: mode })));
-      await add.getByLabel('Again').fill(PASSPHRASE);
-      await add.getByRole('button', { name: 'Save' }).click();
-
-      const list = main.getByRole('list', { name: 'Saved passwords' });
-      const row = list.getByRole('button', { name: /vault-e2e\.example/ });
-      await expect(row).toContainText(USERNAME);
-      await expect(row).toContainText('Today');
-      await row.click();
-      const detail = main.getByRole('group', { name: `vault-e2e.example, ${USERNAME}` });
-      await expect(detail.getByRole('img', { name: 'Password hidden' })).toBeVisible();
-      // Settings has no password until Show: none in the page now.
-      expect(await settings.content()).not.toContain(PASSWORD);
-      findings.push(...(await audit(settings, `Settings → Passwords, a row open (${mode})`, { appearance: mode })));
-
-      // Show: typed a moment ago, so it doesn't ask again.
-      await detail.getByRole('button', { name: 'Show password' }).click();
-      await expect(detail.getByRole('textbox', { name: 'Password' })).toHaveValue(PASSWORD);
-      await detail.getByRole('button', { name: 'Hide password' }).click();
-      // Copy: on the clipboard, never in the page.
-      await detail.getByRole('button', { name: 'Copy password' }).click();
-      await expect(detail.getByText('It leaves the clipboard in a minute.')).toBeVisible();
-      expect(await readClipboard(app)).toBe(PASSWORD);
-      expect(await settings.content()).not.toContain(PASSWORD);
-      await app.evaluate(({ clipboard }) => clipboard.writeText(''));
-
-      // Delete, with Undo for the session.
-      await detail.getByRole('button', { name: 'Delete' }).click();
-      await expect(row).toHaveCount(0);
-      const deleted = main.getByRole('status').filter({ hasText: 'Deleted vault-e2e.example' });
-      await expect(deleted).toContainText(USERNAME);
-      await deleted.getByRole('button', { name: 'Undo' }).click();
-      await expect(row).toBeVisible();
-
-      // chord.db and its log, as bytes: none of it in the clear.
-      for (const file of ['chord.db', 'chord.db-wal']) {
-        const path = join(profile, file);
-        if (!existsSync(path)) continue;
-        const bytes = readFileSync(path);
-        for (const secret of [PASSWORD, USERNAME, 'vault-e2e', PASSPHRASE]) {
-          expect(bytes.includes(Buffer.from(secret, 'utf8')), `${secret} in ${file}`).toBe(false);
-          expect(bytes.includes(Buffer.from(secret, 'utf16le')), `${secret} (UTF-16) in ${file}`).toBe(false);
-        }
-      }
-
-      // Lock now: the list goes, and the passphrase opens it again.
-      await main.getByRole('button', { name: 'Lock now' }).click();
-      await expect(main.getByText('Your passwords are locked.')).toBeVisible();
-      await expect(list).toHaveCount(0);
-      findings.push(...(await audit(settings, `Settings → Passwords, locked (${mode})`, { appearance: mode })));
-      await closeSettings(app);
-      await app.close();
-
-      // Relaunched: locked, and the card at the top of the tab asks.
-      ({ app, shell } = await chord(profile, mode));
-      const popover = await pageWhere(app, isPopover);
-      const asked = app.evaluate(() => (globalThis as unknown as { chordTestHooks: { passwordsAskUnlock(): Promise<boolean> } }).chordTestHooks.passwordsAskUnlock());
-      const card = popover.getByRole('alertdialog', { name: 'Unlock passwords' });
-      await expect(card).toBeVisible();
-      // No keyring here: it doesn't offer to keep them unlocked.
-      await expect(card.getByRole('switch')).toHaveCount(0);
-      await expect(card.getByLabel('Passphrase')).toBeFocused();
-      findings.push(...(await audit(popover, `the unlock card (${mode})`, { appearance: mode })));
-      await card.getByLabel('Passphrase').fill('not the passphrase');
-      await card.getByRole('button', { name: 'Unlock' }).click();
-      await expect(card.getByRole('alert')).toHaveText('That isn’t the passphrase. Try again.');
-      // Emptied and focused again: typing goes straight in, and a second wrong try does the same.
-      await expect(card.getByLabel('Passphrase')).toBeFocused();
-      await expect(card.getByLabel('Passphrase')).toHaveValue('');
-      await card.getByLabel('Passphrase').pressSequentially('still not it');
-      await card.getByLabel('Passphrase').press('Enter');
-      await expect(card.getByLabel('Passphrase')).toBeFocused();
-      await expect(card.getByLabel('Passphrase')).toHaveValue('');
-      findings.push(...(await audit(popover, `the unlock card, a wrong passphrase (${mode})`, { appearance: mode })));
-      await card.getByLabel('Passphrase').fill(PASSPHRASE);
-      await card.getByRole('button', { name: 'Unlock' }).click();
-      expect(await asked).toBe(true);
-      await expect(card).toHaveCount(0);
-
-      // Open now: Settings lists it again.
-      settings = await openPasswords(app, shell);
-      await expect(settings.getByRole('main').getByRole('list', { name: 'Saved passwords' })).toContainText(USERNAME);
-    } finally {
-      await app.close();
-    }
-    expectClean(findings);
-  });
-}
-
-/** A sign-in's last change, set as if it were made then (Settings shows *Today*, *Yesterday*, *Nov 2*). */
-function dated(profile: string, dates: number[]): void {
-  const db = new DatabaseSync(join(profile, 'chord.db'));
+test('passwords: the agent wakes only on sign-in pages, adds nothing, and tells main what you did without a value', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/nothing`, CHORD_E2E_HOOKS: '1' });
   try {
-    const ids = (db.prepare('SELECT id FROM login ORDER BY rowid').all() as { id: string }[]).map((r) => r.id);
-    expect(ids).toHaveLength(dates.length);
-    ids.forEach((id, i) => db.prepare('UPDATE login SET updated_at = ? WHERE id = ?').run(dates[i]!, id));
-    expect((db.prepare('SELECT updated_at AS at FROM login ORDER BY rowid').all() as { at: number }[]).map((r) => r.at)).toEqual(dates);
+    let page: Page = await pageWhere(app, (u) => u.endsWith('/nothing'));
+    await enable(app, true);
+    await page.reload();
+    // No sign-in field: the sentinel stays asleep, even with the search box focused.
+    await page.focus('#q');
+    await page.waitForTimeout(300);
+    expect(await inAgentWorld(app, `${site.origin}/nothing`, 'typeof chordPasswords')).toBe('undefined');
+
+    // A sign-in page: the agent wakes in its own world, and nothing of it is in the page's.
+    await page.goto(`${site.origin}/plain`);
+    const before = await page.evaluate(() => document.documentElement.outerHTML);
+    await expect.poll(() => inAgentWorld(app, `${site.origin}/plain`, 'typeof chordPasswords')).toBe('object');
+    expect(await page.evaluate(() => typeof (window as unknown as Record<string, unknown>)['chordPasswords'])).toBe('undefined');
+
+    // Focus: the role and the field's box, as the page measures it.
+    await page.focus('#u');
+    await expect.poll(() => types(app)).toContain('focus');
+    const focus = (await events(app)).find((e) => e['type'] === 'focus')!;
+    const box = await page.evaluate(() => {
+      const r = document.getElementById('u')!.getBoundingClientRect();
+      return { x: r.left, y: r.top, width: r.width, height: r.height };
+    });
+    expect(focus).toMatchObject({ role: 'username', kind: 'sign-in', origin: site.origin, rect: box, zoomFactor: 1 });
+
+    // A sign-in that worked: typed, submitted, and the next page doesn't show the form.
+    await page.fill('#u', USER);
+    await page.fill('#p', SECRET);
+    // Woken, focused and typed in: the page's markup is exactly what it was (no attribute, class, element or style).
+    expect(await page.evaluate(() => document.documentElement.outerHTML)).toBe(before);
+    await page.press('#p', 'Enter');
+    await page.waitForURL(/\/welcome$/);
+    await expect.poll(() => types(app), { timeout: 10_000 }).toContain('signedIn');
+    expect((await events(app)).find((e) => e['type'] === 'signedIn')).toMatchObject({ how: 'navigation', kind: 'sign-in', origin: site.origin });
+
+    // A sign-in that failed: the same form comes back.
+    await clear(app);
+    page = await pageWhere(app, (u) => u.endsWith('/welcome'));
+    await page.goto(`${site.origin}/wrong`);
+    await page.fill('#u', USER);
+    await page.fill('#p', 'wrong password');
+    await page.click('#go');
+    await expect.poll(() => types(app), { timeout: 10_000 }).toContain('failed');
+    expect((await events(app)).find((e) => e['type'] === 'failed')).toMatchObject({ why: 'reappeared' });
+    expect(await types(app)).not.toContain('signedIn');
+
+    // No <form>: the button's click is the signal, and the form going after the fetch is the success, with its status as a hint.
+    await clear(app);
+    await page.goto(`${site.origin}/spa`);
+    await page.fill('#u', USER);
+    await page.fill('#p', SECRET);
+    await page.click('#go');
+    await expect.poll(() => types(app), { timeout: 12_000 }).toContain('signedIn');
+    const all = await events(app);
+    expect(all.find((e) => e['type'] === 'submitted')).toMatchObject({ signal: 'button' });
+    expect(all.find((e) => e['type'] === 'signedIn')).toMatchObject({ how: 'form-gone', hint: 'response-ok' });
+
+    // A show-password toggle and "Forgot password?" aren't submits; the form's own button is, once.
+    await clear(app);
+    await page.goto(`${site.origin}/toggle`);
+    await page.fill('#u', USER);
+    await page.fill('#p', SECRET);
+    await page.click('#eye');
+    await page.click('#forgot');
+    await page.waitForTimeout(500);
+    expect(await types(app)).not.toContain('submitted');
+    await page.click('#go');
+    await page.waitForURL(/\/welcome$/);
+    await expect.poll(() => types(app), { timeout: 10_000 }).toContain('signedIn');
+    expect((await types(app)).filter((t) => t === 'submitted')).toEqual(['submitted']);
+
+    // A sign-in form in a frame: no agent in the page (its preload doesn't run in frames), nothing reported.
+    await clear(app);
+    await page.goto(`${site.origin}/framed`);
+    const frame = page.frameLocator('#frame');
+    await frame.locator('#u').fill(USER);
+    await frame.locator('#p').fill(SECRET);
+    await frame.locator('#p').press('Enter');
+    await expect(frame.locator('p')).toHaveText('Signed in.');
+    await page.waitForTimeout(SETTLE_WAIT_MS);
+    expect(await inAgentWorld(app, `${site.origin}/framed`, 'typeof chordPasswords')).toBe('undefined');
+    expect(await events(app)).toEqual([]);
+
+    // Forged payloads from the agent's own world: an origin of the page's choosing, a value. Both refused.
+    await page.goto(`${site.origin}/plain`);
+    await expect.poll(() => inAgentWorld(app, `${site.origin}/plain`, 'typeof chordPasswords')).toBe('object');
+    await clear(app);
+    await inAgentWorld(
+      app,
+      `${site.origin}/plain`,
+      `chordPasswords.send('focus', { formId: 'f1', kind: 'sign-in', role: 'username', rect: { x: 0, y: 0, width: 9, height: 9 }, origin: 'https://bank.example' });
+       chordPasswords.send('candidate', { formId: 'f1', kind: 'sign-in', signal: 'submit', username: null, password: { type: 'password', id: 'p', name: 'password' }, newPassword: null, hasUsername: false, hasPassword: true, value: 'x' });
+       chordPasswords.send('focus', { formId: 'f1', kind: 'sign-in', role: 'username', rect: { x: 0, y: 0, width: 9, height: 9 } });`,
+    );
+    // The last one is well formed: once it's in, the two before it were dropped, not delayed.
+    await expect.poll(() => types(app)).toEqual(['focus']);
+    expect((await events(app))[0]).toMatchObject({ origin: site.origin });
+
+    // Nothing that reached main holds what you typed.
+    const json = JSON.stringify(await events(app)) + JSON.stringify(all);
+    expect(json).not.toContain(USER);
+    expect(json).not.toContain(SECRET);
+
+    // Off: the sentinel is gone from the next load.
+    await enable(app, false);
+    await page.reload();
+    await page.waitForTimeout(300);
+    expect(await inAgentWorld(app, `${site.origin}/plain`, 'typeof chordPasswords')).toBe('undefined');
   } finally {
-    db.close();
+    await app.close();
   }
-}
-
-for (const mode of ['light', 'dark'] as const) {
-  test(`passwords, the captures: Settings with sign-ins, Keep unlocked, locked; the unlock card with its switch and a wrong passphrase (${mode})`, async () => {
-    test.setTimeout(120_000);
-    const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-passwords-'));
-    // A keyring that's there (a stand-in, in memory), so Keep unlocked is offered, as on most computers.
-    const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1', CHORD_APPEARANCE: mode, CHORD_E2E_TEST_KEYRING: '1' }, { profile });
-    const findings: Finding[] = [];
-    try {
-      const shell = await pageWhere(app, isShell);
-      const settings = await openPasswords(app, shell);
-      // Tall enough for the whole section, as the mock draws it.
-      await app.evaluate(({ BaseWindow }) => {
-        const w = BaseWindow.getAllWindows().find((b) => b.getTitle() === 'Chord Settings')!;
-        w.setSize(w.getSize()[0]!, 1040);
-      });
-      await settings.evaluate(async (passphrase) => {
-        const chord = (window as unknown as { chord: { passwords: { setup(p: string): Promise<unknown>; add(l: unknown): Promise<unknown> } } }).chord;
-        await chord.passwords.setup(passphrase);
-        await chord.passwords.add({ origin: 'https://github.com', username: 'ada@acme.dev', password: 'gh-Zq9-hunter2', note: '' });
-        await chord.passwords.add({ origin: 'https://linear.app', username: 'ada@acme.dev', password: 'ln-Zq9-hunter2', note: '' });
-        await chord.passwords.add({ origin: 'https://news.ycombinator.com', username: 'adal', password: 'hn-Zq9-hunter2', note: '' });
-      }, PASSPHRASE);
-      const now = Date.now();
-      dated(profile, [now, now - 86_400_000, new Date(new Date(now).getFullYear(), 10, 2, 12).getTime()]);
-      // Settings asks for its view again when its window comes to the front.
-      await settings.evaluate(() => window.dispatchEvent(new Event('focus')));
-      const main = settings.getByRole('main');
-      const list = main.getByRole('list', { name: 'Saved passwords' });
-      await expect(list.getByRole('button')).toHaveCount(3);
-      await expect(list.getByRole('button', { name: /linear\.app/ })).toContainText('Yesterday');
-      await expect(list.getByRole('button', { name: /news\.ycombinator\.com/ })).toContainText('Nov 2');
-      await list.getByRole('button', { name: /github\.com/ }).click();
-      // Keep unlocked is offered, off, with what it gives up.
-      await expect(main.getByRole('switch', { name: 'Keep unlocked on this computer' })).toHaveAttribute('aria-checked', 'false');
-      await expect(main.getByText('Then other programs you run could read your passwords, on Windows and Linux.')).toBeVisible();
-      await settings.evaluate(() => document.querySelector('main')?.scrollTo(0, 0));
-      findings.push(...(await audit(settings, `Settings → Passwords with sign-ins and a keyring (${mode})`, { appearance: mode })));
-      await settings.screenshot({ path: resolve(capturesDir, `settings-passwords-${mode}.png`) });
-
-      // Locked: the field, Unlock and Forgot it? in the Passphrase row.
-      await main.getByRole('button', { name: 'Lock now' }).click();
-      await expect(main.getByText('Your passwords are locked.')).toBeVisible();
-      await expect(main.getByLabel('Passphrase')).toHaveCount(1);
-      findings.push(...(await audit(settings, `Settings → Passwords, locked, with a keyring (${mode})`, { appearance: mode })));
-      await settings.screenshot({ path: resolve(capturesDir, `settings-passwords-locked-${mode}.png`) });
-      await closeSettings(app);
-
-      // The card, with Keep unlocked offered and off.
-      const popover = await pageWhere(app, isPopover);
-      const asked = app.evaluate(() => (globalThis as unknown as { chordTestHooks: { passwordsAskUnlock(): Promise<boolean> } }).chordTestHooks.passwordsAskUnlock());
-      const card = popover.getByRole('alertdialog', { name: 'Unlock passwords' });
-      await expect(card.getByRole('switch', { name: 'Keep unlocked on this computer' })).toHaveAttribute('aria-checked', 'false');
-      await expect(card.getByText('Then other programs you run could read your passwords, on Windows and Linux.')).toBeVisible();
-      findings.push(...(await audit(popover, `the unlock card with a keyring (${mode})`, { appearance: mode })));
-      await card.screenshot({ path: resolve(capturesDir, `passwords-unlock-${mode}.png`) });
-      await card.getByLabel('Passphrase').fill('not the passphrase');
-      await card.getByRole('button', { name: 'Unlock' }).click();
-      await expect(card.getByRole('alert')).toBeVisible();
-      await expect(card.getByLabel('Passphrase')).toBeFocused();
-      await card.screenshot({ path: resolve(capturesDir, `passwords-unlock-wrong-${mode}.png`) });
-      await card.getByLabel('Passphrase').fill(PASSPHRASE);
-      await card.getByRole('button', { name: 'Unlock' }).click();
-      expect(await asked).toBe(true);
-    } finally {
-      await app.close();
-    }
-    expectClean(findings);
-  });
-}
+});

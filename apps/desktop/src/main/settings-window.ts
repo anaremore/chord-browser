@@ -8,6 +8,7 @@ import { size } from '@chord/tokens';
 import { BaseWindow, nativeTheme, type Session, type WebContentsView } from 'electron';
 import { send } from './ipc';
 import { applyMaterial, onUiScale, platform, systemInfo, titleBarOverlay, trafficLightPosition, windowChromeOptions } from './platform';
+import { pageOf } from './view-page';
 import { createUiView } from './window';
 
 const WIDTH = 860;
@@ -55,14 +56,14 @@ export class SettingsWindow {
     this.window.on('closed', () => {
       stopScale();
       nativeTheme.off('updated', onTheme);
-      if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
+      pageOf(this.view)?.close();
       onClosed();
     });
     this.view.webContents.once('did-finish-load', () => {
       // It may have been closed before it finished loading.
       if (this.window.isDestroyed()) return;
       this.window.show();
-      this.view.webContents.focus();
+      pageOf(this.view)?.focus();
     });
   }
 
@@ -70,7 +71,7 @@ export class SettingsWindow {
   show(section?: string): void {
     if (this.window.isMinimized()) this.window.restore();
     this.window.focus();
-    this.view.webContents.focus();
+    pageOf(this.view)?.focus();
     if (section) send(this.view.webContents, 'settings:section', section);
   }
 

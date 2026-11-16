@@ -5,7 +5,7 @@
  */
 import { generateNKeysBetween } from 'fractional-indexing';
 import { SPLIT, type NodeId, type SidebarNode, type SplitDirection, type SplitNode, type State, type TabNode, type WindowId } from './model';
-import { children } from './nodes';
+import { byRank, children, childrenToRead, nodeList } from './nodes';
 
 export interface PaneRect {
   x: number;
@@ -120,11 +120,28 @@ export const fitsPanes = (along: number, n: number, gap: number = SPLIT.gap, min
 export function settleSplits(state: State): Set<NodeId> {
   const changed = new Set<NodeId>();
   const nodes = state.nodes as Record<NodeId, SidebarNode>;
-  for (const split of Object.values(nodes).filter((n): n is SplitNode => n.kind === 'split')) {
+  // Read without making a draft of every node (nodes.ts); what changes is taken from `nodes`, as a draft.
+  const all = nodeList(state);
+  const splits = all.filter((n): n is SplitNode => n.kind === 'split');
+  if (splits.length === 0) return changed;
+  // What each split held as this began, by id; what moves into one as others settle is added (`moved`).
+  const inSplits = new Map<NodeId, NodeId[]>(splits.map((n) => [n.id, []]));
+  for (const n of all) if (n.parentId !== null) inSplits.get(n.parentId)?.push(n.id);
+  const moved = (into: NodeId | null, ids: readonly NodeId[]) => {
+    if (into !== null) inSplits.get(into)?.push(...ids);
+  };
+  for (const found of splits) {
+    const split = nodes[found.id] as SplitNode | undefined;
+    if (!split) continue;
+    // As it is now: a split settled before this one may have taken nodes out, or put them in.
+    const inside = [...new Set(inSplits.get(split.id))].map((id) => nodes[id]).filter((n): n is SidebarNode => n?.parentId === split.id);
     // A split holds only tabs, of its own chord and section; anything else steps out, just after it.
-    const strays = Object.values(nodes).filter((n) => n.parentId === split.id && (n.kind !== 'tab' || n.chordId !== split.chordId || n.section !== split.section));
+    const pane = (n: SidebarNode) => n.kind === 'tab' && n.chordId === split.chordId && n.section === split.section;
+    // Which is which before any steps out: stepping out can give a stray tab this split's section.
+    const strays = inside.filter((n) => !pane(n));
+    const members = inside.filter(pane).sort(byRank) as TabNode[];
     stepOut(state, split, strays, changed);
-    const members = splitMembers(state, split.id);
+    moved(split.parentId, strays.map((n) => n.id));
     if (members.length === 0) {
       delete nodes[split.id];
       continue;
@@ -135,10 +152,15 @@ export function settleSplits(state: State): Set<NodeId> {
       only.rank = split.rank;
       delete nodes[split.id];
       changed.add(only.id);
+      moved(split.parentId, [only.id]);
       continue;
     }
     // Extra panes keep their order, right after the split.
-    if (members.length > SPLIT.maxPanes) stepOut(state, split, members.slice(SPLIT.maxPanes), changed);
+    if (members.length > SPLIT.maxPanes) {
+      const extra = members.slice(SPLIT.maxPanes);
+      stepOut(state, split, extra, changed);
+      moved(split.parentId, extra.map((n) => n.id));
+    }
     const count = Math.min(members.length, SPLIT.maxPanes);
     // Panes changed without saying how (a tab closed): the rest share the frame evenly.
     if (split.sizes.length !== count) {
@@ -152,7 +174,7 @@ export function settleSplits(state: State): Set<NodeId> {
 /** Put nodes just after a split, among its siblings, in the order given. */
 function stepOut(state: State, split: SplitNode, nodes: readonly SidebarNode[], changed: Set<NodeId>): void {
   if (nodes.length === 0) return;
-  const siblings = children(state, split.chordId, split.section, split.parentId);
+  const siblings = childrenToRead(state, split.chordId, split.section, split.parentId);
   const next = siblings[siblings.findIndex((n) => n.id === split.id) + 1];
   const ranks = generateNKeysBetween(split.rank, next && next.rank > split.rank ? next.rank : null, nodes.length);
   nodes.forEach((node, i) => {

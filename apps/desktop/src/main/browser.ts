@@ -90,6 +90,7 @@ import type { ScreenShareBroker } from './screen-share';
 import type { AuthBroker } from './http-auth';
 import type { PasskeyBroker } from './passkeys';
 import type { PasswordService } from './passwords/service';
+import type { PasswordDetector } from './passwords/detector';
 import type { Screenshots } from './screenshots/service';
 import { HistorySaver } from './history-saver';
 import { SiteZoom } from './site-zoom';
@@ -98,6 +99,7 @@ import { platform, setUiScale, systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
 import { TabManager } from './tabs';
+import { pageOf } from './view-page';
 import { AppWindow, createUiView, hwndOf } from './window';
 
 /** Histories of tabs archived this session, kept in memory so ⌘⇧T doesn't wait on the database. */
@@ -140,6 +142,8 @@ export interface BrowserOptions {
   passkeys: PasskeyBroker;
   /** Chord's own passwords: the unlock card each window's popover may show. */
   passwords: Pick<PasswordService, 'unlockPromptFor' | 'windowClosed'>;
+  /** The password detector (S17): a tab's page is the only one its agent's channels answer. */
+  passwordDetector: PasswordDetector;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
   /** A Chord window came to the front (sync looks at its folder then, S15 §6). */
@@ -370,6 +374,7 @@ export class Browser {
       },
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
+        options.passwordDetector.attachPage(contents);
         this.extensions.tabCreated(contents, nodeId);
         this.safeBrowsing.attach(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
@@ -1258,7 +1263,7 @@ export class Browser {
     const windows = [...this.windows.values()].filter((w) => !w.window.isDestroyed());
     for (const { nodeId, by } of this.options.screenShare.sharedTabs()) {
       const view = this.tabs.get(nodeId);
-      if (!view || view.webContents.isDestroyed()) continue;
+      if (!view || !pageOf(view)) continue;
       const shownIn = Object.values(state.windows).find((m) => shownTabs(state, m.id).includes(nodeId))?.id;
       const holder = windows.find((w) => w.holds(view))?.id;
       // In reader view, the article stands in the frame and the page isn't on the window at all: it waits behind it.
@@ -1635,7 +1640,7 @@ export class Browser {
    * DevTools' own.
    */
   private runInDevtools(action: ActionId, nodeId: NodeId, contents: WebContents): boolean {
-    const page = this.tabs.get(nodeId)?.webContents;
+    const page = pageOf(this.tabs.get(nodeId));
     switch (action) {
       case 'app.devtools':
         this.devtools.close(nodeId);
@@ -2001,7 +2006,7 @@ export class Browser {
         togglePin: () => this.store.dispatch({ t: tab.section === 'pinned' ? 'tab.unpin' : 'tab.pin', nodeId }),
         copyLink: () => clipboard.writeText(tab.url),
         copyMarkdown: () => clipboard.writeText(markdownLink(tab.title, tab.url)),
-        reload: () => this.tabs.get(nodeId)?.webContents.reload(),
+        reload: () => pageOf(this.tabs.get(nodeId))?.reload(),
         duplicate: () => this.store.dispatch({ t: 'tab.open', windowId: w.id, url: tab.url }),
         muted: Boolean(tab.muted),
         toggleMute: () => this.store.dispatch({ t: 'tab.mute', nodeId, muted: !tab.muted }),

@@ -15,6 +15,7 @@ import { BaseWindow, clipboard, Menu, nativeTheme, screen, type Session, type We
 import { send } from './ipc';
 import { miniWindowChromeOptions, onUiScale, platform, systemInfo, titleBarOverlay, trafficLightPosition, uiScale } from './platform';
 import type { TabManager } from './tabs';
+import { pageOf } from './view-page';
 import { createUiView } from './window';
 
 export interface MiniDeps {
@@ -114,7 +115,7 @@ class MiniWindow {
       stopScale();
       nativeTheme.off('updated', onTheme);
       clearTimeout(this.sizeTimer);
-      if (!this.bar.webContents.isDestroyed()) this.bar.webContents.close();
+      pageOf(this.bar)?.close();
       this.onClosed(this);
     });
     this.bar.webContents.once('did-finish-load', () => {
@@ -157,21 +158,21 @@ class MiniWindow {
   }
 
   state(): MiniState {
-    const contents = this.page.webContents;
-    const url = contents.isDestroyed() ? '' : contents.getURL();
+    const contents = pageOf(this.page);
+    const url = contents?.getURL() ?? '';
     const chord = this.target ? this.deps.state().chords[this.target] : undefined;
     return {
       url,
       host: hostOf(url) ?? '',
-      title: contents.isDestroyed() ? '' : contents.getTitle(),
+      title: contents?.getTitle() ?? '',
       secure: url.startsWith('https:'),
-      loading: !contents.isDestroyed() && contents.isLoading(),
+      loading: Boolean(contents?.isLoading()),
       target: chord && !chord.private ? { id: chord.id, name: chord.name, icon: chord.icon } : null,
     };
   }
 
   push(): void {
-    if (!this.bar.webContents.isDestroyed()) send(this.bar.webContents, 'mini:state', this.state());
+    send(pageOf(this.bar), 'mini:state', this.state());
   }
 
   /** Fade out (where the OS can), then close. */
@@ -245,11 +246,12 @@ export class MiniWindows {
   promote(contents: WebContents, chordId?: ChordId): void {
     const mini = this.forContents(contents);
     const target = chordId ?? mini?.target;
-    if (!mini || !target || mini.promoted || mini.page.webContents.isDestroyed()) return;
+    const page = pageOf(mini?.page);
+    if (!mini || !target || !page || mini.promoted) return;
     mini.promoted = true;
     // Out of the mini window first: a view has one parent, and the tab's window takes it next.
     if (!mini.window.isDestroyed()) mini.window.contentView.removeChildView(mini.page);
-    this.deps.promote(mini.nodeId, target, mini.page.webContents);
+    this.deps.promote(mini.nodeId, target, page);
     mini.fadeAndClose();
   }
 
@@ -278,8 +280,8 @@ export class MiniWindows {
   run(action: string, contents: WebContents): boolean {
     const mini = this.forContents(contents);
     if (!mini) return false;
-    const page = mini.page.webContents;
-    if (page.isDestroyed()) return false;
+    const page = pageOf(mini.page);
+    if (!page) return false;
     switch (action) {
       case 'tab.close':
       case 'window.close':

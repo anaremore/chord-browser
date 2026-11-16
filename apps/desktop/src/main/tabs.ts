@@ -12,6 +12,7 @@ import { windowIcon } from './app-icon';
 import { trimNavState } from './nav';
 import { platform } from './platform';
 import { pageCall } from './page-call';
+import { pageOf } from './view-page';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 /** Sites whose icon each session keeps (TabManager.siteIcons). */
@@ -124,7 +125,10 @@ export class TabManager {
 
   /** Every tab that has a page, and its contents. */
   *entries(): IterableIterator<[NodeId, WebContents]> {
-    for (const [id, view] of this.views) if (!view.webContents.isDestroyed()) yield [id, view.webContents];
+    for (const [id, view] of this.views) {
+      const contents = pageOf(view);
+      if (contents) yield [id, contents];
+    }
   }
 
   nodeFor(contents: WebContents): NodeId | undefined {
@@ -149,8 +153,8 @@ export class TabManager {
 
   /** Whether the tab's page shows a video in picture-in-picture. */
   async inPictureInPicture(nodeId: NodeId): Promise<boolean> {
-    const contents = this.views.get(nodeId)?.webContents;
-    if (!contents || contents.isDestroyed() || this.internal.has(nodeId)) return false;
+    const contents = pageOf(this.views.get(nodeId));
+    if (!contents || this.internal.has(nodeId)) return false;
     // An isolated world shares the page's DOM but not its scripts, so a page can't fake this. A hung page
     // answers no (it can go to sleep), rather than holding up every tab after it.
     return Boolean(await pageCall(contents.executeJavaScriptInIsolatedWorld(999, [{ code: 'Boolean(document.pictureInPictureElement)' }]), false));
@@ -158,8 +162,8 @@ export class TabManager {
 
   /** The tab's back/forward history as it is now (or as it fell asleep), ready to restore later. */
   history(nodeId: NodeId): NavState | null {
-    const contents = this.views.get(nodeId)?.webContents;
-    if (!contents || contents.isDestroyed()) return this.pendingHistory.get(nodeId) ?? null;
+    const contents = pageOf(this.views.get(nodeId));
+    if (!contents) return this.pendingHistory.get(nodeId) ?? null;
     if (this.internal.has(nodeId)) return null;
     return trimNavState(contents.navigationHistory.getAllEntries(), contents.navigationHistory.getActiveIndex());
   }
@@ -226,10 +230,12 @@ export class TabManager {
       webPreferences: { session, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
     });
     this.floating.set(nodeId, { view, private: isPrivate });
-    this.wire(nodeId, view.webContents, false);
-    this.deps.onContentsCreated(view.webContents, nodeId);
-    this.whenProxied(view.webContents, () => {
-      void view.webContents.loadURL(url).catch(() => {
+    // The page as made: the view forgets it once it's destroyed (view-page.ts), and the proxy may take a while.
+    const contents = view.webContents;
+    this.wire(nodeId, contents, false);
+    this.deps.onContentsCreated(contents, nodeId);
+    this.whenProxied(contents, () => {
+      void contents.loadURL(url).catch(() => {
         // Load failures show in the page itself, as they would in a tab.
       });
     });
@@ -249,7 +255,7 @@ export class TabManager {
   /** The floating page becomes the tab `nodeId` (tab.adopt makes the node), keeping its page and history. */
   adopt(nodeId: NodeId): WebContentsView | undefined {
     const page = this.floating.get(nodeId);
-    if (!page || page.view.webContents.isDestroyed()) return undefined;
+    if (!page || !pageOf(page.view)) return undefined;
     this.floating.delete(nodeId);
     this.views.set(nodeId, page.view);
     page.view.setBorderRadius(frameRadius[platform]);
@@ -260,7 +266,7 @@ export class TabManager {
   closeFloating(nodeId: NodeId): void {
     const page = this.floating.get(nodeId);
     this.floating.delete(nodeId);
-    if (page && !page.view.webContents.isDestroyed()) page.view.webContents.close();
+    pageOf(page?.view)?.close();
   }
 
   navigate(nodeId: NodeId, url: string): void {
@@ -272,13 +278,13 @@ export class TabManager {
       this.ensure(nodeId);
       return;
     }
-    if (!isInternalUrl(url)) this.whenProxied(view.webContents, () => void view.webContents.loadURL(url).catch(() => {}));
+    const contents = pageOf(view);
+    if (contents && !isInternalUrl(url)) this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
   }
 
   /** Silence the tab's page, or let it be heard. A tab without a page is silenced when it gets one (ensure). */
   setMuted(nodeId: NodeId, muted: boolean): void {
-    const contents = this.views.get(nodeId)?.webContents;
-    if (contents && !contents.isDestroyed()) contents.setAudioMuted(muted);
+    pageOf(this.views.get(nodeId))?.setAudioMuted(muted);
   }
 
   /** A tab's count as it shows: its page's, else its site's service worker's; hidden when counts are off, or off for its site. */
@@ -309,16 +315,16 @@ export class TabManager {
 
   /** Whether the tab has a count of its own or its site's (its menu offers to hide or show it). */
   hasBadge(nodeId: NodeId): boolean {
-    const contents = this.views.get(nodeId)?.webContents;
-    return this.badges.has(nodeId) || (contents && !contents.isDestroyed() ? this.scopeBadge(nodeId, contents.getURL()) !== null : false);
+    const contents = pageOf(this.views.get(nodeId));
+    return this.badges.has(nodeId) || (contents ? this.scopeBadge(nodeId, contents.getURL()) !== null : false);
   }
 
   /** Counts were turned on or off, hidden for a site, or a service worker's changed: every awake tab shows its own as it is now. */
   refreshCounts(): void {
     const state = this.deps.state();
     for (const [nodeId, view] of this.views) {
-      const contents = view.webContents;
-      if (contents.isDestroyed() || !state.live[nodeId]) continue;
+      const contents = pageOf(view);
+      if (!contents || !state.live[nodeId]) continue;
       const badge = this.shownBadge(nodeId, contents.getURL());
       if (state.live[nodeId]!.badge !== badge) this.deps.dispatch({ t: 'tab.live', nodeId, live: { badge } });
     }
@@ -340,7 +346,7 @@ export class TabManager {
     this.pendingHistory.delete(nodeId);
     this.internal.delete(nodeId);
     // removeChildView alone keeps the renderer alive; close() frees it (ARCHITECTURE.md §5).
-    if (view && !view.webContents.isDestroyed()) view.webContents.close();
+    pageOf(view)?.close();
   }
 
   destroyAll(): void {
@@ -509,11 +515,11 @@ export class TabManager {
     // Peek and mini windows keep to themselves: a link that wants a new tab opens right there.
     const floating = this.floating.get(openerNodeId);
     if (floating) {
-      if (!floating.view.webContents.isDestroyed()) void floating.view.webContents.loadURL(url).catch(() => {});
+      void pageOf(floating.view)?.loadURL(url).catch(() => {});
       return { action: 'deny' };
     }
     // A pinned tab's link to another site opens in Peek, unless it was asked for in the background (⌘/Ctrl-click).
-    const opener = this.views.get(openerNodeId)?.webContents;
+    const opener = pageOf(this.views.get(openerNodeId));
     if (disposition !== 'background-tab' && opener && this.leadsToPeek(openerNodeId, opener, url)) {
       this.deps.onPeek(openerNodeId, url, null);
       return { action: 'deny' };

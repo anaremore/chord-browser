@@ -203,6 +203,10 @@ jobs:
           } else {
             if ($publishers.Count -eq 0) { throw "A signed build must name its publisher in app-update.yml, or its copies would install an update signed by anyone" }
             "Updates must be signed by: $($publishers -join ' or ')"
+            # Microsoft's own redistributables that Electron ships already signed by Microsoft (on Windows arm64 since
+            # Electron 45.3): signing leaves a signed file alone, so they keep Microsoft's valid, timestamped signature.
+            # Only these names may, and only with a Microsoft Corporation signer; everything else must be the publisher's.
+            $microsoftSigned = @('d3dcompiler_47.dll')
             foreach ($file in $files + @(Get-ChildItem $installed -Filter '*.dll')) {
               $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
               $signer = $signature.SignerCertificate
@@ -210,7 +214,8 @@ jobs:
               "$($file.Name): $($signature.Status), signed by '$name', timestamped by '$($signature.TimeStamperCertificate.Subject)'"
               if ($signature.Status -ne 'Valid') { throw "$($file.Name) isn't validly signed: $($signature.StatusMessage)" }
               if (-not $signature.TimeStamperCertificate) { throw "$($file.Name) has no timestamp, so its signature would lapse with the certificate" }
-              if ($publishers -notcontains $name -and $publishers -notcontains $signer.Subject) { throw "$($file.Name) is signed by '$($signer.Subject)', not by $($publishers -join ' or ')" }
+              $byMicrosoft = $microsoftSigned -contains $file.Name -and $signer.Subject -match '(^|,\s*)O=Microsoft Corporation(,|$)'
+              if (-not $byMicrosoft -and $publishers -notcontains $name -and $publishers -notcontains $signer.Subject) { throw "$($file.Name) is signed by '$($signer.Subject)', not by $($publishers -join ' or ')" }
             }
           }
 

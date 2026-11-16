@@ -35,6 +35,41 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
 
+  # The password detector on DuckDuckGo's corpus of real sites' forms, in Playwright's own headless Chromium
+  # (apps/desktop/test/forms; S17 §13 layer 2), held to its baseline. The corpus is a pinned, hash-checked
+  # download, kept in this job's cache and never in the repository or a release (decided 2026-11-15).
+  forms:
+    name: Password detector · corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Cache the corpus
+        uses: actions/cache@v6
+        with:
+          path: apps/desktop/test/forms/.cache
+          key: forms-corpus-${{ hashFiles('apps/desktop/test/forms/corpus.ts') }}
+      - name: Cache Playwright's Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/package.json') }}
+      - run: pnpm --filter @chord/desktop exec playwright install --only-shell chromium
+      - run: pnpm --filter @chord/desktop test:forms
+      - name: Upload the corpus score
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: forms-score
+          path: apps/desktop/test-results/forms/score.json
+          if-no-files-found: ignore
+
   # Chord Player (apps/player): packaged on castLabs ECS per OS and smoke-tested, with ECS's
   # development signature. Only a player release is VMP-signed (player-release.yml).
   player:

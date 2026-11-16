@@ -22,6 +22,7 @@ import { epochNow, markLaunch } from './perf';
 import { applyMaterial, onUiScale, platform, systemInfo, titleBarOverlay, trafficLightPosition, uiScale, windowChromeOptions } from './platform';
 import { lockToOrigins } from './security';
 import { originOf } from './urls';
+import { pageOf } from './view-page';
 
 export type SidebarMode = WindowModel['sidebar'];
 
@@ -375,7 +376,7 @@ export class AppWindow {
       clearTimeout(boundsTimer);
       this.snapshots.dispose();
       clearInterval(this.previewAnimation);
-      for (const view of [this.shell, this.popover, this.preview, this.overlay]) if (!view.webContents.isDestroyed()) view.webContents.close();
+      for (const view of [this.shell, this.popover, this.preview, this.overlay]) pageOf(view)?.close();
     });
 
     markLaunch('windowCreated');
@@ -460,11 +461,12 @@ export class AppWindow {
     this.focusedPane = focus ? next.indexOf(focus) : 0;
     this.layout();
     if (this.overlayVisible || !focusChanged) return;
-    (focus?.webContents ?? this.shell.webContents).focus();
+    // A page that's gone leaves the keyboard with the shell.
+    (pageOf(focus) ?? pageOf(this.shell))?.focus();
   }
 
   get activeTabContents() {
-    return this.tabView?.webContents ?? null;
+    return pageOf(this.tabView) ?? null;
   }
 
   /**
@@ -478,6 +480,16 @@ export class AppWindow {
     for (const d of this.devtools) if (d && !views.includes(d.view) && root.children.includes(d.view)) root.removeChildView(d.view);
     for (const view of views) if (!root.children.includes(view)) root.addChildView(view, this.shellRaised ? 0 : 1);
     this.devtools = next;
+  }
+
+  /**
+   * Pane `i`'s docked developer tools while their page is there. Ones whose page is gone (quitting, or it
+   * crashed away before DevTools.close cleared them here) aren't laid out, pictured or focused: their view
+   * has no page to read on macOS (view-page.ts).
+   */
+  private dockedDevtools(i: number): DockedDevtools | null {
+    const tools = this.devtools[i];
+    return tools && pageOf(tools.view) ? tools : null;
   }
 
   /** Settings changed where docked developer tools go, or how big they are: they move now. */
@@ -504,7 +516,7 @@ export class AppWindow {
 
   /** Whether the focused pane's tab has its developer tools docked here (one of F6's regions). */
   get devtoolsShown(): boolean {
-    return !this.window.isDestroyed() && Boolean(this.devtools[this.focusedPane]);
+    return !this.window.isDestroyed() && Boolean(this.dockedDevtools(this.focusedPane));
   }
 
   /** Docked developer tools' page, edge and frame in a pane: at the edge being dragged, or the setting for their side. */
@@ -514,7 +526,7 @@ export class AppWindow {
 
   /** Each pane's page in the frame: its pane, less its docked developer tools. */
   private pageRectsIn(frame: Rect): Rect[] {
-    return this.paneRectsIn(frame).map((pane, i) => (this.devtools[i] ? this.devtoolsLayoutIn(pane).page : pane));
+    return this.paneRectsIn(frame).map((pane, i) => (this.dockedDevtools(i) ? this.devtoolsLayoutIn(pane).page : pane));
   }
 
   /**
@@ -527,7 +539,7 @@ export class AppWindow {
     const rects = this.paneRectsIn(frame);
     return this.panes.flatMap((view, i) => {
       const pane = rects[i] ?? frame;
-      const tools = this.devtools[i];
+      const tools = this.dockedDevtools(i);
       if (!tools) return [{ view, rect: pane }];
       const d = this.devtoolsLayoutIn(pane);
       return [
@@ -554,7 +566,7 @@ export class AppWindow {
     if (this.window.isDestroyed()) return;
     const root = this.window.contentView;
     for (const view of this.parked) if (!views.includes(view) && !this.panes.includes(view) && root.children.includes(view)) root.removeChildView(view);
-    this.parked = views.filter((view) => !view.webContents.isDestroyed());
+    this.parked = views.filter((view) => Boolean(pageOf(view)));
     for (const view of this.parked) {
       if (this.panes.includes(view)) continue;
       // Just above the shell, where the pages go.
@@ -584,7 +596,7 @@ export class AppWindow {
 
   /** Peek's page, while one is open. */
   get peekContents() {
-    return this.peek ? (this.peekView?.webContents ?? null) : null;
+    return this.peek ? (pageOf(this.peekView) ?? null) : null;
   }
 
   /** Which opening of the overlay is Peek's, so a close for it (overlay:close) closes the Peek. */
@@ -610,7 +622,7 @@ export class AppWindow {
     root.addChildView(this.popover);
     this.showOverlay(true);
     // Esc and ⌘↵ work from the first frame; the page takes focus once it's in the card.
-    this.overlay.webContents.focus();
+    pageOf(this.overlay)?.focus();
     this.peekSeq = ++this.overlaySeq;
     send(this.overlay.webContents, 'overlay:open', { mode: 'peek', anchor: null, url: info.url, seq: this.peekSeq, peek: this.peekState(), requestedAt: epochNow() });
     clearTimeout(this.peekTimer);
@@ -618,7 +630,7 @@ export class AppWindow {
       if (this.peekView !== view || this.window.isDestroyed()) return;
       root.addChildView(view, root.children.indexOf(this.popover));
       this.layout();
-      view.webContents.focus();
+      pageOf(view)?.focus();
     }, delayMs);
     this.layout();
   }
@@ -645,7 +657,7 @@ export class AppWindow {
     root.addChildView(this.popover, root.children.indexOf(this.preview));
     if (this.overlayVisible) this.showOverlay(false);
     this.layout();
-    (this.tabView?.webContents ?? this.shell.webContents).focus();
+    (pageOf(this.tabView) ?? pageOf(this.shell))?.focus();
     return view;
   }
 
@@ -665,7 +677,7 @@ export class AppWindow {
     if (!animate) return done();
     const start = performance.now();
     const timer = setInterval(() => {
-      if (this.window.isDestroyed() || view.webContents.isDestroyed()) {
+      if (this.window.isDestroyed() || !pageOf(view)) {
         clearInterval(timer);
         return;
       }
@@ -734,17 +746,21 @@ export class AppWindow {
    */
   captureTarget(): { contents: WebContents; rect: Rect } | null {
     if (this.window.isDestroyed()) return null;
-    if (this.peek && this.peekView) return { contents: this.peekView.webContents, rect: this.peekPageRect() };
+    if (this.peek && this.peekView) {
+      const peek = pageOf(this.peekView);
+      return peek ? { contents: peek, rect: this.peekPageRect() } : null;
+    }
     const view = this.tabView;
-    if (!view || this.hiddenPanes.has(view) || view.webContents.isDestroyed()) return null;
-    if (this.pageFullScreen) return { contents: view.webContents, rect: { x: 0, y: 0, ...this.contentSize() } };
+    const contents = pageOf(view);
+    if (!view || !contents || this.hiddenPanes.has(view)) return null;
+    if (this.pageFullScreen) return { contents, rect: { x: 0, y: 0, ...this.contentSize() } };
     const frame = this.frameRect();
-    return { contents: view.webContents, rect: this.pageRectsIn(frame)[this.focusedPane] ?? frame };
+    return { contents, rect: this.pageRectsIn(frame)[this.focusedPane] ?? frame };
   }
 
-  /** Every page shown in the frame: a split's panes, or the one tab. */
+  /** Every page shown in the frame: a split's panes, or the one tab (a page that's gone, not at all). */
   get paneContents(): WebContents[] {
-    return this.panes.map((v) => v.webContents);
+    return this.panes.flatMap((v) => pageOf(v) ?? []);
   }
 
   /**
@@ -810,11 +826,12 @@ export class AppWindow {
 
   /** The shell is listening for the snapshot's events: give it a port of its own (a fresh one each time it asks). */
   connectSnapshots(): void {
-    if (this.shell.webContents.isDestroyed()) return;
+    const shell = pageOf(this.shell);
+    if (!shell) return;
     this.snapshotPort?.close();
     const { port1, port2 } = new MessageChannelMain();
     this.snapshotPort = port1;
-    this.shell.webContents.postMessage('frame:port', null, [port2]);
+    shell.postMessage('frame:port', null, [port2]);
   }
 
   /** The popover reports its cards' size; 0 × 0 hides it. */
@@ -832,13 +849,13 @@ export class AppWindow {
     if (this.popover.getVisible() !== visible) this.popover.setVisible(visible);
     if (visible && this.focusPopoverWhenShown) {
       this.focusPopoverWhenShown = false;
-      this.popover.webContents.focus();
+      pageOf(this.popover)?.focus();
     }
   }
 
   /** Give the popover keyboard focus (the find bar), now or as soon as it's shown. */
   focusPopover(): void {
-    if (this.popover.getVisible()) this.popover.webContents.focus();
+    if (this.popover.getVisible()) pageOf(this.popover)?.focus();
     else this.focusPopoverWhenShown = true;
   }
 
@@ -943,7 +960,7 @@ export class AppWindow {
       return;
     }
     this.showOverlay(true);
-    this.overlay.webContents.focus();
+    pageOf(this.overlay)?.focus();
     send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? (anchor ?? this.anchor) : anchor, url, seq: ++this.overlaySeq, requestedAt, ...(capture ? { capture } : {}) });
     this.placementChanged();
   }
@@ -973,7 +990,7 @@ export class AppWindow {
   private loadDeferred(): void {
     const views = this.deferred;
     this.deferred = [];
-    for (const { view, surface } of views) if (!view.webContents.isDestroyed()) void view.webContents.loadURL(uiUrl(surface));
+    for (const { view, surface } of views) void pageOf(view)?.loadURL(uiUrl(surface));
   }
 
   /**
@@ -987,7 +1004,7 @@ export class AppWindow {
     if (this.peek && seq === this.peekSeq) return;
     this.showOverlay(false);
     const back = dismissed && this.overlayFrom === 'shell' ? this.shell : (this.tabView ?? this.shell);
-    back.webContents.focus();
+    (pageOf(back) ?? pageOf(this.shell))?.focus();
     this.placementChanged();
   }
 
@@ -998,11 +1015,11 @@ export class AppWindow {
    */
   focusRegion(to: 'page' | 'devtools' | 'popover' | 'shell'): void {
     if (this.window.isDestroyed()) return;
-    const tools = this.devtools[this.focusedPane];
-    if (to === 'popover' && this.popover.getVisible()) this.popover.webContents.focus();
-    else if (to === 'devtools' && tools && !tools.view.webContents.isDestroyed()) tools.view.webContents.focus();
-    else if (to === 'page' && this.tabView?.getVisible()) this.tabView.webContents.focus();
-    else this.shell.webContents.focus();
+    const tools = this.dockedDevtools(this.focusedPane);
+    const target =
+      to === 'popover' && this.popover.getVisible() ? pageOf(this.popover) : to === 'devtools' && tools ? pageOf(tools.view) : to === 'page' && this.tabView?.getVisible() ? pageOf(this.tabView) : undefined;
+    // The shell otherwise, or when the region's page is gone.
+    (target ?? pageOf(this.shell))?.focus();
   }
 
   /** Whether a find bar or permission prompt shows over the page (it's one of F6's regions). */
@@ -1172,7 +1189,7 @@ export class AppWindow {
     this.panes.forEach((view, i) => {
       const pane = rects[i] ?? frame;
       // Docked developer tools share the pane with the page (DESIGN.md §7.16), with the shell's edge between them.
-      const tools = this.devtools[i];
+      const tools = this.dockedDevtools(i);
       const docked = tools ? this.devtoolsLayoutIn(pane) : null;
       // The page's rect in window pixels: the one place a page's rect leaves the layout's units (the shell's CSS pixels).
       const at = toWindowRect(docked?.page ?? pane);
@@ -1184,7 +1201,7 @@ export class AppWindow {
     });
     const parkedAt = offscreen(toWindowRect(frame), whole);
     for (const view of this.parked) {
-      if (this.panes.includes(view) || view.webContents.isDestroyed()) continue;
+      if (this.panes.includes(view) || !pageOf(view)) continue;
       place(view, this.nudged.has(view) ? { ...parkedAt, height: parkedAt.height + 1 } : parkedAt);
     }
     this.showPopover();

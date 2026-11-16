@@ -16,6 +16,7 @@
 import { captureScale, effectsHost, intersectRect, MIN_AREA, pageToUi, screenshotFilename, uiToPage, type ScreenshotEntry, type ScreenshotKind, type ShotRect } from '@chord/core';
 import type { CaptureHit, ScreenshotChoice, ScreenshotItem } from '@chord/ipc';
 import { clipboard, ClipboardItem, type WebContents } from 'electron';
+import { withDebugger } from '../debugger-queue';
 import { pageCall } from '../page-call';
 import type { AppWindow } from '../window';
 import { FORGET_SCRIPT, hitScript, PICKED_SCRIPT, SHOT_WORLD, stepScript } from './scripts';
@@ -292,7 +293,12 @@ export class Screenshots {
     }
   }
 
-  private async capture(c: Capturing, choice: ScreenshotChoice): Promise<{ png: Buffer; thumb: Buffer; ask: Buffer | null; width: number; height: number } | null> {
+  /** One debugger client at a time per page, shared with the assistant's page_diagnostics (debugger-queue.ts). */
+  private capture(c: Capturing, choice: ScreenshotChoice): Promise<{ png: Buffer; thumb: Buffer; ask: Buffer | null; width: number; height: number } | null> {
+    return withDebugger(c.contents, () => this.captureOnce(c, choice));
+  }
+
+  private async captureOnce(c: Capturing, choice: ScreenshotChoice): Promise<{ png: Buffer; thumb: Buffer; ask: Buffer | null; width: number; height: number } | null> {
     const debug = c.contents.debugger;
     const mine = !debug.isAttached();
     if (mine) debug.attach('1.3');

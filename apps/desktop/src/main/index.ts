@@ -62,6 +62,7 @@ import { UpdateChecker } from './updates';
 import { PasskeyBroker } from './passkeys';
 import { osKeys, testKeys } from './passwords/keys';
 import { PasswordService } from './passwords/service';
+import { createPasswordDetector } from './passwords/detector';
 import { proxies } from './proxy';
 import { Screenshots } from './screenshots/service';
 import { DiskShots } from './screenshots/store';
@@ -124,6 +125,14 @@ const passwords = new PasswordService({
   hide: () => browser?.passwordsHide(),
   chord: (chordId) => browser?.store.state.chords[chordId] ?? null,
   extensions: () => browser?.store.state.extensions ?? {},
+});
+/**
+ * Chord's password detector (S17): off until the vault turns it on (`passwords.attachDetector`, once the state
+ * exists, then `stateChanged` after each change); reads nothing until a page asks.
+ */
+const passwordDetector = createPasswordDetector({
+  preloadPath: join(import.meta.dirname, '../preload/passwords.cjs'),
+  agentPath: join(import.meta.dirname, 'passwords/agent.js'),
 });
 /** Work the first window doesn't need waits until launch is over. */
 const afterLaunch = new AfterLaunch();
@@ -575,6 +584,8 @@ if (!app.requestSingleInstanceLock()) {
   // keeps WebRTC to it (proxy.ts). Registered before any session exists: they fire from session.fromPartition on.
   app.on('session-created', (ses) => proxies.created(ses));
   app.on('web-contents-created', (_event, contents) => proxies.contentsCreated(contents));
+  // The passwords sentinel's ask for the agent gets an answer anywhere it runs; a tab's page then takes over (attachPage).
+  app.on('web-contents-created', (_event, contents) => passwordDetector.attachOther(contents));
   // A site or proxy asking for a username and password: Chord's own box over the tab, or cancelled.
   app.on('login', (event, contents, details, info, callback) => {
     if (httpAuth.login(contents, details, info, callback)) event.preventDefault();
@@ -667,6 +678,8 @@ if (!app.requestSingleInstanceLock()) {
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
         screenShare.attach(ses);
         passkeys.attach(ses);
+        // The passwords sentinel, registered only while passwords are on for this chord (S17 §8).
+        passwordDetector.attachSession(profileId, ses, priv);
         // A chord's session gets the blocker extension; a private window's, its request dispatcher.
         adBlocking.attach(profileId, ses, priv);
         // Before any page's own scripts: what Electron lacks and every Chromium browser has (preload/page.ts).
@@ -810,6 +823,7 @@ if (!app.requestSingleInstanceLock()) {
       httpAuth,
       passkeys,
       passwords,
+      passwordDetector,
       screenshots,
       histories: opened.navs,
       saveHistory: (nodeId, nav) => persistence?.nav(nodeId, nav),
@@ -986,6 +1000,9 @@ if (!app.requestSingleInstanceLock()) {
       folder: () => app.getPath('documents'),
       data: { flush: () => store.flush(), device: () => store.device(), counts: () => store.exportCounts() },
     });
+    // The detector watches the sign-ins the vault's switch and extension rule say (S17 §11), from now on: told at once,
+    // and after every change (onChange's stateChanged), only when that changes.
+    passwords.attachDetector(passwordDetector, browser.store.state);
     // Your data's import from a Chord file (S15 §5, §7): a process of its own reads and checks the file.
     fileImporter = new FileImporter({
       workerPath: join(import.meta.dirname, 'import-file.js'),
@@ -1039,7 +1056,19 @@ if (!app.requestSingleInstanceLock()) {
       // Right-click menus are read, not shown: their labels, newest last, by page.
       const contextMenus = new Map<number, ObservedItem[]>();
       observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
+      // The password detector's events, as plain data (the page's contents by id), oldest first.
+      const passwordEvents: Record<string, unknown>[] = [];
+      for (const type of ['focus', 'blur', 'submitted', 'signedIn', 'failed'] as const) {
+        passwordDetector.events.on(type, (event: { contents: Electron.WebContents; frame?: unknown }) => {
+          const { contents, frame: _frame, ...rest } = event;
+          passwordEvents.push({ type, contentsId: contents.id, ...rest });
+        });
+      }
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
+        /** Passwords (S17): turn detection on or off, as the vault's switch will; and what it has reported. */
+        passwordsEnabled: (on: boolean, profileIds?: string[]) => passwordDetector.setEnabled(on, profileIds),
+        passwordEvents: () => passwordEvents.slice(),
+        clearPasswordEvents: () => void (passwordEvents.length = 0),
         launch: () => launchTimings(),
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),
