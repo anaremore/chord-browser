@@ -7,7 +7,7 @@
  * cut to its origin and path. Requests' headers, cookies and bodies are never
  * asked for (no Network domain), so they can't be here.
  */
-import { cleanPageText } from './assistant';
+import { cleanPageText, isNeverReadable } from './assistant';
 
 /** Core runs without DOM types. */
 declare const URL: new (url: string) => { protocol: string; origin: string; host: string; pathname: string };
@@ -56,11 +56,13 @@ export interface CdpConsoleCall {
   args?: CdpRemoteObject[];
   timestamp?: number;
   stackTrace?: CdpStackTrace;
+  /** The frame's script context it was called in (Runtime.executionContextCreated said whose). */
+  executionContextId?: number;
 }
 /** Runtime.exceptionThrown's params. */
 export interface CdpException {
   timestamp?: number;
-  exceptionDetails?: { text?: string; url?: string; lineNumber?: number; stackTrace?: CdpStackTrace; exception?: CdpRemoteObject };
+  exceptionDetails?: { text?: string; url?: string; lineNumber?: number; stackTrace?: CdpStackTrace; exception?: CdpRemoteObject; executionContextId?: number };
 }
 
 export type DiagnosticsEvent = { kind: 'log'; entry: CdpLogEntry } | { kind: 'console'; call: CdpConsoleCall } | { kind: 'exception'; thrown: CdpException };
@@ -98,14 +100,14 @@ export function shrinkEvent(e: DiagnosticsEvent): DiagnosticsEvent {
   }
   if (e.kind === 'console') {
     const { call } = e;
-    return { kind: 'console', call: { type: call.type, timestamp: call.timestamp, args: (call.args ?? []).slice(0, RAW_ARGS).map(shrinkObject), stackTrace: shrinkTrace(call.stackTrace) } };
+    return { kind: 'console', call: { type: call.type, timestamp: call.timestamp, args: (call.args ?? []).slice(0, RAW_ARGS).map(shrinkObject), stackTrace: shrinkTrace(call.stackTrace), executionContextId: call.executionContextId } };
   }
   const d = e.thrown.exceptionDetails;
   return {
     kind: 'exception',
     thrown: {
       timestamp: e.thrown.timestamp,
-      ...(d ? { exceptionDetails: { text: rawCut(d.text), url: rawCut(d.url, RAW_URL), lineNumber: d.lineNumber, stackTrace: shrinkTrace(d.stackTrace), ...(d.exception ? { exception: shrinkObject(d.exception) } : {}) } } : {}),
+      ...(d ? { exceptionDetails: { text: rawCut(d.text), url: rawCut(d.url, RAW_URL), lineNumber: d.lineNumber, stackTrace: shrinkTrace(d.stackTrace), executionContextId: d.executionContextId, ...(d.exception ? { exception: shrinkObject(d.exception) } : {}) } } : {}),
     },
   };
 }
@@ -307,9 +309,14 @@ const INITIATOR_TYPES: Record<string, string> = {
  * are left out), each bounded. `types` maps a request's full address to the
  * page's own `initiatorType`, when its timing has one.
  */
-export function diagnosticsEntries(events: readonly DiagnosticsEvent[], types: Readonly<Record<string, string>> = {}): { entries: DiagnosticsEntry[]; total: number } {
+export function diagnosticsEntries(
+  events: readonly DiagnosticsEvent[],
+  types: Readonly<Record<string, string>> = {},
+  never: NeverFrames = { sites: [], origins: {} },
+): { entries: DiagnosticsEntry[]; total: number } {
   const all: { at: number; entry: DiagnosticsEntry }[] = [];
   for (const e of events) {
+    if (fromNeverSite(e, never)) continue;
     if (e.kind === 'log') {
       const { entry } = e;
       if (entry.level !== 'error' && entry.level !== 'warning') continue;
@@ -343,6 +350,33 @@ export function diagnosticsEntries(events: readonly DiagnosticsEvent[], types: R
   // Stable: entries with the same time keep the order Chromium sent them in.
   const sorted = all.map((x, i) => ({ ...x, i })).sort((a, b) => a.at - b.at || a.i - b.i);
   return { entries: sorted.slice(-DIAGNOSTICS_MAX_ENTRIES).map((x) => x.entry), total: sorted.length };
+}
+
+/**
+ * The *Never read* sites (ARCHITECTURE.md §11.3), and each script context's origin from the read
+ * (Runtime.executionContextCreated): a page that's readable can hold a frame of a site that isn't
+ * (`mail.example.com` inside `www.example.com`), and that frame's problems are left out.
+ */
+export interface NeverFrames {
+  sites: readonly string[];
+  origins: Readonly<Record<number, string>>;
+}
+
+/** Whether an address is a *Never read* site's. Addresses that aren't a site's (eval'd code, `about:`, an extension's) aren't. */
+function onNeverSite(address: string | undefined, sites: readonly string[]): boolean {
+  if (!address || !sites.length) return false;
+  // A blob's address carries the origin that made it.
+  const url = address.trim().replace(/^blob:/i, '');
+  return /^(https?|file):/i.test(url) && isNeverReadable(url, sites);
+}
+
+/** Whether the event came from, or names, a frame of a *Never read* site: its script context, its address, any frame of its stack. */
+function fromNeverSite(e: DiagnosticsEvent, never: NeverFrames): boolean {
+  const trace = e.kind === 'log' ? e.entry.stackTrace : e.kind === 'console' ? e.call.stackTrace : e.thrown.exceptionDetails?.stackTrace;
+  const url = e.kind === 'log' ? e.entry.url : e.kind === 'exception' ? e.thrown.exceptionDetails?.url : undefined;
+  const context = e.kind === 'console' ? e.call.executionContextId : e.kind === 'exception' ? e.thrown.exceptionDetails?.executionContextId : undefined;
+  const addresses = [url, context === undefined ? undefined : never.origins[context], ...(trace?.callFrames ?? []).map((f) => f.url)];
+  return addresses.some((a) => onNeverSite(a, never.sites));
 }
 
 /** The activity line's detail: "2 errors · 1 warning · 2 failed requests", or "No problems". */

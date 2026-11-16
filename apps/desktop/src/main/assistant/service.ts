@@ -1444,7 +1444,8 @@ export class AssistantService {
     // What was read belongs to the page that was asked about, still on screen and still readable.
     const after = blocked(url);
     if (after) return refuse(after);
-    const { entries, total } = diagnosticsEntries(read.events, read.types);
+    // A frame of a *Never read* site inside the page (mail.example.com in www.example.com): its problems are left out.
+    const { entries, total } = diagnosticsEntries(read.events, read.types, { sites: this.settings.neverSites, origins: read.origins });
     state.read.add(node.id);
     const note = total > entries.length ? `The page has ${total} problems; the newest ${entries.length} are here.` : entries.length ? '' : 'Chromium kept no errors, warnings or failed requests for this page since it loaded.';
     await this.activity(state, 'page_diagnostics', `Checked “${title}” for problems`, diagnosticsSummary(entries));

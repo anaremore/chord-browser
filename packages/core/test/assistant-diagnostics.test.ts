@@ -183,6 +183,33 @@ describe('page_diagnostics: what each kind of event becomes', () => {
     ['an info log entry', { kind: 'log', entry: { source: 'other', level: 'info', text: 'note' } }],
   ])('leaves out %s', (_, event) => expect(diagnosticsEntries([event]).entries).toEqual([]));
 
+  // A readable page holding a frame of a *Never read* site (mail.example.com inside www.example.com): that frame's problems stay out.
+  describe('a Never read site’s frame inside the page', () => {
+    const never = { sites: ['mail.example.com'], origins: { 1: 'https://www.example.com', 7: 'https://mail.example.com' } };
+    const error = (extra: object): DiagnosticsEvent => ({ kind: 'console', call: { type: 'error', args: [{ type: 'string', value: 'x' }], ...extra } });
+    it.each<[string, DiagnosticsEvent, boolean]>([
+      ['the page’s own console call', error({ executionContextId: 1 }), true],
+      ['a console call in the frame (its script context)', error({ executionContextId: 7 }), false],
+      ['a console call whose stack runs through the frame’s script', error({ stackTrace: { callFrames: [{ url: 'https://www.example.com/a.js' }, { url: 'https://mail.example.com/inbox.js?s=1' }] } }), false],
+      ['an exception in the frame', { kind: 'exception', thrown: { exceptionDetails: { text: 'Uncaught', executionContextId: 7 } } }, false],
+      ['an exception at the frame’s address', { kind: 'exception', thrown: { exceptionDetails: { text: 'Uncaught', url: 'https://mail.example.com/x.js' } } }, false],
+      ['a failed request to the site', { kind: 'log', entry: { source: 'network', level: 'error', text: 'net::ERR_FAILED', url: 'https://mail.example.com/api' } }, false],
+      ['a blob the frame made', error({ stackTrace: { callFrames: [{ url: 'blob:https://mail.example.com/1f2e' }] } }), false],
+      ['a failed request elsewhere', { kind: 'log', entry: { source: 'network', level: 'error', text: 'net::ERR_FAILED', url: 'https://cdn.example.net/a.js' } }, true],
+      ['eval’d code and an extension’s script: not a site', error({ stackTrace: { callFrames: [{ url: '' }, { url: 'chrome-extension://abc/c.js' }] } }), true],
+      ['a context Chord wasn’t told about', error({ executionContextId: 99 }), true],
+    ])('%s', (_, event, kept) => {
+      expect(diagnosticsEntries([event], {}, never).entries).toHaveLength(kept ? 1 : 0);
+      // With no Never read sites, nothing is left out.
+      expect(diagnosticsEntries([event], {}, { sites: [], origins: never.origins }).entries).toHaveLength(1);
+    });
+
+    it('keeps the context through shrinkEvent', () => {
+      expect(diagnosticsEntries([shrinkEvent(error({ executionContextId: 7 }))], {}, never).entries).toEqual([]);
+      expect(diagnosticsEntries([shrinkEvent({ kind: 'exception', thrown: { exceptionDetails: { text: 'Uncaught', executionContextId: 7 } } })], {}, never).entries).toEqual([]);
+    });
+  });
+
   it('summarizes for the activity line', () => {
     const { entries } = diagnosticsEntries([
       { kind: 'console', call: { type: 'error', args: [{ type: 'string', value: 'a' }] } },
