@@ -57,7 +57,7 @@ const chordId = (s: State) => Object.keys(s.chords)[0]!;
 describe('migrations 19 to 21', () => {
   it('add sync’s tables, empty, and what its reader remembers of junk', () => {
     expect(db.version).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(23);
+    expect(MIGRATIONS.length).toBe(24);
     expect(db.sync.outboxSize()).toBe(0);
     expect(db.sync.meta.on).toBe(false);
     expect(db.sync.junk()).toEqual([]);

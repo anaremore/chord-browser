@@ -26,6 +26,7 @@ import type {
 import type { ExportCounts, FolderInspection, SyncApply, SyncStatus } from '@chord/core';
 import { localChordFields, localFavoriteFields, localNodeFields, localRouteFields, same } from '@chord/core';
 import type { AssistantOp, AssistantResult } from './assistant';
+import type { PasswordOp, PasswordResult } from './passwords';
 import type { SyncTimings } from './sync';
 
 /**
@@ -216,6 +217,8 @@ export type DataRequest =
   | { id: number; type: 'archive.latest'; reasons: ArchiveReason[] }
   /** The assistant's threads and messages (./assistant.ts). */
   | { id: number; type: 'assistant'; op: AssistantOp }
+  /** Chord's own passwords (./passwords.ts): the vault and its sealed sign-ins. A password or a passphrase in here is never logged. */
+  | { id: number; type: 'passwords'; op: PasswordOp }
   /**
    * A port (transferred with this request) on which the import process sends
    * one import's history, a batch at a time (`ImportBatch`), so the pages
@@ -344,6 +347,7 @@ export type DataResponse =
       archive?: ArchivePage;
       entry?: ArchiveEntry | null;
       assistant?: AssistantResult;
+      passwords?: PasswordResult;
       timing?: OpenTiming;
       device?: string;
       counts?: ExportCounts;
@@ -521,4 +525,5 @@ export function opsForState(state: State): WriteOp[] {
 }
 
 export type { AssistantOp, AssistantResult } from './assistant';
+export type { Candidate, LoginPatch, NewLogin, PasswordOp, PasswordProblem, PasswordResult, VaultState, VaultStatus } from './passwords';
 export type { ExportPhase } from './export';

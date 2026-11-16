@@ -36,6 +36,7 @@ import {
   type LinkRoute,
   type PersistedState,
   type Platform,
+  type ScryptParams,
   type SavedEffects,
   type SidebarNode,
   type SitePermissions,
@@ -46,6 +47,7 @@ import { runAssistant, threadOf, type AssistantOp, type AssistantResult } from '
 import { exportCounts } from './export';
 import { MIGRATIONS } from './migrations';
 import { chordOf, favoriteOf, iconOf, nodeOf, nodeSelect, num, parseJson, siteEffectsOf, str, strOrNull, type Row } from './rows';
+import { PasswordStore } from './passwords';
 import { SyncStore } from './sync';
 
 /** The profile every chord belongs to until "Keep sign-ins separate" exists. */
@@ -185,15 +187,20 @@ export class ChordDatabase {
   private importedUpto = 0;
   /** Sync's tables (sync.ts): write() stamps your changes through it while sync is on. */
   readonly sync: SyncStore;
+  /** Chord's own passwords (passwords.ts): the vault key while it's open, and the sealed sign-ins. */
+  readonly passwords: PasswordStore;
 
   constructor(
     readonly file: string,
     platform: Platform = process.platform === 'darwin' || process.platform === 'win32' ? process.platform : 'linux',
+    /** Tests only: a cheaper scrypt for the vault passphrase than S15's. */
+    passwordKdf?: ScryptParams,
   ) {
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
     this.migrate();
     this.sync = new SyncStore((text) => this.sql(text), () => this.device(), platform);
+    this.passwords = new PasswordStore((text) => this.sql(text), passwordKdf);
     // Archived tabs past their keep-by date, icons nothing uses any more, and picks unused for their lifetime.
     this.db.prepare('DELETE FROM archive_item WHERE archived_at < ?').run(Date.now() - ARCHIVE_KEEP_MS);
     this.db.exec(
@@ -1168,6 +1175,7 @@ export class ChordDatabase {
   }
 
   close(): void {
+    this.passwords.close();
     this.statements.clear();
     this.db.close();
   }

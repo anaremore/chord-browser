@@ -1,0 +1,374 @@
+/**
+ * The vault (docs/decisions/S17-passwords.md §7, §13 layer 4): migration 24,
+ * the passphrase and the kept key, sealing and opening, tags, matching on the
+ * page's origin, saving and updating, Delete's Undo, and that nothing of a
+ * password or a site reaches chord.db's bytes in the clear.
+ */
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ChordDatabase } from '../src/db';
+import { MIGRATIONS } from '../src/migrations';
+import type { PasswordOp, PasswordResult } from '../src/passwords';
+
+/** A cheap scrypt: S15's parameters take half a second each time. */
+const KDF = { N: 2 ** 10, r: 8, p: 1 };
+const PASSPHRASE = 'correct horse battery staple';
+const PASSWORD = 'hunter2-Sekrit-Zq9!';
+
+let dir: string;
+let file: string;
+let db: ChordDatabase;
+const run = (op: PasswordOp, now?: number): Promise<PasswordResult> => db.passwords.run(op, now);
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'chord-passwords-data-'));
+  file = join(dir, 'chord.db');
+  db = new ChordDatabase(file, 'linux', KDF);
+});
+afterEach(() => {
+  db.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** A vault, open, with one GitHub sign-in. */
+async function withLogin(origin = 'https://github.com', username = 'ada@acme.dev', password = PASSWORD, chordId: string | null = 'work'): Promise<string> {
+  if ((await run({ op: 'status' })).status!.state === 'none') await run({ op: 'setup', passphrase: PASSPHRASE });
+  const added = await run({ op: 'add', login: { origin, username, password }, chordId });
+  expect(added.problem).toBeUndefined();
+  return added.id!;
+}
+
+/** chord.db opened beside the vault, as anything else on the computer could open it; closed after each test. */
+let handles: DatabaseSync[] = [];
+const raw = () => {
+  const handle = new DatabaseSync(file);
+  handles.push(handle);
+  return handle;
+};
+afterEach(() => {
+  for (const handle of handles) if (handle.isOpen) handle.close();
+  handles = [];
+});
+
+describe('migration 24', () => {
+  it('adds the vault’s tables, empty, on the newest version', () => {
+    expect(db.version).toBe(MIGRATIONS.length);
+    const tables = (raw().prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'login%' ORDER BY name`).all() as { name: string }[]).map((t) => t.name);
+    expect(tables).toEqual(['login', 'login_never', 'login_use']);
+  });
+});
+
+describe('the passphrase and the key', () => {
+  it('has no vault until the first passphrase, and opens with it', async () => {
+    expect((await run({ op: 'status' })).status).toEqual({ state: 'none', kept: false, count: 0 });
+    expect((await run({ op: 'list', chordId: null })).problem).toBe('none');
+    expect((await run({ op: 'setup', passphrase: 'short' })).problem).toBe('invalid');
+    expect((await run({ op: 'setup', passphrase: PASSPHRASE })).status).toEqual({ state: 'open', kept: false, count: 0 });
+    expect((await run({ op: 'setup', passphrase: 'another long passphrase' })).problem).toBe('exists');
+  });
+
+  it.each([
+    ['the passphrase', PASSPHRASE, undefined, 'open'],
+    ['the same passphrase composed differently (NFC)', `${PASSPHRASE} café`, `${PASSPHRASE} café`, 'open'],
+    ['another passphrase', 'not the passphrase at all', undefined, 'locked'],
+    ['an empty one', '', undefined, 'locked'],
+  ] as const)('unlocks with %s, or fails closed', async (_what, typed, setWith, state) => {
+    await run({ op: 'setup', passphrase: setWith ?? PASSPHRASE });
+    await run({ op: 'lock' });
+    const answer = await run({ op: 'unlock', passphrase: typed });
+    expect(answer.status!.state).toBe(state);
+    expect(answer.problem).toBe(state === 'open' ? undefined : 'wrong');
+  });
+
+  it('locks: the ops that need the key say so, and nothing else changes', async () => {
+    const id = await withLogin();
+    await run({ op: 'lock' });
+    expect((await run({ op: 'status' })).status).toEqual({ state: 'locked', kept: false, count: 1 });
+    for (const op of [{ op: 'list', chordId: null }, { op: 'reveal', id }, { op: 'fill', id, origin: 'https://github.com', chordId: null }, { op: 'key' }] as PasswordOp[]) {
+      const answer = await run(op);
+      expect(answer.problem).toBe('locked');
+      expect(answer.password).toBeUndefined();
+    }
+  });
+
+  it('an unlock typed before a lock doesn’t open the vault after it', async () => {
+    await run({ op: 'setup', passphrase: PASSPHRASE });
+    await run({ op: 'lock' });
+    const unlocking = run({ op: 'unlock', passphrase: PASSPHRASE });
+    await run({ op: 'lock' });
+    // It says so, so main doesn't take the passphrase as typed and opened.
+    expect((await unlocking).problem).toBe('locked');
+    expect((await run({ op: 'status' })).status!.state).toBe('locked');
+  });
+
+  it('a kept key read before a lock doesn’t open the vault after it', async () => {
+    await withLogin();
+    const { key } = await run({ op: 'key' });
+    await run({ op: 'lock' });
+    const { generation } = await run({ op: 'status' });
+    await run({ op: 'lock' });
+    expect((await run({ op: 'open', key: new Uint8Array(key!), generation })).problem).toBe('locked');
+    const now = (await run({ op: 'status' })).generation;
+    expect((await run({ op: 'open', key: key!, generation: now })).status!.state).toBe('open');
+  });
+
+  it('a stored check of the wrong length fails closed, and throws nothing', async () => {
+    await run({ op: 'setup', passphrase: PASSPHRASE });
+    const { key } = await run({ op: 'key' });
+    await run({ op: 'lock' });
+    const r = raw();
+    const meta = JSON.parse((r.prepare(`SELECT value FROM meta WHERE key = 'passwords'`).get() as { value: string }).value);
+    r.prepare(`UPDATE meta SET value = ? WHERE key = 'passwords'`).run(JSON.stringify({ ...meta, check: 'c2hvcnQ=' }));
+    expect((await run({ op: 'open', key: key! })).problem).toBe('wrong');
+    expect((await run({ op: 'unlock', passphrase: PASSPHRASE })).problem).toBe('wrong');
+  });
+
+  it('verifies the passphrase without changing anything, and changes it without sealing a row again', async () => {
+    const id = await withLogin();
+    const before = raw().prepare('SELECT sealed FROM login WHERE id = ?').get(id) as { sealed: Uint8Array };
+    expect((await run({ op: 'verify', passphrase: PASSPHRASE })).problem).toBeUndefined();
+    expect((await run({ op: 'verify', passphrase: 'wrong wrong wrong' })).problem).toBe('wrong');
+    expect((await run({ op: 'passphrase', current: 'wrong wrong wrong', next: 'a brand new passphrase' })).problem).toBe('wrong');
+    expect((await run({ op: 'passphrase', current: PASSPHRASE, next: 'short' })).problem).toBe('invalid');
+    expect((await run({ op: 'passphrase', current: PASSPHRASE, next: 'a brand new passphrase' })).status!.state).toBe('open');
+    const after = raw().prepare('SELECT sealed FROM login WHERE id = ?').get(id) as { sealed: Uint8Array };
+    expect(Buffer.from(after.sealed).equals(Buffer.from(before.sealed))).toBe(true);
+    await run({ op: 'lock' });
+    expect((await run({ op: 'unlock', passphrase: PASSPHRASE })).problem).toBe('wrong');
+    expect((await run({ op: 'unlock', passphrase: 'a brand new passphrase' })).status!.state).toBe('open');
+    expect((await run({ op: 'reveal', id })).password).toBe(PASSWORD);
+  });
+
+  it('keeps a copy for the OS to wrap; opens with the key, and refuses another', async () => {
+    const id = await withLogin();
+    const { key } = await run({ op: 'key' });
+    expect(key).toHaveLength(32);
+    await run({ op: 'keep', blob: 'b3Mtd3JhcHBlZA==' });
+    expect((await run({ op: 'kept' })).blob).toBe('b3Mtd3JhcHBlZA==');
+    expect((await run({ op: 'status' })).status!.kept).toBe(true);
+    await run({ op: 'lock' });
+    // A key that isn't this vault's (a profile copied from elsewhere, a stale copy): fails closed.
+    const other = new Uint8Array(32).fill(7);
+    expect((await run({ op: 'open', key: other })).problem).toBe('wrong');
+    expect(other.every((b) => b === 0)).toBe(true);
+    expect((await run({ op: 'open', key: new Uint8Array(16) })).problem).toBe('wrong');
+    expect((await run({ op: 'open', key: key! })).status!.state).toBe('open');
+    expect((await run({ op: 'reveal', id })).password).toBe(PASSWORD);
+    await run({ op: 'keep', blob: null });
+    expect((await run({ op: 'status' })).status!.kept).toBe(false);
+  });
+
+  it('starts over: every sign-in, the never list and the key go', async () => {
+    await withLogin();
+    await run({ op: 'never', origin: 'https://example.com' });
+    await run({ op: 'lock' });
+    expect((await run({ op: 'startOver' })).status).toEqual({ state: 'none', kept: false, count: 0 });
+    const db2 = raw();
+    expect(db2.prepare('SELECT COUNT(*) AS n FROM login_never').get()).toEqual({ n: 0 });
+    expect(db2.prepare(`SELECT COUNT(*) AS n FROM meta WHERE key = 'passwords'`).get()).toEqual({ n: 0 });
+  });
+
+  it('a reopened chord.db is locked, and opens with the passphrase', async () => {
+    const id = await withLogin();
+    db.close();
+    db = new ChordDatabase(file, 'linux', KDF);
+    expect((await run({ op: 'status' })).status!.state).toBe('locked');
+    await run({ op: 'unlock', passphrase: PASSPHRASE });
+    expect((await run({ op: 'reveal', id })).password).toBe(PASSWORD);
+  });
+});
+
+describe('sealing', () => {
+  it('a blob moved to another row doesn’t open there', async () => {
+    const a = await withLogin('https://github.com', 'ada');
+    const b = await withLogin('https://github.com', 'grace', 'another-password');
+    const r = raw();
+    const sealedA = (r.prepare('SELECT sealed FROM login WHERE id = ?').get(a) as { sealed: Uint8Array }).sealed;
+    r.prepare('UPDATE login SET sealed = ? WHERE id = ?').run(sealedA, b);
+    r.close();
+    expect((await run({ op: 'reveal', id: a })).password).toBe(PASSWORD);
+    expect((await run({ op: 'reveal', id: b })).problem).toBe('missing');
+    const list = await run({ op: 'list', chordId: null });
+    expect(list.logins!.map((l) => l.username)).toEqual(['ada']);
+    expect(list.unreadable).toBe(1);
+  });
+
+  it.each([
+    ['a flipped bit in the ciphertext', (s: Buffer) => (s[20]! ^= 1)],
+    ['a flipped bit in the tag', (s: Buffer) => (s[s.length - 1]! ^= 1)],
+    ['another format version', (s: Buffer) => (s[0] = 2)],
+  ])('%s fails closed', async (_what, damage) => {
+    const id = await withLogin();
+    const r = raw();
+    const sealed = Buffer.from((r.prepare('SELECT sealed FROM login WHERE id = ?').get(id) as { sealed: Uint8Array }).sealed);
+    damage(sealed);
+    r.prepare('UPDATE login SET sealed = ? WHERE id = ?').run(sealed, id);
+    r.close();
+    expect((await run({ op: 'reveal', id })).problem).toBe('missing');
+    expect((await run({ op: 'fill', id, origin: 'https://github.com', chordId: null })).password).toBeUndefined();
+  });
+
+  it('seals each sign-in with its own nonce: the same sign-in twice is two different blobs', async () => {
+    const a = await withLogin();
+    const b = await withLogin();
+    const r = raw();
+    const blob = (id: string) => Buffer.from((r.prepare('SELECT sealed FROM login WHERE id = ?').get(id) as { sealed: Uint8Array }).sealed);
+    expect(blob(a).equals(blob(b))).toBe(false);
+  });
+
+  it('chord.db, its write-ahead log and its backups never hold a password, a username or a site in the clear', async () => {
+    const id = await withLogin('https://secret-site.example', 'ada.lovelace@acme.dev');
+    await run({ op: 'edit', id, patch: { password: 'second-Password-Qx7', note: 'the note is sealed too' } });
+    await run({ op: 'never', origin: 'https://never-here.example' });
+    db.close();
+    db = new ChordDatabase(file, 'linux', KDF);
+    for (const path of [file, `${file}-wal`, `${file}-shm`]) {
+      if (!existsSync(path)) continue;
+      const bytes = readFileSync(path);
+      for (const secret of [PASSWORD, 'second-Password-Qx7', 'ada.lovelace@acme.dev', 'secret-site', 'never-here', 'the note is sealed', PASSPHRASE]) {
+        expect(bytes.includes(Buffer.from(secret, 'utf8')), `${secret} in ${path}`).toBe(false);
+        expect(bytes.includes(Buffer.from(secret, 'utf16le')), `${secret} (UTF-16) in ${path}`).toBe(false);
+      }
+    }
+  });
+});
+
+describe('tags', () => {
+  it.each([
+    ['the same host', 'https://github.com', 'https://github.com', true],
+    ['another host of the site', 'https://login.github.com', 'https://gist.github.com', true],
+    ['http and https of one host', 'http://github.com', 'https://github.com', true],
+    ['private suffixes apart', 'https://a.github.io', 'https://b.github.io', false],
+    ['another site', 'https://github.com', 'https://gitlab.com', false],
+    ['an address and its port', 'http://10.0.0.1:8080', 'http://10.0.0.1:8081', false],
+  ])('%s: one tag %s', async (_what, a, b, same) => {
+    await withLogin(a, 'one');
+    await withLogin(b, 'two');
+    const tags = (raw().prepare('SELECT DISTINCT hex(site_tag) AS t FROM login').all() as { t: string }[]).map((r) => r.t);
+    expect(tags).toHaveLength(same ? 1 : 2);
+    expect(tags[0]).toMatch(/^[0-9A-F]{32}$/);
+  });
+
+  it('tags with the vault’s own key: another vault tags the same site differently', async () => {
+    await withLogin('https://github.com');
+    const first = (raw().prepare('SELECT hex(site_tag) AS t FROM login').get() as { t: string }).t;
+    await run({ op: 'startOver' });
+    await withLogin('https://github.com');
+    expect((raw().prepare('SELECT hex(site_tag) AS t FROM login').get() as { t: string }).t).not.toBe(first);
+  });
+});
+
+describe('the API the menu and the save card call', () => {
+  it('lists a site’s sign-ins with usernames only, and when the asking chord last used each', async () => {
+    const work = await withLogin('https://github.com', 'ada@acme.dev', PASSWORD, 'work');
+    await withLogin('https://gist.github.com', 'ada.lovelace', 'pw-2', 'personal');
+    await withLogin('https://gitlab.com', 'nope', 'pw-3', 'work');
+    const { logins } = await run({ op: 'forSite', origin: 'https://github.com/login', chordId: 'work' });
+    expect(logins!.map((l) => [l.username, l.origin, l.chordUsed !== null])).toEqual(
+      expect.arrayContaining([
+        ['ada@acme.dev', 'https://github.com', true],
+        ['ada.lovelace', 'https://gist.github.com', false],
+      ]),
+    );
+    expect(logins).toHaveLength(2);
+    expect(JSON.stringify(logins)).not.toContain(PASSWORD);
+    expect(logins!.find((l) => l.id === work)!.lastUsed).not.toBeNull();
+  });
+
+  it.each([
+    ['its own origin', 'https://github.com', 'https://github.com', true],
+    ['another host of its site', 'https://gist.github.com', 'https://github.com', true],
+    ['saved on http, the page on https', 'https://github.com', 'http://github.com', true],
+    ['saved on https, the page on http', 'http://github.com', 'https://github.com', false],
+    ['a look-alike', 'https://github.com.evil.example', 'https://github.com', false],
+    ['another private suffix', 'https://b.github.io', 'https://a.github.io', false],
+    ['not a web page', 'chord://settings', 'https://github.com', false],
+  ])('fills for %s: %s', async (_what, page, saved, fills) => {
+    const id = await withLogin(saved);
+    const answer = await run({ op: 'fill', id, origin: page, chordId: 'work' });
+    if (fills) expect(answer.password).toBe(PASSWORD);
+    else expect(answer).toEqual({ problem: 'refused' });
+  });
+
+  it('a fill records which chord used it; a private window’s (no chord) records nothing', async () => {
+    const id = await withLogin('https://github.com', 'ada', PASSWORD, null);
+    await run({ op: 'fill', id, origin: 'https://github.com', chordId: null }, 1000);
+    expect((await run({ op: 'list', chordId: 'work' })).logins![0]!.lastUsed).toBeNull();
+    await run({ op: 'fill', id, origin: 'https://github.com', chordId: 'work' }, 2000);
+    const [login] = (await run({ op: 'list', chordId: 'work' })).logins!;
+    expect([login!.lastUsed, login!.chordUsed]).toEqual([2000, 2000]);
+    expect((await run({ op: 'list', chordId: 'personal' })).logins![0]!.chordUsed).toBeNull();
+  });
+
+  it.each([
+    ['nothing saved for the username', { username: 'grace', password: PASSWORD }, 'new'],
+    ['the same username, another password', { username: 'ada', password: 'changed' }, 'update'],
+    ['exactly what’s saved', { username: 'ada', password: PASSWORD }, 'same'],
+  ] as const)('compares a candidate: %s → %s', async (_what, candidate, kind) => {
+    const id = await withLogin('https://github.com', 'ada');
+    const { candidate: found } = await run({ op: 'compare', origin: 'https://github.com', ...candidate });
+    expect(found!.kind).toBe(kind);
+    if (found!.kind !== 'new') expect(found!.id).toBe(id);
+  });
+
+  it('saves a new sign-in, and updates one keeping the password before it; an http one moves to https', async () => {
+    const id = await withLogin('http://github.com', 'ada');
+    const saved = await run({ op: 'save', origin: 'https://github.com', username: 'ada', password: 'new-password', chordId: 'work', replace: id }, 5000);
+    expect(saved.id).toBe(id);
+    const [login] = (await run({ op: 'list', chordId: 'work' })).logins!;
+    expect(login!.origin).toBe('https://github.com');
+    expect((await run({ op: 'reveal', id })).password).toBe('new-password');
+    // The old password is kept inside the blob, for a wrong update.
+    expect((await run({ op: 'fill', id, origin: 'https://github.com', chordId: null })).password).toBe('new-password');
+    const other = await run({ op: 'save', origin: 'https://gitlab.com', username: 'ada', password: 'x', chordId: null });
+    expect(other.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect((await run({ op: 'save', origin: 'https://gitlab.com', username: 'ada', password: 'y', chordId: null, replace: id })).problem).toBe('refused');
+  });
+
+  it.each([
+    ['an empty password', { origin: 'https://a.example', username: 'u', password: '' }],
+    ['a password over 1,000 characters', { origin: 'https://a.example', username: 'u', password: 'x'.repeat(1001) }],
+    ['a username over 500', { origin: 'https://a.example', username: 'u'.repeat(501), password: 'p' }],
+    ['a page that isn’t http or https', { origin: 'file:///etc/passwd', username: 'u', password: 'p' }],
+    ['an address with a password in it', { origin: 'https://u:p@a.example', username: 'u', password: 'p' }],
+  ])('refuses %s, and keeps nothing', async (_what, login) => {
+    await run({ op: 'setup', passphrase: PASSPHRASE });
+    expect((await run({ op: 'add', login, chordId: null })).problem).toBe('invalid');
+    expect((await run({ op: 'status' })).status!.count).toBe(0);
+  });
+
+  it('deletes with an Undo that brings it back as it was, with its uses', async () => {
+    const id = await withLogin('https://github.com', 'ada', PASSWORD, 'work');
+    expect((await run({ op: 'delete', id })).id).toBe(id);
+    expect((await run({ op: 'list', chordId: 'work' })).logins).toEqual([]);
+    expect((await run({ op: 'undelete', id })).id).toBe(id);
+    const [login] = (await run({ op: 'list', chordId: 'work' })).logins!;
+    expect([login!.id, login!.chordUsed !== null]).toEqual([id, true]);
+    expect((await run({ op: 'reveal', id })).password).toBe(PASSWORD);
+    expect((await run({ op: 'undelete', id })).problem).toBe('missing');
+  });
+
+  it('edits: the address, the username, the note, the password', async () => {
+    const id = await withLogin('https://github.com', 'ada');
+    await run({ op: 'edit', id, patch: { origin: 'https://gitlab.com', username: 'grace', note: 'work account', password: 'p2' } });
+    const [login] = (await run({ op: 'list', chordId: null })).logins!;
+    expect([login!.origin, login!.username, login!.note]).toEqual(['https://gitlab.com', 'grace', 'work account']);
+    expect((await run({ op: 'forSite', origin: 'https://github.com', chordId: null })).logins).toEqual([]);
+    expect((await run({ op: 'forSite', origin: 'https://gitlab.com', chordId: null })).logins).toHaveLength(1);
+    expect((await run({ op: 'edit', id, patch: { origin: 'ftp://x' } })).problem).toBe('invalid');
+  });
+
+  it('remembers sites never to save for, by site, and lists them', async () => {
+    await run({ op: 'setup', passphrase: PASSPHRASE });
+    await run({ op: 'never', origin: 'https://login.example.com' });
+    await run({ op: 'never', origin: 'https://www.example.com' });
+    expect((await run({ op: 'isNever', origin: 'https://example.com/signup' })).never).toBe(true);
+    expect((await run({ op: 'isNever', origin: 'https://example.org' })).never).toBe(false);
+    expect((await run({ op: 'nevers' })).nevers).toEqual(['example.com']);
+    await run({ op: 'forgetNever', site: 'example.com' });
+    expect((await run({ op: 'nevers' })).nevers).toEqual([]);
+  });
+});

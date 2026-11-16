@@ -367,4 +367,28 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE favorite ADD COLUMN chord_id TEXT;
   `,
+  // 24: Chord's own passwords (docs/decisions/S17-passwords.md §7, §8). Each sign-in is one sealed blob (its origin,
+  // username, password and note inside, AES-256-GCM under the vault key, its id in the associated data), found by its
+  // site's tag (HMAC of the registrable domain, 16 bytes), so the file lists neither where you have accounts nor who you
+  // are there. Which chord last used each one is this computer's own (login_use), never synced or exported. Sites you
+  // said never to save for are tagged the same way, with their name sealed so Settings can list them. The vault key,
+  // wrapped by your passphrase (and maybe by the OS too), is in meta (passwords.*). Export and sync name their record
+  // types, so none of these tables is in either.
+  `
+  CREATE TABLE login (
+    id TEXT PRIMARY KEY,
+    site_tag BLOB NOT NULL,
+    sealed BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX login_site ON login (site_tag);
+  CREATE TABLE login_use (
+    login_id TEXT NOT NULL REFERENCES login(id) ON DELETE CASCADE,
+    chord_id TEXT NOT NULL,
+    used_at INTEGER NOT NULL,
+    PRIMARY KEY (login_id, chord_id)
+  ) STRICT;
+  CREATE TABLE login_never (site_tag BLOB PRIMARY KEY, sealed BLOB NOT NULL, created_at INTEGER NOT NULL) STRICT;
+  `,
 ];

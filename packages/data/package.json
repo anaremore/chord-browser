@@ -10,7 +10,8 @@
     "./export": "./src/export.ts",
     "./import-file": "./src/import-file.ts",
     "./crypto": "./src/crypto.ts",
-    "./sync": "./src/sync.ts"
+    "./sync": "./src/sync.ts",
+    "./passwords": "./src/passwords.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
