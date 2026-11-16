@@ -347,6 +347,92 @@
   box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
 }
 
+.authInput[aria-invalid] {
+  box-shadow: 0 0 0 var(--size-hairline) var(--color-danger);
+}
+
+/* Focused with a problem: the error's hairline inside the focus ring, both seen. */
+.authInput[aria-invalid]:focus-visible {
+  box-shadow:
+    inset 0 0 0 var(--size-hairline) var(--color-danger),
+    0 0 0 var(--size-focus-ring) var(--color-accent);
+}
+
+/* ---------- Unlock passwords ---------- */
+
+/* *Keep unlocked on this computer*: a switch, and what it gives up under its label. */
+.keepRow {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  margin: var(--space-3) 0 0;
+  padding: 0 var(--space-4);
+}
+
+.keepText {
+  display: flex;
+  flex-direction: column;
+  font: var(--text-small);
+}
+
+.keepWhy {
+  color: var(--color-fg-muted);
+}
+
+/* As Settings' switch (DESIGN.md §7.1). */
+.switch {
+  position: relative;
+  flex: none;
+  inline-size: var(--size-switch-width);
+  block-size: var(--size-switch-height);
+  margin-block-start: calc(var(--space-1) / 2);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-fg-subtle);
+  transition: background-color var(--duration-fade-base) var(--ease-standard);
+}
+
+.switch[aria-checked='true'] {
+  background: var(--color-accent);
+}
+
+.knob {
+  position: absolute;
+  inset-block-start: calc((var(--size-switch-height) - var(--size-switch-knob)) / 2);
+  inset-inline-start: calc((var(--size-switch-height) - var(--size-switch-knob)) / 2);
+  inline-size: var(--size-switch-knob);
+  block-size: var(--size-switch-knob);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  transition: transform var(--spring-snappy-duration) var(--spring-snappy);
+}
+
+.switch[aria-checked='true'] .knob {
+  transform: translateX(calc(var(--size-switch-width) - var(--size-switch-height)));
+}
+
+@media (forced-colors: active) {
+  .switch {
+    border: var(--size-hairline) solid ButtonText;
+  }
+
+  .switch[aria-checked='true'] {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+
+  .knob {
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
+  .switch[aria-checked='true'] .knob {
+    background: HighlightText;
+  }
+}
+
 /* ---------- Screen-share picker ---------- */
 
 /* Wider than the other cards: two thumbnails side by side. */

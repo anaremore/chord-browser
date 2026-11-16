@@ -37,6 +37,7 @@ import {
   type SitePermission,
   type SitePermissions,
 } from './model';
+import { isPasswordLockAfter, lockAfterText } from './passwords';
 import { cleanProxy, proxyLabel, sameProxy, type ProxySettings } from './proxy';
 import {
   chordFromRecord,
@@ -386,6 +387,9 @@ const SETTING_NAMES: Record<string, [label: string, describe: (value: unknown) =
   'reader.font': ['Reader view’s font', named({ sans: 'Sans serif', serif: 'Serif' })],
   'effects.wet': ['Effects on every site', named({ true: 'Wet', false: 'Dry' })],
   encryptExports: ['Encrypt exports with a passphrase', ON_OFF],
+  'passwords.enabled': ['Offer to save and fill passwords', ON_OFF],
+  'passwords.lockAfter': ['Lock passwords after', (v) => (isPasswordLockAfter(v) ? lockAfterText(v) : String(v))],
+  'passwords.onChords': ['Chords where passwords are on despite an extension', (v) => (Array.isArray(v) ? (v.length === 0 ? 'None' : `${v.length} chords`) : String(v))],
   proxy: ['Proxy for every chord', (v) => (v && typeof v === 'object' ? proxyLabel(v as ProxySettings) : 'The system’s proxy')],
 };
 

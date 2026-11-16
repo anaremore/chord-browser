@@ -8,6 +8,7 @@ import { DEFAULT_DEVTOOLS, type DevtoolsPlace, type DevtoolsSettings } from './d
 import type { AssistantKeep, AssistantProvider, AssistantScope } from './assistant';
 import type { ImportRecord } from './import';
 import { DEFAULT_READER, type ReaderSettings } from './reader';
+import { DEFAULT_PASSWORD_SETTINGS, type PasswordSettings } from './passwords';
 import type { ProxySettings } from './proxy';
 import type { PageThreat, ThreatKind } from './safe-browsing';
 import type { ActionId, ShortcutOverrides } from './shortcuts';
@@ -433,6 +434,8 @@ export interface Settings {
   proxy: ProxySettings;
   /** Settings → Your data → Export: *Encrypt with a passphrase*, remembered for next time (the passphrase never is). */
   encryptExports: boolean;
+  /** Chord's own passwords (docs/decisions/S17-passwords.md): the switch, when the vault locks, and the chords it's on in despite an extension. */
+  passwords: PasswordSettings;
 }
 
 /** Settings → Effects: dry everywhere keeps every site's Effects and applies none; each site keeps its own switch too. */
@@ -540,6 +543,7 @@ export const DEFAULT_SETTINGS: Settings = {
   proxy: { mode: 'system', server: null, pac: null },
   // Plain by default (S15 §3): a forgotten passphrase is a worse failure for a backup than a file someone else might read.
   encryptExports: false,
+  passwords: DEFAULT_PASSWORD_SETTINGS,
 };
 
 /** A fresh copy of the defaults (State is frozen by Immer, so nothing may share these objects). */
@@ -557,6 +561,7 @@ export const defaultSettings = (): Settings => ({
   effects: { ...DEFAULT_SETTINGS.effects },
   devtools: { ...DEFAULT_SETTINGS.devtools },
   proxy: { mode: 'system', server: null, pac: null },
+  passwords: { ...DEFAULT_SETTINGS.passwords, onChords: [] },
 });
 
 /**
@@ -610,6 +615,8 @@ export interface SettingsPatch {
   /** The whole new proxy for every chord; one that can't be used (core's cleanProxy) is ignored. */
   proxy?: ProxySettings;
   encryptExports?: boolean;
+  /** `onChords` is the whole new list. */
+  passwords?: Partial<PasswordSettings>;
 }
 
 /**

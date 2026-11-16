@@ -51,6 +51,13 @@ export function handle<C extends InvokeChannel>(
     if (payload !== undefined && JSON.stringify(payload).length > MAX_PAYLOAD_BYTES) {
       throw new IpcDenied(`${channel}: payload too large`);
     }
+    // What a password channel was sent may hold a password or a passphrase: its problem is never described, so no zod
+    // message (which can quote what it read) reaches a log or a crash report (S17 §7, Where the key lives).
+    if (channel.startsWith('passwords:')) {
+      const parsed = invokeChannels[channel].request.safeParse(payload);
+      if (!parsed.success) throw new IpcDenied(`${channel}: invalid request`);
+      return handler(parsed.data as InvokeRequest<C>, event.sender);
+    }
     const request = invokeChannels[channel].request.parse(payload) as InvokeRequest<C>;
     return handler(request, event.sender);
   });

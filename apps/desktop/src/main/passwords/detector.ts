@@ -109,6 +109,8 @@ export interface PasswordDetector {
   attachOther(contents: WebContents): void;
   /** Turns detection on or off for these chords' profiles, or for every one (and every one made later) when none are named. */
   setEnabled(on: boolean, profileIds?: readonly string[]): void;
+  /** Detection on in exactly these chords' profiles and off in every other one (and every one made later). */
+  setProfiles(profileIds: readonly string[]): void;
   isEnabled(profileId: string): boolean;
 }
 
@@ -275,6 +277,12 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
         everyone = on;
         explicit.clear();
       } else for (const id of profileIds) explicit.set(id, on);
+      for (const entry of sessions.values()) apply(entry);
+    },
+    setProfiles(profileIds) {
+      everyone = false;
+      explicit.clear();
+      for (const id of profileIds) explicit.set(id, true);
       for (const entry of sessions.values()) apply(entry);
     },
     isEnabled,

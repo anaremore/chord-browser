@@ -31,6 +31,21 @@ const isSync = (request: DataRequest): request is DataRequest & SyncRequest => r
 
 process.parentPort.on('message', (event) => {
   const request = event.data as DataRequest;
+  // The vault's ops can wait on scrypt (in Node's thread pool, never this thread). What they carry is never logged:
+  // a failure answers with its message only, and none of the vault's messages holds a value.
+  if (request.type === 'passwords') {
+    const vault = db?.passwords;
+    if (!vault) return reply({ id: request.id, ok: false, error: 'chord-data: passwords before open' });
+    vault.run(request.op).then(
+      (passwords) => {
+        reply({ id: request.id, ok: true, passwords });
+        // postMessage cloned it: this copy of the key goes now.
+        passwords.key?.fill(0);
+      },
+      (error: unknown) => reply({ id: request.id, ok: false, error: `chord-data: passwords: ${error instanceof Error ? error.name : 'error'}` }),
+    );
+    return;
+  }
   if (isSync(request)) {
     sync.handle(request).then(
       (answer) => reply({ id: request.id, ok: true, sync: answer }),

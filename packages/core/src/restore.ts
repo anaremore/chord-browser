@@ -38,6 +38,7 @@ import { cleanDevtoolsSettings } from './devtools';
 import { ARCHIVE_AFTER_MS } from './idle';
 import { SEARCH_ENGINES } from './input';
 import { routeKey } from './links';
+import { restorePasswordSettings } from './passwords';
 import { cleanProxy } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { seedState, type SeedOptions } from './seed';
@@ -258,6 +259,7 @@ export function restoreSettings(saved: Record<string, unknown>, platform?: Platf
   if (effects && typeof effects === 'object' && typeof effects['wet'] === 'boolean') settings.effects.wet = effects['wet'];
   settings.proxy = cleanProxy(saved['proxy']) ?? settings.proxy;
   if (typeof saved['encryptExports'] === 'boolean') settings.encryptExports = saved['encryptExports'];
+  settings.passwords = restorePasswordSettings(saved['passwords']);
   return settings;
 }
 

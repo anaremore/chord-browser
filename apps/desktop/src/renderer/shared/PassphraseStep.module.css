@@ -1,0 +1,96 @@
+/* The vault passphrase's step: label on the left, as Settings' rows and the popover's sign-in box have it. Tokens only. */
+
+.step {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+}
+
+.note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.field {
+  display: contents;
+}
+
+.label {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.input {
+  min-inline-size: 0;
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--color-item-hover);
+  color: var(--color-fg);
+  font: var(--text-small);
+  user-select: text;
+}
+
+.input:focus-visible {
+  box-shadow: 0 0 0 var(--size-focus-ring) var(--color-accent);
+}
+
+.input[aria-invalid] {
+  box-shadow: 0 0 0 var(--size-hairline) var(--color-danger);
+}
+
+/* Focused with a problem: the error's hairline inside the focus ring, both seen. */
+.input[aria-invalid]:focus-visible {
+  box-shadow:
+    inset 0 0 0 var(--size-hairline) var(--color-danger),
+    0 0 0 var(--size-focus-ring) var(--color-accent);
+}
+
+/* What's wrong sits under its field, in the field's column. */
+.problem {
+  grid-column: 2;
+  color: var(--color-danger);
+  font: var(--text-small);
+}
+
+.suggest {
+  display: flex;
+  grid-column: 2;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+}
+
+.suggestButton {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: var(--text-label);
+  white-space: nowrap;
+}
+
+.suggestButton:hover {
+  text-decoration: underline;
+}
+
+.hint {
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+@media (forced-colors: active) {
+  .input {
+    border: var(--size-hairline) solid CanvasText;
+  }
+
+  .suggestButton {
+    color: LinkText;
+  }
+}

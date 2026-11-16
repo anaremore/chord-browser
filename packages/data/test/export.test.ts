@@ -223,6 +223,20 @@ describe('an export', () => {
     }
   });
 
+  it('never holds a password, sealed or not, nor where you have one (S17 §10: a plain export leaves them out)', async () => {
+    seeded().db.close();
+    const before = new Set(exported().map((i) => i.record.type));
+    const db = new ChordDatabase(file, 'linux', { N: 2 ** 10, r: 8, p: 1 });
+    await db.passwords.run({ op: 'setup', passphrase: 'correct horse battery staple' });
+    await db.passwords.run({ op: 'add', login: { origin: 'https://vault-site.test', username: 'vault-user', password: 'VAULT-SECRET' }, chordId: 'work' });
+    await db.passwords.run({ op: 'never', origin: 'https://never-site.test' });
+    db.close();
+    const items = exported();
+    expect(new Set(items.map((i) => i.record.type))).toEqual(before);
+    const text = JSON.stringify(items.map((i) => i.record));
+    for (const never of ['VAULT-SECRET', 'vault-user', 'vault-site', 'never-site', 'login']) expect(text).not.toContain(never);
+  });
+
   it('leaves history out, or the assistant’s chats, when their switch is off', () => {
     seeded().db.close();
     const types = (items: ExportItem[]) => new Set(items.map((i) => i.record.type));

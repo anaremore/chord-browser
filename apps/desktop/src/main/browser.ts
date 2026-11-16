@@ -89,6 +89,7 @@ import { SafeBrowsingGuard } from './safe-browsing/guard';
 import type { ScreenShareBroker } from './screen-share';
 import type { AuthBroker } from './http-auth';
 import type { PasskeyBroker } from './passkeys';
+import type { PasswordService } from './passwords/service';
 import type { PasswordDetector } from './passwords/detector';
 import type { Screenshots } from './screenshots/service';
 import { HistorySaver } from './history-saver';
@@ -139,8 +140,10 @@ export interface BrowserOptions {
   screenshots: Screenshots;
   /** Chooses a passkey when an authenticator holds several for a site; connected here once the store exists. */
   passkeys: PasskeyBroker;
+  /** Chord's own passwords: the unlock card each window's popover may show. */
+  passwords: Pick<PasswordService, 'unlockPromptFor' | 'windowClosed'>;
   /** The password detector (S17): a tab's page is the only one its agent's channels answer. */
-  passwords: PasswordDetector;
+  passwordDetector: PasswordDetector;
   /** Persistence hook: every change, after it's applied. */
   onChange?(change: Change): void;
   /** A Chord window came to the front (sync looks at its folder then, S15 §6). */
@@ -371,7 +374,7 @@ export class Browser {
       },
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
-        options.passwords.attachPage(contents);
+        options.passwordDetector.attachPage(contents);
         this.extensions.tabCreated(contents, nodeId);
         this.safeBrowsing.attach(contents, nodeId);
         this.autoPip.attach(contents, nodeId);
@@ -938,6 +941,7 @@ export class Browser {
     w.window.on('closed', () => {
       this.assistant?.forgetWindow(windowId);
       this.options.screenshots.windowClosed(windowId);
+      this.options.passwords.windowClosed(windowId);
       this.effects.forgetWindow(windowId);
       this.windows.delete(windowId);
       this.player.placementChanged();
@@ -1346,6 +1350,7 @@ export class Browser {
       // Peek's page is in front while it's open: its sign-in box first.
       auth: this.options.httpAuth.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
       passkey: this.options.passkeys.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
+      passwordsUnlock: this.options.passwords.unlockPromptFor(w.id),
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
       // A tab whose service plays in Chord Player says so in its frame instead.
@@ -1595,7 +1600,13 @@ export class Browser {
     send(w.popover.webContents, 'popover:state', popover);
     // A new sign-in box takes the keyboard, ready to type the username.
     // A new sign-in box or passkey choice takes the keyboard, ready to answer.
-    const asking = popover.auth ? `auth:${popover.auth.id}` : popover.passkey ? `passkey:${popover.passkey.id}` : '';
+    const asking = popover.auth
+      ? `auth:${popover.auth.id}`
+      : popover.passkey
+        ? `passkey:${popover.passkey.id}`
+        : popover.passwordsUnlock
+          ? `passwords:${popover.passwordsUnlock.id}`
+          : '';
     if (asking && this.authFocused.get(w.id) !== asking) w.focusPopover();
     this.authFocused.set(w.id, asking);
   }
@@ -1723,6 +1734,19 @@ export class Browser {
   }
 
   /** Where sync stands, to Settings if it's open (Your data → Sync). */
+  /** The vault changed: popovers show the unlock card or don't, and Settings asks for its view again. */
+  passwordsChanged(): void {
+    this.syncPopovers();
+    const contents = this.settingsWindow?.view.webContents;
+    if (contents && !contents.isDestroyed()) send(contents, 'passwords:changed', null);
+  }
+
+  /** The vault locked: Settings hides a password it shows, without asking for its view again. */
+  passwordsHide(): void {
+    const contents = this.settingsWindow?.view.webContents;
+    if (contents && !contents.isDestroyed()) send(contents, 'passwords:changed', { hide: true });
+  }
+
   syncChanged(view: SyncView): void {
     const contents = this.settingsWindow?.view.webContents;
     if (contents && !contents.isDestroyed()) send(contents, 'sync:status', view);

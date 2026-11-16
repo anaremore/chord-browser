@@ -262,6 +262,7 @@ describe('which settings travel', () => {
     ['developer tools’ side', 'devtools.side'],
     ['The assistant’s app', 'assistant.provider'],
     ['The assistant’s model', 'assistant.model'],
+    ['when passwords lock, each computer’s own', 'passwords.lockAfter'],
     ['themes, which are records of their own', 'themes'],
     ['a Mac’s shortcuts, on Windows', 'shortcuts.mac'],
   ])('out: %s', (_what, field) => {

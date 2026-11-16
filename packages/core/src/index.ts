@@ -16,6 +16,7 @@ export * from './media';
 export * from './merge';
 export * from './model';
 export * from './page';
+export * from './passwords';
 export * from './password-forms';
 export * from './password-parser';
 export * from './proxy';

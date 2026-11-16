@@ -60,6 +60,8 @@ import { Suggestions } from './suggestions';
 import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
 import { PasskeyBroker } from './passkeys';
+import { osKeys, testKeys } from './passwords/keys';
+import { PasswordService } from './passwords/service';
 import { createPasswordDetector } from './passwords/detector';
 import { proxies } from './proxy';
 import { Screenshots } from './screenshots/service';
@@ -105,8 +107,30 @@ const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
 const passkeys = new PasskeyBroker();
-/** Chord's password detector (S17): off until the vault turns it on; reads nothing until a page asks. */
-const passwords = createPasswordDetector({
+// Chord's own passwords (S17): chord-data holds the vault; this keeps the lock's clock, the kept key and the unlock card.
+const passwords = new PasswordService({
+  data: (op) => {
+    if (!persistence) return Promise.reject(new Error('chord-data isn’t open'));
+    return persistence.passwords(op);
+  },
+  settings: () => browser?.store.state.settings.passwords ?? DEFAULT_SETTINGS.passwords,
+  // Tests only (development builds): no keyring, on any system, as Linux's `basic_text`; or a stand-in one, kept in
+  // memory for the run, where the runner has none.
+  keys:
+    !app.isPackaged && process.env['CHORD_E2E_TEST_KEYRING'] === '1'
+      ? testKeys()
+      : osKeys(process.platform, { noKeyring: !app.isPackaged && process.env['CHORD_E2E_NO_KEYRING'] === '1' }),
+  clipboard: { writeText: (text) => clipboard.writeText(text), readText: () => clipboard.readText() },
+  changed: () => browser?.passwordsChanged(),
+  hide: () => browser?.passwordsHide(),
+  chord: (chordId) => browser?.store.state.chords[chordId] ?? null,
+  extensions: () => browser?.store.state.extensions ?? {},
+});
+/**
+ * Chord's password detector (S17): off until the vault turns it on (`passwords.attachDetector`, once the state
+ * exists, then `stateChanged` after each change); reads nothing until a page asks.
+ */
+const passwordDetector = createPasswordDetector({
   preloadPath: join(import.meta.dirname, '../preload/passwords.cjs'),
   agentPath: join(import.meta.dirname, 'passwords/agent.js'),
 });
@@ -451,6 +475,22 @@ function registerIpc(): void {
   handle('media:do', ({ nodeId, action }, sender) => browser!.mediaAction(senderWindow(sender), nodeId, action));
   handle('auth:respond', ({ id, credentials }) => httpAuth.respond(id, credentials));
   handle('passkey:respond', ({ id, credentialId }) => passkeys.respond(id, credentialId));
+  // Settings → Passwords, and the popover's unlock card (S17 §9).
+  handle('passwords:view', () => passwords.view());
+  handle('passwords:setup', ({ passphrase }) => passwords.setup(passphrase));
+  handle('passwords:unlock', ({ passphrase }) => passwords.unlock(passphrase));
+  handle('passwords:lock', () => passwords.lock());
+  handle('passwords:keep', ({ on, passphrase }) => passwords.keep(on, passphrase));
+  handle('passwords:passphrase', ({ current, next }) => passwords.changePassphrase(current, next));
+  handle('passwords:reveal', ({ id, passphrase }) => passwords.reveal(id, passphrase));
+  handle('passwords:copy', ({ id, passphrase }) => passwords.copy(id, passphrase));
+  handle('passwords:add', (login) => passwords.add(login));
+  handle('passwords:edit', ({ id, patch, passphrase }) => passwords.edit(id, patch, passphrase));
+  handle('passwords:delete', ({ id }) => passwords.remove(id));
+  handle('passwords:undelete', ({ id }) => passwords.undo(id));
+  handle('passwords:forgetNever', ({ site }) => passwords.forgetNever(site));
+  handle('passwords:startOver', () => passwords.startOver());
+  handle('passwords:unlockCard', ({ id, passphrase, keep }) => passwords.answerUnlock(id, passphrase, keep));
   handle('drm:open', ({ browser: other }, sender) => browser!.drmAction(sender, { open: other }));
   handle('drm:dismiss', (_request, sender) => browser!.drmAction(sender, 'dismiss'));
   handle('drm:player', ({ action }, sender) => browser!.drmAction(sender, { player: action }));
@@ -545,7 +585,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('session-created', (ses) => proxies.created(ses));
   app.on('web-contents-created', (_event, contents) => proxies.contentsCreated(contents));
   // The passwords sentinel's ask for the agent gets an answer anywhere it runs; a tab's page then takes over (attachPage).
-  app.on('web-contents-created', (_event, contents) => passwords.attachOther(contents));
+  app.on('web-contents-created', (_event, contents) => passwordDetector.attachOther(contents));
   // A site or proxy asking for a username and password: Chord's own box over the tab, or cancelled.
   app.on('login', (event, contents, details, info, callback) => {
     if (httpAuth.login(contents, details, info, callback)) event.preventDefault();
@@ -574,6 +614,8 @@ if (!app.requestSingleInstanceLock()) {
     browser?.prepareToQuit();
     // Downloads Safe Browsing held, never kept: their unfinished files go.
     downloads.discardHeld();
+    // A password copied less than a minute ago leaves the clipboard.
+    void passwords.dispose();
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
@@ -637,7 +679,7 @@ if (!app.requestSingleInstanceLock()) {
         screenShare.attach(ses);
         passkeys.attach(ses);
         // The passwords sentinel, registered only while passwords are on for this chord (S17 §8).
-        passwords.attachSession(profileId, ses, priv);
+        passwordDetector.attachSession(profileId, ses, priv);
         // A chord's session gets the blocker extension; a private window's, its request dispatcher.
         adBlocking.attach(profileId, ses, priv);
         // Before any page's own scripts: what Electron lacks and every Chromium browser has (preload/page.ts).
@@ -782,6 +824,7 @@ if (!app.requestSingleInstanceLock()) {
       httpAuth,
       passkeys,
       passwords,
+      passwordDetector,
       screenshots,
       histories: opened.navs,
       saveHistory: (nodeId, nav) => persistence?.nav(nodeId, nav),
@@ -806,7 +849,13 @@ if (!app.requestSingleInstanceLock()) {
       onBattery: () => (!app.isPackaged && process.env['CHORD_ON_BATTERY'] === '1') || powerMonitor.isOnBatteryPower(),
       // Another computer's changes (sync.apply) are saved marked as sync's: never stamped, never back into this computer's log.
       // Who each change is from (S15 §13): yours are stamped; another computer's applied, and tidying, never are.
-      onChange: (change) => store.record(change.patches, change.state, originOf(change.command), change.before),
+      onChange: (change) => {
+        store.record(change.patches, change.state, originOf(change.command), change.before);
+        // *Lock after* changed: the clock counts with the new time.
+        if (change.before && change.before.settings.passwords.lockAfter !== change.state.settings.passwords.lockAfter) passwords.settingsChanged();
+        // The switch, the extension rule or the chords changed: the form detector hears which sign-ins it watches.
+        passwords.stateChanged(change.state);
+      },
       windowFocused: () => syncService?.focused(),
       // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).
       windowBlurred: () => setTimeout(() => (BaseWindow.getFocusedWindow() ? undefined : syncService?.blurred()), 250),
@@ -952,6 +1001,9 @@ if (!app.requestSingleInstanceLock()) {
       folder: () => app.getPath('documents'),
       data: { flush: () => store.flush(), device: () => store.device(), counts: () => store.exportCounts() },
     });
+    // The detector watches the sign-ins the vault's switch and extension rule say (S17 §11), from now on: told at once,
+    // and after every change (onChange's stateChanged), only when that changes.
+    passwords.attachDetector(passwordDetector, browser.store.state);
     // Your data's import from a Chord file (S15 §5, §7): a process of its own reads and checks the file.
     fileImporter = new FileImporter({
       workerPath: join(import.meta.dirname, 'import-file.js'),
@@ -982,7 +1034,11 @@ if (!app.requestSingleInstanceLock()) {
       // Tests only (development builds): no keyring, on any system, so a relaunch asks for the passphrase again.
       noKeyring: devEnv('CHORD_E2E_NO_KEYRING') === '1',
     });
-    store.onRespawn(() => void syncService?.restarted());
+    store.onRespawn(() => {
+      void syncService?.restarted();
+      // The vault's key went with chord-data: locked until it's opened again.
+      passwords.restarted();
+    });
     // Writes chord-data keeps refusing (a full disk): they wait, are sent again later and later, and the window says so.
     store.onTrouble((failing) => {
       const windowId = browser?.lastBrowserWindow()?.id;
@@ -1004,14 +1060,14 @@ if (!app.requestSingleInstanceLock()) {
       // The password detector's events, as plain data (the page's contents by id), oldest first.
       const passwordEvents: Record<string, unknown>[] = [];
       for (const type of ['focus', 'blur', 'submitted', 'signedIn', 'failed'] as const) {
-        passwords.events.on(type, (event: { contents: Electron.WebContents; frame?: unknown }) => {
+        passwordDetector.events.on(type, (event: { contents: Electron.WebContents; frame?: unknown }) => {
           const { contents, frame: _frame, ...rest } = event;
           passwordEvents.push({ type, contentsId: contents.id, ...rest });
         });
       }
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
         /** Passwords (S17): turn detection on or off, as the vault's switch will; and what it has reported. */
-        passwordsEnabled: (on: boolean, profileIds?: string[]) => passwords.setEnabled(on, profileIds),
+        passwordsEnabled: (on: boolean, profileIds?: string[]) => passwordDetector.setEnabled(on, profileIds),
         passwordEvents: () => passwordEvents.slice(),
         clearPasswordEvents: () => void (passwordEvents.length = 0),
         launch: () => launchTimings(),
@@ -1037,6 +1093,11 @@ if (!app.requestSingleInstanceLock()) {
         syncTimings: async () => (await store.sync({ type: 'sync.timings' })).timings,
         /** Turn sync off at once (Settings holds it for its Undo first). */
         syncOff: () => store.sync({ type: 'sync.off' }),
+        /** The unlock card in the last window's popover, as the menu under a field will ask for it: true once the vault is open. */
+        passwordsAskUnlock: () => {
+          const w = browser!.lastBrowserWindow();
+          return w ? passwords.askUnlock(w.id) : Promise.resolve(false);
+        },
         /** Pinned folders and tabs, and how many have a name ending in `suffix`: what a sync check waits for, without a state snapshot. */
         pinnedNames: (suffix: string) => {
           const pinned = Object.values(browser!.store.state.nodes).filter((n) => n.section === 'pinned');

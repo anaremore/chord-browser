@@ -58,6 +58,7 @@ import { routeFor, routeKey } from './links';
 import { emptyMergeUndo, type MergePart, type MergeUndo } from './merge';
 import { isTabUrl } from './records';
 import { restoreChord, validTheme } from './restore';
+import { applyPasswordPatch } from './passwords';
 import { cleanProxy, sameProxy, type ProxySettings } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
@@ -1978,6 +1979,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (current.font !== next.font) current.font = next.font;
       }
       if (cmd.settings.effects?.wet !== undefined && draft.settings.effects.wet !== cmd.settings.effects.wet) draft.settings.effects.wet = cmd.settings.effects.wet;
+      if (cmd.settings.passwords) applyPasswordPatch(draft.settings.passwords, cmd.settings.passwords);
       // Developer tools: a side Chord has, and sizes in range.
       if (cmd.settings.devtools) {
         const next = cleanDevtoolsSettings(draft.settings.devtools, cmd.settings.devtools);
