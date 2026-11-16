@@ -6,6 +6,8 @@ Please **don't** open a public issue for security problems.
 
 Report privately through GitHub instead: open the repository's **Security** tab and choose **Report a vulnerability**. Include steps to reproduce, the affected platform (Windows, macOS, or Linux), and the Chord version.
 
+Chord keeps passwords of its own now ([S17](docs/decisions/S17-passwords.md)). A bug that could let a page, another program or another site's frame read a saved password, or see where you have one, is a security problem: report it the same way, and say so in its title.
+
 You'll get an acknowledgement within 3 days. We'll keep you updated until the issue is fixed, and credit you in the release notes if you'd like.
 
 ## Supported versions

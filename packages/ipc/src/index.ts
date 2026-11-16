@@ -17,6 +17,7 @@ import {
   SHORTCUTS,
   UI_SCALES,
   PASSPHRASE_MAX,
+  PASSWORD_LIMITS,
   passphraseProblem,
   ASSISTANT_FORM_AREA_MAX,
   ASSISTANT_FORM_MAX_FIELDS,
@@ -61,6 +62,7 @@ import {
   type ProxySettings as CoreProxySettings,
   type State,
 } from '@chord/core';
+import type { LoginSummary } from '@chord/core';
 import { z } from 'zod';
 
 /**
@@ -305,6 +307,15 @@ export const SettingsPatch = z.strictObject({
   proxy: ProxySettingsSchema.optional(),
   // Settings → Your data → Export: whether the card starts with Encrypt with a passphrase on.
   encryptExports: z.boolean().optional(),
+  // Settings → Passwords: the switch, Lock after, and the chords it's on in despite a password manager's extension.
+  passwords: z
+    .strictObject({
+      enabled: z.boolean(),
+      lockAfter: z.union([z.literal(5), z.literal(15), z.literal(30), z.literal(60), z.literal(240), z.literal('never')]),
+      onChords: z.array(z.string().min(1).max(100)).max(500),
+    })
+    .partial()
+    .optional(),
   assistant: z
     .strictObject({
       enabled: z.boolean(),
@@ -723,6 +734,45 @@ export const PreviewTarget = z
   .nullable();
 export type PreviewTarget = z.infer<typeof PreviewTarget>;
 
+/**
+ * Chord's own passwords (docs/decisions/S17-passwords.md): Settings → Passwords
+ * as main sees it. Sign-ins come with usernames, never passwords; the list is
+ * empty unless the vault is open.
+ */
+export interface PasswordsView {
+  /** `none`: no passphrase yet (it's chosen with the first password). */
+  state: 'none' | 'locked' | 'open';
+  /** *Keep unlocked on this computer*. */
+  kept: boolean;
+  /** This computer can keep the key with the OS (not Linux without a keyring). */
+  canKeep: boolean;
+  count: number;
+  logins: LoginSummary[];
+  /** Sign-ins whose sealed copy didn't open: left as they are. */
+  unreadable: number;
+  /** *Sites Chord never saves for*. */
+  nevers: string[];
+  /** Deleted this session, newest first, for Undo. */
+  deleted: { id: string; origin: string; username: string }[];
+}
+
+/** A step's answer: the view as it is now, or why not. `keyring`: the OS can't keep the key here. `passphrase`: a change of address needs it typed again (Show asks for it). */
+export type PasswordStepResult =
+  | { ok: true; view: PasswordsView }
+  | { ok: false; problem: 'wrong' | 'invalid' | 'locked' | 'none' | 'exists' | 'missing' | 'keyring' | 'io' | 'passphrase' };
+
+/** *Show* and *Copy*: `passphrase`, it must be typed again first (more than 5 minutes since it was). */
+export type PasswordRevealResult = { ok: true; password?: string } | { ok: false; problem: 'passphrase' | 'wrong' | 'locked' | 'missing' | 'io' };
+
+/** The unlock card. `problem`: the last passphrase typed wasn't it. */
+export interface PasswordUnlockPrompt {
+  id: number;
+  keep: boolean;
+  canKeep: boolean;
+  problem: 'wrong' | null;
+  busy: boolean;
+}
+
 export interface PopoverState {
   theme: ChordThemeSpec | null;
   interface: InterfaceSettings;
@@ -731,6 +781,8 @@ export interface PopoverState {
   share: SharePrompt | null;
   auth: AuthPrompt | null;
   passkey: PasskeyPrompt | null;
+  /** Unlock passwords: the passphrase card at the top of the tab (S17 §7), when something needs the vault open. */
+  passwordsUnlock: PasswordUnlockPrompt | null;
   /** The one-time offer to turn Safe Browsing on, with its notice (profiles from before it existed). */
   safeBrowsingOffer: boolean;
   /** The page is on a service that needs Widevine, which Chord doesn't include yet (D4). */
@@ -1301,6 +1353,20 @@ export type SyncFolderResult = { ok: true; folderId: string; name: string; inspe
 /** A step's answer: where sync stands now, or why it didn't work (`full`: this computer's disk refused the step's writes). */
 export type SyncStepResult = { ok: true; view: SyncView } | { ok: false; problem: 'wrong' | 'conflict' | 'newer' | 'damaged' | 'missing' | 'io' | 'busy' | 'full' };
 
+/** A typed passphrase: anything up to the longest a new one may be (a wrong one is the vault's to say). */
+const typedPassphrase = z.string().min(1).max(PASSPHRASE_MAX * 4);
+const newPassphrase = z
+  .string()
+  .max(PASSPHRASE_MAX * 4)
+  .refine((p) => passphraseProblem(p) === null);
+const loginId = z.string().regex(/^[0-9a-f-]{36}$/);
+const loginFields = {
+  origin: z.string().min(1).max(PASSWORD_LIMITS.origin),
+  username: z.string().max(PASSWORD_LIMITS.username),
+  password: z.string().min(1).max(PASSWORD_LIMITS.password),
+  note: z.string().max(PASSWORD_LIMITS.note),
+};
+
 const syncPassphrase = z
   .string()
   .max(PASSPHRASE_MAX * 4)
@@ -1310,6 +1376,32 @@ const deviceId = z.string().regex(/^[0-9a-f]{16}$/);
 /** Renderer → main requests (`ipcRenderer.invoke`). */
 export const invokeChannels = {
   // Your data: sync. Settings only; a passphrase is passed on and kept nowhere, a folder is named by its id.
+  // Settings → Passwords (S17 §9). A password reaches Settings only through *Show*, after the check in §7. Their
+  // requests' problems are never described (main's handle()): what was sent may hold a password.
+  'passwords:view': { roles: ['internal'], request: z.void(), response: z.custom<PasswordsView>() },
+  'passwords:setup': { roles: ['internal'], request: z.strictObject({ passphrase: newPassphrase }), response: z.custom<PasswordStepResult>() },
+  'passwords:unlock': { roles: ['internal'], request: z.strictObject({ passphrase: typedPassphrase }), response: z.custom<PasswordStepResult>() },
+  'passwords:lock': { roles: ['internal'], request: z.void(), response: z.custom<PasswordsView>() },
+  /** *Keep unlocked on this computer*; turning it on needs the vault open. */
+  'passwords:keep': { roles: ['internal'], request: z.strictObject({ on: z.boolean() }), response: z.custom<PasswordStepResult>() },
+  'passwords:passphrase': { roles: ['internal'], request: z.strictObject({ current: typedPassphrase, next: newPassphrase }), response: z.custom<PasswordStepResult>() },
+  /** *Show*: the password, or `passphrase` when it must be typed again first (then sent with it). */
+  'passwords:reveal': { roles: ['internal'], request: z.strictObject({ id: loginId, passphrase: typedPassphrase.optional() }), response: z.custom<PasswordRevealResult>() },
+  /** *Copy*: main puts it on the clipboard (it leaves after a minute); Settings never gets it. */
+  'passwords:copy': { roles: ['internal'], request: z.strictObject({ id: loginId, passphrase: typedPassphrase.optional() }), response: z.custom<PasswordRevealResult>() },
+  'passwords:add': { roles: ['internal'], request: z.strictObject(loginFields), response: z.custom<PasswordStepResult>() },
+  'passwords:edit': { roles: ['internal'], request: z.strictObject({ id: loginId, patch: z.strictObject(loginFields).partial() }), response: z.custom<PasswordStepResult>() },
+  'passwords:delete': { roles: ['internal'], request: z.strictObject({ id: loginId }), response: z.custom<PasswordStepResult>() },
+  'passwords:undelete': { roles: ['internal'], request: z.strictObject({ id: loginId }), response: z.custom<PasswordStepResult>() },
+  'passwords:forgetNever': { roles: ['internal'], request: z.strictObject({ site: z.string().min(1).max(300) }), response: z.custom<PasswordStepResult>() },
+  /** A forgotten passphrase: every password goes. */
+  'passwords:startOver': { roles: ['internal'], request: z.void(), response: z.custom<PasswordsView>() },
+  /** The popover's unlock card: the passphrase (and whether to keep the vault unlocked here), or null to cancel. */
+  'passwords:unlockCard': {
+    roles: ['popover'],
+    request: z.strictObject({ id: z.number().int().min(1), passphrase: typedPassphrase.nullable(), keep: z.boolean() }),
+    response: z.void(),
+  },
   'sync:status': { roles: ['internal'], request: z.void(), response: z.custom<SyncView>() },
   'sync:chooseFolder': { roles: ['internal'], request: z.void(), response: z.custom<SyncFolderResult>() },
   'sync:setup': { roles: ['internal'], request: z.strictObject({ folderId: id, passphrase: syncPassphrase }), response: z.custom<SyncStepResult>() },
@@ -1664,6 +1756,8 @@ export interface EventPayloads {
   'importFile:progress': FileImportProgress;
   /** Where sync stands, to Settings, whenever it changes. */
   'sync:status': SyncView;
+  /** The vault changed (locked, unlocked, a sign-in saved): Settings asks for its view again. Nothing of it rides along. */
+  'passwords:changed': null;
   /** Tabs in the window's chords playing media (or paused a moment ago), newest first, when that changes. */
   'media:state': NowPlaying[];
   /** The frame of the tab that plays in Chord Player changed (docked, starting, its still picture), or no tab does (null). */
@@ -1909,6 +2003,27 @@ export interface SettingsApi {
   files: FileImportApi;
   /** Settings → Your data → Sync. */
   sync: SyncApi;
+  /** Settings → Passwords. */
+  passwords: PasswordsApi;
+}
+
+/** Settings → Passwords (docs/decisions/S17-passwords.md §9). */
+export interface PasswordsApi {
+  view(): Promise<PasswordsView>;
+  setup(passphrase: string): Promise<PasswordStepResult>;
+  unlock(passphrase: string): Promise<PasswordStepResult>;
+  lock(): Promise<PasswordsView>;
+  keep(on: boolean): Promise<PasswordStepResult>;
+  changePassphrase(current: string, next: string): Promise<PasswordStepResult>;
+  reveal(id: string, passphrase?: string): Promise<PasswordRevealResult>;
+  copy(id: string, passphrase?: string): Promise<PasswordRevealResult>;
+  add(login: { origin: string; username: string; password: string; note: string }): Promise<PasswordStepResult>;
+  edit(id: string, patch: Partial<{ origin: string; username: string; password: string; note: string }>): Promise<PasswordStepResult>;
+  remove(id: string): Promise<PasswordStepResult>;
+  undo(id: string): Promise<PasswordStepResult>;
+  forgetNever(site: string): Promise<PasswordStepResult>;
+  startOver(): Promise<PasswordsView>;
+  onChange(listener: () => void): () => void;
 }
 
 /** Your data's sync (Settings → Your data → Sync, docs/decisions/S15-your-data.md §8). */
@@ -2053,6 +2168,8 @@ export interface PopoverApi {
   auth: { respond(id: number, credentials: { username: string; password: string } | null): Promise<void> };
   /** Choosing a passkey: one the prompt offered, or null to decline. */
   passkey: { respond(id: number, credentialId: string | null): Promise<void> };
+  /** Unlock passwords: the passphrase, or null to cancel. */
+  passwords: { unlock(id: number, passphrase: string | null, keep: boolean): Promise<void> };
   /** The one-time offer: turn Safe Browsing on, or not now (either way it isn't offered again). */
   safeBrowsing: { choose(on: boolean): Promise<void> };
   /** The DRM notice: open the page in another browser or Chord Player (installing it first), or not now. */

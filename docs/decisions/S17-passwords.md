@@ -1,6 +1,6 @@
 # S17: Passwords, built in
 
-*2026-11-15 · replaces D12 (ARCHITECTURE.md §16) and re-rates risk R2 (§17) · nothing is built yet.*
+*2026-11-15 · replaces D12 (ARCHITECTURE.md §16) and re-rates risk R2 (§17) · phase 1's vault is built ([below](#phase-1-the-vault-as-built-2026-11-15)).*
 
 **Decided 2026-11-15 by the maintainer:**
 1. **D12 is reversed: option B.** Chord builds its own password manager, with its own detector (§2–§4). Extensions stay supported.
@@ -890,3 +890,28 @@ Only what a real desktop can show; everything else above was measured.
   Before then, the spike's placement checks can be run on a machine nobody is using; it opens a window for about 20 s: `pnpm install`, `pnpm --filter @chord/desktop build`, then `node spikes/s17-passwords/probes/run.mjs --only world,card`. The results land in `spikes/s17-passwords/results/probes/`.
 - **A Wayland desktop** (GNOME or KDE): the same checks, since headless Weston never activates a window.
 - **A real news site** for question 5's ratio, if wanted: the page measured here was synthetic, and real ads share sites.
+
+---
+
+## Phase 1: the vault, as built (2026-11-15)
+
+*Phase 1's first half, beside the form detector (`feat/passwords-detector`). The menu under the field, filling and the save cards come once both are in. Where this differs from the text above, this is what was built.*
+
+**Built.**
+- **Storage** (migration 24, `packages/data/src/passwords.ts`): §7's format. One meta row, `passwords`, holds the KDF, the wrapped key, a check and the OS-kept copy, rather than three keys. `login_use` is keyed by **chord** (`chord_id`), not profile, since chords that share sign-ins are still different chords (§7, *One vault, every chord*). `login_never` seals each site's name too, so Settings can list *Sites Chord never saves for* (§9).
+- **The passphrase** is chosen with the first password: Settings' *Add a password…* asks for it, the save card will (its step is `renderer/shared/PassphraseStep.tsx`), or Settings' **Choose…** while there's none.
+- **Locking**: after every launch and after *Lock after* unused (default 30 minutes, *Never* allowed), counted from the last use; *Lock now* in Settings. With *Keep unlocked on this computer*, idling still drops the key from memory, and the next use opens it again with the OS's copy; *Lock now* holds until the passphrase is typed. No *Lock passwords* menu item yet: it belongs in the menu under the field.
+- **Keep unlocked** isn't offered on Linux without a keyring (`basic_text`), unlike sync's *remember anyway*: there it would be a key in a file any program can read.
+- **Show and Copy** ask again after 5 minutes, and also when the passphrase hasn't been typed this launch (the vault opened with the kept key). Touch ID can't stand in yet (phase 4).
+- **A copied password** leaves the clipboard after 60 s if unchanged, and at quit; main keeps its hash, not the password.
+- **Honest limit: clipboard history.** Windows' clipboard history (Win+V) and its cloud clipboard keep a copied password after Chord clears it. Chrome marks its copies with `ExcludeClipboardContentFromMonitorProcessing`; Electron's `clipboard` can't add that format beside text, so it needs a native helper (performance rule 3: a decision of its own). Until then, Settings' *Copy* is best avoided with clipboard history on. macOS's and Linux's clipboard managers are the same story ⚠.
+- **After a security review** (a subagent's, of this half): *Lock now* during an unlock, or while the kept key is read, leaves the vault locked (chord-data counts locks, and refuses an `open` or an `unlock` from before the latest); changing a sign-in's address in Settings needs the passphrase typed in the last 5 minutes, as *Show* does, since the address decides where it fills; idle with the key kept, Settings isn't told, so it doesn't open the vault again just by refreshing.
+- **Delete** has Undo for the session (chord-data keeps the sealed row in memory).
+- **The extension rule** (§11): `PASSWORD_MANAGER_EXTENSIONS` (store ids from memory ⚠, unchecked against the store), and `settings.passwords.onChords` for *Turn on there too*.
+- **Settings → Passwords** as the owner's mock draws it (DESIGN.md §8.9), and the popover's unlock card (§7.1).
+- **The API the menu and save cards call** (`main/passwords/service.ts`): `accountsFor`, `passwordForFill`, `candidate`, `save`, `never`, `askUnlock`. Each takes the frame's origin as Chromium reports it and the tab's chord; the menu gets usernames and hosts only; private windows fill and never save, and record no use; a proxy's sign-in is refused (DESIGN.md §9); a *Never* site gets no card. The page-side IPC (§8's `passwords:focus`, `:candidate`, `:fill`) is the detector half's.
+- **Matching** (§5) is `core/password-sites.ts` (`tldts` 7.4.19, a subpath of core so no renderer bundles the list): same origin, `http` upgraded to `https` on the same host and port, same site on `https`; never `https` for an `http` page.
+
+**Left out, as decided:** import and export (phase 2), sync (phase 5). Sync and Chord's export carry no passwords: the tables aren't record types (docs/data-format.md).
+
+**Tests:** layer 4 in `packages/data/test/passwords.test.ts` (and `export.test.ts`: an export never holds the vault); the clock, extension rule, settings and matching in `packages/core/test/passwords.test.ts`; main's side in `apps/desktop/test/unit/passwords-service.test.ts`; layer 3's vault journey in `apps/desktop/test/e2e/passwords.spec.ts` (light and dark, axe, captures), and Settings → Passwords in `a11y.spec.ts`'s every-section audit.

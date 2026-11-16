@@ -93,10 +93,13 @@ Each setting that travels is a field of the `settings` record. A group's parts a
 | `externalLinks` | `"mini"` or `"tab"` |
 | `reader.size`, `reader.width`, `reader.theme`, `reader.font` | reader view's look |
 | `effects.wet` | Dry/Wet for every site |
+| `passwords.enabled`, `passwords.lockAfter`, `passwords.onChords` | Chord's own passwords: the switch (`true`/`false`); when they lock after going unused (`5`, `15`, `30`, `60` or `240` minutes, or `"never"`); the chords they're on in although a password manager's extension is installed there (chord ids) |
 | `shortcuts.mac`, `shortcuts.other` | Your keyboard shortcuts, by action (`{"tab.new": ["Ctrl+Alt+T"]}`): a Mac writes `mac`, Windows and Linux write `other`, and each reads only its own. |
 | `proxy` | The proxy for every chord: `{"mode": "system" \| "none" \| "server" \| "pac", "server": {"scheme": "http" \| "https" \| "socks5", "host", "port", "bypass": [...]} \| null, "pac": <a PAC file's address> \| null}`. Never a password: one in a PAC file's address is taken out. Exported so a restore brings it back, but never synced: it's about the network a computer is on. A chord's own proxy, on its `chord` record, is the same shape. |
 
 Not in a file, because they're about one computer or happen once: the interface size, update checks, the mini window's size, developer tools' side and size, the assistant's app and model, first run's flag. Themes you made are `theme` records.
+
+**Passwords are never in a file, nor in sync's folder** (docs/decisions/S17-passwords.md §10): no record type carries them yet, and a plain file never will. Nor does a file say where you have one, or which sites you told Chord never to save for, or whether your passwords are kept unlocked on a computer. An encrypted file may carry them later (phase 2), and sync only by a switch of its own (phase 5); both will be new record types, added as this section says.
 
 ## The encrypted file
 
