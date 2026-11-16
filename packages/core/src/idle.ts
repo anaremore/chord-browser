@@ -65,7 +65,8 @@ export function archiveCandidates(state: State, now: number, afterMs: number | n
     .filter((n): n is TabNode => n.kind === 'tab' && n.section === 'today' && !state.chords[n.chordId]?.private)
     .filter((t) => !(t.parentId && nodeOf(state, t.parentId)?.kind === 'split'))
     .filter((t) => !visible.has(t.id) && !busy.has(t.id) && now - t.lastActiveAt >= afterMs)
-    .sort((a, b) => a.lastActiveAt - b.lastActiveAt)
+    // Ties by ID (time-ordered), not by where the nodes happen to sit: their buckets keep no order.
+    .sort((a, b) => a.lastActiveAt - b.lastActiveAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((t) => t.id);
 }
 

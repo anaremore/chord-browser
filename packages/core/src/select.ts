@@ -1,6 +1,6 @@
 /** Read-only queries over State, shared by main and renderers. */
 import { MAX_FAVORITES, type Chord, type ChordId, type Download, type Favorite, type NodeId, type Section, type SidebarNode, type State, type TabNode, type WindowId } from './model';
-import { childrenIndex, nodeList, nodeOf } from './nodes';
+import { childrenIndex, nodeOf, nodesOfChord } from './nodes';
 import { placeKey } from './rank';
 import { shownTabs } from './split';
 
@@ -95,7 +95,7 @@ export function favoriteFits(state: Pick<State, 'favorites' | 'chords'>, url: st
  * the same site.
  */
 export function tabForFavorite(state: State, chordId: ChordId, url: string): TabNode | null {
-  const tabs = nodeList(state).filter((n): n is TabNode => n.kind === 'tab' && n.chordId === chordId);
+  const tabs = nodesOfChord(state, chordId).filter((n): n is TabNode => n.kind === 'tab');
   const place = placeKey(url);
   const same = place ? tabs.filter((t) => placeKey(t.url) === place) : [];
   const host = siteOf(url);

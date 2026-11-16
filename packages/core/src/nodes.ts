@@ -83,27 +83,54 @@ export type HasNodes = { readonly nodes: { readonly [bucket: BucketKey]: Readonl
 /** A node of `S`: in a draft, a draft. */
 type NodeIn<S extends HasNodes> = S['nodes'][BucketKey][NodeId];
 
-/** A node by ID. In a draft, a draft of it, to change. */
-export function nodeOf<S extends HasNodes>(state: S, id: NodeId): NodeIn<S> | undefined {
-  return (state.nodes as NodeBuckets)[bucketOf(id)]?.[id] as NodeIn<S> | undefined;
+/**
+ * In a draft, the nodes these helpers handed out as drafts, put in or took
+ * out, by bucket: only they can differ from the draft's base, so the tree's
+ * queries in a draft look at them, not at every node of every bucket that
+ * changed (deleting a chord changes them all). Nothing else can reach a node
+ * by its ID (the type keeps `state.nodes[id]` from compiling).
+ */
+const journals = new WeakMap<object, Map<BucketKey, Set<NodeId>>>();
+
+function touch(nodes: NodeBuckets, key: BucketKey, id: NodeId): void {
+  if (!isDraft(nodes)) return;
+  let journal = journals.get(nodes);
+  if (!journal) journals.set(nodes, (journal = new Map()));
+  const ids = journal.get(key);
+  if (ids) ids.add(id);
+  else journal.set(key, new Set([id]));
 }
 
-/** Whether there's a node with this ID. */
-export const hasNode = (state: HasNodes, id: NodeId): boolean => nodeOf(state, id) !== undefined;
+/** A node by ID. In a draft, a draft of it, to change. */
+export function nodeOf<S extends HasNodes>(state: S, id: NodeId): NodeIn<S> | undefined {
+  const nodes = state.nodes as NodeBuckets;
+  const key = bucketOf(id);
+  touch(nodes, key, id);
+  return nodes[key]?.[id] as NodeIn<S> | undefined;
+}
+
+/** Whether there's a node with this ID (in a draft, without making a draft of it). */
+export function hasNode(state: HasNodes, id: NodeId): boolean {
+  const bucket = (state.nodes as NodeBuckets)[bucketOf(id)];
+  return bucket !== undefined && id in bucket;
+}
 
 /** Put a node in (or in place of the one with its ID). */
-export function setNode<S extends HasNodes>(state: S, node: SidebarNode): NodeIn<S> {
-  const key = bucketOf(node.id);
+export function setNode(state: HasNodes, node: SidebarNode): void {
   const nodes = state.nodes as NodeBuckets;
-  const bucket = (nodes[key] ??= {});
-  bucket[node.id] = node;
-  return bucket[node.id] as NodeIn<S>;
+  const key = bucketOf(node.id);
+  touch(nodes, key, node.id);
+  (nodes[key] ??= {})[node.id] = node;
 }
 
 /** Take a node out. */
 export function deleteNode(state: HasNodes, id: NodeId): void {
-  const bucket = (state.nodes as NodeBuckets)[bucketOf(id)];
-  if (bucket && id in bucket) delete bucket[id];
+  const nodes = state.nodes as NodeBuckets;
+  const key = bucketOf(id);
+  const bucket = nodes[key];
+  if (!bucket || !(id in bucket)) return;
+  touch(nodes, key, id);
+  delete bucket[id];
 }
 
 /** Immer's own key for a draft's state (a global symbol, so every copy of Immer shares it). */
@@ -204,6 +231,19 @@ interface Group {
   sorted: boolean;
 }
 
+/** A state's index: its children, and its splits (which settle after every change that can move a pane, split.ts). */
+interface Index {
+  groups: Groups;
+  splits: ReadonlySet<SidebarNode>;
+}
+
+/** One pass over `nodes`. */
+function indexOf(nodes: readonly SidebarNode[]): Index {
+  const splits = new Set<SidebarNode>();
+  for (const node of nodes) if (node.kind === 'split') splits.add(node);
+  return { groups: group(nodes), splits };
+}
+
 /** One pass over `nodes` (only `chordId`'s, when given). */
 function group(nodes: Iterable<SidebarNode>, chordId?: ChordId): Groups {
   const groups: Groups = new Map();
@@ -232,8 +272,30 @@ function sortedOf(found: Group | undefined): SidebarNode[] {
 
 const groupIn = (groups: Groups, chordId: ChordId, section: Section, parentId: NodeId | null): Group | undefined => groups.get(chordId)?.get(section)?.get(parentId);
 
-/** Where a node goes in the groups. */
-const keyOf = (n: SidebarNode) => `${n.chordId}\0${n.section}\0${n.parentId ?? ''}`;
+/** Where a node goes in the groups (read from a draft's own copy: through its proxy, every read costs). */
+const keyOf = (node: SidebarNode) => {
+  const n = ownOf(node);
+  return `${n.chordId}\0${n.section}\0${n.parentId ?? ''}`;
+};
+
+/** Nodes in rank order, some of them drafts: sorted by their own copies, so no read goes through a proxy. */
+function sortRead(list: SidebarNode[]): SidebarNode[] {
+  const keyed = list.map((n) => ({ n, own: ownOf(n) }));
+  keyed.sort((a, b) => byRank(a.own, b.own));
+  return keyed.map((k) => k.n);
+}
+
+/** The buckets that aren't the same object in both; null past `limit` of them. */
+function changedBuckets(was: NodeBuckets, now: NodeBuckets, limit: number): BucketKey[] | null {
+  const changed: BucketKey[] = [];
+  for (const key in now) {
+    if (now[key as BucketKey] === was[key as BucketKey]) continue;
+    changed.push(key as BucketKey);
+    if (changed.length > limit) return null;
+  }
+  for (const key in was) if (!(key in now)) changed.push(key as BucketKey);
+  return changed.length > limit ? null : changed;
+}
 
 /** Which nodes changed between two versions of the nodes, by identity, bucket by bucket: what left, and what came. */
 interface Diff {
@@ -241,41 +303,92 @@ interface Diff {
   gone: Map<string, Set<SidebarNode>>;
   /** By where they are. */
   came: Map<string, SidebarNode[]>;
+  /** Splits among them. */
+  goneSplits: Set<SidebarNode>;
+  cameSplits: SidebarNode[];
+  /** What came, by its parent (not the root), in any chord and section. */
+  cameUnder: Map<NodeId, SidebarNode[]>;
 }
 
 /**
  * How `now` differs from `was`, over the buckets that aren't the same object
- * (`now` may be a draft's own copy, its buckets drafts); null when more than
- * `limit` buckets differ, so building afresh is about as cheap.
+ * (`now` may be a draft's own copy, its buckets drafts). With `bail`, null
+ * once most of the nodes it has looked at changed: they're unrelated, and
+ * indexing `now` afresh is cheaper.
  */
-function diff(was: NodeBuckets, now: NodeBuckets, limit: number): Diff | null {
-  const changed: BucketKey[] = [];
-  for (const key in now) if (now[key as BucketKey] !== was[key as BucketKey]) changed.push(key as BucketKey);
-  for (const key in was) if (!(key in now)) changed.push(key as BucketKey);
-  if (changed.length > limit) return null;
+function diff(was: NodeBuckets, now: NodeBuckets, bail: boolean, journal?: Map<BucketKey, Set<NodeId>>): Diff | null {
+  const changed = changedBuckets(was, now, NODE_BUCKETS)!;
+  let seen = 0;
+  let changes = 0;
   const gone = new Map<string, Set<SidebarNode>>();
   const came = new Map<string, SidebarNode[]>();
+  const goneSplits = new Set<SidebarNode>();
+  const cameSplits: SidebarNode[] = [];
+  const cameUnder = new Map<NodeId, SidebarNode[]>();
   for (const key of changed) {
     const before = was[key] ?? {};
     const after = now[key] ? ownOf(now[key]) : {};
+    // In a draft, only what the journal names in a bucket that's still a draft; a bucket put in whole, or one the
+    // journal doesn't name, is read whole.
+    const ids = journal && isDraft(now[key]) ? journal.get(key) : undefined;
+    if (ids) {
+      for (const id of ids) {
+        const old = before[id];
+        const node = after[id];
+        if (old === node) continue;
+        if (old) {
+          const at = keyOf(old);
+          const set = gone.get(at);
+          if (set) set.add(old);
+          else gone.set(at, new Set([old]));
+          if (old.kind === 'split') goneSplits.add(old);
+        }
+        if (node) {
+          const own = ownOf(node);
+          const at = keyOf(node);
+          const list = came.get(at);
+          if (list) list.push(node);
+          else came.set(at, [node]);
+          if (own.kind === 'split') cameSplits.push(node);
+          if (own.parentId !== null) {
+            const under = cameUnder.get(own.parentId);
+            if (under) under.push(node);
+            else cameUnder.set(own.parentId, [node]);
+          }
+        }
+      }
+      continue;
+    }
     for (const id in before) {
       const old = before[id]!;
+      seen++;
       if (after[id] === old) continue;
+      changes++;
       const at = keyOf(old);
       const set = gone.get(at);
       if (set) set.add(old);
       else gone.set(at, new Set([old]));
+      if (old.kind === 'split') goneSplits.add(old);
     }
     for (const id in after) {
       const node = after[id]!;
       if (before[id] === node) continue;
+      changes++;
+      const own = ownOf(node);
       const at = keyOf(node);
       const list = came.get(at);
       if (list) list.push(node);
       else came.set(at, [node]);
+      if (own.kind === 'split') cameSplits.push(node);
+      if (own.parentId !== null) {
+        const under = cameUnder.get(own.parentId);
+        if (under) under.push(node);
+        else cameUnder.set(own.parentId, [node]);
+      }
     }
+    if (bail && changes > 1000 && changes > seen) return null;
   }
-  return { gone, came };
+  return { gone, came, goneSplits, cameSplits, cameUnder };
 }
 
 /** Where `node` goes in `sorted` (binary search by rank). */
@@ -305,9 +418,17 @@ function changedGroup(old: Group | undefined, gone: Set<SidebarNode> | undefined
   return kept.length === 0 ? null : { nodes: kept, sorted };
 }
 
-/** `groups` with a diff applied, copying only the maps and groups it touches. */
-function applyDiff(groups: Groups, { gone, came }: Diff): Groups {
-  const next: Groups = new Map(groups);
+/** An index with a diff applied, copying only the maps and groups it touches. */
+function applyDiff(index: Index, changes: Diff): Index {
+  const { gone, came, goneSplits, cameSplits } = changes;
+  let splits = index.splits;
+  if (goneSplits.size > 0 || cameSplits.length > 0) {
+    const kept = new Set(splits);
+    for (const n of goneSplits) kept.delete(n);
+    for (const n of cameSplits) kept.add(n);
+    splits = kept;
+  }
+  const next: Groups = new Map(index.groups);
   const copied = new Set<object>();
   const own = <K, V>(map: Map<K, V>): Map<K, V> => {
     if (copied.has(map)) return map;
@@ -328,16 +449,41 @@ function applyDiff(groups: Groups, { gone, came }: Diff): Groups {
     if (group) parents.set(parentId, group);
     else parents.delete(parentId);
   }
-  return next;
+  return { groups: next, splits };
 }
 
-/** A frozen state's groups, kept for as long as its `nodes` is around. */
-const frozenGroups = new WeakMap<object, Groups>();
-/** The last frozen nodes indexed: the next state is most likely made from it, so its index is this one put right. */
-let lastIndexed: { nodes: NodeBuckets; groups: Groups } | null = null;
+/** A frozen state's index, kept for as long as its `nodes` is around. */
+const frozenIndexes = new WeakMap<object, Index>();
+/**
+ * The frozen nodes indexed last, newest first: the next state is most likely
+ * made from one of them, so its index is that one's put right. A few, not
+ * one: a process can follow more than one line of states (main's store, and
+ * a state sync or a test works out beside it).
+ */
+const recent: { nodes: NodeBuckets; index: Index }[] = [];
+const RECENT = 4;
 
-/** More buckets changed than this, and a state is indexed afresh. */
-const DIFF_LIMIT = NODE_BUCKETS / 2;
+function remember(nodes: NodeBuckets, index: Index): void {
+  const at = recent.findIndex((r) => r.nodes === nodes);
+  if (at === 0) return;
+  if (at > 0) recent.splice(at, 1);
+  recent.unshift({ nodes, index });
+  if (recent.length > RECENT) recent.pop();
+}
+
+/** The recent index closest to `nodes`: fewest buckets apart. */
+function closest(nodes: NodeBuckets): { nodes: NodeBuckets; index: Index } | null {
+  let best: { nodes: NodeBuckets; index: Index } | null = null;
+  let fewest = NODE_BUCKETS;
+  for (const r of recent) {
+    const changed = changedBuckets(r.nodes, nodes, fewest);
+    if (changed && (!best || changed.length < fewest)) {
+      best = r;
+      fewest = changed.length;
+    }
+  }
+  return best;
+}
 
 /** Whether nodes are done changing: the buckets object and every bucket frozen (Immer freezes them all). */
 function isDone(nodes: NodeBuckets): boolean {
@@ -346,19 +492,20 @@ function isDone(nodes: NodeBuckets): boolean {
   return true;
 }
 
-/** The groups of nodes that are done (frozen), cached; null for ones that can still change (a draft too). */
-function groupsOfNodes(nodes: NodeBuckets): Groups | null {
-  const known = frozenGroups.get(nodes);
+/** The index of nodes that are done (frozen), cached; null for ones that can still change (a draft too). */
+function indexOfNodes(nodes: NodeBuckets): Index | null {
+  const known = frozenIndexes.get(nodes);
   if (known) {
-    if (lastIndexed?.nodes !== nodes) lastIndexed = { nodes, groups: known };
+    remember(nodes, known);
     return known;
   }
   if (isDraft(nodes) || !isDone(nodes)) return null;
-  const changes = lastIndexed ? diff(lastIndexed.nodes, nodes, DIFF_LIMIT) : null;
-  const groups = changes ? applyDiff(lastIndexed!.groups, changes) : group(nodeList({ nodes }));
-  frozenGroups.set(nodes, groups);
-  lastIndexed = { nodes, groups };
-  return groups;
+  const from = closest(nodes);
+  const changes = from ? diff(from.nodes, nodes, true) : null;
+  const index = from && changes ? applyDiff(from.index, changes) : indexOf(nodeList({ nodes }));
+  frozenIndexes.set(nodes, index);
+  remember(nodes, index);
+  return index;
 }
 
 /**
@@ -367,8 +514,7 @@ function groupsOfNodes(nodes: NodeBuckets): Groups | null {
  * when neither can be had (a state still being changed by hand, or Immer's
  * production build), and every node must be read.
  */
-interface View {
-  groups: Groups;
+interface View extends Index {
   changes: Diff | null;
 }
 
@@ -377,12 +523,12 @@ function viewOf(state: Nodes): View | null {
   if (isDraft(nodes)) {
     const draft = draftStateOf(nodes);
     if (!draft?.base_) return null;
-    const groups = groupsOfNodes(draft.base_);
-    if (!groups) return null;
-    return { groups, changes: draft.copy_ ? diff(draft.base_, draft.copy_, Infinity) : null };
+    const index = indexOfNodes(draft.base_);
+    if (!index) return null;
+    return { ...index, changes: draft.copy_ ? diff(draft.base_, draft.copy_, false, journals.get(nodes)) : null };
   }
-  const groups = groupsOfNodes(nodes);
-  return groups ? { groups, changes: null } : null;
+  const index = indexOfNodes(nodes);
+  return index ? { ...index, changes: null } : null;
 }
 
 /** A parent's children from a view, in order. A new array. */
@@ -394,11 +540,9 @@ function childrenIn(view: View, chordId: ChordId, section: Section, parentId: No
   const came = view.changes.came.get(at);
   if (!gone && !came) return base.slice();
   const kept = gone ? base.filter((n) => !gone.has(n)) : base.slice();
-  if (came) {
-    kept.push(...came);
-    kept.sort(byRank);
-  }
-  return kept;
+  if (!came) return kept;
+  kept.push(...came);
+  return sortRead(kept);
 }
 
 /**
@@ -437,6 +581,63 @@ export function children(state: State, chordId: ChordId, section: Section, paren
  * changes, or one pass over the nodes), however many parents are asked for.
  */
 export function childrenIndex(state: Nodes, chordId: ChordId): (section: Section, parentId: NodeId | null) => SidebarNode[] {
-  const view = viewOf(state) ?? { groups: group(nodeList(state), chordId), changes: null };
+  const view: View = viewOf(state) ?? { groups: group(nodeList(state), chordId), splits: new Set(), changes: null };
   return (section, parentId) => childrenIn(view, chordId, section, parentId);
+}
+
+/**
+ * Every node of a chord, to read (in a draft, drafts for the ones changed),
+ * in no order: from the index, not a pass over every node.
+ */
+export function nodesOfChord(state: Nodes, chordId: ChordId): SidebarNode[] {
+  const view = viewOf(state);
+  if (!view) return nodeList(state).filter((n) => n.chordId === chordId);
+  const out: SidebarNode[] = [];
+  const changes = view.changes;
+  for (const [section, parents] of view.groups.get(chordId) ?? []) {
+    for (const [parentId, found] of parents) {
+      const gone = changes?.gone.get(`${chordId}\0${section}\0${parentId ?? ''}`);
+      for (const n of found.nodes) if (!gone?.has(n)) out.push(n);
+    }
+  }
+  if (changes) for (const [at, list] of changes.came) if (at.startsWith(`${chordId}\0`)) out.push(...list);
+  return out;
+}
+
+/**
+ * Every split, to read (in a draft, drafts for the ones changed), and what's
+ * in one: every node whose parent it is, in any chord or section (old or
+ * damaged data can put another chord's tab in a split), in no order. From
+ * the index, not a pass over every node: splits settle after most changes (split.ts).
+ */
+export function splitsWithPanes(state: Nodes): { splits: SidebarNode[]; inside: (splitId: NodeId) => SidebarNode[] } {
+  const view = viewOf(state);
+  if (!view) {
+    const all = nodeList(state);
+    const under = new Map<NodeId, SidebarNode[]>();
+    for (const n of all) {
+      if (n.parentId === null) continue;
+      const list = under.get(n.parentId);
+      if (list) list.push(n);
+      else under.set(n.parentId, [n]);
+    }
+    return { splits: all.filter((n) => n.kind === 'split'), inside: (id) => under.get(id) ?? [] };
+  }
+  const changes = view.changes;
+  const splits = [...view.splits].filter((n) => !changes?.goneSplits.has(n));
+  if (changes) splits.push(...changes.cameSplits);
+  const inside = (id: NodeId): SidebarNode[] => {
+    const out: SidebarNode[] = [];
+    for (const [chordId, sections] of view.groups) {
+      for (const [section, parents] of sections) {
+        const found = parents.get(id);
+        if (!found) continue;
+        const gone = changes?.gone.get(`${chordId}\0${section}\0${id}`);
+        for (const n of found.nodes) if (!gone?.has(n)) out.push(n);
+      }
+    }
+    if (changes) out.push(...(changes.cameUnder.get(id) ?? []));
+    return out;
+  };
+  return { splits, inside };
 }

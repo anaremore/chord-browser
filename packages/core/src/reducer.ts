@@ -63,7 +63,7 @@ import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
 import type { SyncApply, SyncGone } from './sync';
 import { chordsFor, descendants, favoriteFits, favoritesFor, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
-import { children, childrenToRead, deleteNode, nodeList, nodeOf, setNode } from './nodes';
+import { byRank, children, childrenToRead, deleteNode, nodeList, nodeOf, nodesOfChord, setNode } from './nodes';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
 
 enablePatches();
@@ -635,8 +635,8 @@ function switchChord(draft: Draft<State>, windowId: WindowId, chordId: ChordId, 
 function changeProfile(draft: Draft<State>, chord: Draft<Chord>, profileId: ProfileId, effects: Effect[]): void {
   chord.profileId = profileId;
   if (profileId === DEFAULT_PROFILE) delete chord.proxy;
-  for (const node of nodeList(draft as State)) {
-    if (node.kind !== 'tab' || node.chordId !== chord.id || !draft.live[node.id]) continue;
+  for (const node of nodesOfChord(draft as State, chord.id)) {
+    if (node.kind !== 'tab' || !draft.live[node.id]) continue;
     delete draft.live[node.id];
     effects.push({ e: 'view.destroy', nodeId: node.id });
   }
@@ -826,7 +826,7 @@ function makeWay(draft: Draft<State>, undo: Draft<MergeUndo>, chordId: ChordId, 
   const chord = draft.chords[chordId];
   const target = draft.chords[to];
   if (!chord || !target || chord.private || target.private || chordId === to || undo.madeWay || sortedChords(draft as State).length < 2) return;
-  const nodes = nodeList(draft as State).filter((n) => n.chordId === chordId);
+  const nodes = nodesOfChord(draft as State, chordId);
   undo.madeWay = { chord: copy(chord), nodes: nodes.map(copy), to };
   const today = childrenToRead(draft as State, chordId, 'today', null);
   const pinned = childrenToRead(draft as State, chordId, 'pinned', null);
@@ -959,14 +959,16 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
   const target = draft.chords[to];
   if (!chord || !target || chord.private || target.private || chordId === to) return;
   const today = children(draft as State, chordId, 'today', null);
-  const opened = nodeList(draft as State)
-    .filter((n) => n.chordId === chordId && n.kind === 'tab' && n.section === 'pinned' && open.has(n.id))
-    .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
+  const ofChord = nodesOfChord(draft as State, chordId);
+  const opened = ofChord
+    .filter((n) => n.kind === 'tab' && n.section === 'pinned' && open.has(n.id))
+    // Ties (tabs in different folders) by ID, not by where the nodes happen to sit (their buckets keep no order).
+    .sort(byRank);
   const going = [...today, ...opened];
   // Each split's panes, from one pass.
   const panesOf = new Map<NodeId, NodeId[]>();
-  for (const n of nodeList(draft as State)) {
-    if (n.parentId === null || n.chordId !== chordId) continue;
+  for (const n of ofChord) {
+    if (n.parentId === null) continue;
     const list = panesOf.get(n.parentId);
     if (list) list.push(n.id);
     else panesOf.set(n.parentId, [n.id]);
@@ -1012,7 +1014,7 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
     effects.push({ e: 'view.show', windowId: win.id, nodeId: show });
   }
   // The rest goes with it, kept for Undo this session.
-  const rest = nodeList(draft as State).filter((n) => n.chordId === chordId);
+  const rest = nodesOfChord(draft as State, chordId);
   draft.syncUndo.unshift({ id: ctx.newId(), chord: copy(chord), nodes: rest.map((n) => copy(n)), deletedAt: ctx.now, moved: before });
   if (draft.syncUndo.length > MAX_SYNC_UNDO) draft.syncUndo.length = MAX_SYNC_UNDO;
   for (const node of rest) {
@@ -1844,8 +1846,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (!win.private) return;
       // Closing a private window forgets everything in it (files it downloaded stay on disk).
       const chordId = win.activeChordId;
-      for (const node of nodeList(draft as State)) {
-        if (node.chordId !== chordId) continue;
+      for (const node of nodesOfChord(draft as State, chordId)) {
         if (node.kind === 'tab') effects.push({ e: 'view.destroy', nodeId: node.id });
         deleteNode(draft, node.id);
         delete draft.live[node.id];
@@ -2120,7 +2121,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (win.activeChordId === cmd.chordId) switchChord(draft, win.id, neighbor.id, ctx, effects);
         delete win.activeTab[cmd.chordId];
       }
-      const nodes = nodeList(draft as State).filter((n) => n.chordId === cmd.chordId);
+      const nodes = nodesOfChord(draft as State, cmd.chordId);
       // Its own Favorites go with it, and come back with Undo.
       const favorites = Object.values(draft.favorites).filter((f) => f.chordId === cmd.chordId);
       draft.deletedChords.unshift({

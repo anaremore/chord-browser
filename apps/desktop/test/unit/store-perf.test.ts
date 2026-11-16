@@ -1,11 +1,11 @@
 /**
- * The store's cost on a very large profile (ARCHITECTURE.md §6.1, §9 Import's
- * known limit): 5,000 pinned tabs across chords, one chord of them alone, and
- * an import of 30,000 bookmarks. Each common action's store change, and a
- * mirror applying its patches, timed as the median of several runs.
+ * The store's cost on a very large profile (ARCHITECTURE.md §6.1, *Large
+ * profiles*): 5,000 pinned tabs across chords, one chord of them alone, and
+ * those with an import of 30,000 bookmarks. Each common action's store
+ * change, and a mirror applying its patches, timed as the median of several runs.
  */
 import { generateNKeysBetween } from 'fractional-indexing';
-import { applyPatches, enablePatches } from 'immer';
+import { applyPatches, enablePatches, freeze } from 'immer';
 import { writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { apply, childrenToRead, emptyState, IDLE_LIVE, type Command, type Context, type SidebarNode, type State, setNode } from '@chord/core';
@@ -76,13 +76,23 @@ interface Timing {
   patches: number;
 }
 
-/** A command applied to `base` again and again: its store change, and a mirror applying what it sent, each with its first read of the tree. */
+/**
+ * A command applied to `base` again and again: its store change, and a mirror
+ * applying what it sent, each with its first read of the tree. Both start as
+ * they are in the app: frozen (main's store freezes its first state, and Immer
+ * every one after; a mirror freezes its snapshot) and already read once (main's
+ * listeners and the sidebar read every state), so the new state's index is
+ * the last one's put right (core's nodes.ts).
+ */
 function time(base: State, command: Command, runs = 9): Timing {
   const store: number[] = [];
   const mirror: number[] = [];
   let patches = 0;
-  // A mirror's copy came over IPC: its own, not frozen.
-  const copy = structuredClone(base);
+  freeze(base, true);
+  childrenToRead(base, 'c0', 'pinned');
+  // A mirror's copy came over IPC: its own.
+  const copy = freeze(structuredClone(base), true);
+  childrenToRead(copy, 'c0', 'pinned');
   for (let i = 0; i < runs + 2; i++) {
     // Each side then reads the new state's tree once, as main's listeners and the sidebar do: the first read of a new state builds its index.
     const t0 = performance.now();
@@ -117,10 +127,8 @@ const row = (setup: string, action: string, t: Timing) => report.push(`| ${setup
 
 /**
  * Budgets (docs/testing/performance.md): a frame for each common action, and
- * 50 ms for deleting a chord or its Undo, at 5,000 pinned tabs; CI's shared
- * machines get twice as long. 30,000 imported bookmarks aren't held to them
- * yet (ARCHITECTURE.md §9, *Import*'s known limit): they're measured only with
- * `CHORD_STORE_REPORT`, for the table.
+ * 50 ms for deleting a chord or its Undo, at 5,000 pinned tabs, alone or with
+ * 30,000 imported bookmarks; CI's shared machines get twice as long.
  */
 const enforce = process.env.CHORD_PERF_ENFORCE === '1';
 const FRAME = enforce ? 8 : 16;
@@ -130,7 +138,7 @@ describe('store on a very large profile', { timeout: 120_000 }, () => {
   for (const [name, opts, held] of [
     ['5,000 pinned in 10 chords', { chords: 10, bookmarks: 0 }, true],
     ['5,000 pinned in 1 chord', { chords: 1, bookmarks: 0 }, true],
-    ['5,000 pinned + 30,000 bookmarks', { chords: 10, bookmarks: 30_000 }, false],
+    ['5,000 pinned + 30,000 bookmarks', { chords: 10, bookmarks: 30_000 }, true],
   ] as const) {
     const run = held || Boolean(process.env.CHORD_STORE_REPORT);
     it.runIf(run)(`${name}: each common action takes less than a frame`, () => {
