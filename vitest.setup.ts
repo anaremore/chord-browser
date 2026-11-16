@@ -2,9 +2,10 @@
  * Unit tests that need files make throwaway folders in tmpdir(). Each test
  * file gets its own temp folder, removed after its last test, so none of them
  * outlive the run (left behind, test folders filled a disk). The folder sits
- * in the real temp folder, kept in CHORD_TEST_REAL_TMP across files.
+ * in the real temp folder, kept in CHORD_TEST_REAL_TMP across files, or in
+ * CHORD_TEST_TEMP when it's set (to keep test files off the system drive).
  */
-import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll } from 'vitest';
@@ -21,7 +22,8 @@ const remove = (dir: string) => {
   }
 };
 
-const base = (process.env['CHORD_TEST_REAL_TMP'] ??= tmpdir());
+const base = (process.env['CHORD_TEST_REAL_TMP'] ??= process.env['CHORD_TEST_TEMP'] || tmpdir());
+mkdirSync(base, { recursive: true });
 for (const name of readdirSync(base)) {
   if (!name.startsWith(PREFIX)) continue;
   const dir = join(base, name);

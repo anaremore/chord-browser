@@ -5,8 +5,10 @@
  * tens of gigabytes. Pointing TEMP/TMP/TMPDIR at the run's folder gathers all
  * of it: the workers and the Chords they launch inherit the variables. Folders
  * left by runs that were killed are swept when the next run starts.
+ * CHORD_TEST_TEMP, when set, is where the run's folder goes instead of the
+ * system temp folder (to keep test profiles off the system drive).
  */
-import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,7 +17,8 @@ const PREFIX = 'chord-test-run-';
 const STALE_MS = 6 * 3_600_000;
 
 export default function globalSetup(): () => void {
-  const base = tmpdir();
+  const base = process.env['CHORD_TEST_TEMP'] || tmpdir();
+  mkdirSync(base, { recursive: true });
   for (const name of readdirSync(base)) {
     if (!name.startsWith(PREFIX)) continue;
     const dir = join(base, name);
