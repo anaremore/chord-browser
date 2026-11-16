@@ -135,25 +135,23 @@ const FRAME = enforce ? 8 : 16;
 const DELETE = enforce ? 50 : 100;
 
 describe('store on a very large profile', { timeout: 120_000 }, () => {
-  for (const [name, opts, held] of [
-    ['5,000 pinned in 10 chords', { chords: 10, bookmarks: 0 }, true],
-    ['5,000 pinned in 1 chord', { chords: 1, bookmarks: 0 }, true],
-    ['5,000 pinned + 30,000 bookmarks', { chords: 10, bookmarks: 30_000 }, true],
+  for (const [name, opts] of [
+    ['5,000 pinned in 10 chords', { chords: 10, bookmarks: 0 }],
+    ['5,000 pinned in 1 chord', { chords: 1, bookmarks: 0 }],
+    ['5,000 pinned + 30,000 bookmarks', { chords: 10, bookmarks: 30_000 }],
   ] as const) {
-    const run = held || Boolean(process.env.CHORD_STORE_REPORT);
-    it.runIf(run)(`${name}: each common action takes less than a frame`, () => {
+    it(`${name}: each common action takes less than a frame`, () => {
       const s = bigState(opts);
       for (const [action, command] of common) {
         const t = time(s, command);
         row(name, action, t);
         expect(t.patches, action).toBeGreaterThan(0);
-        if (!held) continue;
         expect.soft(t.bestStore, `${action}: store`).toBeLessThan(FRAME);
         expect.soft(t.bestMirror, `${action}: mirror`).toBeLessThan(FRAME);
       }
     });
 
-    it.runIf(run)(`${name}: deleting a chord and its Undo`, () => {
+    it(`${name}: deleting a chord and its Undo`, () => {
       const s = bigState(opts);
       const del = time(s, { t: 'chord.delete', chordId: 'c0' }, 5);
       row(name, 'delete chord', del);
@@ -161,9 +159,10 @@ describe('store on a very large profile', { timeout: 120_000 }, () => {
       const undo = time(deleted, { t: 'chord.restore', windowId: 'w1', chordId: 'c0' }, 5);
       row(name, 'undo delete', undo);
       expect(del.patches).toBeGreaterThan(0);
-      if (!held) return;
-      expect.soft(del.bestStore).toBeLessThan(DELETE);
-      expect.soft(undo.bestStore).toBeLessThan(DELETE);
+      expect.soft(del.bestStore, 'delete: store').toBeLessThan(DELETE);
+      expect.soft(del.bestMirror, 'delete: mirror').toBeLessThan(DELETE);
+      expect.soft(undo.bestStore, 'undo: store').toBeLessThan(DELETE);
+      expect.soft(undo.bestMirror, 'undo: mirror').toBeLessThan(DELETE);
     });
   }
 
