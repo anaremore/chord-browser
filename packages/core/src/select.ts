@@ -100,7 +100,8 @@ export function tabForFavorite(state: State, chordId: ChordId, url: string): Tab
   const same = place ? tabs.filter((t) => placeKey(t.url) === place) : [];
   const host = siteOf(url);
   const pool = same.length > 0 ? same : host ? tabs.filter((t) => siteOf(t.url) === host) : [];
-  return pool.sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0] ?? null;
+  // Ties by ID (time-ordered), not by where the nodes happen to sit: their buckets keep no order.
+  return pool.sort((a, b) => b.lastActiveAt - a.lastActiveAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0] ?? null;
 }
 
 /** The host (and port) a web address is on, without "www.". */

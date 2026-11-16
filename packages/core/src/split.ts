@@ -124,8 +124,9 @@ export function settleSplits(state: State): Set<NodeId> {
   if (found.splits.length === 0) return changed;
   // In ID order (time-ordered), not the nodes' order, which their buckets don't keep: which of two nested splits settles first can change the outcome.
   const splits = (found.splits as SplitNode[]).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  // What each split held as this began, by id; what moves into one as others settle is added (`moved`).
-  const inSplits = new Map<NodeId, NodeId[]>(splits.map((n) => [n.id, found.inside(n.id).map((c) => c.id)]));
+  // What each split held as this began, by id (in ID order, as for the splits); what moves into one as others settle
+  // is added after (`moved`). Strays step out in this order.
+  const inSplits = new Map<NodeId, NodeId[]>(splits.map((n) => [n.id, found.inside(n.id).map((c) => c.id).sort()]));
   const moved = (into: NodeId | null, ids: readonly NodeId[]) => {
     if (into !== null) inSplits.get(into)?.push(...ids);
   };
@@ -137,7 +138,7 @@ export function settleSplits(state: State): Set<NodeId> {
     // A split holds only tabs, of its own chord and section; anything else steps out, just after it.
     const pane = (n: SidebarNode) => n.kind === 'tab' && n.chordId === split.chordId && n.section === split.section;
     // Which is which before any steps out: stepping out can give a stray tab this split's section.
-    const strays = inside.filter((n) => !pane(n)).sort(byRank);
+    const strays = inside.filter((n) => !pane(n));
     const members = inside.filter(pane).sort(byRank) as TabNode[];
     stepOut(state, split, strays, changed);
     moved(split.parentId, strays.map((n) => n.id));
