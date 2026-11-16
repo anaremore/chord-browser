@@ -57,7 +57,7 @@ interface Check {
   value: number;
   /** The budget: the value is held to at most this. */
   limit: number;
-  unit: 'ms' | 'late' | 'renders' | 'moves' | 'MB' | 'KB' | '×';
+  unit: 'ms' | 'late' | 'renders' | 'moves' | 'MB' | 'KB' | '×' | 'rows';
   status: Status;
   /** Held to this runner's baseline rather than a budget: what it measured before (`limit` adds the margin). */
   baseline?: number;
@@ -1249,6 +1249,137 @@ for (const tabs of [20, 200]) {
       }
     });
   }
+}
+
+/* ---------- A long Pinned ---------- */
+
+const PINNED = 5000;
+/** Rows a windowed Pinned may mount: a tall window's worth, its overscan, and the rows kept wherever they are. */
+const PINNED_MOUNTED_MAX = 80;
+
+/**
+ * 5,000 pinned tabs with icons, the last 400 in 20 folders (DESIGN.md §6.7):
+ * the shell's launch, switching to and from the chord, the wheel over Pinned
+ * and a drag within it. How many of Pinned's rows are in the DOM doesn't
+ * depend on the machine, so it's held everywhere.
+ */
+for (const motion of ['on', 'off'] as const) {
+  test(`interactions with ${PINNED.toLocaleString('en-US')} pinned tabs, motion ${motion}`, async () => {
+    test.setTimeout(300_000);
+    cpuBusy = await measureCpuBusy();
+    const app = await launch({ CHORD_PERF_TABS: '20', CHORD_PERF_PINNED: String(PINNED), CHORD_PERF_FOLDERS: '20' });
+    try {
+      const shell = await pageWhere(app, isShell);
+      const overlay = await pageWhere(app, isOverlay);
+      const pinned = shell.getByRole('tree', { name: 'Pinned' });
+      const pinnedRows = pinned.locator('[data-row]');
+      await expect(pinned.getByRole('treeitem').first()).toHaveAttribute('aria-setsize', String(PINNED - 400 + 20), { timeout: 60_000 });
+      const launched = await launchTimings(app);
+      await bringToFront(app, shell);
+      await setMotion(app, shell, overlay, motion === 'on');
+      environment ??= await readEnvironment(app, shell);
+      const renderers = await app.evaluate(({ webContents }) =>
+        webContents
+          .getAllWebContents()
+          .map((c) => ({ pid: c.getOSProcessId(), name: /shell/.test(c.getURL()) ? 'shell' : /overlay/.test(c.getURL()) ? 'command bar' : '' }))
+          .filter((r) => r.name),
+      );
+      const cdp = await shell.context().newCDPSession(shell);
+      const scenario = `${PINNED.toLocaleString('en-US')} pinned`;
+      const s: Session = { app, shell, overlay, cdp, renderers, scenario, motion };
+      const settle = () => shell.waitForTimeout(SETTLE_MS);
+      const repeat = (n: number, step: (i: number) => Step) => Array.from({ length: n }, (_, i) => step(i));
+      let at = { x: 0, y: 0 };
+      let to = { x: 0, y: 0 };
+      const mounted: number[] = [await pinnedRows.count()];
+      const locked = screenLocked();
+      record({
+        group: 'launch',
+        name: 'Launch with a long Pinned',
+        scenario,
+        motion,
+        locked,
+        checks: [
+          check('ready', (launched.shellReady ?? NaN) - (launched.mainEntry ?? NaN), BUDGET.launchMs, { locked }),
+          check('painted', (launched.shellPainted ?? NaN) - (launched.mainEntry ?? NaN), BUDGET.launchMs, { display: true, locked }),
+        ],
+        detail: { sinceMainEntry: launched },
+      });
+
+      // The wheel over Pinned, down and back up.
+      await interaction(s, 'Wheel over Pinned', [
+        {
+          setup: async () => {
+            const box = (await pinned.boundingBox())!;
+            at = { x: box.x + box.width / 2, y: Math.min(box.y + 200, box.y + box.height / 2) };
+            await shell.mouse.move(at.x, at.y);
+          },
+          act: async () => {
+            for (let i = 0; i < 20; i++) {
+              await shell.mouse.wheel(0, 240);
+              await shell.waitForTimeout(16);
+            }
+            for (let i = 0; i < 20; i++) {
+              await shell.mouse.wheel(0, -240);
+              await shell.waitForTimeout(16);
+            }
+            await settle();
+          },
+          verify: async () => void mounted.push(await pinnedRows.count()),
+        },
+      ]);
+
+      // A drag within Pinned: rows make room live, then the drop settles.
+      await interaction(s, 'Drag to reorder Pinned', repeat(2, () => ({
+        setup: async () => {
+          at = await centerOf(pinnedRows.nth(1));
+          const target = (await pinnedRows.nth(4).boundingBox())!;
+          await settle();
+          to = { x: target.x + target.width / 2, y: target.y + target.height - 4 };
+        },
+        act: async () => {
+          await drag(shell, at, to);
+          await settle();
+        },
+        verify: async () => void mounted.push(await pinnedRows.count()),
+      })));
+
+      // Switching chords: to an empty one and back, where all of Pinned's rows draw again. Through the store, as
+      // the switcher's keys do: before Pinned scrolled, its rows covered the switcher.
+      const ids = () =>
+        shell.evaluate(async () => {
+          const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string }>; chords: Record<string, { id: string; name: string }> } }> } } }).chord;
+          const { windowId, state } = await chord.state.snapshot();
+          return { windowId, active: state.windows[windowId]!.activeChordId, chords: Object.values(state.chords).map((c) => ({ id: c.id, name: c.name })) };
+        });
+      const home = await ids();
+      await dispatch(shell, { t: 'chord.create', windowId: home.windowId, name: 'Work', icon: 'briefcase', theme: { stops: [{ l: 0.72, c: 0.1, h: 200 }], grain: 0.2, appearance: 'light' } });
+      const work = (await ids()).chords.find((c) => c.name === 'Work')!.id;
+      await settle();
+      await interaction(s, 'Switch chords, long Pinned', repeat(4, (i) => ({
+        act: async () => {
+          await dispatch(shell, { t: 'chord.activate', windowId: home.windowId, chordId: i % 2 === 0 ? home.active : work });
+          await settle();
+        },
+        verify: async () => {
+          expect((await ids()).active).toBe(i % 2 === 0 ? home.active : work);
+          if (i % 2 === 0) mounted.push(await pinnedRows.count());
+        },
+      })));
+
+      record({
+        group: 'renders',
+        name: 'Pinned rows mounted',
+        scenario,
+        motion,
+        locked: null,
+        checks: [check('most mounted', max(mounted), PINNED_MOUNTED_MAX, { locked: null, unit: 'rows' })],
+        detail: { mounted },
+      });
+    } finally {
+      await app.close();
+    }
+  });
 }
 
 /* ---------- Your data's export ---------- */

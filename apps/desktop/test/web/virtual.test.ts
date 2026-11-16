@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EMPTY, grow, inOrder, inSpan, moveId, pieces, rowChanges, slotsInOrder, visibleSpan, WINDOW_ABOVE, type ChangeOptions, type Placed } from '../../src/renderer/shell/virtual';
+import { EMPTY, grow, inOrder, inSpan, moveId, pieces, reconcile, rowChanges, slotsInOrder, visibleSpan, WINDOW_ABOVE, type ChangeOptions, type Placed } from '../../src/renderer/shell/virtual';
 
 describe('visibleSpan', () => {
   it('is the rows a viewport shows, partly shown ones included', () => {
@@ -91,6 +91,25 @@ describe('moveId', () => {
     const ids = ['a', 'b'];
     expect(moveId(ids, 'a', 'a')).toBe(ids);
     expect(moveId(ids, 'a', 'z')).toBe(ids);
+  });
+});
+
+describe('reconcile', () => {
+  // A drag's order kept as the rows under it change: the dragged row (x) stays after the row it followed.
+  it.each([
+    ['the same rows: the order as it is', ['a', 'x', 'b'], ['a', 'b', 'x'], ['a', 'x', 'b']],
+    ['a folder sprang open: its rows come in, x stays after a', ['a', 'x', 'f'], ['a', 'f', 'f1', 'f2', 'x'], ['a', 'x', 'f', 'f1', 'f2']],
+    ['x followed a folder’s row: after it', ['f', 'f1', 'x', 'b'], ['f', 'f1', 'f2', 'b', 'x'], ['f', 'f1', 'x', 'f2', 'b']],
+    ['the row x followed is gone: after the one before it', ['a', 'b', 'x'], ['a', 'x'], ['a', 'x']],
+    ['x was first: first', ['x', 'a'], ['a', 'b', 'x'], ['x', 'a', 'b']],
+    ['x is gone: the rows as they are', ['a', 'x'], ['a', 'b'], ['a', 'b']],
+  ])('%s', (_, ids, base, out) => {
+    expect(reconcile(ids, base, 'x')).toEqual(out);
+  });
+
+  it('keeps the same array when nothing changed', () => {
+    const ids = ['a', 'x', 'b'];
+    expect(reconcile(ids, ['x', 'a', 'b'], 'x')).toBe(ids);
   });
 });
 

@@ -5,6 +5,8 @@
  * which lays the shell out each time: about 16 ms over a drag through 200 tabs.
  * Chord knows its scrolling lists (`data-edge-scroll`), so this measures them
  * once when the drag starts and scrolls from a frame loop, reading no layout.
+ * A list that scrolls only at its cap (Pinned: `data-edge-scroll="capped"`)
+ * counts only while it's there (`data-capped`).
  */
 import { Plugin } from '@dnd-kit/abstract';
 import type { DragDropManager } from '@dnd-kit/dom';
@@ -13,6 +15,8 @@ import type { DragDropManager } from '@dnd-kit/dom';
 const EDGE = 48;
 /** Speed at the edge and past it, in px per ms (about 20 px a frame at 60 Hz). */
 const MAX_SPEED = 1.2;
+/** Held at a list's end, how often to look again whether it got longer (a folder springing open), in ms. */
+const RECHECK_MS = 200;
 
 interface Box {
   top: number;
@@ -36,11 +40,19 @@ export function edgeSpeed(x: number, y: number, box: Box): number {
   return 0;
 }
 
+/** Whether a list scrolls at all now: one that does only at its cap, only while it's there (an attribute, no layout). */
+const scrolls = (element: HTMLElement) => element.dataset['edgeScroll'] !== 'capped' || element.hasAttribute('data-capped');
+
 export class EdgeScroller extends Plugin<DragDropManager> {
   constructor(manager: DragDropManager) {
     super(manager);
-    /** `carry`: the part of a pixel not scrolled yet, so a slow creep near the edge still moves. */
-    let lists: { element: HTMLElement; box: Box; carry: number }[] = [];
+    /**
+     * `carry`: the part of a pixel not scrolled yet, so a slow creep near the edge still moves. `top` and `max`:
+     * how far it's scrolled and can be, kept from its scroll events, so a list already at that end (or one too
+     * short to scroll, like a short Pinned) isn't scrolled: `scrollBy` lays the list out even when it can't move.
+     * Held at its end, `max` is read again now and then (`checked`): rows can come below without a scroll.
+     */
+    let lists: { element: HTMLElement; box: Box; carry: number; top: number; max: number; checked: number; off: () => void }[] = [];
     let frame = 0;
     let last = 0;
 
@@ -54,14 +66,25 @@ export class EdgeScroller extends Plugin<DragDropManager> {
       last = now;
       let atEdge = false;
       speeds().forEach((speed, i) => {
-        if (speed === 0) return;
-        atEdge = true;
         const list = lists[i]!;
+        if (speed === 0 || (speed < 0 && list.top <= 0) || !scrolls(list.element)) return;
+        // At the edge either way: the loop goes on while the pointer's there.
+        atEdge = true;
+        if (speed > 0 && list.top >= list.max) {
+          if (now - list.checked < RECHECK_MS) return;
+          list.checked = now;
+          list.top = list.element.scrollTop;
+          list.max = list.element.scrollHeight - list.element.clientHeight;
+          if (list.top >= list.max) return;
+        }
         const delta = list.carry + speed * elapsed;
         const whole = Math.trunc(delta);
         list.carry = delta - whole;
         // Written, never read: no layout here. Past the end of the list it's a no-op.
-        if (whole !== 0) list.element.scrollBy({ top: whole, behavior: 'instant' });
+        if (whole !== 0) {
+          list.element.scrollBy({ top: whole, behavior: 'instant' });
+          list.top = Math.max(0, Math.min(list.max, list.top + whole));
+        }
       });
       // Away from every edge: wait for the pointer to move again.
       frame = atEdge ? requestAnimationFrame(tick) : 0;
@@ -69,12 +92,32 @@ export class EdgeScroller extends Plugin<DragDropManager> {
     const stop = () => {
       cancelAnimationFrame(frame);
       frame = 0;
+      for (const list of lists) list.off();
       lists = [];
     };
 
     const off = [
       manager.monitor.addEventListener('dragstart', () => {
-        lists = [...document.querySelectorAll<HTMLElement>('[data-edge-scroll]')].map((element) => ({ element, box: element.getBoundingClientRect(), carry: 0 }));
+        lists = [...document.querySelectorAll<HTMLElement>('[data-edge-scroll]')].map((element) => {
+          const list = { element, box: element.getBoundingClientRect(), carry: 0, top: element.scrollTop, max: element.scrollHeight - element.clientHeight, checked: 0, off: () => {} };
+          // Scrolled some other way too (the wheel, rows mounting), or resized (a short Pinned reaching its cap):
+          // read where it is, when it's laid out anyway.
+          const scrolled = () => {
+            list.top = element.scrollTop;
+            list.max = element.scrollHeight - element.clientHeight;
+          };
+          const resized = new ResizeObserver(() => {
+            list.box = element.getBoundingClientRect();
+            scrolled();
+          });
+          element.addEventListener('scroll', scrolled, { passive: true });
+          resized.observe(element);
+          list.off = () => {
+            element.removeEventListener('scroll', scrolled);
+            resized.disconnect();
+          };
+          return list;
+        });
       }),
       // dragmove comes before the move is applied (it can be prevented), so the next frame decides: the loop
       // stops itself away from the edges.

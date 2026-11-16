@@ -11,6 +11,8 @@ export function applySystem(info: SystemInfo): void {
   root.dataset['platform'] = info.platform;
   root.dataset['appearance'] = info.appearance;
   root.dataset['material'] = info.material;
+  // Reduce transparency (DESIGN.md §10): fades over content give way to hard edges.
+  root.toggleAttribute('data-reduced-transparency', info.prefersReducedTransparency);
   for (const [name, value] of Object.entries(tokenVars(info.platform, info.appearance))) {
     root.style.setProperty(name, value);
   }

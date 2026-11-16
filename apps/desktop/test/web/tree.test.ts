@@ -24,7 +24,7 @@ function tree(): { state: State; chordId: string; id: Record<string, string> } {
   return { state, chordId, id };
 }
 
-const shape = (rows: FlatRow[], id: Record<string, string>) => {
+const shape = (rows: readonly FlatRow[], id: Record<string, string>) => {
   const name = (rowId: string) => Object.keys(id).find((k) => id[k] === rowId) ?? rowId;
   return rows.map((r) => `${'.'.repeat(r.depth)}${name(r.id)}`);
 };
@@ -35,6 +35,17 @@ describe('flattenPinned', () => {
     expect(shape(flattenPinned(state, chordId), id)).toEqual(['a', 'F', '.b', '.G', '..c', 'd']);
     // A folder being dragged travels closed.
     expect(shape(flattenPinned(state, chordId, 'F'), id)).toEqual(['a', 'F', 'd']);
+  });
+
+  it('flattens the same nodes once, and new nodes again', () => {
+    const { state, chordId, id } = tree();
+    const rows = flattenPinned(state, chordId);
+    expect(flattenPinned(state, chordId)).toBe(rows);
+    expect(flattenPinned(state, chordId, 'F')).not.toBe(rows);
+    // Folding F is new nodes: its rows go.
+    const folded = apply(state, { t: 'folder.toggle', nodeId: 'F', collapsed: true }, ctx).state;
+    expect(shape(flattenPinned(folded, chordId), id)).toEqual(['a', 'F', 'd']);
+    expect(shape(flattenPinned(state, chordId), id)).toEqual(['a', 'F', '.b', '.G', '..c', 'd']);
   });
 });
 
