@@ -7,7 +7,8 @@
  * cut to its origin and path. Requests' headers, cookies and bodies are never
  * asked for (no Network domain), so they can't be here.
  */
-import { cleanPageText } from './assistant';
+import { cleanPageText, isNeverReadable } from './assistant';
+import { hostOf, siteOf } from './links';
 
 /** Core runs without DOM types. */
 declare const URL: new (url: string) => { protocol: string; origin: string; host: string; pathname: string };
@@ -56,11 +57,13 @@ export interface CdpConsoleCall {
   args?: CdpRemoteObject[];
   timestamp?: number;
   stackTrace?: CdpStackTrace;
+  /** The frame's script context it was called in (Runtime.executionContextCreated said whose). */
+  executionContextId?: number;
 }
 /** Runtime.exceptionThrown's params. */
 export interface CdpException {
   timestamp?: number;
-  exceptionDetails?: { text?: string; url?: string; lineNumber?: number; stackTrace?: CdpStackTrace; exception?: CdpRemoteObject };
+  exceptionDetails?: { text?: string; url?: string; lineNumber?: number; stackTrace?: CdpStackTrace; exception?: CdpRemoteObject; executionContextId?: number };
 }
 
 export type DiagnosticsEvent = { kind: 'log'; entry: CdpLogEntry } | { kind: 'console'; call: CdpConsoleCall } | { kind: 'exception'; thrown: CdpException };
@@ -98,14 +101,14 @@ export function shrinkEvent(e: DiagnosticsEvent): DiagnosticsEvent {
   }
   if (e.kind === 'console') {
     const { call } = e;
-    return { kind: 'console', call: { type: call.type, timestamp: call.timestamp, args: (call.args ?? []).slice(0, RAW_ARGS).map(shrinkObject), stackTrace: shrinkTrace(call.stackTrace) } };
+    return { kind: 'console', call: { type: call.type, timestamp: call.timestamp, args: (call.args ?? []).slice(0, RAW_ARGS).map(shrinkObject), stackTrace: shrinkTrace(call.stackTrace), executionContextId: call.executionContextId } };
   }
   const d = e.thrown.exceptionDetails;
   return {
     kind: 'exception',
     thrown: {
       timestamp: e.thrown.timestamp,
-      ...(d ? { exceptionDetails: { text: rawCut(d.text), url: rawCut(d.url, RAW_URL), lineNumber: d.lineNumber, stackTrace: shrinkTrace(d.stackTrace), ...(d.exception ? { exception: shrinkObject(d.exception) } : {}) } } : {}),
+      ...(d ? { exceptionDetails: { text: rawCut(d.text), url: rawCut(d.url, RAW_URL), lineNumber: d.lineNumber, stackTrace: shrinkTrace(d.stackTrace), executionContextId: d.executionContextId, ...(d.exception ? { exception: shrinkObject(d.exception) } : {}) } } : {}),
     },
   };
 }
@@ -307,9 +310,15 @@ const INITIATOR_TYPES: Record<string, string> = {
  * are left out), each bounded. `types` maps a request's full address to the
  * page's own `initiatorType`, when its timing has one.
  */
-export function diagnosticsEntries(events: readonly DiagnosticsEvent[], types: Readonly<Record<string, string>> = {}): { entries: DiagnosticsEntry[]; total: number } {
+export function diagnosticsEntries(
+  events: readonly DiagnosticsEvent[],
+  types: Readonly<Record<string, string>> = {},
+  never: NeverFrames = { sites: [], contexts: {}, page: '' },
+): { entries: DiagnosticsEntry[]; total: number } {
   const all: { at: number; entry: DiagnosticsEntry }[] = [];
+  const fromNever = neverJudge(never);
   for (const e of events) {
+    if (fromNever(e)) continue;
     if (e.kind === 'log') {
       const { entry } = e;
       if (entry.level !== 'error' && entry.level !== 'warning') continue;
@@ -343,6 +352,75 @@ export function diagnosticsEntries(events: readonly DiagnosticsEvent[], types: R
   // Stable: entries with the same time keep the order Chromium sent them in.
   const sorted = all.map((x, i) => ({ ...x, i })).sort((a, b) => a.at - b.at || a.i - b.i);
   return { entries: sorted.slice(-DIAGNOSTICS_MAX_ENTRIES).map((x) => x.entry), total: sorted.length };
+}
+
+/** A script context the read was told about (Runtime.executionContextCreated): whose it is, and in which frame. */
+export interface DiagnosticsContext {
+  origin: string;
+  frameId?: string;
+}
+
+/**
+ * The *Never read* sites (ARCHITECTURE.md §11.3), and the script contexts the read was told about, by id. A
+ * readable page can hold a same-site frame of a site that isn't (`mail.example.com` inside `www.example.com`),
+ * and with any *Never read* sites set, the rule fails closed:
+ * - an event at such an address, or with any frame of its stack there, is left out;
+ * - a console call or exception is kept only from a context Chord was told about, with a web or extension
+ *   origin, in a frame that isn't such a site's: an unknown context (0, or a frame since removed or reloaded)
+ *   could be anyone's, an opaque one (a `data:` or sandboxed `srcdoc` frame) could sit inside such a frame,
+ *   and every context in a *Never read* frame (an extension's content script there too) is that frame's;
+ * - when such a site is the page's own site (`mail.example.com` and `www.example.com`), the only case in which
+ *   its frame shares the page's process, no `Log` entry is kept: none says which frame it came from, and a frame
+ *   removed before the read still has its failed requests replayed. Also when such a frame is in the page anyway.
+ */
+export interface NeverFrames {
+  sites: readonly string[];
+  contexts: Readonly<Record<number, DiagnosticsContext>>;
+  /** The page's own address (its main frame's). */
+  page: string;
+}
+
+/** A *Never read* entry's host, as `isNeverReadable` matches it (`https://www.mail.example.com/x` → `mail.example.com`). */
+const neverHost = (site: string) =>
+  site
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/[/:].*$/, '');
+
+/** Origins a frame of the web, or an extension, has; not an opaque one (`null`, or none). */
+const SITE_ORIGIN = /^(https?|file|chrome-extension):\/\//i;
+
+/** Whether an address is a *Never read* site's. Addresses that aren't a site's (eval'd code, `about:`, an extension's) aren't. */
+function onNeverSite(address: string | undefined, sites: readonly string[]): boolean {
+  if (!address || !sites.length) return false;
+  // A blob's address carries the origin that made it.
+  const url = address.trim().replace(/^blob:/i, '');
+  return /^(https?|file):/i.test(url) && isNeverReadable(url, sites);
+}
+
+/** Which events NeverFrames leaves out. */
+function neverJudge({ sites: all, contexts, page }: NeverFrames): (e: DiagnosticsEvent) => boolean {
+  // A blank entry names no site.
+  const sites = all.filter((s) => neverHost(s));
+  if (!sites.length) return () => false;
+  const pageHost = hostOf(page);
+  const pageSite = pageHost ? siteOf(pageHost) : null;
+  const known = Object.values(contexts);
+  const neverFrames = new Set(known.filter((c) => c.frameId !== undefined && onNeverSite(c.origin, sites)).map((c) => c.frameId));
+  const logsMixed = (pageSite !== null && sites.some((s) => siteOf(neverHost(s)) === pageSite)) || known.some((c) => onNeverSite(c.origin, sites));
+  const allowedContext = (id: number | undefined) => {
+    const c = id ? contexts[id] : undefined;
+    return Boolean(c && SITE_ORIGIN.test(c.origin) && !onNeverSite(c.origin, sites) && !(c.frameId !== undefined && neverFrames.has(c.frameId)));
+  };
+  return (e) => {
+    const trace = e.kind === 'log' ? e.entry.stackTrace : e.kind === 'console' ? e.call.stackTrace : e.thrown.exceptionDetails?.stackTrace;
+    const url = e.kind === 'log' ? e.entry.url : e.kind === 'exception' ? e.thrown.exceptionDetails?.url : undefined;
+    if ([url, ...(trace?.callFrames ?? []).map((f) => f.url)].some((a) => onNeverSite(a, sites))) return true;
+    if (e.kind === 'log') return logsMixed;
+    return !allowedContext(e.kind === 'console' ? e.call.executionContextId : e.thrown.exceptionDetails?.executionContextId);
+  };
 }
 
 /** The activity line's detail: "2 errors · 1 warning · 2 failed requests", or "No problems". */

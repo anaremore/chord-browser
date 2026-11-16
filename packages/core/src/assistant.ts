@@ -258,6 +258,11 @@ export const assistantTool = (name: string): AssistantToolSpec | undefined => AS
  * pages, anything that isn't a web or file page, and sites the user marked
  * "Never". (Private windows are refused by the caller, which knows windows.)
  */
+/** The *Never* list as kept: each entry trimmed, blanks and repeats gone (a blank entry names no site). */
+export function cleanNeverSites(sites: readonly string[]): string[] {
+  return [...new Set(sites.map((s) => s.trim()).filter(Boolean))];
+}
+
 export function isNeverReadable(url: string, neverSites: readonly string[]): boolean {
   let u: InstanceType<typeof URL>;
   try {

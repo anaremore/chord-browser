@@ -5,7 +5,7 @@
  */
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { readDiagnostics, type DiagnosticsContents } from '../../src/main/assistant/diagnostics';
+import { NAVIGATED, readDiagnostics, type DiagnosticsContents } from '../../src/main/assistant/diagnostics';
 import { withDebugger } from '../../src/main/debugger-queue';
 
 type Answer = 'replay' | 'hang' | 'reject';
@@ -44,8 +44,9 @@ class FakeDebugger extends EventEmitter {
   }
 }
 
-const page = (debug: FakeDebugger, script: () => Promise<unknown> = async () => ({})) =>
-  ({ isDestroyed: () => false, executeJavaScriptInIsolatedWorld: script, debugger: debug }) as unknown as DiagnosticsContents;
+/** The page itself: its navigation events, as Electron sends them. */
+const page = (debug: FakeDebugger, script: () => Promise<unknown> = async () => ({}), events = new EventEmitter()) =>
+  Object.assign(events, { isDestroyed: () => false, executeJavaScriptInIsolatedWorld: script, debugger: debug }) as unknown as DiagnosticsContents;
 
 describe('page_diagnostics reads a page once and lets go', () => {
   it('a page that replays: its events, each cut as it arrived, then detached', async () => {
@@ -113,6 +114,53 @@ describe('page_diagnostics reads a page once and lets go', () => {
     const reads = await Promise.all([readDiagnostics(contents), screenshot, readDiagnostics(contents)]);
     expect(reads[0].ok && reads[2]?.ok).toBe(true);
     expect(shared).toEqual(['attach', 'detach', 'attach', 'detach', 'attach', 'detach']);
+  });
+
+  it('names each script context’s origin and frame (the page’s frames, an extension’s in them), from Runtime.enable', async () => {
+    const debug = new FakeDebugger('replay');
+    const send = debug.sendCommand.bind(debug);
+    debug.sendCommand = (method: string) => {
+      if (method === 'Runtime.enable') {
+        debug.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 1, origin: 'https://www.example.com', auxData: { frameId: 'top', isDefault: true } } });
+        debug.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 7, origin: 'https://mail.example.com', auxData: { frameId: 'mail', isDefault: true } } });
+        debug.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 8, origin: 'chrome-extension://abc', auxData: { frameId: 'mail', isDefault: false } } });
+      }
+      return send(method);
+    };
+    const read = await readDiagnostics(page(debug));
+    expect(read.ok && read.contexts).toEqual({
+      1: { origin: 'https://www.example.com', frameId: 'top' },
+      7: { origin: 'https://mail.example.com', frameId: 'mail' },
+      8: { origin: 'chrome-extension://abc', frameId: 'mail' },
+    });
+    // Contexts aren't problems.
+    expect(read.ok && read.events.map((e) => e.kind)).toEqual(['log', 'console']);
+  });
+
+  // Another document during the read: its events would mix with the old one's, at the same address or not.
+  it.each([
+    ['a reload, or a link (to the same address or another)', 'did-start-navigation', { isMainFrame: true, isSameDocument: false }, false],
+    ['a navigation started before the read, arriving during it', 'did-navigate', {}, false],
+    ['the address changing inside the document (pushState): its events are the same page’s', 'did-start-navigation', { isMainFrame: true, isSameDocument: true }, true],
+    ['a frame inside the page loading again', 'did-start-navigation', { isMainFrame: false, isSameDocument: false }, true],
+    // From the debugger itself, in order with the page's events.
+    ['the page’s contexts cleared (its main frame went to another document)', 'Runtime.executionContextsCleared', {}, false],
+  ] as const)('%s', async (_, event, details, ok) => {
+    const debug = new FakeDebugger('replay');
+    const events = new EventEmitter();
+    const send = debug.sendCommand.bind(debug);
+    debug.sendCommand = (method: string) => {
+      if (method === 'Runtime.enable') {
+        if (event.startsWith('Runtime.')) debug.emit('message', {}, event, details);
+        else events.emit(event, details);
+      }
+      return send(method);
+    };
+    const read = await readDiagnostics(page(debug, undefined, events));
+    expect(read.ok ? true : read.why).toBe(ok ? true : NAVIGATED);
+    expect(debug.attached).toBe(false);
+    // Nothing left listening on the page.
+    expect(events.listenerCount('did-start-navigation') + events.listenerCount('did-navigate')).toBe(0);
   });
 
   it('a turn that fails doesn’t stop the ones after it', async () => {

@@ -183,6 +183,77 @@ describe('page_diagnostics: what each kind of event becomes', () => {
     ['an info log entry', { kind: 'log', entry: { source: 'other', level: 'info', text: 'note' } }],
   ])('leaves out %s', (_, event) => expect(diagnosticsEntries([event]).entries).toEqual([]));
 
+  // A readable page holding a frame of a *Never read* site (mail.example.com inside www.example.com): that frame's problems stay out.
+  describe('a Never read site’s frame inside the page', () => {
+    const page = { origin: 'https://www.example.com', frameId: 'top' };
+    const contexts = {
+      1: page,
+      7: { origin: 'https://mail.example.com', frameId: 'mail' },
+      // An extension's content script in the mail frame: the frame's, whatever its own origin.
+      8: { origin: 'chrome-extension://abc', frameId: 'mail' },
+      // The same extension in the page: the page's.
+      9: { origin: 'chrome-extension://abc', frameId: 'top' },
+    };
+    const never = { sites: ['mail.example.com'], contexts, page: 'https://www.example.com/home' };
+    const error = (extra: object): DiagnosticsEvent => ({ kind: 'console', call: { type: 'error', args: [{ type: 'string', value: 'x' }], executionContextId: 1, ...extra } });
+    const thrown = (extra: object): DiagnosticsEvent => ({ kind: 'exception', thrown: { exceptionDetails: { text: 'Uncaught', executionContextId: 1, ...extra } } });
+    const failed = (url: string): DiagnosticsEvent => ({ kind: 'log', entry: { source: 'network', level: 'error', text: 'net::ERR_FAILED', url } });
+    it.each<[string, DiagnosticsEvent, boolean]>([
+      ['the page’s own console call', error({}), true],
+      ['the page’s own exception', thrown({}), true],
+      ['an extension’s content script in the page', error({ executionContextId: 9 }), true],
+      ['a console call in the frame (its script context)', error({ executionContextId: 7 }), false],
+      ['an extension’s content script in the frame', error({ executionContextId: 8 }), false],
+      ['a console call whose stack runs through the frame’s script', error({ stackTrace: { callFrames: [{ url: 'https://www.example.com/a.js' }, { url: 'https://mail.example.com/inbox.js?s=1' }] } }), false],
+      ['an exception in the frame', thrown({ executionContextId: 7 }), false],
+      ['an exception at the frame’s address', thrown({ url: 'https://mail.example.com/x.js' }), false],
+      ['a blob the frame made', error({ stackTrace: { callFrames: [{ url: 'blob:https://mail.example.com/1f2e' }] } }), false],
+      // Fails closed: a removed or reloaded frame's replayed exception has a context nobody named, and could be the frame's.
+      ['an exception in a context Chord wasn’t told about, at a CDN', thrown({ executionContextId: 99, url: 'https://cdn.example.net/lib.js' }), false],
+      ['an exception in context 0', thrown({ executionContextId: 0 }), false],
+      ['a console call with no context', error({ executionContextId: undefined }), false],
+      ['eval’d code and an extension’s script in the page: not a site', error({ stackTrace: { callFrames: [{ url: '' }, { url: 'chrome-extension://abc/c.js' }] } }), true],
+      // No Log entry says which frame it came from: the frame's failed request to another host looks like the page's.
+      ['a failed request to the site', failed('https://mail.example.com/api'), false],
+      ['a failed request to another host, with the frame in the page', failed('https://api.mailcdn.net/v1/messages/123'), false],
+    ])('%s', (_, event, kept) => {
+      expect(diagnosticsEntries([event], {}, never).entries).toHaveLength(kept ? 1 : 0);
+      // With no Never read sites, or only a blank one, nothing is left out.
+      expect(diagnosticsEntries([event], {}, { ...never, sites: [] }).entries).toHaveLength(1);
+      expect(diagnosticsEntries([event], {}, { ...never, sites: ['  ', ''] }).entries).toHaveLength(1);
+    });
+
+    // A Never read frame shares the page's process only when it's the page's own site: then no Log entry can be
+    // trusted, even once the frame is gone (Log.enable replays a removed frame's failed requests).
+    it.each<[string, string, string, boolean]>([
+      ['a same-site page, the frame removed before the read', 'https://www.example.com/home', 'https://api.mailcdn.net/v1/messages/123', false],
+      ['a same-site page, an entry about the page itself', 'https://www.example.com/home', 'https://www.example.com/missing.png', false],
+      ['a Never entry written with its scheme', 'https://example.com/', 'https://cdn.example.net/a.js', false],
+      ['a page of another site: its own failed request', 'https://www.other.net/', 'https://cdn.example.net/a.js', true],
+      ['a page of another site: a request to the Never site', 'https://www.other.net/', 'https://mail.example.com/api', false],
+    ])('Log entries, %s', (_, pageUrl, address, kept) => {
+      const sites = pageUrl === 'https://example.com/' ? ['https://mail.example.com/'] : ['mail.example.com'];
+      expect(diagnosticsEntries([failed(address)], {}, { sites, contexts: { 1: { origin: pageUrl.replace(/^(https?:\/\/[^/]+).*$/, '$1'), frameId: 'top' } }, page: pageUrl }).entries).toHaveLength(kept ? 1 : 0);
+    });
+
+    // A data: or sandboxed srcdoc frame has an opaque origin and a frame of its own: it could sit inside the Never frame.
+    it.each<[string, string]>([
+      ['null (a sandboxed srcdoc frame)', 'null'],
+      ['none (a data: frame)', ''],
+      ['about:blank’s, with no origin of its own', 'about:blank'],
+    ])('a console call from a context whose origin is %s: left out', (_, origin) => {
+      const withChild = { ...never, contexts: { ...contexts, 12: { origin, frameId: 'child' } } };
+      expect(diagnosticsEntries([error({ executionContextId: 12 })], {}, withChild).entries).toEqual([]);
+      expect(diagnosticsEntries([thrown({ executionContextId: 12 })], {}, withChild).entries).toEqual([]);
+    });
+
+    it('keeps the context through shrinkEvent', () => {
+      expect(diagnosticsEntries([shrinkEvent(error({ executionContextId: 7 }))], {}, never).entries).toEqual([]);
+      expect(diagnosticsEntries([shrinkEvent(error({}))], {}, never).entries).toHaveLength(1);
+      expect(diagnosticsEntries([shrinkEvent(thrown({ executionContextId: 7 }))], {}, never).entries).toEqual([]);
+    });
+  });
+
   it('summarizes for the activity line', () => {
     const { entries } = diagnosticsEntries([
       { kind: 'console', call: { type: 'error', args: [{ type: 'string', value: 'a' }] } },

@@ -13,6 +13,10 @@ import {
   isAssistantScope,
   MAKE_IMAGE_MARK,
   isNeverReadable,
+  apply,
+  cleanNeverSites,
+  emptyState,
+  restoreSettings,
   nameTabs,
   pageResult,
   pdfPageOf,
@@ -54,6 +58,17 @@ describe('Assistant: prompt-injection rules (research §6)', () => {
   it('puts only handles and sites in the user’s turn, never titles or page text', () => {
     expect(userTurnText('Summarize', [{ ref: 't3', url: 'https://example.com/private?id=7' }])).toBe('Summarize\n\nAttached: tab t3 · example.com');
   });
+});
+
+describe('Assistant: the Never list as kept', () => {
+  // A blank entry names no site; kept, it would make page_diagnostics fail closed on every page.
+  const typed = ['  bank.example ', '', '   ', 'bank.example', 'https://mail.example.com'];
+  const kept = ['bank.example', 'https://mail.example.com'];
+  it.each([
+    ['cleaned', () => cleanNeverSites(typed)],
+    ['set in Settings', () => apply(emptyState(), { t: 'settings.set', settings: { assistant: { neverSites: typed } } }, { now: 1, newId: () => 'x' }).state.settings.assistant.neverSites],
+    ['restored from disk', () => restoreSettings({ assistant: { neverSites: typed } }).assistant.neverSites],
+  ])('%s: trimmed, without blanks or repeats', (_, list) => expect(list()).toEqual(kept));
 });
 
 describe('Assistant: what can be read', () => {

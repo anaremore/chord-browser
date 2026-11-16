@@ -11,12 +11,17 @@
  * on the tab are another client of the same page and keep working; a debugger
  * Chord can't attach says so instead of returning nothing.
  *
+ * Another document during the read (a reload, even to the same address) is a
+ * refusal, so two pages' events never mix; each script context's origin and frame
+ * come back with the events, so a *Never read* site's frame inside the page is left
+ * out (core's NeverFrames).
+ *
  * Nothing here waits on the page without a limit (ARCHITECTURE.md §1, rule 1):
  * a hung renderer answers no command, so the read gives up after READ_MS and
  * detaches at once. Debugger work is one at a time per page (debugger-queue.ts),
  * shared with screenshots, so two clients never detach each other.
  */
-import { shrinkEvent, type CdpConsoleCall, type CdpException, type CdpLogEntry, type DiagnosticsEvent } from '@chord/core';
+import { shrinkEvent, type CdpConsoleCall, type CdpException, type CdpLogEntry, type DiagnosticsContext, type DiagnosticsEvent } from '@chord/core';
 import type { WebContents } from 'electron';
 import { withDebugger } from '../debugger-queue';
 import { PAGE_CALL_MS, pageCall, pageOutcome } from '../page-call';
@@ -30,10 +35,14 @@ export const DIAGNOSTICS_MAX_EVENTS = 2500;
 /** Each resource's `initiatorType`, by its full address, from the page's own Resource Timing (read in Chord's isolated world). */
 const TYPES_SCRIPT = `(() => { const out = {}; for (const e of performance.getEntriesByType('resource').slice(-500)) out[e.name.slice(0, 2048)] = e.initiatorType; return out; })()`;
 
-export type DiagnosticsRead = { ok: true; events: DiagnosticsEvent[]; types: Record<string, string> } | { ok: false; why: string };
+/** The refusal when the page loaded again, or went somewhere else, while it was read. */
+export const NAVIGATED = 'The page loaded again or went to another page while Chord was reading it. Ask the user to ask again once it has loaded.';
+
+/** `contexts`: each script context's origin and frame (a frame's own, an extension's in it), so a *Never read* site's frame inside the page is left out (NeverFrames). */
+export type DiagnosticsRead = { ok: true; events: DiagnosticsEvent[]; types: Record<string, string>; contexts: Record<number, DiagnosticsContext> } | { ok: false; why: string };
 
 /** What of a page's WebContents the read uses (a fake in the unit tests). */
-export type DiagnosticsContents = Pick<WebContents, 'isDestroyed' | 'executeJavaScriptInIsolatedWorld'> & {
+export type DiagnosticsContents = Pick<WebContents, 'isDestroyed' | 'executeJavaScriptInIsolatedWorld' | 'on' | 'off'> & {
   debugger: Pick<WebContents['debugger'], 'attach' | 'detach' | 'isAttached' | 'sendCommand' | 'on' | 'off'>;
 };
 
@@ -54,21 +63,47 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
     }
   }
   const events: DiagnosticsEvent[] = [];
+  const contexts: Record<number, DiagnosticsContext> = {};
   // Cut to size as each arrives (each argument and field to its own limit): a page can log megabytes at a time.
   // The ceiling keeps the first events, not the newest. Chromium replays at most about 1,000 console and 1,000 log
   // entries, so the replay stays under it; entries the page logs during the read may be dropped.
   const onMessage = (_event: Electron.Event, method: string, params: unknown, sessionId?: string) => {
-    if (sessionId || events.length >= DIAGNOSTICS_MAX_EVENTS) return;
+    if (sessionId) return;
+    // Runtime.enable names every script context (each frame's) before it replays their console calls.
+    if (method === 'Runtime.executionContextCreated') {
+      const context = (params as { context?: { id?: unknown; origin?: unknown; auxData?: { frameId?: unknown } } }).context;
+      if (typeof context?.id !== 'number' || typeof context.origin !== 'string') return;
+      const frameId = context.auxData?.frameId;
+      contexts[context.id] = { origin: context.origin.slice(0, 2048), ...(typeof frameId === 'string' ? { frameId: frameId.slice(0, 256) } : {}) };
+      return;
+    }
+    // The page's contexts all went (its main frame went to another document): noticed in order with its events.
+    if (method === 'Runtime.executionContextsCleared') {
+      navigated = true;
+      return;
+    }
+    if (events.length >= DIAGNOSTICS_MAX_EVENTS) return;
     if (method === 'Log.entryAdded') events.push(shrinkEvent({ kind: 'log', entry: (params as { entry: CdpLogEntry }).entry }));
     else if (method === 'Runtime.consoleAPICalled') events.push(shrinkEvent({ kind: 'console', call: params as CdpConsoleCall }));
     else if (method === 'Runtime.exceptionThrown') events.push(shrinkEvent({ kind: 'exception', thrown: params as CdpException }));
   };
   let detached = false;
+  // Another document during the read (a reload, the same address again, a link): its events would mix with the
+  // old one's, and comparing addresses afterwards can't tell. A navigation inside the document (pushState) keeps
+  // its events; the address check after the read (AssistantService.diagnosticsTool) is for that.
+  let navigated = false;
+  const onStart = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+    if (details.isMainFrame && !details.isSameDocument) navigated = true;
+  };
+  // One that started before the read and arrives during it.
+  const onNavigate = () => (navigated = true);
   // Set once the read is over: a page that answers Log.enable late must not get Runtime.enable after Chord let go.
   let over = false;
   const onDetach = () => (detached = true);
   debug.on('message', onMessage);
   debug.on('detach', onDetach);
+  contents.on('did-start-navigation', onStart);
+  contents.on('did-navigate', onNavigate);
   try {
     // The replayed entries arrive before each command's answer (one channel, in order).
     const asked = await pageOutcome(
@@ -79,14 +114,18 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
       })(),
       ms,
     );
+    if (navigated) return { ok: false, why: NAVIGATED };
     if (detached) return { ok: false, why: 'The page let go of Chord while it was asking.' };
     if (!asked.ok) return { ok: false, why: 'timedOut' in asked ? 'The page took too long to answer.' : `The page didn't answer (${asked.error}).` };
     const types = await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: TYPES_SCRIPT }]) as Promise<unknown>, {}, PAGE_CALL_MS);
-    return { ok: true, events, types: types && typeof types === 'object' ? (types as Record<string, string>) : {} };
+    if (navigated) return { ok: false, why: NAVIGATED };
+    return { ok: true, events, types: types && typeof types === 'object' ? (types as Record<string, string>) : {}, contexts };
   } finally {
     over = true;
     debug.off('message', onMessage);
     debug.off('detach', onDetach);
+    contents.off('did-start-navigation', onStart);
+    contents.off('did-navigate', onNavigate);
     if (!contents.isDestroyed() && debug.isAttached()) {
       // Detaching drops the domains, without asking the page (which may be hung). Someone else's client keeps its
       // attachment: the domains are turned off without waiting for an answer.

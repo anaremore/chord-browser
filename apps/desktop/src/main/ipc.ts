@@ -15,6 +15,7 @@ import {
 } from '@chord/ipc';
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { originOf } from './urls';
+import { live } from './view-page';
 
 interface Caller {
   role: Role;
@@ -55,6 +56,7 @@ export function handle<C extends InvokeChannel>(
   });
 }
 
-export function send<C extends EventChannel>(contents: WebContents, channel: C, payload: EventPayload<C>): void {
-  if (!contents.isDestroyed()) contents.send(channel, payload);
+export function send<C extends EventChannel>(contents: WebContents | null | undefined, channel: C, payload: EventPayload<C>): void {
+  // `view.webContents` is undefined once its page is destroyed (view-page.ts): nothing to tell then.
+  if (live(contents)) contents.send(channel, payload);
 }
