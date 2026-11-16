@@ -60,7 +60,7 @@ import { Suggestions } from './suggestions';
 import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
 import { PasskeyBroker } from './passkeys';
-import { osKeys } from './passwords/keys';
+import { osKeys, testKeys } from './passwords/keys';
 import { PasswordService } from './passwords/service';
 import { proxies } from './proxy';
 import { Screenshots } from './screenshots/service';
@@ -113,8 +113,12 @@ const passwords = new PasswordService({
     return persistence.passwords(op);
   },
   settings: () => browser?.store.state.settings.passwords ?? DEFAULT_SETTINGS.passwords,
-  // Tests only (development builds): no keyring, on any system, as Linux's `basic_text`.
-  keys: osKeys(process.platform, { noKeyring: !app.isPackaged && process.env['CHORD_E2E_NO_KEYRING'] === '1' }),
+  // Tests only (development builds): no keyring, on any system, as Linux's `basic_text`; or a stand-in one, kept in
+  // memory for the run, where the runner has none.
+  keys:
+    !app.isPackaged && process.env['CHORD_E2E_TEST_KEYRING'] === '1'
+      ? testKeys()
+      : osKeys(process.platform, { noKeyring: !app.isPackaged && process.env['CHORD_E2E_NO_KEYRING'] === '1' }),
   clipboard: { writeText: (text) => clipboard.writeText(text), readText: () => clipboard.readText() },
   changed: () => browser?.passwordsChanged(),
   hide: () => browser?.passwordsHide(),

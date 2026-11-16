@@ -43,3 +43,25 @@ export function osKeys(platform: NodeJS.Platform, options: { noKeyring?: boolean
     },
   };
 }
+
+/**
+ * Tests only (a development build's switch, never when packaged): a keyring
+ * that's always there, kept in memory for this run, so E2E can show and use
+ * *Keep unlocked* where the runner has none. Nothing it keeps outlives the run.
+ */
+export function testKeys(): PasswordKeys {
+  const kept = new Map<string, Uint8Array>();
+  return {
+    available: async () => true,
+    async wrap(key) {
+      const blob = Buffer.from(`test-keyring-${kept.size}`).toString('base64');
+      kept.set(blob, new Uint8Array(key));
+      return blob;
+    },
+    async unwrap(blob) {
+      const key = kept.get(blob);
+      if (!key) throw new Error('not kept this run');
+      return new Uint8Array(key);
+    },
+  };
+}

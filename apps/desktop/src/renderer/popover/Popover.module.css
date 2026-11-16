@@ -351,6 +351,13 @@
   box-shadow: 0 0 0 var(--size-hairline) var(--color-danger);
 }
 
+/* Focused with a problem: the error's hairline inside the focus ring, both seen. */
+.authInput[aria-invalid]:focus-visible {
+  box-shadow:
+    inset 0 0 0 var(--size-hairline) var(--color-danger),
+    0 0 0 var(--size-focus-ring) var(--color-accent);
+}
+
 /* ---------- Unlock passwords ---------- */
 
 /* *Keep unlocked on this computer*: a switch, and what it gives up under its label. */

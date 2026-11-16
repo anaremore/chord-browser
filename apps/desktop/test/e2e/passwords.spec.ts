@@ -17,6 +17,7 @@
  * detector (phase 1's other half), so this spec stops at the vault.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -91,8 +92,6 @@ for (const mode of ['light', 'dark'] as const) {
       // Settings has no password until Show: none in the page now.
       expect(await settings.content()).not.toContain(PASSWORD);
       findings.push(...(await audit(settings, `Settings → Passwords, a row open (${mode})`, { appearance: mode })));
-      await detail.scrollIntoViewIfNeeded();
-      await settings.screenshot({ path: resolve(capturesDir, `settings-passwords-${mode}.png`) });
 
       // Show: typed a moment ago, so it doesn't ask again.
       await detail.getByRole('button', { name: 'Show password' }).click();
@@ -129,7 +128,6 @@ for (const mode of ['light', 'dark'] as const) {
       await expect(main.getByText('Your passwords are locked.')).toBeVisible();
       await expect(list).toHaveCount(0);
       findings.push(...(await audit(settings, `Settings → Passwords, locked (${mode})`, { appearance: mode })));
-      await settings.screenshot({ path: resolve(capturesDir, `settings-passwords-locked-${mode}.png`) });
       await closeSettings(app);
       await app.close();
 
@@ -143,12 +141,17 @@ for (const mode of ['light', 'dark'] as const) {
       await expect(card.getByRole('switch')).toHaveCount(0);
       await expect(card.getByLabel('Passphrase')).toBeFocused();
       findings.push(...(await audit(popover, `the unlock card (${mode})`, { appearance: mode })));
-      await card.screenshot({ path: resolve(capturesDir, `passwords-unlock-${mode}.png`) });
       await card.getByLabel('Passphrase').fill('not the passphrase');
       await card.getByRole('button', { name: 'Unlock' }).click();
       await expect(card.getByRole('alert')).toHaveText('That isn’t the passphrase. Try again.');
+      // Emptied and focused again: typing goes straight in, and a second wrong try does the same.
+      await expect(card.getByLabel('Passphrase')).toBeFocused();
+      await expect(card.getByLabel('Passphrase')).toHaveValue('');
+      await card.getByLabel('Passphrase').pressSequentially('still not it');
+      await card.getByLabel('Passphrase').press('Enter');
+      await expect(card.getByLabel('Passphrase')).toBeFocused();
+      await expect(card.getByLabel('Passphrase')).toHaveValue('');
       findings.push(...(await audit(popover, `the unlock card, a wrong passphrase (${mode})`, { appearance: mode })));
-      await card.screenshot({ path: resolve(capturesDir, `passwords-unlock-wrong-${mode}.png`) });
       await card.getByLabel('Passphrase').fill(PASSPHRASE);
       await card.getByRole('button', { name: 'Unlock' }).click();
       expect(await asked).toBe(true);
@@ -157,6 +160,89 @@ for (const mode of ['light', 'dark'] as const) {
       // Open now: Settings lists it again.
       settings = await openPasswords(app, shell);
       await expect(settings.getByRole('main').getByRole('list', { name: 'Saved passwords' })).toContainText(USERNAME);
+    } finally {
+      await app.close();
+    }
+    expectClean(findings);
+  });
+}
+
+/** A sign-in's last change, set as if it were made then (Settings shows *Today*, *Yesterday*, *Nov 2*). */
+function dated(profile: string, dates: number[]): void {
+  const db = new DatabaseSync(join(profile, 'chord.db'));
+  try {
+    const ids = (db.prepare('SELECT id FROM login ORDER BY rowid').all() as { id: string }[]).map((r) => r.id);
+    expect(ids).toHaveLength(dates.length);
+    ids.forEach((id, i) => db.prepare('UPDATE login SET updated_at = ? WHERE id = ?').run(dates[i]!, id));
+    expect((db.prepare('SELECT updated_at AS at FROM login ORDER BY rowid').all() as { at: number }[]).map((r) => r.at)).toEqual(dates);
+  } finally {
+    db.close();
+  }
+}
+
+for (const mode of ['light', 'dark'] as const) {
+  test(`passwords, the captures: Settings with sign-ins, Keep unlocked, locked; the unlock card with its switch and a wrong passphrase (${mode})`, async () => {
+    test.setTimeout(120_000);
+    const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-passwords-'));
+    // A keyring that's there (a stand-in, in memory), so Keep unlocked is offered, as on most computers.
+    const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1', CHORD_APPEARANCE: mode, CHORD_E2E_TEST_KEYRING: '1' }, { profile });
+    const findings: Finding[] = [];
+    try {
+      const shell = await pageWhere(app, isShell);
+      const settings = await openPasswords(app, shell);
+      // Tall enough for the whole section, as the mock draws it.
+      await app.evaluate(({ BaseWindow }) => {
+        const w = BaseWindow.getAllWindows().find((b) => b.getTitle() === 'Chord Settings')!;
+        w.setSize(w.getSize()[0]!, 1040);
+      });
+      await settings.evaluate(async (passphrase) => {
+        const chord = (window as unknown as { chord: { passwords: { setup(p: string): Promise<unknown>; add(l: unknown): Promise<unknown> } } }).chord;
+        await chord.passwords.setup(passphrase);
+        await chord.passwords.add({ origin: 'https://github.com', username: 'ada@acme.dev', password: 'gh-Zq9-hunter2', note: '' });
+        await chord.passwords.add({ origin: 'https://linear.app', username: 'ada@acme.dev', password: 'ln-Zq9-hunter2', note: '' });
+        await chord.passwords.add({ origin: 'https://news.ycombinator.com', username: 'adal', password: 'hn-Zq9-hunter2', note: '' });
+      }, PASSPHRASE);
+      const now = Date.now();
+      dated(profile, [now, now - 86_400_000, new Date(new Date(now).getFullYear(), 10, 2, 12).getTime()]);
+      // Settings asks for its view again when its window comes to the front.
+      await settings.evaluate(() => window.dispatchEvent(new Event('focus')));
+      const main = settings.getByRole('main');
+      const list = main.getByRole('list', { name: 'Saved passwords' });
+      await expect(list.getByRole('button')).toHaveCount(3);
+      await expect(list.getByRole('button', { name: /linear\.app/ })).toContainText('Yesterday');
+      await expect(list.getByRole('button', { name: /news\.ycombinator\.com/ })).toContainText('Nov 2');
+      await list.getByRole('button', { name: /github\.com/ }).click();
+      // Keep unlocked is offered, off, with what it gives up.
+      await expect(main.getByRole('switch', { name: 'Keep unlocked on this computer' })).toHaveAttribute('aria-checked', 'false');
+      await expect(main.getByText('Then other programs you run could read your passwords, on Windows and Linux.')).toBeVisible();
+      await settings.evaluate(() => document.querySelector('main')?.scrollTo(0, 0));
+      findings.push(...(await audit(settings, `Settings → Passwords with sign-ins and a keyring (${mode})`, { appearance: mode })));
+      await settings.screenshot({ path: resolve(capturesDir, `settings-passwords-${mode}.png`) });
+
+      // Locked: the field, Unlock and Forgot it? in the Passphrase row.
+      await main.getByRole('button', { name: 'Lock now' }).click();
+      await expect(main.getByText('Your passwords are locked.')).toBeVisible();
+      await expect(main.getByLabel('Passphrase')).toHaveCount(1);
+      findings.push(...(await audit(settings, `Settings → Passwords, locked, with a keyring (${mode})`, { appearance: mode })));
+      await settings.screenshot({ path: resolve(capturesDir, `settings-passwords-locked-${mode}.png`) });
+      await closeSettings(app);
+
+      // The card, with Keep unlocked offered and off.
+      const popover = await pageWhere(app, isPopover);
+      const asked = app.evaluate(() => (globalThis as unknown as { chordTestHooks: { passwordsAskUnlock(): Promise<boolean> } }).chordTestHooks.passwordsAskUnlock());
+      const card = popover.getByRole('alertdialog', { name: 'Unlock passwords' });
+      await expect(card.getByRole('switch', { name: 'Keep unlocked on this computer' })).toHaveAttribute('aria-checked', 'false');
+      await expect(card.getByText('Then other programs you run could read your passwords, on Windows and Linux.')).toBeVisible();
+      findings.push(...(await audit(popover, `the unlock card with a keyring (${mode})`, { appearance: mode })));
+      await card.screenshot({ path: resolve(capturesDir, `passwords-unlock-${mode}.png`) });
+      await card.getByLabel('Passphrase').fill('not the passphrase');
+      await card.getByRole('button', { name: 'Unlock' }).click();
+      await expect(card.getByRole('alert')).toBeVisible();
+      await expect(card.getByLabel('Passphrase')).toBeFocused();
+      await card.screenshot({ path: resolve(capturesDir, `passwords-unlock-wrong-${mode}.png`) });
+      await card.getByLabel('Passphrase').fill(PASSPHRASE);
+      await card.getByRole('button', { name: 'Unlock' }).click();
+      expect(await asked).toBe(true);
     } finally {
       await app.close();
     }

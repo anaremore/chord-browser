@@ -400,8 +400,10 @@ function UnlockPasswordsCard({ prompt }: { prompt: PasswordUnlockPrompt }) {
   const field = useRef<HTMLInputElement>(null);
   const [passphrase, setPassphrase] = useState('');
   const [keep, setKeep] = useState(prompt.keep);
-  // The field has the keyboard when the card appears, and again after a wrong passphrase.
-  useEffect(() => field.current?.focus(), [prompt.problem]);
+  // The field has the keyboard when the card appears, and again after each wrong passphrase (the button had it).
+  useEffect(() => {
+    if (!prompt.busy) field.current?.focus();
+  }, [prompt.problem, prompt.busy]);
   const cancel = () => void api.passwords.unlock(prompt.id, null, false);
   return (
     <form

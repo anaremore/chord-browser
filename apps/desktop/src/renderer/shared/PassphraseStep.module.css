@@ -44,6 +44,13 @@
   box-shadow: 0 0 0 var(--size-hairline) var(--color-danger);
 }
 
+/* Focused with a problem: the error's hairline inside the focus ring, both seen. */
+.input[aria-invalid]:focus-visible {
+  box-shadow:
+    inset 0 0 0 var(--size-hairline) var(--color-danger),
+    0 0 0 var(--size-focus-ring) var(--color-accent);
+}
+
 /* What's wrong sits under its field, in the field's column. */
 .problem {
   grid-column: 2;

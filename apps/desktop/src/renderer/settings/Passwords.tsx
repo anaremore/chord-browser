@@ -53,7 +53,23 @@ export function whenText(at: number, now = Date.now()): string {
 }
 
 /** One passphrase field and its button, inline: unlocking, and Show or Copy asking again. */
-function PassphraseAsk({ text, button, problem, onSubmit, onCancel }: { text: string; button: string; problem: string | null; onSubmit(passphrase: string): void; onCancel?(): void }) {
+function PassphraseAsk({
+  text,
+  button,
+  problem,
+  onSubmit,
+  onCancel,
+  labelled = true,
+}: {
+  /** The line above the field; null where the row already says it. */
+  text: string | null;
+  button: string;
+  problem: string | null;
+  onSubmit(passphrase: string): void;
+  onCancel?(): void;
+  /** Its own *Passphrase* label; false inside the Passphrase row, which names it already. */
+  labelled?: boolean;
+}) {
   const ids = useId();
   const [passphrase, setPassphrase] = useState('');
   const field = useRef<HTMLInputElement>(null);
@@ -67,11 +83,13 @@ function PassphraseAsk({ text, button, problem, onSubmit, onCancel }: { text: st
   };
   return (
     <form className={local.ask} onSubmit={submit}>
-      <p className={local.askText}>{text}</p>
+      {text && <p className={local.askText}>{text}</p>}
       <div className={local.askField}>
-        <label className={styles.rowLabel} htmlFor={`${ids}-passphrase`}>
-          Passphrase
-        </label>
+        {labelled && (
+          <label className={styles.rowLabel} htmlFor={`${ids}-passphrase`}>
+            Passphrase
+          </label>
+        )}
         <input
           ref={field}
           id={`${ids}-passphrase`}
@@ -80,6 +98,7 @@ function PassphraseAsk({ text, button, problem, onSubmit, onCancel }: { text: st
           value={passphrase}
           autoComplete="off"
           spellCheck={false}
+          aria-label={labelled ? undefined : 'Passphrase'}
           aria-invalid={problem ? true : undefined}
           aria-describedby={problem ? `${ids}-problem` : undefined}
           onChange={(e) => setPassphrase(e.target.value)}
@@ -477,7 +496,7 @@ function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view:
           <div className={styles.rowText}>
             <span className={styles.rowLabel}>Keep unlocked on this computer</span>
             <span id={`${ids}-keep`} className={styles.rowDescription}>
-              {view.canKeep ? KEEP_WHY : 'This computer has no keyring for Chord to keep it in, so your passwords lock after each start.'}
+              {view.canKeep ? KEEP_WHY : 'This computer has no keyring, so your passwords lock each time Chord starts.'}
             </span>
           </div>
           {view.canKeep && (
@@ -498,13 +517,17 @@ function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view:
       <div className={styles.row}>
         <div className={styles.rowText}>
           <span className={styles.rowLabel}>Passphrase</span>
-          <span className={styles.rowDescription}>
-            {view.state === 'none'
-              ? 'None yet. You choose one with the first password Chord keeps.'
-              : view.state === 'locked'
-                ? 'Your passwords are locked.'
-                : 'Locks your passwords. Chord can’t get it back for you.'}
-          </span>
+          {view.state !== 'open' && (
+            <span className={styles.rowDescription}>{view.state === 'none' ? 'None yet. You choose one with the first password Chord keeps.' : 'Your passwords are locked.'}</span>
+          )}
+          {view.state === 'locked' && step !== 'startOver' && (
+            <div className={local.inRow}>
+              <PassphraseAsk text={null} labelled={false} button="Unlock" problem={problem} onSubmit={(passphrase) => void api.passwords.unlock(passphrase).then(answered)} />
+              <button type="button" className={local.inlineLink} onClick={() => setStep('startOver')}>
+                Forgot it?
+              </button>
+            </div>
+          )}
         </div>
         <div className={styles.inlineControls}>
           {view.state === 'none' && step !== 'choose' && (
@@ -538,14 +561,6 @@ function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view:
               setProblem(null);
             }}
           />
-        </div>
-      )}
-      {view.state === 'locked' && step !== 'startOver' && (
-        <div className={local.block}>
-          <PassphraseAsk text="Enter your passphrase to see and change your passwords." button="Unlock" problem={problem} onSubmit={(passphrase) => void api.passwords.unlock(passphrase).then(answered)} />
-          <button type="button" className={local.inlineLink} onClick={() => setStep('startOver')}>
-            Forgot it?
-          </button>
         </div>
       )}
       {view.state === 'locked' && step === 'startOver' && (
