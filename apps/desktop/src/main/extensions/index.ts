@@ -4,7 +4,19 @@
  * updater, the install step Electron skips (runtime.onInstalled and manifest
  * rulesets), the toolbar buttons each window shows, and their popups.
  */
-import { activeTabId, extensionKey, isPrivateProfile, tabsInOrder, type Command, type InstalledExtension, type NodeId, type State, type WindowId, nodeOf, nodeIds } from '@chord/core';
+import {
+  activeTabId,
+  extensionKey,
+  isPrivateProfile,
+  tabsInOrder,
+  nodeOf,
+  nodeIds,
+  type Command,
+  type InstalledExtension,
+  type NodeId,
+  type State,
+  type WindowId,
+} from '@chord/core';
 import type { ExtensionAction, ExtensionInfo, ExtensionsBarState, InstallResult, Rect, Toast } from '@chord/ipc';
 import { BaseWindow, BrowserWindow, Menu, nativeImage, type ContextMenuParams, type MenuItemConstructorOptions, type Session, type WebContents } from 'electron';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';

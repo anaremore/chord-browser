@@ -13,7 +13,7 @@
  * and brings the tab back itself. Its ✕ ends PiP and pauses the video, which
  * is how the two are told apart.
  */
-import { isInternalUrl, type Command, type NodeId, type State, nodeOf } from '@chord/core';
+import { isInternalUrl, nodeOf, type Command, type NodeId, type State } from '@chord/core';
 import type { WebContents, WebFrameMain } from 'electron';
 import { PAGE_CALL_MS, pageCall } from './page-call';
 

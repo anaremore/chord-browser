@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { effectsHost, placeKey, readDataFile, type DataRecord, nodeOf, nodeList, nodeIds } from '@chord/core';
+import { effectsHost, placeKey, readDataFile, nodeOf, nodeList, nodeIds, type DataRecord } from '@chord/core';
 import { nodeCrypto } from '@chord/data/crypto';
 import { audit, capturesDir, dispatch, expectClean, isOverlay, isSettings, isShell, launch, newPage, pageWhere, runAction, startSite, type Site } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';

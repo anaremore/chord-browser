@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { apply, seedState, splitMembers, splitOf, type Command, type Context, type State, nodeList } from '@chord/core';
+import { apply, seedState, splitMembers, splitOf, nodeList, type Command, type Context, type State } from '@chord/core';
 import { splitDropFor } from '../../src/renderer/shell/split-drop';
 
 let n = 0;

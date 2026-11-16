@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { apply, seedState, type Context, nodeOf, nodeIds } from '@chord/core';
+import { apply, seedState, nodeOf, nodeIds, type Context } from '@chord/core';
 import { opsFromPatches } from '../src';
 
 let n = 0;

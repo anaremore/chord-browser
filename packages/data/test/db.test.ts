@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { apply, restoreState, seedState, type Command, type Context, type ProxySettings, type State, type TabNode, nodeOf, nodeList, nodeIds } from '@chord/core';
+import { apply, restoreState, seedState, nodeOf, nodeList, nodeIds, type Command, type Context, type ProxySettings, type State, type TabNode } from '@chord/core';
 import { ChordDatabase, errorPasses } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
 import { opsForState, opsFromPatches, type WriteOp } from '../src';

@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { apply, emptyState, isCrossSite, restoreState, routeCovers, routeFor, routeHost, routeKey, siteOf, tabsInOrder, type Chord, type Command, type Context, type PersistedState, type State, nodeOf } from '../src';
+import {
+  apply,
+  emptyState,
+  isCrossSite,
+  restoreState,
+  routeCovers,
+  routeFor,
+  routeHost,
+  routeKey,
+  siteOf,
+  tabsInOrder,
+  nodeOf,
+  type Chord,
+  type Command,
+  type Context,
+  type PersistedState,
+  type State,
+} from '../src';
 
 const chord = (id: string, name: string, extra: Partial<Chord> = {}): Chord => ({
   id,

@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { appCount, chordsWithCounts, cleanCountSites, countShows, countSite, countText, countWithin, unreadWords, apply, emptyState, IDLE_LIVE, pageBadge, restoreState, sumCounts, type State, nodesFrom } from '../src';
+import {
+  appCount,
+  chordsWithCounts,
+  cleanCountSites,
+  countShows,
+  countSite,
+  countText,
+  countWithin,
+  unreadWords,
+  apply,
+  emptyState,
+  IDLE_LIVE,
+  pageBadge,
+  restoreState,
+  sumCounts,
+  nodesFrom,
+  type State,
+} from '../src';
 
 describe('pageBadge: what Chord takes from a page’s preload', () => {
   it.each([

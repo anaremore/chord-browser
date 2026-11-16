@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apply, MAX_FAVORITES, restoreState, seedState, type Command, type DataRecord, type SegmentCursor, type State, nodeOf, nodeList } from '@chord/core';
+import { apply, MAX_FAVORITES, restoreState, seedState, nodeOf, nodeList, type Command, type DataRecord, type SegmentCursor, type State } from '@chord/core';
 import { ChordDatabase } from '@chord/data/db';
 import { opKey, opOrigin, opsForState, opsFromPatches, originOf, type DataPush, type WriteOp } from '@chord/data';
 import { SyncController, type WorkerLike } from '../../src/data/sync';

@@ -4,7 +4,33 @@
  * keeps a chord's own proxy to a chord with its own sign-ins.
  */
 import { describe, expect, it } from 'vitest';
-import { apply, bypassRule, cleanProxy, describeLoadError, emptyState, IDLE_LIVE, proxyBypassProblem, proxyConfig, proxyFor, proxyHost, proxyHostProblem, proxyLabel, proxyPac, proxyPacProblem, proxyPort, proxyPortProblem, restoreState, splitBypass, splitProxyAddress, type Chord, type Command, type Context, type ProxySettings, type State, setNode } from '../src';
+import {
+  apply,
+  bypassRule,
+  cleanProxy,
+  describeLoadError,
+  emptyState,
+  IDLE_LIVE,
+  proxyBypassProblem,
+  proxyConfig,
+  proxyFor,
+  proxyHost,
+  proxyHostProblem,
+  proxyLabel,
+  proxyPac,
+  proxyPacProblem,
+  proxyPort,
+  proxyPortProblem,
+  restoreState,
+  splitBypass,
+  splitProxyAddress,
+  setNode,
+  type Chord,
+  type Command,
+  type Context,
+  type ProxySettings,
+  type State,
+} from '../src';
 
 const server = (host: string, port: number, scheme: 'http' | 'https' | 'socks5' = 'http', bypass: string[] = []) => ({ scheme, host, port, bypass });
 const A: ProxySettings = { mode: 'server', server: server('10.0.0.2', 3128), pac: null };

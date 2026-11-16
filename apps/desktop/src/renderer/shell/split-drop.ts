@@ -5,7 +5,7 @@
  * split shown, the half of the pane under the pointer (along the split)
  * decides, and a pane dragged within its own split moves there.
  */
-import { paneRects, splitMembers, splitOf, SPLIT, type Command, type NodeId, type PaneRect, type State, type WindowId, nodeOf } from '@chord/core';
+import { paneRects, splitMembers, splitOf, SPLIT, nodeOf, type Command, type NodeId, type PaneRect, type State, type WindowId } from '@chord/core';
 
 /** The droppable over the page. */
 export const SPLIT_DROP = 'split-drop';

@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import * as dev from 'immer';
 import { describe, expect, it } from 'vitest';
-import { childrenToRead, deleteNode, emptyState, nodeIds, nodeList, nodeOf, nodesOfChord, setNode, splitsWithPanes, tabsInOrder, type SidebarNode, type State, type TabNode } from '@chord/core';
+import { childrenToRead, emptyState, nodeList, tabsInOrder, deleteNode, nodeIds, nodeOf, nodesOfChord, setNode, splitsWithPanes, type SidebarNode, type State, type TabNode } from '@chord/core';
 
 const require = createRequire(import.meta.url);
 const production = require(join(dirname(require.resolve('immer')), 'immer.cjs.production.js')) as typeof dev;

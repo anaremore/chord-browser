@@ -11,7 +11,7 @@
  * hidden elements): a setup that's big for sync to read.
  */
 import { createHash } from 'node:crypto';
-import { addSleepingTabs, EFFECTS_LIMITS, type SavedEffects, type State, type TabNode, nodeOf, setNode, nodeIds } from '@chord/core';
+import { addSleepingTabs, EFFECTS_LIMITS, nodeOf, setNode, nodeIds, type SavedEffects, type State, type TabNode } from '@chord/core';
 import type { HistoryEvent } from '@chord/data';
 
 /** Titles varied enough that typing narrows the results. */

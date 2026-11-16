@@ -7,7 +7,22 @@
  * older value in place of a newer one, nor take what's only on one computer
  * without a toast and an Undo.
  */
-import { defaultFields, localChordFields, localFavoriteFields, localNodeFields, localRouteFields, localSettingFields, localThemeFields, same, type Command, type Settings, type State, type SyncValues, nodeOf, nodeList } from '@chord/core';
+import {
+  defaultFields,
+  localChordFields,
+  localFavoriteFields,
+  localNodeFields,
+  localRouteFields,
+  localSettingFields,
+  localThemeFields,
+  same,
+  nodeOf,
+  nodeList,
+  type Command,
+  type Settings,
+  type State,
+  type SyncValues,
+} from '@chord/core';
 
 export type Things = Map<string, SyncValues>;
 

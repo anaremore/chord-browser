@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { apply, chordsFor, restoreState, downloadsFor, emptyState, isPrivateProfile, profilePartition, sortedChords, tabsInOrder, type Command, type Context, type Download, type State, type TabNode, nodeOf, nodeList } from '../src';
+import {
+  apply,
+  chordsFor,
+  restoreState,
+  downloadsFor,
+  emptyState,
+  isPrivateProfile,
+  profilePartition,
+  sortedChords,
+  tabsInOrder,
+  nodeOf,
+  nodeList,
+  type Command,
+  type Context,
+  type Download,
+  type State,
+  type TabNode,
+} from '../src';
 
 /** Two chords and one window; ids come out as id-001, id-002, … */
 function setup() {

@@ -4,7 +4,7 @@
  * sleep: its page closes, and its back/forward history (scroll position
  * included) comes back when it's shown again.
  */
-import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId, nodeOf, nodeList } from '@chord/core';
+import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, nodeOf, nodeList, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
 import type { NavState } from '@chord/data';
 import { frameRadius } from '@chord/tokens';
 import { WebContentsView, type BrowserWindow, type HandlerDetails, type Session, type WebContents, type WindowOpenHandlerResponse } from 'electron';

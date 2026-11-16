@@ -8,7 +8,46 @@
  * number of times, gives the same result.
  */
 import { describe, expect, it } from 'vitest';
-import { apply, checkSyncRecord, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, MAX_STAMP_MS, nextStamp, seenStamp, stampAbove, defaultSettings, emptyState, isGone, localChanges, localChordFields, localNodeFields, localSettingFields, mergeRecord, planApply, seedState, stable, SYNC_LIMITS, syncParts, thingKey, thingRecords, valuesOf, type ApplyContext, type Chord, type DataRecord, type SidebarNode, type Stamp, type State, type SyncChange, type SyncThing, type TabNode, nodeOf, setNode, nodeList } from '../src';
+import {
+  apply,
+  checkSyncRecord,
+  CLOCK_DRIFT_MS,
+  compareStamps,
+  isStamp,
+  MAX_COUNTER,
+  MAX_STAMP_MS,
+  nextStamp,
+  seenStamp,
+  stampAbove,
+  defaultSettings,
+  emptyState,
+  isGone,
+  localChanges,
+  localChordFields,
+  localNodeFields,
+  localSettingFields,
+  mergeRecord,
+  planApply,
+  seedState,
+  stable,
+  SYNC_LIMITS,
+  syncParts,
+  thingKey,
+  thingRecords,
+  valuesOf,
+  nodeOf,
+  setNode,
+  nodeList,
+  type ApplyContext,
+  type Chord,
+  type DataRecord,
+  type SidebarNode,
+  type Stamp,
+  type State,
+  type SyncChange,
+  type SyncThing,
+  type TabNode,
+} from '../src';
 
 const A = '00000000000000aa';
 const B = '00000000000000bb';

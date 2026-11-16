@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ARCHIVE_AFTER_MS, archiveCandidates, emptyState, sleepCandidates, visibleTabs, type State, type TabNode, setNode } from '../src';
+import { ARCHIVE_AFTER_MS, archiveCandidates, emptyState, sleepCandidates, visibleTabs, setNode, type State, type TabNode } from '../src';
 
 const HOUR = 3_600_000;
 const now = 100 * 24 * HOUR;

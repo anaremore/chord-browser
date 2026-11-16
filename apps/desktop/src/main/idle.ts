@@ -7,7 +7,7 @@
  * microphone, sharing the screen or being shared, or in picture-in-picture
  * are left alone.
  */
-import { archiveCandidates, sleepCandidates, type ArchiveAfter, type Command, type NodeId, type State, nodeIds } from '@chord/core';
+import { archiveCandidates, sleepCandidates, nodeIds, type ArchiveAfter, type Command, type NodeId, type State } from '@chord/core';
 import { powerMonitor } from 'electron';
 import type { TabManager } from './tabs';
 

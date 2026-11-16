@@ -4,7 +4,7 @@
  * pinned page. It has its own back stack. Esc or a click outside closes it;
  * "Open in Today" (⌘↵ / Ctrl+Enter) keeps it as a tab, page and history intact.
  */
-import { hostOf, isPrivateChord, uuidv7, type ChordId, type Command, type LiveTab, type NodeId, type State, type WindowId, nodeOf } from '@chord/core';
+import { hostOf, isPrivateChord, uuidv7, nodeOf, type ChordId, type Command, type LiveTab, type NodeId, type State, type WindowId } from '@chord/core';
 import { springCurve, springs } from '@chord/tokens';
 import type { Session, WebContents } from 'electron';
 import { uiScale } from './platform';

@@ -1,6 +1,25 @@
 // First, so launch timing starts before any other module runs (ARCHITECTURE.md §1).
 import { launchTimings, markLaunch } from './perf';
-import { ARCHIVE_AFTER_MS, blockingOffSites, DEFAULT_SETTINGS, BATTERY_SLEEP_AFTER_MS, IDLE_CHECK_MS, MEMORY_CHECK_MS, PRESSURE_SLEEP_AFTER_MS, SLEEP_AFTER_MS, isPrivateProfile, isPrivateWindow, privateWindowOf, profilePartition, proxyFor, restoreState, uuidv7, type Command, type WindowId, nodeList } from '@chord/core';
+import {
+  ARCHIVE_AFTER_MS,
+  blockingOffSites,
+  DEFAULT_SETTINGS,
+  BATTERY_SLEEP_AFTER_MS,
+  IDLE_CHECK_MS,
+  MEMORY_CHECK_MS,
+  PRESSURE_SLEEP_AFTER_MS,
+  SLEEP_AFTER_MS,
+  isPrivateProfile,
+  isPrivateWindow,
+  privateWindowOf,
+  profilePartition,
+  proxyFor,
+  restoreState,
+  uuidv7,
+  nodeList,
+  type Command,
+  type WindowId,
+} from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { hostname } from 'node:os';

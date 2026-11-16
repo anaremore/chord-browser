@@ -9,7 +9,7 @@
  * Asked just before the view is swapped out, it still returns that frame, so
  * leaving a tab is the main moment to picture it.
  */
-import { children, openedAgo, type NodeId, type State, type TabNode, nodeOf, nodeList } from '@chord/core';
+import { children, openedAgo, nodeOf, nodeList, type NodeId, type State, type TabNode } from '@chord/core';
 import type { PreviewCard, PreviewRow, PreviewTarget } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import { CaptureStore } from './captures';

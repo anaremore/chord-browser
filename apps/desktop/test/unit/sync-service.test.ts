@@ -6,7 +6,7 @@
  * applies anything that would delete, so its one Undo covers everything.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { apply, emptyApply, seedState, SYNC_OFF, type Chord, type Command, type State, type SyncApply, type TabNode, nodeList, nodeOf, nodesFrom } from '@chord/core';
+import { apply, emptyApply, seedState, SYNC_OFF, nodeList, nodeOf, nodesFrom, type Chord, type Command, type State, type SyncApply, type TabNode } from '@chord/core';
 import type { DataPush, SyncReply, SyncRequest } from '@chord/data';
 import type { SyncView, Toast } from '@chord/ipc';
 

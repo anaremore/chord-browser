@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SETTINGS, restoreState, type Chord, type PersistedState, type SeedOptions, type TabNode, type WindowModel, nodeOf, nodeList, nodeIds } from '../src';
+import { DEFAULT_SETTINGS, restoreState, nodeOf, nodeList, nodeIds, type Chord, type PersistedState, type SeedOptions, type TabNode, type WindowModel } from '../src';
 
 let n = 0;
 const seed: SeedOptions = {

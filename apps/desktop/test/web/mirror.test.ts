@@ -1,4 +1,4 @@
-import { bucketOf, emptyState, nodeIds, type State } from '@chord/core';
+import { emptyState, bucketOf, nodeIds, type State } from '@chord/core';
 import type { StatePatchEvent, StateSnapshot } from '@chord/ipc';
 import { describe, expect, it } from 'vitest';
 import { createMirror } from '../../src/renderer/shared/mirror';

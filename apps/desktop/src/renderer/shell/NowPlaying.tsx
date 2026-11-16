@@ -16,7 +16,7 @@
  * Chord Player (DESIGN.md §7.14) shows as the tab it plays for would, with
  * *Back to the player* instead of *Go to tab*, and the player's own mute.
  */
-import { cardMedia, type State, type TabNode, nodeOf } from '@chord/core';
+import { cardMedia, nodeOf, type State, type TabNode } from '@chord/core';
 import type { NowPlaying } from '@chord/ipc';
 import { durations, space, type Appearance } from '@chord/tokens';
 import { Pause, PictureInPicture, PictureInPicture2, Play, Volume2, VolumeX } from 'lucide-react';

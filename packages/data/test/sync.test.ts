@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { StatementSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apply, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, MAX_STAMP_MS, seedState, SYNC_LIMITS, thingKey, type Command, type Context, type DataRecord, type Stamp, type SidebarNode, type State, nodeOf, nodeList, nodesFrom } from '@chord/core';
+import { apply, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, MAX_STAMP_MS, seedState, SYNC_LIMITS, thingKey, nodeOf, nodeList, nodesFrom, type Command, type Context, type DataRecord, type Stamp, type State, type SidebarNode } from '@chord/core';
 import { ChordDatabase } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
 import { coalesceOps, opsForState, opsFromPatches, type WriteOp } from '../src';

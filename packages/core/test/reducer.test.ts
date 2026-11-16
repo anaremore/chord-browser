@@ -1,6 +1,6 @@
 import { applyPatches, enablePatches } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { apply, children, emptyState, favoritesFor, MAX_FAVORITES, sortedFavorites, tabsInOrder, type Command, type Context, type State, type TabNode, nodeOf, nodeList } from '../src';
+import { apply, children, emptyState, favoritesFor, MAX_FAVORITES, sortedFavorites, tabsInOrder, nodeOf, nodeList, type Command, type Context, type State, type TabNode } from '../src';
 
 enablePatches();
 

@@ -9,7 +9,35 @@
  * a filter (`@tabs`, `@history`, …) shows only that kind. The engine's search
  * suggestions come last, so they never move the rows above them.
  */
-import { type AssistantHit, abbreviationScore, habit, keywordFor, keywordSearchUrl, learnedPoints, matchScore, parseInput, placeKey, prefixes, recencyPoints, searchEngine, searchUrl, shownTabs, chordsFor, activeTab, activeTabId, splitOf, usagePoints, type ActionId, type ArchivedTab, type Chord, type SiteKeyword, type State, type TabNode, type ImageSearchEngine, nodeList } from '@chord/core';
+import {
+  type AssistantHit,
+  abbreviationScore,
+  habit,
+  keywordFor,
+  keywordSearchUrl,
+  learnedPoints,
+  matchScore,
+  parseInput,
+  placeKey,
+  prefixes,
+  recencyPoints,
+  searchEngine,
+  searchUrl,
+  shownTabs,
+  chordsFor,
+  activeTab,
+  activeTabId,
+  splitOf,
+  usagePoints,
+  nodeList,
+  type ActionId,
+  type ArchivedTab,
+  type Chord,
+  type SiteKeyword,
+  type State,
+  type TabNode,
+  type ImageSearchEngine,
+} from '@chord/core';
 import type { HistorySearch } from '@chord/ipc';
 import { displayHost, pageTitle } from '../shared/site';
 

@@ -8,7 +8,7 @@ import { generateNKeysBetween } from 'fractional-indexing';
 import { applyPatches, enablePatches, freeze } from 'immer';
 import { writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { apply, childrenToRead, emptyState, IDLE_LIVE, type Command, type Context, type SidebarNode, type State, setNode } from '@chord/core';
+import { apply, childrenToRead, emptyState, IDLE_LIVE, setNode, type Command, type Context, type SidebarNode, type State } from '@chord/core';
 
 enablePatches();
 

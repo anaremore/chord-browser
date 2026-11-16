@@ -24,7 +24,29 @@
  * under it. A tab dropped on the page goes beside it in a split, and a split's
  * tab dragged out to the sidebar leaves the split.
  */
-import { children, countText, countWithin, isInternalUrl, favoritesFor, splitMembers, sumCounts, tabForFavorite, unreadWords, uuidv7, type ChordId, type Favorite, type FolderNode, type LiveTab, type SidebarNode, type SplitNode, type State, type TabCount, type TabNode, nodeOf, childrenShared } from '@chord/core';
+import {
+  children,
+  countText,
+  countWithin,
+  isInternalUrl,
+  favoritesFor,
+  splitMembers,
+  sumCounts,
+  tabForFavorite,
+  unreadWords,
+  uuidv7,
+  nodeOf,
+  childrenShared,
+  type ChordId,
+  type Favorite,
+  type FolderNode,
+  type LiveTab,
+  type SidebarNode,
+  type SplitNode,
+  type State,
+  type TabCount,
+  type TabNode,
+} from '@chord/core';
 import { CollisionPriority } from '@dnd-kit/abstract';
 import { Accessibility, AutoScroller, KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import { DragDropProvider, useDraggable, useDragDropMonitor, useDroppable } from '@dnd-kit/react';

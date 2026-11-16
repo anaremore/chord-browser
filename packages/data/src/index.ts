@@ -24,7 +24,7 @@ import type {
   WindowModel,
 } from '@chord/core';
 import type { ExportCounts, FolderInspection, SyncApply, SyncStatus } from '@chord/core';
-import { localChordFields, localFavoriteFields, localNodeFields, localRouteFields, nodeIdsOfPatch, nodeList, nodeOf, same } from '@chord/core';
+import { localChordFields, localFavoriteFields, localNodeFields, localRouteFields, same, nodeIdsOfPatch, nodeList, nodeOf } from '@chord/core';
 import type { AssistantOp, AssistantResult } from './assistant';
 import type { SyncTimings } from './sync';
 

@@ -1,6 +1,29 @@
 import { produce } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { apply, archiveCandidates, emptyState, paneRects, resizeSizes, restoreState, settleSplits, shownTabs, splitMembers, splitOf, tabsInOrder, visibleTabs, windowsShowing, type Command, type Context, type SidebarNode, type SplitNode, type State, type TabNode, nodeOf, setNode, nodeList } from '../src';
+import {
+  apply,
+  archiveCandidates,
+  emptyState,
+  paneRects,
+  resizeSizes,
+  restoreState,
+  settleSplits,
+  shownTabs,
+  splitMembers,
+  splitOf,
+  tabsInOrder,
+  visibleTabs,
+  windowsShowing,
+  nodeOf,
+  setNode,
+  nodeList,
+  type Command,
+  type Context,
+  type SplitNode,
+  type State,
+  type TabNode,
+  type SidebarNode,
+} from '../src';
 
 /** One chord, one window, three Today tabs (t1 on top); ids from the reducer come out as id-001, id-002, … */
 function setup() {

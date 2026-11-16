@@ -21,7 +21,21 @@
  */
 import { randomBytes } from 'node:crypto';
 import { basename } from 'node:path';
-import { emptyApply, sortedChords, syncParts, uuidv7, type FolderInspection, type SiteEffects, type State, type SyncApply, type SyncStatus, type WindowId, type Command, nodeOf, nodeList } from '@chord/core';
+import {
+  emptyApply,
+  sortedChords,
+  syncParts,
+  uuidv7,
+  nodeOf,
+  nodeList,
+  type FolderInspection,
+  type SiteEffects,
+  type State,
+  type SyncApply,
+  type SyncStatus,
+  type WindowId,
+  type Command,
+} from '@chord/core';
 import type { DataPush, SyncInfo, SyncReply, SyncRequest, WriteSeq } from '@chord/data';
 import { ImportedSettings, type SyncFolderResult, type SyncStepResult, type SyncView, type Toast } from '@chord/ipc';
 import { dialog, safeStorage, type BaseWindow, type OpenDialogOptions } from 'electron';

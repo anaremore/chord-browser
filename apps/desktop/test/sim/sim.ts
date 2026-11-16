@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { vi } from 'vitest';
-import { stable, localChordFields, localFavoriteFields, localNodeFields, localRouteFields, localSettingFields, localThemeFields, same, type Command, type Settings, type State, type SyncValues, nodeOf, nodeList } from '@chord/core';
+import { stable, localChordFields, localFavoriteFields, localNodeFields, localRouteFields, localSettingFields, localThemeFields, same, nodeOf, nodeList, type Command, type Settings, type State, type SyncValues } from '@chord/core';
 import { hooks } from './electron';
 import { Computer, PASSPHRASE, THEME } from './computer';
 import { LocalFolder, Rng, SyncApp } from './folder';

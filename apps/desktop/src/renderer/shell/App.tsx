@@ -1,4 +1,20 @@
-import { activeTabId, chordsFor, describeLoadError, downloadsFor, isInternalUrl, keycapFor, SIDEBAR_WIDTH, sortedChords, splitOf, type ActionId, type LiveTab, type LoadError, type TabNode, nodeOf, nodeList } from '@chord/core';
+import {
+  activeTabId,
+  chordsFor,
+  describeLoadError,
+  downloadsFor,
+  isInternalUrl,
+  keycapFor,
+  SIDEBAR_WIDTH,
+  sortedChords,
+  splitOf,
+  nodeOf,
+  nodeList,
+  type ActionId,
+  type LiveTab,
+  type LoadError,
+  type TabNode,
+} from '@chord/core';
 import type { ChordEdit, AssistantView, PlayerFrame, SystemInfo } from '@chord/ipc';
 import { durations } from '@chord/tokens';
 import { Archive, ArrowLeft, ArrowRight, Blend, BookOpenText, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';

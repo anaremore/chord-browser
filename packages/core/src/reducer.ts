@@ -63,7 +63,7 @@ import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
 import type { SyncApply, SyncGone } from './sync';
 import { chordsFor, descendants, favoriteFits, favoritesFor, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
-import { byRank, children, childrenToRead, deleteNode, nodeList, nodeOf, nodesOfChord, setNode } from './nodes';
+import { childrenToRead, nodeList, byRank, children, deleteNode, nodeOf, nodesOfChord, setNode } from './nodes';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
 
 enablePatches();

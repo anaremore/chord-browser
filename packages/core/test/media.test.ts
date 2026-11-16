@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { apply, cardMedia, emptyState, imageSide, mediaVisibleTo, pickArtwork, type Command, type Context, type MediaImage, type State, type TabNode, nodeOf } from '../src';
+import { apply, cardMedia, emptyState, imageSide, mediaVisibleTo, pickArtwork, nodeOf, type Command, type Context, type MediaImage, type State, type TabNode } from '../src';
 
 const image = (src: string, sizes = '', type = ''): MediaImage => ({ src, sizes, type });
 

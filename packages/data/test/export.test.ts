@@ -9,7 +9,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chordFromRecord, favoriteFromRecord, iconFromRecord, iconId, imageFromRecord, messageFromRecord, nodeFromRecord, pageFromRecord, seedState, settingsFromFields, threadFromRecord, type DataRecord, type AssistantImage, type State, type TabNode, setNode } from '@chord/core';
+import {
+  chordFromRecord,
+  favoriteFromRecord,
+  iconFromRecord,
+  iconId,
+  imageFromRecord,
+  messageFromRecord,
+  nodeFromRecord,
+  pageFromRecord,
+  seedState,
+  settingsFromFields,
+  threadFromRecord,
+  setNode,
+  type DataRecord,
+  type AssistantImage,
+  type State,
+  type TabNode,
+} from '@chord/core';
 import { opsForState } from '../src';
 import { sha256Hex } from '../src/crypto';
 import { ChordDatabase } from '../src/db';

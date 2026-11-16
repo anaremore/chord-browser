@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { apply, seedState, type Context, type SidebarNode, type State, nodeList, nodesFrom } from '@chord/core';
+import { apply, seedState, nodeList, nodesFrom, type Context, type SidebarNode, type State } from '@chord/core';
 import { ChordDatabase, WRITE_PART } from '../src/db';
 import { opsForState, opsFromPatches, type WriteOp } from '../src';
 
