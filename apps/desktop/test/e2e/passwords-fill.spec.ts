@@ -12,9 +12,14 @@
  *    Submitting what was filled offers nothing (it's what's saved).
  * 3. **Update.** The same username with a new password: *Update the password for…?*; its eye
  *    shows the new one. Update, and the next fill (a click on the row this time) fills that.
- * 4. **Never.** Another username: *Never for this site*, and the next sign-in there is offered
- *    nothing.
+ * 4. **The menu and a card at once, ×, the key, and Never.** Another username: the save card,
+ *    its username typed over; a link back to the form and a menu there leave the card as it was
+ *    (the menu has a view of its own). × hides it, the key beside the address brings it back,
+ *    *Never for this site* ends it, and the next sign-in there is offered nothing.
  * 5. **A private window** fills from the vault, and is never offered a save.
+ *
+ * And apart: the unlock card stays up, with what's typed in it, while the menu offers
+ * *Unlock passwords*.
  *
  * axe checks the menu, the first-save card and the update card, and each is captured.
  */
@@ -24,7 +29,7 @@ import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { audit, capturesDir, expectClean, isOverlay, isPopover, isShell, launch, newPage, pageWhere, pressReal, runAction, type Finding } from './a11y-kit';
+import { audit, capturesDir, closeSettings, expectClean, isOverlay, isPopover, isSettings, isShell, launch, newPage, pageWhere, pressReal, runAction, type Finding } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -49,7 +54,12 @@ const SIGN_IN =
   "document.addEventListener('keyup', (e) => seen.ups.push(e.key), true);" +
   "document.addEventListener('keypress', (e) => seen.presses.push(e.key), true);" +
   "document.addEventListener('input', (e) => seen.inputs.push(e.target.id), true);</script>";
-const WELCOME = '<title>Welcome</title><p>Signed in.</p>';
+// A link back to the form: the page's own navigation, which a save card stays through (yours, from the address bar, ends it).
+const WELCOME = '<title>Welcome</title><p>Signed in.</p><a id="again" href="/login">Sign in again</a>';
+
+/** The menu under a field has a view of its own, on the popover's page (`#menu`); the popover's cards are the other one. */
+const isMenu = (url: string) => isPopover(url) && url.endsWith('#menu');
+const isCards = (url: string) => isPopover(url) && !url.includes('#');
 
 interface Recorder {
   server: Server;
@@ -127,7 +137,7 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
   try {
     const shell = await pageWhere(app, isShell);
     let page = await pageWhere(app, (u) => u.startsWith(`${site.origin}/login`));
-    const popover = await pageWhere(app, isPopover);
+    const popover = await pageWhere(app, isCards);
     const { events, clear } = hooks(app);
 
     // 1. A sign-in that worked, with no vault yet: the card offers to save it and chooses the passphrase.
@@ -154,7 +164,9 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     page = await pageWhere(app, (u) => u.startsWith(`${site.origin}/`));
     await page.goto(`${site.origin}/login`);
     await page.focus('#u');
-    const menu = popover.getByRole('listbox', { name: `Passwords for ${site.host}` });
+    // Its own small view, made the first time a sign-in field takes focus in the window.
+    const menuPage = await pageWhere(app, isMenu);
+    const menu = menuPage.getByRole('listbox', { name: `Passwords for ${site.host}` });
     await expect(menu).toBeVisible({ timeout: 10_000 });
     // By accessible name: the tinted initial beside each username is hidden from assistive tech.
     await expect(menu.getByRole('option')).toHaveCount(2);
@@ -162,12 +174,12 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     await expect(menu.getByRole('option').nth(1)).toHaveAccessibleName('Other passwords…');
     await expect(menu.getByRole('option', { name: USER })).toHaveAttribute('aria-selected', 'true');
     // Plain HTTP on this computer (127.0.0.1) isn't called insecure (core's insecureOrigin); other http pages are, in the unit table.
-    await expect(popover.getByText('This page isn’t secure')).toHaveCount(0);
+    await expect(menuPage.getByText('This page isn’t secure')).toHaveCount(0);
     // Under the field: the card's top-left (inside the view's 12 px padding) is 4 px under the field's bottom-left.
     const placed = await app.evaluate(({ BaseWindow }, origin) => {
       for (const w of BaseWindow.getAllWindows()) {
         const views = w.contentView.children as Electron.WebContentsView[];
-        const pop = views.find((v) => v.webContents?.getURL().includes('popover'));
+        const pop = views.find((v) => v.webContents?.getURL().endsWith('#menu'));
         const tab = views.find((v) => v.webContents?.getURL().startsWith(`${origin}/login`));
         if (pop && tab) return { pop: pop.getBounds(), tab: tab.getBounds(), zoom: tab.webContents.getZoomFactor() };
       }
@@ -180,8 +192,8 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     expect(placed).not.toBeNull();
     expect(Math.abs(placed!.pop.x + 12 - (placed!.tab.x + field.left * placed!.zoom))).toBeLessThanOrEqual(1);
     expect(Math.abs(placed!.pop.y + 12 - (placed!.tab.y + field.bottom * placed!.zoom + 4))).toBeLessThanOrEqual(1);
-    findings.push(...(await audit(popover, 'the menu under the field', { appearance: 'light' })));
-    await popover.locator('body').screenshot({ path: resolve(capturesDir, 'passwords-menu-light.png') });
+    findings.push(...(await audit(menuPage, 'the menu under the field', { appearance: 'light' })));
+    await menuPage.locator('body').screenshot({ path: resolve(capturesDir, 'passwords-menu-light.png') });
     // ↓ ↑ Enter: main's. The page sees none of them, and its field keeps the keyboard.
     await page.evaluate(() => ((window as unknown as { seen: Seen }).seen = { keys: [], ups: [], presses: [], inputs: [] }));
     await press(app, 'Down');
@@ -227,12 +239,32 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     await menu.getByRole('option', { name: USER }).click();
     await expect(page.locator('#p')).toHaveValue(SECOND);
 
-    // 4. Another account on the same site: Never for this site, and the next sign-in there is offered nothing.
+    // 4. Another account on the same site: the save card, its username typed over.
     await signIn(page, OTHER_USER, 'Zq9-grace-Sekrit');
     const save = popover.getByRole('dialog', { name: `Save this password for ${site.host}?` });
     await expect(save).toBeVisible({ timeout: 15_000 });
     findings.push(...(await audit(popover, 'the save card', { appearance: 'light' })));
     await save.screenshot({ path: resolve(capturesDir, 'passwords-save-light.png') });
+    await save.getByLabel('Username').fill('grace.edited');
+    // Back to the form by the page's own link (the card stays through it), and a menu there: the card is as it was.
+    await page.click('#again');
+    await page.waitForURL(`${site.origin}/login`);
+    await page.focus('#u');
+    await expect(menu).toBeVisible({ timeout: 10_000 });
+    await expect(save).toBeVisible();
+    await expect(save.getByLabel('Username')).toHaveValue('grace.edited');
+    await press(app, 'Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(save.getByLabel('Username')).toHaveValue('grace.edited');
+    // ×: the card hides, and the key beside the address brings it back.
+    await save.getByRole('button', { name: 'Close' }).click();
+    await expect(save).toHaveCount(0);
+    const key = shell.getByRole('button', { name: 'Save password' }).filter({ visible: true });
+    await expect(key).toBeVisible();
+    await key.click();
+    await expect(save).toBeVisible();
+    await expect(key).toHaveCount(0);
+    // Never for this site: the card, and the key, go for good; the next sign-in there is offered nothing.
     await save.getByRole('button', { name: 'Never for this site' }).click();
     await expect(save).toHaveCount(0);
     await clear();
@@ -249,11 +281,12 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     await expect(privateOverlay.getByRole('dialog')).toBeVisible();
     await privateOverlay.getByRole('combobox').fill(`${site.origin}/login`);
     await privateOverlay.keyboard.press('Enter');
-    const privatePopover = await newPage(app, isPopover, [popover]);
+    const privatePopover = await newPage(app, isCards, [popover]);
     const privatePage = await newPage(app, (u) => u.startsWith(`${site.origin}/login`), [page]);
     await privatePage.waitForLoadState('domcontentloaded');
     await privatePage.focus('#u');
-    const privateMenu = privatePopover.getByRole('listbox', { name: `Passwords for ${site.host}` });
+    const privateMenuPage = await newPage(app, isMenu, [menuPage]);
+    const privateMenu = privateMenuPage.getByRole('listbox', { name: `Passwords for ${site.host}` });
     await expect(privateMenu).toBeVisible({ timeout: 10_000 });
     await privateMenu.getByRole('option', { name: USER }).click();
     await expect(privatePage.locator('#p')).toHaveValue(SECOND);
@@ -270,4 +303,52 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     await app.close();
   }
   expectClean(findings);
+});
+
+test('passwords: the unlock card stays up, with what’s typed in it, while the menu under the field offers Unlock passwords', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-passwords-unlock-'));
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/login`, CHORD_E2E_HOOKS: '1', CHORD_APPEARANCE: 'light', CHORD_E2E_NO_KEYRING: '1' }, { profile });
+  try {
+    const shell = await pageWhere(app, isShell);
+    // A vault with this site's account, locked.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.evaluate(
+      async ({ passphrase, origin, username, password }) => {
+        const chord = (window as unknown as { chord: { passwords: { setup(p: string): Promise<unknown>; add(l: unknown): Promise<unknown>; lock(): Promise<unknown> } } }).chord;
+        await chord.passwords.setup(passphrase);
+        await chord.passwords.add({ origin, username, password, note: '' });
+        await chord.passwords.lock();
+      },
+      { passphrase: PASSPHRASE, origin: site.origin, username: USER, password: FIRST },
+    );
+    await closeSettings(app);
+
+    // The unlock card at the top of the tab, half typed.
+    const popover = await pageWhere(app, isCards);
+    const asked = app.evaluate(() => (globalThis as unknown as { chordTestHooks: { passwordsAskUnlock(): Promise<boolean> } }).chordTestHooks.passwordsAskUnlock());
+    const card = popover.getByRole('alertdialog', { name: 'Unlock passwords' });
+    await expect(card).toBeVisible();
+    await card.getByLabel('Passphrase').fill('half typed');
+
+    // The field takes focus: the menu, in its own view, offers Unlock passwords; the card stays, with what's in it.
+    const page = await pageWhere(app, (u) => u.startsWith(`${site.origin}/login`));
+    await page.focus('#u');
+    const menuPage = await pageWhere(app, isMenu);
+    const menu = menuPage.getByRole('listbox', { name: `Passwords for ${site.host}` });
+    await expect(menu.getByRole('option', { name: 'Unlock passwords' })).toBeVisible({ timeout: 10_000 });
+    await expect(card).toBeVisible();
+    await expect(card.getByLabel('Passphrase')).toHaveValue('half typed');
+    // The menu closes; the card is still as it was.
+    await press(app, 'Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(card.getByLabel('Passphrase')).toHaveValue('half typed');
+    await card.getByLabel('Passphrase').fill(PASSPHRASE);
+    await card.getByRole('button', { name: 'Unlock' }).click();
+    expect(await asked).toBe(true);
+    await expect(card).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
 });

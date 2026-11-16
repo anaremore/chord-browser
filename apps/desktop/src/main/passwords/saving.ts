@@ -43,7 +43,7 @@ export type ResponseHint = 'response-ok' | 'response-error' | null;
 
 export type SavingOutcome =
   | { readonly type: 'submitted'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly signal: SubmitSignal }
-  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint; readonly values: CandidateValues | null }
+  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint; readonly values: CandidateValues | null; readonly valuesUntil: number | null }
   | { readonly type: 'failed'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly why: 'error-response' | 'reappeared' | 'still-shown' };
 
 interface Held {
@@ -109,6 +109,8 @@ export class SubmissionTracker {
   private phase: Phase = { t: 'idle' };
   /** Runs `HOLD_MS` after the newest values came: by then every value held is that old, and all go. (`#`: never in a JSON dump of the tracker.) */
   #valuesTimer: unknown = null;
+  /** When the newest values came: they, and whatever takes them on (the save card), last until `HOLD_MS` after. */
+  #valuesAt = 0;
   readonly #timers: TrackerTimers;
 
   constructor(
@@ -120,6 +122,7 @@ export class SubmissionTracker {
 
   /** Values came: the 5 minutes count from now, for every value held. */
   private holdValues(): void {
+    this.#valuesAt = this.now();
     if (this.#valuesTimer !== null) this.#timers.clearTimeout(this.#valuesTimer);
     this.#valuesTimer = this.#timers.setTimeout(() => {
       this.#valuesTimer = null;
@@ -129,6 +132,11 @@ export class SubmissionTracker {
       if (old(this.held)) this.held = null;
       if (this.phase.t !== 'idle' && old(this.phase.held)) this.phase = { t: 'idle' };
     }, HOLD_MS);
+  }
+
+  /** The candidate's deadline, handed to the save card with its values: the card doesn't get a fresh 5 minutes. */
+  private valuesUntil(held: Held): number | null {
+    return held.candidate.values ? this.#valuesAt + HOLD_MS : null;
   }
 
   /** What was typed goes from both places it can be: the held form, and the one a navigation waits on. */
@@ -238,7 +246,7 @@ export class SubmissionTracker {
       return [{ type: 'failed', formId: c.formId, kind: c.kind, origin: held.origin, why: reappeared ? 'reappeared' : 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status), values: valuesOf(held) }];
+    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held) }];
   }
 
   /** The main frame navigated within its document (`did-navigate-in-page`): an SPA's route change. */
@@ -265,7 +273,7 @@ export class SubmissionTracker {
       return [{ type: 'failed', formId, kind: held.candidate.kind, origin: held.origin, why: 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status), values: valuesOf(held) }];
+    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held) }];
   }
 
   /** After a submit signal, the form was still shown at the end of the agent's watch. */

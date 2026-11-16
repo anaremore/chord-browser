@@ -21,10 +21,14 @@
  * - **The save and update cards.** A sign-in that worked (`signedIn`, with what was typed) →
  *   `candidateFor` → the card for that tab, or none (the same password, a *Never* site,
  *   passwords off) → Save → `saveCandidate` (the first one with the passphrase its card
- *   chose), or *Never for this site* → `neverFor`. What was typed stays here, in memory, only
- *   while the card does: answered, closed, a minute unused (not while you're in it), the tab
- *   leaving the site or closing, and it's gone. The popover gets the username; the password
- *   only when you press the card's eye, and only that card's popover.
+ *   chose), or *Never for this site* → `neverFor`. × (or a minute unused, not while you're in
+ *   it) only hides the card: the key in the address brings it back (S17 §9, the owner's answer
+ *   of 2026-11-16) while the candidate lasts. What was typed stays here, in memory, only that
+ *   long: until the candidate's own deadline (`HOLD_MS` after it was typed, handed over by the
+ *   tracker, not a fresh 5 minutes), *Save* or *Never*, passwords turned off for the chord, the
+ *   tab leaving the site, a navigation of your own, a sign-in there that failed, or the tab
+ *   closing. The popover gets the username; the password only when you press the card's eye,
+ *   and only that card's popover.
  *
  * The vault keeps its own gates (the switch, the extension rule, an address that can be saved,
  * private windows never saving, proxies never), and the detector its own (Chord's pages, the
@@ -38,7 +42,7 @@ import { durations, easing } from '@chord/tokens';
 import type { Input, WebContents, WebFrameMain } from 'electron';
 import type { PasswordDetectorEvents, PasswordsFocusEvent } from './detector';
 import { routeMenuKey, routeTakenKey } from './menu-keys';
-import type { CandidateValues } from './saving';
+import { HOLD_MS, type CandidateValues } from './saving';
 import type { PasswordService } from './service';
 
 /** How long the save card stays unused (S17 §9: a minute ⚠). It doesn't go while you're in it. */
@@ -72,6 +76,10 @@ export interface PasswordAssistHost {
   /** The tab's chord's accent, for the fill's outline. */
   accent(nodeId: string): string | null;
   toast(windowId: WindowId, id: string, message: string): void;
+  /** A closed save card can be brought back: the key in the tab's address (`live.passwordOffer`). */
+  offer(nodeId: string, on: boolean): void;
+  /** A sign-in field took focus in this window: the menu's view is made now if it isn't yet, while the vault answers. */
+  prepareMenu(windowId: WindowId): void;
   /** *Other passwords…*: Settings → Passwords. */
   openPasswords(windowId: WindowId): void;
   /** Whether Chord's passwords are on for a chord now: the switch and the extension rule. */
@@ -151,7 +159,12 @@ interface Card {
   busy: boolean;
   problem: 'io' | null;
   held: boolean;
-  timer: unknown;
+  /** On screen; hidden by × or a minute unused, and brought back by the key in the address. */
+  shown: boolean;
+  /** The minute unused, while shown. */
+  idle: unknown;
+  /** The candidate's deadline: the card and what was typed go then, shown or not. */
+  expiry: unknown;
 }
 
 const hostOf = (origin: string) => {
@@ -190,6 +203,8 @@ export class PasswordAssist {
     events.on('focus', (e) => void this.focused(e));
     events.on('blur', (e) => this.blurred(e.contents));
     events.on('signedIn', (e) => void this.signedIn(e));
+    // A sign-in there that failed: what an earlier one left to save is no longer what you use.
+    events.on('failed', (e) => this.dropCardsOf(e.contents));
     events.on('filled', (e) => {
       if (e.ok) return;
       const tab = options.host.tabOf(e.contents);
@@ -201,11 +216,16 @@ export class PasswordAssist {
   attachPage(contents: WebContents): void {
     this.docs.set(contents, 0);
     contents.on('did-start-navigation', (details) => {
-      if (details.isMainFrame && !details.isSameDocument) this.closeMenuOf(contents);
+      if (!details.isMainFrame || details.isSameDocument) return;
+      this.closeMenuOf(contents);
+      // A navigation of your own (the address bar, a bookmark, Back), not the page's: the candidate ends.
+      if (!details.initiator) this.dropCardsOf(contents);
     });
     contents.on('did-navigate', (_event, url) => {
       this.docs.set(contents, (this.docs.get(contents) ?? 0) + 1);
       this.closeMenuOf(contents);
+      // A new document numbers its forms from f1 again: "not again in this form" was the last page's.
+      this.quiet.delete(contents);
       void this.leftSite(contents, url);
     });
     contents.once('destroyed', () => {
@@ -213,7 +233,7 @@ export class PasswordAssist {
       this.guards.delete(contents);
       this.pending.delete(contents);
       this.quiet.delete(contents);
-      for (const card of [...this.cards.values()]) if (card.contents === contents) this.dropCard(card);
+      this.dropCardsOf(contents);
     });
   }
 
@@ -245,6 +265,7 @@ export class PasswordAssist {
       return;
     }
     if (this.quiet.get(e.contents) === e.formId || !host.shown(e.contents)) return;
+    host.prepareMenu(tab.windowId);
     const seq = ++this.seq;
     const pending: Pending = { seq, formId: e.formId, role: e.role, rect: e.rect, zoom: e.zoomFactor };
     this.pending.set(e.contents, pending);
@@ -461,6 +482,8 @@ export class PasswordAssist {
     // Never in a private window (the detector and the vault refuse too), only a sign-in, and only with what was typed.
     if (!tab || tab.private || !e.values || !SAVE_KINDS.has(e.kind)) return;
     const values = { ...e.values };
+    // The candidate's own deadline: the card keeps what was typed no longer than the tracker would have.
+    const until = e.valuesUntil ?? this.now() + HOLD_MS;
     // The document the sign-in ended on: if the tab commits another while the vault answers, the card would be for a
     // page you've left (and `leftSite`, which runs at that commit, found no card to drop yet).
     const doc = this.docs.get(e.contents) ?? 0;
@@ -469,7 +492,7 @@ export class PasswordAssist {
     if (!here()) return;
     if (answer.kind !== 'new' && answer.kind !== 'update' && answer.kind !== 'locked') return;
     const site = await this.siteOf(e.origin).catch(() => null);
-    if (!here()) return;
+    if (!here() || until <= this.now()) return;
     const before = this.cards.get(tab.nodeId);
     if (before) this.dropCard(before, false);
     const card: Card = {
@@ -486,25 +509,55 @@ export class PasswordAssist {
       busy: false,
       problem: null,
       held: false,
-      timer: null,
+      shown: true,
+      idle: null,
+      expiry: null,
     };
+    card.expiry = this.setTimer(() => this.dropCard(card), until - this.now());
     this.cards.set(tab.nodeId, card);
     this.startTimer(card);
     host.changed(tab.windowId);
   }
 
+  /** A minute unused, while it's shown and you're not in it: it hides (the key brings it back). */
   private startTimer(card: Card): void {
-    if (card.timer !== null) this.clearTimer(card.timer);
-    card.timer = card.held ? null : this.setTimer(() => this.dropCard(card), SAVE_CARD_MS);
+    if (card.idle !== null) this.clearTimer(card.idle);
+    card.idle = card.held || !card.shown ? null : this.setTimer(() => this.hideCard(card), SAVE_CARD_MS);
+  }
+
+  /** × or a minute unused: off screen, still there for the key in the address until the candidate ends. */
+  private hideCard(card: Card): void {
+    if (this.cards.get(card.tab.nodeId) !== card || !card.shown) return;
+    card.shown = false;
+    card.held = false;
+    this.startTimer(card);
+    this.options.host.offer(card.tab.nodeId, true);
+    this.options.host.changed(this.windowOf(card));
+  }
+
+  /** The key in the address: the tab's card again, as it was. */
+  reopen(windowId: WindowId, nodeId: string): void {
+    const card = this.cards.get(nodeId);
+    if (!card || card.shown || !card.values || this.windowOf(card) !== windowId) return;
+    card.shown = true;
+    this.startTimer(card);
+    this.options.host.offer(nodeId, false);
+    this.options.host.changed(windowId);
   }
 
   /** The card goes, and what was typed with it. */
   private dropCard(card: Card, notify = true): void {
-    if (card.timer !== null) this.clearTimer(card.timer);
-    card.timer = null;
+    for (const timer of [card.idle, card.expiry]) if (timer !== null) this.clearTimer(timer);
+    card.idle = card.expiry = null;
     card.values = null;
-    if (this.cards.get(card.tab.nodeId) === card) this.cards.delete(card.tab.nodeId);
+    if (this.cards.get(card.tab.nodeId) !== card) return;
+    this.cards.delete(card.tab.nodeId);
+    if (!card.shown) this.options.host.offer(card.tab.nodeId, false);
     if (notify) this.options.host.changed(this.windowOf(card));
+  }
+
+  private dropCardsOf(contents: WebContents): void {
+    for (const card of [...this.cards.values()]) if (card.contents === contents) this.dropCard(card);
   }
 
   /** A page of the tab committed: the card goes once you've left the site it's for. */
@@ -525,7 +578,7 @@ export class PasswordAssist {
   /** The tab's card as its window's popover shows it: the username, never the password. */
   cardFor(nodeId: string | null): PasswordSaveCard | null {
     const card = nodeId ? this.cards.get(nodeId) : undefined;
-    if (!card?.values) return null;
+    if (!card?.values || !card.shown) return null;
     return { id: card.id, kind: card.kind, host: card.host, username: card.values.username, setup: card.setup, busy: card.busy, problem: card.problem };
   }
 
@@ -535,7 +588,7 @@ export class PasswordAssist {
   }
 
   private cardById(windowId: WindowId, id: number): Card | undefined {
-    for (const card of this.cards.values()) if (card.id === id && card.values && this.windowOf(card) === windowId) return card;
+    for (const card of this.cards.values()) if (card.id === id && card.values && card.shown && this.windowOf(card) === windowId) return card;
     return undefined;
   }
 
@@ -551,7 +604,8 @@ export class PasswordAssist {
     if (!card || (card.busy && action !== 'hold' && action !== 'release')) return;
     switch (action) {
       case 'close':
-        return this.dropCard(card);
+        // Hidden, not gone: the key in the address brings it back while the candidate lasts.
+        return this.hideCard(card);
       case 'hold':
       case 'release':
         card.held = action === 'hold';

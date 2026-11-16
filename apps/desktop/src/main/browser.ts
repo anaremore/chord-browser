@@ -236,6 +236,8 @@ export class Browser {
   private readonly finders = new Map<WindowId, FindInPage>();
   /** The last popover state sent to each window, so unchanged state isn't re-sent on every engine event. */
   private readonly popoverSent = new Map<WindowId, string>();
+  /** The same, for each window's menu view (the menu under a field). */
+  private readonly menuSent = new Map<WindowId, string>();
   /** When the command bar last had each server connected ahead of Enter, by profile and origin (`preconnect`). */
   private readonly preconnected = new Map<string, number>();
   /** Tabs playing media, for the Now playing cards (DESIGN.md §7.10), and what each window's card was last sent. */
@@ -394,6 +396,11 @@ export class Browser {
         accent: (nodeId) => this.accentOf(nodeId),
         toast: (windowId, id, message) => this.windows.get(windowId)?.toast({ id, message }),
         openPasswords: () => this.openSettings('passwords'),
+        offer: (nodeId, on) => {
+          const live = this.store.state.live[nodeId];
+          if (nodeOf(this.store.state, nodeId)?.kind === 'tab' && Boolean(live?.passwordOffer) !== on) this.store.dispatch({ t: 'tab.live', nodeId, live: { passwordOffer: on } });
+        },
+        prepareMenu: (windowId) => void this.windows.get(windowId)?.ensureMenuView(),
         passwordsOn: (chordId) => {
           const state = this.store.state;
           const chord = chordId ? state.chords[chordId] : undefined;
@@ -893,7 +900,7 @@ export class Browser {
 
   windowFor(contents: WebContents): AppWindow | undefined {
     for (const w of this.windows.values()) {
-      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.preview.webContents, w.peekContents, ...w.paneContents].includes(contents)) return w;
+      if ([w.shell.webContents, w.overlay.webContents, w.popover.webContents, w.preview.webContents, w.peekContents, w.menuPage, ...w.paneContents].includes(contents)) return w;
     }
     const nodeId = this.tabs.nodeFor(contents);
     const windowId = nodeId ? this.windowShowing(nodeId) : undefined;
@@ -954,8 +961,16 @@ export class Browser {
       this.authFocused.delete(windowId);
       this.syncPopover(w);
     });
-    // A press on the menu under a field, before the popover's page sees it: the field's blur that follows keeps the menu (M0 §3).
-    w.popover.webContents.on('before-mouse-event', (_event, mouse) => this.passwordAssist.popoverMouse(windowId, mouse.type));
+    // The menu under a field has a view of its own, made the first time it's wanted: a press on it, before its page
+    // sees it, keeps the menu through the field's blur that follows (M0 §3); its state once it has loaded.
+    w.onMenuView = (contents) => {
+      contents.on('before-mouse-event', (_event, mouse) => this.passwordAssist.popoverMouse(windowId, mouse.type));
+      contents.on('did-finish-load', () => {
+        if (this.windows.get(windowId) !== w) return;
+        this.menuSent.delete(windowId);
+        this.syncPopover(w);
+      });
+    };
     w.shell.webContents.on('did-finish-load', () => {
       if (this.windows.get(windowId) !== w) return;
       this.extensions.forget(windowId);
@@ -998,6 +1013,7 @@ export class Browser {
       this.player.placementChanged();
       this.finders.delete(windowId);
       this.popoverSent.delete(windowId);
+      this.menuSent.delete(windowId);
       this.mediaSent.delete(windowId);
       this.authFocused.delete(windowId);
       this.extensions.forget(windowId);
@@ -1648,9 +1664,15 @@ export class Browser {
     w.setHiddenPanes(hidden);
     // The menu under a field: closed once its page isn't on screen, else the popover goes under the field.
     this.passwordAssist.check(w.id);
-    w.setPopoverAnchor(this.passwordAssist.anchorFor(w.id));
+    w.setMenuAnchor(this.passwordAssist.anchorFor(w.id));
     const popover = this.popoverState(w);
     const json = JSON.stringify(popover);
+    // The menu's own view takes the same state (it shows only the menu), sent when it changes too.
+    const menuPage = w.menuPage;
+    if (menuPage && this.menuSent.get(w.id) !== json) {
+      this.menuSent.set(w.id, json);
+      send(menuPage, 'popover:state', popover);
+    }
     if (this.popoverSent.get(w.id) === json) return;
     this.popoverSent.set(w.id, json);
     send(w.popover.webContents, 'popover:state', popover);
@@ -1792,7 +1814,7 @@ export class Browser {
   /** Where sync stands, to Settings if it's open (Your data → Sync). */
   /** The window whose popover this is, for the popover's password channels: a card answers only its own window's popover. */
   popoverWindow(sender: WebContents): WindowId | null {
-    for (const w of this.windows.values()) if (w.popover.webContents === sender) return w.id;
+    for (const w of this.windows.values()) if (w.popover.webContents === sender || w.menuPage === sender) return w.id;
     return null;
   }
 

@@ -816,15 +816,19 @@ function DrmNoticeCard({ notice }: { notice: DrmNotice }) {
   );
 }
 
-export function Popover({ info: infoSource, state: stateSource }: { info: Live<SystemInfo>; state: Live<PopoverState> }) {
+/**
+ * `menuOnly`: the page in the menu's own view (loaded with `#menu`), which shows the menu under a sign-in field and
+ * nothing else; main places it under the field. The popover's own page never shows the menu, so its cards stay put
+ * and keep what's typed in them while a menu opens and closes.
+ */
+export function Popover({ info: infoSource, state: stateSource, menuOnly = false }: { info: Live<SystemInfo>; state: Live<PopoverState>; menuOnly?: boolean }) {
   const info = useLive(infoSource);
   const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
-  const menu = state.passwordMenu;
-  const hasCards = Boolean(
-    menu || state.find || state.permission || state.share || state.auth || state.passkey || state.passwordsUnlock || state.passwordSave || state.safeBrowsingOffer || state.drm || state.effects,
-  );
-  const menuOpen = Boolean(menu);
+  const menu = menuOnly ? state.passwordMenu : null;
+  const hasCards = menuOnly
+    ? Boolean(menu)
+    : Boolean(state.find || state.permission || state.share || state.auth || state.passkey || state.passwordsUnlock || state.passwordSave || state.safeBrowsingOffer || state.drm || state.effects);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -838,15 +842,13 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
     const observer = new ResizeObserver(report);
     observer.observe(el);
     return () => observer.disconnect();
-    // The menu replaces the cards (another root element): measured afresh.
-  }, [hasCards, menuOpen]);
+  }, [hasCards]);
 
   const { style, appearance } = chordStyle(state.theme ? { theme: state.theme } : null, info, state.interface);
-  // The menu under a field: main places the view under the field, so it's shown alone while it's open.
-  if (menu)
+  if (menuOnly)
     return (
       <div ref={root} className={`${styles.root} ${styles.menuRoot}`} style={style}>
-        <PasswordMenuCard menu={menu} />
+        {menu && <PasswordMenuCard key={menu.id} menu={menu} />}
       </div>
     );
   return (

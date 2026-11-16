@@ -131,7 +131,7 @@ describe('knowing you signed in (S17 §6)', () => {
     t.candidate(candidate(), 'https://real.example');
     t.navigationStarted(true);
     t.navigated(200);
-    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null, values: null }]);
+    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null, values: null, valuesUntil: null }]);
   });
 });
 
@@ -238,5 +238,24 @@ describe('the 5 minutes run by themselves (no later call needed)', () => {
     tracker.reset();
     expect(leaks(tracker)).toBe(false);
     expect(pending()).toBe(0);
+  });
+});
+
+describe('the candidate’s deadline goes with its values to the save card', () => {
+  it('it’s HOLD_MS after the values were typed, not after the sign-in was decided', () => {
+    let now = 1000;
+    const t = new SubmissionTracker(() => now, { setTimeout: () => 0, clearTimeout: () => {} });
+    t.candidate(candidate({ values: { username: 'ada', password: 'pw' } }), ORIGIN);
+    now = 9000;
+    t.candidate(candidate({ signal: 'blur' }), ORIGIN);
+    now = 20_000;
+    const signedIn = t.gone('f1').find((o) => o.type === 'signedIn') as Extract<SavingOutcome, { type: 'signedIn' }>;
+    expect(signedIn.valuesUntil).toBe(1000 + HOLD_MS);
+  });
+
+  it('none without values', () => {
+    const t = new SubmissionTracker(() => 0, { setTimeout: () => 0, clearTimeout: () => {} });
+    t.candidate(candidate(), ORIGIN);
+    expect((t.gone('f1')[0] as Extract<SavingOutcome, { type: 'signedIn' }>).valuesUntil).toBeNull();
   });
 });

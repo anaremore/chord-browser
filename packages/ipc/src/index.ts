@@ -1719,6 +1719,8 @@ export const invokeChannels = {
   'share:stop': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   /** A sidebar row's reload button: reload that tab's page, on screen or not. */
   'tab:reload': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
+  /** The key beside the address: the tab's closed save card again (S17 §9). Nothing it carries is a value. */
+  'passwords:reopenCard': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   // Now playing (DESIGN.md §7.10): what the window's card offers, and its play, pause and picture-in-picture buttons.
   'media:view': { roles: ['shell'], request: z.void(), response: z.custom<NowPlaying[]>() },
   /** What the frame of the tab that plays in Chord Player shows; null when no tab does. */
@@ -1945,6 +1947,8 @@ export interface ShellApi {
   share: { stop(nodeId: string): Promise<void> };
   /** Reload a tab's page from its sidebar row. */
   tab: { reload(nodeId: string): Promise<void> };
+  /** The key beside the address: a closed save card, back. */
+  passwords: { reopen(nodeId: string): Promise<void> };
   /** A tab that plays in Chord Player: back to the player, or show its page here instead; and what its frame shows. */
   player: { act(nodeId: string, action: 'show' | 'release'): Promise<void>; view(): Promise<PlayerFrame | null>; onState(listener: (frame: PlayerFrame | null) => void): () => void };
   /** The Now playing card: the window's media as main pushes it, and the card's own buttons. */

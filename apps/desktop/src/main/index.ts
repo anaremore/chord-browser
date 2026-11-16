@@ -442,7 +442,12 @@ function registerIpc(): void {
     return defaultBrowserStatus();
   });
   handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
-  handle('popover:size', ({ width, height }, sender) => senderWindow(sender).setPopoverSize(width, height));
+  handle('popover:size', ({ width, height }, sender) => {
+    const w = senderWindow(sender);
+    // The menu under a field has a view of its own, on the popover's page and API.
+    if (sender === w.menuPage) w.setMenuSize(width, height);
+    else w.setPopoverSize(width, height);
+  });
   handle('preview:hover', (target, sender) => browser!.previewHover(senderWindow(sender), target));
   handle('preview:size', ({ width, height }, sender) => senderWindow(sender).setPreviewSize(width, height));
   handle('find:query', ({ text, forward }, sender) => browser!.findFor(sender)?.query(text, forward));
@@ -501,6 +506,8 @@ function registerIpc(): void {
     const windowId = browser?.popoverWindow(sender);
     if (windowId) await browser!.passwordAssist.answer(windowId, id, action, { ...(username !== undefined ? { username } : {}), ...(passphrase !== undefined ? { passphrase } : {}) });
   });
+  // The key beside the address: the sender's window's own tab's card only.
+  handle('passwords:reopenCard', ({ nodeId }, sender) => browser!.passwordAssist.reopen(senderWindow(sender).id, nodeId));
   handle('passwords:saveCardReveal', ({ id }, sender) => {
     const windowId = browser?.popoverWindow(sender);
     return windowId ? browser!.passwordAssist.reveal(windowId, id) : null;

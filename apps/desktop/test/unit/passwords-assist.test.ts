@@ -8,6 +8,7 @@ import { PASSWORDS_FILL } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { CLICK_GRACE_MS, PasswordAssist, SAVE_CARD_MS, type AssistTab, type AssistVault } from '../../src/main/passwords/assist';
+import { HOLD_MS } from '../../src/main/passwords/saving';
 import type { PasswordDetectorEvents } from '../../src/main/passwords/detector';
 import type { AccountsAnswer, CandidateAnswer, SaveAnswer } from '../../src/main/passwords/service';
 
@@ -90,6 +91,8 @@ function setup({
     toast: vi.fn(),
     openPasswords: vi.fn(),
     passwordsOn: vi.fn((_chordId: string | null) => true),
+    offer: vi.fn((_nodeId: string, _on: boolean) => {}),
+    prepareMenu: vi.fn(),
   };
   const assist = new PasswordAssist({
     vault: vault as unknown as AssistVault,
@@ -245,6 +248,16 @@ describe('keys: the page keeps focus, and never sees the menu’s', () => {
     expect(t.key('Enter', { control: true })).toBe(false);
     expect(t.key('ArrowDown', { meta: true })).toBe(false);
     expect(t.assist.menuFor('w1')?.index).toBe(0);
+  });
+
+  it('“not again in this form” is the page’s: the next document’s form (f1 again) gets its menu', async () => {
+    const t = setup();
+    await t.focus();
+    t.key('Enter');
+    await flush();
+    t.page.emit('did-navigate', {}, 'https://github.com/login', 200);
+    await t.focus();
+    expect(t.assist.menuFor('w1')).not.toBeNull();
   });
 
   it('once answered (a choice, Escape), not again in that form until you leave it', async () => {
@@ -494,12 +507,18 @@ describe('the cards’ buttons', () => {
     expect(t.assist.cardFor('n1')).toBeNull();
   });
 
-  it('×: the card and what was typed go, and nothing is saved', async () => {
+  it('×: the card hides, nothing is saved, and the key in the address can bring it back', async () => {
     const t = await offered();
     await t.assist.answer('w1', t.card.id, 'close');
     expect(t.assist.cardFor('n1')).toBeNull();
+    // Hidden, its eye and buttons answer nothing.
     expect(t.assist.reveal('w1', t.card.id)).toBeNull();
+    await t.assist.answer('w1', t.card.id, 'save', {});
     expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    expect(t.host.offer).toHaveBeenLastCalledWith('n1', true);
+    t.assist.reopen('w1', 'n1');
+    expect(t.assist.cardFor('n1')).toEqual(t.card);
+    expect(t.host.offer).toHaveBeenLastCalledWith('n1', false);
   });
 
   it('the eye: the password, to the card’s own window only', async () => {
@@ -517,24 +536,87 @@ describe('the cards’ buttons', () => {
   });
 });
 
-describe('how long a card lasts', () => {
-  it.each<[string, (t: ReturnType<typeof setup>, id: number) => Promise<void> | void, boolean]>([
-    ['a minute unused: it goes', (t) => t.timers.advance(SAVE_CARD_MS), false],
-    ['just under a minute: still there', (t) => t.timers.advance(SAVE_CARD_MS - 1), true],
-    ['while you’re in it, it stays', async (t, id) => (await t.assist.answer('w1', id, 'hold'), t.timers.advance(SAVE_CARD_MS * 3)), true],
-    ['…and once you leave it, a minute again', async (t, id) => (await t.assist.answer('w1', id, 'hold'), await t.assist.answer('w1', id, 'release'), t.timers.advance(SAVE_CARD_MS)), false],
-    ['through the next page on the same site', async (t) => (t.page.emit('did-navigate', {}, 'https://gist.github.com/ada', 200), await flush(), await flush()), true],
-    ['leaving the site: it goes', async (t) => (t.page.emit('did-navigate', {}, 'https://example.org/', 200), await flush(), await flush()), false],
-    ['the tab closing: it goes', (t) => ((t.page.destroyed = true), t.page.emit('destroyed')), false],
-    ['its window closing: it goes', (t) => t.assist.windowClosed('w1'), false],
-    ['another sign-in on the tab: the new one replaces it', async (t) => t.signedIn({ values: { username: 'grace', password: 'other' } }), true],
-  ])('%s', async (_name, act, stays) => {
+describe('how long a card lasts: shown, hidden (the key brings it back), gone', () => {
+  type Where = 'shown' | 'hidden' | 'gone';
+  /** Shown in the popover; hidden with the key in the address (it comes back); or gone, values with it. */
+  const whereIs = (t: ReturnType<typeof setup>, id: number): Where => {
+    if (t.assist.cardFor('n1')?.id === id) return 'shown';
+    const offered = t.host.offer.mock.calls.filter(([nodeId]) => nodeId === 'n1').at(-1)?.[1] === true;
+    if (!offered) return 'gone';
+    t.assist.reopen('w1', 'n1');
+    return t.assist.cardFor('n1')?.id === id ? 'hidden' : 'gone';
+  };
+  const nav = async (t: ReturnType<typeof setup>, url: string, initiator: unknown) => {
+    t.page.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator });
+    t.page.emit('did-navigate', {}, url, 200);
+    await flush();
+    await flush();
+  };
+
+  it.each<[string, (t: ReturnType<typeof setup>, id: number) => Promise<unknown> | unknown, Where]>([
+    ['a minute unused: it hides', (t) => t.timers.advance(SAVE_CARD_MS), 'hidden'],
+    ['just under a minute: still shown', (t) => t.timers.advance(SAVE_CARD_MS - 1), 'shown'],
+    ['while you’re in it, it stays', async (t, id) => (await t.assist.answer('w1', id, 'hold'), t.timers.advance(SAVE_CARD_MS * 3)), 'shown'],
+    ['…and once you leave it, a minute, then hidden', async (t, id) => (await t.assist.answer('w1', id, 'hold'), await t.assist.answer('w1', id, 'release'), t.timers.advance(SAVE_CARD_MS)), 'hidden'],
+    ['×: hidden', (t, id) => t.assist.answer('w1', id, 'close'), 'hidden'],
+    ['the candidate’s deadline (5 minutes from the typing): gone, shown or not', (t) => t.timers.advance(HOLD_MS), 'gone'],
+    ['…hidden first, then the deadline: gone', (t, id) => (t.assist.answer('w1', id, 'close'), t.timers.advance(HOLD_MS)), 'gone'],
+    ['Save: gone', (t, id) => t.assist.answer('w1', id, 'save', {}), 'gone'],
+    ['Never: gone', (t, id) => t.assist.answer('w1', id, 'never'), 'gone'],
+    ['passwords off for the chord, hidden: gone', (t, id) => (t.assist.answer('w1', id, 'close'), t.host.passwordsOn.mockReturnValue(false), t.assist.switched()), 'gone'],
+    ['the page goes on within the site (a link): still there', (t, id) => (t.assist.answer('w1', id, 'close'), nav(t, 'https://gist.github.com/ada', {})), 'hidden'],
+    ['leaving the site, hidden: gone', (t, id) => (t.assist.answer('w1', id, 'close'), nav(t, 'https://example.org/', {})), 'gone'],
+    ['a navigation of your own (the address bar, Back), even on the site: gone', (t, id) => (t.assist.answer('w1', id, 'close'), nav(t, 'https://github.com/settings', null)), 'gone'],
+    ['a sign-in there that failed: gone', (t, id) => (t.assist.answer('w1', id, 'close'), t.events.emit('failed', { contents: t.contents, formId: 'f1', kind: 'sign-in', origin: ORIGIN, why: 'still-shown' })), 'gone'],
+    ['the tab closing: gone', (t) => ((t.page.destroyed = true), t.page.emit('destroyed')), 'gone'],
+    ['its window closing: gone', (t) => t.assist.windowClosed('w1'), 'gone'],
+  ])('%s', async (_name, act, where) => {
     const t = setup();
     await t.signedIn();
     const card = t.assist.cardFor('n1')!;
     await act(t, card.id);
-    expect(t.assist.cardFor('n1') !== null).toBe(stays);
-    if (!stays) expect(t.assist.reveal('w1', card.id)).toBeNull();
+    await flush();
+    expect(whereIs(t, card.id)).toBe(where);
+    if (where === 'gone') expect(t.assist.reveal('w1', card.id)).toBeNull();
+  });
+
+  it('the deadline is the candidate’s, handed over by the tracker: a card made late gets what’s left of it, not 5 minutes more', async () => {
+    const t = setup();
+    t.timers.advance(1000);
+    await t.signedIn({ valuesUntil: 1000 + 60_000 });
+    const card = t.assist.cardFor('n1')!;
+    t.assist.answer('w1', card.id, 'close');
+    t.timers.advance(59_999);
+    expect(whereIs(t, card.id)).toBe('hidden');
+    t.timers.advance(1);
+    expect(whereIs(t, card.id)).toBe('gone');
+  });
+
+  it('a candidate already past its deadline makes no card', async () => {
+    const t = setup();
+    t.timers.advance(10_000);
+    await t.signedIn({ valuesUntil: 10_000 });
+    expect(t.assist.cardFor('n1')).toBeNull();
+  });
+
+  it('the key answers only its own window, and only a card that’s hidden', async () => {
+    const t = setup();
+    await t.signedIn();
+    const card = t.assist.cardFor('n1')!;
+    t.assist.reopen('w1', 'n1');
+    expect(t.host.offer).not.toHaveBeenCalled();
+    await t.assist.answer('w1', card.id, 'close');
+    t.assist.reopen('w2', 'n1');
+    expect(t.assist.cardFor('n1')).toBeNull();
+    t.assist.reopen('w1', 'n1');
+    expect(t.assist.cardFor('n1')?.id).toBe(card.id);
+  });
+
+  it('a private window keeps nothing: no card, no key', async () => {
+    const t = setup({ tab: { private: true } });
+    await t.signedIn();
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(t.host.offer).not.toHaveBeenCalled();
   });
 
   it('a newer card replaces the old one, and the old one’s password with it', async () => {
@@ -591,8 +673,10 @@ describe('a card is only for the page you’re on (security review of 0fdf159)',
     const saving = t.assist.answer('w1', card.id, 'save', {});
     await flush();
     expect(t.vault.askUnlock).toHaveBeenCalled();
-    // A minute passes (or the tab leaves the site) while you type the passphrase.
-    t.timers.advance(SAVE_CARD_MS);
+    // The tab leaves the site while you type the passphrase: the card goes, values with it.
+    t.page.emit('did-navigate', {}, 'https://example.org/', 200);
+    await flush();
+    await flush();
     expect(t.assist.cardFor('n1')).toBeNull();
     unlocked.open(true);
     await saving;
@@ -703,5 +787,24 @@ describe('a first step gets no password (general review of 37bd619)', () => {
     const fill = sent(t.page)[0]![1] as Record<string, unknown>;
     expect(fill['username']).toBe('ada@acme.dev');
     expect('password' in fill).toBe(withPassword);
+  });
+});
+
+describe('the menu and the cards at once (the owner, 2026-11-16)', () => {
+  it('a save card, its username typed over, stays as it was while a menu opens and closes: the same card, same id', async () => {
+    const t = setup();
+    await t.signedIn();
+    const card = t.assist.cardFor('n1')!;
+    // The menu's view is made the first time a sign-in field takes focus in the window, before the vault answers.
+    await t.focus();
+    expect(t.host.prepareMenu).toHaveBeenCalledWith('w1');
+    expect(t.assist.menuFor('w1')).not.toBeNull();
+    expect(t.assist.cardFor('n1')).toEqual(card);
+    t.key('Escape');
+    expect(t.assist.menuFor('w1')).toBeNull();
+    expect(t.assist.cardFor('n1')).toEqual(card);
+    // Saving afterwards takes the username as it was left in the card.
+    await t.assist.answer('w1', card.id, 'save', { username: 'ada.edited' });
+    expect(t.vault.saveCandidate).toHaveBeenCalledWith(expect.objectContaining({ username: 'ada.edited' }));
   });
 });

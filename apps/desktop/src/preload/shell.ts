@@ -61,6 +61,7 @@ const api: ShellApi = {
   defaultBrowser: { status: () => invoke('settings:defaultBrowser'), make: () => invoke('settings:makeDefaultBrowser') },
   share: { stop: (nodeId) => invoke('share:stop', { nodeId }) },
   tab: { reload: (nodeId) => invoke('tab:reload', { nodeId }) },
+  passwords: { reopen: (nodeId) => invoke('passwords:reopenCard', { nodeId }) },
   player: { act: (nodeId, action) => invoke('player:do', { nodeId, action }), view: () => invoke('player:view'), onState: (listener) => subscribe('player:state', listener) },
   media: {
     view: () => invoke('media:view'),
