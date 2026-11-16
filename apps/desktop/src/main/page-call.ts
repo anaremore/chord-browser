@@ -25,3 +25,22 @@ export function pageCall<T>(call: Promise<T>, fallback: T, ms = PAGE_CALL_MS): P
     );
   });
 }
+
+/** What a bounded call came to: its value, the error it failed with, or out of time (`pageCall`'s cases, told apart). */
+export type PageOutcome<T> = { ok: true; value: T } | { ok: false; error: string } | { ok: false; timedOut: true };
+
+export function pageOutcome<T>(call: Promise<T>, ms = PAGE_CALL_MS): Promise<PageOutcome<T>> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ms);
+    call.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve({ ok: true, value });
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        resolve({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      },
+    );
+  });
+}

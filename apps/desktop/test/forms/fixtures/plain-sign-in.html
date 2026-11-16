@@ -1,0 +1,10 @@
+<!doctype html>
+<!-- A plain form: username, password, a Sign in button, no autocomplete. -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<h1>Sign in to Example</h1>
+<form action="/session" method="post">
+  <label for="u">Username</label> <input id="u" name="login" data-chord-expect="username">
+  <label for="p">Password</label> <input id="p" name="pass" type="password" data-chord-expect="current-password">
+  <button>Sign in</button>
+</form>
+</body></html>

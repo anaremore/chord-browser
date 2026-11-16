@@ -63,6 +63,8 @@ import {
 } from '@chord/core';
 import { z } from 'zod';
 
+export * from './passwords';
+
 /**
  * `internal` is the Settings window; `archive` is the archive page (it alone sees archived tabs); `preview` draws hover
  * previews; `mini` is a mini window's bar; `reader` is a tab's reader view (it sees that tab's article and nothing else);

@@ -16,6 +16,9 @@
   },
   "include": [
     "test/e2e",
+    "test/forms",
+    "playwright.forms.config.ts",
+    "src/passwords",
     "test/fixtures",
     "test/packaged",
     "test/shots",

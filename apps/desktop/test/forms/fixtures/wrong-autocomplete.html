@@ -1,0 +1,10 @@
+<!doctype html>
+<!-- autocomplete=new-password on a sign-in form, as some sites have it (M0 section 4): the words win. -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<h2>Log in</h2>
+<form>
+  <input type="email" name="email" placeholder="Email" data-chord-expect="username">
+  <input type="password" name="password" placeholder="Password" autocomplete="new-password" data-chord-expect="current-password">
+  <button>Log in</button>
+</form>
+</body></html>

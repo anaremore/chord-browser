@@ -2,6 +2,13 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.10.2 · security · 2026-11-16
+
+0.10.1 was never published: its update comes in this release.
+
+- **Security.** Updates Electron to 45.3.2 (Chromium 156.0.8078.100), which fixes security issues in Chromium and the components it uses. Update as soon as you can.
+- **Thousands of pinned tabs stay quick.** Closing, pinning, moving or renaming a tab, deleting a chord and Undo no longer slow down as Pinned grows: with 5,000 pinned tabs, closing a tab went from about 170 ms to under 8.
+
 ## 0.10.1 · security · 2026-11-15
 
 **Security.** Updates Electron to 45.3.2 (Chromium 156.0.8078.100), which fixes security issues in Chromium and the components it uses. Update as soon as you can.
