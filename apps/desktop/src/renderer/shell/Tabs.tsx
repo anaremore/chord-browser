@@ -1616,7 +1616,7 @@ export function SidebarTabs({
   // The tab on screen came to a row of Pinned's that doesn't show (Pinned at its cap): pinned with its key, or
   // switched to with Ctrl+Tab or the command bar. Pinned scrolls to show it, as the keyboard's moves do. Not when the
   // chord's lists mount (they're where they were left), not mid-drag or with a row picked up, and not for a click on
-  // a row (it shows).
+  // one of Pinned's rows (it shows). A Today row clicked and then pinned is scrolled to: it lands at Pinned's end.
   const activeRow = activeId && !pinnedAt.has(activeId) ? (state.nodes[activeId]?.parentId ?? null) : activeId;
   const activeInPinned = activeRow !== null && pinnedAt.has(activeRow) ? activeRow : null;
   const revealed = useRef(activeInPinned);
@@ -1629,6 +1629,15 @@ export function SidebarTabs({
     if (activeInPinned === null || dragging || moving || (click?.id === activeInPinned && performance.now() - click.at < 1000)) return;
     pinnedWin.reveal(pinnedAt.get(activeInPinned)!);
   });
+
+  // A row picked up and moved with the keys stays in view in its list wherever main's move puts it: the move lands
+  // after its key, sometimes a render after the keyboard was put on the row where it was. Only when its place
+  // changes, so scrolling away with the wheel is left alone.
+  const movingAt = moving ? (pinnedAt.get(moving.id) ?? todayAt.get(moving.id)) : undefined;
+  const movingIn = moving && pinnedAt.has(moving.id) ? pinnedWin : win;
+  useLayoutEffect(() => {
+    if (movingAt !== undefined) movingIn.reveal(movingAt);
+  }, [moving?.id, movingAt]);
 
   // The keyboard asked for a row that wasn't mounted: now it is.
   useLayoutEffect(() => {
@@ -1740,8 +1749,9 @@ export function SidebarTabs({
       // A click drops a row picked up with the keyboard.
       onPointerDown={(e) => {
         if (moving) setMoving(null);
-        // A row clicked shows already: the tab it opens isn't scrolled to.
-        const id = (e.target as HTMLElement).closest<HTMLElement>('[data-row]')?.dataset['id'];
+        // A row of Pinned's clicked shows already: the tab it opens isn't scrolled to.
+        const row = (e.target as HTMLElement).closest<HTMLElement>('[data-row]');
+        const id = row && pinnedList.current?.contains(row) ? row.dataset['id'] : undefined;
         clicked.current = id ? { id, at: performance.now() } : null;
       }}
     >
