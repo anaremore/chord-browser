@@ -170,8 +170,25 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   let timer = 0;
   let trailing = 0;
   let focusSentAt = Number.NEGATIVE_INFINITY;
+  /** Whether the last scan saw `el` hidden (neither shown nor focusable): its form was classed without it, so it's stale now `el` has focus. */
+  const scannedHidden = (k: KnownForm, el: Element) => {
+    const rec = k.scanned.record.fields[k.scanned.elements.indexOf(el as HTMLElement)];
+    return !!rec && !rec.visible && !rec.focusable;
+  };
   const focusOn = (el: HTMLInputElement) => {
-    const k = knownFor(el);
+    let k = knownFor(el);
+    // A later step shown in place (a password field hidden until the username is in): classed again, as it is now.
+    if (k && scannedHidden(k, el)) {
+      if (performance.now() - scannedAt >= SCAN_GAP_MS) {
+        rescan();
+        k = byElement.get(el);
+      } else {
+        scanWanted = true;
+        pending = new WeakRef(el);
+        schedule();
+        k = undefined;
+      }
+    }
     const role = roleOf(k, el);
     focused = k && role && k.classified ? { ref: new WeakRef(el), formId: k.id, kind: k.classified.kind, role } : null;
   };
@@ -421,6 +438,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const left = k.scanned.elements.filter((el, i) => controlType(el) === 'password' && c.roles.has(k.scanned.record.fields[i]!.key) && usable(el) && (el !== pass || !p.password));
     if (left.length) return 'password';
     if (!user && !pass) return 'changed';
+    // Main sent a password: the form had one when the menu showed. One with none now (hidden since) changed.
+    if (p.password && !pass) return 'changed';
     if (user && !usable(user)) return 'changed';
     // A password field needs the password: main leaves it out only for a first step, which has none.
     if (pass && (!p.password || !usable(pass) || controlType(pass) !== 'password')) return 'changed';

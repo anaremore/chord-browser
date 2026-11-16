@@ -310,3 +310,42 @@ test('never half a fill: a password field the fill has no password for gets the 
     expect(values.join(''), name).toBe(written);
   }
 });
+
+test('hidden fields: a first step carrying a hidden password field, and a hidden duplicate of the fields', async ({ page }) => {
+  const { password: _password, ...noPassword } = FILL;
+  // A first step whose next step's password field is in the page, hidden: username-only, filled without a password.
+  let a = await open(
+    page,
+    '<div id="step"><input id="u" type="email" name="email" autocomplete="username" aria-label="Email"><input id="p" type="password" name="password" style="display:none"><button type="button">Next</button></div>',
+  );
+  await page.focus('#u');
+  await a.settle();
+  expect((await a.of('focus')).at(-1)).toMatchObject({ kind: 'username-only', role: 'username' });
+  await a.clear();
+  await fill(page, noPassword);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: true }]);
+  expect(await page.inputValue('#u')).toBe('ada@example.com');
+  // The next step shown in place: the password field, focused, is classed as it is now.
+  await page.evaluate(() => {
+    (document.getElementById('u') as HTMLElement).style.display = 'none';
+    (document.getElementById('p') as HTMLElement).style.display = '';
+  });
+  await a.clear();
+  await page.focus('#p');
+  await a.settle();
+  expect((await a.of('focus')).at(-1)).toMatchObject({ kind: 'sign-in', role: 'current-password' });
+
+  // A hidden copy of the sign-in fields before the shown ones, with the same autocomplete: the shown pair has the roles.
+  a = await open(
+    page,
+    '<div hidden><input id="uc" type="email" autocomplete="username"><input id="pc" type="password" autocomplete="current-password"></div>' +
+      '<div><input id="u" type="email" autocomplete="username webauthn" aria-label="Email or phone"><input id="p" type="password" autocomplete="current-password" aria-label="Password"><button>Sign in</button></div>',
+  );
+  await page.focus('#u');
+  await a.settle();
+  expect((await a.of('focus')).at(-1)).toMatchObject({ kind: 'sign-in', role: 'username' });
+  await a.clear();
+  await fill(page, FILL);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: true }]);
+  expect(await page.evaluate(() => ['u', 'p', 'uc', 'pc'].map((id) => (document.getElementById(id) as HTMLInputElement).value))).toEqual(['ada@example.com', 'secret pass', '', '']);
+});

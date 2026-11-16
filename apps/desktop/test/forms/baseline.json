@@ -1,6 +1,6 @@
 {
   "corpus": "duckduckgo/duckduckgo-autofill@4d5848619462c863d6bb7553cb090fc74b172be2",
-  "rightFiles": 394,
+  "rightFiles": 393,
   "scoredFiles": 458,
   "failures": {
     "reddit_signup.html": [
@@ -30,6 +30,9 @@
     ],
     "hackernews_login_signup.html": [
       "3 password password#-[pw] → new-password"
+    ],
+    "samash_checkout.html": [
+      "1 password password#customer-password[password] → none"
     ],
     "containerstore_forgot_password.html": [
       "0 username email#email-password-update[emailAddress] → none"

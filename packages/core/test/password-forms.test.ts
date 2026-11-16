@@ -95,6 +95,69 @@ describe('ids a framework generated say nothing', () => {
   });
 });
 
+/** A field you can neither see nor reach (`display: none`, a later step's, a template's). */
+const HIDDEN = { visible: false, focusable: false } as const;
+
+describe('hidden fields don’t take roles meant for visible ones', () => {
+  it.each<[string, PasswordFormRecord, PasswordFormKind | null, Record<string, PasswordFieldRole>]>([
+    [
+      'a hidden duplicate of the sign-in fields, first: the shown pair takes the roles',
+      form([
+        f('email', { id: 'u-hidden', autocomplete: 'username', label: 'Email or phone', ...HIDDEN }),
+        f('password', { id: 'p-hidden', autocomplete: 'current-password', label: 'Password', ...HIDDEN }),
+        f('email', { id: 'u', autocomplete: 'username webauthn', label: 'Email or phone' }),
+        f('password', { id: 'p', autocomplete: 'current-password', label: 'Password' }),
+      ]),
+      'sign-in',
+      { u: 'username', p: 'current-password' },
+    ],
+    [
+      'the same without autocomplete: the shown pair, by reach',
+      form([f('email', { id: 'u-hidden', label: 'Email', ...HIDDEN }), f('password', { id: 'p-hidden', label: 'Password', ...HIDDEN }), f('email', { id: 'u', label: 'Email' }), f('password', { id: 'p', label: 'Password' })], { submits: ['Sign in'] }),
+      'sign-in',
+      { u: 'username', p: 'current-password' },
+    ],
+    [
+      'a hidden field keeps a role no shown field claims (autocomplete over visibility, as Chromium)',
+      form([f('text', { id: 'u-hidden', autocomplete: 'username', ...HIDDEN }), f('text', { id: 'other' }), f('password', { id: 'p', label: 'Password' })]),
+      'sign-in',
+      { 'u-hidden': 'username', p: 'current-password' },
+    ],
+    [
+      'a hidden password beside a shown one: the shown one, as before',
+      form([user(), f('password', { id: 'p-hidden', ...HIDDEN }), f('password', { id: 'p', label: 'Password' })], { submits: ['Log in'] }),
+      'sign-in',
+      { username: 'username', p: 'current-password' },
+    ],
+    [
+      'a form hidden whole (a later "set a password" step): classed as it will be shown',
+      form([f('password', { id: 'new', autocomplete: 'new-password', label: 'New password', ...HIDDEN }), f('password', { id: 'confirm', autocomplete: 'new-password', label: 'Confirm new password', ...HIDDEN })], { submits: ['Save password'] }),
+      'sign-up',
+      { new: 'new-password', confirm: 'confirmation-password' },
+    ],
+    [
+      'a shown placeholder over a hidden real password field: still a sign-in (no first step to make of it)',
+      form([user(), f('text', { id: 'pw-placeholder' }), f('password', { id: 'real', label: '', ...HIDDEN })]),
+      'sign-in',
+      { username: 'username', real: 'current-password' },
+    ],
+    [
+      'the same form shown: a new password and its confirmation',
+      form([f('password', { id: 'new', autocomplete: 'new-password', label: 'New password' }), f('password', { id: 'confirm', autocomplete: 'new-password', label: 'Confirm new password' })], { submits: ['Save password'] }),
+      'sign-up',
+      { new: 'new-password', confirm: 'confirmation-password' },
+    ],
+    [
+      'hidden honeypot and code fields beside a sign-in get no role',
+      form([user(), pw(), f('text', { name: 'hp_field', ...HIDDEN }), f('text', { id: 'code', label: 'Code', autocomplete: 'off', ...HIDDEN })], { submits: ['Log in'] }),
+      'sign-in',
+      { username: 'username', password: 'current-password' },
+    ],
+  ])('%s', (_name, record, kind, roles) => {
+    expect(classify(record)).toEqual({ kind, roles });
+  });
+});
+
 describe('vetoes', () => {
   it.each<[string, PasswordFormRecord, Record<string, PasswordFieldRole>]>([
     ['a search field before the password is passed over', form([user(), f('search', { name: 'q' }), pw()]), { username: 'username', password: 'current-password' }],
@@ -141,6 +204,9 @@ describe('the username-only first step', () => {
     ['a confirmation code and Continue', form([f('text', { name: 'email_confirmation_code', label: 'Code' })], { submits: ['Continue'] }), false],
     ['a read-only decoy password beside it doesn\'t stop it', form([f('email', { name: 'email', autocomplete: 'username' }), pw('hiddenPassword', { readOnly: true })], { submits: ['Continue'] }), true],
     ['a real password beside it makes it a sign-in form instead', form([f('email', { name: 'email', autocomplete: 'username' }), pw()], { submits: ['Continue'] }), false],
+    ['a hidden password field beside it (a later step’s) doesn’t stop it', form([f('email', { name: 'email', autocomplete: 'username' }), pw('password', HIDDEN)], { submits: ['Next'], title: 'Sign in' }), true],
+    ['nor two hidden ones', form([f('email', { name: 'email' }), pw('a', HIDDEN), pw('b', HIDDEN)], { submits: ['Next'] }), true],
+    ['a hidden password you typed in is a password', form([f('email', { name: 'email', autocomplete: 'username' }), pw('p', { ...HIDDEN, userTyped: true })], { submits: ['Next'] }), false],
   ])('%s', (_name, record, onlyUsername) => {
     expect(classifyPasswordForm(record, 'filling')?.kind === 'username-only').toBe(onlyUsername);
   });

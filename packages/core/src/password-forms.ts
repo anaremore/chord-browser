@@ -175,6 +175,34 @@ export function formKind(form: PasswordFormRecord): Exclude<PasswordFormKind, 'u
 /** A password field you could type in: not vetoed, and not a read-only or unreachable decoy (`hiddenPassword`). */
 const usablePassword = (f: PasswordField, vetoed: ReadonlySet<PasswordField>) => f.type === 'password' && !vetoed.has(f) && (!f.readOnly || f.userTyped || f.autofilled) && (f.visible || f.focusable || f.userTyped);
 
+/** A field you can neither see nor reach, and never typed in or had filled: a template, a decoy, a later step's. */
+const hidden = (f: PasswordField) => !f.visible && !f.focusable && !f.userTyped && !f.autofilled;
+
+/** The `autocomplete` tokens that name a credential's role. */
+const ROLE_TOKENS: ReadonlySet<string> = new Set(['username', 'current-password', 'new-password']);
+/**
+ * The fields the parser may give a role, less a hidden one whose `autocomplete` token a shown field also carries (a
+ * page with a hidden duplicate of its sign-in fields, the hidden copy first): the shown one takes the role. A hidden
+ * field still takes a role no shown field claims (Chromium's "autocomplete mark-up overrides visibility").
+ */
+function withoutHiddenRivals(fields: readonly PasswordField[]): PasswordField[] {
+  const shownTokens = new Set(fields.filter((f) => !hidden(f)).flatMap(autocompleteTokens));
+  return fields.filter((f) => !hidden(f) || !autocompleteTokens(f).some((t) => ROLE_TOKENS.has(t) && shownTokens.has(t)));
+}
+
+/**
+ * A form whose every `type=password` field is hidden, read as having none: a two-step sign-in whose first step carries
+ * the next step's password field, hidden. Taken only when that makes it a username-only first step, so main sends it
+ * no password; any other form keeps its hidden passwords (a form hidden whole, a modal not yet open, is classed as it
+ * will be shown, and a shown placeholder over a hidden real password field stays a sign-in).
+ */
+function asFirstStep(form: PasswordFormRecord, mode: ParseMode, options: ClassifyOptions): PasswordFormClassification | null {
+  const passwords = form.fields.filter((f) => f.type === 'password');
+  if (!passwords.length || !passwords.every(hidden)) return null;
+  const c = classifyPasswordForm({ ...form, fields: form.fields.filter((f) => f.type !== 'password') }, mode, options);
+  return c?.kind === 'username-only' ? c : null;
+}
+
 /** Whether the parse's username was only the nearest field: no `autocomplete`, no saved value, and no word saying username. */
 const nearestOnly = (f: PasswordField) => !saysUsername(f) && !isEmailish(f) && !USERNAMEISH.test(fieldText(f)) && matchWords(DDG_USERNAME, f.label) !== 'yes';
 
@@ -186,7 +214,9 @@ const nearestOnly = (f: PasswordField) => !saysUsername(f) && !isEmailish(f) && 
 export function classifyPasswordForm(form: PasswordFormRecord, mode: ParseMode, options: ClassifyOptions = {}): PasswordFormClassification | null {
   // Vetoed fields leave the parse altogether, so Chromium's nearest-field rule passes over them.
   const vetoed = passwordVetoes(form.fields);
-  const candidates = form.fields.filter((f) => !vetoedAsUsername(f) && !vetoed.has(f));
+  const firstStep = asFirstStep(form, mode, options);
+  if (firstStep) return firstStep;
+  const candidates = withoutHiddenRivals(form.fields).filter((f) => !vetoedAsUsername(f) && !vetoed.has(f));
   let parsed = parsePasswordForm(candidates, mode, { storedUsernames: options.storedUsernames }).form;
   // Chromium's HTML-based username can be an email after the passwords: "Email address" holds one of its technical
   // words, `laddress`. Chord takes the predictions before the first password then. A username field there stays
