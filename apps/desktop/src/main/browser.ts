@@ -372,7 +372,7 @@ export class Browser {
       host: {
         tabOf: (contents) => {
           const nodeId = this.tabOfPage.get(contents);
-          const node = nodeId ? this.store.state.nodes[nodeId] : undefined;
+          const node = nodeId ? nodeOf(this.store.state, nodeId) : undefined;
           if (!nodeId || node?.kind !== 'tab') return null;
           const windowId = this.windowShowing(nodeId);
           if (!windowId) return null;
