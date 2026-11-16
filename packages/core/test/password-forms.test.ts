@@ -93,6 +93,30 @@ describe('ids a framework generated say nothing', () => {
   ])('%s', (_name, record, roles) => {
     expect(classify(record).roles).toEqual(roles);
   });
+
+  // The second of two password fields, by its own words alone: a 2 after a password's word is a confirmation's.
+  it.each<[string, Partial<PasswordField>]>([
+    ['pass 2', { name: 'pass 2' }],
+    ['pw2', { name: 'pw2' }],
+    ['passwd2', { name: 'passwd2' }],
+    ['confirm-password-2', { name: 'confirm-password-2' }],
+    ['Passwort 2', { label: 'Passwort 2' }],
+    ['Kennwort2', { name: 'Kennwort2' }],
+    ['Contraseña 2', { label: 'Contraseña 2' }],
+    ['Mot de passe 2', { label: 'Mot de passe 2' }],
+  ])('%s is a confirmation', (_name, over) => {
+    const record = form([user(), pw('first', { label: '' }), pw('second', { label: '', ...over })], { submits: ['Register'] });
+    expect(classify(record).roles).toEqual({ username: 'username', first: 'new-password', [over.name ?? 'second']: 'confirmation-password' });
+  });
+
+  it.each<[string, string, PasswordFieldRole]>([
+    // JSF's colon ids name the field: the words stay (its "retype" makes it a new password's).
+    ['a JSF id keeps its words', 'form:retypePassword:input', 'new-password'],
+    ['a React id says nothing', 'form:r2:', 'current-password'],
+  ])('%s', (_name, id, role) => {
+    const record = form([user(), f('password', { id, label: '' })], { submits: ['Log in'] });
+    expect(classify(record).roles[id]).toBe(role);
+  });
 });
 
 /** A field you can neither see nor reach (`display: none`, a later step's, a template's). */

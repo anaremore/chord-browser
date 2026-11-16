@@ -76,11 +76,12 @@ export interface ClassifyOptions {
 /** registerForm, sign_in, login-form → separate words, so `\b` matches. */
 const spaced = (s: string) => s.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_./?=&#-]+/g, ' ');
 /**
- * An id a framework made up, which says nothing about the field: React's `useId` (`:r2:`, `«r2»`, and since
- * React 19.2 `_r_2_`; `R` where rendered on the server). Spaced, `_r_2_` reads as the word `2`.
+ * An id React's `useId` made up, which says nothing about the field: `:r2:` (React 18), `«r2»` (19.0, 19.1) and
+ * `_r_2_` (19.2), with `R` where rendered on the server, then a base-32 counter (0-9, a-v). Spaced, `_r_2_` reads as
+ * the word `2`. Only that format: a JSF id's segments (`form:retypePassword:input`) are words.
  */
-const GENERATED_ID = /:[rR][0-9a-zA-Z]*:|«[rR][0-9a-zA-Z]*»|_[rR]_[0-9a-zA-Z]+_/g;
-/** A field's own words: its name, id (less what a framework generated), label and placeholder. */
+const GENERATED_ID = /:[rR][0-9a-v]+:|«[rR][0-9a-v]+»|_[rR]_[0-9a-v]+_/g;
+/** A field's own words: its name, id (less what React generated), label and placeholder. */
 const fieldText = (f: PasswordField) => spaced(`${f.name} ${f.id.replace(GENERATED_ID, ' ')} ${f.label} ${f.placeholder}`);
 
 const SIGN_IN = /\b(sign|log)[ -]?(in|on)\b|\blogin\b|\bsignin\b|\banmelden\b|iniciar sesi|connexion|se connecter|\baccedi\b|\bentrar\b|inloggen|logga in/i;
@@ -98,9 +99,11 @@ const NOT_PASSWORD = /\banswer|secret (question|word)|security (question|word)|\
 const PIN = /\bpin\b|pin ?code/i;
 /**
  * Chromium's two-password guess when both are empty: a form whose own words say "confirm" holds a new password and its confirmation.
- * A 2 counts only after a password's word (`password2`, `pwd_2`): alone it's any counter, as in a React id like `_r_2_`.
+ * A 2 counts only after a password's word, in the languages the vocabulary reads (`password2`, `pwd_2`, `Passwort 2`,
+ * `Kennwort2`, `Contraseña 2`, `Mot de passe 2`): alone it's any counter, as in a React id like `_r_2_`.
  */
-const CONFIRM_WORDS = /confirm|repeat|re-?type|re-?enter|again|verify|\bconf\b|\b(pass(word)?|pwd?|pw) ?2\b/i;
+const CONFIRM_WORDS =
+  /confirm|repeat|re-?type|re-?enter|again|verify|\bconf\b|\b(pass(word|wd|wort)?|pwd?|kennwort|contrase(ñ|n)a|clave|mot de passe|wachtwoord|l(ö|o)senord|senha|parola d'ordine) ?2\b/i;
 
 const isEmailish = (f: PasswordField) => f.type === 'email' || /e-?mail/i.test(`${f.name} ${f.id} ${f.autocomplete} ${f.label}`) || matchWords(DDG_EMAIL, f.label) === 'yes';
 const autocompleteTokens = (f: PasswordField) => f.autocomplete.split(/\s+/).filter(Boolean);

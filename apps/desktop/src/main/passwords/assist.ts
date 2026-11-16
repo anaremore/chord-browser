@@ -118,8 +118,12 @@ interface Menu {
   readonly doc: number;
   readonly formId: string;
   readonly role: string;
-  /** The form's kind: a first step (`username-only`) has no password field, so no password is sent to it. */
-  readonly kind: string;
+  /**
+   * The form's kind, as the agent last said (a `focus` or `forms` for this form): a first step (`username-only`) has
+   * no password field, so no password is sent to it. Read when you pick, not when the menu opened: a page that shows
+   * its password field once the email has focus is a sign-in by then.
+   */
+  kind: string;
   rect: MenuAnchor['rect'];
   zoom: number;
   readonly host: string;
@@ -193,6 +197,8 @@ export class PasswordAssist {
   /** A press on a window's menu: the blur it causes doesn't close it, until then. */
   private readonly grace = new Map<WindowId, { until: number; contents: WebContents }>();
   private readonly docs = new WeakMap<WebContents, number>();
+  /** Each page's forms' kinds, from the agent's last `forms` (until its next document). */
+  private readonly kinds = new WeakMap<WebContents, ReadonlyMap<string, string>>();
   private readonly cards = new Map<string, Card>();
   private readonly guards = new Map<WebContents, KeyGuard>();
 
@@ -207,6 +213,16 @@ export class PasswordAssist {
     events.on('signedIn', (e) => void this.signedIn(e));
     // A sign-in there that failed: what an earlier one left to save is no longer what you use.
     events.on('failed', (e) => this.dropCardsOf(e.contents));
+    events.on('forms', (e) => {
+      const kinds = new Map(e.forms.map((f) => [f.formId, f.kind] as const));
+      this.kinds.set(e.contents, kinds);
+      const menu = this.menuOf(e.contents);
+      const kind = menu && kinds.get(menu.formId);
+      if (!menu || !kind || kind === menu.kind) return;
+      // Now a form the menu isn't for (a sign-up's): it goes.
+      if (!MENU_KINDS.has(kind)) this.close(menu);
+      else menu.kind = kind;
+    });
     events.on('filled', (e) => {
       if (e.ok) return;
       // Half a fill, refused: the detector and the page disagree about the form. Said without a value, an origin or a field.
@@ -229,6 +245,7 @@ export class PasswordAssist {
     });
     contents.on('did-navigate', (_event, url) => {
       this.docs.set(contents, (this.docs.get(contents) ?? 0) + 1);
+      this.kinds.delete(contents);
       this.closeMenuOf(contents);
       // A new document numbers its forms from f1 again: "not again in this form" was the last page's.
       this.quiet.delete(contents);
@@ -256,8 +273,11 @@ export class PasswordAssist {
       if (open) this.close(open);
       return;
     }
-    // The menu's field moved (a scroll, a zoom): the menu follows it.
+    // A focus is newer than any `forms` before it: its kind is the form's now.
+    this.kinds.set(e.contents, new Map(this.kinds.get(e.contents)).set(e.formId, e.kind));
+    // The menu's field moved (a scroll, a zoom), or its form's kind changed: the menu follows it.
     if (open && open.formId === e.formId) {
+      open.kind = e.kind;
       open.rect = e.rect;
       open.zoom = e.zoomFactor;
       host.changed(open.tab.windowId);
@@ -293,7 +313,8 @@ export class PasswordAssist {
       doc,
       formId: e.formId,
       role: e.role,
-      kind: e.kind,
+      // A `forms` that came while the vault answered is newer than the focus.
+      kind: this.kinds.get(e.contents)?.get(e.formId) ?? e.kind,
       rect: pending.rect,
       zoom: pending.zoom,
       host: hostOf(e.origin),
@@ -423,11 +444,13 @@ export class PasswordAssist {
     if (contents.isDestroyed() || (this.docs.get(contents) ?? 0) !== menu.doc) return;
     const frame = contents.mainFrame as FrameRef | null;
     if (!sameFrame(frame, menu.frame) || frame?.origin !== menu.origin || typeof frame.send !== 'function') return;
+    // The kind as it is now (the menu closed when you picked; a `forms` since still counts).
+    const kind = this.kinds.get(contents)?.get(menu.formId) ?? menu.kind;
     const fill: PasswordsFill = {
       formId: menu.formId,
       username: account.username,
       // A first step has no password field: the password stays in main.
-      ...(menu.kind === 'username-only' ? {} : { password }),
+      ...(kind === 'username-only' ? {} : { password }),
       highlight: { color: host.accent(menu.tab.nodeId) ?? 'Highlight', ms: durations.fillHighlight, stagger: durations.stagger, easing: easing.standard },
     };
     frame.send(PASSWORDS_FILL, fill);

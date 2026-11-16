@@ -349,3 +349,69 @@ test('hidden fields: a first step carrying a hidden password field, and a hidden
   expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: true }]);
   expect(await page.evaluate(() => ['u', 'p', 'uc', 'pc'].map((id) => (document.getElementById(id) as HTMLInputElement).value))).toEqual(['ada@example.com', 'secret pass', '', '']);
 });
+
+test('a one-step sign-in that shows its password field when the email takes focus: a fresh focus says sign-in, and a pick fills both', async ({ page }) => {
+  const a = await open(
+    page,
+    '<form id="f"><input id="u" type="email" name="email" aria-label="Email"><input id="p" type="password" name="password" aria-label="Password" style="display:none"><button>Log in</button></form>',
+  );
+  // The page's own script: the password field shows once the email has focus.
+  await page.evaluate(() => document.getElementById('u')!.addEventListener('focus', () => ((document.getElementById('p') as HTMLElement).style.display = '')));
+  await a.clear();
+  await page.focus('#u');
+  await a.settle();
+  const focus = await a.of('focus');
+  // The last word main has: a sign-in now (main reads it when you pick), the email still the username.
+  expect(focus.at(-1)).toMatchObject({ formId: 'f1', kind: 'sign-in', role: 'username' });
+  expect((await a.of('forms')).at(-1)?.['forms']).toEqual([expect.objectContaining({ formId: 'f1', kind: 'sign-in' })]);
+  await a.clear();
+  await fill(page, FILL);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: true }]);
+  expect(await page.inputValue('#u')).toBe('ada@example.com');
+  expect(await page.inputValue('#p')).toBe('secret pass');
+});
+
+test('main sent a password and the form has none now: refused as changed, nothing written', async ({ page }) => {
+  const a = await open(page, SIGN_IN);
+  await page.evaluate(() => document.getElementById('p')!.remove());
+  await a.clear();
+  await fill(page, FILL);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: false, reason: 'changed' }]);
+  expect(await page.inputValue('#u')).toBe('');
+});
+
+test('a field hidden at the last scan, focused within the scan gap: classed again once, at the next flush', async ({ page }) => {
+  body = `<!doctype html><html><head><meta charset="utf-8"><title>Test</title></head><body><form id="f"><input id="u" type="email" name="email" aria-label="Email"><input id="p" type="password" name="password" aria-label="Password" style="display:none"><button>Log in</button></form></body></html>`;
+  await page.goto(`${ORIGIN}/page`);
+  // Count the agent's scans: each reads the document's controls once.
+  await page.evaluate(() => {
+    const qsa = Document.prototype.querySelectorAll;
+    (globalThis as unknown as { scans: number }).scans = 0;
+    Document.prototype.querySelectorAll = function (this: Document, selector: string) {
+      if (selector === 'input, select, textarea') (globalThis as unknown as { scans: number }).scans++;
+      return qsa.call(this, selector);
+    } as typeof qsa;
+  });
+  await page.addScriptTag({ content: script });
+  await page.evaluate(() => (globalThis as unknown as { chordAgentTest: AgentTest }).chordAgentTest.start());
+  const a = api(page);
+  await a.settle();
+  await a.clear();
+  const scans = () => page.evaluate(() => (globalThis as unknown as { scans: number }).scans);
+  const before = await scans();
+  await page.evaluate(() => {
+    // A field the agent doesn't know yet: a scan now, so the next focus is within the gap.
+    const extra = document.createElement('input');
+    extra.id = 'extra';
+    document.body.append(extra);
+    extra.focus();
+    const p = document.getElementById('p') as HTMLElement;
+    p.style.display = '';
+    p.focus();
+    // Still focused, and still neither shown nor focusable to the next scan: the re-class must not run again each frame.
+    p.style.visibility = 'hidden';
+  });
+  // Many frames: one scan for the new field, one for the focus's re-class, and none after.
+  for (let i = 0; i < 5; i++) await a.settle();
+  expect((await scans()) - before).toBe(2);
+});
