@@ -10,6 +10,9 @@
  * - focus reports the field's role and box; a sign-in that navigates to a page without the
  *   form is `signedIn`, one that shows the form again is `failed`; a formless sign-in whose
  *   form goes after its `fetch` is `signedIn`, with the request's status as a hint;
+ * - a show-password toggle and a "Forgot password?" button aren't submits, and one submit
+ *   (a click that submits the form) is one `submitted`;
+ * - a sign-in form inside a frame gets no agent and sends nothing (phase 1 is the main frame);
  * - a forged message (an origin or a value in the payload) is refused;
  * - **no event carries a value**: the username and password typed never reach main.
  */
@@ -20,6 +23,8 @@ import { failOnMainErrors } from './main-errors';
 failOnMainErrors();
 
 const USER = 'ada@example.com';
+/** Longer than main waits after a page stops loading to decide a sign-in (saving.ts, SETTLE_MS). */
+const SETTLE_WAIT_MS = 2000;
 const SECRET = 'correct horse battery staple';
 
 const signIn = (action: string) =>
@@ -39,6 +44,14 @@ const PAGES = {
     '<button id="go" type="button">Log in</button></div>' +
     "<script>document.getElementById('go').addEventListener('click', async () => { const r = await fetch('/api/session', { method: 'POST' }); await r.text(); document.getElementById('box').remove(); });</script>",
   '/api/session': '{"ok":true}',
+  // A show-password toggle and a help button in the form, beside its submit button.
+  '/toggle':
+    '<title>Log in</title><h1>Log in</h1><form action="/welcome" method="post">' +
+    '<input id="u" name="email" type="email" aria-label="Email">' +
+    '<span class="field"><input id="p" name="password" type="password" aria-label="Password"><button id="eye" type="button" aria-label="Show password">\u{1F441}</button></span>' +
+    '<button id="forgot" type="button">Forgot password?</button><button id="go">Log in</button></form>',
+  // The only sign-in form is in a same-origin frame.
+  '/framed': '<title>Framed</title><p>A page with a frame.</p><iframe id="frame" src="/plain" width="600" height="400"></iframe>',
 };
 
 interface Hooks {
@@ -119,6 +132,32 @@ test('passwords: the agent wakes only on sign-in pages, adds nothing, and tells 
     const all = await events(app);
     expect(all.find((e) => e['type'] === 'submitted')).toMatchObject({ signal: 'button' });
     expect(all.find((e) => e['type'] === 'signedIn')).toMatchObject({ how: 'form-gone', hint: 'response-ok' });
+
+    // A show-password toggle and "Forgot password?" aren't submits; the form's own button is, once.
+    await clear(app);
+    await page.goto(`${site.origin}/toggle`);
+    await page.fill('#u', USER);
+    await page.fill('#p', SECRET);
+    await page.click('#eye');
+    await page.click('#forgot');
+    await page.waitForTimeout(500);
+    expect(await types(app)).not.toContain('submitted');
+    await page.click('#go');
+    await page.waitForURL(/\/welcome$/);
+    await expect.poll(() => types(app), { timeout: 10_000 }).toContain('signedIn');
+    expect((await types(app)).filter((t) => t === 'submitted')).toEqual(['submitted']);
+
+    // A sign-in form in a frame: no agent in the page (its preload doesn't run in frames), nothing reported.
+    await clear(app);
+    await page.goto(`${site.origin}/framed`);
+    const frame = page.frameLocator('#frame');
+    await frame.locator('#u').fill(USER);
+    await frame.locator('#p').fill(SECRET);
+    await frame.locator('#p').press('Enter');
+    await expect(frame.locator('p')).toHaveText('Signed in.');
+    await page.waitForTimeout(SETTLE_WAIT_MS);
+    expect(await inAgentWorld(app, `${site.origin}/framed`, 'typeof chordPasswords')).toBe('undefined');
+    expect(await events(app)).toEqual([]);
 
     // Forged payloads from the agent's own world: an origin of the page's choosing, a value. Both refused.
     await page.goto(`${site.origin}/plain`);

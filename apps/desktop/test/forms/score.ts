@@ -10,7 +10,8 @@
  * - *password.current* is the current password; *password.new* is the new one or its confirmation.
  * - A plain *password* takes the variant its file's name implies (a `_login` file's is
  *   current; a sign-up's, change's or reset's is new), or any password elsewhere.
- * - *emailAddress* is right as anything but a password.
+ * - *emailAddress* is right as anything but a password, and as the username only in a file with a
+ *   credential: one with a password or a username-first step. A newsletter's email is no username.
  * - Every other label must get no role.
  */
 import type { PasswordFieldRole } from '@chord/core';
@@ -47,8 +48,8 @@ const PASSWORD_ROLES: ReadonlySet<PasswordFieldRole | null> = new Set(['current-
 const isPassword = (role: PasswordFieldRole | null) => PASSWORD_ROLES.has(role);
 const isNew = (role: PasswordFieldRole | null) => role === 'new-password' || role === 'confirmation-password';
 
-/** Whether a labelled field's role is right. */
-export function fieldRight(label: string, role: PasswordFieldRole | null, type: FileType): boolean {
+/** Whether a labelled field's role is right. `credential`: its file has a password or username field labelled. */
+export function fieldRight(label: string, role: PasswordFieldRole | null, type: FileType, credential = true): boolean {
   switch (label) {
     case 'username':
       return role === 'username';
@@ -61,7 +62,7 @@ export function fieldRight(label: string, role: PasswordFieldRole | null, type: 
     case 'password':
       return type === 'login' ? role === 'current-password' : type === 'signup' || type === 'change' ? isNew(role) : isPassword(role);
     case 'emailAddress':
-      return !isPassword(role);
+      return !isPassword(role) && (credential || role !== 'username');
     default:
       return role === null;
   }
@@ -95,22 +96,23 @@ export function scoreCorpus(files: readonly ScoredFile[]): CorpusScore {
   const failures: Record<string, string[]> = {};
   for (const file of files) {
     const type = fileType(file.html);
+    const credential = [...file.fields, ...file.missing].some((f) => isCredential(f.label));
     const wrong: string[] = [];
     let strictOk = true;
     for (const f of file.fields) {
       fields++;
-      if (!fieldRight(f.label, f.role, type)) wrong.push(failureLine(f));
-      if (f.label === 'username OR emailAddress' ? f.role !== 'username' : !fieldRight(f.label, f.role, type)) strictOk = false;
+      if (!fieldRight(f.label, f.role, type, credential)) wrong.push(failureLine(f));
+      if (f.label === 'username OR emailAddress' ? f.role !== 'username' : !fieldRight(f.label, f.role, type, credential)) strictOk = false;
     }
     for (const m of file.missing) {
       fields++;
       // A label the scan never took is right only if it wanted no role.
-      if (!fieldRight(m.label, null, type)) wrong.push(failureLine({ ...m, field: '(not scanned)', role: null }));
+      if (!fieldRight(m.label, null, type, credential)) wrong.push(failureLine({ ...m, field: '(not scanned)', role: null }));
       if (isCredential(m.label)) strictOk = false;
     }
     wrongFields += wrong.length;
     if (wrong.length) failures[file.html] = wrong;
-    if ([...file.fields, ...file.missing].some((f) => isCredential(f.label))) {
+    if (credential) {
       scoredFiles++;
       if (!wrong.length) rightFiles++;
       if (strictOk) rightFilesStrict++;

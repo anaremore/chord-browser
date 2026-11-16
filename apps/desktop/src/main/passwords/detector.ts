@@ -13,6 +13,9 @@
  *   (`event.senderFrame.origin`), never a word from the payload. Every payload is checked
  *   against @chord/ipc's strict schemas and a size limit; none carries a field's value.
  * - **Private windows** fill and never save (S17 §7): `signedIn` and `failed` never fire there.
+ * - **A page can't flood main:** each page's messages pass a token bucket (`MESSAGE_RATE`) before
+ *   anything is parsed; the excess is dropped without a word. The agent sends far fewer: focus
+ *   and blur at most once a frame, one candidate per submit.
  *
  * Events (`events`): `focus`, `blur`, `submitted`, `signedIn`, `failed`. Nothing here logs a
  * payload: a refused message is dropped without a word.
@@ -32,6 +35,28 @@ import { SETTLE_MS, SubmissionTracker, type SavingOutcome } from './saving';
 
 /** The sentinel's registration id on each session. */
 export const SENTINEL_ID = 'chord-passwords';
+
+/**
+ * Each page's messages to the detector: `burst` at once, then `perSecond`. A person focusing fields
+ * and signing in sends a few a second; a page moving focus in a loop is held to this.
+ */
+export const MESSAGE_RATE = { perSecond: 20, burst: 10 } as const;
+
+/** A token bucket: `take()` says whether one more message may pass now. */
+export function tokenBucket(now: () => number, { perSecond, burst }: { perSecond: number; burst: number } = MESSAGE_RATE): { take(): boolean } {
+  let tokens = burst;
+  let last = now();
+  return {
+    take() {
+      const t = now();
+      tokens = Math.min(burst, tokens + ((t - last) / 1000) * perSecond);
+      last = t;
+      if (tokens < 1) return false;
+      tokens -= 1;
+      return true;
+    },
+  };
+}
 
 export interface PasswordsFocusEvent extends PasswordsFocus {
   readonly contents: WebContents;
@@ -71,6 +96,12 @@ export interface PasswordDetector {
   attachSession(profileId: string, session: Session, isPrivate: boolean): void;
   /** A tab's page, as its webContents is made: the only pages the agent's channels answer. */
   attachPage(contents: WebContents): void;
+  /**
+   * Any other webContents on a chord's session (Peek, a pop-up, an extension's page), as it's made: the
+   * sentinel runs there too, and its ask for the agent gets nothing rather than "no handler". A tab's
+   * page attached later replaces this.
+   */
+  attachOther(contents: WebContents): void;
   /** Turns detection on or off for these chords' profiles, or for every one (and every one made later) when none are named. */
   setEnabled(on: boolean, profileIds?: readonly string[]): void;
   isEnabled(profileId: string): boolean;
@@ -148,9 +179,13 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       }
     };
 
+    contents.ipc.removeHandler(PASSWORDS_AGENT_SOURCE);
     contents.ipc.handle(PASSWORDS_AGENT_SOURCE, async (event) => (allowed(event) ? await source() : null));
+    // One bucket for the page, whichever channel: checked before a message is sized or parsed.
+    const bucket = tokenBucket(now);
     const on = <C extends PasswordsAgentChannel>(channel: C, handle: (message: PasswordsAgentMessage<C>, origin: string, event: IpcMainEvent) => void) => {
       contents.ipc.on(`passwords:${channel}`, (event, raw: unknown) => {
+        if (!bucket.take()) return;
         const origin = allowed(event);
         const message = origin ? checkMessage(channel, raw) : null;
         if (origin && message) handle(message, origin, event);
@@ -172,10 +207,19 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       emit(tracker.navigationStarted(!!details.initiator));
     });
     contents.on('did-navigate', (_event, _url, code) => emit(tracker.navigated(code)));
+    // A navigation that never commits (an aborted one, a download, a 204, a mailto: link): back to waiting on the form.
+    contents.on('did-fail-load', (_event, _code, _description, _url, isMainFrame) => {
+      if (isMainFrame) emit(tracker.navigationFailed());
+    });
+    contents.on('did-fail-provisional-load', (_event, _code, _description, _url, isMainFrame) => {
+      if (isMainFrame) emit(tracker.navigationFailed());
+    });
     contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
       if (isMainFrame) emit(tracker.navigatedInPage());
     });
     contents.on('did-stop-loading', () => {
+      // Loading stopped with nothing committed (a 204, a download): the navigation decided nothing.
+      if (tracker.navigating) return void emit(tracker.navigationFailed());
       if (!tracker.settling) return;
       if (settleTimer) clearTimeout(settleTimer);
       settleTimer = setTimeout(() => {
@@ -198,6 +242,13 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       apply(entry);
     },
     attachPage,
+    attachOther(contents) {
+      try {
+        contents.ipc.handle(PASSWORDS_AGENT_SOURCE, () => null);
+      } catch {
+        // A handler already: a tab's page.
+      }
+    },
     setEnabled(on, profileIds) {
       if (!profileIds) {
         everyone = on;

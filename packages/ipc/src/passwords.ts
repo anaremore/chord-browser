@@ -9,6 +9,7 @@
  * is refused whole. The save card's phase adds one optional `values` field to
  * `PasswordsCandidate`, under its own review.
  */
+import { PASSWORDS_MAX_FORMS } from '@chord/core';
 import { z } from 'zod';
 
 /** The channels, by the agent's own name for each (the sentinel prefixes `passwords:`). */
@@ -61,7 +62,8 @@ export const PasswordsForms = z.strictObject({
         newPassword: PasswordsFieldSignature.nullable(),
       }),
     )
-    .max(50),
+    // 20 forms of at most ~650 bytes each: well under PASSWORDS_MESSAGE_MAX (a test holds it).
+    .max(PASSWORDS_MAX_FORMS),
 });
 export type PasswordsForms = z.infer<typeof PasswordsForms>;
 

@@ -913,6 +913,9 @@ Only what a real desktop can show; everything else above was measured.
 - **Private windows** never get `signedIn` or `failed`; the detector enforces it too.
 
 **How it differs from the plan:**
+- **No sign-in without a submit signal.** §6's table listed a navigation the page started after you used the form (`PROBABLE_FORM_SUBMISSION`) as a signal by itself. Review found that a link clicked after typing a password then read as a sign-in, so a navigation counts only after a submit signal, as §6 step 2 says. A navigation that never commits (a 204, a download, an aborted one) decides nothing.
+- **Rate limits.** The agent sends focus and blur at most once an animation frame, and one candidate per submit. Main holds each page to a token bucket (20 a second, a burst of 10), so a page moving focus in a loop can't flood main.
+- **The reappeared-form check matches a field by its type and its id or name.** A password field with neither can't be matched: a sign-in that shows such a form again reads as a success. A later refinement could match by position and type.
 - **Channels.** §8 named `focus`, `blur`, `candidate`, `gone` and `still`. Two were added: `forms` (each credential form's fields by type, id and name, which the reappeared-form check needs once the old page is gone) and `hint` (the PerformanceObserver's status). There's no `passwords:fill` yet: it's the menu's.
 - **The agent's bridge** is one function (`send`), not four; main sends the agent nothing yet.
 - **Vetoes:** a PIN typed as a password is the password where it's the form's only one (Qantas, Deutsche Bank and McGill sign in so). It isn't one beside another password field, or as one of several (gift cards). One-character password boxes are never passwords (§4).
@@ -921,7 +924,7 @@ Only what a real desktop can show; everything else above was measured.
 - **The username:** an email after the passwords (Chromium's HTML detector reads "Email address" as one of its technical words, `laddress`) is passed over for the username before them. A username field asked for after the passwords stays.
 
 **Measured:**
-- **The corpus**, in Playwright's Chromium (headless, Windows and Linux): **394 of 458 files wholly right (86.0%)**, and 82.1% counting *username OR emailAddress* as username only. M0's bake-off had 80.7% by that stricter count, and DuckDuckGo 83.2%. 89 of 2,476 labelled fields are wrong, and every one is in `baseline.json`. ⚠ The additions were tuned on the whole corpus, file by file through its failures; M0 also scored them on two halves, and this pass didn't.
+- **The corpus**, in Playwright's Chromium (headless, Windows and Linux): **394 of 458 files wholly right (86.0%)**, and 82.1% counting *username OR emailAddress* as username only. M0's bake-off had 80.7% by that stricter count, and DuckDuckGo 83.2%. 95 of 2,476 labelled fields are wrong, and every one is in `baseline.json`. An *emailAddress* field taken as the username counts as wrong in a file with no password or username field (a newsletter's). ⚠ The additions were tuned on the whole corpus, file by file through its failures; M0 also scored them on two halves, and this pass didn't.
 - **What's still wrong**, by kind:
   - DuckDuckGo labels hidden decoys too (reddit's `-prevent` copies, idme's hidden form);
   - a plain *password* label scored by its file's name, where the form's own words say otherwise (a sign-up form in a `_login` file);

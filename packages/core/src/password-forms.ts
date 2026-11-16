@@ -82,6 +82,7 @@ const SIGN_IN = /\b(sign|log)[ -]?(in|on)\b|\blogin\b|\bsignin\b|\banmelden\b|in
 const SIGN_UP = /\bsign[ -]?up\b|\bregist(er|ration|rieren)\b|create (an |your |a free |new |my )?account|\bjoin\b|get started|\bsignup\b|crear cuenta|cr[ée]er un compte|konto erstellen|new account|\benroll/i;
 const CHANGE = /change (your |the )?password|update (your |the )?password|current password|old password/i;
 const RESET = /reset (your |the )?password|(set|choose|create) (a )?new password|forgot/i;
+const NEWSLETTER = /newsletter|subscri|abonn|nieuwsbrief|bolet[ií]n|mailing list/i;
 const NEXT = /^\s*(next|continue|weiter|suivant|siguiente|continuar|volgende|avanti)\b/i;
 const USERNAMEISH = /user|login|e-?mail|account|ident|member|nick/i;
 const STRONG_USERNAME = /^(user(name|id|_?name)?|login(id|name)?|e-?mail|identifier|account(name)?|loginfmt)$/i;
@@ -250,5 +251,14 @@ export function classifyPasswordForm(form: PasswordFormRecord, mode: ParseMode, 
   const strong = saysUsername(f) || STRONG_USERNAME.test(f.id) || STRONG_USERNAME.test(f.name) || f.type === 'email' || /user|login|member|account|e-?mail/i.test(`${f.name} ${f.id}`);
   const nextButton = [...form.words.submits, ...form.words.buttons].some((b) => NEXT.test(b) || SIGN_IN.test(b));
   if (!looks || !(kind === 'sign-in' || saysUsername(f) || (strong && nextButton))) return null;
+  // A newsletter's email and its button ("Anmelden" is both sign in and subscribe) is no first step.
+  if (!saysUsername(f) && NEWSLETTER.test(spaced(`${form.words.headings.join(' ')} ${form.words.attrs} ${form.words.submits.join(' ')} ${fieldText(f)}`))) return null;
   return { kind: 'username-only', roles: new Map([[f.key, 'username']]), username: f, password: null, newPassword: null, confirmation: null };
 }
+
+/**
+ * The most credential forms the agent reports at once (`passwords:forms`). Each takes at most about
+ * 650 bytes as JSON (an id, a kind, three signatures of 20 + 80 + 80 characters), so 20 stay under
+ * the channel's 16 KB limit; a page with more has the first 20 checked.
+ */
+export const PASSWORDS_MAX_FORMS = 20;

@@ -544,6 +544,8 @@ if (!app.requestSingleInstanceLock()) {
   // keeps WebRTC to it (proxy.ts). Registered before any session exists: they fire from session.fromPartition on.
   app.on('session-created', (ses) => proxies.created(ses));
   app.on('web-contents-created', (_event, contents) => proxies.contentsCreated(contents));
+  // The passwords sentinel's ask for the agent gets an answer anywhere it runs; a tab's page then takes over (attachPage).
+  app.on('web-contents-created', (_event, contents) => passwords.attachOther(contents));
   // A site or proxy asking for a username and password: Chord's own box over the tab, or cancelled.
   app.on('login', (event, contents, details, info, callback) => {
     if (httpAuth.login(contents, details, info, callback)) event.preventDefault();

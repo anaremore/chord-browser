@@ -22,6 +22,7 @@ const signInForm = { formId: 'f1', kind: 'sign-in' as const, username, password,
 type Step =
   | ['candidate', Partial<PasswordsCandidate>?]
   | ['start', boolean]
+  | ['failedLoad']
   | ['navigated', number]
   | ['forms', PasswordsForms]
   | ['settled']
@@ -42,6 +43,9 @@ function run(steps: Step[]): string[] {
         break;
       case 'start':
         out.push(...t.navigationStarted(step[1]));
+        break;
+      case 'failedLoad':
+        out.push(...t.navigationFailed());
         break;
       case 'navigated':
         out.push(...t.navigated(step[1]));
@@ -80,7 +84,13 @@ describe('knowing you signed in (S17 §6)', () => {
     ['the new page shows a different sign-in form (another site\'s step): signed in', [['candidate'], ['start', true], ['navigated', 200], ['forms', formsWith([{ ...signInForm, password: { type: 'password', id: 'otp', name: 'code' } }])], ['settled']], ['submitted:submit', 'signedIn:navigation:-']],
     ['the next page is a first step with the same username field: still signed in', [['candidate'], ['start', true], ['navigated', 200], ['forms', formsWith([{ ...signInForm, kind: 'username-only', password: null }])], ['settled']], ['submitted:submit', 'signedIn:navigation:-']],
     ['an error response: failed', [['candidate'], ['start', true], ['navigated', 401]], ['submitted:submit', 'failed:error-response']],
-    ['typed, no submit signal, then the page navigates: that counts (PROBABLE_FORM_SUBMISSION)', [['candidate', { signal: 'blur' }], ['start', true], ['navigated', 200], ['settled']], ['submitted:navigation', 'signedIn:navigation:-']],
+    ['typed, no submit signal, then the page navigates (a link you clicked): no sign-in without a submit signal (S17 §6 step 2)', [['candidate', { signal: 'blur' }], ['start', true], ['navigated', 200], ['settled']], []],
+    ['…and the form is forgotten with the page it was on', [['candidate', { signal: 'blur' }], ['start', true], ['navigated', 200], ['candidate', { signal: 'submit', formId: 'f1' }], ['gone']], ['submitted:submit', 'signedIn:form-gone:-']],
+    ['one submit, several signals (Enter, then the form\'s submit, then a click): one `submitted`', [['candidate', { signal: 'enter' }], ['candidate', { signal: 'submit' }], ['candidate', { signal: 'button' }], ['start', true], ['navigated', 200], ['settled']], ['submitted:enter', 'signedIn:navigation:-']],
+    ['a navigation that never commits (a 204, a download, an aborted one), then the form goes: signed in', [['candidate'], ['start', true], ['failedLoad'], ['gone']], ['submitted:submit', 'signedIn:form-gone:-']],
+    ['…or the form stays: failed', [['candidate'], ['start', true], ['failedLoad'], ['still']], ['submitted:submit', 'failed:still-shown']],
+    ['…or the page then navigates for real', [['candidate'], ['start', true], ['failedLoad'], ['start', true], ['navigated', 200], ['settled']], ['submitted:submit', 'signedIn:navigation:-']],
+    ['a failed load with nothing under way changes nothing', [['candidate'], ['failedLoad'], ['gone']], ['submitted:submit', 'signedIn:form-gone:-']],
     ['typed, then you go elsewhere yourself: nothing', [['candidate', { signal: 'blur' }], ['start', false], ['navigated', 200], ['settled']], []],
     ['submitted, then you go elsewhere yourself before it navigates: nothing', [['candidate'], ['start', false], ['navigated', 200], ['settled']], ['submitted:submit']],
     ['no navigation, the form goes: signed in', [['candidate', { signal: 'button' }], ['gone']], ['submitted:button', 'signedIn:form-gone:-']],

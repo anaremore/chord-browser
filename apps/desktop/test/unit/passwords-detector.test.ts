@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { Session, WebContents } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
-import { checkMessage, createPasswordDetector, pageOrigin, SENTINEL_ID } from '../../src/main/passwords/detector';
+import { checkMessage, createPasswordDetector, MESSAGE_RATE, pageOrigin, SENTINEL_ID, tokenBucket } from '../../src/main/passwords/detector';
 import { SETTLE_MS } from '../../src/main/passwords/saving';
 
 interface Frame {
@@ -31,7 +31,11 @@ function fakeContents(session: ReturnType<typeof fakeSession>, origin = 'https:/
   const contents = new EventEmitter() as EventEmitter & Record<string, unknown>;
   const ipc = new EventEmitter() as EventEmitter & { handlers: Map<string, (event: unknown, ...args: unknown[]) => unknown>; handle(channel: string, fn: (event: unknown, ...args: unknown[]) => unknown): void };
   ipc.handlers = new Map();
-  ipc.handle = (channel, fn) => void ipc.handlers.set(channel, fn);
+  ipc.handle = (channel, fn) => {
+    if (ipc.handlers.has(channel)) throw new Error(`Attempted to register a second handler for '${channel}'`);
+    ipc.handlers.set(channel, fn);
+  };
+  (ipc as unknown as { removeHandler(channel: string): void }).removeHandler = (channel) => void ipc.handlers.delete(channel);
   Object.assign(contents, { id: 1, ipc, session, mainFrame: frame(origin), isDestroyed: () => false, getZoomFactor: () => 1.25 });
   /** A message from a frame (the main frame unless given), as Electron delivers it. */
   const send = (channel: string, payload: unknown, from: Frame = contents['mainFrame'] as Frame) => ipc.emit(channel, { senderFrame: from }, payload);
@@ -42,9 +46,9 @@ function fakeContents(session: ReturnType<typeof fakeSession>, origin = 'https:/
 const FOCUS = { formId: 'f1', kind: 'sign-in', role: 'username', rect: { x: 10, y: 20, width: 200, height: 30 } };
 const CANDIDATE = { formId: 'f1', kind: 'sign-in', signal: 'submit', username: { type: 'email', id: 'u', name: 'email' }, password: { type: 'password', id: 'p', name: 'password' }, newPassword: null, hasUsername: true, hasPassword: true };
 
-function setup({ isPrivate = false, on = true } = {}) {
+function setup({ isPrivate = false, on = true, clock = { t: 0 } } = {}) {
   const session = fakeSession();
-  const detector = createPasswordDetector({ preloadPath: '/out/preload/passwords.cjs', agentPath: '/out/main/passwords/agent.js', readAgent: async () => 'agent source', now: () => 0 });
+  const detector = createPasswordDetector({ preloadPath: '/out/preload/passwords.cjs', agentPath: '/out/main/passwords/agent.js', readAgent: async () => 'agent source', now: () => clock.t });
   detector.attachSession('p1', session as unknown as Session, isPrivate);
   if (on) detector.setEnabled(true);
   const page = fakeContents(session);
@@ -179,5 +183,65 @@ describe('events', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('a page that floods main', () => {
+  it('1,000 messages at once: only the burst gets through, and the rest are dropped without parsing', () => {
+    const clock = { t: 0 };
+    const { page, seen } = setup({ clock });
+    for (let i = 0; i < 1000; i++) page.send('passwords:focus', FOCUS);
+    expect(seen.length).toBe(MESSAGE_RATE.burst);
+  });
+
+  it('then the rate a second, whatever comes', () => {
+    const clock = { t: 0 };
+    const { page, seen } = setup({ clock });
+    for (let ms = 0; ms < 5000; ms += 1) {
+      clock.t = ms;
+      page.send('passwords:blur', { formId: 'f1' });
+    }
+    // The burst, then about 20 a second for 5 s.
+    expect(seen.length).toBeLessThanOrEqual(MESSAGE_RATE.burst + 5 * MESSAGE_RATE.perSecond);
+    expect(seen.length).toBeGreaterThanOrEqual(5 * MESSAGE_RATE.perSecond);
+  });
+
+  it('a page that sends a little is never held back', () => {
+    let t = 0;
+    const bucket = tokenBucket(() => t);
+    const passed = Array.from({ length: 50 }, () => ((t += 250), bucket.take())).filter(Boolean).length;
+    expect(passed).toBe(50);
+  });
+
+  it('each page has its own bucket', () => {
+    const one = setup();
+    for (let i = 0; i < 100; i++) one.page.send('passwords:focus', FOCUS);
+    const two = setup();
+    two.page.send('passwords:focus', FOCUS);
+    expect(two.seen.length).toBe(1);
+  });
+});
+
+describe('other pages on a chord\'s session', () => {
+  it('a page that isn\'t a tab gets nothing for its ask, and a tab attached after takes over', async () => {
+    const { detector, session } = setup();
+    const other = fakeContents(session);
+    detector.attachOther(other.contents);
+    expect(await other.invoke('passwords:agent')).toBeNull();
+    detector.attachPage(other.contents);
+    expect(await other.invoke('passwords:agent')).toBe('agent source');
+    // Attached twice over: no second handler error.
+    expect(() => detector.attachOther(other.contents)).not.toThrow();
+  });
+});
+
+describe('the forms message fits the channel', () => {
+  it('the most forms, each with the longest signatures, stay under the size limit', async () => {
+    const { PASSWORDS_MAX_FORMS } = await import('@chord/core');
+    const { PASSWORDS_MESSAGE_MAX } = await import('@chord/ipc');
+    const sig = { type: 't'.repeat(20), id: 'i'.repeat(80), name: 'n'.repeat(80) };
+    const forms = { forms: Array.from({ length: PASSWORDS_MAX_FORMS }, (_, i) => ({ formId: `f${100000 + i}`, kind: 'username-only', username: sig, password: sig, newPassword: sig })) };
+    expect(JSON.stringify(forms).length).toBeLessThan(PASSWORDS_MESSAGE_MAX);
+    expect(checkMessage('forms', forms)).not.toBeNull();
   });
 });

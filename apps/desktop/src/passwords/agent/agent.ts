@@ -8,17 +8,20 @@
  * What it tells main, through the bridge, never with a field's value:
  * - `forms`: the page's credential forms by their fields' type, id and name, after each scan
  *   that changes them (the reappeared-form check, S17 §6);
- * - `focus` / `blur`: a sign-in field took or lost focus, with its box (the menu, later);
- * - `candidate`: a form you typed a password in, at a submit signal or as you left the field;
+ * - `focus` / `blur`: a sign-in field took or lost focus, with its box (the menu, later). At
+ *   most once an animation frame, the last state only: a page that moves focus in a loop
+ *   sends one message a frame, not one a call (main limits each page's rate as well);
+ * - `candidate`: a form you typed a password in, once per submit signal or as you left the field;
  * - `gone` / `still`: after a submit signal, whether the password field went within 10 s;
  * - `hint`: a request to the page's own origin finished after a submit signal, with its status.
  *
  * Values are read only to classify a form for saving (Chromium's saving mode compares them)
- * and to say whether the username and password are filled in. They stay in this world.
+ * and to say whether the username and password are filled in, from that form's own fields.
+ * They stay in this world.
  */
 import { classifyPasswordForm, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordFormKind } from '@chord/core';
 import type { PasswordsAgentChannel, PasswordsAgentMessage, PasswordsFieldSignature } from '@chord/ipc';
-import { controlType, formlessScope, isShown, scanDocument, type ScannedForm } from './scan';
+import { controlType, isShown, MAX_REPORTED_FORMS, scanDocument, SKIP_TYPES, submitButtonFor, type ScannedForm } from './scan';
 
 /** What the sentinel exposes in this world (contextBridge.exposeInIsolatedWorld). */
 export interface PasswordsBridge {
@@ -29,6 +32,8 @@ export interface PasswordsBridge {
 export const SUBMIT_WATCH_MS = 10_000;
 /** At most this many `hint`s per submit: the first few requests say enough. */
 const MAX_HINTS = 3;
+/** Submit signals for one form within this long are one submit: Enter, then the form's `submit`, then the click a browser makes. */
+const ONE_SUBMIT_MS = 1000;
 
 interface KnownForm {
   readonly id: string;
@@ -41,7 +46,8 @@ type FormKey = HTMLFormElement | Document;
 
 const signature = (f: PasswordField | null): PasswordsFieldSignature | null => (f ? { type: f.type.slice(0, 20), id: f.id.slice(0, 80), name: f.name.slice(0, 80) } : null);
 const isField = (el: EventTarget | null | undefined): el is HTMLInputElement => el instanceof HTMLInputElement;
-const SUBMIT_BUTTON = 'button, input[type=submit], input[type=button], input[type=image], [role=button]';
+/** A text-like field: never a checkbox, radio, button or file input, which never hold a credential. */
+const isTextField = (el: EventTarget | null | undefined): el is HTMLInputElement => isField(el) && !SKIP_TYPES.has(controlType(el));
 
 export interface AgentOptions {
   readonly document?: Document;
@@ -60,6 +66,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   let nextForm = 1;
   let known: KnownForm[] = [];
   let byElement = new WeakMap<Element, KnownForm>();
+  /** Fields a scan was run for already: one that isn't in any form isn't looked for again on each focus or keystroke. */
+  const lookedFor = new WeakSet<Element>();
   let lastForms = '';
   const stops: (() => void)[] = [];
 
@@ -77,7 +85,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     for (const k of known) for (const el of k.scanned.elements) byElement.set(el, k);
     const forms = known
       .filter((k) => k.classified)
-      .slice(0, 50)
+      .slice(0, MAX_REPORTED_FORMS)
       .map((k) => ({ formId: k.id, kind: k.classified!.kind, username: signature(k.classified!.username), password: signature(k.classified!.password), newPassword: signature(k.classified!.newPassword) }));
     const json = JSON.stringify(forms);
     if (json !== lastForms) {
@@ -86,67 +94,87 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     }
   }
 
-  const knownFor = (el: Element) => byElement.get(el) ?? (rescan(), byElement.get(el));
+  /** The known form of a field, scanning the page again the first time a field isn't known. */
+  const knownFor = (el: Element): KnownForm | undefined => {
+    const k = byElement.get(el);
+    if (k || lookedFor.has(el)) return k;
+    lookedFor.add(el);
+    rescan();
+    return byElement.get(el);
+  };
   const roleOf = (k: KnownForm | undefined, el: Element): PasswordFieldRole | undefined => {
     const i = k?.scanned.elements.indexOf(el as HTMLElement) ?? -1;
     return i >= 0 ? k!.classified?.roles.get(k!.scanned.record.fields[i]!.key) : undefined;
   };
 
-  // ----- Focus, and where the field is -----
+  // ----- Focus, and where the field is: once a frame, the last state only -----
   let focused: { ref: WeakRef<HTMLInputElement>; formId: string; kind: PasswordFormKind; role: PasswordFieldRole } | null = null;
+  /** What main was last told: the field it thinks has focus, or null after a blur. */
+  let told: { ref: WeakRef<HTMLInputElement>; formId: string } | null = null;
+  let moved = false;
   let frame = 0;
-  const reportFocus = () => {
+  const flush = () => {
     frame = 0;
     const el = focused?.ref.deref();
-    if (!focused || !el || !el.isConnected) return;
-    const r = el.getBoundingClientRect();
-    bridge.send('focus', { formId: focused.formId, kind: focused.kind, role: focused.role, rect: { x: r.left, y: r.top, width: r.width, height: r.height } });
+    if (focused && el && el.isConnected) {
+      // The same field again, unmoved: main knows already.
+      if (told?.ref.deref() === el && !moved) return;
+      const r = el.getBoundingClientRect();
+      bridge.send('focus', { formId: focused.formId, kind: focused.kind, role: focused.role, rect: { x: r.left, y: r.top, width: r.width, height: r.height } });
+      told = { ref: focused.ref, formId: focused.formId };
+    } else if (told) {
+      bridge.send('blur', { formId: told.formId });
+      told = null;
+    }
+    moved = false;
+  };
+  const schedule = () => {
+    if (!frame) frame = win.requestAnimationFrame(flush);
   };
   const onFocusIn = (event: FocusEvent) => {
     const el = event.composedPath()[0];
-    if (!isField(el)) return;
+    if (!isTextField(el)) return;
     const k = knownFor(el);
     const role = roleOf(k, el);
-    if (!k || !role || !k.classified) return void (focused = null);
-    focused = { ref: new WeakRef(el), formId: k.id, kind: k.classified.kind, role };
-    reportFocus();
+    focused = k && role && k.classified ? { ref: new WeakRef(el), formId: k.id, kind: k.classified.kind, role } : null;
+    schedule();
   };
   const onFocusOut = (event: FocusEvent) => {
     const el = event.composedPath()[0];
-    if (!isField(el)) return;
-    const k = byElement.get(el);
+    if (!isTextField(el)) return;
     if (focused && focused.ref.deref() === el) {
-      bridge.send('blur', { formId: focused.formId });
       focused = null;
+      schedule();
     }
-    // Leaving a password field you typed in: main holds the form in case the page navigates (S17 §6, step 1).
+    // Leaving a password field you typed in: main holds the form in case it's submitted next (S17 §6, step 1).
+    const k = byElement.get(el);
     if (k && el.type === 'password' && typed.has(el)) candidate(k, 'blur');
   };
   // Scroll and resize move the field: its box again, once a frame.
   const onMove = () => {
-    if (focused && !frame) frame = win.requestAnimationFrame(reportFocus);
+    if (!focused) return;
+    moved = true;
+    schedule();
   };
 
   // ----- Typing -----
   const onInput = (event: Event) => {
     const el = event.composedPath()[0];
-    if (!isField(el) || !event.isTrusted) return;
+    if (!isTextField(el) || !event.isTrusted) return;
     typed.add(el);
-    if (el.type === 'password' && !byElement.has(el)) rescan();
+    if (el.type === 'password') knownFor(el);
   };
 
   // ----- Submit signals (S17 §6, step 2) -----
-  /** The known form a submit signal from `el` belongs to: its `<form>`, or the formless fields whose scope holds it. */
-  const formFor = (el: Element): KnownForm | undefined => {
-    const form = (el as HTMLInputElement).form ?? el.closest('form');
-    if (form) return known.find((k) => k.scanned.form === form);
-    const formless = known.find((k) => k.scanned.form === null);
-    const password = formless?.scanned.elements.find((e) => controlType(e) === 'password');
-    const scope = password && formlessScope(password);
-    return scope?.contains(el) ? formless : undefined;
+  /** The known form a submit button belongs to: its `<form>`, or the formless fields whose scope holds it. */
+  const formOf = (button: Element): KnownForm | undefined => {
+    const form = (button as HTMLButtonElement).form ?? button.closest('form');
+    return form ? known.find((k) => k.scanned.form === form) : known.find((k) => k.scanned.form === null);
   };
+  const passwordOf = (k: KnownForm) => k.scanned.elements.find((e) => controlType(e) === 'password') ?? null;
   const hasTypedPassword = (k: KnownForm) => k.scanned.elements.some((e) => controlType(e) === 'password' && (typed.has(e) || filled.has(e)));
   const onSubmit = (event: Event) => {
+    if (!event.isTrusted) return;
     const form = event.composedPath()[0];
     if (form instanceof HTMLFormElement) {
       const k = known.find((x) => x.scanned.form === form);
@@ -156,7 +184,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Enter' || !event.isTrusted) return;
     const el = event.composedPath()[0];
-    if (!isField(el)) return;
+    if (!isTextField(el)) return;
     const k = byElement.get(el);
     if (k) candidate(k, 'enter');
   };
@@ -164,21 +192,26 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (!event.isTrusted) return;
     const target = event.composedPath()[0];
     if (!(target instanceof Element)) return;
-    const button = target.closest(SUBMIT_BUTTON);
-    const k = button && formFor(button);
-    if (k) candidate(k, 'button');
+    // A button that submits: in a <form>, its submit buttons; outside one, a button beside the fields.
+    // Never a show-password toggle, a "Forgot password?" or one that wraps the field (submitButtonFor).
+    const form = target.closest('form');
+    const k = form ? known.find((x) => x.scanned.form === form) : known.find((x) => x.scanned.form === null);
+    const button = k && submitButtonFor(target, passwordOf(k), k.scanned.form !== null);
+    if (k && button && formOf(button) === k) candidate(k, 'button');
   };
 
-  /** Recent candidates by form and signal: a submit sends `enter`, `submit` and a click within a moment, and main needs one. */
-  const sentAt = new Map<string, number>();
+  /** When each form's last submit signal was sent: one submit, however many events it makes, is one candidate. */
+  const submittedAt = new Map<string, number>();
   function candidate(k: KnownForm, signal: PasswordsAgentMessage<'candidate'>['signal']): void {
     if (!hasTypedPassword(k)) return;
-    const now = performance.now();
-    const last = sentAt.get(`${k.id} ${signal}`);
-    if (last !== undefined && now - last < 250) return;
-    sentAt.set(`${k.id} ${signal}`, now);
-    // Saving mode, with values, for this form only: they're compared here and never sent.
-    const fresh = scanDocument(doc, { values: true, typed, filled, keys, nextKey }).find((s) => s.form === k.scanned.form);
+    if (signal !== 'blur') {
+      const now = performance.now();
+      const last = submittedAt.get(k.id);
+      if (last !== undefined && now - last < ONE_SUBMIT_MS) return;
+      submittedAt.set(k.id, now);
+    }
+    // Saving mode, with values, for this form's own fields only: they're compared here and never sent.
+    const fresh = scanDocument(doc, { values: true, typed, filled, keys, nextKey, only: k.scanned.elements })[0];
     const saving = fresh ? classifyPasswordForm(fresh.record, 'saving') : null;
     const c = saving ?? k.classified;
     if (!c) return;
@@ -204,10 +237,11 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (!passwords.length) return;
     let done = false;
     let timer = 0;
-    const shown = () => passwords.some((r) => {
-      const el = r.deref();
-      return !!el && el.isConnected && isShown(el);
-    });
+    const shown = () =>
+      passwords.some((r) => {
+        const el = r.deref();
+        return !!el && el.isConnected && isShown(el);
+      });
     const check = () => {
       timer = 0;
       if (!done && !shown()) finish('gone');
@@ -275,7 +309,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   rescan();
   // A field focused before the agent woke (the sentinel wakes on that focus).
   const active = doc.activeElement;
-  if (isField(active)) onFocusIn({ composedPath: () => [active] } as unknown as FocusEvent);
+  if (isTextField(active)) onFocusIn({ composedPath: () => [active] } as unknown as FocusEvent);
 
   return () => {
     for (const stop of stops) stop();

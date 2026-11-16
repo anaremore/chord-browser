@@ -22,10 +22,13 @@ describe("the corpus's scoring (S17 §13 layer 2; M0 §4)", () => {
     ['emailAddress', 'login', 'username', true],
     ['emailAddress', 'login', null, true],
     ['emailAddress', 'login', 'current-password', false],
+    ['emailAddress', 'newsletter (no credential in the file)', 'username', false],
+    ['emailAddress', 'newsletter (no credential in the file)', null, true],
     ['firstName', 'signup', null, true],
     ['firstName', 'signup', 'username', false],
   ])('%s in a %s file as %s: %s', (label, type, role, right) => {
-    expect(fieldRight(label, role, type as ReturnType<typeof fileType>)).toBe(right);
+    const credential = !type.includes('no credential');
+    expect(fieldRight(label, role, (credential ? type : 'other') as ReturnType<typeof fileType>, credential)).toBe(right);
   });
 
   it.each([

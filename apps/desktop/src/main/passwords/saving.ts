@@ -4,13 +4,16 @@
  * Electron), so every path is unit-tested; detector.ts feeds it.
  *
  * A form is held when you typed a password in it (a `candidate`), for at most 5 minutes, in
- * memory only. Then, after a submit signal or a navigation the page started:
+ * memory only. Then, after a submit signal (the form's `submit`, Enter, its button; without one
+ * there's no sign-in, S17 §6 step 2), and the navigation the page started if any:
  * - **it worked** if the page navigated with a response under 400 and, once the new page had
  *   settled, it doesn't show a form with the same password field (Chromium's reappeared-form
  *   check, inline in `OnPasswordFormsRendered`); or, with no navigation, if the password field
  *   went or was hidden while the agent watched (`gone`);
  * - **it failed** if the same form is still there or back (`still`, or reappeared), or the
  *   response was an error. The form stays held in case you correct the password.
+ * - **neither** if the navigation never committed (a 204, a download, an aborted one): the form
+ *   stays submitted, and its `gone` or `still` decides.
  * A request to the page's own origin seen after the submit (`hint`, the PerformanceObserver;
  * M0 Q7) goes along as a hint, never as the decision.
  *
@@ -23,7 +26,7 @@ export const HOLD_MS = 5 * 60_000;
 /** After the new page stops loading, how long its agent has to report its forms before the check runs. */
 export const SETTLE_MS = 1500;
 
-export type SubmitSignal = PasswordsCandidate['signal'] | 'navigation';
+export type SubmitSignal = Exclude<PasswordsCandidate['signal'], 'blur'>;
 export type ResponseHint = 'response-ok' | 'response-error' | null;
 
 export type SavingOutcome =
@@ -70,10 +73,14 @@ export class SubmissionTracker {
   candidate(candidate: PasswordsCandidate, origin: string): SavingOutcome[] {
     if (!candidate.hasPassword) return [];
     const before = this.current();
+    const same = before?.candidate.formId === candidate.formId && before.origin === origin;
     // A new candidate for the same form keeps its submit (`blur` then `submit`, or the other way round).
-    const submitted = candidate.signal !== 'blur' || (before?.candidate.formId === candidate.formId && before.origin === origin && before.submitted);
-    this.held = { candidate, origin, at: this.now(), submitted, status: before?.candidate.formId === candidate.formId ? before.status : null };
-    return candidate.signal === 'blur' ? [] : [{ type: 'submitted', formId: candidate.formId, kind: candidate.kind, origin, signal: candidate.signal }];
+    const already = same && before.submitted;
+    const submitted = candidate.signal !== 'blur' || already;
+    this.held = { candidate, origin, at: this.now(), submitted, status: same ? before.status : null };
+    // One submit is one `submitted`, however many signals it made.
+    if (candidate.signal === 'blur' || already) return [];
+    return [{ type: 'submitted', formId: candidate.formId, kind: candidate.kind, origin, signal: candidate.signal }];
   }
 
   hint(formId: string, status: number): void {
@@ -87,18 +94,25 @@ export class SubmissionTracker {
     return [];
   }
 
-  /** A main-frame navigation started. `byPage`: the page started it (not the address bar, a bookmark, Back). */
+  /**
+   * A main-frame navigation started. `byPage`: the page started it (not the address bar, a bookmark, Back).
+   * It's the sign-in's answer only after a submit signal: a link you clicked after typing a password isn't one.
+   */
   navigationStarted(byPage: boolean): SavingOutcome[] {
     const held = this.current();
-    if (!held || !byPage) {
-      // You went somewhere yourself: whatever was held belongs to the page you left.
-      if (!byPage) this.reset();
+    if (!byPage || !held?.submitted) {
+      // You went somewhere yourself, or the page did with nothing submitted: what was held belongs to the page left.
+      this.reset();
       return [];
     }
-    const out: SavingOutcome[] = held.submitted ? [] : [{ type: 'submitted', formId: held.candidate.formId, kind: held.candidate.kind, origin: held.origin, signal: 'navigation' }];
-    held.submitted = true;
     this.phase = { t: 'navigating', held };
-    return out;
+    return [];
+  }
+
+  /** The navigation ended without committing a document (a 204, a download, an aborted or failed one): nothing is decided by it. */
+  navigationFailed(): SavingOutcome[] {
+    if (this.phase.t === 'navigating') this.phase = { t: 'idle' };
+    return [];
   }
 
   /** The main frame committed a new document, with its HTTP response code (-1 for none, as `did-navigate` gives). */
@@ -159,6 +173,11 @@ export class SubmissionTracker {
   /** Whether a navigation's settle timer is wanted. */
   get settling(): boolean {
     return this.phase.t === 'settling';
+  }
+
+  /** Whether a navigation has started and not yet committed. */
+  get navigating(): boolean {
+    return this.phase.t === 'navigating';
   }
 
   reset(): void {

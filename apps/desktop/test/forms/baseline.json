@@ -54,6 +54,12 @@
     "fanfiction_signup.html": [
       "0 username text#-[penname] → none"
     ],
+    "thermoworks_checkout.html": [
+      "0 emailAddress email#email[email] → username"
+    ],
+    "iqgunder_guest_entry.html": [
+      "0 emailAddress email#-[-] → username"
+    ],
     "sunlife_login.html": [
       "2 password password#-[-] → none"
     ],
@@ -61,8 +67,14 @@
       "9 password password#password_input[password] → current-password",
       "10 username text#username[username] → none"
     ],
+    "eventbrite_fake-signup.html": [
+      "0 emailAddress email#buyer.N-email[buyer.N-email] → username"
+    ],
     "www_reddit_com_signup.html": [
       "4 username text#regUsername[username] → none"
+    ],
+    "mobile_emirates_com_signup.html": [
+      "3 emailAddress email#emailAddress[emailAddress] → username"
     ],
     "porkbun_com_login.html": [
       "0 username text#bypassTwoFactorEmailCode[-] → none"
@@ -103,6 +115,9 @@
     "admissions_sa_ucsb_edu_login.html": [
       "0 username text#PermWithCheckDigit[PermWithCheckDigit] → none",
       "1 unknown text#UcApplicationId[UcApplicationId] → username"
+    ],
+    "reg_ebay_com_au_signup.html": [
+      "2 emailAddress text#Email[Email] → username"
     ],
     "www_microfocus_com_signup.html": [
       "8 username (not scanned) → none",
@@ -184,6 +199,9 @@
     "namecheap_com-signup.html": [
       "2 password password#-[LoginPassword] → current-password",
       "3 username text#ctl00_ctl00_ctl00_ctl00_base_content_web_base_content_home_content_page_content_[ctl00$ctl00$ctl00$ctl00$base_content$web_base_content$home_content$page_content_] → none"
+    ],
+    "ikea_signup-verification.html": [
+      "0 emailAddress email#family-signup-form-email-pre-verification[email] → username"
     ],
     "amazon_change-password.html": [
       "0 password password#ap_password[password] → current-password"
