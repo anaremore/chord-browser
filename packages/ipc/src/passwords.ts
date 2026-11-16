@@ -4,12 +4,13 @@
  * page preload's badge, so every message is checked here and again in main against
  * the sender's frame (`event.senderFrame.origin`, never a payload's word).
  *
- * **No field values.** A field is named by its type, id and name, never what it holds.
- * Every object is strict, so a payload carrying anything else (a `value`, a `password`)
- * is refused whole. The save card's phase adds one optional `values` field to
- * `PasswordsCandidate`, under its own review.
+ * **Field values, once.** A field is named by its type, id and name, never what it holds,
+ * with one exception: a candidate sent at a submit signal carries the username and password
+ * typed (`values`), so the save card can save them (S17 §6, step 1). Never at a blur, never
+ * in any other message. Every object is strict, so a payload carrying anything else (a
+ * `value`, a `password`) is refused whole.
  */
-import { PASSWORDS_MAX_FORMS } from '@chord/core';
+import { PASSWORD_LIMITS, PASSWORDS_MAX_FORMS } from '@chord/core';
 import { z } from 'zod';
 
 /** The channels, by the agent's own name for each (the sentinel prefixes `passwords:`). */
@@ -76,10 +77,23 @@ export const PasswordsCandidate = z.strictObject({
   username: PasswordsFieldSignature.nullable(),
   password: PasswordsFieldSignature.nullable(),
   newPassword: PasswordsFieldSignature.nullable(),
-  /** Whether those hold something: what saving needs to know before it asks for a value. */
+  /** Whether those hold something. */
   hasUsername: z.boolean(),
   hasPassword: z.boolean(),
-});
+  /**
+   * What was typed, at a submit signal only (never `blur`): the username, and the password to save (the new one
+   * where the form has one). Within the vault's own limits; the agent leaves it out when a value isn't. Main holds
+   * it in memory until the save card is answered, closed or goes, and never logs it.
+   */
+  values: z
+    .strictObject({
+      username: z.string().max(PASSWORD_LIMITS.username),
+      password: z.string().min(1).max(PASSWORD_LIMITS.password),
+    })
+    .optional(),
+})
+  // Values only at a submit signal: a candidate sent as you leave the field carries none.
+  .refine((c) => c.signal !== 'blur' || c.values === undefined);
 export type PasswordsCandidate = z.infer<typeof PasswordsCandidate>;
 
 /** After a submit signal: the password field went, or was hidden, within the agent's watch. */

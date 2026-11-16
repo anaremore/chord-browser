@@ -1057,12 +1057,13 @@ if (!app.requestSingleInstanceLock()) {
       // Right-click menus are read, not shown: their labels, newest last, by page.
       const contextMenus = new Map<number, ObservedItem[]>();
       observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
-      // The password detector's events, as plain data (the page's contents by id), oldest first.
+      // The password detector's events, as plain data (the page's contents by id), oldest first. A sign-in's values
+      // aren't kept here: only whether it had them, so a test can't leak them by printing what it read.
       const passwordEvents: Record<string, unknown>[] = [];
       for (const type of ['focus', 'blur', 'submitted', 'signedIn', 'failed'] as const) {
-        passwordDetector.events.on(type, (event: { contents: Electron.WebContents; frame?: unknown }) => {
-          const { contents, frame: _frame, ...rest } = event;
-          passwordEvents.push({ type, contentsId: contents.id, ...rest });
+        passwordDetector.events.on(type, (event: { contents: Electron.WebContents; frame?: unknown; values?: unknown }) => {
+          const { contents, frame: _frame, values, ...rest } = event;
+          passwordEvents.push({ type, contentsId: contents.id, ...rest, ...(type === 'signedIn' ? { hasValues: Boolean(values) } : {}) });
         });
       }
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {

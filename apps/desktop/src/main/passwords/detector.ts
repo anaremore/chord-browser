@@ -11,8 +11,12 @@
  * - **Who's asking:** only a tab's page (`attachPage`), only its main frame (phase 1), only an
  *   `http:` or `https:` origin, and that origin is the sender frame's as Chromium reports it
  *   (`event.senderFrame.origin`), never a word from the payload. Every payload is checked
- *   against @chord/ipc's strict schemas and a size limit; none carries a field's value.
- * - **Private windows** fill and never save (S17 §7): `signedIn` and `failed` never fire there.
+ *   against @chord/ipc's strict schemas and a size limit.
+ * - **Values:** only a candidate sent at a submit signal carries what was typed (the username
+ *   and the password to save). The tracker holds them with the form, and they leave only on
+ *   `signedIn`, for the save card. Nothing here logs, echoes or stores them.
+ * - **Private windows** fill and never save (S17 §7): `signedIn` and `failed` never fire there,
+ *   and a candidate's values are dropped as it arrives.
  * - **A page can't flood main:** each page's messages pass a token bucket (`MESSAGE_RATE`) before
  *   anything is parsed; the excess is dropped without a word. Focus and blur have one bucket and
  *   the rest (`candidate`, `forms`, `gone`, `still`, `hint`) another, so a page busy with focus
@@ -210,7 +214,14 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       focusShown = false;
       events.emit('blur', { contents, formId: m.formId });
     });
-    on('candidate', (m, origin) => emit(tracker.candidate(m, origin)));
+    on('candidate', (m, origin) => {
+      // A private window never saves: what was typed there isn't even held.
+      if ((entryOf()?.isPrivate ?? true) && m.values) {
+        const { values: _values, ...rest } = m;
+        return emit(tracker.candidate(rest, origin));
+      }
+      emit(tracker.candidate(m, origin));
+    });
     on('forms', (m) => emit(tracker.forms(m)));
     on('gone', (m) => emit(tracker.gone(m.formId)));
     on('still', (m) => emit(tracker.still(m.formId)));

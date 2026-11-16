@@ -19,7 +19,12 @@
  * vetoes one: a sign-in script that got a 401 and showed "wrong password" didn't sign you in,
  * whatever the page does next.
  *
- * It never holds a field's value: candidates carry none (packages/ipc, passwords.ts).
+ * **Values.** A candidate sent at a submit signal carries what was typed (`values`: the
+ * username and the password to save). They're held here with the form, in memory only, and
+ * leave in one place: the `signedIn` that the save card is offered from. A sign-in that
+ * failed drops them (a corrected retry sends its own), and so does everything that forgets
+ * the form: a navigation of your own, the 5 minutes running out, the page going. A candidate
+ * sent as you leave the field never carries any.
  */
 import type { PasswordsCandidate, PasswordsFieldSignature, PasswordsForms } from '@chord/ipc';
 
@@ -29,15 +34,18 @@ export const HOLD_MS = 5 * 60_000;
 export const SETTLE_MS = 1500;
 
 export type SubmitSignal = Exclude<PasswordsCandidate['signal'], 'blur'>;
+/** What was typed in a sign-in that was submitted: the username, and the password to save. */
+export type CandidateValues = NonNullable<PasswordsCandidate['values']>;
 export type ResponseHint = 'response-ok' | 'response-error' | null;
 
 export type SavingOutcome =
   | { readonly type: 'submitted'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly signal: SubmitSignal }
-  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint }
+  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint; readonly values: CandidateValues | null }
   | { readonly type: 'failed'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly why: 'error-response' | 'reappeared' | 'still-shown' };
 
 interface Held {
-  readonly candidate: PasswordsCandidate;
+  /** The form as last reported; its `values` are the last submit's, dropped once a sign-in failed. */
+  candidate: PasswordsCandidate;
   /** The origin main read from the sender's frame when the candidate came. */
   readonly origin: string;
   readonly at: number;
@@ -73,6 +81,15 @@ const sameField = (held: PasswordsFieldSignature | null, shown: PasswordsFieldSi
 const vetoed = (held: Held) => held.error;
 
 const hintOf = (status: number | null): ResponseHint => (status === null ? null : status < 400 ? 'response-ok' : 'response-error');
+/** The candidate without what was typed. */
+const withoutValues = ({ values: _values, ...rest }: PasswordsCandidate): PasswordsCandidate => rest;
+/** A failed sign-in: the form stays held for a retry, its values don't. */
+const failedHeld = (held: Held) => {
+  held.submitted = false;
+  held.candidate = withoutValues(held.candidate);
+};
+/** The sign-in's values, as the save card takes them. */
+const valuesOf = (held: Held): CandidateValues | null => held.candidate.values ?? null;
 
 export class SubmissionTracker {
   private held: Held | null = null;
@@ -96,8 +113,10 @@ export class SubmissionTracker {
     const submitted = candidate.signal !== 'blur' || already;
     // A new submit (a corrected retry) starts afresh: the last attempt's 401 isn't this one's.
     const carry = same && (already || candidate.signal === 'blur');
+    // Values come only with a submit signal. A blur after one keeps the submit's.
+    const values = candidate.signal === 'blur' ? (already ? before?.candidate.values : undefined) : candidate.values;
     this.held = {
-      candidate,
+      candidate: values ? { ...withoutValues(candidate), values } : withoutValues(candidate),
       origin,
       at: this.now(),
       submitted,
@@ -159,7 +178,7 @@ export class SubmissionTracker {
     const { held } = this.phase;
     if (code >= 400) {
       this.phase = { t: 'idle' };
-      held.submitted = false;
+      failedHeld(held);
       return [{ type: 'failed', formId: held.candidate.formId, kind: held.candidate.kind, origin: held.origin, why: 'error-response' }];
     }
     this.phase = { t: 'settling', held, forms: null };
@@ -175,11 +194,11 @@ export class SubmissionTracker {
     // The same password field shown again, in a form that isn't a first step: the sign-in didn't take.
     const reappeared = (forms ?? []).some((f) => f.kind !== 'username-only' && (sameField(c.password ?? c.newPassword, f.password) || sameField(c.newPassword ?? c.password, f.newPassword)));
     if (reappeared || vetoed(held)) {
-      held.submitted = false;
+      failedHeld(held);
       return [{ type: 'failed', formId: c.formId, kind: c.kind, origin: held.origin, why: reappeared ? 'reappeared' : 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status) }];
+    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status), values: valuesOf(held) }];
   }
 
   /** The main frame navigated within its document (`did-navigate-in-page`): an SPA's route change. */
@@ -202,11 +221,11 @@ export class SubmissionTracker {
     const how = this.phase.t === 'same-document' ? 'same-document' : 'form-gone';
     this.phase = { t: 'idle' };
     if (vetoed(held)) {
-      held.submitted = false;
+      failedHeld(held);
       return [{ type: 'failed', formId, kind: held.candidate.kind, origin: held.origin, why: 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status) }];
+    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status), values: valuesOf(held) }];
   }
 
   /** After a submit signal, the form was still shown at the end of the agent's watch. */
@@ -220,7 +239,7 @@ export class SubmissionTracker {
     }
     if (this.phase.t === 'settling') return [];
     this.phase = { t: 'idle' };
-    held.submitted = false;
+    failedHeld(held);
     return [{ type: 'failed', formId, kind: held.candidate.kind, origin: held.origin, why: 'still-shown' }];
   }
 

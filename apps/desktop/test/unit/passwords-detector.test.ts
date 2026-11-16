@@ -130,12 +130,19 @@ describe('payloads', () => {
     ['too many forms', 'forms', { forms: Array.from({ length: 51 }, (_, i) => ({ formId: `f${i}`, kind: 'sign-in', username: null, password: null, newPassword: null })) }],
     ['a status that isn\'t HTTP\'s', 'hint', { formId: 'f1', status: 42 }],
     ['not an object', 'gone', 'f1'],
+    ['values with a blur (they come only with a submit signal)', 'candidate', { ...CANDIDATE, signal: 'blur', values: { username: 'ada', password: 'hunter2' } }],
+    ['a username longer than the vault keeps', 'candidate', { ...CANDIDATE, values: { username: 'x'.repeat(501), password: 'hunter2' } }],
+    ['a password longer than the vault keeps', 'candidate', { ...CANDIDATE, values: { username: 'ada', password: 'x'.repeat(1001) } }],
+    ['an empty password', 'candidate', { ...CANDIDATE, values: { username: 'ada', password: '' } }],
+    ['anything else beside the values', 'candidate', { ...CANDIDATE, values: { username: 'ada', password: 'hunter2', origin: 'https://bank.example' } }],
   ])('refuses %s', (_name, channel, payload) => {
     expect(checkMessage(channel as 'focus', payload)).toBeNull();
   });
 
   it('takes a well-formed one', () => {
     expect(checkMessage('candidate', CANDIDATE)).toEqual(CANDIDATE);
+    const withValues = { ...CANDIDATE, values: { username: 'ada@example.com', password: 'hunter2' } };
+    expect(checkMessage('candidate', withValues)).toEqual(withValues);
     expect(checkMessage('focus', FOCUS)).toEqual(FOCUS);
   });
 
@@ -168,6 +175,24 @@ describe('events', () => {
     page.send('passwords:candidate', CANDIDATE);
     page.send('passwords:still', { formId: 'f1' });
     expect(seen.map(([t]) => t)).toEqual(['submitted', 'submitted']);
+  });
+
+  it('a sign-in that worked carries what was typed, for the save card; nothing before it does', () => {
+    const { page, seen } = setup();
+    const values = { username: 'ada@example.com', password: 'hunter2' };
+    page.send('passwords:candidate', { ...CANDIDATE, values });
+    page.send('passwords:gone', { formId: 'f1' });
+    expect(seen.map(([t]) => t)).toEqual(['submitted', 'signedIn']);
+    expect(JSON.stringify(seen[0]![1])).not.toContain('hunter2');
+    expect(seen[1]![1]).toMatchObject({ values });
+  });
+
+  it("a private window's values are dropped as they arrive, and nothing is signed in", () => {
+    const { page, seen } = setup({ isPrivate: true });
+    page.send('passwords:candidate', { ...CANDIDATE, values: { username: 'ada@example.com', password: 'hunter2' } });
+    page.send('passwords:gone', { formId: 'f1' });
+    expect(seen.map(([t]) => t)).toEqual(['submitted']);
+    expect(JSON.stringify(seen)).not.toContain('hunter2');
   });
 
   it('a navigation you started yourself forgets the form', () => {

@@ -19,11 +19,13 @@
  * - `gone` / `still`: after a submit signal, whether the password field went within 10 s;
  * - `hint`: a request to the page's own origin finished after a submit signal, with its status.
  *
- * Values are read only to classify a form for saving (Chromium's saving mode compares them)
- * and to say whether the username and password are filled in, from that form's own fields.
- * They stay in this world.
+ * Values are read to classify a form for saving (Chromium's saving mode compares them) and to
+ * say whether the username and password are filled in, from that form's own fields. They
+ * leave this world once per submit: the candidate sent at a submit signal carries the
+ * username and the password to save (`values`), so the save card can keep them. A candidate
+ * sent as you leave a field carries none, and nothing else ever does.
  */
-import { classifyPasswordForm, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordFormKind } from '@chord/core';
+import { classifyPasswordForm, PASSWORD_LIMITS, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordFormKind } from '@chord/core';
 import type { PasswordsAgentChannel, PasswordsAgentMessage, PasswordsFieldSignature } from '@chord/ipc';
 import { activeElementOf, controlType, isShown, MAX_REPORTED_FORMS, scanDocument, SKIP_TYPES, submitButtonFor, type ScannedForm } from './scan';
 
@@ -289,7 +291,13 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const saving = fresh ? classifyPasswordForm(fresh.record, 'saving') : null;
     const c = saving ?? k.classified;
     if (!c) return;
-    const hasValue = (f: PasswordField | null) => !!f && !!fresh?.record.fields.find((x) => x.key === f.key)?.value;
+    const valueOf = (f: PasswordField | null) => (f ? (fresh?.record.fields.find((x) => x.key === f.key)?.value ?? '') : '');
+    const hasValue = (f: PasswordField | null) => valueOf(f) !== '';
+    // At a submit signal: what to save, the new password where the form has one. Left out when it can't be saved.
+    const username = valueOf(c.username);
+    const password = valueOf(c.newPassword ?? c.password);
+    const values =
+      signal !== 'blur' && password && password.length <= PASSWORD_LIMITS.password && username.length <= PASSWORD_LIMITS.username ? { username, password } : undefined;
     bridge.send('candidate', {
       formId: k.id,
       kind: c.kind,
@@ -299,6 +307,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       newPassword: signature(c.newPassword),
       hasUsername: hasValue(c.username),
       hasPassword: hasValue(c.password) || hasValue(c.newPassword),
+      ...(values ? { values } : {}),
     });
     if (signal !== 'blur') watch(k, fresh);
   }

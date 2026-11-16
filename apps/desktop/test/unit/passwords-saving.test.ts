@@ -131,6 +131,53 @@ describe('knowing you signed in (S17 §6)', () => {
     t.candidate(candidate(), 'https://real.example');
     t.navigationStarted(true);
     t.navigated(200);
-    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null }]);
+    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null, values: null }]);
+  });
+});
+
+describe('what was typed (values): held for the save card, never longer', () => {
+  const typed = { username: 'ada@example.com', password: 'correct horse' };
+  const signedInValues = (outcomes: SavingOutcome[]) => outcomes.find((o) => o.type === 'signedIn') as Extract<SavingOutcome, { type: 'signedIn' }> | undefined;
+
+  it.each<[string, (t: SubmissionTracker, clock: { now: number }) => SavingOutcome[], { username: string; password: string } | null | 'no sign-in']>([
+    ['a submit with values, then the form goes: the sign-in carries them', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.gone('f1')], typed],
+    ['…through a navigation and the reappeared-form check', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.navigationStarted(true), ...t.navigated(200), ...t.settled()], typed],
+    ['a blur after the submit keeps the submit’s values', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.candidate(candidate({ signal: 'blur' }), ORIGIN), ...t.gone('f1')], typed],
+    ['a blur’s values (forged past the schema) are never held', (t) => [...t.candidate(candidate({ signal: 'blur', values: typed }), ORIGIN), ...t.candidate(candidate({ signal: 'button' }), ORIGIN), ...t.gone('f1')], null],
+    ['a submit without values: a sign-in, nothing to save', (t) => [...t.candidate(candidate(), ORIGIN), ...t.gone('f1')], null],
+    [
+      'a second submit (a corrected password) carries its own',
+      (t) => [...t.candidate(candidate({ values: { ...typed, password: 'wrong' } }), ORIGIN), ...t.still('f1'), ...t.candidate(candidate({ values: typed }), ORIGIN), ...t.gone('f1')],
+      typed,
+    ],
+    [
+      'a failed sign-in drops them: the form stays held, the next signal brings none, so nothing is saved',
+      (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.still('f1'), ...t.candidate(candidate({ signal: 'blur' }), ORIGIN), ...t.candidate(candidate({ signal: 'enter' }), ORIGIN), ...t.gone('f1')],
+      null,
+    ],
+    ['…as does an error response', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.navigationStarted(true), ...t.navigated(401), ...t.candidate(candidate({ signal: 'blur' }), ORIGIN), ...t.gone('f1')], 'no sign-in'],
+    ['a navigation of your own forgets them', (t) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...t.navigationStarted(false), ...t.gone('f1')], 'no sign-in'],
+    ['…and so do 5 minutes', (t, clock) => [...t.candidate(candidate({ values: typed }), ORIGIN), ...((clock.now += HOLD_MS + 1), []), ...t.gone('f1')], 'no sign-in'],
+  ])('%s', (_name, journey, expected) => {
+    const clock = { now: 0 };
+    const t = new SubmissionTracker(() => clock.now);
+    const signedIn = signedInValues(journey(t, clock));
+    if (expected === 'no sign-in') expect(signedIn).toBeUndefined();
+    else expect(signedIn?.values ?? null).toEqual(expected);
+  });
+
+  it('once the sign-in is reported, nothing of it is left: a late `gone` decides nothing', () => {
+    const t = new SubmissionTracker(() => 0);
+    expect(signedInValues([...t.candidate(candidate({ values: typed }), ORIGIN), ...t.gone('f1')])?.values).toEqual(typed);
+    expect(t.gone('f1')).toEqual([]);
+    expect(JSON.stringify(t)).not.toContain(typed.password);
+  });
+
+  it('a failed sign-in keeps the form, without what was typed', () => {
+    const t = new SubmissionTracker(() => 0);
+    t.candidate(candidate({ values: typed }), ORIGIN);
+    t.still('f1');
+    expect(JSON.stringify(t)).not.toContain(typed.password);
+    expect(JSON.stringify(t)).not.toContain(typed.username);
   });
 });

@@ -4,8 +4,9 @@
  * trusted, as a person's is; a page's own script is played by `page.evaluate`.
  *
  * - Focus moved in a loop: one message a frame, the last state; a carousel scrolling elsewhere: none.
- * - One submit (Enter, then the form's `submit`): one candidate. Leaving the password field: a
- *   candidate only after typing in it, at most once a second.
+ * - One submit (Enter, then the form's `submit`): one candidate, with what was typed. Leaving
+ *   the password field: a candidate only after typing in it, at most once a second, and never
+ *   with a value.
  * - Buttons: a `type="button"` that signs in counts; a show-password eye doesn't.
  * - Fields added in a loop: `forms` at most once a frame.
  * - A smooth scroll: focus at most every 100 ms, and the last one is the field's final box.
@@ -98,8 +99,9 @@ test('one submit is one candidate; leaving the password field sends one only aft
   const submits = await a.of('candidate');
   expect(submits).toHaveLength(1);
   expect(submits[0]).toMatchObject({ signal: 'enter', hasUsername: true, hasPassword: true, password: { type: 'password', id: 'p', name: 'password' } });
-  // Nothing typed is in it.
-  expect(JSON.stringify(await a.messages())).not.toMatch(/ada@example\.com|secret pass/);
+  // What was typed goes with the submit's candidate, for the save card, and in no other message.
+  expect(submits[0]!['values']).toEqual({ username: 'ada@example.com', password: 'secret pass' });
+  expect(JSON.stringify((await a.messages()).filter(([c]) => c !== 'candidate'))).not.toMatch(/ada@example\.com|secret pass/);
 
   // Leaving the field after typing: one candidate. Moving focus back and forth without typing: none.
   await page.waitForTimeout(1100);
@@ -107,6 +109,8 @@ test('one submit is one candidate; leaving the password field sends one only aft
   await a.clear();
   await page.focus('#u');
   expect((await a.of('candidate')).map((c) => c['signal'])).toEqual(['blur']);
+  // Leaving the field sends no value: only a submit does.
+  expect(JSON.stringify(await a.messages())).not.toMatch(/ada@example\.com|secret pass/);
   await a.clear();
   await page.evaluate(() => {
     for (let i = 0; i < 50; i++) {
