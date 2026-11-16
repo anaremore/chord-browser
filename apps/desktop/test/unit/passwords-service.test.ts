@@ -77,8 +77,16 @@ let changes: number;
 let service: PasswordService;
 const extensions: Record<string, InstalledExtension> = {};
 
+/** The chords main knows: Work (shared sign-ins), and a private window's. */
+const CHORDS: Record<string, { id: string; profileId: string; private?: boolean }> = {
+  work: { id: 'work', profileId: 'default' },
+  priv: { id: 'priv', profileId: 'private-w1', private: true },
+};
+
 function make(): PasswordService {
   return new PasswordService({
+    chord: (chordId) => CHORDS[chordId] ?? null,
+    extensions: () => extensions,
     data: (op) => db.passwords.run(op, clock.now),
     settings: () => settings,
     keys,
@@ -177,7 +185,7 @@ describe('Keep unlocked on this computer', () => {
     // Lock now: locked until you type it.
     view = await service.lock();
     expect(view.state).toBe('locked');
-    expect((await service.accountsFor(github, extensions)).state).toBe('locked');
+    expect((await service.accountsForPage(github, extensions)).state).toBe('locked');
     await service.unlock(PASSPHRASE);
     expect((await service.view()).state).toBe('open');
   });
@@ -374,6 +382,60 @@ describe('the unlock card', () => {
   });
 });
 
+describe('the API agreed with the detector (origin from senderFrame, a chord id)', () => {
+  it('accountsFor: usernames only, this chord’s recent first', async () => {
+    const id = await oneLogin();
+    expect(await service.accountsFor('https://github.com', 'work')).toEqual({ state: 'open', insecure: false, offers: [{ id, username: 'ada@acme.dev', host: '', match: 'origin' }] });
+    expect(await service.accountsFor('https://evil.example', 'work')).toEqual({ state: 'open', insecure: false, offers: [] });
+  });
+
+  it('passwordFor: only for an origin the sign-in matches; a private window’s use isn’t remembered', async () => {
+    const id = await oneLogin();
+    expect(await service.passwordFor(id, 'https://github.com.evil.example', 'work')).toBeNull();
+    expect(await service.passwordFor(id, 'https://github.com', 'priv')).toBe('hunter2');
+    expect((await db.passwords.run({ op: 'list', chordId: 'work' })).logins![0]!.chordUsed).toBeNull();
+    expect(await service.passwordFor(id, 'https://github.com', 'work')).toBe('hunter2');
+    expect((await db.passwords.run({ op: 'list', chordId: 'work' })).logins![0]!.chordUsed).toBe(clock.now);
+  });
+
+  it('saveCandidate: the first sets the passphrase; then update, same; never in a private window, an unknown chord or for a proxy', async () => {
+    const at = { origin: 'https://github.com', username: 'ada', password: 'one', chordId: 'work' };
+    expect(await service.saveCandidate(at)).toEqual({ ok: false, problem: 'none' });
+    for (const refused of [{ ...at, chordId: 'priv' }, { ...at, chordId: 'gone' }, { ...at, chordId: null }, { ...at, proxy: true }]) {
+      expect(await service.saveCandidate({ ...refused, passphrase: PASSPHRASE })).toEqual({ ok: false, problem: 'refused' });
+    }
+    const first = await service.saveCandidate({ ...at, passphrase: PASSPHRASE });
+    expect(first).toEqual({ ok: true, id: expect.any(String), kind: 'new' });
+    const id = (first as { id: string }).id;
+    expect(await service.saveCandidate({ ...at, password: 'two' })).toEqual({ ok: true, id, kind: 'update' });
+    expect(await service.passwordFor(id, 'https://github.com', 'work')).toBe('two');
+    expect(await service.saveCandidate({ ...at, password: 'two' })).toEqual({ ok: true, id, kind: 'same' });
+    expect(await service.candidateFor({ ...at, username: 'grace' })).toEqual({ kind: 'new', setup: false });
+    await service.never({ origin: 'https://example.com', chord: { id: 'work', profileId: 'default' }, private: false });
+    expect(await service.saveCandidate({ ...at, origin: 'https://example.com' })).toEqual({ ok: false, problem: 'never' });
+  });
+
+  it('tells the detector which sign-ins to watch, only when that changes', () => {
+    const calls: [boolean, string[] | undefined][] = [];
+    const ONE_PASSWORD = { id: 'aeblfdkhhhdcdjpifhhbdiojplfjncoa', profileId: 'default', name: '1Password' } as InstalledExtension;
+    let state = { settings: { passwords: settings }, chords: CHORDS, extensions: {} as Record<string, InstalledExtension> };
+    service.attachDetector({ setEnabled: (on, profiles) => void calls.push([on, profiles]) }, state);
+    expect(calls).toEqual([[true, ['default', 'private-w1']]]);
+    service.stateChanged(state);
+    service.stateChanged({ ...state, chords: { ...CHORDS } });
+    expect(calls).toHaveLength(1);
+    state = { ...state, extensions: { x: ONE_PASSWORD } };
+    service.stateChanged(state);
+    expect(calls.at(-1)).toEqual([true, ['private-w1']]);
+    state = { ...state, settings: { passwords: { ...settings, onChords: ['work'] } } };
+    service.stateChanged(state);
+    expect(calls.at(-1)).toEqual([true, ['default', 'private-w1']]);
+    state = { ...state, settings: { passwords: { ...settings, enabled: false } } };
+    service.stateChanged(state);
+    expect(calls.at(-1)).toEqual([false, []]);
+  });
+});
+
 describe('the API for the menu under the field and the save cards', () => {
   const page = (patch: Partial<PasswordPage> = {}): PasswordPage => ({ ...github, ...patch });
   const ONE_PASSWORD: InstalledExtension = { id: 'aeblfdkhhhdcdjpifhhbdiojplfjncoa', profileId: 'default', name: '1Password', version: '8', source: 'store', path: '', notifiedVersion: null } as InstalledExtension;
@@ -381,7 +443,7 @@ describe('the API for the menu under the field and the save cards', () => {
   it('offers usernames only, the page’s own first', async () => {
     await oneLogin();
     await service.add({ origin: 'https://gist.github.com', username: 'ada.lovelace', password: 'pw2', note: '' });
-    const answer = await service.accountsFor(page({ origin: 'https://github.com' }), extensions);
+    const answer = await service.accountsForPage(page({ origin: 'https://github.com' }), extensions);
     expect(answer).toEqual({
       state: 'open',
       insecure: false,
@@ -401,8 +463,8 @@ describe('the API for the menu under the field and the save cards', () => {
     await oneLogin();
     arrange();
     try {
-      expect(await service.accountsFor(at, extensions)).toEqual({ state: 'off' });
-      expect(await service.passwordForFill(at, 'id', extensions)).toBeNull();
+      expect(await service.accountsForPage(at, extensions)).toEqual({ state: 'off' });
+      expect(await service.passwordForPage(at, 'id', extensions)).toBeNull();
     } finally {
       delete extensions['x'];
     }
@@ -413,7 +475,7 @@ describe('the API for the menu under the field and the save cards', () => {
     extensions['x'] = ONE_PASSWORD;
     settings.onChords = ['work'];
     try {
-      expect((await service.accountsFor(page(), extensions)).state).toBe('open');
+      expect((await service.accountsForPage(page(), extensions)).state).toBe('open');
     } finally {
       delete extensions['x'];
     }
@@ -422,16 +484,16 @@ describe('the API for the menu under the field and the save cards', () => {
   it('says locked, so the menu offers Unlock passwords', async () => {
     await oneLogin();
     await service.lock();
-    expect(await service.accountsFor(page(), extensions)).toEqual({ state: 'locked' });
+    expect(await service.accountsForPage(page(), extensions)).toEqual({ state: 'locked' });
   });
 
   it('fills only the page it matches, and remembers which chord used it (not a private window)', async () => {
     const id = await oneLogin();
-    expect(await service.passwordForFill(page({ origin: 'https://evil.example' }), id, extensions)).toBeNull();
-    expect(await service.passwordForFill(page({ origin: 'http://github.com' }), id, extensions)).toBeNull();
-    expect(await service.passwordForFill(page({ chord: null, private: true }), id, extensions)).toBe('hunter2');
+    expect(await service.passwordForPage(page({ origin: 'https://evil.example' }), id, extensions)).toBeNull();
+    expect(await service.passwordForPage(page({ origin: 'http://github.com' }), id, extensions)).toBeNull();
+    expect(await service.passwordForPage(page({ chord: null, private: true }), id, extensions)).toBe('hunter2');
     expect((await db.passwords.run({ op: 'list', chordId: 'work' })).logins![0]!.chordUsed).toBeNull();
-    expect(await service.passwordForFill(page(), id, extensions)).toBe('hunter2');
+    expect(await service.passwordForPage(page(), id, extensions)).toBe('hunter2');
     expect((await db.passwords.run({ op: 'list', chordId: 'work' })).logins![0]!.chordUsed).toBe(clock.now);
   });
 

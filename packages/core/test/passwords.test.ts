@@ -14,6 +14,7 @@ import {
   loginProblem,
   passphraseDue,
   passwordManagerIn,
+  passwordProfiles,
   passwordsOffBecause,
   passwordsOffText,
   passwordsOnIn,
@@ -88,6 +89,15 @@ describe('a password manager’s extension turns Chord’s off in its chord', ()
     expect(passwordManagerIn('default', extensions)).toBeNull();
     expect(passwordManagerIn('personal', extensions)?.name).toBe('1Password');
     expect(passwordManagerIn('personal', [ext(UBLOCK, 'personal', '1Password')])).toBeNull();
+  });
+
+  it.each([
+    ['on: every chord’s sign-ins but those with a manager only, and private windows’', settings(), ['default', 'private-w1']],
+    ['turned on there too: that chord’s sign-ins as well', settings({ onChords: ['c-a'] }), ['default', 'private-w1', 'shared']],
+    ['the switch off: none, private windows’ neither', settings({ enabled: false }), []],
+  ] as const)('the detector watches %s', (_what, s, profiles) => {
+    const all = [...chords, { id: 'c-private', name: 'Private', profileId: 'private-w1', private: true }];
+    expect(passwordProfiles(s, all, extensions)).toEqual(profiles);
   });
 
   it('says where it’s off, and why', () => {

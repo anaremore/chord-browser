@@ -117,6 +117,8 @@ const passwords = new PasswordService({
   keys: osKeys(process.platform, { noKeyring: !app.isPackaged && process.env['CHORD_E2E_NO_KEYRING'] === '1' }),
   clipboard: { writeText: (text) => clipboard.writeText(text), readText: () => clipboard.readText() },
   changed: () => browser?.passwordsChanged(),
+  chord: (chordId) => browser?.store.state.chords[chordId] ?? null,
+  extensions: () => browser?.store.state.extensions ?? {},
 });
 /** Work the first window doesn't need waits until launch is over. */
 const afterLaunch = new AfterLaunch();
@@ -831,6 +833,8 @@ if (!app.requestSingleInstanceLock()) {
         store.record(change.patches, change.state, originOf(change.command), change.before);
         // *Lock after* changed: the clock counts with the new time.
         if (change.before && change.before.settings.passwords.lockAfter !== change.state.settings.passwords.lockAfter) passwords.settingsChanged();
+        // The switch, the extension rule or the chords changed: the form detector hears which sign-ins it watches.
+        passwords.stateChanged(change.state);
       },
       windowFocused: () => syncService?.focused(),
       // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).

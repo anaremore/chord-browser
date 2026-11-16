@@ -191,3 +191,20 @@ export function applyPasswordPatch(current: PasswordSettings, patch: Partial<Pas
     if (clean.join('\n') !== current.onChords.join('\n')) current.onChords = clean;
   }
 }
+
+type ChordLike = { id: ChordId; profileId: ProfileId; private?: boolean };
+
+/**
+ * The sign-ins (sessions, by profile id) whose pages the form detector
+ * watches: each profile with a chord where Chord's own is on, and private
+ * windows' (they fill and never save). Sorted, so a change is easy to tell.
+ * Empty with the switch off.
+ */
+export function passwordProfiles(settings: PasswordSettings, chords: Record<string, ChordLike> | readonly ChordLike[], extensions: Extensions): string[] {
+  if (!settings.enabled) return [];
+  const on = new Set<string>();
+  for (const chord of Array.isArray(chords) ? chords : Object.values(chords)) {
+    if (chord.private || passwordsOnIn(settings, chord, extensions)) on.add(chord.profileId);
+  }
+  return [...on].sort();
+}

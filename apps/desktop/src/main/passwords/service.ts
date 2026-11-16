@@ -32,6 +32,7 @@ import {
   loginProblem,
   PASSWORD_CLIPBOARD_MS,
   passphraseDue,
+  passwordProfiles,
   passwordsOnIn,
   type InstalledExtension,
   type LoginSummary,
@@ -61,10 +62,25 @@ export interface PasswordServiceOptions {
   clipboard: { writeText(text: string): void; readText(): string | Promise<string> };
   /** Something Settings or a popover shows changed: they ask again. */
   changed(): void;
+  /** A chord by id (its sign-ins' profile, whether it's a private window's), for the detector's API; null when there's none. */
+  chord?(chordId: string): { id: string; profileId: string; private?: boolean } | null;
+  /** The installed extensions, for the extension rule. */
+  extensions?(): Record<string, InstalledExtension>;
   now?: () => number;
   setTimeout?: (run: () => void, ms: number) => unknown;
   clearTimeout?: (timer: unknown) => void;
 }
+
+/** What the form detector (`main/passwords/detector.ts`) takes from the vault's side: which sign-ins it watches. It reads no settings. */
+export interface DetectorSwitch {
+  setEnabled(on: boolean, profileIds?: string[]): void;
+}
+
+/** The state the detector's switch is worked out from. */
+type DetectorState = { settings: { passwords: PasswordSettings }; chords: Record<string, { id: string; profileId: string; private?: boolean }>; extensions: Record<string, InstalledExtension> };
+
+/** What the save card's Save did, or why it didn't. */
+export type SaveAnswer = { ok: true; id: string; kind: 'new' | 'update' | 'same' } | { ok: false; problem: PasswordProblem | 'off' | 'io' | 'never' };
 
 /** Who's asking for a page's accounts, or saving one: the page's origin as Chromium reports it for the frame, never what its script says. */
 export interface PasswordPage {
@@ -144,6 +160,10 @@ export class PasswordService {
   private nextAsk = 1;
   /** Whether the unlock card offers *Keep unlocked on this computer*: the OS can keep the key here. */
   private canKeep = false;
+  private detector: DetectorSwitch | null = null;
+  /** What the detector was last told, so it's told only of a change. */
+  private detectorKey: string | null = null;
+  private detectorInputs: readonly unknown[] = [];
   /** One opening at a time: two steps that need the kept key unwrap it once. */
   private opening: Promise<VaultState> | null = null;
 
@@ -508,7 +528,7 @@ export class PasswordService {
    * usernames and hosts only. A private window is offered them too (it fills
    * and never saves); its use isn't remembered.
    */
-  async accountsFor(page: PasswordPage, extensions: Record<string, InstalledExtension>): Promise<AccountsAnswer> {
+  async accountsForPage(page: PasswordPage, extensions: Record<string, InstalledExtension>): Promise<AccountsAnswer> {
     if (!(await this.onFor(page, extensions))) return { state: 'off' };
     const state = await this.ensureOpen();
     if (state !== 'open') return { state };
@@ -526,7 +546,7 @@ export class PasswordService {
    * (chord-data checks again). Its use is remembered for the chord, never in
    * a private window.
    */
-  async passwordForFill(page: PasswordPage, id: string, extensions: Record<string, InstalledExtension>): Promise<string | null> {
+  async passwordForPage(page: PasswordPage, id: string, extensions: Record<string, InstalledExtension>): Promise<string | null> {
     if (!(await this.onFor(page, extensions))) return null;
     if ((await this.ensureOpen()) !== 'open') return null;
     const chordId = page.private ? null : (page.chord?.id ?? null);
@@ -593,6 +613,106 @@ export class PasswordService {
     const result = await this.data({ op: 'never', origin: page.origin }).catch(() => ({}) as PasswordResult);
     this.options.changed();
     return result.never === true;
+  }
+
+  /* ---------- the detector's API (agreed with feat/passwords-detector) ---------- */
+
+  /**
+   * A page as the detector reports it: its origin (`event.senderFrame.origin`,
+   * which main gives and this trusts) and its tab's chord. No chord, or one
+   * main doesn't know, counts as a private window's: fill only.
+   */
+  private pageOf(origin: string, chordId: string | null): PasswordPage {
+    const chord = chordId ? (this.options.chord?.(chordId) ?? null) : null;
+    if (!chord || chord.private) return { origin, chord: null, private: true };
+    return { origin, chord: { id: chord.id, profileId: chord.profileId }, private: false };
+  }
+
+  private installed(): Record<string, InstalledExtension> {
+    return this.options.extensions?.() ?? {};
+  }
+
+  /** The menu under a focused field: usernames and hosts, this chord's recent first; or off, none (no vault yet), locked. */
+  accountsFor(origin: string, chordId: string | null): Promise<AccountsAnswer> {
+    return this.accountsForPage(this.pageOf(origin, chordId), this.installed());
+  }
+
+  /**
+   * The password for the account picked in the menu, for that frame's origin:
+   * null unless the sign-in matches it (S17 §5, checked here and again in
+   * chord-data). `chordId` records the use; a private window's isn't.
+   */
+  passwordFor(accountId: string, origin: string, chordId: string | null = null): Promise<string | null> {
+    return this.passwordForPage(this.pageOf(origin, chordId), accountId, this.installed());
+  }
+
+  /** Which card a sign-in that worked gets: new (with the passphrase step when there's no vault yet), update, or none. */
+  candidateFor(candidate: { origin: string; username: string; password: string; chordId: string | null }): Promise<CandidateAnswer> {
+    return this.candidate({ ...this.pageOf(candidate.origin, candidate.chordId), username: candidate.username, password: candidate.password }, this.installed());
+  }
+
+  /**
+   * The save or update card's Save: a new sign-in, a new password for the
+   * one saved for that username on the site (keeping the one before), or,
+   * when it's what's saved already, its use only. The first one sets the
+   * passphrase (`passphrase`, from the card's step). Never from a private
+   * window, for a proxy, or on a site you said never to save for.
+   */
+  async saveCandidate(candidate: { origin: string; username: string; password: string; chordId: string | null; passphrase?: string; proxy?: boolean }): Promise<SaveAnswer> {
+    const page = this.pageOf(candidate.origin, candidate.chordId);
+    const extensions = this.installed();
+    const request: SaveRequest = {
+      ...page,
+      username: candidate.username,
+      password: candidate.password,
+      ...(candidate.passphrase !== undefined ? { passphrase: candidate.passphrase } : {}),
+      ...(candidate.proxy ? { proxy: true } : {}),
+    };
+    const kind = await this.candidate(request, extensions);
+    switch (kind.kind) {
+      case 'refused':
+      case 'off':
+      case 'never':
+      case 'locked':
+        return { ok: false, problem: kind.kind };
+      case 'same':
+        return { ok: true, id: kind.id, kind: 'same' };
+      case 'update': {
+        const saved = await this.save({ ...request, replace: kind.id }, extensions);
+        return saved.ok ? { ok: true, id: saved.id, kind: 'update' } : saved;
+      }
+      case 'new': {
+        const saved = await this.save(request, extensions);
+        return saved.ok ? { ok: true, id: saved.id, kind: 'new' } : saved;
+      }
+    }
+  }
+
+  /** The form detector, once main has made it: it's told at once which sign-ins to watch. */
+  attachDetector(detector: DetectorSwitch, state: DetectorState): void {
+    this.detector = detector;
+    this.detectorKey = null;
+    this.detectorInputs = [];
+    this.stateChanged(state);
+  }
+
+  /**
+   * After every state change: when the switch, the extension rule, the
+   * chords or the extensions changed, the detector hears which sign-ins it
+   * watches now (`setEnabled`), and only when that changed. Compared by
+   * reference first (Immer keeps what didn't change), so most changes cost nothing.
+   */
+  stateChanged(state: DetectorState): void {
+    if (!this.detector) return;
+    const inputs = [state.settings.passwords, state.chords, state.extensions];
+    if (inputs.every((input, i) => input === this.detectorInputs[i])) return;
+    this.detectorInputs = inputs;
+    const profiles = passwordProfiles(state.settings.passwords, state.chords, state.extensions);
+    const on = profiles.length > 0;
+    const key = `${on}:${profiles.join(',')}`;
+    if (key === this.detectorKey) return;
+    this.detectorKey = key;
+    this.detector.setEnabled(on, profiles);
   }
 
   /* ---------- lifetime ---------- */
