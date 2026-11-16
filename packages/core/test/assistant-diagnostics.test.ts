@@ -12,6 +12,7 @@ import {
   readNeedsApproval,
   redactAddress,
   redactText,
+  shrinkEvent,
   stackFrames,
   type DiagnosticsEvent,
 } from '../src';
@@ -38,6 +39,13 @@ describe('page_diagnostics: addresses lose what carries tokens', () => {
     ['several', 'https://a.example/?a=1 and http://b.example/x#y', 'https://a.example/ and http://b.example/x'],
     ['a data: address', 'bad image data:image/gif;base64,R0lGOD', 'bad image data:image/gif,…'],
     ['no address', 'TypeError: x is undefined', 'TypeError: x is undefined'],
+    ['protocol-relative', 'Failed to load //cdn.example/lib.js?token=SECRET', 'Failed to load //cdn.example/lib.js'],
+    ['relative, in quotes', "fetch('/api/items?key=SECRET') failed", "fetch('/api/items') failed"],
+    ['relative, with a fragment', 'went to /callback#access_token=SECRET', 'went to /callback'],
+    ['relative, in a stack', '    at load (/static/app.js?v=SECRET:3:9)', '    at load (/static/app.js:3:9)'],
+    ['relative after a colon', 'Not found:/missing?sig=SECRET', 'Not found:/missing'],
+    ['another scheme', 'ftp://files.example/a.zip?t=SECRET', 'ftp://files.example/a.zip'],
+    ['a path with no query stays', 'see /docs/setup and a/b?c', 'see /docs/setup and a/b?c'],
   ])('%s', (_, input, expected) => expect(redactText(input)).toBe(expected));
 });
 
@@ -47,6 +55,8 @@ describe('page_diagnostics: bounds', () => {
     ['exactly the most', 'a'.repeat(DIAGNOSTICS_MAX_TEXT), DIAGNOSTICS_MAX_TEXT],
     ['one over', 'a'.repeat(DIAGNOSTICS_MAX_TEXT + 1), DIAGNOSTICS_MAX_TEXT],
     ['far over', 'a'.repeat(100_000), DIAGNOSTICS_MAX_TEXT],
+    ['a huge single entry (5,000,000 characters)', 'x'.repeat(5_000_000), DIAGNOSTICS_MAX_TEXT],
+    ['exactly the most, with astral characters', '😀'.repeat(DIAGNOSTICS_MAX_TEXT), DIAGNOSTICS_MAX_TEXT],
     ['astral characters count as one', '😀'.repeat(DIAGNOSTICS_MAX_TEXT + 5), DIAGNOSTICS_MAX_TEXT],
   ])('text: %s', (_, input, length) => {
     const out = cut(input);
@@ -62,6 +72,16 @@ describe('page_diagnostics: bounds', () => {
     expect(frames[3]).toEqual({ file: 'https://a.example/app.js', line: 4, function: 'f3' });
     expect(stackFrames({ callFrames: [] })).toBeUndefined();
     expect(stackFrames(undefined)).toBeUndefined();
+  });
+
+  it.each<[string, DiagnosticsEvent]>([
+    ['a console call', { kind: 'console', call: { type: 'error', args: [{ type: 'string', value: 'x'.repeat(5_000_000) }, { type: 'object', description: 'd'.repeat(5_000_000), preview: { properties: Array.from({ length: 500 }, (_, i) => ({ name: `p${i}`, type: 'string', value: 'v'.repeat(10_000) })) } }, ...Array.from({ length: 500 }, () => ({ type: 'string', value: 'y' }))], stackTrace: { callFrames: Array.from({ length: 1000 }, () => ({ functionName: 'f'.repeat(10_000), url: `https://a.example/${'u'.repeat(1_000_000)}`, lineNumber: 1 })) } } }],
+    ['a log entry', { kind: 'log', entry: { source: 'network', level: 'error', text: 't'.repeat(5_000_000), url: `https://a.example/${'u'.repeat(5_000_000)}` } }],
+    ['an exception', { kind: 'exception', thrown: { exceptionDetails: { text: 't'.repeat(5_000_000), url: 'u'.repeat(5_000_000), exception: { type: 'object', subtype: 'error', description: 'e'.repeat(5_000_000) } } } }],
+  ])('a huge single entry is cut as it arrives: %s', (_, event) => {
+    const kept = shrinkEvent(event);
+    expect(JSON.stringify(kept).length).toBeLessThan(80_000);
+    expect(diagnosticsEntries([kept]).entries).toEqual(diagnosticsEntries([event]).entries);
   });
 
   it('keeps the newest entries, oldest first, and says how many there were', () => {
@@ -144,13 +164,15 @@ describe('page_diagnostics: the assistant’s rules', () => {
   });
 
   it.each([
-    ['every', false, true],
-    ['every', true, false],
-    ['ask', false, true],
-    ['ask', true, false],
-    ['chord', false, false],
-    ['all', false, false],
-  ] as const)('scope %s, attached %s: asks first %s', (scope, attached, asks) => {
-    expect(readNeedsApproval({ scope, attached, sameChord: true, tool: 'page_diagnostics', granted: false })).toBe(asks);
+    ['every', false, true, true],
+    ['every', true, true, false],
+    ['ask', false, true, true],
+    ['ask', true, true, false],
+    ['chord', false, true, false],
+    ['chord', false, false, true],
+    ['all', false, true, false],
+    ['all', false, false, false],
+  ] as const)('scope %s, attached %s, same chord %s: asks first %s', (scope, attached, sameChord, asks) => {
+    expect(readNeedsApproval({ scope, attached, sameChord, tool: 'page_diagnostics', granted: false })).toBe(asks);
   });
 });

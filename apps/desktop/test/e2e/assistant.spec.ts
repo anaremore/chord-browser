@@ -789,6 +789,22 @@ test('The assistant reads the problems of the tab on screen, and only that tab�
     await tab.evaluate(() => console.error('logged-after-the-read'));
     await expect.poll(async () => (await devtoolsHeard())?.includes('logged-after-the-read'), { timeout: 10_000 }).toBe(true);
     expect(await debugging()).toEqual([]);
+
+    // Ask every time, in a new chat (a tab attached earlier in a chat stays readable in it, as for read_tab): main
+    // asks before reading, and a No reads nothing (no debugger attached at all).
+    const attachesBefore = (await attachedTo()).length;
+    await panel.getByRole('button', { name: 'Chats' }).click();
+    await panel.getByRole('menuitem', { name: 'New chat' }).click();
+    await panel.getByRole('button', { name: /^(Reads |Asks before reading)/ }).click();
+    await panel.getByRole('menu', { name: 'What it can read' }).getByRole('menuitemradio', { name: 'Ask every time' }).click();
+    await send(panel, 'Is it broken now?');
+    await expect(panel.getByText('See the list of your tabs')).toBeVisible();
+    await panel.getByRole('button', { name: 'Allow once' }).click();
+    await expect(panel.getByText('Read the problems on “Broken”')).toBeVisible();
+    await panel.getByRole('button', { name: 'No', exact: true }).last().click();
+    await expect(panel.getByText(/^I couldn't check: The user said no to reading that page’s problems\./)).toBeVisible();
+    expect(JSON.parse(asked()[2]!.result)).toEqual({ data: { refused: 'The user said no to reading that page’s problems. Carry on without it, or ask them.' } });
+    expect(await attachedTo()).toHaveLength(attachesBefore);
     expect((await attachedTo()).every((u) => u === `${site.origin}/broken`)).toBe(true);
   } finally {
     await app.close();

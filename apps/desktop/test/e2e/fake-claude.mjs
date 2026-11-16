@@ -142,7 +142,10 @@ async function turn(sent, images = []) {
   // nothing's attached), kept where the test can see them.
   if (/\bbroken\b/i.test(text)) {
     const tools = (await mcp('tools/list', {}))?.mcp_response?.result?.tools ?? [];
-    const result = toolText(await callTool('page_diagnostics', { tab_id: ref ?? 't1' }));
+    // Nothing attached (Ask every time): it finds the tab in the list first, as a model would.
+    let tab = ref;
+    if (!tab) tab = JSON.parse(toolText(await callTool('list_tabs', {})) || '{}').data?.tabs?.find((t) => t.title === 'Broken')?.tab_id ?? 't1';
+    const result = toolText(await callTool('page_diagnostics', { tab_id: tab }));
     appendFileSync(join(config, 'diagnostics.jsonl'), `${JSON.stringify({ tools: tools.map((t) => t.name), result })}\n`);
     const data = JSON.parse(result || '{}');
     return finish(await say(data.entries ? `I see ${data.entries.length} problems.` : `I couldn't check: ${data.data?.refused ?? 'no answer'}`));

@@ -65,6 +65,51 @@ export interface CdpException {
 
 export type DiagnosticsEvent = { kind: 'log'; entry: CdpLogEntry } | { kind: 'console'; call: CdpConsoleCall } | { kind: 'exception'; thrown: CdpException };
 
+/**
+ * How much of an event main keeps while it waits for the rest: a page can log
+ * 5,000,000 characters at a time. Twice the text the model gets (redaction
+ * can shorten it), addresses whole up to 2,048 (a request's type is found by
+ * its full address), and the frames that are kept.
+ */
+export const DIAGNOSTICS_RAW_TEXT = 2 * DIAGNOSTICS_MAX_TEXT;
+const RAW_URL = 2048;
+const RAW_ARGS = 20;
+const RAW_PROPS = 20;
+const rawCut = (s: unknown, max = DIAGNOSTICS_RAW_TEXT) => (typeof s === 'string' ? s.slice(0, max) : undefined);
+const shrinkTrace = (t: CdpStackTrace | undefined): CdpStackTrace | undefined =>
+  t?.callFrames ? { callFrames: t.callFrames.slice(0, DIAGNOSTICS_MAX_FRAMES).map((f) => ({ functionName: rawCut(f.functionName, 200), url: rawCut(f.url, RAW_URL), lineNumber: f.lineNumber })) } : undefined;
+const shrinkObject = (o: CdpRemoteObject): CdpRemoteObject => ({
+  type: o.type,
+  subtype: o.subtype,
+  value: typeof o.value === 'string' ? o.value.slice(0, DIAGNOSTICS_RAW_TEXT) : typeof o.value === 'number' || typeof o.value === 'boolean' ? o.value : undefined,
+  unserializableValue: rawCut(o.unserializableValue, 100),
+  description: rawCut(o.description),
+  className: rawCut(o.className, 100),
+  ...(o.preview?.properties
+    ? { preview: { overflow: o.preview.overflow || o.preview.properties.length > RAW_PROPS, properties: o.preview.properties.slice(0, RAW_PROPS).map((p) => ({ name: String(p.name).slice(0, 100), value: rawCut(p.value, 100), type: p.type })) } }
+    : {}),
+});
+
+/** An event cut to what diagnosticsEntries can use, as it arrives: the rest is dropped at once. */
+export function shrinkEvent(e: DiagnosticsEvent): DiagnosticsEvent {
+  if (e.kind === 'log') {
+    const { entry } = e;
+    return { kind: 'log', entry: { source: entry.source, level: entry.level, text: rawCut(entry.text), url: rawCut(entry.url, RAW_URL), lineNumber: entry.lineNumber, timestamp: entry.timestamp, stackTrace: shrinkTrace(entry.stackTrace) } };
+  }
+  if (e.kind === 'console') {
+    const { call } = e;
+    return { kind: 'console', call: { type: call.type, timestamp: call.timestamp, args: (call.args ?? []).slice(0, RAW_ARGS).map(shrinkObject), stackTrace: shrinkTrace(call.stackTrace) } };
+  }
+  const d = e.thrown.exceptionDetails;
+  return {
+    kind: 'exception',
+    thrown: {
+      timestamp: e.thrown.timestamp,
+      ...(d ? { exceptionDetails: { text: rawCut(d.text), url: rawCut(d.url, RAW_URL), lineNumber: d.lineNumber, stackTrace: shrinkTrace(d.stackTrace), ...(d.exception ? { exception: shrinkObject(d.exception) } : {}) } } : {}),
+    },
+  };
+}
+
 /* ---------- What the model gets ---------- */
 
 export interface DiagnosticsFrame {
@@ -102,14 +147,26 @@ export function redactAddress(address: string): string {
 
 /** Addresses inside a message (an error's text or stack) are cut the same way. */
 const ADDRESS_IN_TEXT = /\b(?:https?|wss?|file|blob:https?|chrome-extension):\/\/[^\s'"<>()[\]{}`]+|\bdata:[^\s'"<>()[\]{}`]+/gi;
+/**
+ * Addresses without a scheme, with a query or fragment: protocol-relative (`//cdn.example/a.js?token=…`) and
+ * relative (`/api?token=…`), where a word starts. They can't be parsed, so everything from the `?` or `#` goes,
+ * but a stack's line and column stay.
+ */
+const RELATIVE_IN_TEXT = /(?<=^|[\s'"(=:,])\/{1,2}[^\s'"<>()[\]{}`?#]*[?#][^\s'"<>()[\]{}`]*/g;
 export function redactText(text: string): string {
-  return text.replace(ADDRESS_IN_TEXT, (m) => redactAddress(m));
+  return text.replace(ADDRESS_IN_TEXT, (m) => redactAddress(m)).replace(RELATIVE_IN_TEXT, (m) => {
+    const at = m.search(/[?#]/);
+    return `${m.slice(0, at).slice(0, MAX_FILE)}${/(?::\d+){1,2}$/.exec(m.slice(at))?.[0] ?? ''}`;
+  });
 }
 
-/** At most `max` characters, and a mark where it was cut. */
+/** At most `max` characters, and a mark where it was cut. Only what's kept is looked at, however long the text. */
 export function cut(text: string, max = DIAGNOSTICS_MAX_TEXT): string {
-  const chars = [...text];
-  return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`;
+  if (text.length <= max) return text;
+  // Astral characters are two code units: `max * 2` units always hold `max` characters.
+  const chars = [...text.slice(0, max * 2)];
+  if (chars.length <= max && text.length <= max * 2) return text;
+  return `${chars.slice(0, max - 1).join('')}…`;
 }
 
 const entryText = (text: string) => cut(cleanPageText(redactText(text)));

@@ -1404,32 +1404,51 @@ export class AssistantService {
    */
   private async diagnosticsTool(state: ThreadState, args: Record<string, unknown>): Promise<ToolOutput> {
     const refuse = (why: string) => ({ text: toolResult({ refused: why }, false), isError: true });
+    const never = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
+    const offScreen = "Only the tab on screen's problems can be read. Ask the user to switch to it, then to ask again.";
     const node = this.resolveTab(state, args['tab_id']);
     if (!node) return refuse('No such tab. Use the tab id from "Attached:".');
-    if (!this.readable(node)) return refuse('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
-    if (!state.windowId || this.activeTab(state.windowId)?.id !== node.id) return refuse("Only the tab on screen's problems can be read. Ask the user to switch to it, then to ask again.");
+    const windowId = state.windowId;
     const contents = this.browser.tabs.get(node.id)?.webContents;
-    if (!contents || contents.isDestroyed()) return refuse('That tab could not be read.');
-    // Where the page is now, which can be ahead of the tab's saved address.
-    if (isNeverReadable(contents.getURL(), this.settings.neverSites)) return refuse('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+    /**
+     * Every rule, as things are now: asked before reading, after the approval card (the user may have moved on
+     * while it waited), and after the read (the page may have gone somewhere else meanwhile). `at`: the address
+     * it must still be at.
+     */
+    const blocked = (at?: string): string | null => {
+      const now = this.browser.store.state.nodes[node.id];
+      if (now?.kind !== 'tab' || !this.readable(now)) return never;
+      if (!windowId || this.activeTab(windowId)?.id !== node.id) return offScreen;
+      if (!contents || contents.isDestroyed()) return 'That tab could not be read.';
+      // Where the page is, which can be ahead of the tab's saved address.
+      if (isNeverReadable(contents.getURL(), this.settings.neverSites)) return never;
+      if (at !== undefined && contents.getURL() !== at) return 'The page went to another address while Chord was reading it. Ask the user to ask again once it has loaded.';
+      return null;
+    };
+    const before = blocked();
+    if (before || !contents) return refuse(before ?? 'That tab could not be read.');
     const title = node.title || safeHost(node.url);
     const thread = state.thread!;
     if (readNeedsApproval({ scope: thread.scope, attached: state.attached.has(node.id), sameChord: node.chordId === state.chordId, tool: 'page_diagnostics', granted: state.grants.has(`read:${node.id}`) || state.grants.has('page_diagnostics') })) {
       const { decision } = await this.ask(state, 'page_diagnostics', `Read the problems on “${title}”`, [node.url]);
       if (decision === 'denied') return refuse('The user said no to reading that page’s problems. Carry on without it, or ask them.');
     }
-    // Asked again after the card: the tab may have changed while it waited.
-    if (contents.isDestroyed() || this.activeTab(state.windowId)?.id !== node.id || isNeverReadable(contents.getURL(), this.settings.neverSites)) return refuse("Only the tab on screen's problems can be read. Ask the user to switch to it, then to ask again.");
+    const asked = blocked();
+    if (asked) return refuse(asked);
+    const url = contents.getURL();
     const read = await readDiagnostics(contents);
     if (!read.ok) {
       await this.activity(state, 'page_diagnostics', `Couldn’t check “${title}” for problems`, read.why, false);
       return refuse(read.why);
     }
+    // What was read belongs to the page that was asked about, still on screen and still readable.
+    const after = blocked(url);
+    if (after) return refuse(after);
     const { entries, total } = diagnosticsEntries(read.events, read.types);
     state.read.add(node.id);
     const note = total > entries.length ? `The page has ${total} problems; the newest ${entries.length} are here.` : entries.length ? '' : 'Chromium kept no errors, warnings or failed requests for this page since it loaded.';
     await this.activity(state, 'page_diagnostics', `Checked “${title}” for problems`, diagnosticsSummary(entries));
-    return { text: diagnosticsResult({ ref: this.refFor(state, node.id), url: contents.getURL(), retrievedAt: Date.now(), entries, total, ...(note ? { note } : {}) }) };
+    return { text: diagnosticsResult({ ref: this.refFor(state, node.id), url, retrievedAt: Date.now(), entries, total, ...(note ? { note } : {}) }) };
   }
 
   /* ---------- Filling forms (D16, ARCHITECTURE.md §11.6) ---------- */

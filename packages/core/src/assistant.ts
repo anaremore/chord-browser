@@ -285,7 +285,7 @@ export function isNeverReadable(url: string, neverSites: readonly string[]): boo
 export function readNeedsApproval(input: { scope: AssistantScope; attached: boolean; sameChord: boolean; tool: AssistantToolName; granted: boolean }): boolean {
   if (input.attached || input.granted) return false;
   if (input.scope === 'all') return false;
-  if (input.scope === 'chord') return !input.sameChord && (input.tool === 'read_tab' || input.tool === 'tab_screenshot' || input.tool === 'read_selection' || input.tool === 'read_form');
+  if (input.scope === 'chord') return !input.sameChord && (input.tool === 'read_tab' || input.tool === 'tab_screenshot' || input.tool === 'read_selection' || input.tool === 'read_form' || input.tool === 'page_diagnostics');
   return true;
 }
 
