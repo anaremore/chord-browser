@@ -19,6 +19,7 @@ Newest first. Entries are only ever added, never rewritten. Each release's GitHu
 - **Huge sidebars stay quick.** With 5,000 pinned tabs and 30,000 bookmarks, opening, closing, pinning, moving or renaming a tab now takes about a millisecond, well under a frame; in 0.10.1, closing one took over a second. Deleting a chord, or its Undo, takes about 30 ms.
 - **A long Pinned scrolls on its own.** Pinned stops at half the sidebar and scrolls, its lower edge fading while there's more below, so Today always has the rest. Before, a Pinned taller than the window ran under the chord switcher, hid Today, and its last tabs couldn't be reached. A Pinned that fits looks as it did, and each chord keeps where you'd scrolled.
   - With 5,000 pinned tabs, switching to their chord no longer stalls for about 2 seconds, and Chord's window is ready in less than half the time.
+- **Dropdowns are readable in a dark chord** when your system is light. Their lists came up white, with text too pale to read, in Settings and elsewhere.
 - **Security.** Updates Electron to 45.3.2 (Chromium 156.0.8078.100), which fixes security issues in Chromium and the components it uses. Update as soon as you can.
 
 ## 0.10.2 · security · 2026-11-16
