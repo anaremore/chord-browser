@@ -392,6 +392,21 @@ describe('filling: only that frame, that origin, that document (S17 §5)', () =>
     t.events.emit('filled', { contents: t.contents, formId: 'f1', ok: true });
     expect(t.host.toast).toHaveBeenCalledTimes(1);
   });
+
+  it('the agent refused half a fill: a toast and a log line say so, with no value, origin or field', () => {
+    const t = setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      t.events.emit('filled', { contents: t.contents, formId: 'f1', ok: false, reason: 'password' });
+      expect(t.host.toast).toHaveBeenCalledWith('w1', 'passwords:fill', expect.stringContaining('where the password goes'));
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0]![0]);
+      expect(warn.mock.calls[0]).toHaveLength(1);
+      for (const secret of ['f1', 'ada', 'pw-', 'github', 'http']) expect(line).not.toContain(secret);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe('the save and update cards: which sign-in gets one', () => {
@@ -808,6 +823,60 @@ describe('a first step gets no password (general review of 37bd619)', () => {
     const fill = sent(t.page)[0]![1] as Record<string, unknown>;
     expect(fill['username']).toBe('ada@acme.dev');
     expect('password' in fill).toBe(withPassword);
+  });
+
+  // A one-step sign-in that shows its password field once the email has focus: the menu opened on a first step, and
+  // the form is a sign-in by the time you pick. The kind is read when you pick (review of 303ced9).
+  it.each<[string, (t: ReturnType<typeof setup>) => Promise<void> | void, boolean]>([
+    ['a forms report since says sign-in: both', (t) => void t.events.emit('forms', { contents: t.contents, forms: [{ formId: 'f1', kind: 'sign-in' }] }), true],
+    ['a focus in the same form since says sign-in: both', (t) => t.focus({ kind: 'sign-in', role: 'username', rect: { x: 10, y: 20, width: 200, height: 31 } }), true],
+    ['another form’s report changes nothing', (t) => void t.events.emit('forms', { contents: t.contents, forms: [{ formId: 'f1', kind: 'username-only' }, { formId: 'f2', kind: 'sign-in' }] }), false],
+    ['still a first step when you pick: the username alone', () => {}, false],
+  ])('%s', async (_name, since, withPassword) => {
+    const t = setup();
+    t.events.emit('forms', { contents: t.contents, forms: [{ formId: 'f1', kind: 'username-only' }] });
+    await t.focus({ kind: 'username-only' });
+    expect(t.assist.menuFor('w1')).not.toBeNull();
+    await since(t);
+    expect(t.assist.menuFor('w1')).not.toBeNull();
+    t.key('Enter');
+    await flush();
+    await flush();
+    const fill = sent(t.page)[0]![1] as Record<string, unknown>;
+    expect(fill['username']).toBe('ada@acme.dev');
+    expect(fill['password']).toBe(withPassword ? 'pw-one' : undefined);
+  });
+
+  it('a forms report while you pick (the vault reading the password) counts too', async () => {
+    const t = setup();
+    await t.focus({ kind: 'username-only' });
+    let release: (pw: 'pw-one') => void = () => {};
+    t.vault.passwordFor.mockImplementationOnce(() => new Promise<'pw-one'>((done) => (release = done)));
+    t.key('Enter');
+    await flush();
+    t.events.emit('forms', { contents: t.contents, forms: [{ formId: 'f1', kind: 'sign-in' }] });
+    release('pw-one');
+    await flush();
+    await flush();
+    expect((sent(t.page)[0]![1] as Record<string, unknown>)['password']).toBe('pw-one');
+  });
+
+  it('a form that turned into a sign-up while the menu is open: the menu goes', async () => {
+    const t = setup();
+    await t.focus({ kind: 'username-only' });
+    t.events.emit('forms', { contents: t.contents, forms: [{ formId: 'f1', kind: 'sign-up' }] });
+    expect(t.assist.menuFor('w1')).toBeNull();
+  });
+
+  it('the next document’s kinds are its own', async () => {
+    const t = setup();
+    t.events.emit('forms', { contents: t.contents, forms: [{ formId: 'f1', kind: 'sign-in' }] });
+    t.page.emit('did-navigate', {}, 'https://github.com/login', 200);
+    await t.focus({ kind: 'username-only' });
+    t.key('Enter');
+    await flush();
+    await flush();
+    expect('password' in (sent(t.page)[0]![1] as Record<string, unknown>)).toBe(false);
   });
 });
 

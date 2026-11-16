@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- A page with a hidden duplicate of its sign-in fields, the hidden copy first, both outside any form and with the same autocomplete: the shown pair takes the roles. -->
+<html><head><meta charset="utf-8"><title>Sign in</title><meta name="chord-kind" content="sign-in"></head><body>
+<div hidden>
+  <div><input type="email" id="u-copy" autocomplete="username" aria-label="Email or phone" data-chord-expect="none">
+  <input type="password" id="p-copy" autocomplete="current-password" aria-label="Password" data-chord-expect="none"></div>
+</div>
+<h1>Sign in</h1>
+<div>
+  <input type="email" id="u" autocomplete="username webauthn" aria-label="Email or phone" data-chord-expect="username">
+  <input type="password" id="p" autocomplete="current-password" aria-label="Password" data-chord-expect="current-password"><button type="button" aria-label="Show password">Show</button>
+  <button type="button">Forgot password?</button>
+  <button type="submit">Sign in</button>
+</div>
+</body></html>

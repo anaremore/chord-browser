@@ -18,7 +18,8 @@
  * Scans run at most once in `SCAN_GAP_MS`. Main limits each page's rate as well.
  * - `gone` / `still`: after a submit signal, whether the password field went within 10 s;
  * - `hint`: a request to the page's own origin finished after a submit signal, with its status;
- * - `filled`: whether a fill main sent was written.
+ * - `filled`: whether a fill main sent was written, and if not why: the form changed, or the fill would have left a
+ *   password field empty (never half a fill).
  *
  * **Filling** (S17 §5): main sends the account you picked in the menu (`onFill`), for the form
  * it was shown for. The page is scanned again, and nothing is written unless that form is still
@@ -163,14 +164,54 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   let focused: { ref: WeakRef<HTMLInputElement>; formId: string; kind: PasswordFormKind; role: PasswordFieldRole } | null = null;
   /** A field that took focus while a scan had to wait: looked at again at the flush. */
   let pending: WeakRef<HTMLInputElement> | null = null;
-  /** What main was last told: the field it thinks has focus and its box, or null after a blur. */
-  let told: { ref: WeakRef<HTMLInputElement>; formId: string; rect: string } | null = null;
+  /** What main was last told: the field it thinks has focus, its form's kind, its role and its box, or null after a blur. */
+  let told: { ref: WeakRef<HTMLInputElement>; formId: string; key: string } | null = null;
   let frame = 0;
   let timer = 0;
   let trailing = 0;
   let focusSentAt = Number.NEGATIVE_INFINITY;
-  const focusOn = (el: HTMLInputElement) => {
-    const k = knownFor(el);
+  /** Whether the last scan saw field `i` of `k` hidden (neither shown nor focusable): its form was classed without it. */
+  const hiddenAt = (k: KnownForm, i: number) => {
+    const rec = k.scanned.record.fields[i];
+    return !!rec && !rec.visible && !rec.focusable;
+  };
+  const scannedHidden = (k: KnownForm, el: Element) => hiddenAt(k, k.scanned.elements.indexOf(el as HTMLElement));
+  /**
+   * A password field of `k` the last scan saw hidden and the page has shown since (on the email's focus, or as you
+   * type): the form's kind may have changed (a first step is a sign-in now). Only those fields are looked at.
+   */
+  const revealed = (k: KnownForm | undefined) => !!k && k.scanned.elements.some((e, i) => hiddenAt(k, i) && controlType(e) === 'password' && e.isConnected && isShown(e));
+  /** A scan now, or at the next flush if one just ran. */
+  const rescanSoon = () => {
+    if (performance.now() - scannedAt >= SCAN_GAP_MS) rescan();
+    else {
+      scanWanted = true;
+      schedule();
+    }
+  };
+  /** `focused` as the last scan has it: a rescan may have changed its form's kind or its role. */
+  const refreshFocused = () => {
+    const el = focused?.ref.deref();
+    if (!focused || !el) return;
+    const k = byElement.get(el);
+    const role = roleOf(k, el);
+    focused = k && role && k.classified ? { ref: focused.ref, formId: k.id, kind: k.classified.kind, role } : null;
+  };
+  /** `again`: from the flush, for a field whose scan had to wait: never another wait (one rescan per focus). */
+  const focusOn = (el: HTMLInputElement, again = false) => {
+    let k = knownFor(el);
+    // A later step shown in place (a password field hidden until the username is in): classed again, as it is now.
+    if (k && !again && scannedHidden(k, el)) {
+      if (performance.now() - scannedAt >= SCAN_GAP_MS) {
+        rescan();
+        k = byElement.get(el);
+      } else {
+        scanWanted = true;
+        pending = new WeakRef(el);
+        schedule();
+        k = undefined;
+      }
+    }
     const role = roleOf(k, el);
     focused = k && role && k.classified ? { ref: new WeakRef(el), formId: k.id, kind: k.classified.kind, role } : null;
   };
@@ -181,7 +222,11 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (scanWanted) rescan();
     const waiting = pending?.deref();
     pending = null;
-    if (waiting && activeElementOf(doc) === waiting) focusOn(waiting);
+    if (waiting && activeElementOf(doc) === waiting) focusOn(waiting, true);
+    // The page showed a password field in the focused field's form since the last scan: classed again now.
+    const active = activeElementOf(doc);
+    if (active && revealed(byElement.get(active))) rescanSoon();
+    refreshFocused();
     const forms = formsReport();
     const json = JSON.stringify(forms);
     if (json !== lastForms) {
@@ -192,9 +237,9 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (focused && el && el.isConnected) {
       const r = el.getBoundingClientRect();
       const rect = { x: r.left, y: r.top, width: r.width, height: r.height };
-      const key = `${rect.x},${rect.y},${rect.width},${rect.height}`;
-      // The same field in the same place: main knows already (a carousel scrolling elsewhere moves nothing).
-      if (told?.ref.deref() === el && told.rect === key) return;
+      const key = `${focused.formId} ${focused.kind} ${focused.role} ${rect.x},${rect.y},${rect.width},${rect.height}`;
+      // The same field in the same place, of the same kind: main knows already (a carousel scrolling elsewhere moves nothing).
+      if (told?.ref.deref() === el && told.key === key) return;
       // Too soon after the last: the trailing flush sends the state as it is then.
       const wait = FOCUS_GAP_MS - (performance.now() - focusSentAt);
       if (wait > 0) {
@@ -207,7 +252,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       }
       focusSentAt = performance.now();
       bridge.send('focus', { formId: focused.formId, kind: focused.kind, role: focused.role, rect });
-      told = { ref: focused.ref, formId: focused.formId, rect: key };
+      told = { ref: focused.ref, formId: focused.formId, key };
     } else if (told) {
       bridge.send('blur', { formId: told.formId });
       told = null;
@@ -245,6 +290,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const el = event.composedPath()[0];
     if (!isTextField(el) || !event.isTrusted) return;
     typed.add(el);
+    // Typing that made the page show its password field (a first step that's a sign-in after all).
+    if (revealed(byElement.get(el))) rescanSoon();
     if (el.type !== 'password') return;
     const k = knownFor(el);
     if (k) changed.add(k.id);
@@ -405,19 +452,27 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     el.dispatchEvent(new Event('change', { bubbles: true }));
     filled.add(el);
   };
-  function fill(p: PasswordsFill): boolean {
+  /** Why a fill wrote nothing (PasswordsFilled's `reason`). */
+  type Refused = 'changed' | 'password';
+  function fill(p: PasswordsFill): true | Refused {
     // The page as it is now: a field swapped, hidden or re-rendered since the menu opened is seen here.
     rescan();
     const k = known.find((x) => x.id === p.formId);
     const c = k?.classified;
-    if (!k || !c) return false;
+    if (!k || !c) return 'changed';
     const user = elementOf(k, c.username);
     const pass = elementOf(k, c.password);
-    if (!user && !pass) return false;
-    if (user && !usable(user)) return false;
+    // Never half a fill: a password field you could type in, with a role in this form, that the fill would leave
+    // empty (main sent no password, as for a first step, or the field isn't the current password) gets nothing at all.
+    const left = k.scanned.elements.filter((el, i) => controlType(el) === 'password' && c.roles.has(k.scanned.record.fields[i]!.key) && usable(el) && (el !== pass || !p.password));
+    if (left.length) return 'password';
+    if (!user && !pass) return 'changed';
+    // Main sent a password: the form had one when the menu showed. One with none now (hidden since) changed.
+    if (p.password && !pass) return 'changed';
+    if (user && !usable(user)) return 'changed';
     // A password field needs the password: main leaves it out only for a first step, which has none.
-    if (pass && (!p.password || !usable(pass) || controlType(pass) !== 'password')) return false;
-    if (![user, pass].some((el) => el && onScreen(el))) return false;
+    if (pass && (!p.password || !usable(pass) || controlType(pass) !== 'password')) return 'changed';
+    if (![user, pass].some((el) => el && onScreen(el))) return 'changed';
     const fields = [user && p.username ? ([user, p.username] as const) : null, pass && p.password ? ([pass, p.password] as const) : null].filter((f) => f !== null);
     for (const [el, value] of fields) put(el, value);
     const reduce = win.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -436,13 +491,13 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const h = p?.highlight as Partial<PasswordsFill['highlight']> | undefined;
     if (!p || typeof p.formId !== 'string' || typeof p.username !== 'string' || (p.password !== undefined && (typeof p.password !== 'string' || !p.password))) return;
     if (!h || typeof h.color !== 'string' || typeof h.ms !== 'number' || typeof h.stagger !== 'number' || typeof h.easing !== 'string') return;
-    let ok: boolean;
+    let done: true | Refused;
     try {
-      ok = fill(p as PasswordsFill);
+      done = fill(p as PasswordsFill);
     } catch {
-      ok = false;
+      done = 'changed';
     }
-    bridge.send('filled', { formId: p.formId, ok });
+    bridge.send('filled', done === true ? { formId: p.formId, ok: true } : { formId: p.formId, ok: false, reason: done });
   };
   bridge.onFill?.(onFill);
 
