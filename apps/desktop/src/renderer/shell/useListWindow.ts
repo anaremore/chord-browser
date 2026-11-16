@@ -10,7 +10,7 @@
  * switching back to a chord finds it where it was, and how tall it was, so it
  * mounts with the rows it shows.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 export interface ListView {
   /** How far the list is scrolled, px. */
@@ -51,17 +51,24 @@ const viewOf = (list: HTMLElement, contentHeight: number): ListView => {
 const same = (a: ListView, b: ListView, rowHeight: number) =>
   Math.floor(a.top / rowHeight) === Math.floor(b.top / rowHeight) && a.height === b.height && a.more === b.more && a.capped === b.capped;
 
-/** `rows`: how many rows the list has, mounted or not. */
-export function useListWindow(rowHeight: number, key: string, rows: number) {
+/**
+ * `rows`: how many rows the list has, mounted or not. `capped`: the list
+ * grows with its rows up to a cap and scrolls (and clips) only there
+ * (Pinned, through `data-capped`), so its rows reaching or leaving the cap is
+ * measured before that frame is painted.
+ */
+export function useListWindow(rowHeight: number, key: string, rows: number, { capped: hasCap = false }: { capped?: boolean } = {}) {
   const [list, setList] = useState<HTMLElement | null>(null);
   // Until the list is measured, where it was left, as tall as it was (or as the last list of its kind, or the
   // window): if that's short, the rows it leaves out are there before the first frame is drawn (its
-  // ResizeObserver reports before paint). Capped as it was, or if its rows wouldn't fit in that height.
+  // ResizeObserver reports before paint). Capped as it was; a list not seen before is measured before paint.
   const [view, setView] = useState<ListView>(() => {
     const was = remembered.get(key);
     const height = was?.height || lastHeight.get(kindOf(key)) || window.innerHeight;
-    return { top: was?.top ?? 0, height, more: false, capped: was?.capped ?? rows * rowHeight > height + 1 };
+    return { top: was?.top ?? 0, height, more: false, capped: was?.capped ?? false };
   });
+  const shown = useRef(view);
+  shown.current = view;
   /** As of the last scroll or resize: where rows were on screen, still known once they're gone. */
   const last = useRef<ListView>({ top: 0, height: 0, more: false, capped: false });
   const contentHeight = useRef(0);
@@ -80,13 +87,15 @@ export function useListWindow(rowHeight: number, key: string, rows: number) {
     [key],
   );
 
+  const update = useCallback(() => {
+    if (!list) return;
+    const now = viewOf(list, contentHeight.current);
+    keep(now);
+    setView((v) => (same(v, now, rowHeight) ? v : now));
+  }, [list, rowHeight, keep]);
+
   useEffect(() => {
     if (!list) return;
-    const update = () => {
-      const now = viewOf(list, contentHeight.current);
-      keep(now);
-      setView((v) => (same(v, now, rowHeight) ? v : now));
-    };
     // Measured first by the ResizeObserver, as the first frame is laid out: not now, mid-commit.
     list.addEventListener('scroll', update, { passive: true });
     const observer = new ResizeObserver(update);
@@ -97,7 +106,17 @@ export function useListWindow(rowHeight: number, key: string, rows: number) {
       list.removeEventListener('scroll', update);
       observer.disconnect();
     };
-  }, [list, rowHeight, keep]);
+  }, [list, update]);
+
+  // A list with a cap: when its rows may have reached it or left it (or it's new), measured now, so the frame
+  // that shows them scrolls or doesn't (otherwise they'd spill over what's below it for a frame). Not on every
+  // change of its rows: only when they cross what it last measured.
+  useLayoutEffect(() => {
+    if (!hasCap || !list) return;
+    const content = rows * rowHeight;
+    const height = last.current.height;
+    if (height === 0 || (shown.current.capped ? content <= height + 1 : content > height + 1)) update();
+  }, [hasCap, list, rows, rowHeight, update]);
 
   // Rows came or went without the list changing size (it's at its cap): whether there's more below, or whether
   // they still overflow it, may have changed. On the next frame, with the rest of its layout.
@@ -126,6 +145,8 @@ export function useListWindow(rowHeight: number, key: string, rows: number) {
       if (!list) return;
       const top = index * rowHeight;
       const height = list.clientHeight;
+      // Its rows just reached its cap (a tab pinned at its end): it scrolls from now on, before React says so.
+      if (hasCap && contentHeight.current > height + 1) list.setAttribute('data-capped', '');
       let to = list.scrollTop;
       if (top < to) to = top;
       else if (top + rowHeight > to + height) to = top + rowHeight - height;
@@ -135,7 +156,7 @@ export function useListWindow(rowHeight: number, key: string, rows: number) {
       keep(now);
       setView(now);
     },
-    [list, rowHeight, keep],
+    [list, rowHeight, keep, hasCap],
   );
 
   return { ref, list, view, last, reveal };

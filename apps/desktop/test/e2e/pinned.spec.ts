@@ -434,3 +434,81 @@ test('a row leaving a scrolled long Pinned goes out where it was, inside Pinned:
     await app.close();
   }
 });
+
+test('a Pinned reaching its cap scrolls from the frame it does: no frame spills over Today, and a tab pinned there shows', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_PERF_TABS: '30', CHORD_PERF_PINNED: '2' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const pinned = pinnedTree(shell);
+    const today = todayTree(shell);
+    await expect(pinned.getByRole('treeitem')).toHaveCount(2, { timeout: 20_000 });
+    await setReducedTransparency(app, shell, false);
+    // How many rows fit under the cap: half the chord's pane.
+    const fit = await pinned.evaluate((ul, row) => {
+      let el = ul.parentElement!.parentElement;
+      while (el && getComputedStyle(el).display === 'contents') el = el.parentElement;
+      return Math.floor(el!.getBoundingClientRect().height / 2 / row);
+    }, ROW);
+    const { windowId } = await snapshot(shell);
+    const todayIds = () => today.locator('[data-row="tab"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-id')!));
+    // Pinned filled to its cap, from elsewhere (as another window or a drop would): it fits, nothing scrolls.
+    for (const id of (await todayIds()).slice(1, fit - 1)) await dispatch(shell, { t: 'node.move', nodeId: id, section: 'pinned', index: 0, parentId: null });
+    await expect(pinned.getByRole('treeitem')).toHaveCount(fit);
+    await expect(pinned).not.toHaveAttribute('data-capped');
+
+    /** From now on, every frame: whether Pinned's rows are taller than it while it doesn't scroll (spilling over Today). */
+    const watchSpill = () =>
+      pinned.evaluate((ul) => {
+        const probe = { spilled: 0, frames: 0 };
+        (window as unknown as { spill: typeof probe }).spill = probe;
+        // Laid-out heights, not transforms: a row sliding into place isn't a spill.
+        const spills = () => {
+          const rows = [...ul.children].reduce((sum, li) => sum + (li as HTMLElement).offsetHeight, 0);
+          return ul.isConnected && rows > ul.clientHeight + 1 && getComputedStyle(ul).overflowY === 'visible';
+        };
+        // As each frame is about to be painted: a ResizeObserver reports after layout, before paint (rows reaching
+        // the cap resize the list), as does a frame's first callback after the shell's own.
+        const observer = new ResizeObserver(() => {
+          if (spills()) probe.spilled++;
+        });
+        observer.observe(ul);
+        const step = () => {
+          probe.frames++;
+          if (spills()) probe.spilled++;
+          if (probe.frames < 60) requestAnimationFrame(step);
+          else observer.disconnect();
+        };
+        requestAnimationFrame(step);
+      });
+    const spilled = () => shell.evaluate(() => (window as unknown as { spill: { spilled: number; frames: number } }).spill);
+
+    // One more from elsewhere: it scrolls from the first frame its rows don't fit.
+    await watchSpill();
+    await dispatch(shell, { t: 'node.move', nodeId: (await todayIds())[1], section: 'pinned', index: 0, parentId: null });
+    await expect(pinned).toHaveAttribute('data-capped');
+    await expect.poll(async () => (await spilled()).frames).toBe(60);
+    expect((await spilled()).spilled, 'no frame spills over Today').toBe(0);
+
+    // Back under the cap, then the tab on screen pinned with its key, past it: it lands at the end, in view.
+    const last = await pinned.locator('[data-row]').first().getAttribute('data-id');
+    await dispatch(shell, { t: 'node.move', nodeId: last, section: 'today', index: 0 });
+    await expect(pinned).not.toHaveAttribute('data-capped');
+    const tab = (await todayIds())[3]!;
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: tab });
+    await expect(today.locator(`[data-row][data-id="${tab}"]`)).toHaveAttribute('aria-selected', 'true');
+    await watchSpill();
+    await runAction(shell, 'tab.pin');
+    const row = pinned.locator(`[data-row][data-id="${tab}"]`);
+    await expect(row).toBeAttached();
+    await expect(pinned).toHaveAttribute('data-capped');
+    await expect.poll(() => row.evaluate((el) => {
+      const box = el.closest('ul')!.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+    })).toBe(true);
+    await expect.poll(async () => (await spilled()).frames).toBe(60);
+    expect((await spilled()).spilled, 'no frame spills over Today').toBe(0);
+  } finally {
+    await app.close();
+  }
+});

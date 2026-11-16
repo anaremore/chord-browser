@@ -5,6 +5,8 @@
  * which lays the shell out each time: about 16 ms over a drag through 200 tabs.
  * Chord knows its scrolling lists (`data-edge-scroll`), so this measures them
  * once when the drag starts and scrolls from a frame loop, reading no layout.
+ * A list that scrolls only at its cap (Pinned: `data-edge-scroll="capped"`)
+ * counts only while it's there (`data-capped`).
  */
 import { Plugin } from '@dnd-kit/abstract';
 import type { DragDropManager } from '@dnd-kit/dom';
@@ -38,6 +40,9 @@ export function edgeSpeed(x: number, y: number, box: Box): number {
   return 0;
 }
 
+/** Whether a list scrolls at all now: one that does only at its cap, only while it's there (an attribute, no layout). */
+const scrolls = (element: HTMLElement) => element.dataset['edgeScroll'] !== 'capped' || element.hasAttribute('data-capped');
+
 export class EdgeScroller extends Plugin<DragDropManager> {
   constructor(manager: DragDropManager) {
     super(manager);
@@ -62,7 +67,7 @@ export class EdgeScroller extends Plugin<DragDropManager> {
       let atEdge = false;
       speeds().forEach((speed, i) => {
         const list = lists[i]!;
-        if (speed === 0 || (speed < 0 && list.top <= 0)) return;
+        if (speed === 0 || (speed < 0 && list.top <= 0) || !scrolls(list.element)) return;
         // At the edge either way: the loop goes on while the pointer's there.
         atEdge = true;
         if (speed > 0 && list.top >= list.max) {

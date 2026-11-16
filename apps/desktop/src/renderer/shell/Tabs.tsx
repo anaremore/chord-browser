@@ -1226,6 +1226,8 @@ interface TreeKeys {
   dragging: boolean;
   moving: Moving | null;
   setMoving(moving: Moving | null): void;
+  /** A row picked up was moved with a key: it's kept in view where main's move puts it. */
+  moved(): void;
   setRenaming(id: string): void;
   openSplits: ReadonlySet<string>;
   toggleSplit(id: string, open: boolean): void;
@@ -1244,8 +1246,10 @@ function moveKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys, moving: Movi
   if (!node) return ctx.setMoving(null);
   const siblings = children(ctx.state, node.chordId, node.section, node.parentId);
   // React may move the row's element to reorder the list, which takes the focus away: give it back.
-  const move = (index: number, parentId = node.parentId, section = node.section) =>
+  const move = (index: number, parentId = node.parentId, section = node.section) => {
+    ctx.moved();
     void api.state.dispatch({ t: 'node.move', nodeId: node.id, section, index, parentId }).then(() => ctx.focus(node.id));
+  };
   switch (event.key) {
     case 'ArrowUp':
     case 'ArrowDown': {
@@ -1495,7 +1499,7 @@ export function SidebarTabs({
   // list mounts (a chord switch): they don't show, so they needn't hold up that frame. Each chord's lists are
   // where it left them.
   const win = useListWindow(ROW, `${chordId}:today`, today.length);
-  const pinnedWin = useListWindow(ROW, `${chordId}:pinned`, pinned.length);
+  const pinnedWin = useListWindow(ROW, `${chordId}:pinned`, pinned.length, { capped: true });
   const overscan = useSettled() ? OVERSCAN : 0;
   const [focused, setFocused] = useState<string | null>(null);
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
@@ -1630,14 +1634,18 @@ export function SidebarTabs({
     pinnedWin.reveal(pinnedAt.get(activeInPinned)!);
   });
 
-  // A row picked up and moved with the keys stays in view in its list wherever main's move puts it: the move lands
-  // after its key, sometimes a render after the keyboard was put on the row where it was. Only when its place
-  // changes, so scrolling away with the wheel is left alone.
+  // A row picked up and moved with a key stays in view in its list where main's move puts it: the move lands after
+  // the key, sometimes a render after the keyboard was put on the row where it was. Only after a key moved it, so
+  // scrolling away with the wheel, or rows coming and going above it (another window, a page), is left alone.
   const movingAt = moving ? (pinnedAt.get(moving.id) ?? todayAt.get(moving.id)) : undefined;
   const movingIn = moving && pinnedAt.has(moving.id) ? pinnedWin : win;
+  const keyMoved = useRef(false);
   useLayoutEffect(() => {
-    if (movingAt !== undefined) movingIn.reveal(movingAt);
-  }, [moving?.id, movingAt]);
+    if (!moving) keyMoved.current = false;
+    if (!keyMoved.current || movingAt === undefined) return;
+    keyMoved.current = false;
+    movingIn.reveal(movingAt);
+  }, [moving, movingAt]);
 
   // The keyboard asked for a row that wasn't mounted: now it is.
   useLayoutEffect(() => {
@@ -1739,6 +1747,7 @@ export function SidebarTabs({
           dragging,
           moving,
           setMoving,
+          moved: () => void (keyMoved.current = true),
           setRenaming,
           openSplits,
           toggleSplit,
@@ -1765,7 +1774,8 @@ export function SidebarTabs({
           <ul
             ref={pinnedRef}
             className={styles.pinnedList}
-            data-edge-scroll
+            // Edge scrolled only while it's at its cap (edge-scroll.ts).
+            data-edge-scroll="capped"
             role="tree"
             aria-label="Pinned"
             aria-describedby={help}
