@@ -383,6 +383,7 @@ export const SETTING_TRAVEL: Record<keyof Settings, SettingTravel> = {
   devtools: 'computer',
   proxy: 'export',
   encryptExports: 'sync',
+  passwords: 'sync',
 };
 
 /**
@@ -390,7 +391,7 @@ export const SETTING_TRAVEL: Record<keyof Settings, SettingTravel> = {
  * (`adBlocking.offSites`): the groups a settings change merges into part by
  * part. A setting that's replaced whole (the proxy, a list) is one field.
  */
-const GROUPS = ['motion', 'interface', 'spellcheck', 'adBlocking', 'tabCounts', 'assistant', 'reader', 'effects'] as const;
+const GROUPS = ['motion', 'interface', 'spellcheck', 'adBlocking', 'tabCounts', 'assistant', 'reader', 'effects', 'passwords'] as const;
 type Group = (typeof GROUPS)[number];
 /** The assistant's app and model depend on which CLI is installed on this computer. */
 const NOT_EXPORTED: Partial<Record<Group, readonly string[]>> = { assistant: ['provider', 'model'] };

@@ -15,6 +15,7 @@ export * from './media';
 export * from './merge';
 export * from './model';
 export * from './page';
+export * from './passwords';
 export * from './proxy';
 export * from './rank';
 export * from './reader';

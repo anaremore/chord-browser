@@ -5,13 +5,15 @@
   "description": "Chord's domain model: chords, tabs, commands and the reducer shared by main and renderers",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./password-sites": "./src/password-sites.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "fractional-indexing": "4.0.0",
-    "immer": "11.2.9"
+    "immer": "11.2.9",
+    "tldts": "7.4.19"
   }
 }
