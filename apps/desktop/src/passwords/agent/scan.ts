@@ -8,7 +8,7 @@
  * at most 2,000 controls and 250 ms. Values are read only when `values` is set, and
  * they never leave the page's renderer.
  */
-import { ASSISTANT_FORM_SCAN, ASSISTANT_FORM_SCAN_MS, PASSWORDS_MAX_FORMS, type FormWords, type PasswordField, type PasswordFormRecord } from '@chord/core';
+import { ASSISTANT_FORM_SCAN, ASSISTANT_FORM_SCAN_MS, PASSWORDS_MAX_FORMS, readsAsSubmit, type FormWords, type PasswordField, type PasswordFormRecord } from '@chord/core';
 
 /** The most credential forms the agent reports in one `forms` message (the schema's limit, which keeps it under the message limit). */
 export const MAX_REPORTED_FORMS = PASSWORDS_MAX_FORMS;
@@ -54,6 +54,12 @@ const allIn = (el: Element | Document, selector: string): Element[] => [...(el i
 const parentOf = (el: Element): Element | null => parentGetter.call(el) as Element | null;
 const tagOf = (el: Element): string => String(tagGetter.call(el));
 const textOf = (el: Element): string => String(textGetter.call(el) ?? '');
+const childNodesGetter = getter(nodeProto, 'childNodes');
+const nodeTypeGetter = getter(nodeProto, 'nodeType');
+const previousSiblingGetter = getter(nodeProto, 'previousSibling');
+const childrenOf = (n: Node): NodeListOf<ChildNode> => childNodesGetter.call(n) as NodeListOf<ChildNode>;
+const nodeTypeOf = (n: Node): number => Number(nodeTypeGetter.call(n));
+const previousOf = (n: Node): Node | null => previousSiblingGetter.call(n) as Node | null;
 const NO_WORDS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'BUTTON', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'SVG']);
 const BUTTONS = 'button, input[type=submit], input[type=button], input[type=image], [role=button], a';
 
@@ -64,14 +70,15 @@ const clip = (s: string | null | undefined, n: number): string => {
   return t.length > n ? t.slice(0, n) : t;
 };
 
-/** A node's text, never a field's value inside it (a text area's text is its value). */
+/** A node's text, never a field's value inside it (a text area's text is its value). Read through the prototypes (clobbering). */
 function words(node: Node, max: number): string {
   let out = '';
   const walk = (n: Node) => {
-    for (const c of n.childNodes) {
+    for (const c of childrenOf(n)) {
       if (out.length > max) return;
-      if (c.nodeType === Node.TEXT_NODE) out += ` ${c.nodeValue ?? ''}`;
-      else if (c.nodeType === Node.ELEMENT_NODE && !NO_WORDS.has((c as Element).tagName.toUpperCase())) walk(c);
+      const type = nodeTypeOf(c);
+      if (type === Node.TEXT_NODE) out += ` ${c.nodeValue ?? ''}`;
+      else if (type === Node.ELEMENT_NODE && !NO_WORDS.has(tagOf(c as Element).toUpperCase())) walk(c);
     }
   };
   walk(node);
@@ -82,9 +89,10 @@ function words(node: Node, max: number): string {
 function previousText(el: Element): string {
   let node: Element | null = el;
   for (let depth = 0; depth < 4 && node; depth++) {
-    for (let s = node.previousSibling; s; s = s.previousSibling) {
-      if (s.nodeType === Node.ELEMENT_NODE && /^(INPUT|SELECT|TEXTAREA)$/.test((s as Element).tagName)) return '';
-      const t = s.nodeType === Node.TEXT_NODE ? clip(s.nodeValue, 100) : s.nodeType === Node.ELEMENT_NODE ? words(s, 100) : '';
+    for (let s = previousOf(node); s; s = previousOf(s)) {
+      const type = nodeTypeOf(s);
+      if (type === Node.ELEMENT_NODE && /^(INPUT|SELECT|TEXTAREA)$/.test(tagOf(s as Element))) return '';
+      const t = type === Node.TEXT_NODE ? clip(s.nodeValue, 100) : type === Node.ELEMENT_NODE ? words(s, 100) : '';
       if (t) return t;
     }
     node = parentOf(node);
@@ -180,12 +188,14 @@ const NOT_SUBMIT = /\b(show|hide|reveal|toggle|view|forgot|forgotten|cancel|clos
  * button that reads as a show-password toggle, help or recovery (by its words, `aria-pressed`, or
  * `aria-controls` naming the password field), nor one inside the password field's own wrapper.
  */
-export function submitButtonFor(target: Element, password: Element | null, inForm: boolean): Element | null {
-  const button = target.closest(inForm ? 'button, input[type=submit], input[type=image]' : 'button, input[type=submit], input[type=button], input[type=image], [role=button]');
+export function submitButtonFor(target: Element, password: Element | null, form: HTMLFormElement | null): Element | null {
+  const button = target.closest(ANY_BUTTON);
   if (!button) return null;
-  if (inForm && !isSubmit(button)) return null;
   const words = `${buttonText(button)} ${attrOf(button, 'aria-label') ?? ''} ${attrOf(button, 'title') ?? ''}`;
   if (NOT_SUBMIT.test(words) || button.hasAttribute('aria-pressed')) return null;
+  // In a <form>: its submit buttons, and a plain button that a script signs in with (React apps, banks):
+  // one whose words say sign in, sign up, Next or Continue, or the form's only button.
+  if (form && !isSubmit(button) && !readsAsSubmit(words) && allIn(form, ANY_BUTTON).length !== 1) return null;
   if (password) {
     if (button.contains(password)) return null;
     const controls = (attrOf(button, 'aria-controls') ?? '').split(/\s+/);
@@ -193,7 +203,7 @@ export function submitButtonFor(target: Element, password: Element | null, inFor
     // The field's own wrapper (a box holding only it and its eye): a button there toggles it.
     const wrapper = parentOf(password);
     if (wrapper && tagOf(wrapper) !== 'FORM' && wrapper.contains(button) && allIn(wrapper, 'input, select, textarea').length === 1) return null;
-    if (!inForm) {
+    if (!form) {
       const scope = formlessScope(password);
       if (!scope || !scope.contains(button)) return null;
     }
@@ -201,11 +211,14 @@ export function submitButtonFor(target: Element, password: Element | null, inFor
   return button;
 }
 
+/** Any button a person can press to submit: a `<button>`, an input button, or an element with `role=button`. */
+const ANY_BUTTON = 'button, input[type=submit], input[type=button], input[type=image], [role=button]';
+
 /** The closest ancestor of `el` (up to 6 levels) that holds a button: a formless form's scope. */
 export function formlessScope(el: Element): Element | null {
-  let node = el.parentElement;
-  for (let depth = 0; depth < 6 && node && node.tagName !== 'BODY'; depth++, node = node.parentElement) {
-    if (node.querySelector('button, input[type=submit], input[type=button], [role=button]')) return node;
+  let node = parentOf(el);
+  for (let depth = 0; depth < 6 && node && tagOf(node) !== 'BODY'; depth++, node = parentOf(node)) {
+    if (allIn(node, 'button, input[type=submit], input[type=button], [role=button]').length) return node;
   }
   return null;
 }
@@ -247,6 +260,13 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
   const keys = options.keys ?? new WeakMap<Element, number>();
   const nextKey = options.nextKey ?? { value: 1 };
   const labelOf = labeller();
+  const safeLabel = (el: HTMLElement) => {
+    try {
+      return labelOf(el);
+    } catch {
+      return clip(el.getAttribute('placeholder'), 100);
+    }
+  };
   const groups = new Map<HTMLFormElement | null, { fields: PasswordField[]; elements: HTMLElement[] }>();
   let seen = 0;
   const controls = (options.only ?? doc.querySelectorAll('input, select, textarea')) as Iterable<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
@@ -268,7 +288,7 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
       id: clip(el.id, 80),
       name: clip(el.getAttribute('name'), 80),
       autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(),
-      label: labelOf(el),
+      label: safeLabel(el),
       placeholder: clip(el.getAttribute('placeholder'), 100),
       maxLength: 'maxLength' in el && typeof el.maxLength === 'number' ? el.maxLength : -1,
       readOnly: 'readOnly' in el && el.readOnly === true,

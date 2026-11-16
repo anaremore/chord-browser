@@ -95,7 +95,13 @@ describe('knowing you signed in (S17 §6)', () => {
     ['submitted, then you go elsewhere yourself before it navigates: nothing', [['candidate'], ['start', false], ['navigated', 200], ['settled']], ['submitted:submit']],
     ['no navigation, the form goes: signed in', [['candidate', { signal: 'button' }], ['gone']], ['submitted:button', 'signedIn:form-gone:-']],
     ['…with the request the page made: its status as a hint', [['candidate', { signal: 'button' }], ['hint', 200], ['gone']], ['submitted:button', 'signedIn:form-gone:response-ok']],
-    ['…and a failing one', [['candidate', { signal: 'button' }], ['hint', 401], ['gone']], ['submitted:button', 'signedIn:form-gone:response-error']],
+    ['…and a failing one vetoes the success: a 401, then the form taken away, is no sign-in', [['candidate', { signal: 'button' }], ['hint', 401], ['gone']], ['submitted:button', 'failed:error-response']],
+    ['a script\'s sign-in gets a 401 and says "wrong password"; then you follow "Forgot password?": no sign-in', [['candidate', { signal: 'button' }], ['hint', 401], ['start', true], ['navigated', 200], ['settled']], ['submitted:button', 'failed:error-response']],
+    ['…and after that, a link clicked within 5 minutes is nothing', [['candidate', { signal: 'button' }], ['hint', 401], ['gone'], ['start', true], ['navigated', 200], ['settled']], ['submitted:button', 'failed:error-response']],
+    ['the watch says `still` while a navigation is under way, which then never commits: failed', [['candidate'], ['start', true], ['still'], ['failedLoad']], ['submitted:submit', 'failed:still-shown']],
+    ['…and a link clicked later is no sign-in', [['candidate'], ['start', true], ['still'], ['failedLoad'], ['start', true], ['navigated', 200], ['settled']], ['submitted:submit', 'failed:still-shown']],
+    ['the watch says `gone` while a navigation is under way, which then never commits: signed in', [['candidate'], ['start', true], ['gone'], ['failedLoad']], ['submitted:submit', 'signedIn:form-gone:-']],
+    ['the watch answers while navigating, and the navigation commits: the new page decides', [['candidate'], ['start', true], ['still'], ['navigated', 200], ['forms', formsWith([])], ['settled']], ['submitted:submit', 'signedIn:navigation:-']],
     ['no navigation, the form stays: failed', [['candidate', { signal: 'enter' }], ['still']], ['submitted:enter', 'failed:still-shown']],
     ['an SPA route change, then the form goes', [['candidate'], ['inPage'], ['gone']], ['submitted:submit', 'signedIn:same-document:-']],
     ['a `gone` for another form says nothing', [['candidate'], ['gone', 'f2']], ['submitted:submit']],
@@ -110,9 +116,11 @@ describe('knowing you signed in (S17 §6)', () => {
     expect(run(steps)).toEqual(expected);
   });
 
-  it('a field with neither id nor name never matches another', () => {
+  it('a held field with neither id nor name: any password field shown again counts as reappeared (cautious)', () => {
     const anonymous = { type: 'password', id: '', name: '' };
-    expect(run([['candidate', { password: anonymous }], ['start', true], ['navigated', 200], ['forms', formsWith([{ ...signInForm, password: anonymous }])], ['settled']])).toEqual(['submitted:submit', 'signedIn:navigation:-']);
+    expect(run([['candidate', { password: anonymous }], ['start', true], ['navigated', 200], ['forms', formsWith([{ ...signInForm, password: { type: 'password', id: 'x', name: '' } }])], ['settled']])).toEqual(['submitted:submit', 'failed:reappeared']);
+    // …but not a first step, which shows no password.
+    expect(run([['candidate', { password: anonymous }], ['start', true], ['navigated', 200], ['forms', formsWith([{ ...signInForm, kind: 'username-only', password: null }])], ['settled']])).toEqual(['submitted:submit', 'signedIn:navigation:-']);
   });
 
   it('carries the origin main read, never one from the page', () => {

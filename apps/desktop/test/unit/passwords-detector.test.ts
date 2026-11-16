@@ -245,3 +245,56 @@ describe('the forms message fits the channel', () => {
     expect(checkMessage('forms', forms)).not.toBeNull();
   });
 });
+
+describe('focus traffic and a sign-in\'s messages', () => {
+  it('a page sending focus every frame can\'t crowd out the candidate, nor the forms that decide a sign-in', () => {
+    vi.useFakeTimers();
+    try {
+      const clock = { t: 0 };
+      const { page, seen } = setup({ clock });
+      // A carousel scrolling: a focus a frame, for a second.
+      for (let frame = 0; frame < 60; frame++) {
+        clock.t = frame * 16;
+        page.send('passwords:focus', { ...FOCUS, rect: { ...FOCUS.rect, y: frame } });
+      }
+      page.send('passwords:candidate', CANDIDATE);
+      page.emitter.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator: page.contents.mainFrame });
+      page.emitter.emit('did-navigate', {}, 'https://example.com/again', 200);
+      // The new page shows the same form: a failed sign-in, which must not read as a success.
+      page.send('passwords:forms', { forms: [{ formId: 'f1', kind: 'sign-in', username: CANDIDATE.username, password: CANDIDATE.password, newPassword: null }] });
+      page.emitter.emit('did-stop-loading');
+      vi.advanceTimersByTime(SETTLE_MS);
+      const types = seen.map(([t]) => t);
+      expect(types).toContain('submitted');
+      expect(types).toContain('failed');
+      expect(types).not.toContain('signedIn');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the blur that ends a focus main passed always passes, so main never believes a field still has focus', () => {
+    const { page, seen } = setup();
+    for (let i = 0; i < 50; i++) page.send('passwords:focus', FOCUS);
+    page.send('passwords:blur', { formId: 'f1' });
+    expect(seen.at(-1)![0]).toBe('blur');
+    // A second blur with nothing focused gets no free pass: blurs alone can't flood.
+    for (let i = 0; i < 50; i++) page.send('passwords:blur', { formId: 'f1' });
+    expect(seen.filter(([t]) => t === 'blur').length).toBeLessThanOrEqual(1 + MESSAGE_RATE.burst);
+  });
+
+  it('a frame\'s messages, refused, take nothing from the page\'s buckets', () => {
+    const { page, seen } = setup();
+    for (let i = 0; i < 100; i++) page.send('passwords:focus', FOCUS, frame('https://ads.example', 3, frame('https://example.com')));
+    page.send('passwords:focus', FOCUS);
+    expect(seen.map(([t]) => t)).toEqual(['focus']);
+  });
+
+  it('a new document starts with full buckets', () => {
+    const { page, seen } = setup();
+    for (let i = 0; i < 100; i++) page.send('passwords:focus', FOCUS);
+    page.emitter.emit('did-navigate', {}, 'https://example.com/next', 200);
+    for (let i = 0; i < 100; i++) page.send('passwords:focus', FOCUS);
+    expect(seen.length).toBe(2 * MESSAGE_RATE.burst);
+  });
+});

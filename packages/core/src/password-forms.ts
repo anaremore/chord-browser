@@ -262,3 +262,12 @@ export function classifyPasswordForm(form: PasswordFormRecord, mode: ParseMode, 
  * the channel's 16 KB limit; a page with more has the first 20 checked.
  */
 export const PASSWORDS_MAX_FORMS = 20;
+
+/**
+ * Whether a button's words say it submits a credential form: sign in, sign up, Next or Continue
+ * (S17 §6 step 2). For a `type="button"` that a page's script signs in with, which no `submit` follows.
+ */
+export const readsAsSubmit = (words: string): boolean => {
+  const text = spaced(words);
+  return SIGN_IN.test(text) || SIGN_UP.test(text) || NEXT.test(text.trim());
+};

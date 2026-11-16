@@ -14,8 +14,10 @@
  *   against @chord/ipc's strict schemas and a size limit; none carries a field's value.
  * - **Private windows** fill and never save (S17 §7): `signedIn` and `failed` never fire there.
  * - **A page can't flood main:** each page's messages pass a token bucket (`MESSAGE_RATE`) before
- *   anything is parsed; the excess is dropped without a word. The agent sends far fewer: focus
- *   and blur at most once a frame, one candidate per submit.
+ *   anything is parsed; the excess is dropped without a word. Focus and blur have one bucket and
+ *   the rest (`candidate`, `forms`, `gone`, `still`, `hint`) another, so a page busy with focus
+ *   can't crowd out a sign-in's messages; both start afresh with each new document. The agent
+ *   sends far fewer: focus, blur and forms at most once a frame, one candidate per submit.
  *
  * Events (`events`): `focus`, `blur`, `submitted`, `signedIn`, `failed`. Nothing here logs a
  * payload: a refused message is dropped without a word.
@@ -181,18 +183,28 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
 
     contents.ipc.removeHandler(PASSWORDS_AGENT_SOURCE);
     contents.ipc.handle(PASSWORDS_AGENT_SOURCE, async (event) => (allowed(event) ? await source() : null));
-    // One bucket for the page, whichever channel: checked before a message is sized or parsed.
-    const bucket = tokenBucket(now);
+    // Two buckets for the page: focus and blur, and the sign-in's own messages. Checked after the sender, before a message is sized or parsed.
+    let buckets = { focus: tokenBucket(now), lifecycle: tokenBucket(now) };
+    /** Main told the vault a field has focus: the blur that ends it always passes, so what main believes stays true. */
+    let focusShown = false;
     const on = <C extends PasswordsAgentChannel>(channel: C, handle: (message: PasswordsAgentMessage<C>, origin: string, event: IpcMainEvent) => void) => {
       contents.ipc.on(`passwords:${channel}`, (event, raw: unknown) => {
-        if (!bucket.take()) return;
         const origin = allowed(event);
-        const message = origin ? checkMessage(channel, raw) : null;
-        if (origin && message) handle(message, origin, event);
+        if (!origin) return;
+        const free = channel === 'blur' && focusShown;
+        if (!free && !(channel === 'focus' || channel === 'blur' ? buckets.focus : buckets.lifecycle).take()) return;
+        const message = checkMessage(channel, raw);
+        if (message) handle(message, origin, event);
       });
     };
-    on('focus', (m, origin, event) => events.emit('focus', { ...m, contents, frame: event.senderFrame!, origin, zoomFactor: contents.getZoomFactor() }));
-    on('blur', (m) => events.emit('blur', { contents, formId: m.formId }));
+    on('focus', (m, origin, event) => {
+      focusShown = true;
+      events.emit('focus', { ...m, contents, frame: event.senderFrame!, origin, zoomFactor: contents.getZoomFactor() });
+    });
+    on('blur', (m) => {
+      focusShown = false;
+      events.emit('blur', { contents, formId: m.formId });
+    });
     on('candidate', (m, origin) => emit(tracker.candidate(m, origin)));
     on('forms', (m) => emit(tracker.forms(m)));
     on('gone', (m) => emit(tracker.gone(m.formId)));
@@ -206,7 +218,12 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       // Started by the page (a form's post, a script's location change), not by you from Chord's address bar or Back.
       emit(tracker.navigationStarted(!!details.initiator));
     });
-    contents.on('did-navigate', (_event, _url, code) => emit(tracker.navigated(code)));
+    contents.on('did-navigate', (_event, _url, code) => {
+      // A new document: its agent starts with full buckets, and nothing of the last page has focus.
+      buckets = { focus: tokenBucket(now), lifecycle: tokenBucket(now) };
+      focusShown = false;
+      emit(tracker.navigated(code));
+    });
     // A navigation that never commits (an aborted one, a download, a 204, a mailto: link): back to waiting on the form.
     contents.on('did-fail-load', (_event, _code, _description, _url, isMainFrame) => {
       if (isMainFrame) emit(tracker.navigationFailed());

@@ -15,7 +15,9 @@
  * - **neither** if the navigation never committed (a 204, a download, an aborted one): the form
  *   stays submitted, and its `gone` or `still` decides.
  * A request to the page's own origin seen after the submit (`hint`, the PerformanceObserver;
- * M0 Q7) goes along as a hint, never as the decision.
+ * M0 Q7) goes along as a hint. It's never the reason for a success, but an error (400 or more)
+ * vetoes one: a sign-in script that got a 401 and showed "wrong password" didn't sign you in,
+ * whatever the page does next.
  *
  * It never holds a field's value: candidates carry none (packages/ipc, passwords.ts).
  */
@@ -42,6 +44,8 @@ interface Held {
   submitted: boolean;
   /** The last request status seen after the submit. */
   status: number | null;
+  /** The agent's watch answered while a navigation was under way: applied if that navigation never commits. */
+  watched: 'gone' | 'still' | null;
 }
 
 type Phase =
@@ -53,7 +57,18 @@ type Phase =
   /** Navigated within the document: the agent's `gone` or `still` decides. */
   | { readonly t: 'same-document'; readonly held: Held };
 
-const sameField = (a: PasswordsFieldSignature | null, b: PasswordsFieldSignature | null) => !!a && !!b && a.type === b.type && a.id === b.id && a.name === b.name && (a.id !== '' || a.name !== '');
+/**
+ * Whether a form on the new page shows the held field again: the same type, id and name. A held
+ * field with neither id nor name can't be told apart, so any field of its type counts: cautious,
+ * since a wrong "reappeared" only loses an offer to save, and a wrong "gone" makes one for a failed sign-in.
+ */
+const sameField = (held: PasswordsFieldSignature | null, shown: PasswordsFieldSignature | null) => {
+  if (!held || !shown || held.type !== shown.type) return false;
+  if (held.id === '' && held.name === '') return true;
+  return held.id === shown.id && held.name === shown.name;
+};
+/** A request error after the submit: no success, whatever follows. */
+const vetoed = (held: Held) => held.status !== null && held.status >= 400;
 
 const hintOf = (status: number | null): ResponseHint => (status === null ? null : status < 400 ? 'response-ok' : 'response-error');
 
@@ -77,8 +92,10 @@ export class SubmissionTracker {
     // A new candidate for the same form keeps its submit (`blur` then `submit`, or the other way round).
     const already = same && before.submitted;
     const submitted = candidate.signal !== 'blur' || already;
-    this.held = { candidate, origin, at: this.now(), submitted, status: same ? before.status : null };
-    // One submit is one `submitted`, however many signals it made.
+    this.held = { candidate, origin, at: this.now(), submitted, status: same ? before.status : null, watched: same && already ? before.watched : null };
+    // One submit is one `submitted`, however many signals it made. A second submit of the same form
+    // while the first is still undecided (within the agent's 10 s watch) emits nothing either: the
+    // save card's phase decides what a resubmit means.
     if (candidate.signal === 'blur' || already) return [];
     return [{ type: 'submitted', formId: candidate.formId, kind: candidate.kind, origin, signal: candidate.signal }];
   }
@@ -111,7 +128,14 @@ export class SubmissionTracker {
 
   /** The navigation ended without committing a document (a 204, a download, an aborted or failed one): nothing is decided by it. */
   navigationFailed(): SavingOutcome[] {
-    if (this.phase.t === 'navigating') this.phase = { t: 'idle' };
+    if (this.phase.t !== 'navigating') return [];
+    const { held } = this.phase;
+    this.phase = { t: 'idle' };
+    // The agent's watch may have answered while it waited: that answer decides now.
+    const watched = held.watched;
+    held.watched = null;
+    if (watched === 'gone') return this.gone(held.candidate.formId);
+    if (watched === 'still') return this.still(held.candidate.formId);
     return [];
   }
 
@@ -135,10 +159,10 @@ export class SubmissionTracker {
     this.phase = { t: 'idle' };
     const c = held.candidate;
     // The same password field shown again, in a form that isn't a first step: the sign-in didn't take.
-    const reappeared = (forms ?? []).some((f) => f.kind !== 'username-only' && (sameField(f.password, c.password ?? c.newPassword) || sameField(f.newPassword, c.newPassword ?? c.password)));
-    if (reappeared) {
+    const reappeared = (forms ?? []).some((f) => f.kind !== 'username-only' && (sameField(c.password ?? c.newPassword, f.password) || sameField(c.newPassword ?? c.password, f.newPassword)));
+    if (reappeared || vetoed(held)) {
       held.submitted = false;
-      return [{ type: 'failed', formId: c.formId, kind: c.kind, origin: held.origin, why: 'reappeared' }];
+      return [{ type: 'failed', formId: c.formId, kind: c.kind, origin: held.origin, why: reappeared ? 'reappeared' : 'error-response' }];
     }
     this.held = null;
     return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status) }];
@@ -154,9 +178,19 @@ export class SubmissionTracker {
   /** After a submit signal, the agent saw the password field go. */
   gone(formId: string): SavingOutcome[] {
     const held = this.current();
-    if (!held || !held.submitted || held.candidate.formId !== formId || this.phase.t === 'navigating' || this.phase.t === 'settling') return [];
+    if (!held || !held.submitted || held.candidate.formId !== formId) return [];
+    if (this.phase.t === 'navigating') {
+      // The page is navigating: the new page decides, unless the navigation never commits (navigationFailed).
+      held.watched = 'gone';
+      return [];
+    }
+    if (this.phase.t === 'settling') return [];
     const how = this.phase.t === 'same-document' ? 'same-document' : 'form-gone';
     this.phase = { t: 'idle' };
+    if (vetoed(held)) {
+      held.submitted = false;
+      return [{ type: 'failed', formId, kind: held.candidate.kind, origin: held.origin, why: 'error-response' }];
+    }
     this.held = null;
     return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status) }];
   }
@@ -164,7 +198,13 @@ export class SubmissionTracker {
   /** After a submit signal, the form was still shown at the end of the agent's watch. */
   still(formId: string): SavingOutcome[] {
     const held = this.current();
-    if (!held || !held.submitted || held.candidate.formId !== formId || this.phase.t === 'navigating' || this.phase.t === 'settling') return [];
+    if (!held || !held.submitted || held.candidate.formId !== formId) return [];
+    if (this.phase.t === 'navigating') {
+      // The page is navigating: the new page decides, unless the navigation never commits (navigationFailed).
+      held.watched = 'still';
+      return [];
+    }
+    if (this.phase.t === 'settling') return [];
     this.phase = { t: 'idle' };
     held.submitted = false;
     return [{ type: 'failed', formId, kind: held.candidate.kind, origin: held.origin, why: 'still-shown' }];
