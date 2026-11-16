@@ -60,7 +60,15 @@ function fakeTimers() {
 
 const flush = () => new Promise<void>((done) => setTimeout(done, 0));
 
-function setup({ accounts = { state: 'open', offers: OFFERS, insecure: false } as AccountsAnswer, candidate = { kind: 'new', setup: false } as CandidateAnswer, tab = {} as Partial<AssistTab> | null, shown = true } = {}) {
+const naiveSite = async (origin: string) => new URL(origin).hostname.split('.').slice(-2).join('.');
+
+function setup({
+  accounts = { state: 'open', offers: OFFERS, insecure: false } as AccountsAnswer,
+  candidate = { kind: 'new', setup: false } as CandidateAnswer,
+  tab = {} as Partial<AssistTab> | null,
+  shown = true,
+  siteOf = naiveSite as (origin: string) => Promise<string | null>,
+} = {}) {
   const events = new EventEmitter<PasswordDetectorEvents>();
   const timers = fakeTimers();
   const vault = {
@@ -89,7 +97,7 @@ function setup({ accounts = { state: 'open', offers: OFFERS, insecure: false } a
     now: timers.now,
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
-    siteOf: async (origin) => new URL(origin).hostname.split('.').slice(-2).join('.'),
+    siteOf,
   });
   assist.attachPage(page as unknown as WebContents);
   const contents = page as unknown as WebContents;
@@ -535,5 +543,59 @@ describe('how long a card lasts', () => {
     await t.signedIn({ values: { username: 'grace', password: 'other' } });
     expect(t.assist.reveal('w1', first.id)).toBeNull();
     expect(t.assist.cardFor('n1')).toMatchObject({ username: 'grace' });
+  });
+});
+
+describe('a card is only for the page you’re on (security review of 0fdf159)', () => {
+  /** A promise the test resolves when it likes. */
+  const gate = <T,>() => {
+    let open!: (value: T) => void;
+    const promise = new Promise<T>((done) => (open = done));
+    return { promise, open };
+  };
+
+  it('the tab commits another site while the vault answers: no card, and nothing of the sign-in kept', async () => {
+    const t = setup();
+    const answer = gate<CandidateAnswer>();
+    t.vault.candidateFor.mockImplementationOnce(() => answer.promise);
+    const signedIn = t.signedIn();
+    t.page.emit('did-navigate', {}, 'https://example.org/', 200);
+    answer.open({ kind: 'new', setup: false });
+    await signedIn;
+    await flush();
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(t.host.changed).not.toHaveBeenCalled();
+  });
+
+  it('…or while its site is worked out', async () => {
+    const site = gate<string | null>();
+    const t = setup({ siteOf: () => site.promise });
+    const signedIn = t.signedIn();
+    await flush();
+    expect(t.vault.candidateFor).toHaveBeenCalled();
+    t.page.emit('did-navigate', {}, 'https://example.org/', 200);
+    site.open('github.com');
+    await signedIn;
+    await flush();
+    expect(t.assist.cardFor('n1')).toBeNull();
+  });
+
+  it('the card goes while the unlock card is up: the vault isn’t asked to save after the unlock', async () => {
+    const t = setup({ candidate: { kind: 'locked' } });
+    await t.signedIn();
+    const card = t.assist.cardFor('n1')!;
+    t.vault.saveCandidate.mockResolvedValueOnce({ ok: false, problem: 'locked' });
+    const unlocked = gate<boolean>();
+    t.vault.askUnlock.mockImplementationOnce(() => unlocked.promise);
+    const saving = t.assist.answer('w1', card.id, 'save', {});
+    await flush();
+    expect(t.vault.askUnlock).toHaveBeenCalled();
+    // A minute passes (or the tab leaves the site) while you type the passphrase.
+    t.timers.advance(SAVE_CARD_MS);
+    expect(t.assist.cardFor('n1')).toBeNull();
+    unlocked.open(true);
+    await saving;
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
+    expect(t.host.toast).not.toHaveBeenCalled();
   });
 });

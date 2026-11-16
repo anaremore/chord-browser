@@ -163,6 +163,14 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
   const now = options.now ?? Date.now;
 
   const isEnabled = (profileId: string) => explicit.get(profileId) ?? everyone;
+  /** Each tab's page and its tracker: turned off there, what it holds (a typed sign-in) goes at once. */
+  const pages = new Map<WebContents, SubmissionTracker>();
+  const forgetWhereOff = () => {
+    for (const [contents, tracker] of pages) {
+      const entry = sessions.get(contents.session);
+      if (!entry || !isEnabled(entry.profileId)) tracker.reset();
+    }
+  };
   const apply = (entry: SessionEntry) => {
     const on = isEnabled(entry.profileId);
     if (on && !entry.registration) entry.registration = entry.session.registerPreloadScript({ type: 'frame', id: SENTINEL_ID, filePath: options.preloadPath });
@@ -184,6 +192,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       return pageOrigin(event.senderFrame, contents.mainFrame);
     };
     const tracker = new SubmissionTracker(now);
+    pages.set(contents, tracker);
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
     const emit = (outcomes: SavingOutcome[]) => {
       const priv = entryOf()?.isPrivate ?? true;
@@ -272,6 +281,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
     contents.once('destroyed', () => {
       if (settleTimer) clearTimeout(settleTimer);
       tracker.reset();
+      pages.delete(contents);
     });
   }
 
@@ -297,12 +307,14 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
         explicit.clear();
       } else for (const id of profileIds) explicit.set(id, on);
       for (const entry of sessions.values()) apply(entry);
+      forgetWhereOff();
     },
     setProfiles(profileIds) {
       everyone = false;
       explicit.clear();
       for (const id of profileIds) explicit.set(id, true);
       for (const entry of sessions.values()) apply(entry);
+      forgetWhereOff();
     },
     isEnabled,
   };

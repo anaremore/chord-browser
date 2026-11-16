@@ -410,11 +410,15 @@ export class PasswordAssist {
     // Never in a private window (the detector and the vault refuse too), only a sign-in, and only with what was typed.
     if (!tab || tab.private || !e.values || !SAVE_KINDS.has(e.kind)) return;
     const values = { ...e.values };
+    // The document the sign-in ended on: if the tab commits another while the vault answers, the card would be for a
+    // page you've left (and `leftSite`, which runs at that commit, found no card to drop yet).
+    const doc = this.docs.get(e.contents) ?? 0;
+    const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc;
     const answer = await vault.candidateFor({ origin: e.origin, username: values.username, password: values.password, chordId: tab.chordId });
-    if (e.contents.isDestroyed()) return;
+    if (!here()) return;
     if (answer.kind !== 'new' && answer.kind !== 'update' && answer.kind !== 'locked') return;
     const site = await this.siteOf(e.origin).catch(() => null);
-    if (e.contents.isDestroyed()) return;
+    if (!here()) return;
     const before = this.cards.get(tab.nodeId);
     if (before) this.dropCard(before, false);
     const card: Card = {
@@ -534,7 +538,8 @@ export class PasswordAssist {
     const request = { origin: card.origin, username, password: values.password, chordId: card.tab.chordId, ...(card.setup && details.passphrase !== undefined ? { passphrase: details.passphrase } : {}) };
     const setup = card.setup;
     let saved = await vault.saveCandidate(request).catch(() => ({ ok: false as const, problem: 'io' as const }));
-    if (!saved.ok && saved.problem === 'locked' && (await vault.askUnlock(this.windowOf(card)))) {
+    // Locked: unlock, then save again, unless the card went meanwhile (×, a minute, the site left), taking its values with it.
+    if (!saved.ok && saved.problem === 'locked' && (await vault.askUnlock(this.windowOf(card))) && this.cards.get(card.tab.nodeId) === card) {
       saved = await vault.saveCandidate(request).catch(() => ({ ok: false as const, problem: 'io' as const }));
     }
     if (this.cards.get(card.tab.nodeId) !== card) return;

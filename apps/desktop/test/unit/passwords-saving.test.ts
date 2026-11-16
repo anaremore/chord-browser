@@ -181,3 +181,62 @@ describe('what was typed (values): held for the save card, never longer', () => 
     expect(JSON.stringify(t)).not.toContain(typed.username);
   });
 });
+
+describe('the 5 minutes run by themselves (no later call needed)', () => {
+  const typed = { username: 'ada@example.com', password: 'correct horse' };
+  /** A clock and timers moved by hand. */
+  function clocked() {
+    const clock = { now: 0 };
+    const timers = new Map<number, { at: number; run: () => void }>();
+    let next = 1;
+    const tracker = new SubmissionTracker(() => clock.now, {
+      setTimeout: (run, ms) => (timers.set(next, { at: clock.now + ms, run }), next++),
+      clearTimeout: (id) => void timers.delete(id as number),
+    });
+    const advance = (ms: number) => {
+      clock.now += ms;
+      for (const [id, t] of [...timers]) if (t.at <= clock.now && timers.delete(id)) t.run();
+    };
+    return { tracker, advance, pending: () => timers.size };
+  }
+  const leaks = (t: SubmissionTracker) => /ada@example\.com|correct horse/.test(JSON.stringify(t));
+
+  it.each<[string, (t: SubmissionTracker) => void]>([
+    ['held, nothing else happening', () => {}],
+    ['a navigation the page started that never ends (navigating)', (t) => t.navigationStarted(true)],
+    ['an SPA route change whose watch never answers (same-document)', (t) => t.navigatedInPage()],
+    ['a new page whose forms never come (settling)', (t) => (t.navigationStarted(true), t.navigated(200))],
+  ])('%s: the values go at HOLD_MS', (_name, then) => {
+    const { tracker, advance } = clocked();
+    tracker.candidate(candidate({ values: typed }), ORIGIN);
+    then(tracker);
+    advance(HOLD_MS - 1);
+    expect(leaks(tracker)).toBe(true);
+    advance(1);
+    expect(leaks(tracker)).toBe(false);
+    // And nothing waits on the forgotten form: a late answer decides nothing.
+    expect([...tracker.gone('f1'), ...tracker.settled()]).toEqual([]);
+  });
+
+  it('a newer submit’s values count their own 5 minutes, and the older ones go with them', () => {
+    const { tracker, advance } = clocked();
+    tracker.candidate(candidate({ values: { ...typed, password: 'first try' } }), ORIGIN);
+    advance(HOLD_MS - 10);
+    tracker.candidate(candidate({ values: typed }), ORIGIN);
+    advance(20);
+    expect(leaks(tracker)).toBe(true);
+    expect(JSON.stringify(tracker)).not.toContain('first try');
+    advance(HOLD_MS);
+    expect(leaks(tracker)).toBe(false);
+  });
+
+  it('reset (passwords off there, the page gone) drops them at once, from the navigation waiting too, and stops the timer', () => {
+    const { tracker, pending } = clocked();
+    tracker.candidate(candidate({ values: typed }), ORIGIN);
+    tracker.navigationStarted(true);
+    expect(pending()).toBe(1);
+    tracker.reset();
+    expect(leaks(tracker)).toBe(false);
+    expect(pending()).toBe(0);
+  });
+});

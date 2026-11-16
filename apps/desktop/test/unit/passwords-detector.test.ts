@@ -110,6 +110,37 @@ describe('who may talk to the detector', () => {
     expect(seen[0]![1]).toMatchObject({ ...FOCUS, origin: 'https://example.com', zoomFactor: 1.25 });
   });
 
+  it('refuses what was typed from anything but a tab\'s main frame: a subframe, another site\'s frame, a page that isn\'t a tab\'s', () => {
+    const values = { username: 'ada@example.com', password: 'hunter2' };
+    const { detector, session, page, seen } = setup();
+    for (const from of [frame('https://example.com', 2, frame('https://example.com')), frame('https://ads.example', 3, frame('https://example.com'))]) {
+      page.send('passwords:candidate', { ...CANDIDATE, values }, from);
+      page.send('passwords:gone', { formId: 'f1' }, from);
+    }
+    // Peek, a pop-up, an extension's page on the chord's session: it gets the sentinel's answer, and no channel.
+    const other = fakeContents(session);
+    detector.attachOther(other.contents);
+    other.send('passwords:candidate', { ...CANDIDATE, values });
+    other.send('passwords:gone', { formId: 'f1' });
+    expect(seen).toEqual([]);
+    // The tab's main frame still decides nothing from what those sent.
+    page.send('passwords:gone', { formId: 'f1' });
+    expect(seen).toEqual([]);
+  });
+
+  it('passwords turned off for the chord while a sign-in is held: what was typed goes at once', () => {
+    for (const off of [(d: ReturnType<typeof setup>['detector']) => d.setEnabled(false, ['p1']), (d: ReturnType<typeof setup>['detector']) => d.setProfiles([])]) {
+      const { detector, page, seen } = setup();
+      page.send('passwords:candidate', { ...CANDIDATE, values: { username: 'ada@example.com', password: 'hunter2' } });
+      off(detector);
+      detector.setEnabled(true);
+      // Back on: the form held before is forgotten, so its watch's answer is no sign-in, and no values come out.
+      page.send('passwords:gone', { formId: 'f1' });
+      expect(seen.map(([t]) => t)).toEqual(['submitted']);
+      expect(JSON.stringify(seen)).not.toContain('hunter2');
+    }
+  });
+
   it('drops messages from a chord turned off, without a restart', () => {
     const { detector, page, seen } = setup();
     detector.setEnabled(false);

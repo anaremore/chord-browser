@@ -23,8 +23,11 @@
  * username and the password to save). They're held here with the form, in memory only, and
  * leave in one place: the `signedIn` that the save card is offered from. A sign-in that
  * failed drops them (a corrected retry sends its own), and so does everything that forgets
- * the form: a navigation of your own, the 5 minutes running out, the page going. A candidate
- * sent as you leave the field never carries any.
+ * the form: a navigation of your own, the page going, passwords turned off there (`reset`).
+ * The 5 minutes are a timer of their own, started as values arrive: when it runs, they go from
+ * the held form and from the navigation waiting on it, whether or not anything else ever
+ * reaches the tracker (a watch that never answers, a message the page's rate limit dropped).
+ * A candidate sent as you leave the field never carries any.
  */
 import type { PasswordsCandidate, PasswordsFieldSignature, PasswordsForms } from '@chord/ipc';
 
@@ -91,11 +94,47 @@ const failedHeld = (held: Held) => {
 /** The sign-in's values, as the save card takes them. */
 const valuesOf = (held: Held): CandidateValues | null => held.candidate.values ?? null;
 
+/** The tracker's timer: the real one in main, a fake in tests. */
+export interface TrackerTimers {
+  setTimeout(run: () => void, ms: number): unknown;
+  clearTimeout(timer: unknown): void;
+}
+const realTimers: TrackerTimers = {
+  setTimeout: (run, ms) => setTimeout(run, ms),
+  clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
+
 export class SubmissionTracker {
   private held: Held | null = null;
   private phase: Phase = { t: 'idle' };
+  /** Runs `HOLD_MS` after the newest values came: by then every value held is that old, and all go. (`#`: never in a JSON dump of the tracker.) */
+  #valuesTimer: unknown = null;
+  readonly #timers: TrackerTimers;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    timers: TrackerTimers = realTimers,
+  ) {
+    this.#timers = timers;
+  }
+
+  /** Values came: the 5 minutes count from now, for every value held. */
+  private holdValues(): void {
+    if (this.#valuesTimer !== null) this.#timers.clearTimeout(this.#valuesTimer);
+    this.#valuesTimer = this.#timers.setTimeout(() => {
+      this.#valuesTimer = null;
+      this.dropValues();
+      // What's held as long is forgotten too: the form, and a navigation still waiting on it.
+      const old = (held: Held | null) => !!held && this.now() - held.at >= HOLD_MS;
+      if (old(this.held)) this.held = null;
+      if (this.phase.t !== 'idle' && old(this.phase.held)) this.phase = { t: 'idle' };
+    }, HOLD_MS);
+  }
+
+  /** What was typed goes from both places it can be: the held form, and the one a navigation waits on. */
+  private dropValues(): void {
+    for (const held of [this.held, this.phase.t === 'idle' ? null : this.phase.held]) if (held?.candidate.values) held.candidate = withoutValues(held.candidate);
+  }
 
   /** The held form, if any and not expired. */
   private current(): Held | null {
@@ -124,6 +163,7 @@ export class SubmissionTracker {
       error: carry ? before.error : false,
       watched: same && already ? before.watched : null,
     };
+    if (values && candidate.values) this.holdValues();
     // One submit is one `submitted`, however many signals it made. A second submit of the same form
     // while the first is still undecided (within the agent's 10 s watch) emits nothing either: the
     // save card's phase decides what a resubmit means.
@@ -253,7 +293,11 @@ export class SubmissionTracker {
     return this.phase.t === 'navigating';
   }
 
+  /** Forget the form and anything typed: a navigation of your own, the page going, passwords turned off there. */
   reset(): void {
+    this.dropValues();
+    if (this.#valuesTimer !== null) this.#timers.clearTimeout(this.#valuesTimer);
+    this.#valuesTimer = null;
     this.held = null;
     this.phase = { t: 'idle' };
   }
