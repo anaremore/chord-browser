@@ -18,6 +18,8 @@ export interface MenuKeys {
 export interface MenuKeyInput {
   readonly type: string;
   readonly key: string;
+  /** The physical key (`KeyA`, `Enter`, `NumpadEnter`): what a keyUp is matched to its keyDown by, where Electron gives it. */
+  readonly code?: string;
   readonly control?: boolean;
   readonly meta?: boolean;
   readonly alt?: boolean;
@@ -55,21 +57,30 @@ export function routeMenuKey(menu: MenuKeys | null, input: MenuKeyInput): MenuKe
   }
 }
 
+/** Which key an event is: its physical key where Electron says (a keyUp's `key` can differ, with Shift), else its `key`. */
+export const keyIdOf = (input: MenuKeyInput): string => input.code || input.key;
+
+/** How many other events a closed menu's listener waits through for a taken key's keyUp, which may never come (focus left the window). */
+export const TAKEN_KEY_PATIENCE = 10;
+
 /**
  * After the menu took a key's keyDown, the rest of that key is the menu's too: its keyUp, and
  * the character Enter makes. Otherwise the page would see half a key. A form that submits on
  * Enter's keyup would submit before the fill, and a site's own suggestion list moves on ↓'s
  * keyup. This is asked for every event that isn't a keyDown the open menu routes, while the
- * menu is open and once it closes. The listener goes once nothing is `taken`, or after the first
- * event this doesn't take (one more event at most).
+ * menu is open and once it closes. `taken` holds each key by `keyIdOf`, so another key pressed
+ * in between doesn't let a taken key's keyUp through. Once the menu has closed, the listener goes
+ * when nothing is `taken`, or after `TAKEN_KEY_PATIENCE` events this doesn't take.
  */
 export function routeTakenKey(taken: ReadonlySet<string>, input: MenuKeyInput): { take: boolean; taken: ReadonlySet<string> } {
-  if (input.type === 'keyUp' && taken.has(input.key)) {
+  const id = keyIdOf(input);
+  if (input.type === 'keyUp' && taken.has(id)) {
     const rest = new Set(taken);
-    rest.delete(input.key);
+    rest.delete(id);
     return { take: true, taken: rest };
   }
   // The character a taken key types (Enter's carriage return) goes with it; its keyUp still ends it.
-  if (input.type === 'char' && (taken.has(input.key) || (taken.has('Enter') && (input.key === '\r' || input.key === '\n')))) return { take: true, taken };
+  const enter = taken.has('Enter') || taken.has('NumpadEnter');
+  if (input.type === 'char' && (taken.has(id) || (enter && (input.key === '\r' || input.key === '\n')))) return { take: true, taken };
   return { take: false, taken };
 }

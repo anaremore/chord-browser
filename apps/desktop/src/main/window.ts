@@ -1323,8 +1323,13 @@ export class AppWindow {
         root.removeChildView(view);
         root.addChildView(view, root.children.indexOf(this.popover) + 1);
         view.setVisible(true);
+        // Something of Chord's is over the pages now: a docked Chord Player steps aside (player/dock.ts).
+        this.placementChanged();
       }
-    } else if (view.getVisible()) view.setVisible(false);
+    } else if (view.getVisible()) {
+      view.setVisible(false);
+      this.placementChanged();
+    }
   }
 
   private placementChanged(): void {
@@ -1338,7 +1343,7 @@ export class AppWindow {
    * moving pictures of them.
    */
   private get pagesCovered(): boolean {
-    return this.overlayVisible || this.popover.getVisible() || this.preview.getVisible() || Boolean(this.floating) || this.shellRaised || this.snapshots.active;
+    return this.overlayVisible || this.popover.getVisible() || Boolean(this.menuView?.getVisible()) || this.preview.getVisible() || Boolean(this.floating) || this.shellRaised || this.snapshots.active;
   }
 
   /** Where Chord Player would go, docked in this tab (`contents`): its pane on screen, in DIPs (player/dock.ts). */

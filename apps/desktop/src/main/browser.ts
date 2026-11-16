@@ -96,6 +96,7 @@ import type { AuthBroker } from './http-auth';
 import type { PasskeyBroker } from './passkeys';
 import type { PasswordService } from './passwords/service';
 import { PasswordAssist, type AssistVault } from './passwords/assist';
+import { popoverSender } from './passwords/senders';
 import type { PasswordDetector } from './passwords/detector';
 import type { Screenshots } from './screenshots/service';
 import { HistorySaver } from './history-saver';
@@ -1418,7 +1419,8 @@ export class Browser {
       auth: this.options.httpAuth.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
       passkey: this.options.passkeys.promptFor(this.peeks.nodeOf(w) ?? activeTabId(state, w.id)),
       passwordsUnlock: this.options.passwords.unlockPromptFor(w.id),
-      passwordMenu: this.passwordAssist.menuFor(w.id),
+      // The menu is its own view's (`menuState`): the cards' page doesn't re-render on every ↓ ↑.
+      passwordMenu: null,
       passwordSave: this.passwordAssist.cardFor(activeTabId(state, w.id)),
       // Not over first run (which asks itself), nor in a private window.
       safeBrowsingOffer: !w.isPrivate && state.settings.onboarded && this.options.safeBrowsing.offer(),
@@ -1665,14 +1667,18 @@ export class Browser {
     // The menu under a field: closed once its page isn't on screen, else the popover goes under the field.
     this.passwordAssist.check(w.id);
     w.setMenuAnchor(this.passwordAssist.anchorFor(w.id));
+    // The menu's own view gets the menu and the chord's look, nothing of the cards; each sent only when it changes.
+    const menuPage = w.menuPage;
+    if (menuPage) {
+      const menu = this.menuState(w);
+      const menuJson = JSON.stringify(menu);
+      if (this.menuSent.get(w.id) !== menuJson) {
+        this.menuSent.set(w.id, menuJson);
+        send(menuPage, 'popover:state', menu);
+      }
+    }
     const popover = this.popoverState(w);
     const json = JSON.stringify(popover);
-    // The menu's own view takes the same state (it shows only the menu), sent when it changes too.
-    const menuPage = w.menuPage;
-    if (menuPage && this.menuSent.get(w.id) !== json) {
-      this.menuSent.set(w.id, json);
-      send(menuPage, 'popover:state', popover);
-    }
     if (this.popoverSent.get(w.id) === json) return;
     this.popoverSent.set(w.id, json);
     send(w.popover.webContents, 'popover:state', popover);
@@ -1812,10 +1818,39 @@ export class Browser {
   }
 
   /** Where sync stands, to Settings if it's open (Your data → Sync). */
-  /** The window whose popover this is, for the popover's password channels: a card answers only its own window's popover. */
-  popoverWindow(sender: WebContents): WindowId | null {
-    for (const w of this.windows.values()) if (w.popover.webContents === sender || w.menuPage === sender) return w.id;
-    return null;
+  /**
+   * The window whose popover page this is, for the password channels: the cards' page (`cards`: the save card, its
+   * eye) or the menu's view (`menu`: choosing a row). Neither answers for the other (passwords/senders.ts).
+   */
+  popoverWindow(sender: WebContents, view: 'cards' | 'menu'): WindowId | null {
+    const pages = [...this.windows.values()].map((w) => ({ id: w.id, cards: w.popover.webContents, menu: w.menuPage }));
+    return popoverSender(pages, sender, view);
+  }
+
+  /** What the menu's own view is sent: the menu under a field and the chord's look; every card left out. */
+  menuState(w: AppWindow): PopoverState {
+    const state = this.store.state;
+    const model = state.windows[w.id];
+    return {
+      theme: model ? (state.chords[model.activeChordId]?.theme ?? null) : null,
+      interface: state.settings.interface,
+      find: null,
+      permission: null,
+      share: null,
+      auth: null,
+      passkey: null,
+      passwordsUnlock: null,
+      passwordMenu: this.passwordAssist.menuFor(w.id),
+      passwordSave: null,
+      safeBrowsingOffer: false,
+      drm: null,
+      effects: null,
+    };
+  }
+
+  /** The state for whichever of the window's popover pages asks: the menu's view gets only the menu's. */
+  popoverStateFor(sender: WebContents, w: AppWindow): PopoverState {
+    return sender === w.menuPage ? this.menuState(w) : this.popoverState(w);
   }
 
   /** The vault changed: popovers show the unlock card or don't, and Settings asks for its view again. */

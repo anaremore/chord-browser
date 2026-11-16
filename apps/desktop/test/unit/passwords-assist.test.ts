@@ -8,6 +8,7 @@ import { PASSWORDS_FILL } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { CLICK_GRACE_MS, PasswordAssist, SAVE_CARD_MS, type AssistTab, type AssistVault } from '../../src/main/passwords/assist';
+import { TAKEN_KEY_PATIENCE } from '../../src/main/passwords/menu-keys';
 import { HOLD_MS } from '../../src/main/passwords/saving';
 import type { PasswordDetectorEvents } from '../../src/main/passwords/detector';
 import type { AccountsAnswer, CandidateAnswer, SaveAnswer } from '../../src/main/passwords/service';
@@ -712,12 +713,32 @@ describe('a key the menu took is the menu’s to its keyUp (general review of 37
     expect(up(t, k)).toBe(false);
   });
 
-  it('closed with a key still down: one more event at most, and the listener goes', async () => {
+  it('closed with a key still down, another key pressed before its keyUp: that keyUp is still the menu’s', async () => {
     const t = setup();
     await t.focus();
-    t.key('Escape');
-    // Escape's keyUp never comes (the window lost the keyboard): the next key is the page's.
-    expect(t.key('b')).toBe(false);
+    t.key('Escape', { code: 'Escape' });
+    // The page's own key, down and up, in between.
+    expect([t.key('b', { code: 'KeyB' }), t.key('b', { type: 'keyUp', code: 'KeyB' })]).toEqual([false, false]);
+    expect(t.page.listenerCount('before-input-event')).toBe(1);
+    expect(t.key('Escape', { type: 'keyUp', code: 'Escape' })).toBe(true);
+    expect(t.page.listenerCount('before-input-event')).toBe(0);
+  });
+
+  it('…matched by the physical key: Enter taken, its keyUp seen as Enter by code even if its key reads otherwise', async () => {
+    const t = setup();
+    await t.focus();
+    t.key('Enter', { code: 'NumpadEnter' });
+    expect(t.key('Enter', { type: 'keyUp', code: 'NumpadEnter' })).toBe(true);
+    expect(t.page.listenerCount('before-input-event')).toBe(0);
+  });
+
+  it('a keyUp that never comes (focus left the window): the listener goes after a few events', async () => {
+    const t = setup();
+    await t.focus();
+    t.key('Escape', { code: 'Escape' });
+    for (let i = 0; i < TAKEN_KEY_PATIENCE - 1; i++) t.key('x', { code: 'KeyX' });
+    expect(t.page.listenerCount('before-input-event')).toBe(1);
+    expect(t.key('x', { code: 'KeyX' })).toBe(false);
     expect(t.page.listenerCount('before-input-event')).toBe(0);
   });
 
@@ -806,5 +827,34 @@ describe('the menu and the cards at once (the owner, 2026-11-16)', () => {
     // Saving afterwards takes the username as it was left in the card.
     await t.assist.answer('w1', card.id, 'save', { username: 'ada.edited' });
     expect(t.vault.saveCandidate).toHaveBeenCalledWith(expect.objectContaining({ username: 'ada.edited' }));
+  });
+});
+
+describe('the password while the unlock card is up (security review, round 2)', () => {
+  it('a save waiting on the unlock card holds no copy: the request is made again from the card, and a card gone sends nothing', async () => {
+    const t = setup({ candidate: { kind: 'locked' } });
+    await t.signedIn();
+    const card = t.assist.cardFor('n1')!;
+    t.vault.saveCandidate.mockResolvedValueOnce({ ok: false, problem: 'locked' });
+    let unlock!: (open: boolean) => void;
+    t.vault.askUnlock.mockImplementationOnce(() => new Promise<boolean>((done) => (unlock = done)));
+    const saving = t.assist.answer('w1', card.id, 'save', { username: 'ada.edited' });
+    await flush();
+    // The candidate's deadline passes while the passphrase is typed.
+    t.timers.advance(HOLD_MS);
+    expect(t.assist.reveal('w1', card.id)).toBeNull();
+    unlock(true);
+    await saving;
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('…and a card still there is saved after the unlock, with the username as you left it', async () => {
+    const t = setup({ candidate: { kind: 'locked' } });
+    await t.signedIn();
+    const card = t.assist.cardFor('n1')!;
+    t.vault.saveCandidate.mockResolvedValueOnce({ ok: false, problem: 'locked' });
+    await t.assist.answer('w1', card.id, 'save', { username: 'ada.edited' });
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(2);
+    expect(t.vault.saveCandidate.mock.calls[1]).toEqual([{ origin: ORIGIN, username: 'ada.edited', password: VALUES.password, chordId: 'c1' }]);
   });
 });

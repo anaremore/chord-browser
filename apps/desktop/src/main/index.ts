@@ -441,7 +441,7 @@ function registerIpc(): void {
     await makeDefaultBrowser();
     return defaultBrowserStatus();
   });
-  handle('popover:state', (_request, sender) => browser!.popoverState(senderWindow(sender)));
+  handle('popover:state', (_request, sender) => browser!.popoverStateFor(sender, senderWindow(sender)));
   handle('popover:size', ({ width, height }, sender) => {
     const w = senderWindow(sender);
     // The menu under a field has a view of its own, on the popover's page and API.
@@ -497,19 +497,20 @@ function registerIpc(): void {
   handle('passwords:forgetNever', ({ site }) => passwords.forgetNever(site));
   handle('passwords:startOver', () => passwords.startOver());
   handle('passwords:unlockCard', ({ id, passphrase, keep }) => passwords.answerUnlock(id, passphrase, keep));
-  // The menu under a field and the save card (S17 §9): each answers only its own window's popover.
+  // The menu under a field and the save card (S17 §9): each answers only its own window's page, the menu's view or the
+  // cards' popover, never the other.
   handle('passwords:menuChoose', ({ id, index }, sender) => {
-    const windowId = browser?.popoverWindow(sender);
+    const windowId = browser?.popoverWindow(sender, 'menu');
     if (windowId) browser!.passwordAssist.chooseRow(windowId, id, index);
   });
   handle('passwords:saveCard', async ({ id, action, username, passphrase }, sender) => {
-    const windowId = browser?.popoverWindow(sender);
+    const windowId = browser?.popoverWindow(sender, 'cards');
     if (windowId) await browser!.passwordAssist.answer(windowId, id, action, { ...(username !== undefined ? { username } : {}), ...(passphrase !== undefined ? { passphrase } : {}) });
   });
   // The key beside the address: the sender's window's own tab's card only.
   handle('passwords:reopenCard', ({ nodeId }, sender) => browser!.passwordAssist.reopen(senderWindow(sender).id, nodeId));
   handle('passwords:saveCardReveal', ({ id }, sender) => {
-    const windowId = browser?.popoverWindow(sender);
+    const windowId = browser?.popoverWindow(sender, 'cards');
     return windowId ? browser!.passwordAssist.reveal(windowId, id) : null;
   });
   handle('drm:open', ({ browser: other }, sender) => browser!.drmAction(sender, { open: other }));

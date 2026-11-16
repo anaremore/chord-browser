@@ -52,6 +52,8 @@ interface Held {
   /** The origin main read from the sender's frame when the candidate came. */
   readonly origin: string;
   readonly at: number;
+  /** When this copy's values were typed (their submit came): they, and the save card made from them, last until `HOLD_MS` after. */
+  valuesAt: number | null;
   submitted: boolean;
   /** The last request status seen after the submit. */
   status: number | null;
@@ -90,6 +92,7 @@ const withoutValues = ({ values: _values, ...rest }: PasswordsCandidate): Passwo
 const failedHeld = (held: Held) => {
   held.submitted = false;
   held.candidate = withoutValues(held.candidate);
+  held.valuesAt = null;
 };
 /** The sign-in's values, as the save card takes them. */
 const valuesOf = (held: Held): CandidateValues | null => held.candidate.values ?? null;
@@ -107,10 +110,11 @@ const realTimers: TrackerTimers = {
 export class SubmissionTracker {
   private held: Held | null = null;
   private phase: Phase = { t: 'idle' };
-  /** Runs `HOLD_MS` after the newest values came: by then every value held is that old, and all go. (`#`: never in a JSON dump of the tracker.) */
+  /**
+   * Runs at the earliest deadline of the copies that still hold values (the held form, and the one a navigation waits
+   * on, each `HOLD_MS` after its own values came), and is set again for the next. (`#`: never in a JSON dump of the tracker.)
+   */
   #valuesTimer: unknown = null;
-  /** When the newest values came: they, and whatever takes them on (the save card), last until `HOLD_MS` after. */
-  #valuesAt = 0;
   readonly #timers: TrackerTimers;
 
   constructor(
@@ -120,28 +124,50 @@ export class SubmissionTracker {
     this.#timers = timers;
   }
 
-  /** Values came: the 5 minutes count from now, for every value held. */
-  private holdValues(): void {
-    this.#valuesAt = this.now();
+  /** The copies of a form the tracker holds: the held one, and the one a navigation waits on (often the same). */
+  private copies(): Held[] {
+    const all = [this.held, this.phase.t === 'idle' ? null : this.phase.held].filter((h): h is Held => h !== null);
+    return all[0] === all[1] ? all.slice(0, 1) : all;
+  }
+
+  /** The timer, at the earliest deadline among the copies that hold values; none when none do. */
+  private scheduleValues(): void {
     if (this.#valuesTimer !== null) this.#timers.clearTimeout(this.#valuesTimer);
+    this.#valuesTimer = null;
+    const deadlines = this.copies().flatMap((h) => (h.candidate.values && h.valuesAt !== null ? [h.valuesAt + HOLD_MS] : []));
+    if (deadlines.length === 0) return;
     this.#valuesTimer = this.#timers.setTimeout(() => {
       this.#valuesTimer = null;
-      this.dropValues();
-      // What's held as long is forgotten too: the form, and a navigation still waiting on it.
-      const old = (held: Held | null) => !!held && this.now() - held.at >= HOLD_MS;
-      if (old(this.held)) this.held = null;
-      if (this.phase.t !== 'idle' && old(this.phase.held)) this.phase = { t: 'idle' };
-    }, HOLD_MS);
+      this.expireValues();
+    }, Math.max(0, Math.min(...deadlines) - this.now()));
+  }
+
+  /** A deadline came: each copy whose values are `HOLD_MS` old loses them, and a form held that long is forgotten. */
+  private expireValues(): void {
+    const now = this.now();
+    for (const held of this.copies()) {
+      if (held.valuesAt !== null && now - held.valuesAt >= HOLD_MS) {
+        held.candidate = withoutValues(held.candidate);
+        held.valuesAt = null;
+      }
+    }
+    const old = (held: Held | null) => !!held && now - held.at >= HOLD_MS;
+    if (old(this.held)) this.held = null;
+    if (this.phase.t !== 'idle' && old(this.phase.held)) this.phase = { t: 'idle' };
+    this.scheduleValues();
   }
 
   /** The candidate's deadline, handed to the save card with its values: the card doesn't get a fresh 5 minutes. */
   private valuesUntil(held: Held): number | null {
-    return held.candidate.values ? this.#valuesAt + HOLD_MS : null;
+    return held.candidate.values && held.valuesAt !== null ? held.valuesAt + HOLD_MS : null;
   }
 
-  /** What was typed goes from both places it can be: the held form, and the one a navigation waits on. */
+  /** What was typed goes from every copy: the held form, and the one a navigation waits on. */
   private dropValues(): void {
-    for (const held of [this.held, this.phase.t === 'idle' ? null : this.phase.held]) if (held?.candidate.values) held.candidate = withoutValues(held.candidate);
+    for (const held of this.copies()) {
+      if (held.candidate.values) held.candidate = withoutValues(held.candidate);
+      held.valuesAt = null;
+    }
   }
 
   /** The held form, if any and not expired. */
@@ -162,6 +188,8 @@ export class SubmissionTracker {
     const carry = same && (already || candidate.signal === 'blur');
     // Values come only with a submit signal. A blur after one keeps the submit's.
     const values = candidate.signal === 'blur' ? (already ? before?.candidate.values : undefined) : candidate.values;
+    // A blur keeps the submit's values, and their deadline; new values count from now.
+    const valuesAt = !values ? null : candidate.signal === 'blur' ? (before?.valuesAt ?? this.now()) : this.now();
     this.held = {
       candidate: values ? { ...withoutValues(candidate), values } : withoutValues(candidate),
       origin,
@@ -170,8 +198,9 @@ export class SubmissionTracker {
       status: carry ? before.status : null,
       error: carry ? before.error : false,
       watched: same && already ? before.watched : null,
+      valuesAt,
     };
-    if (values && candidate.values) this.holdValues();
+    this.scheduleValues();
     // One submit is one `submitted`, however many signals it made. A second submit of the same form
     // while the first is still undecided (within the agent's 10 s watch) emits nothing either: the
     // save card's phase decides what a resubmit means.
@@ -304,9 +333,8 @@ export class SubmissionTracker {
   /** Forget the form and anything typed: a navigation of your own, the page going, passwords turned off there. */
   reset(): void {
     this.dropValues();
-    if (this.#valuesTimer !== null) this.#timers.clearTimeout(this.#valuesTimer);
-    this.#valuesTimer = null;
     this.held = null;
     this.phase = { t: 'idle' };
+    this.scheduleValues();
   }
 }

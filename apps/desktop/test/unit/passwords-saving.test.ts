@@ -259,3 +259,59 @@ describe('the candidate’s deadline goes with its values to the save card', () 
     expect((t.gone('f1')[0] as Extract<SavingOutcome, { type: 'signedIn' }>).valuesUntil).toBeNull();
   });
 });
+
+describe('a deadline per held copy (security review, round 2)', () => {
+  function clocked() {
+    const clock = { now: 0 };
+    const timers = new Map<number, { at: number; run: () => void }>();
+    let next = 1;
+    const tracker = new SubmissionTracker(() => clock.now, {
+      setTimeout: (run, ms) => (timers.set(next, { at: clock.now + ms, run }), next++),
+      clearTimeout: (id) => void timers.delete(id as number),
+    });
+    const advance = (ms: number) => {
+      const until = clock.now + ms;
+      for (;;) {
+        const due = [...timers].filter(([, t]) => t.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        timers.delete(due[0]);
+        clock.now = due[1].at;
+        due[1].run();
+      }
+      clock.now = until;
+    };
+    return { tracker, advance, clock };
+  }
+  const A = { username: 'ada@example.com', password: 'form-a-secret' };
+  const B = { username: 'bob@example.com', password: 'form-b-secret' };
+
+  it('form A submitted at t0, its navigation pending; the old page submits form B at t0+4m: A’s values still go at t0+5m', () => {
+    const { tracker, advance } = clocked();
+    tracker.candidate(candidate({ formId: 'f1', values: A }), ORIGIN);
+    tracker.navigationStarted(true);
+    advance(4 * 60_000);
+    tracker.candidate(candidate({ formId: 'f2', values: B }), ORIGIN);
+    const dump = () => JSON.stringify(tracker);
+    expect(dump()).toContain('form-a-secret');
+    advance(60_000);
+    // A's 5 minutes are its own: gone at t0+5m, with B's still held (until t0+9m).
+    expect(dump()).not.toContain('form-a-secret');
+    expect(dump()).toContain('form-b-secret');
+    advance(4 * 60_000 - 1);
+    expect(dump()).toContain('form-b-secret');
+    advance(1);
+    expect(dump()).not.toContain('form-b-secret');
+  });
+
+  it('…and if A’s navigation decides it before then, its card’s deadline is A’s, not B’s', () => {
+    const { tracker, advance } = clocked();
+    tracker.candidate(candidate({ formId: 'f1', values: A }), ORIGIN);
+    tracker.navigationStarted(true);
+    advance(4 * 60_000);
+    tracker.candidate(candidate({ formId: 'f2', values: B }), ORIGIN);
+    tracker.navigated(200);
+    const signedIn = tracker.settled().find((o) => o.type === 'signedIn') as Extract<SavingOutcome, { type: 'signedIn' }>;
+    expect(signedIn.values).toEqual(A);
+    expect(signedIn.valuesUntil).toBe(HOLD_MS);
+  });
+});

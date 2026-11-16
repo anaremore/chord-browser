@@ -41,7 +41,7 @@ import { PASSWORDS_FILL, type PasswordMenu, type PasswordSaveCard, type Password
 import { durations, easing } from '@chord/tokens';
 import type { Input, WebContents, WebFrameMain } from 'electron';
 import type { PasswordDetectorEvents, PasswordsFocusEvent } from './detector';
-import { routeMenuKey, routeTakenKey } from './menu-keys';
+import { keyIdOf, routeMenuKey, routeTakenKey, TAKEN_KEY_PATIENCE } from './menu-keys';
 import { HOLD_MS, type CandidateValues } from './saving';
 import type { PasswordService } from './service';
 
@@ -132,6 +132,8 @@ interface Menu {
 /** A page's keys while a menu is or was just open: one listener, and the keys whose keyDown the menu took. */
 interface KeyGuard {
   taken: ReadonlySet<string>;
+  /** Once the menu has closed: how many more events it waits through for a taken key's keyUp. */
+  patience: number;
   readonly onKey: (event: { preventDefault(): void }, input: Input) => void;
 }
 
@@ -320,7 +322,7 @@ export class PasswordAssist {
    */
   private guardKeys(contents: WebContents): void {
     if (this.guards.has(contents)) return;
-    const guard: KeyGuard = { taken: new Set(), onKey: (event, input) => this.onKey(contents, guard, event, input) };
+    const guard: KeyGuard = { taken: new Set(), patience: TAKEN_KEY_PATIENCE, onKey: (event, input) => this.onKey(contents, guard, event, input) };
     this.guards.set(contents, guard);
     contents.prependListener('before-input-event', guard.onKey);
   }
@@ -331,8 +333,11 @@ export class PasswordAssist {
     const routed = routeTakenKey(guard.taken, input);
     guard.taken = routed.taken;
     if (routed.take) event.preventDefault();
-    // Closed: the listener goes once the keys it took are over, or at the first event it doesn't take.
-    if (!menu && (!routed.take || guard.taken.size === 0)) this.unguardKeys(contents);
+    if (menu) return;
+    // Closed: the listener goes once the keys it took are over (another key pressed meanwhile is the page's, and
+    // doesn't end the wait), or after a few events if a keyUp never comes.
+    if (!routed.take) guard.patience--;
+    if (guard.taken.size === 0 || guard.patience <= 0) this.unguardKeys(contents);
   }
 
   private unguardKeys(contents: WebContents): void {
@@ -346,7 +351,8 @@ export class PasswordAssist {
     const routed = routeMenuKey({ index: menu.index, rows: this.rowsOf(menu) }, input);
     if (routed.take) {
       event.preventDefault();
-      guard.taken = new Set([...guard.taken, input.key]);
+      guard.taken = new Set([...guard.taken, keyIdOf(input)]);
+      guard.patience = TAKEN_KEY_PATIENCE;
     }
     if (routed.choose !== undefined) return void this.choose(menu, routed.choose);
     if (!routed.menu) {
@@ -632,20 +638,31 @@ export class PasswordAssist {
 
   private async save(card: Card, details: { username?: string; passphrase?: string }): Promise<void> {
     const { host, vault } = this.options;
-    const values = card.values;
-    if (!values) return;
+    if (!card.values) return;
     if (card.setup && details.passphrase === undefined) return;
     card.busy = true;
     card.problem = null;
     host.changed(this.windowOf(card));
-    // An update is for the username it was offered for; a new one takes the username as you left it.
-    const username = card.kind === 'update' ? values.username : (details.username ?? values.username);
-    const request = { origin: card.origin, username, password: values.password, chordId: card.tab.chordId, ...(card.setup && details.passphrase !== undefined ? { passphrase: details.passphrase } : {}) };
+    /**
+     * The request, made from what the card holds now, each time it's sent: nothing here keeps the password while the
+     * unlock card waits, so a card that goes meanwhile (the candidate's deadline, the site left) leaves no copy behind.
+     */
+    const request = () => {
+      const values = this.cards.get(card.tab.nodeId) === card ? card.values : null;
+      if (!values) return null;
+      // An update is for the username it was offered for; a new one takes the username as you left it.
+      const username = card.kind === 'update' ? values.username : (details.username ?? values.username);
+      return { origin: card.origin, username, password: values.password, chordId: card.tab.chordId, ...(card.setup && details.passphrase !== undefined ? { passphrase: details.passphrase } : {}) };
+    };
+    const send = (r: NonNullable<ReturnType<typeof request>>) => vault.saveCandidate(r).catch(() => ({ ok: false as const, problem: 'io' as const }));
     const setup = card.setup;
-    let saved = await vault.saveCandidate(request).catch(() => ({ ok: false as const, problem: 'io' as const }));
-    // Locked: unlock, then save again, unless the card went meanwhile (×, a minute, the site left), taking its values with it.
-    if (!saved.ok && saved.problem === 'locked' && (await vault.askUnlock(this.windowOf(card))) && this.cards.get(card.tab.nodeId) === card) {
-      saved = await vault.saveCandidate(request).catch(() => ({ ok: false as const, problem: 'io' as const }));
+    const first = request();
+    if (!first) return;
+    let saved = await send(first);
+    // Locked: unlock, then save again, unless the card went meanwhile (taking its values with it).
+    if (!saved.ok && saved.problem === 'locked' && (await vault.askUnlock(this.windowOf(card)))) {
+      const again = request();
+      if (again) saved = await send(again);
     }
     if (this.cards.get(card.tab.nodeId) !== card) return;
     card.busy = false;
