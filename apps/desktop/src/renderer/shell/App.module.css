@@ -554,7 +554,11 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
-/* Pinned tabs sit above the Today divider and size to their rows, up to Pinned's cap; Today takes the rest. */
+/*
+ * Pinned tabs sit above the Today divider and size to their rows, up to Pinned's cap; Today takes the rest.
+ * Below the cap nothing is clipped (the active pill gliding in from Today, a lifted row's shadow, a landing's
+ * overshoot); at it, the list scrolls (Tabs.tsx sets data-capped from its measure).
+ */
 .pinnedList {
   display: flex;
   flex: 0 1 auto;
@@ -562,19 +566,28 @@ kbd {
   min-block-size: 0;
   margin: 0;
   padding: 0;
-  overflow: hidden auto;
   list-style: none;
+}
+
+.pinnedList[data-capped] {
+  overflow: hidden auto;
   scrollbar-color: var(--color-divider) transparent;
   scrollbar-width: thin;
 }
 
+/* At its cap, rows leaving Pinned go out within it, not over the divider. */
+.pinnedList[data-capped] + .pinnedExits {
+  inset: 0;
+  overflow: hidden;
+}
+
 /* At its cap with more below, its lower edge fades out (DESIGN.md §6.7). */
-.pinnedList[data-more] {
+.pinnedList[data-capped][data-more] {
   mask-image: linear-gradient(to top, transparent, var(--color-mask) var(--size-pinned-fade));
 }
 
 /* Reduce transparency (DESIGN.md §10): a hard edge instead. */
-:root[data-reduced-transparency] .pinnedList[data-more] {
+:root[data-reduced-transparency] .pinnedList[data-capped][data-more] {
   mask-image: none;
 }
 

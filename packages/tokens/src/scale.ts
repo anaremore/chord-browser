@@ -56,9 +56,9 @@ export const size = {
   popoverCard: 320,
   /** The tallest a popover card grows (the Effects card, DESIGN.md §7.15) before it scrolls inside. */
   popoverMax: 520,
-  /** A mini window (DESIGN.md §7.9): its bar, and its size until you resize one. */
   /** Pinned at its tallest (`share.pinnedMax`): its lower edge fades out over this while there's more below (DESIGN.md §6.7). */
   pinnedFade: 14,
+  /** A mini window (DESIGN.md §7.9): its bar, and its size until you resize one. */
   miniBar: 36,
   miniWidth: 900,
   miniHeight: 640,

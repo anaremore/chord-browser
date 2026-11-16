@@ -10,7 +10,7 @@
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { audit, capturesDir, dispatch, isShell, launch, pageWhere, startSite, type Site } from './a11y-kit';
+import { audit, capturesDir, dispatch, isSettings, isShell, launch, pageWhere, runAction, setReducedMotion, startSite, type Site } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -124,7 +124,9 @@ for (const appearance of ['light', 'dark'] as const) {
       // The full height scrolls, so the scrollbar tells the truth.
       expect(await pinned.evaluate((ul) => ul.scrollHeight)).toBe(ROWS * ROW);
       await check('at the top');
-      // More below: the lower edge fades.
+      // At its cap it scrolls; more below, the lower edge fades.
+      await expect(pinned).toHaveAttribute('data-capped');
+      expect(await pinned.evaluate((ul) => getComputedStyle(ul).overflowY)).toBe('auto');
       await expect(pinned).toHaveAttribute('data-more');
       expect(await mask(pinned)).toMatch(/gradient/);
       await shell.screenshot({ path: resolve(capturesDir, `pinned-cap-${appearance}.png`) });
@@ -319,10 +321,115 @@ test('a short Pinned is as it was: as tall as its rows, nothing to scroll, no fa
     expect(await pinned.evaluate((ul) => [ul.clientHeight, ul.scrollHeight, ul.scrollTop])).toEqual([4 * ROW, 4 * ROW, 0]);
     await expect(pinned).not.toHaveAttribute('data-more');
     expect(await mask(pinned)).toBe('none');
+    // Nothing clipped: the active pill gliding in from Today, a lifted row's shadow, a landing's overshoot.
+    await expect(pinned).not.toHaveAttribute('data-capped');
+    expect(await pinned.evaluate((ul) => [getComputedStyle(ul).overflowY, getComputedStyle(ul.nextElementSibling!).overflowY])).toEqual(['visible', 'visible']);
     // Today starts right under it, past the divider and New tab, as before.
     const gap = (await todayTree(shell).boundingBox())!.y - ((await pinned.boundingBox())!.y + 4 * ROW);
     expect(gap).toBeGreaterThan(0);
     expect(gap).toBeLessThan(3 * ROW);
+  } finally {
+    await app.close();
+  }
+});
+
+test('the tab on screen shows in a long Pinned: switched to from out of view, or just pinned at its end; a click doesn’t scroll it', async () => {
+  const { app, shell } = await longPinned();
+  try {
+    const pinned = pinnedTree(shell);
+    const today = todayTree(shell);
+    const { windowId } = await snapshot(shell);
+    const order = await pinnedOrder(shell);
+    const row = (id: string) => pinned.locator(`[data-row][data-id="${id}"]`);
+
+    // Switched to as the command bar or Ctrl+Tab does: Pinned scrolls to it.
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: order[150] });
+    await expect(row(order[150]!)).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(() => row(order[150]!).evaluate((el) => {
+      const box = el.closest('ul')!.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+    })).toBe(true);
+
+    // A click on a row that shows doesn't scroll Pinned.
+    const visible = (await drawn(pinned)).find((r) => r.slot === 148)!.id;
+    const before = await pinned.evaluate((ul) => ul.scrollTop);
+    await row(visible).click();
+    await expect(row(visible)).toHaveAttribute('aria-selected', 'true');
+    await shell.waitForTimeout(200);
+    expect(await pinned.evaluate((ul) => ul.scrollTop)).toBe(before);
+
+    // A Today tab pinned with its key lands at Pinned's end, scrolled into view.
+    await pinned.evaluate((ul) => ul.scrollTo({ top: 0 }));
+    const tab = (await today.locator('[data-row="tab"]').nth(2).getAttribute('data-id'))!;
+    await today.locator(`[data-row][data-id="${tab}"]`).click();
+    await runAction(shell, 'tab.pin');
+    await expect(row(tab)).toBeAttached();
+    await expect.poll(() => row(tab).evaluate((el) => {
+      const box = el.closest('ul')!.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+    })).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a row leaving a scrolled long Pinned goes out where it was, inside Pinned: with motion, reduced motion, and tab moves off', async () => {
+  const { app, shell } = await longPinned();
+  try {
+    const pinned = pinnedTree(shell);
+    const box = (await pinned.boundingBox())!;
+    // Rows drawn leaving Pinned, from now on: where each started.
+    const watch = () =>
+      shell.evaluate(() => {
+        const seen: { top: number; bottom: number }[] = [];
+        (window as unknown as { exits: typeof seen }).exits = seen;
+        new MutationObserver((records) => {
+          for (const r of records)
+            for (const n of r.addedNodes)
+              if (n instanceof HTMLElement && n.matches('[data-exit]')) {
+                const b = n.getBoundingClientRect();
+                seen.push({ top: b.top, bottom: b.bottom });
+              }
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+    const seen = () => shell.evaluate(() => (window as unknown as { exits: { top: number; bottom: number }[] }).exits);
+    /** Unpins the row at `slot` (scrolled to the middle first), the way its menu does. */
+    const unpin = async (slot: number) => {
+      await scrollTo(pinned, 100);
+      const id = (await drawn(pinned)).find((r) => r.slot === slot)!.id;
+      await watch();
+      await dispatch(shell, { t: 'node.move', nodeId: id, section: 'today', index: 0 });
+      await expect(pinned.locator(`[data-row][data-id="${id}"]`)).toHaveCount(0);
+      await shell.waitForTimeout(400);
+      return seen();
+    };
+    // The leaving layer is clipped to Pinned at its cap: nothing draws over the divider.
+    expect(await pinned.evaluate((ul) => getComputedStyle(ul.nextElementSibling!).overflowY)).toBe('hidden');
+
+    await setReducedMotion(app, shell, false);
+    await shell.emulateMedia({ reducedMotion: 'no-preference' });
+    const moving = await unpin(103);
+    expect(moving).toHaveLength(1);
+    // Where it was: its slot, less how far Pinned is scrolled.
+    expect(Math.abs(moving[0]!.top - (box.y + (103 - 100) * ROW))).toBeLessThanOrEqual(2);
+    expect(moving[0]!.bottom).toBeLessThanOrEqual(box.y + box.height + 1);
+
+    await setReducedMotion(app, shell, true);
+    await shell.emulateMedia({ reducedMotion: 'reduce' });
+    expect(await unpin(104), 'reduced motion: it goes at once').toEqual([]);
+
+    await setReducedMotion(app, shell, false);
+    await shell.emulateMedia({ reducedMotion: 'no-preference' });
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Motion' }).click();
+    const tabMoves = settings.getByRole('switch', { name: 'Animate tab moves' });
+    await tabMoves.click();
+    await expect(tabMoves).toHaveAttribute('aria-checked', 'false');
+    await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['motionOff'])).toContain('tabMoves');
+    expect(await unpin(105), 'tab moves off: nothing animates').toEqual([]);
   } finally {
     await app.close();
   }

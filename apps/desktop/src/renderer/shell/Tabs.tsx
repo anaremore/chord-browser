@@ -674,7 +674,7 @@ interface TabRowProps extends RowBase {
   tab: TabNode;
   live: LiveTab | undefined;
   index: number;
-  /** It shows (in Pinned, or in Today's viewport), or it's being moved: it takes part in drag and drop. */
+  /** It shows (in its list's viewport), or it's being moved: it takes part in drag and drop. */
   shows: boolean;
   section: Section;
   isActive: boolean;
@@ -1522,6 +1522,7 @@ export function SidebarTabs({
     pinned: { slots: pinnedAt, shown: new Map() } as Placed<HTMLElement>,
     offset: null as number | null,
     pinnedRows: pinned.length,
+    pinnedHeight: pinnedWin.view.height,
   }));
   const pinnedList = useRef<HTMLUListElement>(null);
   const todayExits = useRef<HTMLDivElement>(null);
@@ -1541,18 +1542,22 @@ export function SidebarTabs({
     const list = win.list;
     const before = { ...presence };
     // How far Today moved on screen since (Pinned grew or shrank above it): rows that move with it slide too. Only
-    // Pinned moves it, so it's measured only when Pinned's rows change; the first time, on the next frame, with the
-    // rest of that frame's layout (measuring now would lay out a pane that just mounted, mid-commit).
+    // Pinned moves it, so it's measured only when Pinned's rows or height change; the first time, on the next frame,
+    // with the rest of that frame's layout (measuring now would lay out a pane that just mounted, mid-commit). Only
+    // Pinned's rows changing slides Today's: a new height alone (the pane resized, so the cap did) just measures again.
     const measure = () => list?.getBoundingClientRect().top ?? null;
+    const pinnedHeight = pinnedWin.view.height;
+    const rowsChanged = before.pinnedRows !== pinned.length;
     let offset: number | null = null;
-    if (tabMotion === 'on' && before.offset !== null) offset = before.pinnedRows === pinned.length ? before.offset : measure();
+    if (tabMotion === 'on' && before.offset !== null) offset = rowsChanged || before.pinnedHeight !== pinnedHeight ? measure() : before.offset;
     else if (tabMotion === 'on')
       requestAnimationFrame(() => {
         if (presence.offset === null && presence.pinnedRows === pinned.length) presence.offset = measure();
       });
-    const shift = offset !== null && before.offset !== null ? before.offset - offset : 0;
+    const shift = rowsChanged && offset !== null && before.offset !== null ? before.offset - offset : 0;
     presence.offset = offset;
     presence.pinnedRows = pinned.length;
+    presence.pinnedHeight = pinnedHeight;
     presence.today = { slots: todayAt, shown: new Map() };
     presence.pinned = { slots: pinnedAt, shown: new Map() };
     // Which of the rows that left Today went to the archive.
@@ -1606,6 +1611,23 @@ export function SidebarTabs({
     // A row that came from Today lands in Pinned with a little give (DESIGN.md §6.5, Pin).
     for (const [order, el] of inPinned.arrived.entries()) enter(el, before.today.slots.has(el.dataset['id']!), order);
     for (const { el, dy } of [...inToday.moved, ...inPinned.moved]) slideFrom(el, dy);
+  });
+
+  // The tab on screen came to a row of Pinned's that doesn't show (Pinned at its cap): pinned with its key, or
+  // switched to with Ctrl+Tab or the command bar. Pinned scrolls to show it, as the keyboard's moves do. Not when the
+  // chord's lists mount (they're where they were left), not mid-drag or with a row picked up, and not for a click on
+  // a row (it shows).
+  const activeRow = activeId && !pinnedAt.has(activeId) ? (state.nodes[activeId]?.parentId ?? null) : activeId;
+  const activeInPinned = activeRow !== null && pinnedAt.has(activeRow) ? activeRow : null;
+  const revealed = useRef(activeInPinned);
+  const clicked = useRef<{ id: string; at: number } | null>(null);
+  useLayoutEffect(() => {
+    if (revealed.current === activeInPinned) return;
+    revealed.current = activeInPinned;
+    const click = clicked.current;
+    clicked.current = null;
+    if (activeInPinned === null || dragging || moving || (click?.id === activeInPinned && performance.now() - click.at < 1000)) return;
+    pinnedWin.reveal(pinnedAt.get(activeInPinned)!);
   });
 
   // The keyboard asked for a row that wasn't mounted: now it is.
@@ -1716,7 +1738,12 @@ export function SidebarTabs({
         })
       }
       // A click drops a row picked up with the keyboard.
-      onPointerDown={() => moving && setMoving(null)}
+      onPointerDown={(e) => {
+        if (moving) setMoving(null);
+        // A row clicked shows already: the tab it opens isn't scrolled to.
+        const id = (e.target as HTMLElement).closest<HTMLElement>('[data-row]')?.dataset['id'];
+        clicked.current = id ? { id, at: performance.now() } : null;
+      }}
     >
       {/*
         The rows' one Motion element, the active pill, comes and goes with its row, not with the chord pane around
@@ -1735,6 +1762,8 @@ export function SidebarTabs({
             data-windowed={pinnedWindow.windowed || undefined}
             // At its cap with more below: its lower edge fades (DESIGN.md §6.7).
             data-more={pinnedWin.view.more || undefined}
+            // Its rows overflow it: it scrolls (and clips); below its cap nothing does.
+            data-capped={pinnedWin.view.capped || undefined}
             onFocus={trackFocus}
             onBlur={dropFocus}
           >
