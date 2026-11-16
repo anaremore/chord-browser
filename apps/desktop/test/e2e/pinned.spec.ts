@@ -34,7 +34,18 @@ async function longPinned(env: Record<string, string> = {}): Promise<{ app: Elec
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_PERF_TABS: '20', CHORD_PERF_PINNED: String(PINNED), CHORD_PERF_FOLDERS: '5', ...env });
   const shell = await pageWhere(app, isShell);
   await expect(pinnedTree(shell).getByRole('treeitem').first()).toHaveAttribute('aria-setsize', '205', { timeout: 30_000 });
+  // Whatever the OS says (macOS CI runners have reduce transparency on): the fade, unless a test turns it off.
+  await setReducedTransparency(app, shell, false);
   return { app, shell };
+}
+
+/** Reduce transparency on or off, stubbed in main and announced (as a11y.spec.ts does). */
+async function setReducedTransparency(app: ElectronApplication, shell: Page, reduce: boolean): Promise<void> {
+  await app.evaluate(({ nativeTheme }, r) => {
+    Object.defineProperty(nativeTheme, 'prefersReducedTransparency', { configurable: true, get: () => r });
+    nativeTheme.emit('updated');
+  }, reduce);
+  await expect.poll(() => shell.evaluate(() => document.documentElement.hasAttribute('data-reduced-transparency'))).toBe(reduce);
 }
 
 type Node = { id: string; kind: string; chordId: string; section: string; parentId: string | null; rank: string; collapsed?: boolean };
@@ -289,18 +300,10 @@ test('each chord keeps where its Pinned and Today were scrolled, and reduce tran
     for (const r of rows) expect(order[r.slot]).toBe(r.id);
 
     // Reduce transparency: no fade, a hard edge.
-    const setReduced = async (reduce: boolean) => {
-      await app.evaluate(({ nativeTheme }, r) => {
-        Object.defineProperty(nativeTheme, 'prefersReducedTransparency', { configurable: true, get: () => r });
-        nativeTheme.emit('updated');
-      }, reduce);
-      await shell.evaluate(() => (window as unknown as { chord: { system: { info(): Promise<unknown> } } }).chord.system.info());
-    };
-    await setReduced(false);
     await expect.poll(() => mask(pinned)).toMatch(/gradient/);
-    await setReduced(true);
+    await setReducedTransparency(app, shell, true);
     await expect.poll(() => mask(pinned)).toBe('none');
-    await setReduced(false);
+    await setReducedTransparency(app, shell, false);
     await expect.poll(() => mask(pinned)).toMatch(/gradient/);
   } finally {
     await app.close();
