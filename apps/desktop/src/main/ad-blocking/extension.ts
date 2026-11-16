@@ -26,6 +26,7 @@ import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FILTER_LISTS } from './lists';
 import { siteOffRule } from './rules';
+import { pageOf } from '../view-page';
 
 /** The dynamic rule that holds every site blocking is off for. */
 const SITES_RULE_ID = 1;
@@ -128,7 +129,7 @@ export class BlockerExtension {
    * Windows main crashed (an access violation, in CI).
    */
   closeControls(): void {
-    for (const view of this.controls) if (!view.webContents.isDestroyed()) view.webContents.close();
+    for (const view of this.controls) pageOf(view)?.close();
     this.controls.clear();
   }
 }

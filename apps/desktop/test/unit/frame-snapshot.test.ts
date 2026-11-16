@@ -15,6 +15,7 @@ function fakeView(rect: Rect, capture: { mode: Capture; count: number }) {
     bounds: { ...rect },
     listeners,
     webContents: {
+      isDestroyed: () => false,
       isFocused: () => true,
       on: (_name: string, listener: (event: unknown, input: unknown) => void) => listeners.add(listener),
       off: (_name: string, listener: (event: unknown, input: unknown) => void) => listeners.delete(listener),

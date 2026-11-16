@@ -3,44 +3,14 @@
  * WebContentsView's `webContents` is undefined, so DevTools have to keep the page they made
  * rather than reading it through the view again. PR #22's E2E hit this on macOS only:
  * `Cannot read properties of undefined (reading 'isDestroyed')` in DevTools.close.
+ * Tabs, floating pages and Settings: view-teardown.test.ts.
  */
-import { EventEmitter } from 'node:events';
 import type { Session, WebContents } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
+import { FakeContents, type FakeView } from './fake-view';
 
-/** A page as main sees one: events, and destroyed for good once destroyed. */
-class FakeContents extends EventEmitter {
-  destroyed = false;
-  isDestroyed() {
-    return this.destroyed;
-  }
-  destroy() {
-    this.destroyed = true;
-    this.emit('destroyed');
-  }
-  close = vi.fn(() => this.destroy());
-  focus = vi.fn();
-  setWindowOpenHandler = vi.fn();
-  setDevToolsWebContents = vi.fn();
-  openDevTools = vi.fn();
-  closeDevTools = vi.fn();
-  isDevToolsOpened = () => false;
-  getURL = () => 'http://127.0.0.1/broken';
-  getTitle = () => 'Broken';
-}
-
-/** A view as Electron's is on macOS: its page is gone from it once destroyed. */
-class FakeView {
-  private readonly page = new FakeContents();
-  get webContents(): FakeContents | undefined {
-    return this.page.destroyed ? undefined : this.page;
-  }
-  setBackgroundColor = vi.fn();
-  setBorderRadius = vi.fn();
-}
-
-vi.mock('electron', () => ({
-  WebContentsView: FakeView,
+vi.mock('electron', async () => ({
+  WebContentsView: (await import('./fake-view')).FakeView,
   BaseWindow: class {},
   nativeTheme: { on: vi.fn(), off: vi.fn(), shouldUseDarkColors: false },
   screen: {},
