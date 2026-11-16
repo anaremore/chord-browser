@@ -64,7 +64,7 @@ async function iconsLoaded(shell: Page): Promise<void> {
   const missing = () =>
     shell.evaluate(async () => {
       const { state } = await (window as unknown as ChordGlobal).chord.state.snapshot();
-      return Object.values(state.nodes)
+      return Object.values(state.nodes).flatMap((b) => Object.values(b))
         .filter((n) => n.kind === 'tab' && !n.favicon)
         .map((n) => n.url);
     });
@@ -117,7 +117,7 @@ async function capture(app: ElectronApplication, title: string, name: string): P
 async function tabFor(shell: Page, url: string) {
   return shell.evaluate(async (u) => {
     const { state } = await (window as unknown as ChordGlobal).chord.state.snapshot();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab' && n.url === u);
+    const tab = Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.kind === 'tab' && n.url === u);
     if (!tab) throw new Error(`No tab at ${u}`);
     return tab;
   }, url);
@@ -174,7 +174,7 @@ async function session(appearance: 'light' | 'dark') {
   await sleep(300);
   const folder = await shell.evaluate(async () => {
     const { state: s } = await (window as unknown as ChordGlobal).chord.state.snapshot();
-    return Object.values(s.nodes).find((n) => n.kind === 'folder');
+    return Object.values(s.nodes).flatMap((b) => Object.values(b)).find((n) => n.kind === 'folder');
   });
   if (!folder) throw new Error('folder.new made no folder');
   const arpeggio = await tabFor(shell, PAGES.arpeggio);

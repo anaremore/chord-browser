@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { apply, restoreState, seedState, type Command, type Context, type ProxySettings, type State, type TabNode } from '@chord/core';
+import { apply, restoreState, seedState, nodeOf, nodeList, nodeIds, type Command, type Context, type ProxySettings, type State, type TabNode } from '@chord/core';
 import { ChordDatabase, errorPasses } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
 import { opsForState, opsFromPatches, type WriteOp } from '../src';
@@ -96,7 +96,7 @@ describe('chord-data', () => {
     db = new ChordDatabase(file);
     const restored = restoreState(db.load(), { now: 9, newId: ctx.newId, theme: state.chords[Object.keys(state.chords)[0]!]!.theme, homeUrl: 'x' });
     expect(durable(restored)).toEqual(durable(state));
-    expect((restored.nodes['id-4'] as TabNode).favicon).toBe(ICON);
+    expect((nodeOf(restored, 'id-4') as TabNode).favicon).toBe(ICON);
     // Two tabs share one stored icon.
     db.close();
     expect(count('favicon')).toBe(1);
@@ -137,15 +137,15 @@ describe('chord-data', () => {
     let state = seed();
     db.write(opsForState(state));
     const windowId = Object.keys(state.windows)[0]!;
-    const first = Object.values(state.nodes)[0]!.id;
+    const first = nodeList(state)[0]!.id;
     state = drive(db, state, [{ t: 'split.add', windowId, withId: first, url: 'https://beside.test/', direction: 'column' }]);
-    const split = Object.values(state.nodes).find((n) => n.kind === 'split')!;
+    const split = nodeList(state).find((n) => n.kind === 'split')!;
     state = drive(db, state, [{ t: 'split.resize', splitId: split.id, sizes: [0.3, 0.7] }]);
     db.close();
     db = new ChordDatabase(file);
     const back = restoreState(db.load(), { now: 0, newId: ctx.newId, theme: state.chords[split.chordId]!.theme, homeUrl: 'https://home.test/' });
-    expect(back.nodes[split.id]).toMatchObject({ kind: 'split', direction: 'column', sizes: [0.3, 0.7] });
-    expect(Object.values(back.nodes).filter((n) => n.parentId === split.id)).toHaveLength(2);
+    expect(nodeOf(back, split.id)).toMatchObject({ kind: 'split', direction: 'column', sizes: [0.3, 0.7] });
+    expect(nodeList(back).filter((n) => n.parentId === split.id)).toHaveLength(2);
     drive(db, state, [{ t: 'split.separate', splitId: split.id }]);
     db.close();
     expect(count('split')).toBe(0);
@@ -163,7 +163,7 @@ describe('chord-data', () => {
     ]);
     db.close();
     db = new ChordDatabase(file);
-    expect(db.load()!.nodes.map((node) => node.id).sort()).toEqual(Object.keys(state.nodes).sort());
+    expect(db.load()!.nodes.map((node) => node.id).sort()).toEqual(nodeIds(state).sort());
     db.close();
     expect(count('favicon')).toBe(0);
   });
@@ -175,7 +175,7 @@ describe('chord-data', () => {
     const windowId = Object.keys(state.windows)[0]!;
     const result = apply(state, { t: 'tab.open', windowId, url: 'https://a.test/2' }, ctx);
     state = result.state;
-    const tabId = Object.keys(state.nodes).find((id) => state.nodes[id]!.kind === 'tab' && (state.nodes[id] as TabNode).url === 'https://a.test/2')!;
+    const tabId = nodeIds(state).find((id) => nodeOf(state, id)!.kind === 'tab' && (nodeOf(state, id) as TabNode).url === 'https://a.test/2')!;
     const nav = { entries: [{ url: 'https://a.test/1', title: 'One' }, { url: 'https://a.test/2', title: 'Two', pageState: 'scrolled' }], index: 1 };
     // The history arrives in the same batch as the tab's row, ahead of it: still kept.
     db.write([{ k: 'nav', id: tabId, value: nav }, ...opsFromPatches(result.patches, state)]);
@@ -441,7 +441,7 @@ describe('chord-data', () => {
     db.write(opsForState(state));
     const windowId = Object.keys(state.windows)[0]!;
     const chordId = Object.keys(state.chords)[0]!;
-    const tabId = Object.values(state.nodes)[0]!.id;
+    const tabId = nodeList(state)[0]!.id;
     state = drive(db, state, [
       { t: 'tab.updated', nodeId: tabId, favicon: ICON },
       { t: 'favorite.add', favoriteId: 'fav-1', nodeId: tabId },
@@ -466,7 +466,7 @@ describe('chord-data', () => {
     const db = new ChordDatabase(file);
     const state = seed();
     db.write(opsForState(state));
-    const tab = Object.values(state.nodes)[0] as TabNode;
+    const tab = nodeList(state)[0] as TabNode;
     // A tab in a chord that doesn't exist fails the deferred foreign key at commit.
     expect(() =>
       db.write([

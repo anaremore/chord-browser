@@ -63,8 +63,8 @@ import { cleanProxy, sameProxy, type ProxySettings } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
 import type { SyncApply, SyncGone } from './sync';
-import { children, chordsFor, descendants, favoriteFits, favoritesFor, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
-import { childrenToRead, nodeList } from './nodes';
+import { chordsFor, descendants, favoriteFits, favoritesFor, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
+import { childrenToRead, nodeList, byRank, children, deleteNode, nodeOf, nodesOfChord, setNode } from './nodes';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
 
 enablePatches();
@@ -425,7 +425,7 @@ function rankBetween(before: string | null, after: string | null): string {
  */
 function moveNode(draft: Draft<State>, node: Draft<SidebarNode>, section: Section, index: number, parentId: NodeId | null = null): boolean {
   if (parentId !== null) {
-    const parent = draft.nodes[parentId];
+    const parent = nodeOf(draft, parentId);
     if (parent?.kind !== 'folder' || parent.chordId !== node.chordId || isWithin(draft as State, parentId, node.id)) return false;
     section = parent.section;
   }
@@ -582,7 +582,7 @@ function nearestFree(draft: Draft<State>, order: readonly TabNode[], index: numb
  */
 function leave(draft: Draft<State>, win: Draft<WindowModel>, ctx: Context): void {
   const id = win.activeTab[win.activeChordId];
-  const node = id ? draft.nodes[id] : undefined;
+  const node = id ? nodeOf(draft, id) : undefined;
   if (node?.kind === 'tab') node.lastActiveAt = ctx.now - 1;
 }
 
@@ -609,7 +609,7 @@ function activate(
     effects.push({ e: 'view.show', windowId: other.id, nodeId: fallback });
   }
   if (nodeId) {
-    const node = draft.nodes[nodeId];
+    const node = nodeOf(draft, nodeId);
     if (touch && node?.kind === 'tab') node.lastActiveAt = ctx.now;
     effects.push({ e: 'view.ensure', nodeId });
   }
@@ -624,7 +624,7 @@ function switchChord(draft: Draft<State>, windowId: WindowId, chordId: ChordId, 
   win.activeChordId = chordId;
   // Landing on a chord never takes a tab from another window.
   let tabId = win.activeTab[chordId] ?? null;
-  if (!tabId || draft.nodes[tabId]?.kind !== 'tab' || shownByOther(draft, tabId, windowId)) tabId = recentFree(draft, chordId, windowId);
+  if (!tabId || nodeOf(draft, tabId)?.kind !== 'tab' || shownByOther(draft, tabId, windowId)) tabId = recentFree(draft, chordId, windowId);
   activate(draft, windowId, tabId, ctx, effects);
 }
 
@@ -636,8 +636,8 @@ function switchChord(draft: Draft<State>, windowId: WindowId, chordId: ChordId, 
 function changeProfile(draft: Draft<State>, chord: Draft<Chord>, profileId: ProfileId, effects: Effect[]): void {
   chord.profileId = profileId;
   if (profileId === DEFAULT_PROFILE) delete chord.proxy;
-  for (const node of nodeList(draft as State)) {
-    if (node.kind !== 'tab' || node.chordId !== chord.id || !draft.live[node.id]) continue;
+  for (const node of nodesOfChord(draft as State, chord.id)) {
+    if (node.kind !== 'tab' || !draft.live[node.id]) continue;
     delete draft.live[node.id];
     effects.push({ e: 'view.destroy', nodeId: node.id });
   }
@@ -661,11 +661,11 @@ const PERMISSIONS: readonly SitePermission[] = ['camera', 'microphone', 'locatio
  * call what it returns after.
  */
 function moving(draft: Draft<State>, moves: ReadonlyMap<NodeId, ChordId>, ctx: Context, effects: Effect[]): () => void {
-  const leaving = new Set([...moves.keys()].filter((id) => draft.nodes[id]?.kind === 'tab'));
+  const leaving = new Set([...moves.keys()].filter((id) => nodeOf(draft, id)?.kind === 'tab'));
   const land = landWindows(draft, leaving, ctx, effects);
   return () => {
     for (const id of leaving) {
-      const node = draft.nodes[id];
+      const node = nodeOf(draft, id);
       const from = draft.chords[moves.get(id) ?? ''];
       if (!node || !draft.live[id] || draft.chords[node.chordId]?.profileId === from?.profileId) continue;
       delete draft.live[id];
@@ -715,19 +715,19 @@ function mergeIn(draft: Draft<State>, cmd: Extract<Command, { t: 'data.merge' }>
   const added = new Set(undo.added);
   const moves = new Map<NodeId, ChordId>();
   for (const node of cmd.nodes ?? []) {
-    const existing = draft.nodes[node.id];
+    const existing = nodeOf(draft, node.id);
     const to = draft.chords[node.chordId];
     if (existing && to && !to.private && existing.chordId !== node.chordId && existing.kind === node.kind && (node.kind !== 'tab' || isTabUrl(node.url))) moves.set(node.id, existing.chordId);
   }
   const land = moving(draft, moves, ctx, effects);
   for (const incoming of cmd.nodes ?? []) {
     const chord = draft.chords[incoming.chordId];
-    const existing = draft.nodes[incoming.id];
+    const existing = nodeOf(draft, incoming.id);
     if (!chord || chord.private || (incoming.kind === 'tab' && !isTabUrl(incoming.url))) continue;
     if (existing && (existing.kind !== incoming.kind || draft.chords[existing.chordId]?.private)) continue;
     const node = { ...incoming } as SidebarNode;
     if (node.parentId !== null) {
-      const parent = draft.nodes[node.parentId];
+      const parent = nodeOf(draft, node.parentId);
       const fits =
         parent &&
         parent.id !== node.id &&
@@ -742,11 +742,11 @@ function mergeIn(draft: Draft<State>, cmd: Extract<Command, { t: 'data.merge' }>
     if (existing) {
       if (!(node.id in undo.nodes) && !added.has(node.id)) undo.nodes[node.id] = copy(existing);
       // What's live stays: a tab's icon, unless the file brings one, and when it was last shown.
-      draft.nodes[node.id] = node.kind === 'tab' && existing.kind === 'tab' ? { ...node, favicon: node.favicon ?? existing.favicon, lastActiveAt: existing.lastActiveAt } : node;
+      setNode(draft, node.kind === 'tab' && existing.kind === 'tab' ? { ...node, favicon: node.favicon ?? existing.favicon, lastActiveAt: existing.lastActiveAt } : node);
       continue;
     }
     // Unloaded: no live entry, so nothing loads until it's opened.
-    draft.nodes[node.id] = node;
+    setNode(draft, node);
     undo.added.push(node.id);
     added.add(node.id);
     // Undo takes away the chords it made whole; elsewhere it needs the tops of what it added.
@@ -827,17 +827,17 @@ function makeWay(draft: Draft<State>, undo: Draft<MergeUndo>, chordId: ChordId, 
   const chord = draft.chords[chordId];
   const target = draft.chords[to];
   if (!chord || !target || chord.private || target.private || chordId === to || undo.madeWay || sortedChords(draft as State).length < 2) return;
-  const nodes = nodeList(draft as State).filter((n) => n.chordId === chordId);
+  const nodes = nodesOfChord(draft as State, chordId);
   undo.madeWay = { chord: copy(chord), nodes: nodes.map(copy), to };
   const today = childrenToRead(draft as State, chordId, 'today', null);
   const pinned = childrenToRead(draft as State, chordId, 'pinned', null);
   const todayRanks = generateNKeysBetween(null, childrenToRead(draft as State, to, 'today', null)[0]?.rank ?? null, today.length);
   const pinnedRanks = generateNKeysBetween(childrenToRead(draft as State, to, 'pinned', null).at(-1)?.rank ?? null, null, pinned.length);
-  today.forEach((n, i) => (draft.nodes[n.id]!.rank = todayRanks[i]!));
-  pinned.forEach((n, i) => (draft.nodes[n.id]!.rank = pinnedRanks[i]!));
+  today.forEach((n, i) => (nodeOf(draft, n.id)!.rank = todayRanks[i]!));
+  pinned.forEach((n, i) => (nodeOf(draft, n.id)!.rank = pinnedRanks[i]!));
   const resign = chord.profileId !== target.profileId;
   for (const node of nodes) {
-    draft.nodes[node.id]!.chordId = to;
+    nodeOf(draft, node.id)!.chordId = to;
     if (resign && draft.live[node.id]) {
       delete draft.live[node.id];
       effects.push({ e: 'view.destroy', nodeId: node.id });
@@ -877,9 +877,9 @@ function putBack(draft: Draft<State>, undo: Draft<MergeUndo>, ctx: Context, effe
     const resign = draft.chords[way.to]?.profileId !== way.chord.profileId;
     const moved = new Set(way.nodes.map((n) => n.id));
     for (const before of way.nodes) {
-      const node = draft.nodes[before.id];
+      const node = nodeOf(draft, before.id);
       if (!node) continue;
-      draft.nodes[before.id] = { ...node, chordId: before.chordId, section: before.section, parentId: before.parentId, rank: before.rank } as SidebarNode;
+      setNode(draft, { ...node, chordId: before.chordId, section: before.section, parentId: before.parentId, rank: before.rank } as SidebarNode);
       if (resign && draft.live[before.id]) {
         delete draft.live[before.id];
         effects.push({ e: 'view.destroy', nodeId: before.id });
@@ -907,16 +907,16 @@ function putBack(draft: Draft<State>, undo: Draft<MergeUndo>, ctx: Context, effe
   }
   const moves = new Map<NodeId, ChordId>();
   for (const [id, before] of Object.entries(undo.nodes)) {
-    const node = draft.nodes[id];
+    const node = nodeOf(draft, id);
     if (node && node.kind === before.kind && node.chordId !== before.chordId && draft.chords[before.chordId]) moves.set(id, node.chordId);
   }
   const land = moving(draft, moves, ctx, effects);
   for (const [id, before] of Object.entries(undo.nodes)) {
-    const node = draft.nodes[id];
+    const node = nodeOf(draft, id);
     if (!node || node.kind !== before.kind || !draft.chords[before.chordId]) continue;
     const back = copy(before);
-    if (back.parentId !== null && draft.nodes[back.parentId]?.chordId !== back.chordId) back.parentId = null;
-    draft.nodes[id] = node.kind === 'tab' && back.kind === 'tab' ? { ...back, favicon: node.favicon ?? back.favicon, lastActiveAt: node.lastActiveAt } : back;
+    if (back.parentId !== null && nodeOf(draft, back.parentId)?.chordId !== back.chordId) back.parentId = null;
+    setNode(draft, node.kind === 'tab' && back.kind === 'tab' ? { ...back, favicon: node.favicon ?? back.favicon, lastActiveAt: node.lastActiveAt } : back);
   }
   land();
   for (const [id, before] of Object.entries(undo.favorites)) if (draft.favorites[id]) draft.favorites[id] = copy(before);
@@ -960,14 +960,16 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
   const target = draft.chords[to];
   if (!chord || !target || chord.private || target.private || chordId === to) return;
   const today = children(draft as State, chordId, 'today', null);
-  const opened = nodeList(draft as State)
-    .filter((n) => n.chordId === chordId && n.kind === 'tab' && n.section === 'pinned' && open.has(n.id))
-    .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
+  const ofChord = nodesOfChord(draft as State, chordId);
+  const opened = ofChord
+    .filter((n) => n.kind === 'tab' && n.section === 'pinned' && open.has(n.id))
+    // Ties (tabs in different folders) by ID, not by where the nodes happen to sit (their buckets keep no order).
+    .sort(byRank);
   const going = [...today, ...opened];
   // Each split's panes, from one pass.
   const panesOf = new Map<NodeId, NodeId[]>();
-  for (const n of nodeList(draft as State)) {
-    if (n.parentId === null || n.chordId !== chordId) continue;
+  for (const n of ofChord) {
+    if (n.parentId === null) continue;
     const list = panesOf.get(n.parentId);
     if (list) list.push(n.id);
     else panesOf.set(n.parentId, [n.id]);
@@ -987,7 +989,7 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
     }
   };
   going.forEach((n, i) => {
-    const node = draft.nodes[n.id]!;
+    const node = nodeOf(draft, n.id)!;
     carry(node);
     node.rank = ranks[i]!;
     if (node.section === 'pinned') {
@@ -996,7 +998,7 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
       if (node.kind === 'tab') node.pinnedUrl = null;
     }
     // A split in Today brings its panes.
-    if (node.kind === 'split') for (const id of panesOf.get(node.id) ?? []) carry(draft.nodes[id]!);
+    if (node.kind === 'split') for (const id of panesOf.get(node.id) ?? []) carry(nodeOf(draft, id)!);
   });
   // Windows on it go to `to`, showing what they showed if it moved.
   for (const win of Object.values(draft.windows)) {
@@ -1013,12 +1015,12 @@ function giveWay(draft: Draft<State>, chordId: ChordId, to: ChordId, ctx: Contex
     effects.push({ e: 'view.show', windowId: win.id, nodeId: show });
   }
   // The rest goes with it, kept for Undo this session.
-  const rest = nodeList(draft as State).filter((n) => n.chordId === chordId);
+  const rest = nodesOfChord(draft as State, chordId);
   draft.syncUndo.unshift({ id: ctx.newId(), chord: copy(chord), nodes: rest.map((n) => copy(n)), deletedAt: ctx.now, moved: before });
   if (draft.syncUndo.length > MAX_SYNC_UNDO) draft.syncUndo.length = MAX_SYNC_UNDO;
   for (const node of rest) {
     if (node.kind === 'tab' && draft.live[node.id]) effects.push({ e: 'view.destroy', nodeId: node.id });
-    delete draft.nodes[node.id];
+    deleteNode(draft, node.id);
     delete draft.live[node.id];
   }
   delete draft.chords[chordId];
@@ -1053,27 +1055,27 @@ function unreplace(draft: Draft<State>, windowId: WindowId, chordIds: readonly C
     // What it held comes back where it was, in it (a folder before what it held, whatever order they were kept in).
     const restored: NodeId[] = [];
     for (const node of deleted!.nodes) {
-      if (draft.nodes[node.id] || !draft.chords[node.chordId]) continue;
-      draft.nodes[node.id] = copy(node);
+      if (nodeOf(draft, node.id) || !draft.chords[node.chordId]) continue;
+      setNode(draft, copy(node));
       restored.push(node.id);
     }
     for (const id of restored) {
-      const node = draft.nodes[id]!;
-      if (node.parentId !== null && draft.nodes[node.parentId]?.chordId !== node.chordId) node.parentId = null;
+      const node = nodeOf(draft, id)!;
+      if (node.parentId !== null && nodeOf(draft, node.parentId)?.chordId !== node.chordId) node.parentId = null;
     }
     const moves = new Map<NodeId, ChordId>();
     for (const was of deleted!.moved ?? []) {
-      const node = draft.nodes[was.id];
+      const node = nodeOf(draft, was.id);
       if (node && node.kind === was.kind && node.chordId !== was.chordId && draft.chords[was.chordId]) moves.set(was.id, node.chordId);
     }
     const land = moving(draft, moves, ctx, effects);
     for (const was of deleted!.moved ?? []) {
-      const node = draft.nodes[was.id];
+      const node = nodeOf(draft, was.id);
       if (!node || node.kind !== was.kind || !draft.chords[was.chordId]) continue;
       const put = copy(was);
-      if (put.parentId !== null && draft.nodes[put.parentId]?.chordId !== put.chordId) put.parentId = null;
+      if (put.parentId !== null && nodeOf(draft, put.parentId)?.chordId !== put.chordId) put.parentId = null;
       // A tab keeps where it's got to since (its page, title and icon); it goes back to its place, and its pinned home.
-      draft.nodes[was.id] = node.kind === 'tab' && put.kind === 'tab' ? { ...put, url: node.url, title: node.title, favicon: node.favicon, lastActiveAt: node.lastActiveAt } : put;
+      setNode(draft, node.kind === 'tab' && put.kind === 'tab' ? { ...put, url: node.url, title: node.title, favicon: node.favicon, lastActiveAt: node.lastActiveAt } : put);
     }
     land();
   }
@@ -1128,25 +1130,25 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
   // home, unloaded. Its title and icon follow only while it's on its home, since that's what they're of.
   const incoming = (cmd.nodes ?? []).filter((node) => {
     const chord = draft.chords[node.chordId];
-    const existing = draft.nodes[node.id];
+    const existing = nodeOf(draft, node.id);
     if (!chord || chord.private || (existing && (existing.kind !== node.kind || draft.chords[existing.chordId]?.private))) return false;
     if (node.kind === 'folder' && node.section !== 'pinned') return false;
     return node.kind !== 'tab' || (isTabUrl(node.pinnedUrl ?? node.url) && node.section === 'pinned');
   });
   const moves = new Map<NodeId, ChordId>();
   for (const node of incoming) {
-    const existing = draft.nodes[node.id];
+    const existing = nodeOf(draft, node.id);
     if (existing && existing.chordId !== node.chordId) moves.set(node.id, existing.chordId);
   }
   const land = moving(draft, moves, ctx, effects);
   const placed: NodeId[] = [];
   for (const node of incoming) {
-    const existing = draft.nodes[node.id];
+    const existing = nodeOf(draft, node.id);
     if (node.kind === 'tab') {
       const home = node.pinnedUrl ?? node.url;
       const was = existing?.kind === 'tab' ? existing : null;
       const onHome = !was || was.url === (was.pinnedUrl ?? was.url);
-      draft.nodes[node.id] = {
+      setNode(draft, {
         ...node,
         url: was ? was.url : home,
         pinnedUrl: home,
@@ -1154,16 +1156,16 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
         favicon: was && (!onHome || node.favicon === null) ? was.favicon : node.favicon,
         lastActiveAt: was ? was.lastActiveAt : node.lastActiveAt,
         ...(node.muted ? { muted: true } : {}),
-      } as TabNode;
+      } as TabNode);
       if (was && Boolean(was.muted) !== Boolean(node.muted)) effects.push({ e: 'view.mute', nodeId: node.id, muted: Boolean(node.muted) });
-    } else draft.nodes[node.id] = { ...node } as SidebarNode;
+    } else setNode(draft, { ...node } as SidebarNode);
     placed.push(node.id);
   }
   // Each one's place, now that everything is in: a parent of its chord that can hold it, and never inside itself.
   for (const id of placed) {
-    const node = draft.nodes[id]!;
+    const node = nodeOf(draft, id)!;
     if (node.parentId === null) continue;
-    if (!holds(draft as State, draft.nodes[node.parentId], node)) node.parentId = null;
+    if (!holds(draft as State, nodeOf(draft, node.parentId), node)) node.parentId = null;
   }
   land();
 
@@ -1210,9 +1212,9 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
   // A node's tombstone is about a pinned one: one that's in Today here now (moved out of a chord that went, or unpinned
   // here) is only this computer's, and stays.
   const goneNodes = new Set(
-    (gone.nodes ?? []).filter(({ id, kind }) => draft.nodes[id]?.kind === kind && draft.nodes[id]!.section === 'pinned' && !draft.chords[draft.nodes[id]!.chordId]?.private).map(({ id }) => id),
+    (gone.nodes ?? []).filter(({ id, kind }) => nodeOf(draft, id)?.kind === kind && nodeOf(draft, id)!.section === 'pinned' && !draft.chords[nodeOf(draft, id)!.chordId]?.private).map(({ id }) => id),
   );
-  const leaving = new Set([...goneNodes].filter((id) => draft.nodes[id]?.kind === 'tab' && !openBefore.has(id)));
+  const leaving = new Set([...goneNodes].filter((id) => nodeOf(draft, id)?.kind === 'tab' && !openBefore.has(id)));
   const landGone = landWindows(draft, leaving, ctx, effects);
   // Nothing pinned goes without Undo: what's taken away, and what moves because of it, kept per chord in sync's list.
   const kept = new Map<ChordId, { nodes: SidebarNode[]; moved: SidebarNode[] }>();
@@ -1222,7 +1224,7 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
     kept.set(node.chordId, entry);
   };
   for (const id of goneNodes) {
-    const node = draft.nodes[id]!;
+    const node = nodeOf(draft, id)!;
     if (node.kind === 'tab') {
       keep(node, openBefore.has(id) ? 'moved' : 'nodes');
       if (openBefore.has(id)) {
@@ -1231,10 +1233,10 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
         node.parentId = null;
         node.rank = top;
         node.pinnedUrl = null;
-      } else delete draft.nodes[id];
+      } else deleteNode(draft, id);
       continue;
     }
-    const inside = nodeList(draft as State).filter((n) => n.parentId === id && !goneNodes.has(n.id)).map((n) => draft.nodes[n.id]!);
+    const inside = nodeList(draft as State).filter((n) => n.parentId === id && !goneNodes.has(n.id)).map((n) => nodeOf(draft, n.id)!);
     keep(node, 'nodes');
     for (const child of inside) keep(child, 'moved');
     if (node.kind === 'split') {
@@ -1246,7 +1248,7 @@ function syncIn(draft: Draft<State>, cmd: Extract<Command, { t: 'sync.apply' }>,
         pane.rank = ranks[i]!;
       });
     } else for (const child of inside) child.parentId = null;
-    delete draft.nodes[id];
+    deleteNode(draft, id);
   }
   landGone();
   for (const [chordId, entry] of kept) {
@@ -1294,9 +1296,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         lastActiveAt: ctx.now,
         createdAt: ctx.now,
       };
-      draft.nodes[id] = tab;
+      setNode(draft, tab);
       // First run's "What do you open every day?" lands straight in Pinned (never in a private window).
-      if (cmd.pinned && !win.private) moveNode(draft, draft.nodes[id]!, 'pinned', childrenToRead(draft as State, chordId, 'pinned', null).length);
+      if (cmd.pinned && !win.private) moveNode(draft, nodeOf(draft, id)!, 'pinned', childrenToRead(draft as State, chordId, 'pinned', null).length);
       draft.live[id] = { ...IDLE_LIVE, loading: true };
       effects.push({ e: 'view.ensure', nodeId: id });
       if (!cmd.background) {
@@ -1309,11 +1311,11 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'tab.adopt': {
       const win = draft.windows[cmd.windowId];
-      if (!win || draft.nodes[cmd.nodeId]) return;
+      if (!win || nodeOf(draft, cmd.nodeId)) return;
       const chordId = cmd.chordId ?? win.activeChordId;
       // The window must be allowed to show that chord: a private window only its own, others never a private one.
       if (!chordsFor(draft as State, cmd.windowId).some((c) => c.id === chordId)) return;
-      draft.nodes[cmd.nodeId] = {
+      setNode(draft, {
         kind: 'tab',
         id: cmd.nodeId,
         chordId,
@@ -1327,7 +1329,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         favicon: cmd.favicon ?? null,
         lastActiveAt: ctx.now,
         createdAt: ctx.now,
-      };
+      });
       draft.live[cmd.nodeId] = { ...IDLE_LIVE, ...cmd.live };
       leave(draft, win, ctx);
       if (win.activeChordId !== chordId) win.activeChordId = chordId;
@@ -1352,7 +1354,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'tab.activate': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       const win = draft.windows[cmd.windowId];
       if (node?.kind !== 'tab' || !win) return;
       // A private window shows only its own tabs, and no other window ever shows them.
@@ -1365,7 +1367,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'tab.close': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       if (node?.kind !== 'tab') return;
       // Closing a pane: the split's other panes stay on screen, and the window lands on one of them.
       const split = splitOf(draft as State, node.id);
@@ -1400,7 +1402,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (draft.closed.length > MAX_CLOSED) draft.closed.length = MAX_CLOSED;
       // The panes left keep their shares relative to each other; ⌘⇧T puts this one back in the split.
       if (split) leaveSplit(draft, node, split as Draft<SplitNode>);
-      delete draft.nodes[cmd.nodeId];
+      deleteNode(draft, cmd.nodeId);
       delete draft.live[cmd.nodeId];
       effects.push({ e: 'view.destroy', nodeId: cmd.nodeId });
       for (const win of Object.values(draft.windows)) {
@@ -1423,7 +1425,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (!entry) return;
       // Back where it was if its chord (and folder) still exist; otherwise top of Today.
       const chordExists = Boolean(draft.chords[entry.node.chordId]);
-      const parentExists = entry.node.parentId === null || Boolean(draft.nodes[entry.node.parentId]);
+      const parentExists = entry.node.parentId === null || Boolean(nodeOf(draft, entry.node.parentId));
       const keepPlace = chordExists && parentExists;
       const chordId = chordExists ? entry.node.chordId : win.activeChordId;
       const restored: TabNode = {
@@ -1434,7 +1436,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         rank: keepPlace ? entry.node.rank : topOfToday(draft, chordId),
         lastActiveAt: ctx.now,
       };
-      draft.nodes[restored.id] = restored;
+      setNode(draft, restored);
       draft.live[restored.id] = { ...IDLE_LIVE, loading: true };
       if (entry.archiveId) effects.push({ e: 'archive.restored', archiveId: entry.archiveId, nodeId: restored.id });
       leave(draft, win, ctx);
@@ -1448,7 +1450,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const onScreen = cmd.reason === 'auto' ? visibleTabs(draft as State) : new Set<NodeId>();
       // A private window's tabs are never tidied away; Clear closes them without archiving.
       const tabs = cmd.nodeIds
-        .map((id) => draft.nodes[id])
+        .map((id) => nodeOf(draft, id))
         .filter((n): n is Draft<TabNode> => n?.kind === 'tab' && n.section === 'today' && !onScreen.has(n.id))
         .filter((n) => cmd.reason !== 'auto' || !isPrivateChord(draft as State, n.chordId));
       if (tabs.length === 0) return;
@@ -1467,7 +1469,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         const archiveId = isPrivateChord(draft as State, tab.chordId) ? null : toArchive(tab as TabNode, cmd.reason, ctx, effects);
         // Clearing is something you did, so ⌘⇧T can undo it; tidying up after idle tabs isn't.
         if (cmd.reason === 'cleared') draft.closed.unshift({ node: { ...(tab as TabNode) }, windowId: '', closedAt: ctx.now, archiveId });
-        delete draft.nodes[tab.id];
+        deleteNode(draft, tab.id);
         delete draft.live[tab.id];
         effects.push({ e: 'view.destroy', nodeId: tab.id });
       }
@@ -1488,9 +1490,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'archive.restore': {
       const win = draft.windows[cmd.windowId];
-      if (!win || win.private || draft.nodes[cmd.nodeId]) return;
+      if (!win || win.private || nodeOf(draft, cmd.nodeId)) return;
       const chordId = draft.chords[cmd.tab.chordId] ? cmd.tab.chordId : win.activeChordId;
-      draft.nodes[cmd.nodeId] = {
+      setNode(draft, {
         kind: 'tab',
         id: cmd.nodeId,
         chordId,
@@ -1504,7 +1506,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         favicon: cmd.tab.favicon,
         lastActiveAt: ctx.now,
         createdAt: ctx.now,
-      };
+      });
       // If it's also on the ⌘⇧T list, it isn't closed any more.
       const listed = draft.closed.findIndex((c) => c.archiveId === cmd.tab.id);
       if (listed >= 0) draft.closed.splice(listed, 1);
@@ -1519,7 +1521,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'tab.sleep': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       if (node?.kind !== 'tab' || !draft.live[cmd.nodeId]) return;
       if (Object.values(draft.windows).some((w) => shownTabs(draft as State, w.id).includes(cmd.nodeId))) return;
       delete draft.live[cmd.nodeId];
@@ -1528,7 +1530,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'tab.navigate': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       if (node?.kind !== 'tab') return;
       node.url = cmd.url;
       effects.push({ e: 'view.ensure', nodeId: cmd.nodeId }, { e: 'view.navigate', nodeId: cmd.nodeId, url: cmd.url });
@@ -1536,7 +1538,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'node.move': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       // Nothing pins in a private window: it would be forgotten anyway.
       if (cmd.section === 'pinned' && node && isPrivateChord(draft as State, node.chordId)) return;
       if (node) moveNode(draft, node, cmd.section, cmd.index, cmd.parentId ?? null);
@@ -1544,7 +1546,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'node.moveToChord': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       const from = node ? draft.chords[node.chordId] : undefined;
       const to = draft.chords[cmd.chordId];
       if (node?.kind !== 'tab' || !from || !to || from.id === to.id) return;
@@ -1553,7 +1555,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const land = landWindows(draft, new Set([node.id]), ctx, effects);
       node.chordId = to.id;
       const place = cmd.place;
-      const parent = place?.parentId ? draft.nodes[place.parentId] : undefined;
+      const parent = place?.parentId ? nodeOf(draft, place.parentId) : undefined;
       if (place && (place.parentId === null || (parent?.kind === 'folder' && parent.chordId === to.id))) {
         node.section = place.section;
         node.parentId = place.parentId;
@@ -1577,8 +1579,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'folder.create': {
       const chord = draft.chords[cmd.chordId];
       // Folders live in Pinned, which a private window doesn't have.
-      if (!chord || chord.private || draft.nodes[cmd.folderId]) return;
-      const tab = cmd.tabId ? draft.nodes[cmd.tabId] : undefined;
+      if (!chord || chord.private || nodeOf(draft, cmd.folderId)) return;
+      const tab = cmd.tabId ? nodeOf(draft, cmd.tabId) : undefined;
       if (cmd.tabId && (tab?.kind !== 'tab' || tab.chordId !== chord.id)) return;
       // Where the tab was, if it was pinned; otherwise the end of Pinned.
       const inPlace = tab?.section === 'pinned';
@@ -1593,26 +1595,26 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         collapsed: false,
         createdAt: ctx.now,
       };
-      draft.nodes[folder.id] = folder;
+      setNode(draft, folder);
       if (tab) moveNode(draft, tab, 'pinned', 0, folder.id);
       return;
     }
 
     case 'folder.rename': {
-      const folder = draft.nodes[cmd.nodeId];
+      const folder = nodeOf(draft, cmd.nodeId);
       const title = cmd.title.trim().slice(0, MAX_FOLDER_TITLE);
       if (folder?.kind === 'folder' && title && folder.title !== title) folder.title = title;
       return;
     }
 
     case 'folder.toggle': {
-      const folder = draft.nodes[cmd.nodeId];
+      const folder = nodeOf(draft, cmd.nodeId);
       if (folder?.kind === 'folder' && folder.collapsed !== cmd.collapsed) folder.collapsed = cmd.collapsed;
       return;
     }
 
     case 'folder.delete': {
-      const folder = draft.nodes[cmd.nodeId];
+      const folder = nodeOf(draft, cmd.nodeId);
       if (folder?.kind !== 'folder') return;
       const inside = descendants(draft as State, folder.id);
       const land = landWindows(draft, new Set(inside.filter((n) => n.kind === 'tab').map((n) => n.id)), ctx, effects);
@@ -1621,29 +1623,29 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       for (const node of inside) {
         if (node.kind === 'tab' && draft.live[node.id]) effects.push({ e: 'view.destroy', nodeId: node.id });
         delete draft.live[node.id];
-        delete draft.nodes[node.id];
+        deleteNode(draft, node.id);
       }
-      delete draft.nodes[folder.id];
+      deleteNode(draft, folder.id);
       land();
       return;
     }
 
     case 'folder.restore': {
       const index = draft.deletedFolders.findIndex((d) => d.folder.id === cmd.nodeId);
-      if (index < 0 || draft.nodes[cmd.nodeId]) return;
+      if (index < 0 || nodeOf(draft, cmd.nodeId)) return;
       const { folder, nodes } = draft.deletedFolders[index]!;
       if (!draft.chords[folder.chordId]) return;
       draft.deletedFolders.splice(index, 1);
       // Back in its place, or at the end of Pinned if the folder it was in has gone too.
-      const parentGone = folder.parentId !== null && !draft.nodes[folder.parentId];
+      const parentGone = folder.parentId !== null && !nodeOf(draft, folder.parentId);
       const end = rankBetween(childrenToRead(draft as State, folder.chordId, 'pinned', null).at(-1)?.rank ?? null, null);
-      draft.nodes[folder.id] = parentGone ? { ...folder, parentId: null, rank: end } : folder;
-      for (const node of nodes) draft.nodes[node.id] = node;
+      setNode(draft, parentGone ? { ...folder, parentId: null, rank: end } : folder);
+      for (const node of nodes) setNode(draft, node);
       return;
     }
 
     case 'favorite.add': {
-      const tab = draft.nodes[cmd.nodeId];
+      const tab = nodeOf(draft, cmd.nodeId);
       // Favorites are kept; nothing from a private window becomes one.
       if (tab?.kind !== 'tab' || draft.favorites[cmd.favoriteId] || isPrivateChord(draft as State, tab.chordId)) return;
       const url = tab.pinnedUrl ?? tab.url;
@@ -1712,24 +1714,24 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       const win = draft.windows[cmd.windowId];
       if (!win) return;
       const wanted = new Set(cmd.nodeIds);
-      const entries = draft.closed.filter((c) => wanted.has(c.node.id) && !draft.nodes[c.node.id]);
+      const entries = draft.closed.filter((c) => wanted.has(c.node.id) && !nodeOf(draft, c.node.id));
       if (entries.length === 0) return;
       for (const entry of entries) {
         const { node } = entry;
         const chordExists = Boolean(draft.chords[node.chordId]);
-        const keep = chordExists && (node.parentId === null || Boolean(draft.nodes[node.parentId]));
+        const keep = chordExists && (node.parentId === null || Boolean(nodeOf(draft, node.parentId)));
         const chordId = chordExists ? node.chordId : win.activeChordId;
-        draft.nodes[node.id] = {
+        setNode(draft, {
           ...node,
           chordId,
           section: keep ? node.section : 'today',
           parentId: keep ? node.parentId : null,
           rank: keep ? node.rank : topOfToday(draft, chordId),
-        };
+        });
         if (entry.archiveId) effects.push({ e: 'archive.restored', archiveId: entry.archiveId, nodeId: node.id });
       }
       draft.closed = draft.closed.filter((c) => !wanted.has(c.node.id));
-      const shown = cmd.activate ? draft.nodes[cmd.activate] : undefined;
+      const shown = cmd.activate ? nodeOf(draft, cmd.activate) : undefined;
       if (shown?.kind === 'tab' && shown.chordId === win.activeChordId) {
         draft.live[shown.id] = { ...IDLE_LIVE, loading: true };
         leave(draft, win, ctx);
@@ -1739,7 +1741,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'tab.pin': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       if (node?.kind !== 'tab' || node.section === 'pinned' || isPrivateChord(draft as State, node.chordId)) return;
       // A pane pins its whole split: the panes stay together.
       const unit = (splitOf(draft as State, node.id) as Draft<SplitNode> | null) ?? node;
@@ -1748,7 +1750,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'tab.unpin': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       if (node?.kind !== 'tab' || node.section !== 'pinned') return;
       moveNode(draft, (splitOf(draft as State, node.id) as Draft<SplitNode> | null) ?? node, 'today', 0);
       return;
@@ -1767,7 +1769,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'tab.mute': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       if (node?.kind !== 'tab' || Boolean(node.muted) === cmd.muted) return;
       if (cmd.muted) node.muted = true;
       else delete node.muted;
@@ -1776,7 +1778,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'tab.updated': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       if (node?.kind !== 'tab') return;
       if (cmd.url !== undefined && node.url !== cmd.url) node.url = cmd.url;
       if (cmd.title !== undefined && node.title !== cmd.title) node.title = cmd.title;
@@ -1785,7 +1787,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'tab.live': {
-      if (!draft.nodes[cmd.nodeId]) return;
+      if (!nodeOf(draft, cmd.nodeId)) return;
       const live = (draft.live[cmd.nodeId] ??= { ...IDLE_LIVE });
       for (const [key, value] of Object.entries(cmd.live) as [keyof LiveTab, LiveTab[keyof LiveTab]][]) {
         if (key === 'error') {
@@ -1845,10 +1847,9 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (!win.private) return;
       // Closing a private window forgets everything in it (files it downloaded stay on disk).
       const chordId = win.activeChordId;
-      for (const node of nodeList(draft as State)) {
-        if (node.chordId !== chordId) continue;
+      for (const node of nodesOfChord(draft as State, chordId)) {
         if (node.kind === 'tab') effects.push({ e: 'view.destroy', nodeId: node.id });
-        delete draft.nodes[node.id];
+        deleteNode(draft, node.id);
         delete draft.live[node.id];
       }
       delete draft.chords[chordId];
@@ -2122,7 +2123,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (win.activeChordId === cmd.chordId) switchChord(draft, win.id, neighbor.id, ctx, effects);
         delete win.activeTab[cmd.chordId];
       }
-      const nodes = nodeList(draft as State).filter((n) => n.chordId === cmd.chordId);
+      const nodes = nodesOfChord(draft as State, cmd.chordId);
       // Its own Favorites go with it, and come back with Undo.
       const favorites = Object.values(draft.favorites).filter((f) => f.chordId === cmd.chordId);
       draft.deletedChords.unshift({
@@ -2135,7 +2136,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (draft.deletedChords.length > MAX_DELETED_CHORDS) draft.deletedChords.length = MAX_DELETED_CHORDS;
       for (const node of nodes) {
         if (node.kind === 'tab') effects.push({ e: 'view.destroy', nodeId: node.id });
-        delete draft.nodes[node.id];
+        deleteNode(draft, node.id);
         delete draft.live[node.id];
       }
       delete draft.chords[cmd.chordId];
@@ -2147,7 +2148,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (index < 0 || draft.chords[cmd.chordId]) return;
       const [deleted] = draft.deletedChords.splice(index, 1);
       draft.chords[cmd.chordId] = deleted!.chord;
-      for (const node of deleted!.nodes) draft.nodes[node.id] = node;
+      for (const node of deleted!.nodes) setNode(draft, node);
       // Its Favorites, unless that page became a Favorite in its row meanwhile.
       for (const favorite of deleted!.favorites ?? []) {
         if (!draft.favorites[favorite.id] && favoriteFits(draft as State, favorite.url, cmd.chordId) !== 'taken') draft.favorites[favorite.id] = favorite;
@@ -2277,10 +2278,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'split.add': {
       const win = draft.windows[cmd.windowId];
-      const beside = draft.nodes[cmd.withId];
+      const beside = nodeOf(draft, cmd.withId);
       if (!win || beside?.kind !== 'tab' || beside.chordId !== win.activeChordId) return;
       let split = splitOf(draft as State, beside.id) as Draft<SplitNode> | null;
-      const existing = cmd.nodeId ? draft.nodes[cmd.nodeId] : undefined;
+      const existing = cmd.nodeId ? nodeOf(draft, cmd.nodeId) : undefined;
       if (cmd.nodeId && (existing?.kind !== 'tab' || existing.chordId !== beside.chordId || existing.id === beside.id)) return;
       if (!cmd.nodeId && !cmd.url) return;
       // A split holds four panes at most (a pane moving within it is fine).
@@ -2288,7 +2289,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       let tab = existing as Draft<TabNode> | undefined;
       if (!tab) {
         const id = ctx.newId();
-        draft.nodes[id] = {
+        setNode(draft, {
           kind: 'tab',
           id,
           chordId: beside.chordId,
@@ -2302,10 +2303,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
           favicon: null,
           lastActiveAt: ctx.now,
           createdAt: ctx.now,
-        };
+        });
         draft.live[id] = { ...IDLE_LIVE, loading: true };
         effects.push({ e: 'view.ensure', nodeId: id });
-        tab = draft.nodes[id] as Draft<TabNode>;
+        tab = nodeOf(draft, id) as Draft<TabNode>;
       }
       // Out of any other split first (that one settles afterwards).
       const from = splitOf(draft as State, tab.id) as Draft<SplitNode> | null;
@@ -2313,7 +2314,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (!split) {
         // A new split takes the place of the tab it's made beside.
         const id = ctx.newId();
-        draft.nodes[id] = {
+        setNode(draft, {
           kind: 'split',
           id,
           chordId: beside.chordId,
@@ -2323,10 +2324,10 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
           direction: cmd.direction ?? 'row',
           sizes: [1],
           createdAt: ctx.now,
-        };
+        });
         beside.parentId = id;
         beside.rank = generateKeyBetween(null, null);
-        split = draft.nodes[id] as Draft<SplitNode>;
+        split = nodeOf(draft, id) as Draft<SplitNode>;
       }
       joinSplit(draft, tab, split, cmd.index ?? SPLIT.maxPanes);
       leave(draft, win, ctx);
@@ -2335,7 +2336,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'split.resize': {
-      const split = draft.nodes[cmd.splitId];
+      const split = nodeOf(draft, cmd.splitId);
       if (split?.kind !== 'split') return;
       const n = splitMembers(draft as State, split.id).length;
       if (cmd.sizes.length !== n) return;
@@ -2346,7 +2347,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'split.remove': {
-      const node = draft.nodes[cmd.nodeId];
+      const node = nodeOf(draft, cmd.nodeId);
       const split = node ? (splitOf(draft as State, node.id) as Draft<SplitNode> | null) : null;
       if (node?.kind !== 'tab' || !split) return;
       leaveSplit(draft, node, split);
@@ -2354,7 +2355,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     }
 
     case 'split.separate': {
-      const split = draft.nodes[cmd.splitId];
+      const split = nodeOf(draft, cmd.splitId);
       if (split?.kind !== 'split') return;
       // The panes take the split's place, in order.
       const panes = splitMembers(draft as State, split.id);
@@ -2365,21 +2366,21 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         pane.parentId = split.parentId;
         pane.rank = ranks[i]!;
       });
-      delete draft.nodes[split.id];
+      deleteNode(draft, split.id);
       return;
     }
 
     case 'split.join': {
       const win = draft.windows[cmd.windowId];
-      const tabs = cmd.nodeIds.map((id) => draft.nodes[id]).filter((n): n is Draft<TabNode> => n?.kind === 'tab');
+      const tabs = cmd.nodeIds.map((id) => nodeOf(draft, id)).filter((n): n is Draft<TabNode> => n?.kind === 'tab');
       const first = tabs[0];
-      if (!win || !first || tabs.length < 2 || tabs.length > SPLIT.maxPanes || draft.nodes[cmd.splitId]) return;
+      if (!win || !first || tabs.length < 2 || tabs.length > SPLIT.maxPanes || nodeOf(draft, cmd.splitId)) return;
       if (tabs.some((t) => t.chordId !== first.chordId)) return;
       for (const tab of tabs) {
         const from = splitOf(draft as State, tab.id) as Draft<SplitNode> | null;
         if (from) leaveSplit(draft, tab, from);
       }
-      draft.nodes[cmd.splitId] = {
+      setNode(draft, {
         kind: 'split',
         id: cmd.splitId,
         chordId: first.chordId,
@@ -2389,7 +2390,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         direction: cmd.direction,
         sizes: normalizeSizes(cmd.sizes ?? equalSizes(tabs.length), tabs.length),
         createdAt: ctx.now,
-      };
+      });
       const ranks = generateNKeysBetween(null, null, tabs.length);
       tabs.forEach((tab, i) => {
         tab.parentId = cmd.splitId;
@@ -2431,13 +2432,13 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       for (const node of cmd.nodes ?? []) {
         const chord = draft.chords[node.chordId];
         // Never into a private window's chord; folders only in Pinned; no splits.
-        if (!chord || chord.private || draft.nodes[node.id] || node.kind === 'split' || (node.kind === 'folder' && node.section !== 'pinned')) continue;
+        if (!chord || chord.private || nodeOf(draft, node.id) || node.kind === 'split' || (node.kind === 'folder' && node.section !== 'pinned')) continue;
         if (node.parentId !== null) {
           // Parents arrive before their children, in this command or an earlier one.
-          const parent = draft.nodes[node.parentId];
+          const parent = nodeOf(draft, node.parentId);
           if (parent?.kind !== 'folder' || parent.chordId !== node.chordId) continue;
         }
-        draft.nodes[node.id] = node.kind === 'tab' && node.section === 'pinned' ? { ...node, pinnedUrl: node.pinnedUrl ?? node.url } : node;
+        setNode(draft, node.kind === 'tab' && node.section === 'pinned' ? { ...node, pinnedUrl: node.pinnedUrl ?? node.url } : node);
         // Undo removes the chords it made whole; elsewhere it needs the tops of what it added.
         if (node.parentId === null && !made.has(node.chordId)) record.nodeIds.push(node.id);
       }
@@ -2478,16 +2479,21 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       // inside. Listed parents first (breadth-first, through one index of the tree), taken children first,
       // so a part never leaves anything without its folder.
       const inside = new Map<NodeId, NodeId[]>();
-      const roots: NodeId[] = record.nodeIds.filter((id) => draft.nodes[id] && !gone.has(draft.nodes[id]!.chordId));
+      const roots: NodeId[] = record.nodeIds.filter((id) => nodeOf(draft, id) && !gone.has(nodeOf(draft, id)!.chordId));
+      const goneRoots: NodeId[] = [];
       for (const node of nodeList(draft as State)) {
         if (!node.parentId) {
-          if (gone.has(node.chordId)) roots.push(node.id);
+          if (gone.has(node.chordId)) goneRoots.push(node.id);
           continue;
         }
         const list = inside.get(node.parentId);
         if (list) list.push(node.id);
         else inside.set(node.parentId, [node.id]);
       }
+      // The buckets walk in hash order: by id, so a partial undo takes the same part it always did.
+      const byId = (a: NodeId, b: NodeId) => (a < b ? -1 : a > b ? 1 : 0);
+      roots.push(...goneRoots.sort(byId));
+      for (const list of inside.values()) list.sort(byId);
       const listed: NodeId[] = [];
       const seen = new Set<NodeId>();
       for (let i = 0, queue = roots; i < queue.length; i++) {
@@ -2505,11 +2511,11 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         const next = order.slice(at + 1).find((c) => !gone.has(c.id)) ?? order.slice(0, Math.max(0, at)).reverse().find((c) => !gone.has(c.id));
         if (next) switchChord(draft, win.id, next.id, ctx, effects);
       }
-      const land = landWindows(draft, new Set(part.filter((id) => draft.nodes[id]?.kind === 'tab')), ctx, effects);
+      const land = landWindows(draft, new Set(part.filter((id) => nodeOf(draft, id)?.kind === 'tab')), ctx, effects);
       for (const id of part) {
-        if (draft.nodes[id]?.kind === 'tab' && draft.live[id]) effects.push({ e: 'view.destroy', nodeId: id });
+        if (nodeOf(draft, id)?.kind === 'tab' && draft.live[id]) effects.push({ e: 'view.destroy', nodeId: id });
         delete draft.live[id];
-        delete draft.nodes[id];
+        deleteNode(draft, id);
       }
       land();
       if (part.length < listed.length) return;

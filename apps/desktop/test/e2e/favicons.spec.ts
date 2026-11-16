@@ -67,10 +67,10 @@ const isShell = (url: string) => url.startsWith('chord://shell') || url.includes
 /** The tab on screen, as the store has it. */
 const shown = (shell: Page) =>
   shell.evaluate(async () => {
-    type Snapshot = { windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, { url: string; title: string; favicon: string | null }> } };
+    type Snapshot = { windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, Record<string, { id: string; url: string; title: string; favicon: string | null }>> } };
     const { windowId, state } = await (window as unknown as { chord: { state: { snapshot(): Promise<Snapshot> } } }).chord.state.snapshot();
     const win = state.windows[windowId]!;
-    const tab = state.nodes[win.activeTab[win.activeChordId]!]!;
+    const tab = Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.id === (win.activeTab[win.activeChordId]!))!;
     return { url: tab.url, title: tab.title, favicon: tab.favicon };
   });
 

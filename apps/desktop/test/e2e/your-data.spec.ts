@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { effectsHost, placeKey, readDataFile, type DataRecord } from '@chord/core';
+import { effectsHost, placeKey, readDataFile, nodeOf, nodeList, nodeIds, type DataRecord } from '@chord/core';
 import { nodeCrypto } from '@chord/data/crypto';
 import { audit, capturesDir, dispatch, expectClean, isOverlay, isSettings, isShell, launch, newPage, pageWhere, runAction, startSite, type Site } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
@@ -287,7 +287,7 @@ interface ImportSnapshot {
   windowId: string;
   state: {
     chords: Record<string, { id: string; name: string; profileId: string; proxy?: unknown; private?: boolean }>;
-    nodes: Record<string, { id: string; kind: string; chordId: string; parentId: string | null; section: string; title?: string; customTitle?: string | null; url?: string }>;
+    nodes: Record<string, Record<string, { id: string; kind: string; chordId: string; parentId: string | null; section: string; title?: string; customTitle?: string | null; url?: string }>>;
     favorites: Record<string, { id: string; url: string; title: string }>;
     windows: Record<string, { activeChordId: string }>;
     live: Record<string, unknown>;
@@ -419,7 +419,7 @@ test('a Chord file into a new profile: everything comes in as it was, nothing lo
     expect(after.state.chords[first]).toBeUndefined();
     const work = after.state.chords['work']!;
     expect(work).toMatchObject({ profileId: 'work-signins', proxy: { mode: 'server' } });
-    expect(after.state.nodes['mail']).toMatchObject({ chordId: 'work', parentId: 'folder', section: 'pinned', customTitle: 'Mail', url: 'https://mail.test/inbox' });
+    expect(nodeOf(after.state, 'mail')).toMatchObject({ chordId: 'work', parentId: 'folder', section: 'pinned', customTitle: 'Mail', url: 'https://mail.test/inbox' });
     expect(Object.values(after.state.favorites).map((f) => f.url)).toEqual(['https://calendar.test/']);
     expect(after.state.settings).toMatchObject({ searchEngine: 'duckduckgo', themes: [{ name: 'Late Night' }], proxy: { mode: 'none' } });
     // Blocks only: the camera the other computer allowed asks again here.
@@ -446,7 +446,7 @@ test('a Chord file into a new profile: everything comes in as it was, nothing lo
     await expect(card.getByText('Import undone.')).toBeVisible({ timeout: 30_000 });
     const undone = await stateOf(shell);
     expect(Object.keys(undone.state.chords)).toEqual([first]);
-    expect(Object.values(undone.state.nodes).map((n) => n.id)).toContain(Object.values(before.state.nodes)[0]!.id);
+    expect(nodeList(undone.state).map((n) => n.id)).toContain(nodeList(before.state)[0]!.id);
     expect(undone.state.favorites).toEqual({});
     expect(undone.state.settings).toMatchObject({ searchEngine: 'google', themes: [], proxy: { mode: 'system' } });
     expect(undone.state.sitePermissions).toEqual({});
@@ -523,7 +523,7 @@ test('a Chord file into a profile with data: problems first, then its settings o
 
     const after = await stateOf(shell);
     expect(Object.values(after.state.chords).map((c) => c.name).sort()).toEqual(['Personal', 'Personal', 'Side project', 'Work']);
-    expect(after.state.nodes['notes']).toMatchObject({ chordId: 'side', title: 'Notes' });
+    expect(nodeOf(after.state, 'notes')).toMatchObject({ chordId: 'side', title: 'Notes' });
     // The file's Favorite is the one here, at its address: never a second.
     expect(Object.values(after.state.favorites).map((f) => [f.id, f.url, f.title])).toEqual([['mine', 'https://calendar.test/', 'Calendar']]);
     expect(after.state.settings.searchEngine).toBe('duckduckgo');
@@ -535,7 +535,7 @@ test('a Chord file into a profile with data: problems first, then its settings o
     expect(Object.keys(undone.state.chords).sort()).toEqual(Object.keys(before.state.chords).sort());
     expect(Object.values(undone.state.favorites).map((f) => [f.id, f.title])).toEqual([['mine', 'Cal (mine)']]);
     expect(undone.state.settings.searchEngine).toBe('google');
-    expect(Object.keys(undone.state.nodes).sort()).toEqual(Object.keys(before.state.nodes).sort());
+    expect(nodeIds(undone.state).sort()).toEqual(nodeIds(before.state).sort());
   } finally {
     await app.close();
   }

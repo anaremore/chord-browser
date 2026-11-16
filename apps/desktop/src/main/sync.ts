@@ -26,6 +26,8 @@ import {
   sortedChords,
   syncParts,
   uuidv7,
+  nodeOf,
+  nodeList,
   type FolderInspection,
   type SiteEffects,
   type State,
@@ -632,7 +634,7 @@ export class SyncService {
     // A chord that went, put off: its nodes' tombstones wait with it, so it takes them with it (kept for Undo) when it goes.
     const state = this.options.state();
     const heldChords = new Set(apply.gone.chords.filter((id) => !joining && holderOf(`chord:${id}`)));
-    const chordOf = (n: { id: string }) => state.nodes[n.id]?.chordId ?? '';
+    const chordOf = (n: { id: string }) => nodeOf(state, n.id)?.chordId ?? '';
     const filtered: SyncApply = {
       ...apply,
       chords: hold(apply.chords, (c) => `chord:${c.id}`),
@@ -671,7 +673,7 @@ export class SyncService {
     const shown = Object.values(before.windows).map((w) => ({ windowId: w.id, chordId: w.activeChordId }));
     const going = filtered.gone.chords
       .filter((id) => before.chords[id])
-      .map((id) => ({ id, name: before.chords[id]!.name, local: Object.values(before.nodes).filter((n) => n.chordId === id && n.kind === 'tab' && (n.section === 'today' || before.live[n.id])).map((n) => n.id) }));
+      .map((id) => ({ id, name: before.chords[id]!.name, local: nodeList(before).filter((n) => n.chordId === id && n.kind === 'tab' && (n.section === 'today' || before.live[n.id])).map((n) => n.id) }));
     // Input and painting go first between parts, two frames apart, the first too (not in the task that brought the push). Nothing here is urgent.
     for (const part of syncParts(filtered)) {
       await new Promise((resolve) => setTimeout(resolve, PART_GAP_MS));
@@ -698,8 +700,8 @@ export class SyncService {
     // A chord another computer deleted: a quiet toast where it was on screen, or wherever its tabs went, with Undo.
     for (const gone of going) {
       if (after.chords[gone.id]) continue;
-      const moved = gone.local.filter((id) => after.nodes[id]);
-      const to = moved[0] ? after.chords[after.nodes[moved[0]]!.chordId]?.name : undefined;
+      const moved = gone.local.filter((id) => nodeOf(after, id));
+      const to = moved[0] ? after.chords[nodeOf(after, moved[0])!.chordId]?.name : undefined;
       const windowId = shown.find((s) => s.chordId === gone.id && after.windows[s.windowId])?.windowId ?? (moved.length > 0 ? this.options.lastWindow() : null);
       if (!windowId) continue;
       const tabs = moved.length === 1 ? 'Its tab' : `Its ${moved.length} tabs`;

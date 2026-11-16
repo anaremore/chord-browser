@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apply, MAX_FAVORITES, restoreState, seedState, type Command, type DataRecord, type SegmentCursor, type State } from '@chord/core';
+import { apply, MAX_FAVORITES, restoreState, seedState, nodeOf, nodeList, type Command, type DataRecord, type SegmentCursor, type State } from '@chord/core';
 import { ChordDatabase } from '@chord/data/db';
 import { opKey, opOrigin, opsForState, opsFromPatches, originOf, type DataPush, type WriteOp } from '@chord/data';
 import { SyncController, type WorkerLike } from '../../src/data/sync';
@@ -201,9 +201,9 @@ describe('what arrives before what it depends on', { timeout: 20_000 }, () => {
     const first = await launch();
     await read(first.worker, B, [tabRecord('tab-b', 'chord-a', null)]);
     await quiet(200);
-    expect(state.nodes['tab-b']).toBeUndefined();
+    expect(nodeOf(state, 'tab-b')).toBeUndefined();
     await read(first.worker, A, [chordRecord('chord-a', 'Work')]);
-    await vi.waitFor(() => expect(state.nodes['tab-b']).toMatchObject({ chordId: 'chord-a', section: 'pinned' }), { timeout: 6_000 });
+    await vi.waitFor(() => expect(nodeOf(state, 'tab-b')).toMatchObject({ chordId: 'chord-a', section: 'pinned' }), { timeout: 6_000 });
     for (let i = 0; i < 2; i++) {
       const again = await launch();
       await quiet(300);
@@ -214,34 +214,34 @@ describe('what arrives before what it depends on', { timeout: 20_000 }, () => {
   it('a tab read before the folder it’s in: at the top meanwhile; once the folder comes, in it', async () => {
     const first = await launch();
     await read(first.worker, B, [tabRecord('tab-b', home(), 'folder-a')]);
-    await vi.waitFor(() => expect(state.nodes['tab-b']).toMatchObject({ chordId: home(), parentId: null }));
+    await vi.waitFor(() => expect(nodeOf(state, 'tab-b')).toMatchObject({ chordId: home(), parentId: null }));
     await read(first.worker, A, [folderRecord('folder-a', home())]);
-    await vi.waitFor(() => expect(state.nodes['tab-b']).toMatchObject({ parentId: 'folder-a' }), { timeout: 6_000 });
+    await vi.waitFor(() => expect(nodeOf(state, 'tab-b')).toMatchObject({ parentId: 'folder-a' }), { timeout: 6_000 });
   });
 
   it('a tab waiting on a folder that’s in another chord, until that folder moves into its own: then it’s in it', async () => {
     const first = await launch();
     await read(first.worker, A, [chordRecord('chord-d', 'Elsewhere'), folderRecord('folder-f', 'chord-d')]);
-    await vi.waitFor(() => expect(state.nodes['folder-f']).toMatchObject({ chordId: 'chord-d' }));
+    await vi.waitFor(() => expect(nodeOf(state, 'folder-f')).toMatchObject({ chordId: 'chord-d' }));
     await read(first.worker, B, [tabRecord('tab-b', home(), 'folder-f')]);
-    await vi.waitFor(() => expect(state.nodes['tab-b']).toMatchObject({ chordId: home(), parentId: null }));
+    await vi.waitFor(() => expect(nodeOf(state, 'tab-b')).toMatchObject({ chordId: home(), parentId: null }));
     await read(first.worker, A, [moveRecord('folder', 'folder-f', home(), null, A)]);
-    await vi.waitFor(() => expect(state.nodes['tab-b']).toMatchObject({ parentId: 'folder-f' }), { timeout: 6_000 });
+    await vi.waitFor(() => expect(nodeOf(state, 'tab-b')).toMatchObject({ parentId: 'folder-f' }), { timeout: 6_000 });
   });
 
   it('a loop: X moves B out of A, Y moves A into B, and Y’s comes first; once X’s comes, A is in B', async () => {
     const first = await launch();
     // A, with B in it.
     await read(first.worker, A, [folderRecord('fa', home()), folderRecord('fb', home(), 'fa')]);
-    await vi.waitFor(() => expect(state.nodes['fb']).toMatchObject({ parentId: 'fa' }));
+    await vi.waitFor(() => expect(nodeOf(state, 'fb')).toMatchObject({ parentId: 'fa' }));
     // Y moves A into B: with B still in A, a loop, so A stays at the top for now.
     await read(first.worker, B, [moveRecord('folder', 'fa', home(), 'fb', B)]);
     await quiet(300);
-    expect(state.nodes['fa']).toMatchObject({ parentId: null });
+    expect(nodeOf(state, 'fa')).toMatchObject({ parentId: null });
     // X moves B out of A (read after Y's): no loop now, and A goes into B.
     await read(first.worker, A, [moveRecord('folder', 'fb', home(), null, A)]);
-    await vi.waitFor(() => expect(state.nodes['fa']).toMatchObject({ parentId: 'fb' }), { timeout: 6_000 });
-    expect(state.nodes['fb']).toMatchObject({ parentId: null });
+    await vi.waitFor(() => expect(nodeOf(state, 'fa')).toMatchObject({ parentId: 'fb' }), { timeout: 6_000 });
+    expect(nodeOf(state, 'fb')).toMatchObject({ parentId: null });
   });
 
   it('a tab in a chord deleted here: it waits; Undo brings the chord back, and the tab lands in it', async () => {
@@ -261,9 +261,9 @@ describe('what arrives before what it depends on', { timeout: 20_000 }, () => {
     expect(state.chords['chord-k']).toBeUndefined();
     await read(first.worker, B, [tabRecord('tab-k', 'chord-k', null)]);
     await quiet(300);
-    expect(state.nodes['tab-k']).toBeUndefined();
+    expect(nodeOf(state, 'tab-k')).toBeUndefined();
     dispatchHere({ t: 'chord.restore', windowId, chordId: 'chord-k' });
-    await vi.waitFor(() => expect(state.nodes['tab-k']).toMatchObject({ chordId: 'chord-k' }), { timeout: 6_000 });
+    await vi.waitFor(() => expect(nodeOf(state, 'tab-k')).toMatchObject({ chordId: 'chord-k' }), { timeout: 6_000 });
   });
 
   it('a Favorite past the row’s room (48): not here; once one goes, it’s offered again and lands', async () => {
@@ -366,7 +366,7 @@ describe('reconciling stays cheap', { timeout: 20_000 }, () => {
       A,
       Array.from({ length: 200 }, (_, i) => folderRecord(`folder-${i}`, home())),
     );
-    await vi.waitFor(() => expect(Object.values(state.nodes).filter((n) => n.kind === 'folder')).toHaveLength(200), { timeout: 6_000 });
+    await vi.waitFor(() => expect(nodeList(state).filter((n) => n.kind === 'folder')).toHaveLength(200), { timeout: 6_000 });
     await quiet();
     expect(looks).toHaveBeenCalledTimes(1);
   });

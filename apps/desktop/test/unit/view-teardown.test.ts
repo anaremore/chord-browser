@@ -6,7 +6,7 @@
  * no error, and a page still there is closed exactly once. DevTools: devtools-teardown.test.ts.
  */
 import { EventEmitter } from 'node:events';
-import type { NodeId, State } from '@chord/core';
+import { nodesFrom, type NodeId, type SidebarNode, type State } from '@chord/core';
 import type { Session, WebContentsView } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeView } from './fake-view';
@@ -51,7 +51,7 @@ const { SettingsWindow } = await import('../../src/main/settings-window');
 const NODE = 'n1' as NodeId;
 
 function tabs() {
-  const state = { nodes: { [NODE]: { kind: 'tab', id: NODE, url: 'https://a.example/', section: 'today' } }, live: {}, settings: { tabCounts: {} } } as unknown as State;
+  const state = { nodes: nodesFrom([{ kind: 'tab', id: NODE, url: 'https://a.example/', section: 'today' } as SidebarNode]), live: {}, settings: { tabCounts: {} } } as unknown as State;
   return new TabManager({
     state: () => state,
     dispatch: vi.fn(),

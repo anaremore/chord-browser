@@ -16,7 +16,7 @@
  * Chord Player (DESIGN.md §7.14) shows as the tab it plays for would, with
  * *Back to the player* instead of *Go to tab*, and the player's own mute.
  */
-import { cardMedia, type State, type TabNode } from '@chord/core';
+import { cardMedia, nodeOf, type State, type TabNode } from '@chord/core';
 import type { NowPlaying } from '@chord/ipc';
 import { durations, space, type Appearance } from '@chord/tokens';
 import { Pause, PictureInPicture, PictureInPicture2, Play, Volume2, VolumeX } from 'lucide-react';
@@ -281,7 +281,7 @@ export function NowPlayingCard({
 }) {
   // Newest first: the newest in full, the rest as rows.
   const offered = cardMedia(state, windowId, useNowPlaying()).flatMap((media) => {
-    const tab = state.nodes[media.nodeId];
+    const tab = nodeOf(state, media.nodeId);
     // Out by Chord (the tab's live state) or by the site's own button (what the page says).
     return tab?.kind === 'tab' ? [{ media, tab, popped: Boolean(state.live[tab.id]?.pip) || media.pip }] : [];
   });

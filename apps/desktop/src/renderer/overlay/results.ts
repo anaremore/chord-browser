@@ -9,7 +9,8 @@
  * a filter (`@tabs`, `@history`, …) shows only that kind. The engine's search
  * suggestions come last, so they never move the rows above them.
  */
-import { type AssistantHit,
+import {
+  type AssistantHit,
   abbreviationScore,
   habit,
   keywordFor,
@@ -28,6 +29,7 @@ import { type AssistantHit,
   activeTabId,
   splitOf,
   usagePoints,
+  nodeList,
   type ActionId,
   type ArchivedTab,
   type Chord,
@@ -343,7 +345,7 @@ function resultsFor(
   const activeId = win ? win.activeTab[win.activeChordId] : null;
   // Open tabs from the chords this window can see: a private window's own, or none of a private window's.
   const visibleChords = new Set(chordsFor(state, windowId).map((c) => c.id));
-  const tabs = Object.values(state.nodes).filter((n): n is TabNode => n.kind === 'tab' && visibleChords.has(n.chordId));
+  const tabs = nodeList(state).filter((n): n is TabNode => n.kind === 'tab' && visibleChords.has(n.chordId));
   const chordName = (t: TabNode) => (win && t.chordId !== win.activeChordId ? (state.chords[t.chordId]?.name ?? null) : null);
   const tabResult = (t: TabNode): Result => ({
     kind: 'tab',

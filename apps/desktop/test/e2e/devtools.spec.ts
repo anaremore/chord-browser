@@ -67,7 +67,7 @@ interface Chord {
         state: {
           settings: { devtools: { side: DevtoolsSide; width: number; height: number; window: boolean } };
           live: Record<string, { devtools: 'docked' | 'window' | null } | undefined>;
-          nodes: Record<string, { id: string; kind: string; title?: string }>;
+          nodes: Record<string, Record<string, { id: string; kind: string; title?: string }>>;
         };
       }>;
       dispatch(c: unknown): Promise<void>;
@@ -82,7 +82,7 @@ const runAction = (shell: Page, action: string) => shell.evaluate((a) => (window
 const devtoolsState = (shell: Page) =>
   shell.evaluate(async () => {
     const { windowId, state } = await (window as unknown as Chord).chord.state.snapshot();
-    const tabs = Object.values(state.nodes).filter((n) => n.kind === 'tab');
+    const tabs = Object.values(state.nodes).flatMap((b) => Object.values(b)).filter((n) => n.kind === 'tab');
     return {
       windowId,
       settings: state.settings.devtools,

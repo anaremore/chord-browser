@@ -9,6 +9,8 @@ import {
   extensionKey,
   isPrivateProfile,
   tabsInOrder,
+  nodeOf,
+  nodeIds,
   type Command,
   type InstalledExtension,
   type NodeId,
@@ -155,9 +157,9 @@ export class Extensions {
         const named = base ? this.windowForBase(base) : undefined;
         const w = (named && !named.isPrivate ? named : undefined) || this.deps.lastWindow();
         if (!w) throw new Error('No window to open a tab in');
-        const before = new Set(Object.keys(this.deps.state().nodes));
+        const before = new Set(nodeIds(this.deps.state()));
         this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: url ?? NEW_TAB_URL, background: !active });
-        const nodeId = Object.keys(this.deps.state().nodes).find((id) => !before.has(id));
+        const nodeId = nodeIds(this.deps.state()).find((id) => !before.has(id));
         const contents = nodeId ? this.deps.ensureTab(nodeId) : undefined;
         if (!contents) throw new Error('The tab could not be opened');
         if (contents.session !== this.host(profileId, false)?.session) throw new Error('The tab opened in another profile');
@@ -177,7 +179,7 @@ export class Extensions {
       tabFacts: (contents) => {
         const state = this.deps.state();
         const nodeId = this.deps.nodeFor(contents);
-        const node = nodeId ? state.nodes[nodeId] : undefined;
+        const node = nodeId ? nodeOf(state, nodeId) : undefined;
         if (node?.kind !== 'tab') return undefined;
         return { pinned: node.section === 'pinned', index: tabsInOrder(state, node.chordId).findIndex((t) => t.id === node.id) };
       },
@@ -302,7 +304,7 @@ export class Extensions {
       : [];
     const installed = Object.values(state.extensions).filter((e) => e.profileId === profileId).length;
     const activeId = activeTabId(state, w.id);
-    const url = activeId ? (state.nodes[activeId] as { url?: string } | undefined)?.url : undefined;
+    const url = activeId ? (nodeOf(state, activeId) as { url?: string } | undefined)?.url : undefined;
     const storeId = url ? extensionIdFrom(url) : null;
     const offer = storeId && !state.extensions[extensionKey(profileId, storeId)] ? { id: storeId } : null;
     const installing = [...this.installing.keys()].find((k) => k.startsWith(`${profileId}:`))?.slice(profileId.length + 1) ?? null;

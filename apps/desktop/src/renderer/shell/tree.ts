@@ -5,7 +5,7 @@
  * pointer moved sideways (one level per indent, the way dnd-kit's own
  * sortable tree works).
  */
-import type { ChordId, NodeId, SidebarNode, State } from '@chord/core';
+import { childrenShared, type ChordId, type NodeId, type State } from '@chord/core';
 
 /** One indent level, in px (DESIGN.md §3.2: 12 px per level). */
 export const INDENT = 12;
@@ -37,7 +37,7 @@ export function flattenPinned(state: Nodes, chordId: ChordId, hiding: NodeId | n
   if (known) return known;
   const rows: FlatRow[] = [];
   const walk = (parentId: NodeId | null, depth: number) => {
-    for (const node of childrenOf(state, chordId, 'pinned', parentId)) {
+    for (const node of childrenShared(state, chordId, 'pinned', parentId)) {
       const collapsed = node.kind === 'folder' && (node.collapsed || node.id === hiding);
       rows.push({ id: node.id, kind: node.kind, depth, parentId, collapsed });
       if (node.kind === 'folder' && !collapsed) walk(node.id, depth + 1);
@@ -48,36 +48,6 @@ export function flattenPinned(state: Nodes, chordId: ChordId, hiding: NodeId | n
   return rows;
 }
 
-const NONE: readonly SidebarNode[] = [];
-
-/**
- * `children` (@chord/core) for the sidebar's drawing: a parent's children in
- * one section of a chord, in order. It reads every node once per state, where
- * `children` reads them all on each call (milliseconds with thousands of
- * pinned tabs, for every list and split, every redraw). Read-only: it's shared.
- */
-export function childrenOf(state: Nodes, chordId: ChordId, section: 'pinned' | 'today', parentId: NodeId | null): readonly SidebarNode[] {
-  let index = grouped.get(state.nodes);
-  if (!index) {
-    index = new Map();
-    for (const node of Object.values(state.nodes)) {
-      let sections = index.get(node.chordId);
-      if (!sections) index.set(node.chordId, (sections = { pinned: new Map(), today: new Map() }));
-      const under = sections[node.section];
-      const list = under.get(node.parentId);
-      if (list) list.push(node);
-      else under.set(node.parentId, [node]);
-    }
-    for (const sections of index.values()) for (const under of [sections.pinned, sections.today]) for (const list of under.values()) list.sort(byRank);
-    grouped.set(state.nodes, index);
-  }
-  return index.get(chordId)?.[section].get(parentId) ?? NONE;
-}
-
-/** Each chord's nodes, by section, then by parent (null: the section's root), in order. */
-type Index = Map<ChordId, Record<'pinned' | 'today', Map<NodeId | null, SidebarNode[]>>>;
-const grouped = new WeakMap<State['nodes'], Index>();
-
 /**
  * Flattened Pinned trees by the nodes they came from: the state is never
  * changed in place, so the same nodes flatten the same way. A sidebar redraws
@@ -85,9 +55,6 @@ const grouped = new WeakMap<State['nodes'], Index>();
  * with thousands of pinned tabs a flattening costs milliseconds.
  */
 const flattened = new WeakMap<State['nodes'], Map<string, readonly FlatRow[]>>();
-
-/** `children`'s order (@chord/core): by rank, then by ID, which is time-ordered. */
-const byRank = (a: SidebarNode, b: SidebarNode) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 export interface Drop {
   parentId: NodeId | null;

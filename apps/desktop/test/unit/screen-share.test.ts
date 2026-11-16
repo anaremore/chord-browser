@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { Command, TabNode } from '@chord/core';
-import { emptyState, IDLE_LIVE } from '@chord/core';
+import { emptyState, IDLE_LIVE, nodeOf, setNode } from '@chord/core';
 import { SYSTEM_SHARE_SOURCE } from '@chord/ipc';
 import type { DesktopCapturerSource, Session, Streams, WebContents, WebFrameMain } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -63,8 +63,8 @@ function setup(picker: 'mac' | 'portal' | null = null) {
   const state = emptyState();
   state.live['meet'] = { ...IDLE_LIVE };
   state.live['slides'] = { ...state.live['meet'] };
-  state.nodes['meet'] = tab('meet', 'https://meet.test/', 'Meeting');
-  state.nodes['slides'] = tab('slides', 'https://slides.test/', 'Slides');
+  setNode(state, tab('meet', 'https://meet.test/', 'Meeting'));
+  setNode(state, tab('slides', 'https://slides.test/', 'Slides'));
   const dispatched: Command[] = [];
   const changes = { popover: 0, sharing: 0, repaints: [] as string[] };
   const broker = new ScreenShareBroker(picker);
@@ -74,7 +74,7 @@ function setup(picker: 'mac' | 'portal' | null = null) {
     nodeFor: (contents) => Object.keys(pages).find((id) => (pages[id] as unknown) === contents),
     contentsOf: (nodeId) => pages[nodeId] as unknown as WebContents | undefined,
     // Only the two tabs, the asking one first: a private window's are never among them (core's shareableTabs decides).
-    shareableTabs: () => [state.nodes['meet'] as TabNode, state.nodes['slides'] as TabNode],
+    shareableTabs: () => [nodeOf(state, 'meet') as TabNode, nodeOf(state, 'slides') as TabNode],
     onChange: () => changes.popover++,
     sharingChanged: () => changes.sharing++,
     repaint: (nodeId) => changes.repaints.push(nodeId),
@@ -128,7 +128,7 @@ describe('the share picker', () => {
       ['Notes', ''],
     ]);
     // A tab's title that arrives while the picker is up fills in.
-    t.state.nodes['slides'] = { ...(t.state.nodes['slides'] as TabNode), title: 'Quarterly slides' };
+    setNode(t.state, { ...(nodeOf(t.state, 'slides') as TabNode), title: 'Quarterly slides' });
     expect(t.broker.promptFor('meet')!.sources[1]!.name).toBe('Quarterly slides');
     // …then pictured.
     picture([source('screen:1:0', 'Screen 1', true), source('window:9:0', 'Notes', true)]);

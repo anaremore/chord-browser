@@ -57,7 +57,7 @@ interface Chord {
   chord: {
     action: { run(a: string): Promise<void> };
     overlay: { open(m: string): Promise<void> };
-    state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, Node>; chords: Record<string, { id: string; rank: string }> } }>; dispatch(c: unknown): Promise<void> };
+    state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, Record<string, Node>>; chords: Record<string, { id: string; rank: string }> } }>; dispatch(c: unknown): Promise<void> };
   };
 }
 interface Node {
@@ -80,13 +80,13 @@ const splitState = (shell: Page) =>
     const { windowId, state } = await (window as unknown as Chord).chord.state.snapshot();
     const win = state.windows[windowId]!;
     const active = win.activeTab[win.activeChordId] ?? null;
-    const nodes = Object.values(state.nodes);
-    const parent = active ? state.nodes[active]?.parentId : null;
+    const nodes = Object.values(state.nodes).flatMap((b) => Object.values(b));
+    const parent = active ? Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.id === (active))?.parentId : null;
     const split = parent ? nodes.find((n) => n.id === parent && n.kind === 'split') : undefined;
     const panes = split ? nodes.filter((n) => n.parentId === split.id).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.id < b.id ? -1 : 1)) : [];
     return {
       windowId,
-      active: active ? (state.nodes[active]?.title ?? '') : '',
+      active: active ? (Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.id === (active))?.title ?? '') : '',
       activeId: active,
       ids: Object.fromEntries(nodes.filter((n) => n.kind === 'tab').map((n) => [n.title ?? '', n.id])),
       panes: panes.map((p) => p.title ?? ''),
@@ -412,7 +412,7 @@ test('a split comes back after a relaunch, exactly as it was', async () => {
     await expect.poll(async () => (await splitState(shell)).panes).toEqual(['Second page', 'First page']);
     const splitId = await shell.evaluate(async () => {
       const { state } = await (window as unknown as Chord).chord.state.snapshot();
-      return Object.values(state.nodes).find((n) => n.kind === 'split')!.id;
+      return Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.kind === 'split')!.id;
     });
     await dispatch(shell, { t: 'split.resize', splitId, sizes: [0.3, 0.7] });
     await expect.poll(async () => (await splitState(shell)).sizes).toEqual([0.3, 0.7]);

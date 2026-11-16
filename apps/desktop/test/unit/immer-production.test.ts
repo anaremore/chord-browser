@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import * as dev from 'immer';
 import { describe, expect, it } from 'vitest';
-import { childrenToRead, emptyState, nodeList, tabsInOrder, type SidebarNode, type State, type TabNode } from '@chord/core';
+import { childrenToRead, emptyState, nodeList, tabsInOrder, deleteNode, nodeIds, nodeOf, nodesOfChord, setNode, splitsWithPanes, type SidebarNode, type State, type TabNode } from '@chord/core';
 
 const require = createRequire(import.meta.url);
 const production = require(join(dirname(require.resolve('immer')), 'immer.cjs.production.js')) as typeof dev;
@@ -38,7 +38,7 @@ function base(produce: typeof dev.produce): State {
     tab('x', 'a0', 'f'),
     tab('b', 'a2'),
   ])
-    state.nodes[n.id] = n;
+    setNode(state, n);
   return produce(state, () => {});
 }
 
@@ -49,24 +49,30 @@ describe.each([
   ['production', production],
 ] as const)("core's tree queries in a draft of Immer's %s build", (build, immer) => {
   it.each([
-    { name: 'a node added', change: (d: State) => void (d.nodes['c'] = tab('c', 'a3')), pinned: ['a', 'f', 'b', 'c'], order: ['a', 'x', 'b', 'c'] },
-    { name: 'a node deleted', change: (d: State) => void delete d.nodes['a'], pinned: ['f', 'b'], order: ['x', 'b'] },
-    { name: 'a node re-ranked', change: (d: State) => void (d.nodes['a']!.rank = 'a9'), pinned: ['f', 'b', 'a'], order: ['x', 'b', 'a'] },
-    { name: 'a node moved into the folder', change: (d: State) => void (d.nodes['b']!.parentId = 'f'), pinned: ['a', 'f'], order: ['a', 'x', 'b'] },
+    { name: 'a node added', change: (d: State) => setNode(d, tab('c', 'a3')), pinned: ['a', 'f', 'b', 'c'], order: ['a', 'x', 'b', 'c'] },
+    { name: 'a node deleted', change: (d: State) => void deleteNode(d, 'a'), pinned: ['f', 'b'], order: ['x', 'b'] },
+    { name: 'a node re-ranked', change: (d: State) => void (nodeOf(d, 'a')!.rank = 'a9'), pinned: ['f', 'b', 'a'], order: ['x', 'b', 'a'] },
+    { name: 'a node moved into the folder', change: (d: State) => void (nodeOf(d, 'b')!.parentId = 'f'), pinned: ['a', 'f'], order: ['a', 'x', 'b'] },
   ])('see $name', ({ change, pinned, order }) => {
     immer.produce(base(immer.produce), (d) => {
       const draft = d as State;
       change(draft);
       expect(ids(childrenToRead(draft, 'c1', 'pinned'))).toEqual(pinned);
       expect(ids(tabsInOrder(draft, 'c1'))).toEqual(order);
-      expect(nodeList(draft)).toHaveLength(Object.keys(draft.nodes).length);
+      expect(nodeList(draft)).toHaveLength(nodeIds(draft).length);
+      expect(ids(nodesOfChord(draft, 'c1')).sort()).toEqual(ids(nodeList(draft)).sort());
+      expect(ids(splitsWithPanes(draft).inside('f')).sort()).toEqual(ids(nodeList(draft).filter((n) => n.parentId === 'f')).sort());
     });
+    // And the state it made, whose index is the last one's put right.
+    const next = immer.produce(base(immer.produce), (d) => change(d as State));
+    expect(ids(childrenToRead(next, 'c1', 'pinned'))).toEqual(pinned);
+    expect(ids(tabsInOrder(next, 'c1'))).toEqual(order);
   });
 
   it(build === 'development' ? 'reads its own copy: nothing only read is drafted' : 'read the draft itself: everything read is drafted', () => {
     immer.produce(base(immer.produce), (d) => {
       const draft = d as State;
-      (draft.nodes['b'] as TabNode).title = 'changed';
+      (nodeOf(draft, 'b') as TabNode).title = 'changed';
       for (const n of nodeList(draft)) expect(immer.isDraft(n), n.id).toBe(build === 'production' || n.id === 'b');
     });
   });

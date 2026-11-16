@@ -6,6 +6,7 @@
 import { chordsFor } from './select';
 import { shownTabs } from './split';
 import type { NodeId, State, WindowId } from './model';
+import { nodeOf } from './nodes';
 
 /** An image a page offers for what it plays (the Media Session's `MediaImage`). */
 export interface MediaImage {
@@ -51,7 +52,7 @@ export function pickArtwork(images: readonly MediaImage[], side: number): MediaI
 export function mediaVisibleTo<T extends { nodeId: NodeId }>(state: State, windowId: WindowId, playing: readonly T[]): T[] {
   const chords = new Set(chordsFor(state, windowId).map((c) => c.id));
   return playing.filter((p) => {
-    const node = state.nodes[p.nodeId];
+    const node = nodeOf(state, p.nodeId);
     return node?.kind === 'tab' && chords.has(node.chordId);
   });
 }

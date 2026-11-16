@@ -213,8 +213,8 @@ test('the Now playing card: what plays, Play and Pause, Mute, Go to tab, and sev
     // Closed, it's gone at once; with nothing else playing out of sight, so is the card.
     const { windowId } = await where(shell);
     const radio = await shell.evaluate(async () => {
-      const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, { title?: string; id: string }> } }> } } }).chord.state.snapshot();
-      return Object.values(state.nodes).find((n) => n.title === 'Radio')!.id;
+      const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, Record<string, { title?: string; id: string }>> } }> } } }).chord.state.snapshot();
+      return Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.title === 'Radio')!.id;
     });
     await dispatch(shell, { t: 'tab.close', windowId, nodeId: radio });
     await expect(card(shell)).toHaveCount(0);

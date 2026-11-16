@@ -24,6 +24,7 @@ import {
   restoreState,
   splitBypass,
   splitProxyAddress,
+  setNode,
   type Chord,
   type Command,
   type Context,
@@ -266,7 +267,7 @@ describe('the model', () => {
     const before = stateWith(A);
     before.windows['w1'] = { id: 'w1', activeChordId: 'work', activeTab: { work: 'tab-w', lab: 'tab-l', quiet: 'tab-q' }, sidebar: 'docked', sidebarWidth: 248, bounds: null };
     for (const [id, chordId] of [['tab-w', 'work'], ['tab-l', 'lab'], ['tab-q', 'quiet']] as const) {
-      before.nodes[id] = { kind: 'tab', id, chordId, section: 'today', parentId: null, rank: 'a0', url: 'https://a.test/', title: '', pinnedUrl: null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 };
+      setNode(before, { kind: 'tab', id, chordId, section: 'today', parentId: null, rank: 'a0', url: 'https://a.test/', title: '', pinnedUrl: null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 });
       before.live[id] = { ...IDLE_LIVE };
     }
     let state = before;

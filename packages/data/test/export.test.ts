@@ -21,6 +21,7 @@ import {
   seedState,
   settingsFromFields,
   threadFromRecord,
+  setNode,
   type DataRecord,
   type AssistantImage,
   type State,
@@ -71,10 +72,10 @@ function seeded(): { db: ChordDatabase; state: State } {
     createdAt: 1500,
     ...extra,
   });
-  state.nodes['folder'] = { kind: 'folder', id: 'folder', chordId: 'work', section: 'pinned', parentId: null, rank: 'a0', title: 'Reading', collapsed: false, createdAt: 1500 };
-  state.nodes['mail'] = tab('mail', { parentId: 'folder', favicon: ICON, customTitle: 'Mail' });
-  state.nodes['docs'] = tab('docs', { rank: 'a5' });
-  state.nodes['secret'] = tab('secret', { chordId: 'private', section: 'today', pinnedUrl: null });
+  setNode(state, { kind: 'folder', id: 'folder', chordId: 'work', section: 'pinned', parentId: null, rank: 'a0', title: 'Reading', collapsed: false, createdAt: 1500 });
+  setNode(state, tab('mail', { parentId: 'folder', favicon: ICON, customTitle: 'Mail' }));
+  setNode(state, tab('docs', { rank: 'a5' }));
+  setNode(state, tab('secret', { chordId: 'private', section: 'today', pinnedUrl: null }));
   state.favorites['fav'] = { id: 'fav', url: 'https://calendar.test/', title: 'Calendar', favicon: ICON, rank: 'a0', createdAt: 1600 };
   state.linkRoutes['github.com'] = { host: 'github.com', chordId: 'work', createdAt: 1700 };
   state.siteZoom['docs.test'] = 1.25;

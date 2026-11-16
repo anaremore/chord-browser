@@ -13,6 +13,7 @@ import { join, resolve } from 'node:path';
 import type { State } from '@chord/core';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
+import { nodeList } from '@chord/core';
 
 failOnMainErrors();
 
@@ -139,7 +140,7 @@ async function clickLink(app: ElectronApplication, url: string, selector: string
   );
 }
 
-const tabWith = (state: State, url: string) => Object.values(state.nodes).find((n) => n.kind === 'tab' && n.url === url);
+const tabWith = (state: State, url: string) => nodeList(state).find((n) => n.kind === 'tab' && n.url === url);
 
 test('a link from another app opens in a mini window, and Open in moves it into a chord with its history', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/home` }, ['--single-argument', `${site.origin}/a`]);
