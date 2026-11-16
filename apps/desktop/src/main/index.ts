@@ -60,6 +60,8 @@ import { Suggestions } from './suggestions';
 import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
 import { PasskeyBroker } from './passkeys';
+import { osKeys } from './passwords/keys';
+import { PasswordService } from './passwords/service';
 import { proxies } from './proxy';
 import { Screenshots } from './screenshots/service';
 import { DiskShots } from './screenshots/store';
@@ -104,6 +106,18 @@ const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
 const passkeys = new PasskeyBroker();
+// Chord's own passwords (S17): chord-data holds the vault; this keeps the lock's clock, the kept key and the unlock card.
+const passwords = new PasswordService({
+  data: (op) => {
+    if (!persistence) return Promise.reject(new Error('chord-data isn’t open'));
+    return persistence.passwords(op);
+  },
+  settings: () => browser?.store.state.settings.passwords ?? DEFAULT_SETTINGS.passwords,
+  // Tests only (development builds): no keyring, on any system, as Linux's `basic_text`.
+  keys: osKeys(process.platform, { noKeyring: !app.isPackaged && process.env['CHORD_E2E_NO_KEYRING'] === '1' }),
+  clipboard: { writeText: (text) => clipboard.writeText(text), readText: () => clipboard.readText() },
+  changed: () => browser?.passwordsChanged(),
+});
 /** Work the first window doesn't need waits until launch is over. */
 const afterLaunch = new AfterLaunch();
 
@@ -445,6 +459,22 @@ function registerIpc(): void {
   handle('media:do', ({ nodeId, action }, sender) => browser!.mediaAction(senderWindow(sender), nodeId, action));
   handle('auth:respond', ({ id, credentials }) => httpAuth.respond(id, credentials));
   handle('passkey:respond', ({ id, credentialId }) => passkeys.respond(id, credentialId));
+  // Settings → Passwords, and the popover's unlock card (S17 §9).
+  handle('passwords:view', () => passwords.view());
+  handle('passwords:setup', ({ passphrase }) => passwords.setup(passphrase));
+  handle('passwords:unlock', ({ passphrase }) => passwords.unlock(passphrase));
+  handle('passwords:lock', () => passwords.lock());
+  handle('passwords:keep', ({ on }) => passwords.keep(on));
+  handle('passwords:passphrase', ({ current, next }) => passwords.changePassphrase(current, next));
+  handle('passwords:reveal', ({ id, passphrase }) => passwords.reveal(id, passphrase));
+  handle('passwords:copy', ({ id, passphrase }) => passwords.copy(id, passphrase));
+  handle('passwords:add', (login) => passwords.add(login));
+  handle('passwords:edit', ({ id, patch }) => passwords.edit(id, patch));
+  handle('passwords:delete', ({ id }) => passwords.remove(id));
+  handle('passwords:undelete', ({ id }) => passwords.undo(id));
+  handle('passwords:forgetNever', ({ site }) => passwords.forgetNever(site));
+  handle('passwords:startOver', () => passwords.startOver());
+  handle('passwords:unlockCard', ({ id, passphrase, keep }) => passwords.answerUnlock(id, passphrase, keep));
   handle('drm:open', ({ browser: other }, sender) => browser!.drmAction(sender, { open: other }));
   handle('drm:dismiss', (_request, sender) => browser!.drmAction(sender, 'dismiss'));
   handle('drm:player', ({ action }, sender) => browser!.drmAction(sender, { player: action }));
@@ -566,6 +596,8 @@ if (!app.requestSingleInstanceLock()) {
     browser?.prepareToQuit();
     // Downloads Safe Browsing held, never kept: their unfinished files go.
     downloads.discardHeld();
+    // A password copied less than a minute ago leaves the clipboard.
+    void passwords.dispose();
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
@@ -770,6 +802,7 @@ if (!app.requestSingleInstanceLock()) {
       screenShare,
       httpAuth,
       passkeys,
+      passwords,
       screenshots,
       histories: opened.navs,
       saveHistory: (nodeId, nav) => persistence?.nav(nodeId, nav),
@@ -794,7 +827,11 @@ if (!app.requestSingleInstanceLock()) {
       onBattery: () => (!app.isPackaged && process.env['CHORD_ON_BATTERY'] === '1') || powerMonitor.isOnBatteryPower(),
       // Another computer's changes (sync.apply) are saved marked as sync's: never stamped, never back into this computer's log.
       // Who each change is from (S15 §13): yours are stamped; another computer's applied, and tidying, never are.
-      onChange: (change) => store.record(change.patches, change.state, originOf(change.command), change.before),
+      onChange: (change) => {
+        store.record(change.patches, change.state, originOf(change.command), change.before);
+        // *Lock after* changed: the clock counts with the new time.
+        if (change.before && change.before.settings.passwords.lockAfter !== change.state.settings.passwords.lockAfter) passwords.settingsChanged();
+      },
       windowFocused: () => syncService?.focused(),
       // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).
       windowBlurred: () => setTimeout(() => (BaseWindow.getFocusedWindow() ? undefined : syncService?.blurred()), 250),
@@ -970,7 +1007,11 @@ if (!app.requestSingleInstanceLock()) {
       // Tests only (development builds): no keyring, on any system, so a relaunch asks for the passphrase again.
       noKeyring: devEnv('CHORD_E2E_NO_KEYRING') === '1',
     });
-    store.onRespawn(() => void syncService?.restarted());
+    store.onRespawn(() => {
+      void syncService?.restarted();
+      // The vault's key went with chord-data: locked until it's opened again.
+      passwords.restarted();
+    });
     // Writes chord-data keeps refusing (a full disk): they wait, are sent again later and later, and the window says so.
     store.onTrouble((failing) => {
       const windowId = browser?.lastBrowserWindow()?.id;
@@ -1013,6 +1054,11 @@ if (!app.requestSingleInstanceLock()) {
         syncTimings: async () => (await store.sync({ type: 'sync.timings' })).timings,
         /** Turn sync off at once (Settings holds it for its Undo first). */
         syncOff: () => store.sync({ type: 'sync.off' }),
+        /** The unlock card in the last window's popover, as the menu under a field will ask for it: true once the vault is open. */
+        passwordsAskUnlock: () => {
+          const w = browser!.lastBrowserWindow();
+          return w ? passwords.askUnlock(w.id) : Promise.resolve(false);
+        },
         /** Pinned folders and tabs, and how many have a name ending in `suffix`: what a sync check waits for, without a state snapshot. */
         pinnedNames: (suffix: string) => {
           const pinned = Object.values(browser!.store.state.nodes).filter((n) => n.section === 'pinned');

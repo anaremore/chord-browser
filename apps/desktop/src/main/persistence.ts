@@ -25,6 +25,8 @@ import {
   type OpenTiming,
   type Origin,
   type PathPatch,
+  type PasswordOp,
+  type PasswordResult,
   type SearchResult,
   type SyncReply,
   type SyncRequest,
@@ -440,6 +442,16 @@ export class Persistence {
     const response = await this.request({ type: 'export.counts' });
     if (!response.ok || !response.counts) throw new Error(response.ok ? 'chord-data: no counts' : response.error);
     return response.counts;
+  }
+
+  /**
+   * The vault (S17 §7): chord-data holds the key and the sealed sign-ins. Throws if chord-data can't answer; the
+   * error never carries what was sent.
+   */
+  async passwords(op: PasswordOp): Promise<PasswordResult> {
+    const response = await this.request({ type: 'passwords', op });
+    if (!response.ok) throw new Error('chord-data: passwords failed');
+    return response.passwords ?? {};
   }
 
   /** The assistant's threads and messages. Throws if chord-data can't answer, so the assistant can say so. */

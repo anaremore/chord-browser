@@ -4,7 +4,7 @@
  * these cards, so the rest of the page stays clickable.
  */
 import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
-import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type DrmNotice, type FindState, type PasskeyPrompt, type PermissionPrompt, type PlayerOffer, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
+import { SYSTEM_SHARE_SOURCE, type AuthPrompt, type DrmNotice, type FindState, type PasskeyPrompt, type PasswordUnlockPrompt, type PermissionPrompt, type PlayerOffer, type PopoverState, type SharePrompt, type ShareSource, type SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
 import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, Fingerprint, KeyRound, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
@@ -389,6 +389,102 @@ function PasskeyCard({ prompt }: { prompt: PasskeyPrompt }) {
 }
 
 /**
+ * Unlock passwords (docs/decisions/S17-passwords.md §7): the vault's
+ * passphrase, at the top of the tab like the sign-in box, when something needs
+ * the vault open. *Keep unlocked on this computer* (off unless you turn it on)
+ * keeps a copy of the key with the OS, and says what that gives up. The
+ * passphrase goes to main once, on Unlock, and the field is emptied.
+ */
+function UnlockPasswordsCard({ prompt }: { prompt: PasswordUnlockPrompt }) {
+  const ids = useId();
+  const field = useRef<HTMLInputElement>(null);
+  const [passphrase, setPassphrase] = useState('');
+  const [keep, setKeep] = useState(prompt.keep);
+  // The field has the keyboard when the card appears, and again after a wrong passphrase.
+  useEffect(() => field.current?.focus(), [prompt.problem]);
+  const cancel = () => void api.passwords.unlock(prompt.id, null, false);
+  return (
+    <form
+      className={styles.card}
+      role="alertdialog"
+      aria-labelledby={`${ids}-title`}
+      aria-describedby={prompt.problem ? `${ids}-problem` : undefined}
+      aria-busy={prompt.busy || undefined}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!passphrase || prompt.busy) return;
+        const typed = passphrase;
+        setPassphrase('');
+        void api.passwords.unlock(prompt.id, typed, keep && prompt.canKeep);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          cancel();
+        }
+      }}
+    >
+      <div className={styles.permissionHead}>
+        <KeyRound className={styles.offerIcon} {...ICON} aria-hidden />
+        <p id={`${ids}-title`} className={styles.permissionTitle}>
+          <span className={styles.host}>Unlock passwords</span>
+        </p>
+      </div>
+      <div className={styles.authFields}>
+        <label className={styles.authLabel} htmlFor={`${ids}-passphrase`}>
+          Passphrase
+        </label>
+        <input
+          ref={field}
+          id={`${ids}-passphrase`}
+          className={styles.authInput}
+          type="password"
+          value={passphrase}
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={prompt.problem ? true : undefined}
+          onChange={(e) => setPassphrase(e.target.value)}
+        />
+      </div>
+      {prompt.problem && (
+        <p id={`${ids}-problem`} className={styles.authRetry} role="alert">
+          That isn’t the passphrase. Try again.
+        </p>
+      )}
+      {prompt.canKeep && (
+        <div className={styles.keepRow}>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={keep}
+            aria-labelledby={`${ids}-keep`}
+            aria-describedby={`${ids}-keep-why`}
+            className={styles.switch}
+            onClick={() => setKeep(!keep)}
+          >
+            <span className={styles.knob} />
+          </button>
+          <span className={styles.keepText}>
+            <span id={`${ids}-keep`}>Keep unlocked on this computer</span>
+            <span id={`${ids}-keep-why`} className={styles.keepWhy}>
+              Then other programs you run could read your passwords, on Windows and Linux.
+            </span>
+          </span>
+        </div>
+      )}
+      <div className={styles.actions}>
+        <button type="button" className={styles.secondary} onClick={cancel}>
+          Cancel
+        </button>
+        <button type="submit" className={styles.primary} disabled={!passphrase || prompt.busy}>
+          {prompt.busy ? 'Unlocking…' : 'Unlock'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/**
  * Safe Browsing's one-time offer (ARCHITECTURE.md §14.5), for a profile from
  * before it existed: its notice in full, then on or not now. Either answer
  * is final; Settings → Privacy can change it later.
@@ -529,7 +625,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
   const info = useLive(infoSource);
   const state = useLive(stateSource);
   const root = useRef<HTMLDivElement>(null);
-  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.passkey || state.safeBrowsingOffer || state.drm || state.effects);
+  const hasCards = Boolean(state.find || state.permission || state.share || state.auth || state.passkey || state.passwordsUnlock || state.safeBrowsingOffer || state.drm || state.effects);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -553,6 +649,7 @@ export function Popover({ info: infoSource, state: stateSource }: { info: Live<S
       {state.share && <ShareCard key={state.share.id} prompt={state.share} appearance={appearance} platform={info.platform} />}
       {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}
       {state.passkey && <PasskeyCard key={state.passkey.id} prompt={state.passkey} />}
+      {state.passwordsUnlock && <UnlockPasswordsCard key={state.passwordsUnlock.id} prompt={state.passwordsUnlock} />}
       {state.safeBrowsingOffer && <SafeBrowsingOffer />}
       {state.drm && <DrmNoticeCard key={state.drm.service} notice={state.drm} />}
       {state.effects && <EffectsCard key={state.effects.host} opened={state.effects.opened} />}

@@ -5,7 +5,7 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, keycapFor, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { ArrowDownUp, Blend, Check, EyeOff, Info, Keyboard, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ArrowDownUp, Blend, Check, EyeOff, Info, Keyboard, KeyRound, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { ChordMark } from '../shared/ChordMark';
 import { AssistantIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
@@ -24,6 +24,7 @@ import type { ProxyFocus } from './Proxy';
 import { EffectsSection } from './Effects';
 import styles from './Settings.module.css';
 import { Links } from './Links';
+import { PasswordsSection } from './Passwords';
 import { PlayerSettings } from './Player';
 import { SitesSection, Spelling } from './Sites';
 import { YourDataSection } from './YourData';
@@ -33,6 +34,7 @@ const SECTIONS = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'motion', label: 'Motion', icon: Sparkles },
   { id: 'privacy', label: 'Privacy', icon: EyeOff },
+  { id: 'passwords', label: 'Passwords', icon: KeyRound },
   { id: 'effects', label: 'Effects', icon: Blend },
   { id: 'sites', label: 'Site permissions', icon: ShieldCheck },
   { id: 'extensions', label: 'Extensions', icon: Puzzle },
@@ -492,7 +494,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
   );
   useEffect(() => applyMotion(snapshot.settings, info.prefersReducedMotion), [snapshot.settings, info.prefersReducedMotion]);
 
-  const { style } = chordStyle(snapshot.chord, info, snapshot.settings.interface);
+  const { style, appearance } = chordStyle(snapshot.chord, info, snapshot.settings.interface);
   const spring = springsFor(snapshot.settings, info.prefersReducedMotion);
 
   return (
@@ -544,6 +546,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'appearance' && <AppearanceSection snapshot={snapshot} info={info} editColors={editColors} />}
               {section === 'motion' && <Motion snapshot={snapshot} />}
               {section === 'privacy' && <PrivacySection snapshot={snapshot} proxyFocus={proxyFocus} />}
+              {section === 'passwords' && <PasswordsSection snapshot={snapshot} appearance={appearance} />}
               {section === 'effects' && <EffectsSection snapshot={snapshot} />}
               {section === 'sites' && <SitesSection snapshot={snapshot} />}
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}

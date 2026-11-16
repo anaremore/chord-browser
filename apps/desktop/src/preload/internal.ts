@@ -83,6 +83,23 @@ const api: SettingsApi = {
     rememberKey: (on) => invoke('sync:rememberKey', { on }),
     onStatus: (listener) => subscribe('sync:status', listener),
   },
+  passwords: {
+    view: () => invoke('passwords:view'),
+    setup: (passphrase) => invoke('passwords:setup', { passphrase }),
+    unlock: (passphrase) => invoke('passwords:unlock', { passphrase }),
+    lock: () => invoke('passwords:lock'),
+    keep: (on) => invoke('passwords:keep', { on }),
+    changePassphrase: (current, next) => invoke('passwords:passphrase', { current, next }),
+    reveal: (id, passphrase) => invoke('passwords:reveal', passphrase === undefined ? { id } : { id, passphrase }),
+    copy: (id, passphrase) => invoke('passwords:copy', passphrase === undefined ? { id } : { id, passphrase }),
+    add: (login) => invoke('passwords:add', login),
+    edit: (id, patch) => invoke('passwords:edit', { id, patch }),
+    remove: (id) => invoke('passwords:delete', { id }),
+    undo: (id) => invoke('passwords:undelete', { id }),
+    forgetNever: (site) => invoke('passwords:forgetNever', { site }),
+    startOver: () => invoke('passwords:startOver'),
+    onChange: (listener) => subscribe('passwords:changed', () => listener()),
+  },
 };
 
 contextBridge.exposeInMainWorld('chord', Object.freeze(api));
