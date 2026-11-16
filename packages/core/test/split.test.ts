@@ -1,3 +1,4 @@
+import { produce } from 'immer';
 import { describe, expect, it } from 'vitest';
 import {
   apply,
@@ -267,6 +268,87 @@ describe('splits and the rest of the sidebar', () => {
     expect(splitMembers(state, 's').map((p) => p.id)).toEqual(['t1', 't2', 't3']);
     expect((state.nodes['s'] as SplitNode).sizes).toHaveLength(3);
     expect(changed.size).toBe(3);
+  });
+
+  // A split inside a split (old or damaged data): which one settles first follows the nodes' order, and either way
+  // nothing is lost and every split ends whole. In a draft too, as the reducer runs it.
+  const nested = (order: string[], inner: number) => {
+    const state = emptyState();
+    const tab = (id: string, parentId: string | null, rank: string): TabNode => ({ kind: 'tab', id, chordId: 'c1', section: 'today', parentId, rank, url: `https://${id}.test/`, title: id, pinnedUrl: null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 });
+    const made: Record<string, State['nodes'][string]> = {
+      s1: { kind: 'split', id: 's1', chordId: 'c1', section: 'today', parentId: 's2', rank: 'a0', direction: 'row', sizes: [], createdAt: 0 },
+      s2: { kind: 'split', id: 's2', chordId: 'c1', section: 'today', parentId: null, rank: 'a0', direction: 'row', sizes: [0.5, 0.5], createdAt: 0 },
+      x2: tab('x2', 's2', 'a1'),
+      x3: tab('x3', 's2', 'a2'),
+    };
+    for (let i = 1; i <= inner; i++) made[`t${i}`] = tab(`t${i}`, 's1', `a${i}`);
+    for (const id of order) for (const key of Object.keys(made).filter((k) => k.startsWith(id))) state.nodes[key] = made[key]!;
+    return state;
+  };
+  const shape = (state: State) =>
+    Object.fromEntries(
+      Object.values(state.nodes)
+        .filter((n): n is SplitNode => n.kind === 'split')
+        .map((n) => [n.id, { parent: n.parentId, panes: splitMembers(state, n.id).map((p) => p.id), sizes: n.sizes.length }]),
+    );
+  it.each([
+    { name: 'the inner one of one tab first: it dissolves into the outer', order: ['s1', 't', 's2', 'x'], inner: 1, splits: { s2: { parent: null, panes: ['t1', 'x2', 'x3'], sizes: 3 } } },
+    { name: 'the outer first: the inner steps out, then dissolves', order: ['s2', 'x', 's1', 't'], inner: 1, splits: { s2: { parent: null, panes: ['x2', 'x3'], sizes: 2 } } },
+    {
+      name: 'the inner one of six first: its extras go to the outer, which it then steps out of',
+      order: ['s1', 't', 's2', 'x'],
+      inner: 6,
+      splits: { s1: { parent: null, panes: ['t1', 't2', 't3', 't4'], sizes: 4 }, s2: { parent: null, panes: ['t5', 't6', 'x2', 'x3'], sizes: 4 } },
+    },
+    {
+      name: 'the outer first, the inner of six',
+      order: ['s2', 'x', 's1', 't'],
+      inner: 6,
+      splits: { s1: { parent: null, panes: ['t1', 't2', 't3', 't4'], sizes: 4 }, s2: { parent: null, panes: ['x2', 'x3'], sizes: 2 } },
+    },
+  ])('settles nested splits: $name', ({ order, inner, splits }) => {
+    const plain = nested(order, inner);
+    settleSplits(plain);
+    const drafted = produce(nested(order, inner), (d) => void settleSplits(d as State));
+    for (const state of [plain, drafted]) {
+      expect(shape(state)).toEqual(splits);
+      const tabs = Object.values(state.nodes).filter((n) => n.kind === 'tab');
+      expect(tabs).toHaveLength(inner + 2);
+      // Every tab's parent is there.
+      for (const t of tabs) if (t.parentId) expect(state.nodes[t.parentId]).toBeDefined();
+    }
+  });
+
+  // A Today split holding a pinned tab (old or damaged data, or another computer's): the pinned tab steps out, into
+  // Today, and the split settles on the rest, as if it had never been a pane.
+  const strayPinned = (today: number, nest: boolean) => {
+    const state = emptyState();
+    const tab = (id: string, parentId: string, rank: string, section: 'pinned' | 'today'): TabNode => ({ kind: 'tab', id, chordId: 'c1', section, parentId, rank, url: `https://${id}.test/`, title: id, pinnedUrl: section === 'pinned' ? `https://${id}.test/` : null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 });
+    // Nested: s sits inside an outer Today split o with two tabs of its own, and settles first.
+    state.nodes['s'] = { kind: 'split', id: 's', chordId: 'c1', section: 'today', parentId: nest ? 'o' : null, rank: 'a0', direction: 'row', sizes: [], createdAt: 0 };
+    state.nodes['p'] = tab('p', 's', 'a0', 'pinned');
+    for (let i = 1; i <= today; i++) state.nodes[`q${i}`] = tab(`q${i}`, 's', `a${i}`, 'today');
+    if (nest) {
+      state.nodes['o'] = { kind: 'split', id: 'o', chordId: 'c1', section: 'today', parentId: null, rank: 'a0', direction: 'row', sizes: [], createdAt: 0 };
+      state.nodes['x1'] = tab('x1', 'o', 'a1', 'today');
+      state.nodes['x2'] = tab('x2', 'o', 'a2', 'today');
+    }
+    return state;
+  };
+  it.each([
+    { name: 'of 2: the split dissolves', today: 1, nest: false, splits: {}, p: null },
+    { name: 'of 3: two panes', today: 2, nest: false, splits: { s: { parent: null, panes: ['q1', 'q2'], sizes: 2 } }, p: null },
+    { name: 'of 5: four panes, none pushed out', today: 4, nest: false, splits: { s: { parent: null, panes: ['q1', 'q2', 'q3', 'q4'], sizes: 4 } }, p: null },
+    { name: 'of 2, inside another split: both tabs become its panes', today: 1, nest: true, splits: { o: { parent: null, panes: ['q1', 'p', 'x1', 'x2'], sizes: 4 } }, p: 'o' },
+  ])('settles a pinned tab in a Today split $name', ({ today, nest, splits, p }) => {
+    const plain = strayPinned(today, nest);
+    settleSplits(plain);
+    const drafted = produce(strayPinned(today, nest), (d) => void settleSplits(d as State));
+    for (const state of [plain, drafted]) {
+      expect(shape(state)).toEqual(splits);
+      expect(state.nodes['p']).toMatchObject({ section: 'today', parentId: p, pinnedUrl: null });
+      expect(Object.values(state.nodes).filter((n) => n.kind === 'tab')).toHaveLength(today + 1 + (nest ? 2 : 0));
+    }
   });
 
   it('restores splits whole, and one window keeps a split another one also shows', () => {
