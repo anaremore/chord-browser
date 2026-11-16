@@ -80,10 +80,17 @@ export interface PasswordsBlurEvent {
   readonly contents: WebContents;
   readonly formId: string;
 }
+/** The page's credential forms and their kinds, as the agent last reported them (`forms`). */
+export interface PasswordsFormsEvent {
+  readonly contents: WebContents;
+  readonly forms: readonly { readonly formId: string; readonly kind: string }[];
+}
 export interface PasswordsFilledEvent {
   readonly contents: WebContents;
   readonly formId: string;
   readonly ok: boolean;
+  /** Why nothing was written (PasswordsFilled). */
+  readonly reason?: 'changed' | 'password';
 }
 type Outcome<T extends SavingOutcome['type']> = Omit<Extract<SavingOutcome, { type: T }>, 'type'> & { readonly contents: WebContents };
 
@@ -94,6 +101,7 @@ export interface PasswordDetectorEvents {
   signedIn: [Outcome<'signedIn'>];
   failed: [Outcome<'failed'>];
   filled: [PasswordsFilledEvent];
+  forms: [PasswordsFormsEvent];
 }
 
 export interface PasswordDetectorOptions {
@@ -238,11 +246,14 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       }
       emit(tracker.candidate(m, origin));
     });
-    on('forms', (m) => emit(tracker.forms(m)));
+    on('forms', (m) => {
+      emit(tracker.forms(m));
+      events.emit('forms', { contents, forms: m.forms.map(({ formId, kind }) => ({ formId, kind })) });
+    });
     on('gone', (m) => emit(tracker.gone(m.formId)));
     on('still', (m) => emit(tracker.still(m.formId)));
     on('hint', (m) => tracker.hint(m.formId, m.status));
-    on('filled', (m) => events.emit('filled', { contents, formId: m.formId, ok: m.ok }));
+    on('filled', (m) => events.emit('filled', { contents, formId: m.formId, ok: m.ok, ...(m.reason ? { reason: m.reason } : {}) }));
 
     contents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;

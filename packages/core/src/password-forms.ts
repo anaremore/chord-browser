@@ -75,8 +75,14 @@ export interface ClassifyOptions {
 
 /** registerForm, sign_in, login-form → separate words, so `\b` matches. */
 const spaced = (s: string) => s.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_./?=&#-]+/g, ' ');
-/** A field's own words: its name, id, label and placeholder. */
-const fieldText = (f: PasswordField) => spaced(`${f.name} ${f.id} ${f.label} ${f.placeholder}`);
+/**
+ * An id React's `useId` made up, which says nothing about the field: `:r2:` (React 18), `«r2»` (19.0, 19.1) and
+ * `_r_2_` (19.2), with `R` where rendered on the server, then a base-32 counter (0-9, a-v). Spaced, `_r_2_` reads as
+ * the word `2`. Only that format: a JSF id's segments (`form:retypePassword:input`) are words.
+ */
+const GENERATED_ID = /:[rR][0-9a-v]+:|«[rR][0-9a-v]+»|_[rR]_[0-9a-v]+_/g;
+/** A field's own words: its name, id (less what React generated), label and placeholder. */
+const fieldText = (f: PasswordField) => spaced(`${f.name} ${f.id.replace(GENERATED_ID, ' ')} ${f.label} ${f.placeholder}`);
 
 const SIGN_IN = /\b(sign|log)[ -]?(in|on)\b|\blogin\b|\bsignin\b|\banmelden\b|iniciar sesi|connexion|se connecter|\baccedi\b|\bentrar\b|inloggen|logga in/i;
 const SIGN_UP = /\bsign[ -]?up\b|\bregist(er|ration|rieren)\b|create (an |your |a free |new |my )?account|\bjoin\b|get started|\bsignup\b|crear cuenta|cr[ée]er un compte|konto erstellen|new account|\benroll/i;
@@ -91,8 +97,13 @@ const NOT_USERNAME = /search|captcha|coupon|promo|voucher|\bzip\b|postal|newslet
 const NOT_PASSWORD = /\banswer|secret (question|word)|security (question|word)|\btin\b|tax ?(id|number)|national (id|insurance)|passport|\bssn\b/i;
 /** A PIN: the password on some sign-in pages (banks, airlines), and not one beside a real password field, nor one of several. */
 const PIN = /\bpin\b|pin ?code/i;
-/** Chromium's two-password guess when both are empty: a form whose own words say "confirm" holds a new password and its confirmation. */
-const CONFIRM_WORDS = /confirm|repeat|re-?type|re-?enter|again|verify|\bconf\b|password ?2|_2\b|\b2\b/i;
+/**
+ * Chromium's two-password guess when both are empty: a form whose own words say "confirm" holds a new password and its confirmation.
+ * A 2 counts only after a password's word, in the languages the vocabulary reads (`password2`, `pwd_2`, `Passwort 2`,
+ * `Kennwort2`, `Contraseña 2`, `Mot de passe 2`): alone it's any counter, as in a React id like `_r_2_`.
+ */
+const CONFIRM_WORDS =
+  /confirm|repeat|re-?type|re-?enter|again|verify|\bconf\b|\b(pass(word|wd|wort)?|pwd?|kennwort|contrase(ñ|n)a|clave|mot de passe|wachtwoord|l(ö|o)senord|senha|parola d'ordine) ?2\b/i;
 
 const isEmailish = (f: PasswordField) => f.type === 'email' || /e-?mail/i.test(`${f.name} ${f.id} ${f.autocomplete} ${f.label}`) || matchWords(DDG_EMAIL, f.label) === 'yes';
 const autocompleteTokens = (f: PasswordField) => f.autocomplete.split(/\s+/).filter(Boolean);
@@ -167,6 +178,34 @@ export function formKind(form: PasswordFormRecord): Exclude<PasswordFormKind, 'u
 /** A password field you could type in: not vetoed, and not a read-only or unreachable decoy (`hiddenPassword`). */
 const usablePassword = (f: PasswordField, vetoed: ReadonlySet<PasswordField>) => f.type === 'password' && !vetoed.has(f) && (!f.readOnly || f.userTyped || f.autofilled) && (f.visible || f.focusable || f.userTyped);
 
+/** A field you can neither see nor reach, and never typed in or had filled: a template, a decoy, a later step's. */
+const hidden = (f: PasswordField) => !f.visible && !f.focusable && !f.userTyped && !f.autofilled;
+
+/** The `autocomplete` tokens that name a credential's role. */
+const ROLE_TOKENS: ReadonlySet<string> = new Set(['username', 'current-password', 'new-password']);
+/**
+ * The fields the parser may give a role, less a hidden one whose `autocomplete` token a shown field also carries (a
+ * page with a hidden duplicate of its sign-in fields, the hidden copy first): the shown one takes the role. A hidden
+ * field still takes a role no shown field claims (Chromium's "autocomplete mark-up overrides visibility").
+ */
+function withoutHiddenRivals(fields: readonly PasswordField[]): PasswordField[] {
+  const shownTokens = new Set(fields.filter((f) => !hidden(f)).flatMap(autocompleteTokens));
+  return fields.filter((f) => !hidden(f) || !autocompleteTokens(f).some((t) => ROLE_TOKENS.has(t) && shownTokens.has(t)));
+}
+
+/**
+ * A form whose every `type=password` field is hidden, read as having none: a two-step sign-in whose first step carries
+ * the next step's password field, hidden. Taken only when that makes it a username-only first step, so main sends it
+ * no password; any other form keeps its hidden passwords (a form hidden whole, a modal not yet open, is classed as it
+ * will be shown, and a shown placeholder over a hidden real password field stays a sign-in).
+ */
+function asFirstStep(form: PasswordFormRecord, mode: ParseMode, options: ClassifyOptions): PasswordFormClassification | null {
+  const passwords = form.fields.filter((f) => f.type === 'password');
+  if (!passwords.length || !passwords.every(hidden)) return null;
+  const c = classifyPasswordForm({ ...form, fields: form.fields.filter((f) => f.type !== 'password') }, mode, options);
+  return c?.kind === 'username-only' ? c : null;
+}
+
 /** Whether the parse's username was only the nearest field: no `autocomplete`, no saved value, and no word saying username. */
 const nearestOnly = (f: PasswordField) => !saysUsername(f) && !isEmailish(f) && !USERNAMEISH.test(fieldText(f)) && matchWords(DDG_USERNAME, f.label) !== 'yes';
 
@@ -178,7 +217,9 @@ const nearestOnly = (f: PasswordField) => !saysUsername(f) && !isEmailish(f) && 
 export function classifyPasswordForm(form: PasswordFormRecord, mode: ParseMode, options: ClassifyOptions = {}): PasswordFormClassification | null {
   // Vetoed fields leave the parse altogether, so Chromium's nearest-field rule passes over them.
   const vetoed = passwordVetoes(form.fields);
-  const candidates = form.fields.filter((f) => !vetoedAsUsername(f) && !vetoed.has(f));
+  const firstStep = asFirstStep(form, mode, options);
+  if (firstStep) return firstStep;
+  const candidates = withoutHiddenRivals(form.fields).filter((f) => !vetoedAsUsername(f) && !vetoed.has(f));
   let parsed = parsePasswordForm(candidates, mode, { storedUsernames: options.storedUsernames }).form;
   // Chromium's HTML-based username can be an email after the passwords: "Email address" holds one of its technical
   // words, `laddress`. Chord takes the predictions before the first password then. A username field there stays
