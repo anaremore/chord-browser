@@ -14,11 +14,15 @@ import {
   tabsInOrder,
   visibleTabs,
   windowsShowing,
+  nodeOf,
+  setNode,
+  nodeList,
   type Command,
   type Context,
   type SplitNode,
   type State,
   type TabNode,
+  type SidebarNode,
 } from '../src';
 
 /** One chord, one window, three Today tabs (t1 on top); ids from the reducer come out as id-001, id-002, … */
@@ -49,9 +53,9 @@ function setup() {
     lastActiveAt: 0,
     createdAt: 0,
   });
-  state.nodes['t1'] = tab('t1', 'a0');
-  state.nodes['t2'] = tab('t2', 'a1');
-  state.nodes['t3'] = tab('t3', 'a2');
+  setNode(state, tab('t1', 'a0'));
+  setNode(state, tab('t2', 'a1'));
+  setNode(state, tab('t3', 'a2'));
   state.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: 't1' }, sidebar: 'docked', sidebarWidth: 248, bounds: null };
   const run = (cmd: Command) => {
     const result = apply(state, cmd, ctx);
@@ -69,7 +73,7 @@ function setup() {
   };
 }
 
-const split = (state: State, id: string) => state.nodes[id] as SplitNode;
+const split = (state: State, id: string) => nodeOf(state, id) as SplitNode;
 const panes = (state: State, splitId: string) => splitMembers(state, splitId).map((t) => t.id);
 
 describe('pane layout', () => {
@@ -158,9 +162,9 @@ describe('split commands', () => {
     expect(split(t.state, s).sizes).toEqual([0.6666666666666666, 0.3333333333333333]);
     expect(tabsInOrder(t.state, 'c1').map((x) => x.id)).toEqual(['t1', 't3', 't2']);
     t.run({ t: 'split.remove', nodeId: 't3' });
-    expect(t.state.nodes[s]).toBeUndefined();
-    expect(t.state.nodes['t1']).toMatchObject({ parentId: null, rank: 'a0' });
-    expect(Object.values(t.state.nodes).some((n) => n.kind === 'split')).toBe(false);
+    expect(nodeOf(t.state, s)).toBeUndefined();
+    expect(nodeOf(t.state, 't1')).toMatchObject({ parentId: null, rank: 'a0' });
+    expect(nodeList(t.state).some((n) => n.kind === 'split')).toBe(false);
   });
 
   it('separates every pane into its own tab where the split was, and joins them again', () => {
@@ -168,7 +172,7 @@ describe('split commands', () => {
     t.run({ t: 'split.add', windowId: 'w1', withId: 't2', nodeId: 't3' });
     const s = splitOf(t.state, 't2')!;
     t.run({ t: 'split.separate', splitId: s.id });
-    expect(t.state.nodes[s.id]).toBeUndefined();
+    expect(nodeOf(t.state, s.id)).toBeUndefined();
     expect(tabsInOrder(t.state, 'c1').map((x) => x.id)).toEqual(['t1', 't2', 't3']);
     // Undo: the same split, as it was.
     t.run({ t: 'split.join', windowId: 'w1', splitId: s.id, nodeIds: ['t2', 't3'], direction: 'column', sizes: [1, 3], focus: 't3' });
@@ -205,7 +209,7 @@ describe('splits and the rest of the sidebar', () => {
     expect(split(t.state, s).sizes).toHaveLength(3);
     t.run({ t: 'tab.close', windowId: 'w1', nodeId: 't2' });
     t.run({ t: 'tab.close', windowId: 'w1', nodeId: 't3' });
-    expect(t.state.nodes[s]).toBeUndefined();
+    expect(nodeOf(t.state, s)).toBeUndefined();
     expect(shownTabs(t.state, 'w1')).toEqual(['t1']);
   });
 
@@ -216,14 +220,14 @@ describe('splits and the rest of the sidebar', () => {
     t.run({ t: 'tab.pin', nodeId: 't1' });
     const s = splitOf(t.state, 't1')!.id;
     expect(split(t.state, s).section).toBe('pinned');
-    expect(['t1', 't2', 't3'].map((id) => (t.state.nodes[id] as TabNode).pinnedUrl)).toEqual(['https://t1.test/', 'https://t2.test/', 'https://t3.test/']);
+    expect(['t1', 't2', 't3'].map((id) => (nodeOf(t.state, id) as TabNode).pinnedUrl)).toEqual(['https://t1.test/', 'https://t2.test/', 'https://t3.test/']);
     t.run({ t: 'tab.close', windowId: 'w1', nodeId: 't3' });
-    expect(t.state.nodes['t3']).toMatchObject({ section: 'pinned', parentId: null });
+    expect(nodeOf(t.state, 't3')).toMatchObject({ section: 'pinned', parentId: null });
     expect(panes(t.state, s)).toEqual(['t1', 't2']);
     // Unpinning a pane unpins the split.
     t.run({ t: 'tab.unpin', nodeId: 't2' });
     expect(split(t.state, s).section).toBe('today');
-    expect((t.state.nodes['t1'] as TabNode).pinnedUrl).toBeNull();
+    expect((nodeOf(t.state, 't1') as TabNode).pinnedUrl).toBeNull();
   });
 
   it('a split moves as one, in and out of folders', () => {
@@ -233,11 +237,11 @@ describe('splits and the rest of the sidebar', () => {
     t.run({ t: 'folder.create', folderId: 'f1', chordId: 'c1', title: 'Work' });
     t.run({ t: 'node.move', nodeId: s, section: 'pinned', index: 0, parentId: 'f1' });
     expect(split(t.state, s)).toMatchObject({ section: 'pinned', parentId: 'f1' });
-    expect((t.state.nodes['t2'] as TabNode).section).toBe('pinned');
+    expect((nodeOf(t.state, 't2') as TabNode).section).toBe('pinned');
     // Dragging a pane out to the sidebar takes it out of the split.
     t.run({ t: 'node.move', nodeId: 't2', section: 'today', index: 0 });
-    expect(t.state.nodes[s]).toBeUndefined();
-    expect(t.state.nodes['t1']).toMatchObject({ parentId: 'f1', section: 'pinned' });
+    expect(nodeOf(t.state, s)).toBeUndefined();
+    expect(nodeOf(t.state, 't1')).toMatchObject({ parentId: 'f1', section: 'pinned' });
   });
 
   it('a window showing any pane of a split lets the whole split go to another window', () => {
@@ -262,60 +266,64 @@ describe('splits and the rest of the sidebar', () => {
   it('settles splits that lost panes, gained too many, or hold the wrong kind of node', () => {
     const t = setup();
     const state = t.state;
-    state.nodes['s'] = { kind: 'split', id: 's', chordId: 'c1', section: 'today', parentId: null, rank: 'Zz', direction: 'row', sizes: [1], createdAt: 0 };
-    for (const [i, id] of ['t1', 't2', 't3'].entries()) Object.assign(state.nodes[id]!, { parentId: 's', rank: `a${i}` });
+    setNode(state, { kind: 'split', id: 's', chordId: 'c1', section: 'today', parentId: null, rank: 'Zz', direction: 'row', sizes: [1], createdAt: 0 });
+    for (const [i, id] of ['t1', 't2', 't3'].entries()) Object.assign(nodeOf(state, id)!, { parentId: 's', rank: `a${i}` });
     const changed = settleSplits(state);
     expect(splitMembers(state, 's').map((p) => p.id)).toEqual(['t1', 't2', 't3']);
-    expect((state.nodes['s'] as SplitNode).sizes).toHaveLength(3);
+    expect((nodeOf(state, 's') as SplitNode).sizes).toHaveLength(3);
     expect(changed.size).toBe(3);
   });
 
-  // A split inside a split (old or damaged data): which one settles first follows the nodes' order, and either way
-  // nothing is lost and every split ends whole. In a draft too, as the reducer runs it.
-  const nested = (order: string[], inner: number) => {
+  // A split inside a split (old or damaged data): which one settles first follows their IDs' order (split.ts), and
+  // either way nothing is lost and every split ends whole. In a draft too, as the reducer runs it. The inner split is
+  // s1 (before the outer s2) or s3 (after it); the order the nodes went in doesn't matter.
+  const nested = (order: string[], inner: number, innerId: 's1' | 's3' = 's1') => {
     const state = emptyState();
     const tab = (id: string, parentId: string | null, rank: string): TabNode => ({ kind: 'tab', id, chordId: 'c1', section: 'today', parentId, rank, url: `https://${id}.test/`, title: id, pinnedUrl: null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 });
-    const made: Record<string, State['nodes'][string]> = {
-      s1: { kind: 'split', id: 's1', chordId: 'c1', section: 'today', parentId: 's2', rank: 'a0', direction: 'row', sizes: [], createdAt: 0 },
+    const made: Record<string, SidebarNode> = {
+      s1: { kind: 'split', id: innerId, chordId: 'c1', section: 'today', parentId: 's2', rank: 'a0', direction: 'row', sizes: [], createdAt: 0 },
       s2: { kind: 'split', id: 's2', chordId: 'c1', section: 'today', parentId: null, rank: 'a0', direction: 'row', sizes: [0.5, 0.5], createdAt: 0 },
       x2: tab('x2', 's2', 'a1'),
       x3: tab('x3', 's2', 'a2'),
     };
-    for (let i = 1; i <= inner; i++) made[`t${i}`] = tab(`t${i}`, 's1', `a${i}`);
-    for (const id of order) for (const key of Object.keys(made).filter((k) => k.startsWith(id))) state.nodes[key] = made[key]!;
+    for (let i = 1; i <= inner; i++) made[`t${i}`] = tab(`t${i}`, innerId, `a${i}`);
+    for (const id of order) for (const key of Object.keys(made).filter((k) => k.startsWith(id))) setNode(state, made[key]!);
     return state;
   };
   const shape = (state: State) =>
     Object.fromEntries(
-      Object.values(state.nodes)
+      nodeList(state)
         .filter((n): n is SplitNode => n.kind === 'split')
         .map((n) => [n.id, { parent: n.parentId, panes: splitMembers(state, n.id).map((p) => p.id), sizes: n.sizes.length }]),
     );
   it.each([
-    { name: 'the inner one of one tab first: it dissolves into the outer', order: ['s1', 't', 's2', 'x'], inner: 1, splits: { s2: { parent: null, panes: ['t1', 'x2', 'x3'], sizes: 3 } } },
-    { name: 'the outer first: the inner steps out, then dissolves', order: ['s2', 'x', 's1', 't'], inner: 1, splits: { s2: { parent: null, panes: ['x2', 'x3'], sizes: 2 } } },
+    { name: 'the inner one of one tab first: it dissolves into the outer', order: ['s1', 't', 's2', 'x'], inner: 1, innerId: 's1', splits: { s2: { parent: null, panes: ['t1', 'x2', 'x3'], sizes: 3 } } },
+    { name: 'the inner one of one tab first, put in last', order: ['s2', 'x', 's1', 't'], inner: 1, innerId: 's1', splits: { s2: { parent: null, panes: ['t1', 'x2', 'x3'], sizes: 3 } } },
+    { name: 'the outer first: the inner steps out, then dissolves', order: ['s2', 'x', 's1', 't'], inner: 1, innerId: 's3', splits: { s2: { parent: null, panes: ['x2', 'x3'], sizes: 2 } } },
     {
       name: 'the inner one of six first: its extras go to the outer, which it then steps out of',
       order: ['s1', 't', 's2', 'x'],
       inner: 6,
+      innerId: 's1',
       splits: { s1: { parent: null, panes: ['t1', 't2', 't3', 't4'], sizes: 4 }, s2: { parent: null, panes: ['t5', 't6', 'x2', 'x3'], sizes: 4 } },
     },
     {
       name: 'the outer first, the inner of six',
       order: ['s2', 'x', 's1', 't'],
       inner: 6,
-      splits: { s1: { parent: null, panes: ['t1', 't2', 't3', 't4'], sizes: 4 }, s2: { parent: null, panes: ['x2', 'x3'], sizes: 2 } },
+      innerId: 's3',
+      splits: { s3: { parent: null, panes: ['t1', 't2', 't3', 't4'], sizes: 4 }, s2: { parent: null, panes: ['x2', 'x3'], sizes: 2 } },
     },
-  ])('settles nested splits: $name', ({ order, inner, splits }) => {
-    const plain = nested(order, inner);
+  ] as const)('settles nested splits: $name', ({ order, inner, innerId, splits }) => {
+    const plain = nested([...order], inner, innerId);
     settleSplits(plain);
-    const drafted = produce(nested(order, inner), (d) => void settleSplits(d as State));
+    const drafted = produce(nested([...order], inner, innerId), (d) => void settleSplits(d as State));
     for (const state of [plain, drafted]) {
       expect(shape(state)).toEqual(splits);
-      const tabs = Object.values(state.nodes).filter((n) => n.kind === 'tab');
+      const tabs = nodeList(state).filter((n) => n.kind === 'tab');
       expect(tabs).toHaveLength(inner + 2);
       // Every tab's parent is there.
-      for (const t of tabs) if (t.parentId) expect(state.nodes[t.parentId]).toBeDefined();
+      for (const t of tabs) if (t.parentId) expect(nodeOf(state, t.parentId)).toBeDefined();
     }
   });
 
@@ -324,14 +332,14 @@ describe('splits and the rest of the sidebar', () => {
   const strayPinned = (today: number, nest: boolean) => {
     const state = emptyState();
     const tab = (id: string, parentId: string, rank: string, section: 'pinned' | 'today'): TabNode => ({ kind: 'tab', id, chordId: 'c1', section, parentId, rank, url: `https://${id}.test/`, title: id, pinnedUrl: section === 'pinned' ? `https://${id}.test/` : null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 });
-    // Nested: s sits inside an outer Today split o with two tabs of its own, and settles first.
-    state.nodes['s'] = { kind: 'split', id: 's', chordId: 'c1', section: 'today', parentId: nest ? 'o' : null, rank: 'a0', direction: 'row', sizes: [], createdAt: 0 };
-    state.nodes['p'] = tab('p', 's', 'a0', 'pinned');
-    for (let i = 1; i <= today; i++) state.nodes[`q${i}`] = tab(`q${i}`, 's', `a${i}`, 'today');
+    // Nested: s sits inside an outer Today split u with two tabs of its own, and settles first (its ID is first).
+    setNode(state, { kind: 'split', id: 's', chordId: 'c1', section: 'today', parentId: nest ? 'u' : null, rank: 'a0', direction: 'row', sizes: [], createdAt: 0 });
+    setNode(state, tab('p', 's', 'a0', 'pinned'));
+    for (let i = 1; i <= today; i++) setNode(state, tab(`q${i}`, 's', `a${i}`, 'today'));
     if (nest) {
-      state.nodes['o'] = { kind: 'split', id: 'o', chordId: 'c1', section: 'today', parentId: null, rank: 'a0', direction: 'row', sizes: [], createdAt: 0 };
-      state.nodes['x1'] = tab('x1', 'o', 'a1', 'today');
-      state.nodes['x2'] = tab('x2', 'o', 'a2', 'today');
+      setNode(state, { kind: 'split', id: 'u', chordId: 'c1', section: 'today', parentId: null, rank: 'a0', direction: 'row', sizes: [], createdAt: 0 });
+      setNode(state, tab('x1', 'u', 'a1', 'today'));
+      setNode(state, tab('x2', 'u', 'a2', 'today'));
     }
     return state;
   };
@@ -339,15 +347,15 @@ describe('splits and the rest of the sidebar', () => {
     { name: 'of 2: the split dissolves', today: 1, nest: false, splits: {}, p: null },
     { name: 'of 3: two panes', today: 2, nest: false, splits: { s: { parent: null, panes: ['q1', 'q2'], sizes: 2 } }, p: null },
     { name: 'of 5: four panes, none pushed out', today: 4, nest: false, splits: { s: { parent: null, panes: ['q1', 'q2', 'q3', 'q4'], sizes: 4 } }, p: null },
-    { name: 'of 2, inside another split: both tabs become its panes', today: 1, nest: true, splits: { o: { parent: null, panes: ['q1', 'p', 'x1', 'x2'], sizes: 4 } }, p: 'o' },
+    { name: 'of 2, inside another split: both tabs become its panes', today: 1, nest: true, splits: { u: { parent: null, panes: ['q1', 'p', 'x1', 'x2'], sizes: 4 } }, p: 'u' },
   ])('settles a pinned tab in a Today split $name', ({ today, nest, splits, p }) => {
     const plain = strayPinned(today, nest);
     settleSplits(plain);
     const drafted = produce(strayPinned(today, nest), (d) => void settleSplits(d as State));
     for (const state of [plain, drafted]) {
       expect(shape(state)).toEqual(splits);
-      expect(state.nodes['p']).toMatchObject({ section: 'today', parentId: p, pinnedUrl: null });
-      expect(Object.values(state.nodes).filter((n) => n.kind === 'tab')).toHaveLength(today + 1 + (nest ? 2 : 0));
+      expect(nodeOf(state, 'p')).toMatchObject({ section: 'today', parentId: p, pinnedUrl: null });
+      expect(nodeList(state).filter((n) => n.kind === 'tab')).toHaveLength(today + 1 + (nest ? 2 : 0));
     }
   });
 
@@ -358,7 +366,7 @@ describe('splits and the rest of the sidebar', () => {
     const restored = restoreState(
       {
         chords: Object.values(s.chords),
-        nodes: Object.values(s.nodes),
+        nodes: nodeList(s),
         windows: [
           { ...s.windows['w1']!, activeTab: { c1: 't1' } },
           { ...s.windows['w1']!, id: 'w2', activeTab: { c1: 't2' } },

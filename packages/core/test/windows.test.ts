@@ -9,6 +9,8 @@ import {
   profilePartition,
   sortedChords,
   tabsInOrder,
+  nodeOf,
+  nodeList,
   type Command,
   type Context,
   type Download,
@@ -105,7 +107,7 @@ describe('windows', () => {
     t.run({ t: 'window.create', windowId: 'w2', from: 'w1' });
     t.run({ t: 'window.close', windowId: 'w1' });
     expect(Object.keys(t.state.windows)).toEqual(['w2']);
-    expect(t.state.nodes['id-001']).toBeDefined();
+    expect(nodeOf(t.state, 'id-001')).toBeDefined();
   });
 });
 
@@ -143,7 +145,7 @@ describe('private windows', () => {
     expect(sortedChords(t.state).map((c) => c.id)).toEqual(['c1', 'c2']);
     expect(chordsFor(t.state, 'w1').map((c) => c.id)).toEqual(['c1', 'c2']);
     expect(chordsFor(t.state, 'p1').map((c) => c.id)).toEqual(['pc']);
-    expect((t.state.nodes['id-002'] as TabNode).chordId).toBe('pc');
+    expect((nodeOf(t.state, 'id-002') as TabNode).chordId).toBe('pc');
   });
 
   it('keeps its tabs and normal tabs apart, and has no other chords to switch to', () => {
@@ -191,7 +193,7 @@ describe('private windows', () => {
     expect(result.effects).toContainEqual({ e: 'view.destroy', nodeId: 'id-003' });
     expect(t.state.windows['p1']).toBeUndefined();
     expect(t.state.chords['pc']).toBeUndefined();
-    expect(Object.values(t.state.nodes).some((n) => n.chordId === 'pc')).toBe(false);
+    expect(nodeList(t.state).some((n) => n.chordId === 'pc')).toBe(false);
     expect(t.state.closed.some((c) => c.node.chordId === 'pc')).toBe(false);
     expect(t.state.downloads['p']).toBeUndefined();
     expect(t.run({ t: 'download.update', download: download('p', 'p1') }).patches).toEqual([]);

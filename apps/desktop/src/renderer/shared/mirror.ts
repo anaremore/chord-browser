@@ -4,7 +4,7 @@
  */
 import type { State } from '@chord/core';
 import type { StatePatchEvent, StateSnapshot } from '@chord/ipc';
-import { applyPatches, enablePatches, type Patch } from 'immer';
+import { applyPatches, enablePatches, freeze, type Patch } from 'immer';
 import { useSyncExternalStore } from 'react';
 
 enablePatches();
@@ -49,7 +49,8 @@ export async function createMirror(source: StateSource, { notify = (tell) => tel
   const resync = async () => {
     syncing = true;
     const snap = await source.snapshot();
-    state = snap.state;
+    // Frozen, as every state patched from it is: the nodes' index is kept only for a state that can't change (core's nodes.ts).
+    state = freeze(snap.state, true);
     // Patches that arrived while the snapshot was in flight may be newer.
     for (const event of pending) if (event.version > state.version) state = applyPatches(state, event.patches as Patch[]);
     pending = [];

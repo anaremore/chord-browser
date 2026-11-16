@@ -6,7 +6,7 @@
  * applies anything that would delete, so its one Undo covers everything.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { apply, emptyApply, seedState, SYNC_OFF, type Chord, type Command, type State, type SyncApply, type TabNode } from '@chord/core';
+import { apply, emptyApply, seedState, SYNC_OFF, nodeList, nodeOf, nodesFrom, type Chord, type Command, type State, type SyncApply, type TabNode } from '@chord/core';
 import type { DataPush, SyncReply, SyncRequest } from '@chord/data';
 import type { SyncView, Toast } from '@chord/ipc';
 
@@ -55,7 +55,7 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
   state = {
     ...state,
     chords: { ...state.chords, x: chord('x', 'b0') },
-    nodes: { ...state.nodes, d: tab('d', 'x', { section: 'today', pinnedUrl: null }), p: tab('p', 'x') },
+    nodes: nodesFrom([...nodeList(state), tab('d', 'x', { section: 'today', pinnedUrl: null }), tab('p', 'x')]),
     windows: { ...state.windows, [windowId]: { ...state.windows[windowId]!, activeChordId: 'x', activeTab: { ...state.windows[windowId]!.activeTab, x: 'd' } } },
   };
   const commands: Command[] = [];
@@ -90,12 +90,12 @@ describe('a chord another computer deleted', () => {
     h.push({ ...emptyApply(), gone: { ...emptyApply().gone, chords: ['x'] } });
     await vi.waitFor(() => expect(h.toasts).toHaveLength(1));
     expect(h.state().chords['x']).toBeUndefined();
-    expect(h.state().nodes['d']).toMatchObject({ chordId: h.home, section: 'today' });
+    expect(nodeOf(h.state(), 'd')).toMatchObject({ chordId: h.home, section: 'today' });
     expect(h.toasts[0]!.message).toBe('“X” was deleted on another computer. Its tab moved to “Personal”.');
     h.dispatch((h.toasts[0]!.action as { command: Command }).command);
     expect(h.state().chords['x']).toBeDefined();
-    expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
-    expect(h.state().nodes['d']).toMatchObject({ chordId: 'x', section: 'today' });
+    expect(nodeOf(h.state(), 'p')).toMatchObject({ chordId: 'x', section: 'pinned' });
+    expect(nodeOf(h.state(), 'd')).toMatchObject({ chordId: 'x', section: 'today' });
   });
 });
 
@@ -108,7 +108,7 @@ describe('a chord another computer deleted, while a change of yours to it waits'
     h.whenFlushed(() => (waits = false));
     h.push({ ...emptyApply(), gone: { ...emptyApply().gone, chords: ['x'], nodes: [{ id: 'p', kind: 'tab' }] } });
     await vi.waitFor(() => expect(asked.some((r) => r.type === 'sync.repush')).toBe(true));
-    expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
+    expect(nodeOf(h.state(), 'p')).toMatchObject({ chordId: 'x', section: 'pinned' });
     expect(asked.find((r) => r.type === 'sync.repush')).toMatchObject({ keys: expect.arrayContaining(['chord:x', 'node:p']) });
   });
 });
@@ -123,7 +123,7 @@ describe('what waits for another change of yours', () => {
       h.push({ ...emptyApply(), gone: { ...emptyApply().gone, chords: ['x'], nodes: [{ id: 'p', kind: 'tab' }] } });
       await vi.advanceTimersByTimeAsync(1_000);
       expect(asked.filter((r) => r.type === 'sync.repush')).toEqual([]);
-      expect(h.state().nodes['p']).toMatchObject({ chordId: 'x', section: 'pinned' });
+      expect(nodeOf(h.state(), 'p')).toMatchObject({ chordId: 'x', section: 'pinned' });
     } finally {
       vi.useRealTimers();
     }
@@ -335,7 +335,7 @@ describe('joining with Use the synced setup', () => {
     h.dispatch((undo.action as { command: Command }).command);
     expect(h.state().chords['x']).toBeDefined();
     expect(h.state().chords[h.home]).toBeDefined();
-    expect(h.state().nodes['p']).toMatchObject({ chordId: 'x' });
-    expect(h.state().nodes['d']).toMatchObject({ chordId: 'x', section: 'today' });
+    expect(nodeOf(h.state(), 'p')).toMatchObject({ chordId: 'x' });
+    expect(nodeOf(h.state(), 'd')).toMatchObject({ chordId: 'x', section: 'today' });
   });
 });

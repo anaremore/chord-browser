@@ -143,8 +143,8 @@ Its view: ${JSON.stringify(await viewOf(app, url))}`);
 /** The live state of a tab, by its title. */
 const liveOf = (shell: Page, title: string) =>
   shell.evaluate(async (t) => {
-    const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, { kind: string; title?: string; id: string }>; live: Record<string, { sharing: boolean; shared: boolean }> } }> } } }).chord.state.snapshot();
-    const node = Object.values(state.nodes).find((n) => n.kind === 'tab' && n.title === t);
+    const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, Record<string, { kind: string; title?: string; id: string }>>; live: Record<string, { sharing: boolean; shared: boolean }> } }> } } }).chord.state.snapshot();
+    const node = Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.kind === 'tab' && n.title === t);
     return node ? (state.live[node.id] ?? null) : undefined;
   }, title);
 

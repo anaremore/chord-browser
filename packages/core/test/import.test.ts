@@ -15,6 +15,10 @@ import {
   sortedFavorites,
   tabsInOrder,
   used,
+  nodeOf,
+  setNode,
+  nodeList,
+  nodeIds,
   type BookmarkItem,
   type Command,
   type Context,
@@ -31,7 +35,7 @@ function setup(): { state: State; ctx: Context; run: (cmd: Command) => ReturnTyp
   const ctx: Context = { now: 5_000, newId: () => `id-${String(++n).padStart(4, '0')}` };
   const box = { state: emptyState() };
   box.state.chords['c1'] = { id: 'c1', profileId: 'default', name: 'Personal', icon: '✦', theme: THEME, rank: 'a0', createdAt: 0 };
-  box.state.nodes['t1'] = {
+  setNode(box.state, {
     kind: 'tab',
     id: 't1',
     chordId: 'c1',
@@ -45,7 +49,7 @@ function setup(): { state: State; ctx: Context; run: (cmd: Command) => ReturnTyp
     favicon: null,
     lastActiveAt: 0,
     createdAt: 0,
-  };
+  });
   box.state.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: 't1' }, sidebar: 'docked', sidebarWidth: 248, bounds: null };
   const run = (cmd: Command) => {
     const result = apply(box.state, cmd, ctx);
@@ -171,8 +175,8 @@ describe('import mapping', () => {
     const p = plan(t.state, { groups: { 'r0/1': 'chord:secret', 'r1/1': 'chord:gone', r0: 'chord:secret' }, tabs: 'chord:secret', history: false });
     expect(p.nodes).toEqual([]);
     // And the reducer refuses it too, whatever main sends.
-    t.run({ t: 'import.add', importId: 'x', nodes: [{ ...(t.state.nodes['t1'] as never as object), id: 'sneak', chordId: 'secret', section: 'today' } as never] });
-    expect(t.state.nodes['sneak']).toBeUndefined();
+    t.run({ t: 'import.add', importId: 'x', nodes: [{ ...(nodeOf(t.state, 't1') as never as object), id: 'sneak', chordId: 'secret', section: 'today' } as never] });
+    expect(nodeOf(t.state, 'sneak')).toBeUndefined();
   });
 });
 
@@ -188,7 +192,7 @@ describe('import reducer', () => {
     expect(sortedChords(t.state).map((c) => c.name)).toEqual(['Personal', 'Work']);
     expect(sortedFavorites(t.state).map((f) => f.url)).toEqual(['https://news.test/', 'https://forum.test/']);
     expect(children(t.state, 'c1', 'today', null)).toHaveLength(2);
-    expect(Object.keys(t.state.nodes)).toHaveLength(1 + p.nodes.length);
+    expect(nodeIds(t.state)).toHaveLength(1 + p.nodes.length);
     // The window stays where it was.
     expect(t.state.windows['w1']!.activeTab['c1']).toBe('t1');
 
@@ -197,7 +201,7 @@ describe('import reducer', () => {
     t.run({ t: 'chord.activate', windowId: 'w1', chordId: work });
     t.run({ t: 'import.undo', importId: p.importId });
     expect(t.state.chords).toEqual(before.chords);
-    expect(Object.keys(t.state.nodes)).toEqual(Object.keys(before.nodes));
+    expect(nodeIds(t.state)).toEqual(nodeIds(before));
     expect(t.state.favorites).toEqual({});
     expect(t.state.imports).toEqual({});
     expect(t.state.windows['w1']!.activeChordId).toBe('c1');
@@ -209,15 +213,22 @@ describe('import reducer', () => {
     const p = plan(t.state, { groups: { 'r0/1': 'new', 'r1/1': 'chord:c1', r1: 'chord:c1' }, tabs: 'chord:c1', history: false });
     t.run({ t: 'import.add', importId: p.importId, chords: p.chords, nodes: p.nodes });
     const total = p.nodes.length;
+    const parentOf = new Map(nodeList(t.state).map((n) => [n.id, n.parentId]));
+    const partOf = new Map<string, number>();
     let parts = 0;
     while (t.state.imports[p.importId]) {
+      const was = new Set(nodeIds(t.state));
       t.run({ t: 'import.undo', importId: p.importId, limit: 2 });
       parts++;
-      for (const node of Object.values(t.state.nodes)) if (node.parentId) expect(t.state.nodes[node.parentId]).toBeDefined();
+      for (const id of was) if (!nodeOf(t.state, id)) partOf.set(id, parts);
+      for (const node of nodeList(t.state)) if (node.parentId) expect(nodeOf(t.state, node.parentId)).toBeDefined();
       if (t.state.imports[p.importId]) expect(t.state.chords[p.chords[0]!.id]).toBeDefined();
     }
     expect(parts).toBe(Math.ceil(total / 2));
-    expect(Object.keys(t.state.nodes)).toEqual(['t1']);
+    // Siblings in a folder go by id, the last first, whatever bucket each lands in.
+    for (const [a, pa] of partOf)
+      for (const [b, pb] of partOf) if (a < b && parentOf.get(a) && parentOf.get(a) === parentOf.get(b)) expect(pb).toBeLessThanOrEqual(pa);
+    expect(nodeIds(t.state)).toEqual(['t1']);
     expect(Object.keys(t.state.chords)).toEqual(['c1']);
   });
 
@@ -228,10 +239,10 @@ describe('import reducer', () => {
     const imported = children(t.state, 'c1', 'today', null)[0]!.id;
     t.run({ t: 'tab.unpin', nodeId: 't1' });
     t.run({ t: 'split.join', windowId: 'w1', splitId: 'sp', nodeIds: ['t1', imported], direction: 'row' });
-    expect(t.state.nodes['sp']).toBeDefined();
+    expect(nodeOf(t.state, 'sp')).toBeDefined();
     t.run({ t: 'import.undo', importId: p.importId });
-    expect(t.state.nodes['sp']).toBeUndefined();
-    expect(t.state.nodes['t1']).toMatchObject({ parentId: null });
+    expect(nodeOf(t.state, 'sp')).toBeUndefined();
+    expect(nodeOf(t.state, 't1')).toMatchObject({ parentId: null });
   });
 
   it('Undo moves a window off an imported tab it shows, and closes its page', () => {

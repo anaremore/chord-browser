@@ -46,6 +46,7 @@ import { sortedChords } from './select';
 import { cleanCountSites } from './tab-counts';
 import type { Platform } from './shortcuts';
 import { settleSplits, shownWith } from './split';
+import { nodeOf, setNode, nodeList } from './nodes';
 
 /** Everything chord-data persists; live engine state and the version never are. */
 export interface PersistedState {
@@ -307,14 +308,14 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
   state.linkRoutes = restoreRoutes(saved.linkRoutes, state.chords);
   for (const node of saved.nodes) {
     if (!state.chords[node.chordId]) continue;
-    state.nodes[node.id] = { ...node };
+    setNode(state, { ...node });
   }
   // Children whose folder (or split) is gone move to the section root rather than vanish.
-  for (const node of Object.values(state.nodes)) {
-    if (node.parentId && !state.nodes[node.parentId]) node.parentId = null;
+  for (const node of nodeList(state)) {
+    if (node.parentId && !nodeOf(state, node.parentId)) node.parentId = null;
   }
   // Splits come back whole: two to four panes, sizes that match (split.ts).
-  for (const node of Object.values(state.nodes)) {
+  for (const node of nodeList(state)) {
     if (node.kind === 'split') node.sizes = Array.isArray(node.sizes) ? node.sizes.filter((s) => typeof s === 'number') : [];
   }
   settleSplits(state);
@@ -329,7 +330,7 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
     const activeTab: WindowModel['activeTab'] = {};
     for (const [chordId, tabId] of Object.entries(win.activeTab)) {
       if (!state.chords[chordId]) continue;
-      activeTab[chordId] = tabId && state.nodes[tabId]?.kind === 'tab' && state.nodes[tabId]?.chordId === chordId ? tabId : null;
+      activeTab[chordId] = tabId && nodeOf(state, tabId)?.kind === 'tab' && nodeOf(state, tabId)?.chordId === chordId ? tabId : null;
     }
     // A split shows all its panes, so it's the whole group that one window keeps.
     const showing = activeTab[activeChordId];

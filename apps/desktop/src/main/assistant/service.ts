@@ -48,6 +48,8 @@ import {
   toolResult,
   userTurnText,
   uuidv7,
+  nodeOf,
+  nodeList,
   type AssistantAttachment,
   type AssistantCitation,
   type AssistantImage,
@@ -411,14 +413,14 @@ export class AssistantService {
   }
 
   private nodeByUrl(chordId: string, url: string): NodeId | null {
-    for (const node of Object.values(this.browser.store.state.nodes)) if (node.kind === 'tab' && node.chordId === chordId && node.url === url) return node.id;
+    for (const node of nodeList(this.browser.store.state)) if (node.kind === 'tab' && node.chordId === chordId && node.url === url) return node.id;
     return null;
   }
 
   private activeTab(windowId: WindowId): TabNode | null {
     const model = this.browser.store.state.windows[windowId];
     const id = model ? model.activeTab[model.activeChordId] : null;
-    const node = id ? this.browser.store.state.nodes[id] : undefined;
+    const node = id ? nodeOf(this.browser.store.state, id) : undefined;
     return node?.kind === 'tab' ? node : null;
   }
 
@@ -445,7 +447,7 @@ export class AssistantService {
     const current = this.activeTab(windowId);
     if (current && attachesTabOnScreen(this.scopeFor(windowId)) && panel.removedCurrent !== current.id && this.readable(current)) out.push(current);
     for (const id of panel.extra) {
-      const node = this.browser.store.state.nodes[id];
+      const node = nodeOf(this.browser.store.state, id);
       if (node?.kind === 'tab' && !out.includes(node) && this.readable(node)) out.push(node);
     }
     return out;
@@ -469,7 +471,7 @@ export class AssistantService {
     if (!chordId || privateWindow)
       return { ...base, thread: null, continueFrom: null, threads: [], messages: [], busy: false, startedAt: null, queue: [], attachments: [], attachable: [], readTabIds: [], error: null, draft: '', context: null, pendingImages: [], imageThumbs: {}, tabNames: {} };
     const state = await this.stateFor(chordId);
-    const nodes = this.browser.store.state.nodes;
+    const store = this.browser.store.state;
     const attachable = settings.readsNothing
       ? []
       : children(this.browser.store.state, chordId, 'pinned', null)
@@ -490,7 +492,7 @@ export class AssistantService {
       queue: state.queue,
       attachments: this.attachments(windowId).map((n) => ({ nodeId: n.id, title: n.title || n.url, url: n.url, current: n.id === current?.id })),
       attachable,
-      readTabIds: [...state.read].filter((id) => nodes[id]),
+      readTabIds: [...state.read].filter((id) => nodeOf(store, id)),
       error: state.lastError,
       draft: this.drafts[state.thread?.id ?? `fresh:${chordId}`] ?? '',
       context: state.context,
@@ -507,9 +509,9 @@ export class AssistantService {
       if (m.body.role === 'user') for (const a of m.body.attachments) names[a.ref] = { title: a.title, url: a.url };
       else if (m.body.role === 'assistant') for (const c of m.body.citations) if (c.url) names[c.ref] = { title: c.title || c.url, url: c.url };
     }
-    const nodes = this.browser.store.state.nodes;
+    const current = this.browser.store.state;
     for (const [ref, id] of state.refs) {
-      const node = nodes[id];
+      const node = nodeOf(current, id);
       if (node?.kind === 'tab') names[ref] = { title: node.title || node.url, url: node.url };
     }
     return names;
@@ -885,7 +887,7 @@ export class AssistantService {
         return this.send(windowId, state, lastUser.body.text, lastUser.body.attachments, lastUser.body.images ?? []);
       }
       case 'showTab': {
-        const node = this.browser.store.state.nodes[state.refs.get(action.ref) ?? ''];
+        const node = nodeOf(this.browser.store.state, state.refs.get(action.ref) ?? '');
         if (node?.kind === 'tab') this.browser.store.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
         else {
           // Only a web page: a chat can come from a file, and a file can say anything.
@@ -1162,7 +1164,7 @@ export class AssistantService {
     for (const seg of splitCitations(text)) {
       if (seg.kind !== 'citation' || citations.some((c) => c.n === seg.n)) continue;
       const nodeId = state.refs.get(seg.ref) ?? null;
-      const node = nodeId ? this.browser.store.state.nodes[nodeId] : undefined;
+      const node = nodeId ? nodeOf(this.browser.store.state, nodeId) : undefined;
       // A PDF's page comes from the text the assistant read, not from the model.
       const pdf = nodeId ? state.pdfs.get(nodeId) : undefined;
       const page = pdf ? pdfPageOf(pdf.pages, seg.quote) : null;
@@ -1237,13 +1239,13 @@ export class AssistantService {
 
   private resolveTab(state: ThreadState, ref: unknown): TabNode | null {
     const id = typeof ref === 'string' ? state.refs.get(ref) : undefined;
-    const node = id ? this.browser.store.state.nodes[id] : undefined;
+    const node = id ? nodeOf(this.browser.store.state, id) : undefined;
     return node?.kind === 'tab' ? node : null;
   }
 
   private tabsInScope(state: ThreadState): TabNode[] {
     const scope: AssistantScope = state.thread?.scope ?? 'ask';
-    const nodes = Object.values(this.browser.store.state.nodes).filter((n): n is TabNode => n.kind === 'tab' && this.readable(n));
+    const nodes = nodeList(this.browser.store.state).filter((n): n is TabNode => n.kind === 'tab' && this.readable(n));
     return scope === 'all' ? nodes : nodes.filter((n) => n.chordId === state.chordId);
   }
 
@@ -1374,7 +1376,7 @@ export class AssistantService {
 
   private firstAttached(state: ThreadState): TabNode | null {
     for (const id of state.attached) {
-      const node = this.browser.store.state.nodes[id];
+      const node = nodeOf(this.browser.store.state, id);
       if (node?.kind === 'tab') return node;
     }
     return null;
@@ -1417,7 +1419,7 @@ export class AssistantService {
      * it must still be at.
      */
     const blocked = (at?: string): string | null => {
-      const now = this.browser.store.state.nodes[node.id];
+      const now = nodeOf(this.browser.store.state, node.id);
       if (now?.kind !== 'tab' || !this.readable(now)) return never;
       if (!windowId || this.activeTab(windowId)?.id !== node.id) return offScreen;
       if (!contents || contents.isDestroyed()) return 'That tab could not be read.';
@@ -1537,7 +1539,7 @@ export class AssistantService {
     const meta = state.fills.get(messageId);
     if (!meta) return this.endFill(state, message, 'expired', 'This suggestion has ended, so nothing was filled.');
     if (this.settings.readsNothing) return this.endFill(state, message, 'expired', 'What it can read is set to Nothing, so nothing was filled.');
-    const node = this.browser.store.state.nodes[meta.nodeId];
+    const node = nodeOf(this.browser.store.state, meta.nodeId);
     if (node?.kind !== 'tab') return this.endFill(state, message, 'expired', 'The tab is closed, so nothing was filled.');
     if (!this.readable(node)) return this.endFill(state, message, 'expired', 'This site can’t be read any more, so nothing was filled.');
     // Another tab in front: the card waits, and says how to go on.
@@ -1600,7 +1602,7 @@ export class AssistantService {
     if (message?.body.role !== 'assistant') return;
     const citation = message.body.citations.find((c) => c.n === n);
     if (!citation) return;
-    const node = citation.tabId ? this.browser.store.state.nodes[citation.tabId] : undefined;
+    const node = citation.tabId ? nodeOf(this.browser.store.state, citation.tabId) : undefined;
     if (node?.kind === 'tab') {
       this.browser.store.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
       const contents = await this.loadedContents(node.id);

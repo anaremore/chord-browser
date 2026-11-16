@@ -12,6 +12,7 @@ import type { MergeUndo } from './merge';
 import { DEFAULT_PROFILE, MAX_FAVORITES, type Chord, type ChordId, type ChordThemeSpec, type Favorite, type FolderNode, type SidebarNode, type State, type TabNode } from './model';
 import { dayOf, frecencyOn, HALF_LIFE_DAYS } from './rank';
 import { sortedChords, sortedFavorites } from './select';
+import { nodeList } from './nodes';
 
 /** The browsers Chord imports from. Never Arc (ROADMAP.md, Not planned). */
 export type ImportBrowser = 'chrome' | 'edge' | 'brave' | 'firefox' | 'safari';
@@ -225,7 +226,7 @@ export function importContext(state: State): ImportContext {
   const ends = new Map<ChordId, SidebarNode>();
   const starts = new Map<ChordId, SidebarNode>();
   const after = (a: SidebarNode, b: SidebarNode) => a.rank > b.rank || (a.rank === b.rank && a.id > b.id);
-  for (const node of Object.values(state.nodes)) {
+  for (const node of nodeList(state)) {
     if (node.parentId !== null) continue;
     if (node.section === 'pinned') {
       const end = ends.get(node.chordId);

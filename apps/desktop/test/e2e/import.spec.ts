@@ -11,6 +11,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { makeBrowserFixtures } from '../fixtures/browsers';
 import { audit, expectClean, isOverlay, isSettings, isShell, launch, newPage, pageWhere, runAction, startSite, type Site } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
+import { nodeList } from '@chord/core';
 
 failOnMainErrors();
 
@@ -29,7 +30,7 @@ interface Snapshot {
   windowId: string;
   state: {
     chords: Record<string, { id: string; name: string; rank: string; private?: boolean }>;
-    nodes: Record<string, Node>;
+    nodes: Record<string, Record<string, Node>>;
     favorites: Record<string, { url: string }>;
     windows: Record<string, { activeChordId: string }>;
   };
@@ -43,11 +44,11 @@ const historyFor = (overlay: Page, query: string) => overlay.evaluate((q) => (wi
 const chordNamed = (s: Snapshot, name: string) => Object.values(s.state.chords).find((c) => c.name === name);
 /** A chord's or folder's children, by title, in order. */
 const inside = (s: Snapshot, chordId: string, section: 'pinned' | 'today', parentId: string | null) =>
-  Object.values(s.state.nodes)
+  nodeList(s.state)
     .filter((n) => n.chordId === chordId && n.section === section && n.parentId === parentId)
     .sort((a, b) => (a.rank < b.rank ? -1 : 1))
     .map((n) => (n.kind === 'folder' ? `[${n.title}]` : n.title));
-const folderIn = (s: Snapshot, chordId: string, title: string) => Object.values(s.state.nodes).find((n) => n.kind === 'folder' && n.chordId === chordId && n.title === title);
+const folderIn = (s: Snapshot, chordId: string, title: string) => nodeList(s.state).find((n) => n.kind === 'folder' && n.chordId === chordId && n.title === title);
 
 let site: Site;
 let browsers: string;
@@ -147,7 +148,7 @@ test('Settings: Firefox’s folders, open tabs and history land in the window be
     expect(inside(s, personal, 'pinned', null)).toEqual(['[Other Bookmarks]']);
     expect(Object.values(s.state.favorites).map((f) => f.url)).toEqual(['https://news.test/ff']);
     const privateChord = Object.values(s.state.chords).find((c) => c.private)!;
-    expect(Object.values(s.state.nodes).filter((n) => n.chordId === privateChord.id).map((n) => n.url)).not.toContain('https://open.test/two');
+    expect(nodeList(s.state).filter((n) => n.chordId === privateChord.id).map((n) => n.url)).not.toContain('https://open.test/two');
     await expect.poll(async () => (await historyFor(overlay, 'firefox news')).history.length).toBe(1);
 
     // Undo, from Settings: chords, folders, tabs, favorites and history all go.
@@ -156,7 +157,7 @@ test('Settings: Firefox’s folders, open tabs and history land in the window be
     const after = await snapshot(shell);
     expect(Object.values(after.state.chords).filter((c) => !c.private).map((c) => c.name)).toEqual(['Personal']);
     expect(Object.keys(after.state.favorites)).toEqual([]);
-    const ids = (snap: Snapshot) => Object.values(snap.state.nodes).filter((n) => n.chordId === personal).map((n) => n.id);
+    const ids = (snap: Snapshot) => nodeList(snap.state).filter((n) => n.chordId === personal).map((n) => n.id);
     expect(ids(after)).toEqual(ids(before));
     expect((await historyFor(overlay, 'firefox news')).history).toEqual([]);
   } finally {

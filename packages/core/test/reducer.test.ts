@@ -1,6 +1,6 @@
 import { applyPatches, enablePatches } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { apply, children, emptyState, favoritesFor, MAX_FAVORITES, sortedFavorites, tabsInOrder, type Command, type Context, type State, type TabNode } from '../src';
+import { apply, children, emptyState, favoritesFor, MAX_FAVORITES, sortedFavorites, tabsInOrder, nodeOf, nodeList, type Command, type Context, type State, type TabNode } from '../src';
 
 enablePatches();
 
@@ -304,7 +304,7 @@ describe('reducer', () => {
 
   describe('pinning and moving', () => {
     const section = (t: ReturnType<typeof setup>, s: 'pinned' | 'today') =>
-      Object.values(t.state.nodes)
+      nodeList(t.state)
         .filter((n) => n.section === s)
         .sort((a, b) => (a.rank < b.rank ? -1 : 1))
         .map((n) => (n as TabNode).url.slice(8, 9));
@@ -319,10 +319,10 @@ describe('reducer', () => {
       t.run({ t: 'tab.pin', nodeId: 'id-001' });
       t.run({ t: 'tab.pin', nodeId: 'id-003' });
       expect(section(t, 'pinned')).toEqual(['a', 'c']);
-      expect(t.state.nodes['id-001']).toMatchObject({ section: 'pinned', pinnedUrl: 'https://a.test/' });
+      expect(nodeOf(t.state, 'id-001')).toMatchObject({ section: 'pinned', pinnedUrl: 'https://a.test/' });
       t.run({ t: 'tab.unpin', nodeId: 'id-001' });
       expect(section(t, 'today')).toEqual(['a', 'b']);
-      expect((t.state.nodes['id-001'] as TabNode).pinnedUrl).toBeNull();
+      expect((nodeOf(t.state, 'id-001') as TabNode).pinnedUrl).toBeNull();
     });
 
     it('moves within a section and between sections, and ignores a drop in place', () => {
@@ -341,7 +341,7 @@ describe('reducer', () => {
       t.run({ t: 'tab.activate', windowId: 'w1', nodeId: 'id-003' });
       t.run({ t: 'tab.updated', nodeId: 'id-003', url: 'https://c.test/elsewhere' });
       const result = t.run({ t: 'tab.close', windowId: 'w1', nodeId: 'id-003' });
-      expect(t.state.nodes['id-003']).toMatchObject({ section: 'pinned', url: 'https://c.test/' });
+      expect(nodeOf(t.state, 'id-003')).toMatchObject({ section: 'pinned', url: 'https://c.test/' });
       expect(t.state.live['id-003']).toBeUndefined();
       expect(result.effects).toContainEqual({ e: 'view.destroy', nodeId: 'id-003' });
       expect(t.state.windows['w1']!.activeTab['c1']).not.toBe('id-003');
@@ -531,7 +531,7 @@ describe('archive and sleep', () => {
     const result = t.run({ t: 'tab.sleep', nodeId: 'id-001' });
     expect(result.effects).toEqual([{ e: 'view.sleep', nodeId: 'id-001' }]);
     expect(t.state.live['id-001']).toBeUndefined();
-    expect(t.state.nodes['id-001']).toBeDefined();
+    expect(nodeOf(t.state, 'id-001')).toBeDefined();
   });
 
   it('a tab counts as used until you leave it, so idle time starts then', () => {
@@ -539,9 +539,9 @@ describe('archive and sleep', () => {
     open(t, 'a', 'b');
     // An hour later, switch from b to a.
     const later = apply(t.state, { t: 'tab.activate', windowId: 'w1', nodeId: 'id-001' }, { now: 3_600_000, newId: () => 'unused' }).state;
-    expect((later.nodes['id-001'] as TabNode).lastActiveAt).toBe(3_600_000);
+    expect((nodeOf(later, 'id-001') as TabNode).lastActiveAt).toBe(3_600_000);
     // b was in use until just now, and stays just behind a in recently-used order.
-    expect((later.nodes['id-002'] as TabNode).lastActiveAt).toBe(3_599_999);
+    expect((nodeOf(later, 'id-002') as TabNode).lastActiveAt).toBe(3_599_999);
   });
 
   it('changes the archive and sleep settings', () => {
@@ -571,7 +571,7 @@ describe('folders', () => {
     const c = open(t, 'https://c.test/');
     t.run({ t: 'folder.create', folderId: 'f2', chordId: 'c1', title: '', tabId: c });
     expect(pinnedTree(t.state)).toEqual([{ Reading: ['https://a.test/'] }, 'https://b.test/', { 'New folder': ['https://c.test/'] }]);
-    expect((t.state.nodes[c] as TabNode).pinnedUrl).toBe('https://c.test/');
+    expect((nodeOf(t.state, c) as TabNode).pinnedUrl).toBe('https://c.test/');
   });
 
   it('nests folders, moves tabs in and out, and never moves a folder into itself', () => {
@@ -585,7 +585,7 @@ describe('folders', () => {
     t.run({ t: 'node.move', nodeId: a, section: 'today', index: 0, parentId: 'inner' });
     t.run({ t: 'node.move', nodeId: b, section: 'pinned', index: 1, parentId: 'outer' });
     expect(pinnedTree(t.state)).toEqual([{ Outer: [{ Inner: ['https://a.test/'] }, 'https://b.test/'] }]);
-    expect(t.state.nodes[a]!.section).toBe('pinned');
+    expect(nodeOf(t.state, a)!.section).toBe('pinned');
     // Into itself or its own child: refused.
     expect(t.run({ t: 'node.move', nodeId: 'outer', section: 'pinned', index: 0, parentId: 'inner' }).patches).toEqual([]);
     expect(t.run({ t: 'node.move', nodeId: 'outer', section: 'pinned', index: 0, parentId: 'outer' }).patches).toEqual([]);
@@ -593,17 +593,17 @@ describe('folders', () => {
     expect(t.run({ t: 'node.move', nodeId: 'outer', section: 'today', index: 0 }).patches).toEqual([]);
     // Out to Today unpins the tab.
     t.run({ t: 'node.move', nodeId: b, section: 'today', index: 0, parentId: null });
-    expect(t.state.nodes[b]).toMatchObject({ section: 'today', parentId: null, pinnedUrl: null });
+    expect(nodeOf(t.state, b)).toMatchObject({ section: 'today', parentId: null, pinnedUrl: null });
   });
 
   it('renames and folds, ignoring empty names and no-ops', () => {
     const t = setup();
     t.run({ t: 'folder.create', folderId: 'f', chordId: 'c1', title: 'Old' });
     t.run({ t: 'folder.rename', nodeId: 'f', title: '  New  ' });
-    expect(t.state.nodes['f']).toMatchObject({ title: 'New' });
+    expect(nodeOf(t.state, 'f')).toMatchObject({ title: 'New' });
     expect(t.run({ t: 'folder.rename', nodeId: 'f', title: '   ' }).patches).toEqual([]);
     t.run({ t: 'folder.toggle', nodeId: 'f', collapsed: true });
-    expect(t.state.nodes['f']).toMatchObject({ collapsed: true });
+    expect(nodeOf(t.state, 'f')).toMatchObject({ collapsed: true });
     expect(t.run({ t: 'folder.toggle', nodeId: 'f', collapsed: true }).patches).toEqual([]);
   });
 
@@ -616,9 +616,9 @@ describe('folders', () => {
     t.run({ t: 'node.move', nodeId: 'g', section: 'pinned', index: 1, parentId: 'f' });
     t.run({ t: 'tab.activate', windowId: 'w1', nodeId: a });
     const deleted = t.run({ t: 'folder.delete', nodeId: 'f' });
-    expect(t.state.nodes['f']).toBeUndefined();
-    expect(t.state.nodes['g']).toBeUndefined();
-    expect(t.state.nodes[a]).toBeUndefined();
+    expect(nodeOf(t.state, 'f')).toBeUndefined();
+    expect(nodeOf(t.state, 'g')).toBeUndefined();
+    expect(nodeOf(t.state, a)).toBeUndefined();
     expect(deleted.effects).toContainEqual({ e: 'view.destroy', nodeId: a });
     // The window lands on the tab that's left.
     expect(t.state.windows['w1']!.activeTab['c1']).toBe(b);
@@ -658,7 +658,7 @@ describe('favorites', () => {
     // Nothing on that site any more: a new tab opens on the favorite's page.
     t.run({ t: 'tab.close', windowId: 'w1', nodeId: mail });
     t.run({ t: 'favorite.open', windowId: 'w1', favoriteId: 'fm' });
-    const opened = t.state.nodes[t.state.windows['w1']!.activeTab['c1']!] as TabNode;
+    const opened = nodeOf(t.state, t.state.windows['w1']!.activeTab['c1']!) as TabNode;
     expect(opened.url).toBe('https://mail.test/inbox');
   });
 });
@@ -772,7 +772,7 @@ describe('moving tabs between chords', () => {
     const t = twoChords('default');
     const b = t.state.windows['w1']!.activeTab['c1']!;
     const moved = t.run({ t: 'node.moveToChord', nodeId: b, chordId: 'c2' });
-    expect(t.state.nodes[b]).toMatchObject({ chordId: 'c2', section: 'today', parentId: null });
+    expect(nodeOf(t.state, b)).toMatchObject({ chordId: 'c2', section: 'today', parentId: null });
     expect(moved.effects).not.toContainEqual({ e: 'view.destroy', nodeId: b });
     expect(t.state.live[b]).toBeDefined();
     expect(t.state.windows['w1']!.activeTab['c1']).not.toBe(b);
@@ -781,12 +781,12 @@ describe('moving tabs between chords', () => {
   it('closes the page when the sign-ins differ, and Undo puts it back exactly', () => {
     const t = twoChords('p-work');
     const b = t.state.windows['w1']!.activeTab['c1']!;
-    const before = { ...(t.state.nodes[b] as TabNode) };
+    const before = { ...(nodeOf(t.state, b) as TabNode) };
     const moved = t.run({ t: 'node.moveToChord', nodeId: b, chordId: 'c2' });
     expect(moved.effects).toContainEqual({ e: 'view.destroy', nodeId: b });
     expect(t.state.live[b]).toBeUndefined();
     t.run({ t: 'node.moveToChord', nodeId: b, chordId: 'c1', place: { section: before.section, parentId: before.parentId, rank: before.rank } });
-    expect(t.state.nodes[b]).toMatchObject({ chordId: 'c1', rank: before.rank, section: 'today' });
+    expect(nodeOf(t.state, b)).toMatchObject({ chordId: 'c1', rank: before.rank, section: 'today' });
   });
 });
 

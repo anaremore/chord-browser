@@ -1,10 +1,8 @@
 /** Read-only queries over State, shared by main and renderers. */
 import { MAX_FAVORITES, type Chord, type ChordId, type Download, type Favorite, type NodeId, type Section, type SidebarNode, type State, type TabNode, type WindowId } from './model';
-import { children, childrenIndex, childrenToRead, nodeList } from './nodes';
+import { childrenIndex, nodeOf, nodesOfChord } from './nodes';
 import { placeKey } from './rank';
 import { shownTabs } from './split';
-
-export { children, childrenToRead, nodeList };
 
 /** Every tab of a chord in visual order: pinned (depth-first through folders and splits), then Today. To read (in a draft, see `nodeList`). */
 export function tabsInOrder(state: State, chordId: ChordId): TabNode[] {
@@ -24,7 +22,7 @@ export function tabsInOrder(state: State, chordId: ChordId): TabNode[] {
 
 /** Everything inside a folder (or a split), at any depth, parents before their children. To read (in a draft, see `nodeList`). */
 export function descendants(state: State, folderId: NodeId): SidebarNode[] {
-  const folder = state.nodes[folderId];
+  const folder = nodeOf(state, folderId);
   if (folder?.kind !== 'folder' && folder?.kind !== 'split') return [];
   const out: SidebarNode[] = [];
   const childrenOf = childrenIndex(state, folder.chordId);
@@ -41,11 +39,11 @@ export function descendants(state: State, folderId: NodeId): SidebarNode[] {
 /** How deep a node sits: 0 at a section's root, 1 inside one folder, and so on. */
 export function depthOf(state: State, nodeId: NodeId): number {
   let depth = 0;
-  let parentId = state.nodes[nodeId]?.parentId ?? null;
+  let parentId = nodeOf(state, nodeId)?.parentId ?? null;
   // The loop guard keeps a damaged tree (a cycle) from hanging.
   while (parentId && depth < 64) {
     depth++;
-    parentId = state.nodes[parentId]?.parentId ?? null;
+    parentId = nodeOf(state, parentId)?.parentId ?? null;
   }
   return depth;
 }
@@ -55,7 +53,7 @@ export function isWithin(state: State, nodeId: NodeId, ancestorId: NodeId): bool
   let current: NodeId | null = nodeId;
   for (let guard = 0; current && guard < 64; guard++) {
     if (current === ancestorId) return true;
-    current = state.nodes[current]?.parentId ?? null;
+    current = nodeOf(state, current)?.parentId ?? null;
   }
   return false;
 }
@@ -97,12 +95,13 @@ export function favoriteFits(state: Pick<State, 'favorites' | 'chords'>, url: st
  * the same site.
  */
 export function tabForFavorite(state: State, chordId: ChordId, url: string): TabNode | null {
-  const tabs = nodeList(state).filter((n): n is TabNode => n.kind === 'tab' && n.chordId === chordId);
+  const tabs = nodesOfChord(state, chordId).filter((n): n is TabNode => n.kind === 'tab');
   const place = placeKey(url);
   const same = place ? tabs.filter((t) => placeKey(t.url) === place) : [];
   const host = siteOf(url);
   const pool = same.length > 0 ? same : host ? tabs.filter((t) => siteOf(t.url) === host) : [];
-  return pool.sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0] ?? null;
+  // Ties by ID (time-ordered), not by where the nodes happen to sit: their buckets keep no order.
+  return pool.sort((a, b) => b.lastActiveAt - a.lastActiveAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0] ?? null;
 }
 
 /** The host (and port) a web address is on, without "www.". */
@@ -154,7 +153,7 @@ export function activeTabId(state: State, windowId: WindowId): NodeId | null {
 
 export function activeTab(state: State, windowId: WindowId): TabNode | null {
   const id = activeTabId(state, windowId);
-  const node = id ? state.nodes[id] : undefined;
+  const node = id ? nodeOf(state, id) : undefined;
   return node?.kind === 'tab' ? node : null;
 }
 

@@ -24,7 +24,7 @@ import type {
   WindowModel,
 } from '@chord/core';
 import type { ExportCounts, FolderInspection, SyncApply, SyncStatus } from '@chord/core';
-import { localChordFields, localFavoriteFields, localNodeFields, localRouteFields, same } from '@chord/core';
+import { localChordFields, localFavoriteFields, localNodeFields, localRouteFields, same, nodeIdsOfPatch, nodeList, nodeOf } from '@chord/core';
 import type { AssistantOp, AssistantResult } from './assistant';
 import type { PasswordOp, PasswordResult } from './passwords';
 import type { SyncTimings } from './sync';
@@ -363,7 +363,7 @@ export interface PathPatch {
   path: readonly (string | number)[];
 }
 
-const COLLECTIONS = { chords: 'chord', nodes: 'node', windows: 'window' } as const;
+const COLLECTIONS = { chords: 'chord', windows: 'window' } as const;
 
 /** A stable key for coalescing: the last write to an entity wins. */
 export const opKey = (op: WriteOp): string => `${op.k}:${op.id}`;
@@ -439,12 +439,16 @@ export function opsFromPatches(patches: readonly PathPatch[], state: State, befo
       }
       continue;
     }
-    if (collection !== 'chords' && collection !== 'nodes' && collection !== 'windows') continue;
+    if (collection === 'nodes') {
+      // In buckets (core's nodes.ts): `['nodes', bucket, id, …]` is one node, a bucket or all of them written whole every one in it.
+      for (const nodeId of nodeIdsOfPatch(path, state)!) add({ k: 'node', id: nodeId, value: nodeOf(state, nodeId) ?? null });
+      continue;
+    }
+    if (collection !== 'chords' && collection !== 'windows') continue;
     const k = COLLECTIONS[collection];
     const ids = id === undefined ? Object.keys(state[collection]) : [String(id)];
     for (const entityId of ids) {
       if (k === 'chord') add({ k, id: entityId, value: state.chords[entityId] ?? null });
-      else if (k === 'node') add({ k, id: entityId, value: state.nodes[entityId] ?? null });
       else add({ k, id: entityId, value: state.windows[entityId] ?? null });
     }
   }
@@ -455,7 +459,7 @@ export function opsFromPatches(patches: readonly PathPatch[], state: State, befo
       case 'chord':
         return Boolean(s.chords[op.id] && !s.chords[op.id]!.private);
       case 'node': {
-        const node = s.nodes[op.id];
+        const node = nodeOf(s, op.id);
         return Boolean(node && node.section === 'pinned' && s.chords[node.chordId] && !s.chords[node.chordId]!.private);
       }
       case 'favorite':
@@ -487,7 +491,7 @@ function syncedOf(s: State, op: WriteOp): unknown {
       return chord ? localChordFields(chord) : null;
     }
     case 'node': {
-      const node = s.nodes[op.id];
+      const node = nodeOf(s, op.id);
       if (!node) return null;
       const set = localNodeFields(node, null);
       return set && node.kind === 'tab' ? { ...set, favicon: node.favicon } : set;
@@ -511,7 +515,7 @@ function syncedOf(s: State, op: WriteOp): unknown {
 export function opsForState(state: State): WriteOp[] {
   const ops: WriteOp[] = [
     ...Object.values(state.chords).map((value): WriteOp => ({ k: 'chord', id: value.id, value })),
-    ...Object.values(state.nodes).map((value): WriteOp => ({ k: 'node', id: value.id, value })),
+    ...nodeList(state).map((value): WriteOp => ({ k: 'node', id: value.id, value })),
     ...Object.values(state.windows).map((value): WriteOp => ({ k: 'window', id: value.id, value })),
     ...(Object.keys(state.settings) as (keyof Settings)[]).map((key): WriteOp => ({ k: 'setting', id: key, value: state.settings[key] })),
     ...Object.entries(state.sitePermissions).map(([origin, value]): WriteOp => ({ k: 'sitePermission', id: origin, value })),

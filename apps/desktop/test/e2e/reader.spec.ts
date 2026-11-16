@@ -93,8 +93,8 @@ async function openedReader(app: ElectronApplication): Promise<Page> {
 async function activeUrl(shell: Page): Promise<string | undefined> {
   const { tabId } = await where(shell);
   return shell.evaluate(async (id) => {
-    const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, { url?: string }> } }> } } }).chord.state.snapshot();
-    return id ? state.nodes[id]?.url : undefined;
+    const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, Record<string, { id: string; url?: string }>> } }> } } }).chord.state.snapshot();
+    return id ? Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.id === (id))?.url : undefined;
   }, tabId);
 }
 

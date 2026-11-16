@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SETTINGS, restoreState, type Chord, type PersistedState, type SeedOptions, type TabNode, type WindowModel } from '../src';
+import { DEFAULT_SETTINGS, restoreState, nodeOf, nodeList, nodeIds, type Chord, type PersistedState, type SeedOptions, type TabNode, type WindowModel } from '../src';
 
 let n = 0;
 const seed: SeedOptions = {
@@ -48,7 +48,7 @@ describe('restoreState', () => {
   it('seeds a fresh profile when nothing was saved', () => {
     const state = restoreState(null, seed);
     expect(Object.values(state.chords)).toHaveLength(1);
-    expect(Object.values(state.nodes).map((t) => (t as TabNode).url)).toEqual(['https://home.test/']);
+    expect(nodeList(state).map((t) => (t as TabNode).url)).toEqual(['https://home.test/']);
     expect(state.settings).toEqual(DEFAULT_SETTINGS);
   });
 
@@ -76,7 +76,7 @@ describe('restoreState', () => {
       settings: { searchEngine: 'kagi', motion: { sidebar: false }, searchSuggestions: false, checkForUpdates: false },
     };
     const state = restoreState(saved, seed);
-    expect(Object.keys(state.nodes)).toEqual(['t1', 't2']);
+    expect(nodeIds(state).sort()).toEqual(['t1', 't2']);
     expect(state.settings).toMatchObject({ searchSuggestions: false, checkForUpdates: false });
     expect(state.windows['w1']).toMatchObject({ activeChordId: 'c1', activeTab: { c1: 't2' }, sidebar: 'collapsed', bounds: { x: 10 } });
     expect(state.live).toEqual({}); // every tab starts unloaded
@@ -94,8 +94,8 @@ describe('restoreState', () => {
       settings: { searchEngine: 'evil', motion: { sidebar: 'yes' }, searchSuggestions: 'no', unknown: 1 },
     };
     const state = restoreState(saved, seed);
-    expect(state.nodes['orphan']).toBeUndefined();
-    expect(state.nodes['child']!.parentId).toBeNull();
+    expect(nodeOf(state, 'orphan')).toBeUndefined();
+    expect(nodeOf(state, 'child')!.parentId).toBeNull();
     // The active chord falls back to the first by rank; tabs from other chords don't stay active.
     expect(state.windows['w1']).toMatchObject({ activeChordId: 'c0', activeTab: { c1: null, c0: null } });
     // A saved profile without the mark gets auto picture-in-picture's one-time switch-off (index.ts).

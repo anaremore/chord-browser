@@ -35,6 +35,8 @@ import {
   tabForFavorite,
   unreadWords,
   uuidv7,
+  nodeOf,
+  childrenShared,
   type ChordId,
   type Favorite,
   type FolderNode,
@@ -87,7 +89,7 @@ import { AssistantReadTabs } from './assistant-context';
 import { EdgeScroller } from './edge-scroll';
 import { useKeys } from './keys';
 import { SPLIT_DROP, splitDropFor, type SplitDrop } from './split-drop';
-import { CHORD_DROP, childrenOf, flattenPinned, type Nodes, levelsFor, MAX_VISUAL_DEPTH, projectDrop, type Drop, type FlatRow } from './tree';
+import { CHORD_DROP, flattenPinned, type Nodes, levelsFor, MAX_VISUAL_DEPTH, projectDrop, type Drop, type FlatRow } from './tree';
 import { useListWindow } from './useListWindow';
 import { grow, inOrder, inSpan, moveId, OVERSCAN, pieces, reconcile, rowChanges, visibleSpan, WINDOW_ABOVE, type Placed, type RowChanges } from './virtual';
 
@@ -96,7 +98,7 @@ const FAVORITES_ZONE = 'favorites-zone';
 const FAVORITE = 'fav:';
 /** Today's rows (tabs and splits), top to bottom. */
 const todayIds = (state: State, chordId: ChordId) =>
-  childrenOf(state, chordId, 'today', null)
+  childrenShared(state, chordId, 'today', null)
     .filter((n) => n.kind !== 'folder')
     .map((n) => n.id);
 /** What each kind of row takes as a drop (constant, so dnd-kit sees the same options every render). */
@@ -265,7 +267,7 @@ export function SidebarDnd({
             }
           }
           // Dragging over a closed folder from the other list springs it open too.
-          const node = target ? latest.current.state.nodes[String(target.id)] : undefined;
+          const node = target ? nodeOf(latest.current.state, String(target.id)) : undefined;
           if (isSortable(source) && source.group !== 'pinned') springLoad(node?.kind === 'folder' && node.collapsed ? node.id : null);
         }}
         onDragEnd={(event) => {
@@ -291,7 +293,7 @@ export function SidebarDnd({
             return;
           }
           const nodeId = String(source.id);
-          const node = s.nodes[nodeId];
+          const node = nodeOf(s, nodeId);
           if (!node) return;
 
           // Onto the page: beside the tab shown there, in a split (or to another place in the split shown).
@@ -358,7 +360,7 @@ export function SidebarDnd({
           // Across: above the row it was dropped on, or below if past its middle. The row's place
           // comes from our own order; dnd-kit's index can lag behind after earlier drops.
           if (to === 'today') {
-            const at = childrenOf(s, c, 'today', null).findIndex((n) => n.id === targetId);
+            const at = childrenShared(s, c, 'today', null).findIndex((n) => n.id === targetId);
             if (at >= 0) void api.state.dispatch({ t: 'node.move', nodeId, section: 'today', index: at + (below() ? 1 : 0) });
             return;
           }
@@ -1242,7 +1244,7 @@ interface TreeKeys {
  * it goes; Space or Enter drops it, Esc puts it back where it was (DESIGN.md §14.3).
  */
 function moveKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys, moving: Moving): void {
-  const node = ctx.state.nodes[moving.id];
+  const node = nodeOf(ctx.state, moving.id);
   if (!node) return ctx.setMoving(null);
   const siblings = children(ctx.state, node.chordId, node.section, node.parentId);
   // React may move the row's element to reorder the list, which takes the focus away: give it back.
@@ -1281,7 +1283,7 @@ function moveKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys, moving: Movi
 
 /** What a row is called, for announcements. */
 function nameOf(state: State, id: string): string {
-  const node = state.nodes[id];
+  const node = nodeOf(state, id);
   if (!node) return '';
   if (node.kind === 'folder') return node.title;
   if (node.kind === 'split') return splitTitle(splitMembers(state, id));
@@ -1298,7 +1300,7 @@ function treeKeys(event: KeyboardEvent<HTMLElement>, ctx: TreeKeys) {
   const at = rows.findIndex((r) => r.id === id);
   if (at < 0) return;
   const next = rows[at + 1];
-  const node = ctx.state.nodes[id];
+  const node = nodeOf(ctx.state, id);
   const go = (to: TreeRow | undefined) => {
     if (!to) return;
     event.preventDefault();
@@ -1390,8 +1392,8 @@ interface Entry {
 
 /** A split's tabs, left to right: `splitMembers` (@chord/core), from the sidebar's index of the nodes (tree.ts). */
 function membersOf(state: Nodes, splitId: string): TabNode[] {
-  const split = state.nodes[splitId];
-  return split?.kind === 'split' ? childrenOf(state, split.chordId, split.section, splitId).filter((n): n is TabNode => n.kind === 'tab') : [];
+  const split = nodeOf(state, splitId);
+  return split?.kind === 'split' ? childrenShared(state, split.chordId, split.section, splitId).filter((n): n is TabNode => n.kind === 'tab') : [];
 }
 
 /** `rows` as drawn, each opened split followed by its tabs (unless a drag is moving rows around them). */
@@ -1412,7 +1414,7 @@ function pinnedEntries(state: Nodes, rows: readonly FlatRow[]): Omit<Entry, 'mem
   for (const r of rows) sizes.set(r.parentId, (sizes.get(r.parentId) ?? 0) + 1);
   const seen = new Map<string | null, number>();
   return rows.flatMap((r, index) => {
-    const node = state.nodes[r.id];
+    const node = nodeOf(state, r.id);
     if (!node) return [];
     const pos = (seen.get(r.parentId) ?? 0) + 1;
     seen.set(r.parentId, pos);
@@ -1487,7 +1489,7 @@ export function SidebarTabs({
   const { todayNodes, today, todayAt } = useMemo(() => {
     const at = { nodes };
     const listed = inOrder(
-      childrenOf(at, chordId, 'today', null).filter((n) => n.kind !== 'folder'),
+      childrenShared(at, chordId, 'today', null).filter((n) => n.kind !== 'folder'),
       todayOrder,
     );
     const rows = withMembers(at, listed.map((node, index) => ({ id: node.id, node, depth: 0, parent: null, index, pos: index + 1, size: listed.length })), openSplits, showMembers);
@@ -1505,7 +1507,7 @@ export function SidebarTabs({
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   // Mounted wherever they are: the tab on screen (its pill glides from there, and it's the trees' Tab stop), a row
   // being dragged or moved with the keyboard, and the row with the keyboard (or about to get it).
-  const kept = [activeId, activeId ? (state.nodes[activeId]?.parentId ?? null) : null, active?.id, moving?.id, focused, pendingFocus];
+  const kept = [activeId, activeId ? (nodeOf(state, activeId)?.parentId ?? null) : null, active?.id, moving?.id, focused, pendingFocus];
   const windowOf = (count: number, view: { top: number; height: number }, at: ReadonlyMap<string, number>) => {
     const inView = visibleSpan(view.top, view.height, ROW, count);
     const near = grow(inView, overscan, count);
@@ -1605,7 +1607,7 @@ export function SidebarTabs({
     const fly = inToday.gone.length > 0 && canFly();
     const todayLayer = todayExits.current;
     for (const { id, el, slot } of todayLayer ? inToday.gone : []) {
-      const kind: Leaving = archived.has(id) ? 'archive' : state.nodes[id]?.section === 'pinned' ? 'pin' : 'close';
+      const kind: Leaving = archived.has(id) ? 'archive' : nodeOf(state, id)?.section === 'pinned' ? 'pin' : 'close';
       const flight = kind === 'archive' && fly && el.dataset['row'] === 'tab' && flights < MAX_FLIGHTS ? flights++ : null;
       playExit(todayLayer!, el, slot * ROW - top + shift, kind, flight);
     }
@@ -1621,7 +1623,7 @@ export function SidebarTabs({
   // switched to with Ctrl+Tab or the command bar. Pinned scrolls to show it, as the keyboard's moves do. Not when the
   // chord's lists mount (they're where they were left), not mid-drag or with a row picked up, and not for a click on
   // one of Pinned's rows (it shows). A Today row clicked and then pinned is scrolled to: it lands at Pinned's end.
-  const activeRow = activeId && !pinnedAt.has(activeId) ? (state.nodes[activeId]?.parentId ?? null) : activeId;
+  const activeRow = activeId && !pinnedAt.has(activeId) ? (nodeOf(state, activeId)?.parentId ?? null) : activeId;
   const activeInPinned = activeRow !== null && pinnedAt.has(activeRow) ? activeRow : null;
   const revealed = useRef(activeInPinned);
   const clicked = useRef<{ id: string; at: number } | null>(null);

@@ -321,9 +321,9 @@ test('Assistant: set up, ask about the page with a citation, gate reads, stop, a
     await expect(named).not.toContainText('tab t1');
     const activeTitle = () =>
       shell.evaluate(async () => {
-        const { windowId, state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, { title?: string }> } }> } } }).chord.state.snapshot();
+        const { windowId, state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, Record<string, { id: string; title?: string }>> } }> } } }).chord.state.snapshot();
         const w = state.windows[windowId]!;
-        return state.nodes[w.activeTab[w.activeChordId] ?? '']?.title;
+        return Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.id === (w.activeTab[w.activeChordId] ?? ''))?.title;
       });
     await shell.evaluate(async (url) => {
       const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string }>; dispatch(c: unknown): Promise<void> } } }).chord;
@@ -510,9 +510,9 @@ const signupState = (tab: Page) =>
 /** Switch the window to the tab with this title. */
 const activateTab = (shell: Page, title: string) =>
   shell.evaluate(async (title) => {
-    const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { nodes: Record<string, { id: string; title?: string }> } }>; dispatch(c: unknown): Promise<void> } } }).chord;
+    const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { nodes: Record<string, Record<string, { id: string; title?: string }>> } }>; dispatch(c: unknown): Promise<void> } } }).chord;
     const { windowId, state } = await chord.state.snapshot();
-    const node = Object.values(state.nodes).find((n) => n.title === title)!;
+    const node = Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.title === title)!;
     await chord.state.dispatch({ t: 'tab.activate', windowId, nodeId: node.id });
   }, title);
 

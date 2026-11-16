@@ -24,6 +24,7 @@ import { SYSTEM_SHARE_SOURCE, type SharePrompt, type ShareSource } from '@chord/
 import { randomUUID } from 'node:crypto';
 import { desktopCapturer, webContents, type DesktopCapturerSource, type Session, type Streams, type WebContents, type WebFrameMain } from 'electron';
 import { pageCall } from './page-call';
+import { nodeOf } from '@chord/core';
 
 export interface ScreenShareDeps {
   state(): State;
@@ -285,7 +286,7 @@ export class ScreenShareBroker {
     const state = this.deps?.state();
     if (!pending || !state) return null;
     const tabs = pending.tabs.flatMap((id) => {
-      const node = state.nodes[id];
+      const node = nodeOf(state, id);
       return node?.kind === 'tab' ? [tabSource(node, pending.nodeId)] : [];
     });
     return { ...pending.prompt, sources: [...tabs, ...pending.prompt.sources] };

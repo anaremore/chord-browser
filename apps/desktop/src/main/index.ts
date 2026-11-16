@@ -16,6 +16,7 @@ import {
   proxyFor,
   restoreState,
   uuidv7,
+  nodeList,
   type Command,
   type WindowId,
 } from '@chord/core';
@@ -1100,7 +1101,7 @@ if (!app.requestSingleInstanceLock()) {
         },
         /** Pinned folders and tabs, and how many have a name ending in `suffix`: what a sync check waits for, without a state snapshot. */
         pinnedNames: (suffix: string) => {
-          const pinned = Object.values(browser!.store.state.nodes).filter((n) => n.section === 'pinned');
+          const pinned = nodeList(browser!.store.state).filter((n) => n.section === 'pinned');
           return { count: pinned.length, named: pinned.filter((n) => (n.kind === 'tab' ? n.customTitle : n.kind === 'folder' ? n.title : null)?.endsWith(suffix)).length };
         },
         /**
@@ -1110,7 +1111,7 @@ if (!app.requestSingleInstanceLock()) {
         chordForTests: async (what: 'spare' | 'delete' | 'restore') => {
           const state = browser!.store.state;
           const windowId = Object.keys(state.windows)[0]!;
-          const busiest = Object.values(state.chords).sort((a, b) => Object.values(state.nodes).filter((n) => n.chordId === b.id).length - Object.values(state.nodes).filter((n) => n.chordId === a.id).length)[0];
+          const busiest = Object.values(state.chords).sort((a, b) => nodeList(state).filter((n) => n.chordId === b.id).length - nodeList(state).filter((n) => n.chordId === a.id).length)[0];
           if (what === 'spare') browser!.store.dispatch({ t: 'chord.create', windowId, name: 'Spare', icon: 'S', theme: state.chords[Object.keys(state.chords)[0]!]!.theme });
           else if (what === 'delete' && busiest) browser!.store.dispatch({ t: 'chord.delete', chordId: busiest.id });
           else if (what === 'restore' && state.deletedChords[0]) browser!.store.dispatch({ t: 'chord.restore', windowId, chordId: state.deletedChords[0].chord.id });

@@ -4,6 +4,7 @@
  * and chord-data persists everything except `live` and `closed` (the archive
  * keeps closed tabs in its own table).
  */
+import { emptyNodes, type NodeBuckets } from './nodes';
 import { DEFAULT_DEVTOOLS, type DevtoolsPlace, type DevtoolsSettings } from './devtools';
 import type { AssistantKeep, AssistantProvider, AssistantScope } from './assistant';
 import type { ImportRecord } from './import';
@@ -637,7 +638,8 @@ export interface State {
   /** Extensions removed this session, newest first, for Undo (not persisted). */
   removedExtensions: InstalledExtension[];
   chords: Record<ChordId, Chord>;
-  nodes: Record<NodeId, SidebarNode>;
+  /** In buckets by ID (nodes.ts): read and change them through `nodeOf`, `nodeList`, `setNode` and `deleteNode`. */
+  nodes: NodeBuckets;
   windows: Record<WindowId, WindowModel>;
   live: Record<NodeId, LiveTab>;
   /**
@@ -698,7 +700,7 @@ export const emptyState = (): State => ({
   extensions: {},
   removedExtensions: [],
   chords: {},
-  nodes: {},
+  nodes: emptyNodes(),
   windows: {},
   live: {},
   closed: [],

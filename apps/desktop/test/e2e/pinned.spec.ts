@@ -12,6 +12,7 @@ import { resolve } from 'node:path';
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { audit, capturesDir, dispatch, isSettings, isShell, launch, pageWhere, runAction, setReducedMotion, startSite, type Site } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
+import { nodeList, nodeOf } from '@chord/core';
 
 failOnMainErrors();
 
@@ -49,7 +50,7 @@ async function setReducedTransparency(app: ElectronApplication, shell: Page, red
 }
 
 type Node = { id: string; kind: string; chordId: string; section: string; parentId: string | null; rank: string; collapsed?: boolean };
-type Snapshot = { windowId: string; state: { windows: Record<string, { activeChordId: string }>; nodes: Record<string, Node> } };
+type Snapshot = { windowId: string; state: { windows: Record<string, { activeChordId: string }>; nodes: Record<string, Record<string, Node>> } };
 const snapshot = (shell: Page) =>
   shell.evaluate(() => (window as unknown as { chord: { state: { snapshot(): Promise<Snapshot> } } }).chord.state.snapshot());
 
@@ -57,7 +58,7 @@ const snapshot = (shell: Page) =>
 async function pinnedOrder(shell: Page): Promise<string[]> {
   const { windowId, state } = await snapshot(shell);
   const chordId = state.windows[windowId]!.activeChordId;
-  const nodes = Object.values(state.nodes).filter((n) => n.chordId === chordId && n.section === 'pinned');
+  const nodes = nodeList(state).filter((n) => n.chordId === chordId && n.section === 'pinned');
   const out: string[] = [];
   const walk = (parent: string | null) => {
     for (const n of nodes.filter((m) => m.parentId === parent).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.id < b.id ? -1 : 1))) {
@@ -251,7 +252,7 @@ test('drags across a long Pinned’s scrolled edge: from Today into a folder at 
   try {
     const pinned = pinnedTree(shell);
     const today = todayTree(shell);
-    const node = async (id: string) => (await snapshot(shell)).state.nodes[id]!;
+    const node = async (id: string) => nodeOf((await snapshot(shell)).state, id)!;
 
     // Pinned scrolled to its end, where its last folder is open: a Today tab dropped on one of that folder's tabs joins it.
     await pinned.evaluate((ul) => ul.scrollTo({ top: ul.scrollHeight }));

@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { dispatch, isSettings, isShell, launch, pageWhere, runAction, startSite, type Site } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
+import { nodeList } from '@chord/core';
 
 failOnMainErrors();
 
@@ -29,7 +30,7 @@ interface Snapshot {
   state: {
     windows: Record<string, { activeChordId: string }>;
     chords: Record<string, { id: string; name: string; rank: string }>;
-    nodes: Record<string, { id: string; kind: string; section: string; chordId: string; title?: string; pinnedUrl?: string | null; url?: string }>;
+    nodes: Record<string, Record<string, { id: string; kind: string; section: string; chordId: string; title?: string; pinnedUrl?: string | null; url?: string }>>;
     favorites: Record<string, { url: string }>;
     settings: { searchEngine: string };
   };
@@ -43,7 +44,7 @@ async function synced(shell: Page) {
     chords: Object.values(state.chords)
       .map((c) => c.name)
       .sort(),
-    pinned: Object.values(state.nodes)
+    pinned: nodeList(state)
       .filter((n) => n.kind === 'tab' && n.section === 'pinned')
       .map((n) => n.pinnedUrl)
       .sort(),
@@ -94,7 +95,7 @@ test('two Chords sync through one folder: set up, join, edit on both, a wrong pa
     await dispatch(desk.shell, { t: 'chord.update', chordId: deskChord, name: 'Work' });
     await dispatch(desk.shell, { t: 'tab.open', windowId: deskState.windowId, url: `${site.origin}/mail` });
     await expect(desk.shell.getByRole('tree', { name: 'Today' })).toContainText('Mail');
-    const mail = Object.values((await snapshot(desk.shell)).state.nodes).find((n) => n.kind === 'tab' && n.url?.endsWith('/mail'))!.id;
+    const mail = nodeList((await snapshot(desk.shell)).state).find((n) => n.kind === 'tab' && n.url?.endsWith('/mail'))!.id;
     await dispatch(desk.shell, { t: 'tab.pin', nodeId: mail });
 
     // Set up on the desk: a new folder, a passphrase, Start syncing.
@@ -123,14 +124,14 @@ test('two Chords sync through one folder: set up, join, edit on both, a wrong pa
 
     // Edit on both. The laptop adds a Favorite and changes the search engine; the desk renames its chord and pins another tab.
     const laptopState = await snapshot(laptop.shell);
-    const laptopMail = Object.values(laptopState.state.nodes).find((n) => n.kind === 'tab' && n.pinnedUrl?.endsWith('/mail'))!.id;
+    const laptopMail = nodeList(laptopState.state).find((n) => n.kind === 'tab' && n.pinnedUrl?.endsWith('/mail'))!.id;
     await dispatch(laptop.shell, { t: 'favorite.add', favoriteId: crypto.randomUUID(), nodeId: laptopMail });
     // A setting, through Settings' own channel, as a person changes it.
     await laptopSettings.evaluate(() => (window as unknown as { chord: { settings: { set(patch: unknown): Promise<void> } } }).chord.settings.set({ searchEngine: 'duckduckgo' }));
     await dispatch(desk.shell, { t: 'chord.update', chordId: deskChord, name: 'Studio' });
     await dispatch(desk.shell, { t: 'tab.open', windowId: deskState.windowId, url: `${site.origin}/news` });
     await expect(desk.shell.getByRole('tree', { name: 'Today' })).toContainText('News');
-    const news = Object.values((await snapshot(desk.shell)).state.nodes).find((n) => n.kind === 'tab' && n.url?.endsWith('/news'))!.id;
+    const news = nodeList((await snapshot(desk.shell)).state).find((n) => n.kind === 'tab' && n.url?.endsWith('/news'))!.id;
     await dispatch(desk.shell, { t: 'tab.pin', nodeId: news });
     await carry(laptop.app, desk.app);
     await carry(desk.app, laptop.app);

@@ -1655,8 +1655,8 @@ for (const into of ['a profile with data', 'a new profile'] as const) {
       if (into === 'a profile with data') {
         // Something pinned: the profile keeps its chord, and the file's comes in beside it.
         const tab = await shell.evaluate(async () => {
-          const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, { id: string; kind: string; section: string }> } }> } } }).chord.state.snapshot();
-          return Object.values(state.nodes).find((n) => n.kind === 'tab' && n.section === 'today')!.id;
+          const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, Record<string, { id: string; kind: string; section: string }>> } }> } } }).chord.state.snapshot();
+          return Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.kind === 'tab' && n.section === 'today')!.id;
         });
         await shell.evaluate((nodeId) => (window as unknown as { chord: { state: { dispatch(c: unknown): Promise<void> } } }).chord.state.dispatch({ t: 'tab.pin', nodeId }), tab);
       }
@@ -1871,9 +1871,9 @@ test('sync: one change, stamp to frame; chord-data’s memory with the sync work
     });
     // Two of its Today tabs pinned, so the chord has synced tabs as well as a name.
     await shell.evaluate(async () => {
-      const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, { id: string; kind: string; section: string }> } }>; dispatch(c: unknown): Promise<void> } } }).chord.state;
+      const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, Record<string, { id: string; kind: string; section: string }>> } }>; dispatch(c: unknown): Promise<void> } } }).chord.state;
       const { state } = await chord.snapshot();
-      for (const node of Object.values(state.nodes).filter((n) => n.kind === 'tab' && n.section === 'today').slice(0, 2)) await chord.dispatch({ t: 'tab.pin', nodeId: node.id });
+      for (const node of Object.values(state.nodes).flatMap((b) => Object.values(b)).filter((n) => n.kind === 'tab' && n.section === 'today').slice(0, 2)) await chord.dispatch({ t: 'tab.pin', nodeId: node.id });
     });
     const CHANGES = 30;
     const rename = async (i: number) => {
