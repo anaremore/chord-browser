@@ -54,8 +54,9 @@ async function readOnce(contents: DiagnosticsContents, ms: number): Promise<Diag
     }
   }
   const events: DiagnosticsEvent[] = [];
-  // Cut to size as each arrives: a page can log megabytes at a time. The ceiling keeps the first events, not the
-  // newest; Chromium replays at most about 1,000 console and 1,000 log entries, so a read stays under it.
+  // Cut to size as each arrives (each argument and field to its own limit): a page can log megabytes at a time.
+  // The ceiling keeps the first events, not the newest. Chromium replays at most about 1,000 console and 1,000 log
+  // entries, so the replay stays under it; entries the page logs during the read may be dropped.
   const onMessage = (_event: Electron.Event, method: string, params: unknown, sessionId?: string) => {
     if (sessionId || events.length >= DIAGNOSTICS_MAX_EVENTS) return;
     if (method === 'Log.entryAdded') events.push(shrinkEvent({ kind: 'log', entry: (params as { entry: CdpLogEntry }).entry }));

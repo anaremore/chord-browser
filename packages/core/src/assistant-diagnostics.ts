@@ -10,7 +10,7 @@
 import { cleanPageText } from './assistant';
 
 /** Core runs without DOM types. */
-declare const URL: new (url: string) => { protocol: string; origin: string; pathname: string };
+declare const URL: new (url: string) => { protocol: string; origin: string; host: string; pathname: string };
 
 /** The newest entries kept, and the most characters of any entry's text. */
 export const DIAGNOSTICS_MAX_ENTRIES = 200;
@@ -135,41 +135,75 @@ export function redactAddress(address: string): string {
   try {
     u = new URL(raw);
   } catch {
-    return raw.split(/[?#]/)[0]!.slice(0, MAX_FILE);
+    // Not parseable (a bad port, a bad escape): still without its query, fragment, user name or password.
+    return raw.split(/[?#]/)[0]!.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, '$1').slice(0, MAX_FILE);
   }
   const tail = raw.search(/[?#]/);
-  const position = tail >= 0 ? (/(?::\d+){1,2}$/.exec(raw.slice(tail))?.[0] ?? '') : '';
+  const position = tail >= 0 ? (/:\d+:\d+$/.exec(raw.slice(tail))?.[0] ?? '') : '';
   // As written: an origin alone stays without a slash, and file: keeps its three.
   const path = u.pathname === '/' && !/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*\//i.test(raw) ? '' : u.pathname;
-  const where = u.protocol === 'file:' ? `file://${u.pathname}` : u.protocol === 'blob:' || u.origin === 'null' ? `${u.protocol}${u.pathname}` : `${u.origin}${path}`;
+  const where =
+    u.protocol === 'file:'
+      ? `file://${u.pathname}`
+      : u.protocol === 'blob:'
+        ? `${u.protocol}${u.pathname}`
+        : u.origin === 'null'
+          ? // A scheme the URL standard doesn't know (chrome-extension:, an app's own) keeps its host, never its user.
+            `${u.protocol}${u.host ? `//${u.host}` : ''}${u.pathname}`
+          : `${u.origin}${path}`;
   return `${where.slice(0, MAX_FILE)}${position}`;
 }
 
 /**
- * Where an address starts inside a message (an error's text or stack), up to its query or fragment: any scheme
- * (`https:`, `ftp:`, `blob:https:`, …), `data:`, protocol-relative (`//cdn.example/a.js`), relative (`/api`,
- * `./a`, `../a`), or a bare host with a path (`cdn.example.com/a.js`). A path may hold brackets; the query is
- * found by `queryEnd`, since queries often hold brackets, braces and quotes (`?ids[]=1`, `?q={"t":"…"}`).
+ * Where an address starts inside a message (an error's text or stack), up to its query or fragment:
+ * - any scheme (`https:`, `ftp:`, `blob:https:`, …) and `data:`, wherever a word could start (not inside a word,
+ *   so `x;https://…` and `<td>https://…` are found whole);
+ * - protocol-relative (`//cdn.example/a.js`) and relative (`/api`, `./a`, `../a`) after a space, a quote or a
+ *   mark that opens or separates, so prose like `and/or?` stays;
+ * - a bare host with a path: `cdn.example.com/a.js`, `localhost:3000/api`, `10.0.0.2/api`, with any user name.
+ * A path may hold brackets; the query is found by `queryEnd`, since queries often hold brackets, braces and
+ * quotes (`?ids[]=1`, `?q={"t":"…"}`).
  */
-const ADDRESS_START =
-  /(?<=^|[\s'"(=:,`<[{])(?:(?:blob:)?[a-z][a-z0-9+.-]*:\/\/[^\s'"<>`?#]*|data:[^\s'"<>`]*|\/{1,2}[^\s'"<>`?#]*|\.{1,2}\/[^\s'"<>`?#]*|(?:[\w-]+\.)+[a-z]{2,}(?::\d+)?\/[^\s'"<>`?#]*)/gi;
-const CLOSES: Record<string, string> = { "'": "'", '"': '"', '`': '`', '(': ')', '[': ']', '{': '}', '<': '>' };
+const ADDRESS_START = new RegExp(
+  [
+    String.raw`(?<![\w@%.+-])(?:blob:)?[a-z][a-z0-9+.-]*:\/\/[^\s'"<>\x60?#]*`,
+    String.raw`(?<![\w@%.+-])data:[^\s'"<>\x60]*`,
+    String.raw`(?<=^|[\s'"(=:,\x60<>[{;|“‘])(?:\/{1,2}|\.{1,2}\/)[^\s'"<>\x60?#]*`,
+    String.raw`(?<![\w@%.+-])(?:[^\s\/?#@'"<>\x60]+@)?(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|(?:[\w-]+\.)+[a-z]{2,})(?::\d+)?\/[^\s'"<>\x60?#]*`,
+  ].join('|'),
+  'gi',
+);
+const FULL_ADDRESS = /^(?:blob:)?[a-z][a-z0-9+.-]*:\/\/|^data:/i;
+const CLOSES: Record<string, string> = { "'": "'", '"': '"', '`': '`', '“': '”', '‘': '’', '(': ')', '[': ']', '{': '}', '<': '>' };
+const QUOTES = new Set(["'", '"', '`', '”', '’']);
+/** What may follow a closing mark for it to end the address, rather than sit inside its query (`O'Brien`). */
+const ENDS_AFTER = /[\s,.;:!?)\]}>"'`”’]/;
 
 /**
- * Where a query or fragment that starts at `from` ends: at whitespace, or at the mark that closes the one the
- * address followed (a quote, or a bracket at depth 0). Brackets and braces inside the query nest, and quotes
- * inside it don't end it unless they close the address.
+ * Where a query or fragment that starts at `from` ends. Inside quotes: at the closing quote, or a line's end
+ * (a query may hold a space there). Otherwise: at whitespace. Either way, at the mark that closes what the address
+ * followed only when it's at depth 0 and what comes after it ends a word; brackets, braces and parentheses nest,
+ * and an escaped mark (`\"`) never ends it. When unsure it reads on, which can only remove more.
  */
 function queryEnd(text: string, from: number, opener: string | undefined): number {
   const close = opener ? CLOSES[opener] : undefined;
+  const quoted = close !== undefined && QUOTES.has(close);
   let depth = 0;
   let i = from;
   for (; i < text.length; i++) {
     const c = text[i]!;
-    if (/\s/.test(c)) break;
-    if (c === '[' || c === '{' || (c === '(' && close !== ')')) depth++;
+    if (c === '\n' || c === '\r' || (!quoted && /\s/.test(c))) break;
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (c === close && depth === 0) {
+      const next = text[i + 1];
+      if (next === undefined || ENDS_AFTER.test(next)) break;
+      continue;
+    }
+    if (c === '[' || c === '{' || c === '(') depth++;
     else if ((c === ']' || c === '}' || c === ')') && depth > 0) depth--;
-    else if (c === close && depth === 0) break;
   }
   return i;
 }
@@ -177,22 +211,24 @@ function queryEnd(text: string, from: number, opener: string | undefined): numbe
 export function redactText(text: string): string {
   let out = '';
   let last = 0;
-  for (const m of text.matchAll(ADDRESS_START)) {
+  ADDRESS_START.lastIndex = 0;
+  for (let m = ADDRESS_START.exec(text); m; m = ADDRESS_START.exec(text)) {
     const start = m.index;
-    if (start < last) continue;
     const head = m[0];
     let end = start + head.length;
     let position = '';
-    if (text[end] === '?' || text[end] === '#') {
+    // `?` or `#` with nothing after it ends a sentence (`Did you mean /docs?`), it doesn't start a query.
+    const mark = text[end];
+    if ((mark === '?' || mark === '#') && end + 1 < text.length && !/\s/.test(text[end + 1]!)) {
       const stop = queryEnd(text, end, text[start - 1]);
-      position = /(?::\d+){1,2}$/.exec(text.slice(end, stop))?.[0] ?? '';
+      position = /:\d+:\d+$/.exec(text.slice(end, stop))?.[0] ?? '';
       end = stop;
-    } else if (!/^(?:[a-z][a-z0-9+.-]*:|data:)/i.test(head) && !/@/.test(head)) {
-      continue; // A path with nothing to remove stays as written.
     }
-    const kept = /^(?:blob:)?[a-z][a-z0-9+.-]*:\/\/|^data:/i.test(head) ? redactAddress(head) : head.slice(0, MAX_FILE);
+    const kept = FULL_ADDRESS.test(head) ? redactAddress(head) : head.replace(/^(\/\/)?[^/?#\s]*@/, '$1').slice(0, MAX_FILE);
     out += text.slice(last, start) + kept + position;
     last = end;
+    // Go on from where this address ended, not where its start matched: an address inside its query is its own.
+    ADDRESS_START.lastIndex = Math.max(end, start + 1);
   }
   return out + text.slice(last);
 }
@@ -206,7 +242,8 @@ export function cut(text: string, max = DIAGNOSTICS_MAX_TEXT): string {
   return `${chars.slice(0, max - 1).join('')}…`;
 }
 
-const entryText = (text: string) => cut(cleanPageText(redactText(text)));
+// Cleaned first, so a character the cleaning removes can't hide a query from the redaction.
+const entryText = (text: string) => cut(redactText(cleanPageText(text)));
 
 /** A stack as file, line and function only: no columns, no arguments, no scopes. */
 export function stackFrames(trace: CdpStackTrace | undefined): DiagnosticsFrame[] | undefined {

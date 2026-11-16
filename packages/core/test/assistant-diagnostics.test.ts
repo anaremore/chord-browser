@@ -56,6 +56,40 @@ describe('page_diagnostics: addresses lose what carries tokens', () => {
     ['a password in another scheme', 'ftp://u:SECRET@h.example/x', 'ftp://h.example/x'],
     ['in double quotes with JSON after', 'GET "https://a.example/x?k=SECRET" {"ok":false}', 'GET "https://a.example/x" {"ok":false}'],
     ['in parentheses with brackets', 'at f (https://a.example/a.js?x[0]=SECRET:3:9)', 'at f (https://a.example/a.js:3:9)'],
+    // Review round 3: a closing mark inside the query.
+    ["a quote inside a quoted query", "'https://api.x.com/u?name=O'Brien&token=SECRET' from", "'https://api.x.com/u' from"],
+    ['parentheses inside a query in a stack', 'at f (https://x.com/a.js?q=f(1)&token=SECRET:3:9)', 'at f (https://x.com/a.js:3:9)'],
+    ['a markdown link with parentheses', '[x](https://x.com/a?q=(S)&token=SECRET)', '[x](https://x.com/a)'],
+    ['an escaped quote in JSON', '{"url":"https://x.com/a?q=\\"v\\"&token=SECRET"}', '{"url":"https://x.com/a"}'],
+    ['a bracket inside a bracketed query', '[https://x.com/a?q=]&token=SECRET]', '[https://x.com/a]'],
+    ['a space inside a quoted query', "'https://x.com/a?q=hello world&token=SECRET' ok", "'https://x.com/a' ok"],
+    // An address inside a query doesn't hide the next one.
+    ['an address inside a query, then another', '(https://a.x/login?next=http://b.x/c),https://c.x/d?token=SECRET', '(https://a.x/login),https://c.x/d'],
+    ['a relative path inside a query, then a path', '(https://a.x/p?r=/x)/y?token=SECRET', '(https://a.x/p'],
+    // User names and passwords on every path.
+    ['credentials, protocol-relative', 'load //u:SECRET@cdn.x.com/a.js', 'load //cdn.x.com/a.js'],
+    ['credentials after a tag', '<td>https://u:SECRET@x.com/a</td>', '<td>https://x.com/a</td>'],
+    ['credentials after a semicolon', 'x;https://u:SECRET@x.com/a', 'x;https://x.com/a'],
+    ['credentials on a bare host', 'u:SECRET@cdn.x.com/a', 'cdn.x.com/a'],
+    ['credentials with a bad port', 'https://u:SECRET@x.com:99999/a', 'https://x.com:99999/a'],
+    ['credentials with a bad escape', 'https://u:SECRET@x%zz.com/a', 'https://x%zz.com/a'],
+    // Hosts without a dotted name.
+    ['localhost', 'fetch localhost:3000/api?token=SECRET failed', 'fetch localhost:3000/api failed'],
+    ['an IP address', 'fetch 192.168.0.1/api?token=SECRET failed', 'fetch 192.168.0.1/api failed'],
+    ['an IP address and port', 'fetch 10.0.0.2:8080/api?token=SECRET', 'fetch 10.0.0.2:8080/api'],
+    // After other marks.
+    ['data: after a tag', '<i>data:text/plain;base64,SECRET</i>', '<i>data:text/plain,…</i>'],
+    // Nothing to close after a tag, so the query reads to the next space: more goes, never less.
+    ['a bare host after a tag', '<b>cdn.x.com/a?token=SECRET</b> ok', '<b>cdn.x.com/a ok'],
+    ['relative in curly quotes', 'load “/a?t=SECRET” failed', 'load “/a” failed'],
+    // Hosts of schemes the URL standard doesn't know, and positions.
+    ['an extension keeps its id', 'chrome-extension://abcdefgh/a.js?t=S:1:2', 'chrome-extension://abcdefgh/a.js:1:2'],
+    ["an app's scheme loses its user", 'myapp://u:S@host/a', 'myapp://host/a'],
+    ['a number after a colon in a query is not a position', 'https://x.com/a?otp=x:123456', 'https://x.com/a'],
+    // Prose stays.
+    ['a question about a path', 'Did you mean /docs?', 'Did you mean /docs?'],
+    ['a question in parentheses', 'see (/help)? or not', 'see (/help)? or not'],
+    ['and/or', 'and/or? 1/2? a/b?c', 'and/or? 1/2? a/b?c'],
   ])('%s', (_, input, expected) => expect(redactText(input)).toBe(expected));
 });
 
