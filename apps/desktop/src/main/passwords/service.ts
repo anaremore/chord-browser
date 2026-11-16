@@ -75,7 +75,8 @@ export interface PasswordServiceOptions {
 
 /** What the form detector (`main/passwords/detector.ts`) takes from the vault's side: which sign-ins it watches. It reads no settings. */
 export interface DetectorSwitch {
-  setEnabled(on: boolean, profileIds?: string[]): void;
+  /** Exactly these profiles watched; every other one off. */
+  setProfiles(profileIds: readonly string[]): void;
 }
 
 /** The state the detector's switch is worked out from. */
@@ -738,7 +739,7 @@ export class PasswordService {
   /**
    * After every state change: when the switch, the extension rule, the
    * chords or the extensions changed, the detector hears which sign-ins it
-   * watches now (`setEnabled`), and only when that changed. Compared by
+   * watches now (`setProfiles`: the whole set, so a chord left out is turned off), and only when that changed. Compared by
    * reference first (Immer keeps what didn't change), so most changes cost nothing.
    */
   stateChanged(state: DetectorState): void {
@@ -747,11 +748,10 @@ export class PasswordService {
     if (inputs.every((input, i) => input === this.detectorInputs[i])) return;
     this.detectorInputs = inputs;
     const profiles = passwordProfiles(state.settings.passwords, state.chords, state.extensions);
-    const on = profiles.length > 0;
-    const key = `${on}:${profiles.join(',')}`;
+    const key = profiles.join(',');
     if (key === this.detectorKey) return;
     this.detectorKey = key;
-    this.detector.setEnabled(on, profiles);
+    this.detector.setProfiles(profiles);
   }
 
   /* ---------- lifetime ---------- */

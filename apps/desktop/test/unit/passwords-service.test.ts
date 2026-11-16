@@ -10,7 +10,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_PASSWORD_SETTINGS, type InstalledExtension, type PasswordSettings } from '@chord/core';
 import { ChordDatabase } from '@chord/data/db';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Session } from 'electron';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPasswordDetector } from '../../src/main/passwords/detector';
 import { PasswordService, type PasswordKeys, type PasswordPage } from '../../src/main/passwords/service';
 
 const KDF = { N: 2 ** 10, r: 8, p: 1 };
@@ -516,23 +518,61 @@ describe('the API agreed with the detector (origin from senderFrame, a chord id)
   });
 
   it('tells the detector which sign-ins to watch, only when that changes', () => {
-    const calls: [boolean, string[] | undefined][] = [];
+    const calls: (readonly string[])[] = [];
     const ONE_PASSWORD = { id: 'aeblfdkhhhdcdjpifhhbdiojplfjncoa', profileId: 'default', name: '1Password' } as InstalledExtension;
     let state = { settings: { passwords: settings }, chords: CHORDS, extensions: {} as Record<string, InstalledExtension> };
-    service.attachDetector({ setEnabled: (on, profiles) => void calls.push([on, profiles]) }, state);
-    expect(calls).toEqual([[true, ['default', 'private-w1']]]);
+    service.attachDetector({ setProfiles: (profiles) => void calls.push(profiles) }, state);
+    expect(calls).toEqual([['default', 'private-w1']]);
     service.stateChanged(state);
     service.stateChanged({ ...state, chords: { ...CHORDS } });
     expect(calls).toHaveLength(1);
     state = { ...state, extensions: { x: ONE_PASSWORD } };
     service.stateChanged(state);
-    expect(calls.at(-1)).toEqual([true, ['private-w1']]);
+    expect(calls.at(-1)).toEqual(['private-w1']);
     state = { ...state, settings: { passwords: { ...settings, onChords: ['work'] } } };
     service.stateChanged(state);
-    expect(calls.at(-1)).toEqual([true, ['default', 'private-w1']]);
+    expect(calls.at(-1)).toEqual(['default', 'private-w1']);
     state = { ...state, settings: { passwords: { ...settings, enabled: false } } };
     service.stateChanged(state);
-    expect(calls.at(-1)).toEqual([false, []]);
+    expect(calls.at(-1)).toEqual([]);
+  });
+
+  it('turns the real detector off where it should be: the switch, a password manager’s extension', () => {
+    const fake = () => {
+      const scripts = new Set<string>();
+      let n = 0;
+      return {
+        scripts,
+        registerPreloadScript: vi.fn(() => {
+          const id = `s${++n}`;
+          scripts.add(id);
+          return id;
+        }),
+        unregisterPreloadScript: vi.fn((id: string) => void scripts.delete(id)),
+      };
+    };
+    const main = fake();
+    const priv = fake();
+    const detector = createPasswordDetector({ preloadPath: '/p.cjs', agentPath: '/a.js' });
+    detector.attachSession('default', main as unknown as Session, false);
+    detector.attachSession('private-w1', priv as unknown as Session, true);
+    const ONE_PASSWORD = { id: 'aeblfdkhhhdcdjpifhhbdiojplfjncoa', profileId: 'default', name: '1Password' } as InstalledExtension;
+    let state = { settings: { passwords: settings }, chords: CHORDS, extensions: {} as Record<string, InstalledExtension> };
+    service.attachDetector(detector, state);
+    expect([main.scripts.size, priv.scripts.size]).toEqual([1, 1]);
+    // 1Password in the default profile: Chord's detector steps aside there (S17 §11).
+    state = { ...state, extensions: { x: ONE_PASSWORD } };
+    service.stateChanged(state);
+    expect([main.scripts.size, priv.scripts.size]).toEqual([0, 1]);
+    expect(detector.isEnabled('default')).toBe(false);
+    state = { ...state, extensions: {} };
+    service.stateChanged(state);
+    expect([main.scripts.size, priv.scripts.size]).toEqual([1, 1]);
+    // The switch off: off everywhere, and in profiles made later.
+    state = { ...state, settings: { passwords: { ...settings, enabled: false } } };
+    service.stateChanged(state);
+    expect([main.scripts.size, priv.scripts.size]).toEqual([0, 0]);
+    expect(detector.isEnabled('later')).toBe(false);
   });
 });
 
