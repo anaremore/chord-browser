@@ -27,7 +27,7 @@ import { Favicon } from '../shared/Favicon';
 import { EMPTY_PASSPHRASE, PassphraseStep, passphraseReady, type PassphraseValue } from '../shared/PassphraseStep';
 import { useLive, type Live } from '../shared/live';
 import { installingLabel, megabytes, PLAYER_FAILURES } from '../shared/player';
-import { chordStyle } from '../shared/theme';
+import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
 import { EffectsCard } from './EffectsCard';
 import styles from './Popover.module.css';
@@ -845,6 +845,8 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
   }, [hasCards]);
 
   const { style, appearance } = chordStyle(state.theme ? { theme: state.theme } : null, info, state.interface);
+
+  useRootColorScheme(appearance);
   if (menuOnly)
     return (
       <div ref={root} className={`${styles.root} ${styles.menuRoot}`} style={style}>
