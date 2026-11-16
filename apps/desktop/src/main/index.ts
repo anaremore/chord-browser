@@ -491,6 +491,19 @@ function registerIpc(): void {
   handle('passwords:forgetNever', ({ site }) => passwords.forgetNever(site));
   handle('passwords:startOver', () => passwords.startOver());
   handle('passwords:unlockCard', ({ id, passphrase, keep }) => passwords.answerUnlock(id, passphrase, keep));
+  // The menu under a field and the save card (S17 §9): each answers only its own window's popover.
+  handle('passwords:menuChoose', ({ id, index }, sender) => {
+    const windowId = browser?.popoverWindow(sender);
+    if (windowId) browser!.passwordAssist.chooseRow(windowId, id, index);
+  });
+  handle('passwords:saveCard', async ({ id, action, username, passphrase }, sender) => {
+    const windowId = browser?.popoverWindow(sender);
+    if (windowId) await browser!.passwordAssist.answer(windowId, id, action, { ...(username !== undefined ? { username } : {}), ...(passphrase !== undefined ? { passphrase } : {}) });
+  });
+  handle('passwords:saveCardReveal', ({ id }, sender) => {
+    const windowId = browser?.popoverWindow(sender);
+    return windowId ? browser!.passwordAssist.reveal(windowId, id) : null;
+  });
   handle('drm:open', ({ browser: other }, sender) => browser!.drmAction(sender, { open: other }));
   handle('drm:dismiss', (_request, sender) => browser!.drmAction(sender, 'dismiss'));
   handle('drm:player', ({ action }, sender) => browser!.drmAction(sender, { player: action }));

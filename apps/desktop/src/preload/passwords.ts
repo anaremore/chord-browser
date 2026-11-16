@@ -12,6 +12,9 @@
  * passive capturing listeners and a `querySelector` at each of two moments are its whole cost
  * on any other page (M0 §6: nothing measurable).
  *
+ * Main talks to the agent one way only: `passwords:fill` (the account you picked in the menu,
+ * sent to this frame alone), handed to the one listener the agent registered (`onFill`).
+ *
  * Only types come from `@chord/ipc`, so no schema library lands in every page's preload; main
  * checks every message.
  */
@@ -21,7 +24,7 @@ import type { PasswordsAgentChannel } from '@chord/ipc';
 /** The agent's world: its own, so neither the page nor the assistant's (4400) can see it (S17 §8). */
 const WORLD = 4440;
 /** The channels the bridge forwards, each as `passwords:<name>`; anything else is dropped here. */
-const CHANNELS = ['focus', 'blur', 'forms', 'candidate', 'gone', 'still', 'hint'] as const satisfies readonly PasswordsAgentChannel[];
+const CHANNELS = ['focus', 'blur', 'forms', 'candidate', 'gone', 'still', 'hint', 'filled'] as const satisfies readonly PasswordsAgentChannel[];
 // Every channel of the contract is here (a type error otherwise).
 const _every: Exclude<PasswordsAgentChannel, (typeof CHANNELS)[number]> extends never ? true : never = true;
 void _every;
@@ -59,9 +62,15 @@ async function wake(): Promise<void> {
   // Main answers only a tab's page in a chord where passwords are on; anywhere else there's no agent.
   const source: unknown = await ipcRenderer.invoke('passwords:agent').catch(() => null);
   if (typeof source !== 'string' || !source) return;
+  // Main's fill, to the agent's one listener: registered once, by the agent as it starts.
+  let onFill: ((payload: unknown) => void) | null = null;
+  ipcRenderer.on('passwords:fill', (_event, payload: unknown) => onFill?.(payload));
   contextBridge.exposeInIsolatedWorld(WORLD, 'chordPasswords', {
     send: (channel: unknown, payload: unknown) => {
       if (typeof channel === 'string' && (CHANNELS as readonly string[]).includes(channel)) ipcRenderer.send(`passwords:${channel}`, payload);
+    },
+    onFill: (listener: unknown) => {
+      if (!onFill && typeof listener === 'function') onFill = listener as (payload: unknown) => void;
     },
   });
   webFrame.setIsolatedWorldInfo(WORLD, { name: 'Chord passwords' });

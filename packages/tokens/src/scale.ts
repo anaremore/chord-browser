@@ -54,6 +54,8 @@ export const size = {
   artwork: 40,
   /** Popover cards over the page: the find bar, permission prompts. */
   popoverCard: 320,
+  /** The menu under a sign-in field (S17 §9): at least this wide, at most a popover card. */
+  passwordMenu: 200,
   /** The tallest a popover card grows (the Effects card, DESIGN.md §7.15) before it scrolls inside. */
   popoverMax: 520,
   /** Pinned at its tallest (`share.pinnedMax`): its lower edge fades out over this while there's more below (DESIGN.md §6.7). */

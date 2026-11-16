@@ -508,6 +508,16 @@ describe('the API agreed with the detector (origin from senderFrame, a chord id)
     expect(await service.saveCandidate({ ...at, origin: 'https://example.com' })).toEqual({ ok: false, problem: 'never' });
   });
 
+  it('neverFor: the save card’s Never, for the frame’s origin; never from a private window, an unknown chord, or while locked', async () => {
+    await oneLogin();
+    expect(await service.neverFor('https://example.com', 'priv')).toBe(false);
+    expect(await service.neverFor('https://example.com', 'gone')).toBe(false);
+    expect(await service.neverFor('https://example.com', 'work')).toBe(true);
+    expect(await service.candidateFor({ origin: 'https://example.com', username: 'a', password: 'b', chordId: 'work' })).toEqual({ kind: 'never' });
+    await service.lock();
+    expect(await service.neverFor('https://other.example', 'work')).toBe(false);
+  });
+
   it('a chord main doesn’t know gets nothing; a private window’s fills', async () => {
     const id = await oneLogin();
     expect(await service.accountsFor('https://github.com', 'gone')).toEqual({ state: 'off' });

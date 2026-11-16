@@ -12,6 +12,9 @@
  * - A smooth scroll: focus at most every 100 ms, and the last one is the field's final box.
  * - A form or document whose properties a page clobbered (`<input name="childNodes">`,
  *   `<form name="addEventListener">`) doesn't stop detection.
+ * - Filling (S17 §5): the form the menu was shown for gets the values, the page's own script
+ *   sees `input` and `change`, and the markup is untouched; a password field that turned into
+ *   text, one that's hidden or off screen, or a form that's gone gets nothing.
  */
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
@@ -32,6 +35,7 @@ test.beforeEach(async ({ context }) => {
 type Message = [string, Record<string, unknown>];
 interface AgentTest {
   start(): void;
+  fill(payload: unknown): void;
   messages(): Message[];
   clear(): void;
 }
@@ -216,4 +220,61 @@ test("a document whose own properties a page clobbered doesn't stop detection", 
   await page.focus('#p');
   await a.settle();
   expect((await a.of('focus')).at(-1)).toMatchObject({ role: 'current-password' });
+});
+
+const FILL = { formId: 'f1', username: 'ada@example.com', password: 'secret pass', highlight: { color: 'rgb(200, 0, 100)', ms: 50, stagger: 0, easing: 'linear' } };
+const fill = (page: Page, payload: unknown) => page.evaluate((p) => (globalThis as unknown as { chordAgentTest: AgentTest }).chordAgentTest.fill(p), payload);
+
+test('a fill: the values in, the page sees typing, nothing added to the page', async ({ page }) => {
+  const a = await open(page, SIGN_IN);
+  await page.evaluate(() => {
+    const seen: string[] = [];
+    (globalThis as unknown as { seen: string[] }).seen = seen;
+    for (const id of ['u', 'p']) for (const type of ['input', 'change']) document.getElementById(id)!.addEventListener(type, () => seen.push(`${id}:${type}`));
+  });
+  const before = await page.evaluate(() => document.documentElement.outerHTML);
+  await a.clear();
+  await fill(page, FILL);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: true }]);
+  expect(await page.inputValue('#u')).toBe('ada@example.com');
+  expect(await page.inputValue('#p')).toBe('secret pass');
+  expect(await page.evaluate(() => (globalThis as unknown as { seen: string[] }).seen)).toEqual(['u:input', 'u:change', 'p:input', 'p:change']);
+  // The outline is an animation, not a style or attribute: the markup is as it was.
+  expect(await page.evaluate(() => document.documentElement.outerHTML)).toBe(before);
+  // Submitting what was filled: the candidate is the save card's, as typed.
+  await page.evaluate(() => document.getElementById('f')!.addEventListener('submit', (e) => e.preventDefault()));
+  await page.press('#p', 'Enter');
+  await a.settle();
+  expect((await a.of('candidate'))[0]).toMatchObject({ signal: 'enter', values: { username: 'ada@example.com', password: 'secret pass' } });
+});
+
+test('a fill writes nothing when the form isn’t as the menu showed it', async ({ page }) => {
+  const cases: [string, string, Record<string, unknown>?][] = [
+    ['the password field is text now (a show-password toggle)', "document.getElementById('p').type = 'text'"],
+    ['the password field is hidden', "document.getElementById('p').style.display = 'none'"],
+    ['the fields are under an invisible layer of their own', "document.getElementById('f').style.opacity = '0'"],
+    ['the form is gone', "document.getElementById('f').remove()"],
+    ['the form was replaced by a copy', "const f = document.getElementById('f'); f.replaceWith(f.cloneNode(true))"],
+    ['another form’s id', '', { formId: 'f9' }],
+    ['no password', '', { password: '' }],
+  ];
+  for (const [name, change, over] of cases) {
+    const a = await open(page, SIGN_IN);
+    if (change) await page.evaluate(change);
+    await a.clear();
+    await fill(page, { ...FILL, ...over });
+    const filled = await a.of('filled');
+    expect(filled.map((f) => f['ok']), name).toEqual(over?.['password'] === '' ? [] : [false]);
+    const values = await page.evaluate(() => [...document.querySelectorAll('input')].map((i) => i.value));
+    expect(values.join(''), name).toBe('');
+  }
+});
+
+test('a fill on a page scrolled away from the form writes nothing', async ({ page }) => {
+  const a = await open(page, `${SIGN_IN}<div style="height:5000px"></div>`);
+  await page.evaluate(() => window.scrollTo(0, 4000));
+  await a.clear();
+  await fill(page, FILL);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: false }]);
+  expect(await page.inputValue('#p')).toBe('');
 });

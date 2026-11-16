@@ -23,7 +23,8 @@
  *   can't crowd out a sign-in's messages; both start afresh with each new document. The agent
  *   sends far fewer: focus, blur and forms at most once a frame, one candidate per submit.
  *
- * Events (`events`): `focus`, `blur`, `submitted`, `signedIn`, `failed`. Nothing here logs a
+ * Events (`events`): `focus`, `blur`, `submitted`, `signedIn`, `failed`, and `filled` (the
+ * agent's answer to a fill the menu sent). Nothing here logs a
  * payload: a refused message is dropped without a word.
  */
 import { EventEmitter } from 'node:events';
@@ -79,6 +80,11 @@ export interface PasswordsBlurEvent {
   readonly contents: WebContents;
   readonly formId: string;
 }
+export interface PasswordsFilledEvent {
+  readonly contents: WebContents;
+  readonly formId: string;
+  readonly ok: boolean;
+}
 type Outcome<T extends SavingOutcome['type']> = Omit<Extract<SavingOutcome, { type: T }>, 'type'> & { readonly contents: WebContents };
 
 export interface PasswordDetectorEvents {
@@ -87,6 +93,7 @@ export interface PasswordDetectorEvents {
   submitted: [Outcome<'submitted'>];
   signedIn: [Outcome<'signedIn'>];
   failed: [Outcome<'failed'>];
+  filled: [PasswordsFilledEvent];
 }
 
 export interface PasswordDetectorOptions {
@@ -226,6 +233,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
     on('gone', (m) => emit(tracker.gone(m.formId)));
     on('still', (m) => emit(tracker.still(m.formId)));
     on('hint', (m) => tracker.hint(m.formId, m.status));
+    on('filled', (m) => events.emit('filled', { contents, formId: m.formId, ok: m.ok }));
 
     contents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;

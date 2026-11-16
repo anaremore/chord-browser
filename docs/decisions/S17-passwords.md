@@ -1,6 +1,6 @@
 # S17: Passwords, built in
 
-*2026-11-15 · replaces D12 (ARCHITECTURE.md §16) and re-rates risk R2 (§17) · phase 1's vault and detector are built ([the vault](#phase-1-the-vault-as-built-2026-11-15), [the detector](#phase-1-the-detector-built-2026-11-15)).*
+*2026-11-15 · replaces D12 (ARCHITECTURE.md §16) and re-rates risk R2 (§17) · phase 1 is built: [the vault](#phase-1-the-vault-as-built-2026-11-15), [the detector](#phase-1-the-detector-built-2026-11-15), and [the menu, fill and the save cards](#phase-1-the-menu-fill-and-the-save-cards-built-2026-11-16).*
 
 **Decided 2026-11-15 by the maintainer:**
 1. **D12 is reversed: option B.** Chord builds its own password manager, with its own detector (§2–§4). Extensions stay supported.
@@ -986,3 +986,29 @@ Only what a real desktop can show; everything else above was measured.
 - the menu under the field and the fill (`passwords:fill`, with M0's change 4 for clicks);
 - the save and update cards, and the parts of layer 3 that need them;
 - Firefox's tables.
+
+## Phase 1: the menu, fill and the save cards (built 2026-11-16)
+
+*Branch `feat/passwords-fill`: phase 1's last piece, joining the detector's events to the vault's API, as the owner's mock (`passwords-phase1.html`, sections 1 and 3) draws it. ARCHITECTURE.md §9, *Passwords: the menu, fill and the save cards*, has the details.*
+
+**Built**, as §5, §6 and §9 planned:
+- **The menu under the field** (`main/passwords/assist.ts`, the popover's `PasswordMenuCard`): focus → `accountsFor` → the menu under the field, placed from the agent's box and the page's zoom, within a frame of the vault's answer. Usernames and hosts, *Other passwords…* (opens Settings → Passwords), *Unlock passwords* while locked, *This page isn't secure* on `http`. Once per focus.
+- **Keys** through `before-input-event`, listened to only while a menu is open, routed by the spike's function, ported (`menu-keys.ts`). E2E presses them with `sendInputEvent` (M0's change 5).
+- **Fill** (`passwords:fill`): only to the frame, origin and document the menu was shown for, checked in main; the agent checks the form again (§5, *At fill*), then the native setter, `input` and `change`, and the outline. Its answer, `filled`, says when nothing was written; a toast tells you.
+- **The save and update cards** (`SavePasswordCardView`): `signedIn` → `candidateFor` → the card → `saveCandidate`, or `neverFor` for *Never for this site*. The first one chooses the passphrase with #29's `PassphraseStep`, then the toast.
+- **Values on the candidate**, as a commit of its own: only a submit signal's candidate carries the username and the password to save, within the vault's limits. They go page → main only, are never logged, and leave memory once the card is answered, closed or gone (or at once, in a private window or after a failed sign-in).
+- **The gates** stay where they were (the switch, the extension rule, Chord's pages, private windows never saving, proxies never), and the tab's are added: nothing for a page that isn't a tab's, or a tab that isn't on screen.
+
+**How it differs from the plan:**
+- **Clicks (M0's change 4).** Main hears the press in the popover's `before-mouse-event`, but doesn't stop it: the row gets the click, so main needn't work out which row was under the pointer. For a second after the press, main itself lets the field's blur go by without closing the menu (rather than the agent ignoring it, since the menu is main's), and focuses the page again once the press is over. The field still sees one `focusout` and `focusin`, as M0 measured with both remedies.
+- **The popover shows the menu alone** while it's open: one view can't be under the field and at the tab's top right at once, and a second view would be a renderer more per window. Other cards wait the moment the field has focus, and come back as it closes.
+- **The menu follows its field** through a scroll, a zoom or a resize (M0 §3 found it 0–6 ms behind), instead of closing on a scroll, and waits out of sight while the field is scrolled away.
+- **No key in the address to bring a closed card back** (the mock's note). The values must not outlive the card (this piece's security rule), so × drops them, and there's nothing left to bring back.
+- **The save card's eye** fetches the password from main when pressed (`passwords:saveCardReveal`, to that card's window's popover only); the popover's state carries the username alone.
+- **Sign-up, change and reset forms** get no menu and no card yet: the generator and the change form's matching are phase 2's (§15).
+- **A locked vault at a sign-in** still gets the card; Save asks to unlock, then the vault decides between new and update.
+- **The card goes** after a minute unused, but not while focus is in it, when you leave the site (by registrable domain), when the tab or window closes, or when another sign-in on the tab replaces it.
+
+**Tests:** the wiring and the gates table-driven in `unit/passwords-assist.test.ts` and `unit/passwords-menu-keys.test.ts`; the values in `unit/passwords-saving.test.ts` and `passwords-detector.test.ts`; the agent's fill in `forms/agent.spec.ts`; and one journey in `e2e/passwords-fill.spec.ts`: save with the first passphrase, offer and fill by keys (the page sees none of them) and by click, update, *Never*, and a private window that fills and never saves, with axe and captures.
+
+**Left for later:** *Lock passwords* in the menu (the vault's note); generating, sign-up and change forms (phase 2); the owner's by-hand checks of keys and clicks on macOS and Windows (M0, *What the owner checks by hand*), which this piece makes possible.

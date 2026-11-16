@@ -91,6 +91,13 @@ export function hwndOf(window: BaseWindow): string {
   return handle.length >= 8 ? handle.readBigUInt64LE(0).toString() : '0';
 }
 
+/** Where the menu under a sign-in field goes: the field's box in its page's CSS pixels, and that page's zoom. */
+export interface PopoverAnchor {
+  readonly contents: WebContents;
+  readonly rect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
+  readonly zoom: number;
+}
+
 /** How split panes share the content frame (DESIGN.md §7.9). */
 export interface PaneLayout {
   direction: SplitDirection;
@@ -236,6 +243,10 @@ export class AppWindow {
   private readonly nudged = new Set<WebContentsView>();
   private popoverSize = { width: 0, height: 0 };
   private focusPopoverWhenShown = false;
+  /** The menu under a sign-in field (S17 §9): while it's open, the popover goes under its field instead of the top-right. */
+  private popoverAnchor: PopoverAnchor | null = null;
+  /** The menu's field is scrolled out of its page: the popover waits out of sight. */
+  private popoverAway = false;
   private anchor: Rect | null = null;
   private overlayVisible = false;
   /**
@@ -834,6 +845,42 @@ export class AppWindow {
     shell.postMessage('frame:port', null, [port2]);
   }
 
+  /** The menu under a field opened, moved with its field, or closed (null). */
+  setPopoverAnchor(anchor: PopoverAnchor | null): void {
+    const a = this.popoverAnchor;
+    const same =
+      a === anchor ||
+      (!!a && !!anchor && a.contents === anchor.contents && a.zoom === anchor.zoom && a.rect.x === anchor.rect.x && a.rect.y === anchor.rect.y && a.rect.width === anchor.rect.width && a.rect.height === anchor.rect.height);
+    this.popoverAnchor = anchor;
+    if (!same) this.layout();
+  }
+
+  /**
+   * The popover under the menu's field, in window pixels: its card's left edge on the field's, just below it, or
+   * above it when there's no room below; never past the page's own edges, so never over the sidebar
+   * (ARCHITECTURE.md §5). Null when the field isn't on screen. The view's padding (the card's shadow) is
+   * `space[3]`, as Popover.module.css has it.
+   */
+  private menuPlacement(anchor: PopoverAnchor): Rect | null {
+    const view = this.panes.find((v) => pageOf(v) === anchor.contents);
+    if (!view?.getVisible()) return null;
+    const page = view.getBounds();
+    const s = uiScale();
+    const pad = space[3] * s;
+    const gap = space[1] * s;
+    const width = this.popoverSize.width * s;
+    const height = this.popoverSize.height * s;
+    const card = height - 2 * pad;
+    const left = page.x + anchor.rect.x * anchor.zoom;
+    const top = page.y + anchor.rect.y * anchor.zoom;
+    const bottom = top + anchor.rect.height * anchor.zoom;
+    if (bottom <= page.y || top >= page.y + page.height) return null;
+    const below = bottom + gap + card <= page.y + page.height || top - gap - card < page.y;
+    const y = below ? bottom + gap - pad : top - gap - card - pad;
+    const x = Math.max(page.x, Math.min(left - pad, page.x + page.width - width));
+    return { x, y, width, height };
+  }
+
   /** The popover reports its cards' size; 0 × 0 hides it. */
   setPopoverSize(width: number, height: number): void {
     this.popoverSize = { width: Math.ceil(width), height: Math.ceil(height) };
@@ -845,7 +892,7 @@ export class AppWindow {
    * (it hangs from a page that's out of sight). Shown, it takes focus if asked to.
    */
   private showPopover(): void {
-    const visible = this.popoverSize.width > 0 && this.popoverSize.height > 0 && !this.snapshots.active;
+    const visible = this.popoverSize.width > 0 && this.popoverSize.height > 0 && !this.snapshots.active && !this.popoverAway;
     if (this.popover.getVisible() !== visible) this.popover.setVisible(visible);
     if (visible && this.focusPopoverWhenShown) {
       this.focusPopoverWhenShown = false;
@@ -1204,7 +1251,15 @@ export class AppWindow {
       if (this.panes.includes(view) || !pageOf(view)) continue;
       place(view, this.nudged.has(view) ? { ...parkedAt, height: parkedAt.height + 1 } : parkedAt);
     }
+    // The menu under a field: under its field, or out of sight while the field is.
+    const menuAt = this.popoverAnchor && !this.peek ? this.menuPlacement(this.popoverAnchor) : null;
+    this.popoverAway = !!this.popoverAnchor && !this.peek && !menuAt;
     this.showPopover();
+    if (menuAt) {
+      place(this.popover, menuAt);
+      this.placementChanged();
+      return;
+    }
     const { width: pw, height: ph } = this.popoverSize;
     // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.
     if (this.peek) {

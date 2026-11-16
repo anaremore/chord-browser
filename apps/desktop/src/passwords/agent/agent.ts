@@ -17,7 +17,16 @@
  * page that moves focus, scrolls or adds fields in a loop sends a message a frame, not one a call.
  * Scans run at most once in `SCAN_GAP_MS`. Main limits each page's rate as well.
  * - `gone` / `still`: after a submit signal, whether the password field went within 10 s;
- * - `hint`: a request to the page's own origin finished after a submit signal, with its status.
+ * - `hint`: a request to the page's own origin finished after a submit signal, with its status;
+ * - `filled`: whether a fill main sent was written.
+ *
+ * **Filling** (S17 §5): main sends the account you picked in the menu (`onFill`), for the form
+ * it was shown for. The page is scanned again, and nothing is written unless that form is still
+ * there with a password field that's `type=password`, both fields connected, enabled, shown
+ * (`checkVisibility` with opacity, a few pixels at least) and one of them on screen. The values
+ * go in with the native setter from this world and `input` and `change`, as the assistant's fill
+ * does (§11.6), and each field is outlined for a moment with the Web Animations API: nothing is
+ * added to the page.
  *
  * Values are read to classify a form for saving (Chromium's saving mode compares them) and to
  * say whether the username and password are filled in, from that form's own fields. They
@@ -26,12 +35,14 @@
  * sent as you leave a field carries none, and nothing else ever does.
  */
 import { classifyPasswordForm, PASSWORD_LIMITS, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordFormKind } from '@chord/core';
-import type { PasswordsAgentChannel, PasswordsAgentMessage, PasswordsFieldSignature } from '@chord/ipc';
+import type { PasswordsAgentChannel, PasswordsAgentMessage, PasswordsFieldSignature, PasswordsFill } from '@chord/ipc';
 import { activeElementOf, controlType, isShown, MAX_REPORTED_FORMS, scanDocument, SKIP_TYPES, submitButtonFor, type ScannedForm } from './scan';
 
 /** What the sentinel exposes in this world (contextBridge.exposeInIsolatedWorld). */
 export interface PasswordsBridge {
   send<C extends PasswordsAgentChannel>(channel: C, payload: PasswordsAgentMessage<C>): void;
+  /** Main's fill: the sentinel calls this listener (registered once) with what main sent. */
+  onFill?(listener: (payload: unknown) => void): void;
 }
 
 /** How long after a submit signal the agent watches for the form to go, and for the page's requests (S17 §6, step 3). */
@@ -374,6 +385,65 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     }
     watching = stop;
   }
+
+  // ----- Filling (S17 §5): only the form the menu was shown for, only as it was -----
+  const elementOf = (k: KnownForm, f: PasswordField | null): HTMLElement | null => {
+    if (!f) return null;
+    const i = k.scanned.record.fields.findIndex((x) => x.key === f.key);
+    return i >= 0 ? (k.scanned.elements[i] ?? null) : null;
+  };
+  const usable = (el: HTMLElement | null): el is HTMLInputElement => isTextField(el) && el.isConnected && !el.disabled && !el.readOnly && isShown(el);
+  const onScreen = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    return r.bottom > 0 && r.right > 0 && r.top < win.innerHeight && r.left < win.innerWidth;
+  };
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+  /** What typing sends, so React, Vue and Angular see the value (a framework's own setter lives in the page's world). */
+  const put = (el: HTMLInputElement, value: string) => {
+    valueSetter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    filled.add(el);
+  };
+  function fill(p: PasswordsFill): boolean {
+    // The page as it is now: a field swapped, hidden or re-rendered since the menu opened is seen here.
+    rescan();
+    const k = known.find((x) => x.id === p.formId);
+    const c = k?.classified;
+    if (!k || !c) return false;
+    const user = elementOf(k, c.username);
+    const pass = elementOf(k, c.password);
+    if (!user && !pass) return false;
+    if (user && !usable(user)) return false;
+    if (pass && (!usable(pass) || controlType(pass) !== 'password')) return false;
+    if (![user, pass].some((el) => el && onScreen(el))) return false;
+    const fields = [user && p.username ? ([user, p.username] as const) : null, pass ? ([pass, p.password] as const) : null].filter((f) => f !== null);
+    for (const [el, value] of fields) put(el, value);
+    const reduce = win.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const ring = (color: string) => ({ outline: `2px solid ${color}`, outlineOffset: '2px' });
+    fields.forEach(([el], i) => {
+      el.animate([ring('transparent'), { ...ring(p.highlight.color), offset: 0.1 }, { ...ring(p.highlight.color), offset: 0.7 }, ring('transparent')], {
+        duration: p.highlight.ms,
+        delay: reduce ? 0 : i * p.highlight.stagger,
+        easing: p.highlight.easing,
+      });
+    });
+    return true;
+  }
+  const onFill = (raw: unknown) => {
+    const p = raw as Partial<PasswordsFill> | null;
+    const h = p?.highlight as Partial<PasswordsFill['highlight']> | undefined;
+    if (!p || typeof p.formId !== 'string' || typeof p.username !== 'string' || typeof p.password !== 'string' || !p.password) return;
+    if (!h || typeof h.color !== 'string' || typeof h.ms !== 'number' || typeof h.stagger !== 'number' || typeof h.easing !== 'string') return;
+    let ok: boolean;
+    try {
+      ok = fill(p as PasswordsFill);
+    } catch {
+      ok = false;
+    }
+    bridge.send('filled', { formId: p.formId, ok });
+  };
+  bridge.onFill?.(onFill);
 
   // ----- Listening -----
   const listen = <K extends keyof DocumentEventMap>(type: K, fn: (e: DocumentEventMap[K]) => void, passive = true) => {

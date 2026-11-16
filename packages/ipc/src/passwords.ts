@@ -14,7 +14,7 @@ import { PASSWORD_LIMITS, PASSWORDS_MAX_FORMS } from '@chord/core';
 import { z } from 'zod';
 
 /** The channels, by the agent's own name for each (the sentinel prefixes `passwords:`). */
-export const PASSWORDS_AGENT_CHANNELS = ['focus', 'blur', 'forms', 'candidate', 'gone', 'still', 'hint'] as const;
+export const PASSWORDS_AGENT_CHANNELS = ['focus', 'blur', 'forms', 'candidate', 'gone', 'still', 'hint', 'filled'] as const;
 export type PasswordsAgentChannel = (typeof PASSWORDS_AGENT_CHANNELS)[number];
 /** The preload asks main for the agent's script on this one (`invoke`). */
 export const PASSWORDS_AGENT_SOURCE = 'passwords:agent';
@@ -105,6 +105,20 @@ export const PasswordsStill = z.strictObject({ formId });
 export const PasswordsHint = z.strictObject({ formId, status: z.number().int().min(100).max(599) });
 export type PasswordsHint = z.infer<typeof PasswordsHint>;
 
+/** A fill main sent: done (`ok`), or nothing written because the form changed since the menu was shown. */
+export const PasswordsFilled = z.strictObject({ formId, ok: z.boolean() });
+export type PasswordsFilled = z.infer<typeof PasswordsFilled>;
+
+/** Main to the agent, the only way: fill the account you picked into the form the menu was shown for. */
+export const PASSWORDS_FILL = 'passwords:fill';
+export interface PasswordsFill {
+  formId: string;
+  username: string;
+  password: string;
+  /** The outline that shows where the values went (as the assistant's fill: no change to the page's DOM). */
+  highlight: { color: string; ms: number; stagger: number; easing: string };
+}
+
 export const passwordsAgentSchemas = {
   focus: PasswordsFocus,
   blur: PasswordsBlur,
@@ -113,5 +127,6 @@ export const passwordsAgentSchemas = {
   gone: PasswordsGone,
   still: PasswordsStill,
   hint: PasswordsHint,
+  filled: PasswordsFilled,
 } as const satisfies Record<PasswordsAgentChannel, z.ZodType>;
 export type PasswordsAgentMessage<C extends PasswordsAgentChannel> = z.infer<(typeof passwordsAgentSchemas)[C]>;

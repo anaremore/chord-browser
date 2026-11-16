@@ -18,7 +18,12 @@ const api: PopoverApi = {
   share: { respond: (id, sourceId, audio) => invoke('share:respond', { id, sourceId, audio }) },
   auth: { respond: (id, credentials) => invoke('auth:respond', { id, credentials }) },
   passkey: { respond: (id, credentialId) => invoke('passkey:respond', { id, credentialId }) },
-  passwords: { unlock: (id, passphrase, keep) => invoke('passwords:unlockCard', { id, passphrase, keep }) },
+  passwords: {
+    unlock: (id, passphrase, keep) => invoke('passwords:unlockCard', { id, passphrase, keep }),
+    choose: (id, index) => invoke('passwords:menuChoose', { id, index }),
+    card: (id, action, details) => invoke('passwords:saveCard', { id, action, ...details }),
+    reveal: (id) => invoke('passwords:saveCardReveal', { id }),
+  },
   safeBrowsing: { choose: (on) => invoke('safeBrowsing:choose', { on }) },
   drm: { open: (browser) => invoke('drm:open', { browser }), dismiss: () => invoke('drm:dismiss'), player: (action) => invoke('drm:player', { action }) },
   effects: { view: () => invoke('effects:view'), onState: (listener) => subscribe('effects:state', listener), act: (action) => invoke('effects:do', action) },
