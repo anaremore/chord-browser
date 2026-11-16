@@ -1,0 +1,210 @@
+/**
+ * The password detector's main side (S17 §4–§8): the sentinel preload registered on chords'
+ * sessions while passwords are on, the agent's script served to it, and the agent's messages
+ * checked and turned into events for the vault and the menu.
+ *
+ * - **On and off** without a restart: `setEnabled` registers or unregisters the sentinel
+ *   (`registerPreloadScript`, M0 §1); a page takes the change at its next navigation, and
+ *   messages from an agent left in a page of a chord turned off are dropped. The vault side
+ *   owns the setting and the extension rule (S17 §11) and calls `setEnabled`; this reads no
+ *   settings.
+ * - **Who's asking:** only a tab's page (`attachPage`), only its main frame (phase 1), only an
+ *   `http:` or `https:` origin, and that origin is the sender frame's as Chromium reports it
+ *   (`event.senderFrame.origin`), never a word from the payload. Every payload is checked
+ *   against @chord/ipc's strict schemas and a size limit; none carries a field's value.
+ * - **Private windows** fill and never save (S17 §7): `signedIn` and `failed` never fire there.
+ *
+ * Events (`events`): `focus`, `blur`, `submitted`, `signedIn`, `failed`. Nothing here logs a
+ * payload: a refused message is dropped without a word.
+ */
+import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import {
+  PASSWORDS_AGENT_SOURCE,
+  PASSWORDS_MESSAGE_MAX,
+  passwordsAgentSchemas,
+  type PasswordsAgentChannel,
+  type PasswordsAgentMessage,
+  type PasswordsFocus,
+} from '@chord/ipc';
+import type { IpcMainEvent, IpcMainInvokeEvent, Session, WebContents, WebFrameMain } from 'electron';
+import { SETTLE_MS, SubmissionTracker, type SavingOutcome } from './saving';
+
+/** The sentinel's registration id on each session. */
+export const SENTINEL_ID = 'chord-passwords';
+
+export interface PasswordsFocusEvent extends PasswordsFocus {
+  readonly contents: WebContents;
+  readonly frame: WebFrameMain;
+  /** The sender frame's origin, as Chromium reports it. */
+  readonly origin: string;
+  /** The page's zoom when the field took focus: the menu places the rect with it. */
+  readonly zoomFactor: number;
+}
+export interface PasswordsBlurEvent {
+  readonly contents: WebContents;
+  readonly formId: string;
+}
+type Outcome<T extends SavingOutcome['type']> = Omit<Extract<SavingOutcome, { type: T }>, 'type'> & { readonly contents: WebContents };
+
+export interface PasswordDetectorEvents {
+  focus: [PasswordsFocusEvent];
+  blur: [PasswordsBlurEvent];
+  submitted: [Outcome<'submitted'>];
+  signedIn: [Outcome<'signedIn'>];
+  failed: [Outcome<'failed'>];
+}
+
+export interface PasswordDetectorOptions {
+  /** The built sentinel (out/preload/passwords.cjs). */
+  readonly preloadPath: string;
+  /** The built agent (out/main/passwords/agent.js). */
+  readonly agentPath: string;
+  /** For tests: how the agent's script is read, and a clock. */
+  readonly readAgent?: (path: string) => Promise<string>;
+  readonly now?: () => number;
+}
+
+export interface PasswordDetector {
+  readonly events: EventEmitter<PasswordDetectorEvents>;
+  /** A chord's session, as it's made. `isPrivate`: a private window's. */
+  attachSession(profileId: string, session: Session, isPrivate: boolean): void;
+  /** A tab's page, as its webContents is made: the only pages the agent's channels answer. */
+  attachPage(contents: WebContents): void;
+  /** Turns detection on or off for these chords' profiles, or for every one (and every one made later) when none are named. */
+  setEnabled(on: boolean, profileIds?: readonly string[]): void;
+  isEnabled(profileId: string): boolean;
+}
+
+interface SessionEntry {
+  readonly profileId: string;
+  readonly session: Session;
+  readonly isPrivate: boolean;
+  registration: string | null;
+}
+
+/** Where a message may come from: a web origin, in the page's main frame. */
+type FrameIds = Pick<WebFrameMain, 'origin' | 'parent' | 'processId' | 'routingId'>;
+export function pageOrigin(frame: FrameIds | null | undefined, mainFrame: Pick<WebFrameMain, 'processId' | 'routingId'> | null | undefined): string | null {
+  if (!frame || !mainFrame || frame.parent || frame.processId !== mainFrame.processId || frame.routingId !== mainFrame.routingId) return null;
+  const origin = frame.origin;
+  return /^https?:\/\/[^/]+$/i.test(origin) ? origin : null;
+}
+
+/** A payload checked against its channel's schema and the size limit, or null. Never echoed, never logged. */
+export function checkMessage<C extends PasswordsAgentChannel>(channel: C, raw: unknown): PasswordsAgentMessage<C> | null {
+  let size: number;
+  try {
+    size = JSON.stringify(raw)?.length ?? 0;
+  } catch {
+    return null;
+  }
+  if (size > PASSWORDS_MESSAGE_MAX) return null;
+  const parsed = passwordsAgentSchemas[channel].safeParse(raw);
+  return parsed.success ? (parsed.data as PasswordsAgentMessage<C>) : null;
+}
+
+export function createPasswordDetector(options: PasswordDetectorOptions): PasswordDetector {
+  const events = new EventEmitter<PasswordDetectorEvents>();
+  const sessions = new Map<Session, SessionEntry>();
+  const explicit = new Map<string, boolean>();
+  let everyone = false;
+  let agentSource: Promise<string | null> | null = null;
+  const read = options.readAgent ?? ((path: string) => readFile(path, 'utf8'));
+  const now = options.now ?? Date.now;
+
+  const isEnabled = (profileId: string) => explicit.get(profileId) ?? everyone;
+  const apply = (entry: SessionEntry) => {
+    const on = isEnabled(entry.profileId);
+    if (on && !entry.registration) entry.registration = entry.session.registerPreloadScript({ type: 'frame', id: SENTINEL_ID, filePath: options.preloadPath });
+    else if (!on && entry.registration) {
+      entry.session.unregisterPreloadScript(entry.registration);
+      entry.registration = null;
+    }
+  };
+
+  /** The agent's script, read once, the first time a page asks (never at launch). */
+  const source = () => (agentSource ??= read(options.agentPath).catch(() => ((agentSource = null), null)));
+
+  function attachPage(contents: WebContents): void {
+    const entryOf = () => sessions.get(contents.session);
+    /** The sender's origin when this page may talk to the detector now, else null. */
+    const allowed = (event: IpcMainEvent | IpcMainInvokeEvent): string | null => {
+      const entry = entryOf();
+      if (!entry || !isEnabled(entry.profileId) || contents.isDestroyed()) return null;
+      return pageOrigin(event.senderFrame, contents.mainFrame);
+    };
+    const tracker = new SubmissionTracker(now);
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    const emit = (outcomes: SavingOutcome[]) => {
+      const priv = entryOf()?.isPrivate ?? true;
+      for (const o of outcomes) {
+        const { type, ...rest } = o;
+        if (type === 'submitted') events.emit('submitted', { ...(rest as Omit<Extract<SavingOutcome, { type: 'submitted' }>, 'type'>), contents });
+        // Private windows never save (S17 §7): nothing is offered there.
+        else if (priv) continue;
+        else if (type === 'signedIn') events.emit('signedIn', { ...(rest as Omit<Extract<SavingOutcome, { type: 'signedIn' }>, 'type'>), contents });
+        else events.emit('failed', { ...(rest as Omit<Extract<SavingOutcome, { type: 'failed' }>, 'type'>), contents });
+      }
+    };
+
+    contents.ipc.handle(PASSWORDS_AGENT_SOURCE, async (event) => (allowed(event) ? await source() : null));
+    const on = <C extends PasswordsAgentChannel>(channel: C, handle: (message: PasswordsAgentMessage<C>, origin: string, event: IpcMainEvent) => void) => {
+      contents.ipc.on(`passwords:${channel}`, (event, raw: unknown) => {
+        const origin = allowed(event);
+        const message = origin ? checkMessage(channel, raw) : null;
+        if (origin && message) handle(message, origin, event);
+      });
+    };
+    on('focus', (m, origin, event) => events.emit('focus', { ...m, contents, frame: event.senderFrame!, origin, zoomFactor: contents.getZoomFactor() }));
+    on('blur', (m) => events.emit('blur', { contents, formId: m.formId }));
+    on('candidate', (m, origin) => emit(tracker.candidate(m, origin)));
+    on('forms', (m) => emit(tracker.forms(m)));
+    on('gone', (m) => emit(tracker.gone(m.formId)));
+    on('still', (m) => emit(tracker.still(m.formId)));
+    on('hint', (m) => tracker.hint(m.formId, m.status));
+
+    contents.on('did-start-navigation', (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return;
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = null;
+      // Started by the page (a form's post, a script's location change), not by you from Chord's address bar or Back.
+      emit(tracker.navigationStarted(!!details.initiator));
+    });
+    contents.on('did-navigate', (_event, _url, code) => emit(tracker.navigated(code)));
+    contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+      if (isMainFrame) emit(tracker.navigatedInPage());
+    });
+    contents.on('did-stop-loading', () => {
+      if (!tracker.settling) return;
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        if (!contents.isDestroyed()) emit(tracker.settled());
+      }, SETTLE_MS);
+    });
+    contents.once('destroyed', () => {
+      if (settleTimer) clearTimeout(settleTimer);
+      tracker.reset();
+    });
+  }
+
+  return {
+    events,
+    attachSession(profileId, session, isPrivate) {
+      if (sessions.has(session)) return;
+      const entry: SessionEntry = { profileId, session, isPrivate, registration: null };
+      sessions.set(session, entry);
+      apply(entry);
+    },
+    attachPage,
+    setEnabled(on, profileIds) {
+      if (!profileIds) {
+        everyone = on;
+        explicit.clear();
+      } else for (const id of profileIds) explicit.set(id, on);
+      for (const entry of sessions.values()) apply(entry);
+    },
+    isEnabled,
+  };
+}

@@ -60,6 +60,7 @@ import { Suggestions } from './suggestions';
 import { UpdateInstaller } from './update-installer';
 import { UpdateChecker } from './updates';
 import { PasskeyBroker } from './passkeys';
+import { createPasswordDetector } from './passwords/detector';
 import { proxies } from './proxy';
 import { Screenshots } from './screenshots/service';
 import { DiskShots } from './screenshots/store';
@@ -104,6 +105,11 @@ const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
 const httpAuth = new AuthBroker();
 const passkeys = new PasskeyBroker();
+/** Chord's password detector (S17): off until the vault turns it on; reads nothing until a page asks. */
+const passwords = createPasswordDetector({
+  preloadPath: join(import.meta.dirname, '../preload/passwords.cjs'),
+  agentPath: join(import.meta.dirname, 'passwords/agent.js'),
+});
 /** Work the first window doesn't need waits until launch is over. */
 const afterLaunch = new AfterLaunch();
 
@@ -628,6 +634,8 @@ if (!app.requestSingleInstanceLock()) {
         downloads.attach(ses, priv ? privateWindowOf(profileId) : null);
         screenShare.attach(ses);
         passkeys.attach(ses);
+        // The passwords sentinel, registered only while passwords are on for this chord (S17 §8).
+        passwords.attachSession(profileId, ses, priv);
         // A chord's session gets the blocker extension; a private window's, its request dispatcher.
         adBlocking.attach(profileId, ses, priv);
         // Before any page's own scripts: what Electron lacks and every Chromium browser has (preload/page.ts).
@@ -770,6 +778,7 @@ if (!app.requestSingleInstanceLock()) {
       screenShare,
       httpAuth,
       passkeys,
+      passwords,
       screenshots,
       histories: opened.navs,
       saveHistory: (nodeId, nav) => persistence?.nav(nodeId, nav),
@@ -989,7 +998,19 @@ if (!app.requestSingleInstanceLock()) {
       // Right-click menus are read, not shown: their labels, newest last, by page.
       const contextMenus = new Map<number, ObservedItem[]>();
       observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
+      // The password detector's events, as plain data (the page's contents by id), oldest first.
+      const passwordEvents: Record<string, unknown>[] = [];
+      for (const type of ['focus', 'blur', 'submitted', 'signedIn', 'failed'] as const) {
+        passwords.events.on(type, (event: { contents: Electron.WebContents; frame?: unknown }) => {
+          const { contents, frame: _frame, ...rest } = event;
+          passwordEvents.push({ type, contentsId: contents.id, ...rest });
+        });
+      }
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
+        /** Passwords (S17): turn detection on or off, as the vault's switch will; and what it has reported. */
+        passwordsEnabled: (on: boolean, profileIds?: string[]) => passwords.setEnabled(on, profileIds),
+        passwordEvents: () => passwordEvents.slice(),
+        clearPasswordEvents: () => void (passwordEvents.length = 0),
         launch: () => launchTimings(),
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),
