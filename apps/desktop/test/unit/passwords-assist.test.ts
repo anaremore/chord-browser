@@ -392,6 +392,21 @@ describe('filling: only that frame, that origin, that document (S17 §5)', () =>
     t.events.emit('filled', { contents: t.contents, formId: 'f1', ok: true });
     expect(t.host.toast).toHaveBeenCalledTimes(1);
   });
+
+  it('the agent refused half a fill: a toast and a log line say so, with no value, origin or field', () => {
+    const t = setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      t.events.emit('filled', { contents: t.contents, formId: 'f1', ok: false, reason: 'password' });
+      expect(t.host.toast).toHaveBeenCalledWith('w1', 'passwords:fill', expect.stringContaining('where the password goes'));
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0]![0]);
+      expect(warn.mock.calls[0]).toHaveLength(1);
+      for (const secret of ['f1', 'ada', 'pw-', 'github', 'http']) expect(line).not.toContain(secret);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe('the save and update cards: which sign-in gets one', () => {

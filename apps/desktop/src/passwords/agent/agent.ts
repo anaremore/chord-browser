@@ -18,7 +18,8 @@
  * Scans run at most once in `SCAN_GAP_MS`. Main limits each page's rate as well.
  * - `gone` / `still`: after a submit signal, whether the password field went within 10 s;
  * - `hint`: a request to the page's own origin finished after a submit signal, with its status;
- * - `filled`: whether a fill main sent was written.
+ * - `filled`: whether a fill main sent was written, and if not why: the form changed, or the fill would have left a
+ *   password field empty (never half a fill).
  *
  * **Filling** (S17 §5): main sends the account you picked in the menu (`onFill`), for the form
  * it was shown for. The page is scanned again, and nothing is written unless that form is still
@@ -405,19 +406,25 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     el.dispatchEvent(new Event('change', { bubbles: true }));
     filled.add(el);
   };
-  function fill(p: PasswordsFill): boolean {
+  /** Why a fill wrote nothing (PasswordsFilled's `reason`). */
+  type Refused = 'changed' | 'password';
+  function fill(p: PasswordsFill): true | Refused {
     // The page as it is now: a field swapped, hidden or re-rendered since the menu opened is seen here.
     rescan();
     const k = known.find((x) => x.id === p.formId);
     const c = k?.classified;
-    if (!k || !c) return false;
+    if (!k || !c) return 'changed';
     const user = elementOf(k, c.username);
     const pass = elementOf(k, c.password);
-    if (!user && !pass) return false;
-    if (user && !usable(user)) return false;
+    // Never half a fill: a password field you could type in, with a role in this form, that the fill would leave
+    // empty (main sent no password, as for a first step, or the field isn't the current password) gets nothing at all.
+    const left = k.scanned.elements.filter((el, i) => controlType(el) === 'password' && c.roles.has(k.scanned.record.fields[i]!.key) && usable(el) && (el !== pass || !p.password));
+    if (left.length) return 'password';
+    if (!user && !pass) return 'changed';
+    if (user && !usable(user)) return 'changed';
     // A password field needs the password: main leaves it out only for a first step, which has none.
-    if (pass && (!p.password || !usable(pass) || controlType(pass) !== 'password')) return false;
-    if (![user, pass].some((el) => el && onScreen(el))) return false;
+    if (pass && (!p.password || !usable(pass) || controlType(pass) !== 'password')) return 'changed';
+    if (![user, pass].some((el) => el && onScreen(el))) return 'changed';
     const fields = [user && p.username ? ([user, p.username] as const) : null, pass && p.password ? ([pass, p.password] as const) : null].filter((f) => f !== null);
     for (const [el, value] of fields) put(el, value);
     const reduce = win.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -436,13 +443,13 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const h = p?.highlight as Partial<PasswordsFill['highlight']> | undefined;
     if (!p || typeof p.formId !== 'string' || typeof p.username !== 'string' || (p.password !== undefined && (typeof p.password !== 'string' || !p.password))) return;
     if (!h || typeof h.color !== 'string' || typeof h.ms !== 'number' || typeof h.stagger !== 'number' || typeof h.easing !== 'string') return;
-    let ok: boolean;
+    let done: true | Refused;
     try {
-      ok = fill(p as PasswordsFill);
+      done = fill(p as PasswordsFill);
     } catch {
-      ok = false;
+      done = 'changed';
     }
-    bridge.send('filled', { formId: p.formId, ok });
+    bridge.send('filled', done === true ? { formId: p.formId, ok: true } : { formId: p.formId, ok: false, reason: done });
   };
   bridge.onFill?.(onFill);
 

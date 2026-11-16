@@ -65,6 +65,36 @@ describe('kinds of form', () => {
   });
 });
 
+/** A futures broker's sign-in as the agent scanned it: MUI fields with React 19.2's `useId` ids. */
+const brokerSignIn = (ids: [string, string]) =>
+  form(
+    [
+      f('text', { id: ids[0], name: 'username', label: 'Email', placeholder: 'Enter your Email' }),
+      f('password', { id: ids[1], name: 'password', label: 'Password', placeholder: 'Enter your Password' }),
+    ],
+    { buttons: ['Forgot your password?', 'Log In'], submits: ['Log In'], headings: ['\u200b', '\u200b'], title: 'Example - User Dashboard' },
+  );
+
+describe('ids a framework generated say nothing', () => {
+  it.each<[string, [string, string]]>([
+    ['React 19.2', ['_r_0_', '_r_2_']],
+    ['React 19.2, rendered on the server', ['_R_0_', '_R_2_']],
+    ['React 18', [':r0:', ':r2:']],
+    ['React 19.0 and 19.1', ['«r0»', '«r2»']],
+    ['in a longer id (Radix)', ['radix-:r0:', 'radix-:r2:']],
+  ])('%s: the only password on a sign-in is the current one, not a new one for its 2', (_name, ids) => {
+    expect(classify(brokerSignIn(ids))).toEqual({ kind: 'sign-in', roles: { username: 'username', password: 'current-password' } });
+  });
+
+  it.each<[string, PasswordFormRecord, Record<string, PasswordFieldRole>]>([
+    ['a 2 after a password’s word is still a confirmation', form([user(), pw('password'), pw('password2', { label: '' })], { submits: ['Sign up'] }), { username: 'username', password: 'new-password', password2: 'confirmation-password' }],
+    ['pwd_2 too', form([user(), pw('pwd_1', { label: '' }), pw('pwd_2', { label: '' })], { submits: ['Register'] }), { username: 'username', pwd_1: 'new-password', pwd_2: 'confirmation-password' }],
+    ['a 2 alone is a counter: field_2 on a sign-in is its password', form([user(), pw('field_2', { label: '' })], { submits: ['Log in'] }), { username: 'username', field_2: 'current-password' }],
+  ])('%s', (_name, record, roles) => {
+    expect(classify(record).roles).toEqual(roles);
+  });
+});
+
 describe('vetoes', () => {
   it.each<[string, PasswordFormRecord, Record<string, PasswordFieldRole>]>([
     ['a search field before the password is passed over', form([user(), f('search', { name: 'q' }), pw()]), { username: 'username', password: 'current-password' }],

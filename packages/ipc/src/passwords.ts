@@ -105,8 +105,12 @@ export const PasswordsStill = z.strictObject({ formId });
 export const PasswordsHint = z.strictObject({ formId, status: z.number().int().min(100).max(599) });
 export type PasswordsHint = z.infer<typeof PasswordsHint>;
 
-/** A fill main sent: done (`ok`), or nothing written because the form changed since the menu was shown. */
-export const PasswordsFilled = z.strictObject({ formId, ok: z.boolean() });
+/**
+ * A fill main sent: done (`ok`), or nothing written, and why: the form changed since the menu was shown (`changed`),
+ * or it has a password field the fill had no password for (`password`: main sent none, or the field isn't the
+ * current password), which would have filled half.
+ */
+export const PasswordsFilled = z.strictObject({ formId, ok: z.boolean(), reason: z.enum(['changed', 'password']).optional() });
 export type PasswordsFilled = z.infer<typeof PasswordsFilled>;
 
 /** Main to the agent, the only way: fill the account you picked into the form the menu was shown for. */

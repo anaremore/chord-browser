@@ -84,6 +84,8 @@ export interface PasswordsFilledEvent {
   readonly contents: WebContents;
   readonly formId: string;
   readonly ok: boolean;
+  /** Why nothing was written (PasswordsFilled). */
+  readonly reason?: 'changed' | 'password';
 }
 type Outcome<T extends SavingOutcome['type']> = Omit<Extract<SavingOutcome, { type: T }>, 'type'> & { readonly contents: WebContents };
 
@@ -242,7 +244,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
     on('gone', (m) => emit(tracker.gone(m.formId)));
     on('still', (m) => emit(tracker.still(m.formId)));
     on('hint', (m) => tracker.hint(m.formId, m.status));
-    on('filled', (m) => events.emit('filled', { contents, formId: m.formId, ok: m.ok }));
+    on('filled', (m) => events.emit('filled', { contents, formId: m.formId, ok: m.ok, ...(m.reason ? { reason: m.reason } : {}) }));
 
     contents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;

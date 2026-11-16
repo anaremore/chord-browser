@@ -75,8 +75,13 @@ export interface ClassifyOptions {
 
 /** registerForm, sign_in, login-form → separate words, so `\b` matches. */
 const spaced = (s: string) => s.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_./?=&#-]+/g, ' ');
-/** A field's own words: its name, id, label and placeholder. */
-const fieldText = (f: PasswordField) => spaced(`${f.name} ${f.id} ${f.label} ${f.placeholder}`);
+/**
+ * An id a framework made up, which says nothing about the field: React's `useId` (`:r2:`, `«r2»`, and since
+ * React 19.2 `_r_2_`; `R` where rendered on the server). Spaced, `_r_2_` reads as the word `2`.
+ */
+const GENERATED_ID = /:[rR][0-9a-zA-Z]*:|«[rR][0-9a-zA-Z]*»|_[rR]_[0-9a-zA-Z]+_/g;
+/** A field's own words: its name, id (less what a framework generated), label and placeholder. */
+const fieldText = (f: PasswordField) => spaced(`${f.name} ${f.id.replace(GENERATED_ID, ' ')} ${f.label} ${f.placeholder}`);
 
 const SIGN_IN = /\b(sign|log)[ -]?(in|on)\b|\blogin\b|\bsignin\b|\banmelden\b|iniciar sesi|connexion|se connecter|\baccedi\b|\bentrar\b|inloggen|logga in/i;
 const SIGN_UP = /\bsign[ -]?up\b|\bregist(er|ration|rieren)\b|create (an |your |a free |new |my )?account|\bjoin\b|get started|\bsignup\b|crear cuenta|cr[ée]er un compte|konto erstellen|new account|\benroll/i;
@@ -91,8 +96,11 @@ const NOT_USERNAME = /search|captcha|coupon|promo|voucher|\bzip\b|postal|newslet
 const NOT_PASSWORD = /\banswer|secret (question|word)|security (question|word)|\btin\b|tax ?(id|number)|national (id|insurance)|passport|\bssn\b/i;
 /** A PIN: the password on some sign-in pages (banks, airlines), and not one beside a real password field, nor one of several. */
 const PIN = /\bpin\b|pin ?code/i;
-/** Chromium's two-password guess when both are empty: a form whose own words say "confirm" holds a new password and its confirmation. */
-const CONFIRM_WORDS = /confirm|repeat|re-?type|re-?enter|again|verify|\bconf\b|password ?2|_2\b|\b2\b/i;
+/**
+ * Chromium's two-password guess when both are empty: a form whose own words say "confirm" holds a new password and its confirmation.
+ * A 2 counts only after a password's word (`password2`, `pwd_2`): alone it's any counter, as in a React id like `_r_2_`.
+ */
+const CONFIRM_WORDS = /confirm|repeat|re-?type|re-?enter|again|verify|\bconf\b|\b(pass(word)?|pwd?|pw) ?2\b/i;
 
 const isEmailish = (f: PasswordField) => f.type === 'email' || /e-?mail/i.test(`${f.name} ${f.id} ${f.autocomplete} ${f.label}`) || matchWords(DDG_EMAIL, f.label) === 'yes';
 const autocompleteTokens = (f: PasswordField) => f.autocomplete.split(/\s+/).filter(Boolean);

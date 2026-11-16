@@ -209,8 +209,12 @@ export class PasswordAssist {
     events.on('failed', (e) => this.dropCardsOf(e.contents));
     events.on('filled', (e) => {
       if (e.ok) return;
+      // Half a fill, refused: the detector and the page disagree about the form. Said without a value, an origin or a field.
+      if (e.reason === 'password') console.warn('Passwords: a fill had no password for a password field in its form, so nothing was filled');
       const tab = options.host.tabOf(e.contents);
-      if (tab) options.host.toast(tab.windowId, 'passwords:fill', 'The form changed, so Chord didn’t fill it. Choose the account again.');
+      if (!tab) return;
+      if (e.reason === 'password') options.host.toast(tab.windowId, 'passwords:fill', 'Chord couldn’t tell where the password goes in this form, so it didn’t fill it.');
+      else options.host.toast(tab.windowId, 'passwords:fill', 'The form changed, so Chord didn’t fill it. Choose the account again.');
     });
   }
 

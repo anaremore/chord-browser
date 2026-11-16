@@ -275,6 +275,38 @@ test('a fill on a page scrolled away from the form writes nothing', async ({ pag
   await page.evaluate(() => window.scrollTo(0, 4000));
   await a.clear();
   await fill(page, FILL);
-  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: false }]);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: false, reason: 'changed' }]);
   expect(await page.inputValue('#p')).toBe('');
+});
+
+test('never half a fill: a password field the fill has no password for gets the form nothing, and says why', async ({ page }) => {
+  const { password: _password, ...noPassword } = FILL;
+  const cases: [string, string, unknown, { ok: boolean; reason?: string }, string][] = [
+    // Main thought it a first step (`username-only`), but the form has a password field after all.
+    ['main sent no password to a sign-in form', SIGN_IN, noPassword, { ok: false, reason: 'password' }, ''],
+    // The detector read the form's only password as a new one: the saved password has nowhere it may go.
+    [
+      'the only password field reads as a new one',
+      '<form id="f"><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Create a password"><button>Log in</button></form>',
+      FILL,
+      { ok: false, reason: 'password' },
+      '',
+    ],
+    // A real first step: no password field, so no password, and the username goes in.
+    [
+      'a first step',
+      '<form id="f"><input id="u" name="email" type="email" aria-label="Email"><button>Next</button></form>',
+      noPassword,
+      { ok: true },
+      'ada@example.com',
+    ],
+  ];
+  for (const [name, html, payload, outcome, written] of cases) {
+    const a = await open(page, html);
+    await a.clear();
+    await fill(page, payload);
+    expect(await a.of('filled'), name).toEqual([{ formId: 'f1', ...outcome }]);
+    const values = await page.evaluate(() => [...document.querySelectorAll('input')].map((i) => i.value));
+    expect(values.join(''), name).toBe(written);
+  }
 });
