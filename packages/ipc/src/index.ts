@@ -309,12 +309,13 @@ export const SettingsPatch = z.strictObject({
   proxy: ProxySettingsSchema.optional(),
   // Settings → Your data → Export: whether the card starts with Encrypt with a passphrase on.
   encryptExports: z.boolean().optional(),
-  // Settings → Passwords: the switch, Lock after, and the chords it's on in despite a password manager's extension.
+  // Settings → Passwords: the switch, Lock after, and each chord's own: on despite a password manager's extension, or off by hand.
   passwords: z
     .strictObject({
       enabled: z.boolean(),
       lockAfter: z.union([z.literal(5), z.literal(15), z.literal(30), z.literal(60), z.literal(240), z.literal('never')]),
       onChords: z.array(z.string().min(1).max(100)).max(500),
+      offChords: z.array(z.string().min(1).max(100)).max(500),
     })
     .partial()
     .optional(),
@@ -384,8 +385,8 @@ export type DefaultBrowserStatus = z.infer<typeof DefaultBrowserStatus>;
 export interface SettingsSnapshot {
   settings: Settings;
   chord: Pick<Chord, 'id' | 'name' | 'icon' | 'theme'> | null;
-  /** Every chord in switcher order, for Settings → General → Sign-ins and Privacy → Proxy. */
-  chords: Pick<Chord, 'id' | 'name' | 'icon' | 'profileId' | 'proxy'>[];
+  /** Every chord in switcher order, for Settings → General → Sign-ins, Privacy → Proxy and Passwords' chords (with their colors). */
+  chords: Pick<Chord, 'id' | 'name' | 'icon' | 'profileId' | 'proxy' | 'theme'>[];
   extensions: ExtensionInfo[];
   /** What you allowed or blocked, by site (Settings → Site permissions). */
   sitePermissions: SitePermissions;

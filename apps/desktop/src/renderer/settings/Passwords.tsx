@@ -6,11 +6,11 @@
  * when it was typed more than 5 minutes ago; *Copy* never brings it here.
  * Delete has Undo for the session. Import and Export come in phase 2.
  */
-import { DEFAULT_PASSWORD_SETTINGS, lockAfterText, PASSWORD_LOCK_AFTER, PASSWORD_REAUTH_MS, passwordsOffBecause, passwordsOffText, type LoginSummary, type PasswordLockAfter } from '@chord/core';
+import { DEFAULT_PASSWORD_SETTINGS, lockAfterText, PASSWORD_LOCK_AFTER, PASSWORD_REAUTH_MS, passwordChordPatch, passwordChordRows, type LoginSummary, type PasswordLockAfter } from '@chord/core';
 import type { PasswordRevealResult, PasswordStepResult, PasswordsView, SettingsSnapshot } from '@chord/ipc';
-import type { Appearance } from '@chord/tokens';
+import { createChordTheme, type Appearance } from '@chord/tokens';
 import { Search } from 'lucide-react';
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { EMPTY_PASSPHRASE, PassphraseStep, passphraseReady, type PassphraseValue } from '../shared/PassphraseStep';
 import { api } from './api';
@@ -407,9 +407,55 @@ function AddLogin({ needsPassphrase, onView, onDone }: { needsPassphrase: boolea
     </form>
   );
 }
+/**
+ * One row per chord under the switch, in the switcher's order (DESIGN.md
+ * §8.9): its color, its name and its own switch. A chord with a password
+ * manager's extension shows off, and says which; turning it on there is
+ * `onChords`, off by hand elsewhere `offChords`. With the switch off they dim
+ * and can't be used. Private windows follow the switch alone.
+ */
+function ChordSwitches({ snapshot, appearance, labelledBy }: { snapshot: SettingsSnapshot; appearance: Appearance; labelledBy: string }) {
+  const ids = useId();
+  const settings = snapshot.settings.passwords;
+  const rows = passwordChordRows(settings, snapshot.chords, snapshot.extensions);
+  const colors = useMemo(
+    () => snapshot.chords.map((chord) => createChordTheme(chord.theme, { systemAppearance: appearance, material: 'solid' }).vars['--color-accent']),
+    [snapshot.chords, appearance],
+  );
+  const off = !settings.enabled;
+  return (
+    <div role="group" aria-labelledby={labelledBy} className={`${local.chords} ${off ? local.chordsOff : ''}`}>
+      {snapshot.chords.map((chord, i) => {
+        const row = rows[i]!;
+        const why = row.offBecause ? `${ids}-${i}` : undefined;
+        return (
+          <div key={chord.id} className={`${styles.row} ${local.chordRow}`} data-chord={chord.id}>
+            <span className={local.chordDot} style={{ '--chord-dot': colors[i] } as CSSProperties} aria-hidden />
+            <div className={styles.rowText}>
+              <span className={styles.rowLabel}>{chord.name}</span>
+              {row.offBecause && (
+                <span id={why} className={styles.rowDescription}>
+                  {`Off: ${row.offBecause} is installed here.`}
+                </span>
+              )}
+            </div>
+            <Switch
+              label={chord.name}
+              checked={row.on}
+              disabled={off}
+              onChange={(on) => void api.settings.set({ passwords: passwordChordPatch(settings, chord, on, snapshot.extensions) })}
+              {...(why ? { describedBy: why } : {})}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 
 /** The switch, Lock after, Keep unlocked and the passphrase's own row. */
-function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view: PasswordsView; onView(view: PasswordsView): void }) {
+function Locking({ snapshot, appearance, view, onView }: { snapshot: SettingsSnapshot; appearance: Appearance; view: PasswordsView; onView(view: PasswordsView): void }) {
   const ids = useId();
   const settings = snapshot.settings.passwords;
   const [problem, setProblem] = useState<string | null>(null);
@@ -417,8 +463,6 @@ function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view:
   const [fresh, setFresh] = useState<PassphraseValue>(EMPTY_PASSPHRASE);
   const [current, setCurrent] = useState('');
   const [busy, setBusy] = useState(false);
-  const off = passwordsOffBecause(settings, snapshot.chords, snapshot.extensions);
-  const offText = passwordsOffText(off);
   const answered = (result: PasswordStepResult) => {
     setBusy(false);
     if (!result.ok) return setProblem(PROBLEMS[result.problem]);
@@ -447,16 +491,9 @@ function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view:
           <span id={`${ids}-on`} className={styles.rowLabel}>
             Offer to save and fill passwords
           </span>
-          {offText && settings.enabled && (
-            <span id={`${ids}-off`} className={styles.rowDescription}>
-              {offText}{' '}
-              <button
-                type="button"
-                className={local.inlineLink}
-                onClick={() => void api.settings.set({ passwords: { onChords: [...settings.onChords, ...off.map((o) => o.chordId)] } })}
-              >
-                Turn on there too
-              </button>
+          {snapshot.chords.length > 0 && (
+            <span id={`${ids}-each`} className={styles.rowDescription}>
+              In each chord below.
             </span>
           )}
         </div>
@@ -465,8 +502,14 @@ function Locking({ snapshot, view, onView }: { snapshot: SettingsSnapshot; view:
           visible={settings.enabled !== DEFAULT_PASSWORD_SETTINGS.enabled}
           onReset={() => void api.settings.set({ passwords: { enabled: DEFAULT_PASSWORD_SETTINGS.enabled } })}
         />
-        <Switch label="Offer to save and fill passwords" checked={settings.enabled} onChange={(enabled) => void api.settings.set({ passwords: { enabled } })} {...(offText ? { describedBy: `${ids}-off` } : {})} />
+        <Switch
+          label="Offer to save and fill passwords"
+          checked={settings.enabled}
+          onChange={(enabled) => void api.settings.set({ passwords: { enabled } })}
+          {...(snapshot.chords.length > 0 ? { describedBy: `${ids}-each` } : {})}
+        />
       </div>
+      {snapshot.chords.length > 0 && <ChordSwitches snapshot={snapshot} appearance={appearance} labelledBy={`${ids}-on`} />}
       <div className={styles.row}>
         <div className={styles.rowText}>
           <label htmlFor={`${ids}-lock`} className={styles.rowLabel}>
@@ -656,7 +699,7 @@ export function PasswordsSection({ snapshot, appearance }: { snapshot: SettingsS
   return (
     <>
       <SectionHeader title="Passwords" description="Chord keeps the passwords you sign in with, locked with a passphrase only you know, and fills them when you choose." />
-      {view && <Locking snapshot={snapshot} view={view} onView={setView} />}
+      {view && <Locking snapshot={snapshot} appearance={appearance} view={view} onView={setView} />}
       {view?.state === 'none' && !adding && <p className={local.empty}>No passwords yet. Sign in somewhere and Chord offers to keep it.</p>}
       {view?.state === 'open' && (
         <>
