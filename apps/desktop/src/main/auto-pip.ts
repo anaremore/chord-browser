@@ -13,7 +13,7 @@
  * and brings the tab back itself. Its ✕ ends PiP and pauses the video, which
  * is how the two are told apart.
  */
-import { isInternalUrl, type Command, type NodeId, type State } from '@chord/core';
+import { isInternalUrl, type Command, type NodeId, type State, nodeOf } from '@chord/core';
 import type { WebContents, WebFrameMain } from 'electron';
 import { PAGE_CALL_MS, pageCall } from './page-call';
 
@@ -115,7 +115,7 @@ export class AutoPip {
   /** You switched away from this page: pop its video out if one is playing. */
   left(contents: WebContents): void {
     const nodeId = this.deps.nodeFor(contents);
-    const node = nodeId ? this.deps.state().nodes[nodeId] : undefined;
+    const node = nodeId ? nodeOf(this.deps.state(), nodeId) : undefined;
     if (!nodeId || node?.kind !== 'tab' || isInternalUrl(node.url)) return;
     // A crashed page has no frames to ask (reading mainFrame throws), and no video playing.
     if (!this.deps.state().settings.autoPip || this.popped || contents.isDestroyed() || contents.isCrashed()) return;

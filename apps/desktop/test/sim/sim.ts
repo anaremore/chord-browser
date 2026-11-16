@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { vi } from 'vitest';
-import { stable, localChordFields, localFavoriteFields, localNodeFields, localRouteFields, localSettingFields, localThemeFields, same, type Command, type Settings, type State, type SyncValues } from '@chord/core';
+import { stable, localChordFields, localFavoriteFields, localNodeFields, localRouteFields, localSettingFields, localThemeFields, same, type Command, type Settings, type State, type SyncValues, nodeOf, nodeList } from '@chord/core';
 import { hooks } from './electron';
 import { Computer, PASSPHRASE, THEME } from './computer';
 import { LocalFolder, Rng, SyncApp } from './folder';
@@ -395,7 +395,7 @@ class Sim {
         if (set) out.push({ key: `chord\n${id}`, set, at: time('chord', id, Number(r['updated_at'])) });
       }
       for (const r of raw.prepare('SELECT id, updated_at FROM node WHERE deleted_at IS NULL').all() as Record<string, unknown>[]) {
-        const node = c.state.nodes[String(r['id'])];
+        const node = nodeOf(c.state, String(r['id']));
         if (!node || !chords.has(node.chordId)) continue;
         const set = localNodeFields(node, null);
         if (!set) continue;
@@ -505,7 +505,7 @@ class Sim {
       // readmitted as the join ends), gone from the copy or not.
       if (type === 'tab' || type === 'folder' || type === 'split') {
         const before = nodesNow.before.get(key);
-        return chordKept(state.nodes[id]?.chordId ?? before ?? (all.get(key)?.['pos'] as { chord?: string } | undefined)?.chord ?? nodesNow.outbox.get(key));
+        return chordKept(nodeOf(state, id)?.chordId ?? before ?? (all.get(key)?.['pos'] as { chord?: string } | undefined)?.chord ?? nodesNow.outbox.get(key));
       }
       return true;
     });
@@ -680,10 +680,10 @@ class Sim {
     const windowId = Object.keys(state.windows)[0];
     if (!windowId) return null;
     const chords = Object.values(state.chords).filter((x) => !x.private);
-    const pinned = Object.values(state.nodes).filter((n) => n.section === 'pinned' && state.chords[n.chordId] && !state.chords[n.chordId]!.private);
+    const pinned = nodeList(state).filter((n) => n.section === 'pinned' && state.chords[n.chordId] && !state.chords[n.chordId]!.private);
     const tabs = pinned.filter((n) => n.kind === 'tab');
     const folders = pinned.filter((n) => n.kind === 'folder');
-    const today = Object.values(state.nodes).filter((n) => n.kind === 'tab' && n.section === 'today');
+    const today = nodeList(state).filter((n) => n.kind === 'tab' && n.section === 'today');
     const favorites = Object.values(state.favorites);
     const themes = state.settings.themes;
     const routes = Object.values(state.linkRoutes);
@@ -1062,7 +1062,7 @@ function lastChord(state: State, key: string): boolean {
   const [type, id] = key.split('\n') as [string, string];
   if (type === 'chord') return id === only;
   if (type === 'route') return state.linkRoutes[id]?.chordId === only;
-  return state.nodes[id]?.chordId === only;
+  return nodeOf(state, id)?.chordId === only;
 }
 
 /** The first line two copies differ on (type/id/fields/stamps). */

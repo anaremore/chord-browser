@@ -1,21 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  apply,
-  emptyState,
-  isCrossSite,
-  restoreState,
-  routeCovers,
-  routeFor,
-  routeHost,
-  routeKey,
-  siteOf,
-  tabsInOrder,
-  type Chord,
-  type Command,
-  type Context,
-  type PersistedState,
-  type State,
-} from '../src';
+import { apply, emptyState, isCrossSite, restoreState, routeCovers, routeFor, routeHost, routeKey, siteOf, tabsInOrder, type Chord, type Command, type Context, type PersistedState, type State, nodeOf } from '../src';
 
 const chord = (id: string, name: string, extra: Partial<Chord> = {}): Chord => ({
   id,
@@ -202,7 +186,7 @@ describe('tab.adopt', () => {
     const t = setup();
     t.run({ t: 'window.create', windowId: 'pw', privateChordId: 'pc' });
     t.run({ t: 'tab.adopt', windowId: 'pw', nodeId: 'peek-p', chordId: 'pc', url: 'https://b.test/', title: '' });
-    expect(t.state.nodes['peek-p']).toMatchObject({ chordId: 'pc', section: 'today' });
+    expect(nodeOf(t.state, 'peek-p')).toMatchObject({ chordId: 'pc', section: 'today' });
     // Not into a normal chord from a private window, nor into the private chord from a normal one.
     expect(t.run({ t: 'tab.adopt', windowId: 'pw', nodeId: 'x', chordId: 'c1', url: 'https://b.test/', title: '' }).patches).toEqual([]);
     expect(t.run({ t: 'tab.adopt', windowId: 'w1', nodeId: 'y', chordId: 'pc', url: 'https://b.test/', title: '' }).patches).toEqual([]);

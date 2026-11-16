@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { apply, seedState, type Choice, type Context, type State } from '@chord/core';
+import { apply, seedState, type Choice, type Context, type State, nodeList } from '@chord/core';
 import type { HistorySearch } from '@chord/ipc';
 import { keywordFor } from '@chord/core';
 import { buildResults, completionFor, destinationOf, scopeFor, type Result } from '../../src/renderer/overlay/results';
@@ -72,7 +72,7 @@ describe('command bar ranking', () => {
     expect(actions(state, 'separate')).not.toContain('split.separate');
     const win = state.windows[windowId]!;
     const shown = win.activeTab[win.activeChordId]!;
-    const other = Object.values(state.nodes).find((node) => node.kind === 'tab' && node.id !== shown)!;
+    const other = nodeList(state).find((node) => node.kind === 'tab' && node.id !== shown)!;
     const split = apply(state, { t: 'split.add', windowId, withId: shown, nodeId: other.id }, ctx).state;
     expect(actions(split, 'separate')).toContain('split.separate');
     expect(actions(split, 'pane')).toEqual(expect.arrayContaining(['split.focusNext', 'split.focusPrevious']));
@@ -163,7 +163,7 @@ describe('scopes', () => {
 
   it('a keyword searches its site and ranks only pages there', () => {
     const { state, windowId } = stateWith(['https://www.youtube.com/watch?v=1', 'https://lofi.test/']);
-    const tabs = Object.values(state.nodes).filter((n) => n.kind === 'tab');
+    const tabs = nodeList(state).filter((n) => n.kind === 'tab');
     let withTitles = state;
     for (const t of tabs) withTitles = apply(withTitles, { t: 'tab.updated', nodeId: t.id, title: 'lofi beats' }, ctx).state;
     const results = buildResults('lofi', withTitles, windowId, 'new', null, now, { scope: { kind: 'keyword', keyword: keywordFor('yt')! } });

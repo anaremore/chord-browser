@@ -9,7 +9,7 @@
  * Asked just before the view is swapped out, it still returns that frame, so
  * leaving a tab is the main moment to picture it.
  */
-import { children, openedAgo, type NodeId, type State, type TabNode } from '@chord/core';
+import { children, openedAgo, type NodeId, type State, type TabNode, nodeOf, nodeList } from '@chord/core';
 import type { PreviewCard, PreviewRow, PreviewTarget } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import { CaptureStore } from './captures';
@@ -80,13 +80,13 @@ export class Previews {
     const state = this.deps.state();
     const ids = new Set<string>();
     if (!state.settings.pagePreviews) return ids;
-    for (const node of Object.values(state.nodes)) if (this.eligible(state, node.id)) ids.add(node.id);
+    for (const node of nodeList(state)) if (this.eligible(state, node.id)) ids.add(node.id);
     return ids;
   }
 
   private eligible(state: State, nodeId: NodeId): boolean {
     if (!state.settings.pagePreviews) return false;
-    const node = state.nodes[nodeId];
+    const node = nodeOf(state, nodeId);
     if (node?.kind !== 'tab' || node.section !== 'pinned') return false;
     if (state.chords[node.chordId]?.private) return false;
     return /^(https?|file):/i.test(node.url);
@@ -161,7 +161,7 @@ export class Previews {
     const state = this.deps.state();
     // Presenting mode sends no cards at all: the shell may not have heard it's on yet.
     if (!state.settings.pagePreviews || state.presenting) return null;
-    const node = state.nodes[nodeId];
+    const node = nodeOf(state, nodeId);
     const chord = node ? state.chords[node.chordId] : undefined;
     if (!node || !chord || chord.private || node.section !== 'pinned') return null;
     const look = { theme: chord.theme, interface: state.settings.interface, animate: this.deps.animate() };

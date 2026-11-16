@@ -4,7 +4,7 @@
  * persistence) and the effects (for real views).
  */
 import { apply, uuidv7, type Command, type Effect, type State } from '@chord/core';
-import type { Patch } from 'immer';
+import { freeze, type Patch } from 'immer';
 
 export interface Change {
   state: State;
@@ -21,7 +21,8 @@ export class Store {
   private readonly listeners = new Set<(change: Change) => void>();
 
   constructor(initial: State) {
-    this.current = initial;
+    // Frozen, as every state after it is (Immer freezes what it makes): the nodes' index is kept only for a state that can't change (core's nodes.ts).
+    this.current = freeze(initial, true);
   }
 
   get state(): State {

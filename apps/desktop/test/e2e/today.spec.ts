@@ -71,10 +71,10 @@ const focusedRow = (list: Locator) =>
 const todayOrder = (shell: Page) =>
   shell.evaluate(async () => {
     type Node = { id: string; kind: string; chordId: string; section: string; parentId: string | null; rank: string };
-    const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string }>; nodes: Record<string, Node> } }> } } }).chord;
+    const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string }>; nodes: Record<string, Record<string, Node>> } }> } } }).chord;
     const { windowId, state } = await chord.state.snapshot();
     const chordId = state.windows[windowId]!.activeChordId;
-    return Object.values(state.nodes)
+    return Object.values(state.nodes).flatMap((b) => Object.values(b))
       .filter((n) => n.chordId === chordId && n.section === 'today' && n.parentId === null && n.kind !== 'folder')
       .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.id < b.id ? -1 : 1))
       .map((n) => n.id);

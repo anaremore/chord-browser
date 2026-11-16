@@ -1,21 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  appCount,
-  chordsWithCounts,
-  cleanCountSites,
-  countShows,
-  countSite,
-  countText,
-  countWithin,
-  unreadWords,
-  apply,
-  emptyState,
-  IDLE_LIVE,
-  pageBadge,
-  restoreState,
-  sumCounts,
-  type State,
-} from '../src';
+import { appCount, chordsWithCounts, cleanCountSites, countShows, countSite, countText, countWithin, unreadWords, apply, emptyState, IDLE_LIVE, pageBadge, restoreState, sumCounts, type State, nodesFrom } from '../src';
 
 describe('pageBadge: what Chord takes from a page’s preload', () => {
   it.each([
@@ -88,7 +72,7 @@ describe('counts in the sidebar', () => {
   /** Personal: a pinned folder holding Telegram (3) and a folder in it with WhatsApp (a dot); Mail in Today. Work: Slack, asleep. */
   function state(): State {
     const s = emptyState();
-    s.nodes = {
+    s.nodes = nodesFrom(Object.values({
       f1: { kind: 'folder', id: 'f1', chordId: 'c1', section: 'pinned', parentId: null, rank: 'a0', title: 'Messages', collapsed: true, createdAt: 0 },
       f2: { kind: 'folder', id: 'f2', chordId: 'c1', section: 'pinned', parentId: 'f1', rank: 'a1', title: 'More', collapsed: true, createdAt: 0 },
       telegram: tab('telegram', 'c1', 'pinned', 'f1', 'https://web.telegram.org/'),
@@ -97,7 +81,7 @@ describe('counts in the sidebar', () => {
       slack: tab('slack', 'c2', 'pinned', null, 'https://app.slack.com/'),
       // Telegram again, in Today: the same site, its own count.
       telegram2: tab('telegram2', 'c1', 'today', null, 'https://web.telegram.org/k/'),
-    };
+    }));
     s.live = { telegram: { ...IDLE_LIVE, badge: 3 }, whatsapp: { ...IDLE_LIVE, badge: 'dot' }, mail: { ...IDLE_LIVE, badge: 250 }, telegram2: { ...IDLE_LIVE, badge: 2 } };
     return s;
   }

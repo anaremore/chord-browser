@@ -1,4 +1,4 @@
-import { emptyState, type State } from '@chord/core';
+import { bucketOf, emptyState, nodeIds, type State } from '@chord/core';
 import type { StatePatchEvent, StateSnapshot } from '@chord/ipc';
 import { describe, expect, it } from 'vitest';
 import { createMirror } from '../../src/renderer/shared/mirror';
@@ -15,7 +15,7 @@ function fakeMain(state: State) {
       },
     },
     patch: (version: number, title: string) =>
-      send({ version, patches: [{ op: 'replace', path: ['version'], value: version }, { op: 'add', path: ['nodes', `n${version}`], value: { id: `n${version}`, title } }] }),
+      send({ version, patches: [{ op: 'replace', path: ['version'], value: version }, { op: 'add', path: ['nodes', bucketOf(`n${version}`), `n${version}`], value: { id: `n${version}`, title } }] }),
   };
 }
 
@@ -34,7 +34,7 @@ describe('the state mirror', () => {
     main.patch(3, 'Three');
     // Applied as they came: get() is always current, even before the frame.
     expect(mirror.get().version).toBe(3);
-    expect(Object.keys(mirror.get().nodes)).toEqual(['n1', 'n2', 'n3']);
+    expect(nodeIds(mirror.get()).sort()).toEqual(['n1', 'n2', 'n3']);
     expect(told).toBe(0);
     expect(frame).toHaveLength(1);
 

@@ -9,33 +9,7 @@
  * a filter (`@tabs`, `@history`, …) shows only that kind. The engine's search
  * suggestions come last, so they never move the rows above them.
  */
-import { type AssistantHit,
-  abbreviationScore,
-  habit,
-  keywordFor,
-  keywordSearchUrl,
-  learnedPoints,
-  matchScore,
-  parseInput,
-  placeKey,
-  prefixes,
-  recencyPoints,
-  searchEngine,
-  searchUrl,
-  shownTabs,
-  chordsFor,
-  activeTab,
-  activeTabId,
-  splitOf,
-  usagePoints,
-  type ActionId,
-  type ArchivedTab,
-  type Chord,
-  type SiteKeyword,
-  type State,
-  type TabNode,
-  type ImageSearchEngine,
-} from '@chord/core';
+import { type AssistantHit, abbreviationScore, habit, keywordFor, keywordSearchUrl, learnedPoints, matchScore, parseInput, placeKey, prefixes, recencyPoints, searchEngine, searchUrl, shownTabs, chordsFor, activeTab, activeTabId, splitOf, usagePoints, type ActionId, type ArchivedTab, type Chord, type SiteKeyword, type State, type TabNode, type ImageSearchEngine, nodeList } from '@chord/core';
 import type { HistorySearch } from '@chord/ipc';
 import { displayHost, pageTitle } from '../shared/site';
 
@@ -343,7 +317,7 @@ function resultsFor(
   const activeId = win ? win.activeTab[win.activeChordId] : null;
   // Open tabs from the chords this window can see: a private window's own, or none of a private window's.
   const visibleChords = new Set(chordsFor(state, windowId).map((c) => c.id));
-  const tabs = Object.values(state.nodes).filter((n): n is TabNode => n.kind === 'tab' && visibleChords.has(n.chordId));
+  const tabs = nodeList(state).filter((n): n is TabNode => n.kind === 'tab' && visibleChords.has(n.chordId));
   const chordName = (t: TabNode) => (win && t.chordId !== win.activeChordId ? (state.chords[t.chordId]?.name ?? null) : null);
   const tabResult = (t: TabNode): Result => ({
     kind: 'tab',

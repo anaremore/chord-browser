@@ -7,20 +7,7 @@
  * older value in place of a newer one, nor take what's only on one computer
  * without a toast and an Undo.
  */
-import {
-  defaultFields,
-  localChordFields,
-  localFavoriteFields,
-  localNodeFields,
-  localRouteFields,
-  localSettingFields,
-  localThemeFields,
-  same,
-  type Command,
-  type Settings,
-  type State,
-  type SyncValues,
-} from '@chord/core';
+import { defaultFields, localChordFields, localFavoriteFields, localNodeFields, localRouteFields, localSettingFields, localThemeFields, same, type Command, type Settings, type State, type SyncValues, nodeOf, nodeList } from '@chord/core';
 
 export type Things = Map<string, SyncValues>;
 
@@ -32,7 +19,7 @@ export function synced(state: State): Things {
     const set = localChordFields(chord);
     if (set) out.set(`chord\n${chord.id}`, set);
   }
-  for (const node of Object.values(state.nodes)) {
+  for (const node of nodeList(state)) {
     const chord = state.chords[node.chordId];
     if (!chord || chord.private) continue;
     const set = localNodeFields(node, null);
@@ -368,8 +355,8 @@ export class Model {
     }
     // Today tabs: only this computer's. Gone from the state, moved or not, without being in sync's Undo: lost.
     const kept = new Set(after.syncUndo.flatMap((entry) => [...entry.nodes.map((n) => n.id), ...(entry.moved ?? []).map((n) => n.id)]));
-    for (const node of Object.values(before.nodes)) {
-      if (node.kind !== 'tab' || node.section !== 'today' || after.nodes[node.id] || kept.has(node.id)) continue;
+    for (const node of nodeList(before)) {
+      if (node.kind !== 'tab' || node.section !== 'today' || nodeOf(after, node.id) || kept.has(node.id)) continue;
       this.violations.push(`I5 a Today tab (${node.id}) on ${by} went with ${command.t}, with no Undo`);
     }
   }

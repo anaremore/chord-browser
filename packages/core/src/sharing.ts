@@ -5,6 +5,7 @@
  */
 import { isPrivateChord } from './select';
 import type { NodeId, State, TabNode } from './model';
+import { nodeOf } from './nodes';
 
 /** The most tabs the picker lists; the rest are older than anyone would look for. */
 export const MAX_SHAREABLE_TABS = 50;
@@ -16,12 +17,12 @@ export const MAX_SHAREABLE_TABS = 50;
  * page ever sees a private window's.
  */
 export function shareableTabs(state: State, askingId: NodeId, loaded: Iterable<NodeId>): TabNode[] {
-  const asking = state.nodes[askingId];
+  const asking = nodeOf(state, askingId);
   if (asking?.kind !== 'tab') return [];
   const privately = isPrivateChord(state, asking.chordId);
   const out: TabNode[] = [];
   for (const id of loaded) {
-    const node = state.nodes[id];
+    const node = nodeOf(state, id);
     if (node?.kind !== 'tab' || !/^(https?|file):/i.test(node.url)) continue;
     if (privately ? node.chordId !== asking.chordId : isPrivateChord(state, node.chordId)) continue;
     out.push(node);

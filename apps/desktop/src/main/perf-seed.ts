@@ -11,7 +11,7 @@
  * hidden elements): a setup that's big for sync to read.
  */
 import { createHash } from 'node:crypto';
-import { addSleepingTabs, EFFECTS_LIMITS, type SavedEffects, type State, type TabNode } from '@chord/core';
+import { addSleepingTabs, EFFECTS_LIMITS, type SavedEffects, type State, type TabNode, nodeOf, setNode, nodeIds } from '@chord/core';
 import type { HistoryEvent } from '@chord/data';
 
 /** Titles varied enough that typing narrows the results. */
@@ -49,26 +49,26 @@ export function seedForPerformance(
   const chordId = Object.values(state.windows)[0]?.activeChordId;
   if (chordId && tabs > 0) addSleepingTabs(state, chordId, Array.from({ length: tabs }, (_, i) => page(i + 1)), { now: at, newId });
   if (chordId && pinned > 0) {
-    const before = new Set(Object.keys(state.nodes));
+    const before = new Set(nodeIds(state));
     addSleepingTabs(state, chordId, Array.from({ length: pinned }, (_, i) => page(tabs + i + 1)), { now: at, newId });
     let i = 0;
-    for (const id of Object.keys(state.nodes)) {
+    for (const id of nodeIds(state)) {
       if (before.has(id)) continue;
-      const tab = state.nodes[id] as TabNode;
+      const tab = nodeOf(state, id) as TabNode;
       const icon = Buffer.concat(Array.from({ length: 94 }, (_, k) => createHash('sha256').update(`${i}:${k}`).digest()));
-      state.nodes[id] = { ...tab, section: 'pinned', pinnedUrl: tab.url, favicon: `data:image/png;base64,${icon.toString('base64')}` };
+      setNode(state, { ...tab, section: 'pinned', pinnedUrl: tab.url, favicon: `data:image/png;base64,${icon.toString('base64')}` });
       i++;
     }
     // The last pinned tabs, 20 to a folder, in folders after the rest.
-    const seeded = Object.keys(state.nodes).filter((id) => !before.has(id));
-    const last = seeded.reduce((r, id) => (state.nodes[id]!.rank > r ? state.nodes[id]!.rank : r), '');
+    const seeded = nodeIds(state).filter((id) => !before.has(id));
+    const last = seeded.reduce((r, id) => (nodeOf(state, id)!.rank > r ? nodeOf(state, id)!.rank : r), '');
     const count = Math.min(folders, Math.floor(seeded.length / 20));
     for (let f = 0; f < count; f++) {
       const folderId = newId();
       // Ranks after every seeded one (a key followed by more characters sorts after it), in order.
-      state.nodes[folderId] = { kind: 'folder', id: folderId, chordId, section: 'pinned', parentId: null, rank: `${last}V${String(f).padStart(5, '0')}`, title: `Folder ${f + 1}`, collapsed: f % 2 === 1, createdAt: at };
+      setNode(state, { kind: 'folder', id: folderId, chordId, section: 'pinned', parentId: null, rank: `${last}V${String(f).padStart(5, '0')}`, title: `Folder ${f + 1}`, collapsed: f % 2 === 1, createdAt: at });
       seeded.slice(seeded.length - (count - f) * 20, seeded.length - (count - f - 1) * 20).forEach((id, k) => {
-        state.nodes[id] = { ...(state.nodes[id] as TabNode), parentId: folderId, rank: `a${String(k).padStart(3, '0')}` };
+        setNode(state, { ...(nodeOf(state, id) as TabNode), parentId: folderId, rank: `a${String(k).padStart(3, '0')}` });
       });
     }
   }

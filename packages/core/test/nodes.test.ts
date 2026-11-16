@@ -1,6 +1,6 @@
 import { isDraft, produce } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { children, childrenToRead, descendants, emptyState, nodeList, tabsInOrder, type SidebarNode, type State, type TabNode } from '../src';
+import { children, childrenToRead, descendants, emptyState, nodeList, tabsInOrder, type SidebarNode, type State, type TabNode, nodeOf, setNode, deleteNode, nodeIds } from '../src';
 
 const tab = (id: string, rank: string, parentId: string | null = null, section: 'pinned' | 'today' = 'pinned'): SidebarNode => ({
   kind: 'tab',
@@ -30,7 +30,7 @@ function base(): State {
     tab('b', 'a2'),
     tab('t', 'a0', null, 'today'),
   ])
-    state.nodes[n.id] = n;
+    setNode(state, n);
   return produce(state, () => {});
 }
 
@@ -42,13 +42,13 @@ const ids = (nodes: readonly SidebarNode[]) => nodes.map((n) => n.id);
  */
 const cases: { name: string; change: (d: State) => void; pinned: string[]; inFolder: string[]; order: string[] }[] = [
   { name: 'nothing', change: () => {}, pinned: ['a', 'f', 'b'], inFolder: ['x', 'y'], order: ['a', 'x', 'y', 'b', 't'] },
-  { name: 'a node added', change: (d) => void (d.nodes['c'] = tab('c', 'a3')), pinned: ['a', 'f', 'b', 'c'], inFolder: ['x', 'y'], order: ['a', 'x', 'y', 'b', 'c', 't'] },
-  { name: 'a node deleted', change: (d) => void delete d.nodes['a'], pinned: ['f', 'b'], inFolder: ['x', 'y'], order: ['x', 'y', 'b', 't'] },
-  { name: 'a node re-ranked', change: (d) => void (d.nodes['a']!.rank = 'a9'), pinned: ['f', 'b', 'a'], inFolder: ['x', 'y'], order: ['x', 'y', 'b', 'a', 't'] },
-  { name: 'a node moved into the folder', change: (d) => void (d.nodes['b']!.parentId = 'f'), pinned: ['a', 'f'], inFolder: ['x', 'y', 'b'], order: ['a', 'x', 'y', 'b', 't'] },
-  { name: 'a node unpinned', change: (d) => void (d.nodes['b']!.section = 'today'), pinned: ['a', 'f'], inFolder: ['x', 'y'], order: ['a', 'x', 'y', 't', 'b'] },
-  { name: 'a node replaced', change: (d) => void (d.nodes['y'] = tab('y', '9', 'f')), pinned: ['a', 'f', 'b'], inFolder: ['y', 'x'], order: ['a', 'y', 'x', 'b', 't'] },
-  { name: 'the folder collapsed', change: (d) => void ((d.nodes['f'] as { collapsed: boolean }).collapsed = true), pinned: ['a', 'f', 'b'], inFolder: ['x', 'y'], order: ['a', 'b', 't'] },
+  { name: 'a node added', change: (d) => void (setNode(d, tab('c', 'a3'))), pinned: ['a', 'f', 'b', 'c'], inFolder: ['x', 'y'], order: ['a', 'x', 'y', 'b', 'c', 't'] },
+  { name: 'a node deleted', change: (d) => void deleteNode(d, 'a'), pinned: ['f', 'b'], inFolder: ['x', 'y'], order: ['x', 'y', 'b', 't'] },
+  { name: 'a node re-ranked', change: (d) => void (nodeOf(d, 'a')!.rank = 'a9'), pinned: ['f', 'b', 'a'], inFolder: ['x', 'y'], order: ['x', 'y', 'b', 'a', 't'] },
+  { name: 'a node moved into the folder', change: (d) => void (nodeOf(d, 'b')!.parentId = 'f'), pinned: ['a', 'f'], inFolder: ['x', 'y', 'b'], order: ['a', 'x', 'y', 'b', 't'] },
+  { name: 'a node unpinned', change: (d) => void (nodeOf(d, 'b')!.section = 'today'), pinned: ['a', 'f'], inFolder: ['x', 'y'], order: ['a', 'x', 'y', 't', 'b'] },
+  { name: 'a node replaced', change: (d) => void (setNode(d, tab('y', '9', 'f'))), pinned: ['a', 'f', 'b'], inFolder: ['y', 'x'], order: ['a', 'y', 'x', 'b', 't'] },
+  { name: 'the folder collapsed', change: (d) => void ((nodeOf(d, 'f') as { collapsed: boolean }).collapsed = true), pinned: ['a', 'f', 'b'], inFolder: ['x', 'y'], order: ['a', 'b', 't'] },
 ];
 
 describe('reading nodes', () => {
@@ -60,7 +60,7 @@ describe('reading nodes', () => {
       expect(ids(children(draft, 'c1', 'pinned', 'f'))).toEqual(inFolder);
       expect(ids(tabsInOrder(draft, 'c1'))).toEqual(order);
       expect(ids(descendants(draft, 'f'))).toEqual(inFolder);
-      expect(nodeList(draft)).toHaveLength(Object.keys(draft.nodes).length);
+      expect(nodeList(draft)).toHaveLength(nodeIds(draft).length);
     });
   });
 
@@ -83,7 +83,7 @@ describe('reading nodes', () => {
   it('drafts no node it only reads, only the ones changed', () => {
     produce(base(), (d) => {
       const draft = d as State;
-      (draft.nodes['b'] as TabNode).title = 'changed';
+      (nodeOf(draft, 'b') as TabNode).title = 'changed';
       // Read through Immer's own copy (nodes.ts): if Immer ever stores it differently, these would be drafts.
       for (const read of [nodeList(draft), childrenToRead(draft, 'c1', 'pinned'), childrenToRead(draft, 'c1', 'pinned', 'f'), tabsInOrder(draft, 'c1'), descendants(draft, 'f')]) {
         expect(read.length).toBeGreaterThan(0);
@@ -101,9 +101,9 @@ describe('reading nodes', () => {
 
   it("doesn't keep children of a state that can still change", () => {
     const state = emptyState();
-    state.nodes['a'] = tab('a', 'a0');
+    setNode(state, tab('a', 'a0'));
     expect(ids(children(state, 'c1', 'pinned'))).toEqual(['a']);
-    state.nodes['b'] = tab('b', 'a1');
+    setNode(state, tab('b', 'a1'));
     expect(ids(children(state, 'c1', 'pinned'))).toEqual(['a', 'b']);
   });
 });

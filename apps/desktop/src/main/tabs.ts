@@ -4,7 +4,7 @@
  * sleep: its page closes, and its back/forward history (scroll position
  * included) comes back when it's shown again.
  */
-import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
+import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId, nodeOf, nodeList } from '@chord/core';
 import type { NavState } from '@chord/data';
 import { frameRadius } from '@chord/tokens';
 import { WebContentsView, type BrowserWindow, type HandlerDetails, type Session, type WebContents, type WindowOpenHandlerResponse } from 'electron';
@@ -110,7 +110,7 @@ export class TabManager {
   private knownIcon(session: Session, site: string): string | null {
     const kept = this.siteIcons.get(session)?.get(site);
     if (kept) return kept;
-    for (const node of Object.values(this.deps.state().nodes)) {
+    for (const node of nodeList(this.deps.state())) {
       if (node.kind !== 'tab' || !node.favicon || (node.url !== site && !node.url.startsWith(`${site}/`))) continue;
       if (this.deps.sessionFor(node) !== session) continue;
       this.rememberIcon(session, node.url, node.favicon);
@@ -176,7 +176,7 @@ export class TabManager {
   ensure(nodeId: NodeId): WebContentsView | undefined {
     const existing = this.views.get(nodeId);
     if (existing) return existing;
-    const node = this.deps.state().nodes[nodeId];
+    const node = nodeOf(this.deps.state(), nodeId);
     if (node?.kind !== 'tab') return undefined;
 
     const internal = isInternalUrl(node.url);
@@ -295,7 +295,7 @@ export class TabManager {
 
   /** The count a service worker gave the tab's site: the one whose scope is the longest start of its address, in its session. */
   private scopeBadge(nodeId: NodeId, url: string): TabCount {
-    const node = this.deps.state().nodes[nodeId];
+    const node = nodeOf(this.deps.state(), nodeId);
     const scopes = node?.kind === 'tab' ? this.scopeBadges.get(this.deps.sessionFor(node)) : undefined;
     let best: { scope: string; badge: Exclude<TabCount, null> } | null = null;
     for (const [scope, badge] of scopes ?? []) if (url.startsWith(scope) && (!best || scope.length > best.scope.length)) best = { scope, badge };
@@ -398,7 +398,7 @@ export class TabManager {
       if (had || shown !== null) live({ badge: shown });
       // Its icon stays while the site does (a page may never name one, or fail to load it). On another
       // site, the icon Chord has for that one, or none until the page's own arrives: never the last site's.
-      const before = this.deps.state().nodes[nodeId];
+      const before = nodeOf(this.deps.state(), nodeId);
       const site = siteOf(url);
       if (before?.kind === 'tab' && siteOf(before.url) !== site) {
         dispatch({ t: 'tab.updated', nodeId, url, favicon: site ? this.knownIcon(contents.session, site) : null });
@@ -488,7 +488,7 @@ export class TabManager {
 
   /** Whether following `url` from this tab's page opens Peek: it's pinned, and the link leaves its site. */
   private leadsToPeek(nodeId: NodeId, contents: WebContents, url: string): boolean {
-    const node = this.deps.state().nodes[nodeId];
+    const node = nodeOf(this.deps.state(), nodeId);
     return node?.kind === 'tab' && node.section === 'pinned' && this.views.get(nodeId)?.webContents === contents && isCrossSite(contents.getURL(), url);
   }
 

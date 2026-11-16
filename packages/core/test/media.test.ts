@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { apply, cardMedia, emptyState, imageSide, mediaVisibleTo, pickArtwork, type Command, type Context, type MediaImage, type State, type TabNode } from '../src';
+import { apply, cardMedia, emptyState, imageSide, mediaVisibleTo, pickArtwork, type Command, type Context, type MediaImage, type State, type TabNode, nodeOf } from '../src';
 
 const image = (src: string, sizes = '', type = ''): MediaImage => ({ src, sizes, type });
 
@@ -83,12 +83,12 @@ describe('muting a tab', () => {
     state.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: null }, sidebar: 'docked', sidebarWidth: 248, bounds: null };
     state = apply(state, { t: 'tab.open', windowId: 'w1', url: 'https://music.test/' }, ctx).state;
     const muted = apply(state, { t: 'tab.mute', nodeId: 'id-1', muted: true }, ctx);
-    expect((muted.state.nodes['id-1'] as TabNode).muted).toBe(true);
+    expect((nodeOf(muted.state, 'id-1') as TabNode).muted).toBe(true);
     expect(muted.effects).toEqual([{ e: 'view.mute', nodeId: 'id-1', muted: true }]);
     expect(apply(muted.state, { t: 'tab.mute', nodeId: 'id-1', muted: true }, ctx).patches).toEqual([]);
     const unmuted = apply(muted.state, { t: 'tab.mute', nodeId: 'id-1', muted: false }, ctx);
     // Unmuted, the field goes: a tab that was never muted and one that was look the same.
-    expect('muted' in unmuted.state.nodes['id-1']!).toBe(false);
+    expect('muted' in nodeOf(unmuted.state, 'id-1')!).toBe(false);
     expect(unmuted.effects).toEqual([{ e: 'view.mute', nodeId: 'id-1', muted: false }]);
     expect(apply(state, { t: 'tab.mute', nodeId: 'nope', muted: true }, ctx).patches).toEqual([]);
   });

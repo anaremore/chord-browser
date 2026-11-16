@@ -7,7 +7,7 @@
  * microphone, sharing the screen or being shared, or in picture-in-picture
  * are left alone.
  */
-import { archiveCandidates, sleepCandidates, type ArchiveAfter, type Command, type NodeId, type State } from '@chord/core';
+import { archiveCandidates, sleepCandidates, type ArchiveAfter, type Command, type NodeId, type State, nodeIds } from '@chord/core';
 import { powerMonitor } from 'electron';
 import type { TabManager } from './tabs';
 
@@ -79,7 +79,7 @@ export class IdleKeeper {
       const busy = new Set<NodeId>();
       const busyNow = () => {
         const out = new Set(busy);
-        for (const id of Object.keys(state().nodes)) {
+        for (const id of nodeIds(state())) {
           const live = state().live[id];
           // A tab showing a count (unread messages) stays awake, or its count would go stale; one with its
           // developer tools open too, as in Chrome (sleeping would close them).

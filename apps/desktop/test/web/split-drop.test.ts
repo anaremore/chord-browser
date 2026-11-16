@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { apply, seedState, splitMembers, splitOf, type Command, type Context, type State } from '@chord/core';
+import { apply, seedState, splitMembers, splitOf, type Command, type Context, type State, nodeList } from '@chord/core';
 import { splitDropFor } from '../../src/renderer/shell/split-drop';
 
 let n = 0;
@@ -68,7 +68,7 @@ describe('dropping a tab on the page', () => {
     for (const name of ['c', 'b', 'a']) t.run({ t: 'split.add', windowId: t.windowId, withId: t.id['d']!, nodeId: t.id[name]! });
     expect(splitMembers(t.state, splitOf(t.state, t.id['d']!)!.id)).toHaveLength(4);
     t.run({ t: 'tab.open', windowId: t.windowId, url: 'https://e.test/', background: true });
-    const e = Object.values(t.state.nodes).find((x) => x.kind === 'tab' && x.url === 'https://e.test/')!.id;
+    const e = nodeList(t.state).find((x) => x.kind === 'tab' && x.url === 'https://e.test/')!.id;
     expect(splitDropFor(t.state, t.windowId, e, { x: 10, y: 300 }, size)).toBeNull();
   });
 });

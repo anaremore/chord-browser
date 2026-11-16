@@ -8,7 +8,7 @@ import { generateNKeysBetween } from 'fractional-indexing';
 import { applyPatches, enablePatches } from 'immer';
 import { writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { apply, childrenToRead, emptyState, IDLE_LIVE, type Command, type Context, type SidebarNode, type State } from '@chord/core';
+import { apply, childrenToRead, emptyState, IDLE_LIVE, type Command, type Context, type SidebarNode, type State, setNode } from '@chord/core';
 
 enablePatches();
 
@@ -27,12 +27,12 @@ function fillPinned(state: State, chordId: string, count: number, prefix: string
   let n = 0;
   for (let f = 0; f < folders; f++) {
     const id = `${prefix}f${f}`;
-    state.nodes[id] = { kind: 'folder', id, chordId, section: 'pinned', parentId: null, rank: rootRanks[r++]!, title: `Folder ${f}`, collapsed: f % 2 === 0, createdAt: f };
+    setNode(state, { kind: 'folder', id, chordId, section: 'pinned', parentId: null, rank: rootRanks[r++]!, title: `Folder ${f}`, collapsed: f % 2 === 0, createdAt: f });
     const inner = generateNKeysBetween(null, null, 9);
-    for (let k = 0; k < 9; k++, n++) state.nodes[`${prefix}t${n}`] = tab(`${prefix}t${n}`, chordId, 'pinned', id, inner[k]!, n);
+    for (let k = 0; k < 9; k++, n++) setNode(state, tab(`${prefix}t${n}`, chordId, 'pinned', id, inner[k]!, n));
   }
   while (n < count) {
-    state.nodes[`${prefix}t${n}`] = tab(`${prefix}t${n}`, chordId, 'pinned', null, rootRanks[r++]!, n);
+    setNode(state, tab(`${prefix}t${n}`, chordId, 'pinned', null, rootRanks[r++]!, n));
     n++;
   }
 }
@@ -46,7 +46,7 @@ function bigState({ chords, bookmarks }: { chords: number; bookmarks: number }):
     state.chords[id] = { id, profileId: 'default', name: `Chord ${c}`, icon: 'C', theme, rank: chordRanks[c]!, createdAt: c };
     fillPinned(state, id, 5000 / chords, `c${c}-`);
     const today = generateNKeysBetween(null, null, 10);
-    for (let k = 0; k < 10; k++) state.nodes[`c${c}-d${k}`] = tab(`c${c}-d${k}`, id, 'today', null, today[k]!, 100_000 + k);
+    for (let k = 0; k < 10; k++) setNode(state, tab(`c${c}-d${k}`, id, 'today', null, today[k]!, 100_000 + k));
   }
   if (bookmarks > 0) {
     state.chords['imp'] = { id: 'imp', profileId: 'default', name: 'Imported', icon: 'I', theme, rank: chordRanks[chords]!, createdAt: 99 };

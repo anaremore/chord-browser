@@ -8,43 +8,7 @@
  * number of times, gives the same result.
  */
 import { describe, expect, it } from 'vitest';
-import {
-  apply,
-  checkSyncRecord,
-  CLOCK_DRIFT_MS,
-  compareStamps,
-  isStamp,
-  MAX_COUNTER,
-  MAX_STAMP_MS,
-  nextStamp,
-  seenStamp,
-  stampAbove,
-  defaultSettings,
-  emptyState,
-  isGone,
-  localChanges,
-  localChordFields,
-  localNodeFields,
-  localSettingFields,
-  mergeRecord,
-  planApply,
-  seedState,
-  stable,
-  SYNC_LIMITS,
-  syncParts,
-  thingKey,
-  thingRecords,
-  valuesOf,
-  type ApplyContext,
-  type Chord,
-  type DataRecord,
-  type SidebarNode,
-  type Stamp,
-  type State,
-  type SyncChange,
-  type SyncThing,
-  type TabNode,
-} from '../src';
+import { apply, checkSyncRecord, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, MAX_STAMP_MS, nextStamp, seenStamp, stampAbove, defaultSettings, emptyState, isGone, localChanges, localChordFields, localNodeFields, localSettingFields, mergeRecord, planApply, seedState, stable, SYNC_LIMITS, syncParts, thingKey, thingRecords, valuesOf, type ApplyContext, type Chord, type DataRecord, type SidebarNode, type Stamp, type State, type SyncChange, type SyncThing, type TabNode, nodeOf, setNode, nodeList } from '../src';
 
 const A = '00000000000000aa';
 const B = '00000000000000bb';
@@ -474,9 +438,9 @@ describe('sync.apply in the store', () => {
     const s = seedState({ now: NOW, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
     const home = Object.keys(s.chords)[0]!;
     s.chords['w'] = chord('w', { rank: 'b0', profileId: 'mine', proxy: { mode: 'server', server: { scheme: 'socks5', host: '10.0.0.2', port: 1080, bypass: [] }, pac: null } as never });
-    s.nodes['t'] = tab('t', 'w', { url: 'https://t.test/inbox', title: 'Inbox' });
+    setNode(s, tab('t', 'w', { url: 'https://t.test/inbox', title: 'Inbox' }));
     s.live['t'] = { loading: false } as never;
-    s.nodes['u'] = tab('u', 'w', { rank: 'a1' });
+    setNode(s, tab('u', 'w', { rank: 'a1' }));
     void home;
     return s;
   }
@@ -491,8 +455,8 @@ describe('sync.apply in the store', () => {
 
   it('a tab keeps its own address and, off its home, its title; a new one opens at its home, unloaded', () => {
     const after = apply(state(), { t: 'sync.apply', nodes: [tab('t', 'w', { title: 'Mail', customTitle: 'Work mail' }), tab('n', 'w', { url: 'https://ignored.test/', pinnedUrl: 'https://new.test/', rank: 'b0' })] }, ctx).state;
-    expect(after.nodes['t']).toMatchObject({ url: 'https://t.test/inbox', title: 'Inbox', customTitle: 'Work mail' });
-    expect(after.nodes['n']).toMatchObject({ url: 'https://new.test/', pinnedUrl: 'https://new.test/' });
+    expect(nodeOf(after, 't')).toMatchObject({ url: 'https://t.test/inbox', title: 'Inbox', customTitle: 'Work mail' });
+    expect(nodeOf(after, 'n')).toMatchObject({ url: 'https://new.test/', pinnedUrl: 'https://new.test/' });
     expect(after.live['n']).toBeUndefined();
   });
 
@@ -511,18 +475,18 @@ describe('sync.apply in the store', () => {
       },
       ctx,
     ).state;
-    expect(after.nodes['x']).toBeUndefined();
-    expect(after.nodes['f']).toBeUndefined();
-    expect(after.nodes['y']!.parentId).toBeNull();
+    expect(nodeOf(after, 'x')).toBeUndefined();
+    expect(nodeOf(after, 'f')).toBeUndefined();
+    expect(nodeOf(after, 'y')!.parentId).toBeNull();
   });
 
   it('what went: an open pinned tab moves to Today, an unloaded one goes; a chord goes with its tabs, never the last', () => {
     const after = apply(state(), { t: 'sync.apply', gone: { nodes: [{ id: 't', kind: 'tab' }, { id: 'u', kind: 'tab' }, { id: 'w', kind: 'folder' }] } }, ctx).state;
-    expect(after.nodes['t']).toMatchObject({ section: 'today', pinnedUrl: null });
-    expect(after.nodes['u']).toBeUndefined();
+    expect(nodeOf(after, 't')).toMatchObject({ section: 'today', pinnedUrl: null });
+    expect(nodeOf(after, 'u')).toBeUndefined();
     const dropped = apply(state(), { t: 'sync.apply', gone: { chords: ['w'] } }, ctx).state;
     expect(dropped.chords['w']).toBeUndefined();
-    expect(Object.values(dropped.nodes).some((n) => n.chordId === 'w')).toBe(false);
+    expect(nodeList(dropped).some((n) => n.chordId === 'w')).toBe(false);
     const last = apply(emptyState(), { t: 'sync.apply', chords: [chord('only')] }, ctx).state;
     expect(apply(last, { t: 'sync.apply', gone: { chords: ['only'] } }, ctx).state.chords['only']).toBeDefined();
   });
@@ -530,14 +494,14 @@ describe('sync.apply in the store', () => {
   it('joining with the synced setup: this computer’s chords go, kept for Undo, and their Today tabs move', () => {
     const s = state();
     const home = Object.keys(s.chords).find((id) => id !== 'w')!;
-    const today = Object.values(s.nodes).find((n) => n.chordId === home)!.id;
+    const today = nodeList(s).find((n) => n.chordId === home)!.id;
     const joined = apply(s, { t: 'sync.replace', chordIds: [home], to: 'w' }, ctx).state;
     expect(joined.chords[home]).toBeUndefined();
-    expect(joined.nodes[today]).toMatchObject({ chordId: 'w', section: 'today' });
+    expect(nodeOf(joined, today)).toMatchObject({ chordId: 'w', section: 'today' });
     const windowId = Object.keys(joined.windows)[0] ?? 'w1';
     const undone = apply({ ...joined, windows: { [windowId]: { id: windowId, activeChordId: 'w', activeTab: {}, sidebar: 'docked', sidebarWidth: 248, bounds: null } } }, { t: 'sync.unreplace', windowId, chordIds: [home] }, ctx).state;
     expect(undone.chords[home]).toBeDefined();
-    expect(undone.nodes[today]).toMatchObject({ chordId: home, section: 'today' });
+    expect(nodeOf(undone, today)).toMatchObject({ chordId: home, section: 'today' });
   });
 
   /** A chord with a Today tab and an open pinned tab, shown in a window: what only this computer has. */
@@ -545,7 +509,7 @@ describe('sync.apply in the store', () => {
     const s = state();
     const home = Object.keys(s.chords).find((id) => id !== 'w')!;
     const windowId = Object.keys(s.windows)[0]!;
-    s.nodes['d'] = tab('d', 'w', { section: 'today', pinnedUrl: null, url: 'https://draft.test/', title: 'Draft' });
+    setNode(s, tab('d', 'w', { section: 'today', pinnedUrl: null, url: 'https://draft.test/', title: 'Draft' }));
     s.windows[windowId] = { ...s.windows[windowId]!, activeChordId: 'w', activeTab: { ...s.windows[windowId]!.activeTab, w: 't' } };
     return { s, home, windowId };
   }
@@ -555,19 +519,19 @@ describe('sync.apply in the store', () => {
     const gone = apply(s, { t: 'sync.apply', gone: { chords: ['w'] } }, ctx).state;
     expect(gone.chords['w']).toBeUndefined();
     // The Today tab, and the open pinned one (no longer pinned: it doesn't sync), move to the top of the neighbour's Today.
-    expect(gone.nodes['d']).toMatchObject({ chordId: home, section: 'today' });
-    expect(gone.nodes['t']).toMatchObject({ chordId: home, section: 'today', pinnedUrl: null, url: 'https://t.test/inbox' });
+    expect(nodeOf(gone, 'd')).toMatchObject({ chordId: home, section: 'today' });
+    expect(nodeOf(gone, 't')).toMatchObject({ chordId: home, section: 'today', pinnedUrl: null, url: 'https://t.test/inbox' });
     // The window that showed it goes there, still showing the tab it showed.
     expect(gone.windows[windowId]).toMatchObject({ activeChordId: home });
     expect(gone.windows[windowId]!.activeTab[home]).toBe('t');
     // The unloaded pinned tab goes, kept for Undo with the chord.
-    expect(gone.nodes['u']).toBeUndefined();
+    expect(nodeOf(gone, 'u')).toBeUndefined();
     expect(gone.syncUndo[0]).toMatchObject({ chord: { id: 'w' }, nodes: [expect.objectContaining({ id: 'u' })] });
     const undone = apply(gone, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
     expect(undone.chords['w']).toMatchObject({ name: 'w' });
-    expect(undone.nodes['u']).toMatchObject({ chordId: 'w', section: 'pinned' });
-    expect(undone.nodes['t']).toMatchObject({ chordId: 'w', section: 'pinned', pinnedUrl: 'https://t.test/', url: 'https://t.test/inbox' });
-    expect(undone.nodes['d']).toMatchObject({ chordId: 'w', section: 'today' });
+    expect(nodeOf(undone, 'u')).toMatchObject({ chordId: 'w', section: 'pinned' });
+    expect(nodeOf(undone, 't')).toMatchObject({ chordId: 'w', section: 'pinned', pinnedUrl: 'https://t.test/', url: 'https://t.test/inbox' });
+    expect(nodeOf(undone, 'd')).toMatchObject({ chordId: 'w', section: 'today' });
     expect(undone.windows[windowId]!.activeChordId).toBe('w');
   });
 
@@ -583,30 +547,30 @@ describe('sync.apply in the store', () => {
     // 't' is open (it has a view) but the window shows home's chord.
     expect(s.live['t']).toBeDefined();
     const gone = apply(s, { t: 'sync.apply', gone: { chords: ['w'], nodes: [{ id: 't', kind: 'tab' }, { id: 'u', kind: 'tab' }] } }, ctx).state;
-    expect(gone.nodes['t']).toMatchObject({ chordId: home, section: 'today', pinnedUrl: null });
+    expect(nodeOf(gone, 't')).toMatchObject({ chordId: home, section: 'today', pinnedUrl: null });
     expect(gone.live['t']).toBeUndefined();
     // Its tombstone, in a later push, doesn't take it either: in Today here it's only this computer's.
     const later = apply(gone, { t: 'sync.apply', gone: { nodes: [{ id: 't', kind: 'tab' }] } }, ctx).state;
-    expect(later.nodes['t']).toMatchObject({ chordId: home, section: 'today' });
+    expect(nodeOf(later, 't')).toMatchObject({ chordId: home, section: 'today' });
     const undone = apply(later, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
-    expect(undone.nodes['t']).toMatchObject({ chordId: 'w', section: 'pinned', pinnedUrl: 'https://t.test/' });
-    expect(undone.nodes['u']).toMatchObject({ chordId: 'w', section: 'pinned' });
+    expect(nodeOf(undone, 't')).toMatchObject({ chordId: 'w', section: 'pinned', pinnedUrl: 'https://t.test/' });
+    expect(nodeOf(undone, 'u')).toMatchObject({ chordId: 'w', section: 'pinned' });
   });
 
   it('pinned tabs and a folder another computer took away, their chord staying here (its tombstone in a later frame, or never): kept for Undo, and Undo puts them back where they were', () => {
     const s = state();
     const windowId = Object.keys(s.windows)[0]!;
-    s.nodes['f'] = { kind: 'folder', id: 'f', chordId: 'w', section: 'pinned', parentId: null, rank: 'a5', title: 'Reading', collapsed: false, createdAt: 1 } as SidebarNode;
-    s.nodes['inside'] = tab('inside', 'w', { parentId: 'f', rank: 'a0' });
+    setNode(s, { kind: 'folder', id: 'f', chordId: 'w', section: 'pinned', parentId: null, rank: 'a5', title: 'Reading', collapsed: false, createdAt: 1 } as SidebarNode);
+    setNode(s, tab('inside', 'w', { parentId: 'f', rank: 'a0' }));
     const gone = apply(s, { t: 'sync.apply', gone: { nodes: [{ id: 'u', kind: 'tab' }, { id: 'f', kind: 'folder' }] } }, ctx).state;
-    expect(gone.nodes['u']).toBeUndefined();
-    expect(gone.nodes['f']).toBeUndefined();
-    expect(gone.nodes['inside']).toMatchObject({ parentId: null });
+    expect(nodeOf(gone, 'u')).toBeUndefined();
+    expect(nodeOf(gone, 'f')).toBeUndefined();
+    expect(nodeOf(gone, 'inside')).toMatchObject({ parentId: null });
     expect(gone.syncUndo[0]).toMatchObject({ chord: { id: 'w' }, nodesOnly: true });
     const undone = apply(gone, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
-    expect(undone.nodes['u']).toMatchObject({ chordId: 'w', section: 'pinned' });
-    expect(undone.nodes['f']).toMatchObject({ chordId: 'w', kind: 'folder' });
-    expect(undone.nodes['inside']).toMatchObject({ parentId: 'f' });
+    expect(nodeOf(undone, 'u')).toMatchObject({ chordId: 'w', section: 'pinned' });
+    expect(nodeOf(undone, 'f')).toMatchObject({ chordId: 'w', kind: 'folder' });
+    expect(nodeOf(undone, 'inside')).toMatchObject({ parentId: 'f' });
   });
 
   it('what sync took away is kept apart: deleting chords here never pushes it out of reach of its Undo', () => {
@@ -618,15 +582,15 @@ describe('sync.apply in the store', () => {
     }
     expect(state.deletedChords.length).toBeLessThanOrEqual(5);
     const undone = apply(state, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
-    expect(undone.nodes['u']).toMatchObject({ chordId: 'w' });
+    expect(nodeOf(undone, 'u')).toMatchObject({ chordId: 'w' });
   });
 
   it('the chord’s own tombstone goes before its tabs’, so Undo has them all', () => {
     const { s, windowId } = withLocalTabs();
     const gone = apply(s, { t: 'sync.apply', gone: { chords: ['w'], nodes: [{ id: 'u', kind: 'tab' }, { id: 't', kind: 'tab' }] } }, ctx).state;
-    expect(gone.nodes['t']).toMatchObject({ section: 'today' });
+    expect(nodeOf(gone, 't')).toMatchObject({ section: 'today' });
     const undone = apply(gone, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
-    expect(undone.nodes['u']).toMatchObject({ chordId: 'w' });
+    expect(nodeOf(undone, 'u')).toMatchObject({ chordId: 'w' });
   });
 
   it('deleted elsewhere, then brought back there before Undo here: the chord comes back by sync, and Undo still brings its tabs home', () => {
@@ -634,10 +598,10 @@ describe('sync.apply in the store', () => {
     const gone = apply(s, { t: 'sync.apply', gone: { chords: ['w'] } }, ctx).state;
     // The other computer undid its delete: the chord and its pinned tab come back through sync.
     const back = apply(gone, { t: 'sync.apply', chords: [chord('w', { rank: 'b0' })], nodes: [tab('u', 'w', { rank: 'a1' })] }, ctx).state;
-    expect(back.nodes['d']).toMatchObject({ chordId: home });
+    expect(nodeOf(back, 'd')).toMatchObject({ chordId: home });
     const undone = apply(back, { t: 'sync.unreplace', windowId, chordIds: ['w'] }, ctx).state;
-    expect(undone.nodes['d']).toMatchObject({ chordId: 'w', section: 'today' });
-    expect(undone.nodes['t']).toMatchObject({ chordId: 'w', section: 'pinned' });
+    expect(nodeOf(undone, 'd')).toMatchObject({ chordId: 'w', section: 'today' });
+    expect(nodeOf(undone, 't')).toMatchObject({ chordId: 'w', section: 'pinned' });
   });
 
   it('joining with the synced setup: a chord of this computer’s that another computer deleted makes way with the rest, so the one Undo covers it', () => {
@@ -647,11 +611,11 @@ describe('sync.apply in the store', () => {
     joined = apply(joined, { t: 'sync.replace', chordIds: [home, 'w'], to: 'synced' }, ctx).state;
     joined = apply(joined, { t: 'sync.apply', gone: { chords: ['w'] } }, ctx).state;
     expect(Object.keys(joined.chords)).toEqual(['synced']);
-    expect(joined.nodes['d']).toMatchObject({ chordId: 'synced', section: 'today' });
+    expect(nodeOf(joined, 'd')).toMatchObject({ chordId: 'synced', section: 'today' });
     const undone = apply(joined, { t: 'sync.unreplace', windowId, chordIds: [home, 'w'] }, ctx).state;
     expect(undone.chords['w']).toBeDefined();
     expect(undone.chords[home]).toBeDefined();
-    expect(undone.nodes['u']).toMatchObject({ chordId: 'w' });
-    expect(undone.nodes['d']).toMatchObject({ chordId: 'w', section: 'today' });
+    expect(nodeOf(undone, 'u')).toMatchObject({ chordId: 'w' });
+    expect(nodeOf(undone, 'd')).toMatchObject({ chordId: 'w', section: 'today' });
   });
 });

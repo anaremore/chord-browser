@@ -217,8 +217,8 @@ test('installs Chord Player from the notice, plays a Widevine stream in it, and 
 
     // The bar's Back to Chord brings the tab it plays for forward.
     const netflixTab = await shell.evaluate(async () => {
-      const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, { kind: string; url?: string; id: string }> } }> } } }).chord.state.snapshot();
-      return Object.values(state.nodes).find((n) => n.kind === 'tab' && n.url?.includes('/watch'))!.id;
+      const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { nodes: Record<string, Record<string, { kind: string; url?: string; id: string }>> } }> } } }).chord.state.snapshot();
+      return Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.kind === 'tab' && n.url?.includes('/watch'))!.id;
     });
     await playerTest(app, { do: 'back' });
     await expect.poll(async () => (await where(shell)).tabId).toBe(netflixTab);

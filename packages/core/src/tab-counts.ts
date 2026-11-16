@@ -8,6 +8,7 @@
  */
 import { hostOf, routeHost } from './links';
 import type { ChordId, NodeId, State, TabCountsSettings } from './model';
+import { nodeOf } from './nodes';
 
 /** What a tab shows: a number, a dot (the page set a badge with no number), or nothing. */
 export type TabCount = number | 'dot' | null;
@@ -88,7 +89,7 @@ export function appCount(state: Pick<State, 'live' | 'nodes'>): TabCount {
   const bySite = new Map<string, TabCount>();
   for (const [id, live] of Object.entries(state.live)) {
     if (live.badge === null) continue;
-    const node = state.nodes[id];
+    const node = nodeOf(state, id);
     const site = (node?.kind === 'tab' && countSite(node.url)) || id;
     const was = bySite.get(site) ?? null;
     bySite.set(site, was === null || was === 'dot' ? live.badge : live.badge === 'dot' ? was : Math.max(was, live.badge));
@@ -101,7 +102,7 @@ export function countWithin(state: State, ancestorId: NodeId): TabCount {
   const counts: TabCount[] = [];
   for (const [id, live] of Object.entries(state.live)) {
     if (live.badge === null) continue;
-    for (let node = state.nodes[id]; node?.parentId; node = state.nodes[node.parentId]) {
+    for (let node = nodeOf(state, id); node?.parentId; node = nodeOf(state, node.parentId)) {
       if (node.parentId === ancestorId) {
         counts.push(live.badge);
         break;
@@ -115,7 +116,7 @@ export function countWithin(state: State, ancestorId: NodeId): TabCount {
 export function chordsWithCounts(state: State): Set<ChordId> {
   const chords = new Set<ChordId>();
   for (const [id, live] of Object.entries(state.live)) {
-    const node = state.nodes[id];
+    const node = nodeOf(state, id);
     if (live.badge !== null && node) chords.add(node.chordId);
   }
   return chords;

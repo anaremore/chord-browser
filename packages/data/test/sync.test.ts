@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { StatementSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apply, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, MAX_STAMP_MS, seedState, SYNC_LIMITS, thingKey, type Command, type Context, type DataRecord, type Stamp, type State } from '@chord/core';
+import { apply, CLOCK_DRIFT_MS, compareStamps, isStamp, MAX_COUNTER, MAX_STAMP_MS, seedState, SYNC_LIMITS, thingKey, type Command, type Context, type DataRecord, type Stamp, type SidebarNode, type State, nodeOf, nodeList, nodesFrom } from '@chord/core';
 import { ChordDatabase } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
 import { coalesceOps, opsForState, opsFromPatches, type WriteOp } from '../src';
@@ -92,7 +92,7 @@ describe('the stamping hook', () => {
 
   it('a Favorite’s chord syncs as one field: a chord’s own, then in every chord (null)', () => {
     let state = setUp();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'favorite.add', favoriteId: 'fav', nodeId: tab }]);
     expect(outbox().find((r) => r.type === 'favorite')!.set['chord']).toBe(chordId(state));
     const before = outbox().length;
@@ -110,7 +110,7 @@ describe('the stamping hook', () => {
 
   it('a tab you pin syncs; one you unpin is a tombstone; pinned again, it’s back (deleted: false) with what changed since, never what didn’t', () => {
     let state = setUp();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
     expect(outbox().at(-1)).toMatchObject({ type: 'tab', id: tab, set: { pinnedUrl: 'https://home.test/' } });
     expect(outbox().at(-1)!.set).not.toHaveProperty('url');
@@ -125,7 +125,7 @@ describe('the stamping hook', () => {
 
   it('a Today tab, a window, history and zoom are never stamped', () => {
     const state = setUp();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     drive(state, [
       { t: 'tab.updated', nodeId: tab, title: 'New title' },
       { t: 'zoom.set', host: 'docs.test', factor: 1.25 },
@@ -151,7 +151,7 @@ describe('the stamping hook', () => {
 
   it('a chord deleted here: a tombstone for it and for what was pinned in it', () => {
     let state = setUp();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'tab.pin', nodeId: tab }, { t: 'chord.create', windowId: Object.keys(state.windows)[0]!, name: 'Two', icon: 'T', theme: THEME }]);
     const first = chordId(state);
     drive(state, [{ t: 'chord.delete', chordId: first }]);
@@ -384,15 +384,10 @@ describe('a chord another computer deleted, with more than a push holds', () => 
     state = {
       ...state,
       chords: { ...state.chords, [big]: { id: big, profileId: 'default', name: 'Big', icon: 'B', theme: THEME, rank: 'a5', createdAt: 1 } },
-      nodes: {
-        ...state.nodes,
-        ...Object.fromEntries(
-          tabs.map((id, i) => [
-            id,
-            { kind: 'tab', id, chordId: big, section: 'pinned', parentId: null, rank: `a${String(i).padStart(3, '0')}V`, url: `https://t${i}.test/`, title: `T${i}`, pinnedUrl: `https://t${i}.test/`, customTitle: null, favicon: null, lastActiveAt: 1, createdAt: 1 },
-          ]),
-        ),
-      },
+      nodes: nodesFrom([
+        ...nodeList(state),
+        ...tabs.map((id, i): SidebarNode => ({ kind: 'tab', id, chordId: big, section: 'pinned', parentId: null, rank: `a${String(i).padStart(3, '0')}V`, url: `https://t${i}.test/`, title: `T${i}`, pinnedUrl: `https://t${i}.test/`, customTitle: null, favicon: null, lastActiveAt: 1, createdAt: 1 })),
+      ]),
     } as State;
     db.write(opsForState(state));
     db.sync.setMeta({ on: true, folder: '/sync', generation: 1, name: 'Desk' });
@@ -412,10 +407,10 @@ describe('a chord another computer deleted, with more than a push holds', () => 
     // Applied push by push, as main does: the chord takes its tabs, and its one Undo brings every one back.
     for (const slice of slices) state = drive(state, [{ t: 'sync.apply', ...db.sync.planFor(slice) }], true);
     expect(state.chords[big]).toBeUndefined();
-    expect(tabs.some((id) => state.nodes[id])).toBe(false);
+    expect(tabs.some((id) => nodeOf(state, id))).toBe(false);
     const windowId = Object.keys(state.windows)[0]!;
     state = drive(state, [{ t: 'sync.unreplace', windowId, chordIds: [big] }]);
-    expect(tabs.every((id) => state.nodes[id]?.chordId === big)).toBe(true);
+    expect(tabs.every((id) => nodeOf(state, id)?.chordId === big)).toBe(true);
   });
 });
 
@@ -485,7 +480,7 @@ describe('what this computer hasn’t applied', () => {
 describe('a chord deleted here', () => {
   it('its tombstone goes out before its tabs’ and folders’, so a computer that reads part of it takes the chord with everything', () => {
     let state = setUp();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'tab.pin', nodeId: tab }, { t: 'chord.create', windowId: Object.keys(state.windows)[0]!, name: 'Two', icon: 'T', theme: THEME }]);
     const first = chordId(state);
     const before = outbox().length;
@@ -570,7 +565,7 @@ describe('stamping by origin: yours is stamped, sync’s and tidying’s never a
     state = drive(state, [{ t: 'theme.save', theme: { id: 'mine', name: 'Mine', stops: THEME.stops, grain: 0.2 } }]);
     state = drive(state, [{ t: 'theme.delete', id: 'mine' }]);
     expect(tombstoned('mine')).toBe(true);
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'favorite.add', favoriteId: 'fav-mine', nodeId: tab }]);
     state = drive(state, [{ t: 'favorite.remove', favoriteId: 'fav-mine' }]);
     expect(tombstoned('fav-mine')).toBe(true);
@@ -605,7 +600,7 @@ describe('rejoining with Use the synced setup', () => {
   it('a pinned tab the copy has only a change of (its making gone from the folder), which this computer has: applied, the rest from what it has (S15 §13, the ninth review)', () => {
     let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
     const chord = chordId(state);
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = apply(state, { t: 'tab.pin', nodeId: tab }, ctx).state;
     db.write(opsForState(state));
     db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
@@ -619,7 +614,7 @@ describe('rejoining with Use the synced setup', () => {
   it('a tab you pinned while sync was off, in a chord the synced setup keeps, joins it; this computer’s own chords still make way', () => {
     let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
     const kept = chordId(state);
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = apply(state, { t: 'tab.pin', nodeId: tab }, ctx).state;
     db.write(opsForState(state));
     db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
@@ -670,7 +665,7 @@ describe('the kept copy, sync off while what it applied isn’t all saved', () =
 describe('one id, one thing', () => {
   it('a node record under another kind of node’s id (a folder over a pinned tab) is refused and counted; the tab’s edits and deletion stay the tab’s', () => {
     let state = setUp();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
     const result = db.atomically(() => db.sync.merge([{ type: 'folder', id: tab, at: [Date.now() + 1000, 0, OTHER], set: { title: 'Decoy', collapsed: false, created: 1 } }], Date.now()));
     expect(result.dropped).toBe(1);
@@ -694,7 +689,7 @@ describe('local checked against the rows', () => {
   it('after ordinary writes of every kind, nothing to mend: what stamping keeps is exactly what the rows project to', () => {
     let state = setUp();
     const windowId = Object.keys(state.windows)[0]!;
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [
       { t: 'tab.pin', nodeId: tab },
       { t: 'chord.create', windowId, name: 'Two', icon: 'T', theme: THEME },
@@ -716,7 +711,7 @@ describe('local checked against the rows', () => {
   it('a join’s window: only the ids written in it are read back, and stamped as the joins ends, as the hook would have', () => {
     let state = setUp();
     const id = chordId(state);
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     db.sync.setMeta({ joining: true });
     state = drive(state, [
       { t: 'chord.update', chordId: id, name: 'Renamed meanwhile' },
@@ -749,7 +744,7 @@ describe('local checked against the rows', () => {
 
   it('a Today tab closed in a join’s window, unpinned earlier in it: the unpinning’s deletion stays as of then, never retimed by a write out of sync before and after (S15 §13, the ninth review)', () => {
     let state = setUp();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
     const began = Date.now();
     db.sync.setMeta({ joining: true, compactedAt: began });
@@ -757,7 +752,7 @@ describe('local checked against the rows', () => {
     state = apply(state, { t: 'tab.unpin', nodeId: tab }, ctx).state;
     db.write(opsFromPatches(apply(unpinned, { t: 'tab.unpin', nodeId: tab }, ctx).patches, state, unpinned).map((op) => ({ ...op, at: began + 1000 })), began + 1000);
     const closed = apply(state, { t: 'tab.close', windowId: Object.keys(state.windows)[0]!, nodeId: tab }, ctx);
-    expect(closed.state.nodes[tab]).toBeUndefined();
+    expect(nodeOf(closed.state, tab)).toBeUndefined();
     db.write(opsFromPatches(closed.patches, closed.state, state).map((op) => ({ ...op, at: began + 9000 })), began + 9000);
     const at = (raw('SELECT at FROM sync_noted WHERE k = ? AND id = ?').get('node', tab) as { at: number } | undefined)?.at;
     expect(at).toBe(began + 1000);
@@ -815,7 +810,7 @@ describe('local checked against the rows', () => {
 
   it('a pinned tab you wrote that the copy doesn’t have, in a chord it has: added, at its row’s time; a chord it doesn’t have, never', () => {
     let state = setUp();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     db.sync.setMeta({ on: false });
     state = drive(state, [{ t: 'tab.pin', nodeId: tab }, { t: 'chord.create', windowId: Object.keys(state.windows)[0]!, name: 'Off', icon: 'O', theme: THEME }]);
     db.sync.setMeta({ on: true });
@@ -908,11 +903,11 @@ describe('what the sync simulation found (S15 §13, the ninth review)', () => {
 
   it('a row keeps when what sync keeps of it was made: a write that changes nothing of that (a tab’s last visit) leaves its time', () => {
     let state = setUp();
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
     const made = Date.now() - 60_000;
-    db.write([{ k: 'node', id: tab, value: state.nodes[tab]!, at: made } as WriteOp]);
-    db.write([{ k: 'node', id: tab, value: { ...state.nodes[tab]!, lastActiveAt: Date.now() }, synced: false, at: Date.now() } as WriteOp]);
+    db.write([{ k: 'node', id: tab, value: nodeOf(state, tab)!, at: made } as WriteOp]);
+    db.write([{ k: 'node', id: tab, value: { ...nodeOf(state, tab)!, lastActiveAt: Date.now() }, synced: false, at: Date.now() } as WriteOp]);
     db.sync.setMeta({ joining: true });
     const joined = [...db.sync.localPages()].flat().find((r) => r.type === 'tab' && r.id === tab)!;
     expect(joined.at?.[0]).toBe(made);
@@ -1020,7 +1015,7 @@ describe('what the sync simulation found (S15 §13, the ninth review)', () => {
   it('joined with the synced setup, this computer’s chord’s making way lost in a crash, and every synced chord deleted since: it stays, and joins the copy with its pinned tabs (S15 §13, the ninth review)', () => {
     const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
     const mine = chordId(state);
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     db.write(opsForState(state));
     drive(state, [{ t: 'tab.pin', nodeId: tab }]);
     const synced = { name: 'Synced', icon: 'S', theme: THEME, rank: 'a1', profile: 'default', created: 1 };
@@ -1047,7 +1042,7 @@ describe('what the sync simulation found (S15 §13, the ninth review)', () => {
     let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
     db.write(opsForState(state));
     db.sync.setMeta({ on: true, joining: true, folder: '/sync', generation: 1, name: 'Desk' });
-    const tab = Object.values(state.nodes).find((n) => n.kind === 'tab')!.id;
+    const tab = nodeList(state).find((n) => n.kind === 'tab')!.id;
     state = drive(state, [{ t: 'tab.pin', nodeId: tab }]);
     db.sync.setMeta({ on: false });
     db.sync.setMeta({ on: true, joining: true });

@@ -1,7 +1,7 @@
 /** The state of a brand-new profile: one chord, one window, one tab. */
 import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import { IDLE_LIVE, SIDEBAR_WIDTH, emptyState, type ChordId, type ChordThemeSpec, type State } from './model';
-import { children } from './select';
+import { children, setNode } from './nodes';
 import type { Platform } from './shortcuts';
 
 export interface SeedOptions {
@@ -21,7 +21,7 @@ export function seedState({ now, newId, theme, homeUrl }: SeedOptions): State {
   const windowId = newId();
   const tabId = newId();
   state.chords[chordId] = { id: chordId, profileId: 'default', name: 'Personal', icon: '✦', theme, rank: generateKeyBetween(null, null), createdAt: now };
-  state.nodes[tabId] = {
+  setNode(state, {
     kind: 'tab',
     id: tabId,
     chordId,
@@ -35,7 +35,7 @@ export function seedState({ now, newId, theme, homeUrl }: SeedOptions): State {
     favicon: null,
     lastActiveAt: now,
     createdAt: now,
-  };
+  });
   state.live[tabId] = { ...IDLE_LIVE, loading: true };
   state.windows[windowId] = { id: windowId, activeChordId: chordId, activeTab: { [chordId]: tabId }, sidebar: 'docked', sidebarWidth: SIDEBAR_WIDTH.default, bounds: null };
   return state;
@@ -58,7 +58,7 @@ export function addSleepingTabs(
     const id = newId();
     // A minute apart, newest first: recent enough that none is archived for being idle.
     const at = now - (i + 1) * 60_000;
-    state.nodes[id] = {
+    setNode(state, {
       kind: 'tab',
       id,
       chordId,
@@ -72,6 +72,6 @@ export function addSleepingTabs(
       favicon: null,
       lastActiveAt: at,
       createdAt: at,
-    };
+    });
   });
 }

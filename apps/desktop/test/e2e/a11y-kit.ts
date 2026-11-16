@@ -123,7 +123,7 @@ export interface ChordGlobal {
     overlay: { open(mode: string): Promise<void> };
     state: {
       dispatch(c: unknown): Promise<void>;
-      snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, { id: string; title?: string; url?: string; favicon?: string | null; kind: string }>; chords: Record<string, { theme: { stops: { l: number; c: number; h: number }[] } }> } }>;
+      snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, Record<string, { id: string; title?: string; url?: string; favicon?: string | null; kind: string }>>; chords: Record<string, { theme: { stops: { l: number; c: number; h: number }[] } }> } }>;
     };
   };
 }
@@ -183,7 +183,7 @@ export async function leavePlaying(app: ElectronApplication, shell: Page, url: s
 export async function tabIdByTitle(shell: Page, title: string): Promise<string> {
   return shell.evaluate(async (t) => {
     const { state } = await (window as unknown as ChordGlobal).chord.state.snapshot();
-    return Object.values(state.nodes).find((n) => n.kind === 'tab' && n.title === t)!.id;
+    return Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.kind === 'tab' && n.title === t)!.id;
   }, title);
 }
 

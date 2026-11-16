@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ARCHIVE_AFTER_MS, archiveCandidates, emptyState, sleepCandidates, visibleTabs, type State, type TabNode } from '../src';
+import { ARCHIVE_AFTER_MS, archiveCandidates, emptyState, sleepCandidates, visibleTabs, type State, type TabNode, setNode } from '../src';
 
 const HOUR = 3_600_000;
 const now = 100 * 24 * HOUR;
@@ -24,7 +24,7 @@ function tab(id: string, section: TabNode['section'], idleFor: number, chordId =
 
 function state(tabs: TabNode[], shown: Record<string, string | null> = {}): State {
   const s = emptyState();
-  for (const t of tabs) s.nodes[t.id] = t;
+  for (const t of tabs) setNode(s, t);
   s.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: null, ...shown }, sidebar: 'docked', sidebarWidth: 248, bounds: null };
   return s;
 }

@@ -4,32 +4,7 @@
  * keeps a chord's own proxy to a chord with its own sign-ins.
  */
 import { describe, expect, it } from 'vitest';
-import {
-  apply,
-  bypassRule,
-  cleanProxy,
-  describeLoadError,
-  emptyState,
-  IDLE_LIVE,
-  proxyBypassProblem,
-  proxyConfig,
-  proxyFor,
-  proxyHost,
-  proxyHostProblem,
-  proxyLabel,
-  proxyPac,
-  proxyPacProblem,
-  proxyPort,
-  proxyPortProblem,
-  restoreState,
-  splitBypass,
-  splitProxyAddress,
-  type Chord,
-  type Command,
-  type Context,
-  type ProxySettings,
-  type State,
-} from '../src';
+import { apply, bypassRule, cleanProxy, describeLoadError, emptyState, IDLE_LIVE, proxyBypassProblem, proxyConfig, proxyFor, proxyHost, proxyHostProblem, proxyLabel, proxyPac, proxyPacProblem, proxyPort, proxyPortProblem, restoreState, splitBypass, splitProxyAddress, type Chord, type Command, type Context, type ProxySettings, type State, setNode } from '../src';
 
 const server = (host: string, port: number, scheme: 'http' | 'https' | 'socks5' = 'http', bypass: string[] = []) => ({ scheme, host, port, bypass });
 const A: ProxySettings = { mode: 'server', server: server('10.0.0.2', 3128), pac: null };
@@ -266,7 +241,7 @@ describe('the model', () => {
     const before = stateWith(A);
     before.windows['w1'] = { id: 'w1', activeChordId: 'work', activeTab: { work: 'tab-w', lab: 'tab-l', quiet: 'tab-q' }, sidebar: 'docked', sidebarWidth: 248, bounds: null };
     for (const [id, chordId] of [['tab-w', 'work'], ['tab-l', 'lab'], ['tab-q', 'quiet']] as const) {
-      before.nodes[id] = { kind: 'tab', id, chordId, section: 'today', parentId: null, rank: 'a0', url: 'https://a.test/', title: '', pinnedUrl: null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 };
+      setNode(before, { kind: 'tab', id, chordId, section: 'today', parentId: null, rank: 'a0', url: 'https://a.test/', title: '', pinnedUrl: null, customTitle: null, favicon: null, lastActiveAt: 0, createdAt: 0 });
       before.live[id] = { ...IDLE_LIVE };
     }
     let state = before;

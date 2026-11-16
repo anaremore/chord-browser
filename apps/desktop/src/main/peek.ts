@@ -4,7 +4,7 @@
  * pinned page. It has its own back stack. Esc or a click outside closes it;
  * "Open in Today" (⌘↵ / Ctrl+Enter) keeps it as a tab, page and history intact.
  */
-import { hostOf, isPrivateChord, uuidv7, type ChordId, type Command, type LiveTab, type NodeId, type State, type WindowId } from '@chord/core';
+import { hostOf, isPrivateChord, uuidv7, type ChordId, type Command, type LiveTab, type NodeId, type State, type WindowId, nodeOf } from '@chord/core';
 import { springCurve, springs } from '@chord/tokens';
 import type { Session, WebContents } from 'electron';
 import { uiScale } from './platform';
@@ -45,7 +45,7 @@ export class Peeks {
   /** Open `url` in Peek over `w`, which shows the pinned tab `openerNodeId`. `point` is the click, in the page. */
   show(w: AppWindow, openerNodeId: NodeId, url: string, point: { x: number; y: number } | null): void {
     const state = this.deps.state();
-    const opener = state.nodes[openerNodeId];
+    const opener = nodeOf(state, openerNodeId);
     if (opener?.kind !== 'tab') return;
     this.close(w);
     const nodeId = uuidv7();

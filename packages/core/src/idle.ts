@@ -6,6 +6,7 @@
  */
 import type { ArchiveAfter, NodeId, State, TabNode } from './model';
 import { shownTabs } from './split';
+import { nodeOf, nodeList } from './nodes';
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -60,9 +61,9 @@ export function visibleTabs(state: State): Set<NodeId> {
 export function archiveCandidates(state: State, now: number, afterMs: number | null, busy: ReadonlySet<NodeId> = new Set()): NodeId[] {
   if (afterMs === null) return [];
   const visible = visibleTabs(state);
-  return Object.values(state.nodes)
+  return nodeList(state)
     .filter((n): n is TabNode => n.kind === 'tab' && n.section === 'today' && !state.chords[n.chordId]?.private)
-    .filter((t) => !(t.parentId && state.nodes[t.parentId]?.kind === 'split'))
+    .filter((t) => !(t.parentId && nodeOf(state, t.parentId)?.kind === 'split'))
     .filter((t) => !visible.has(t.id) && !busy.has(t.id) && now - t.lastActiveAt >= afterMs)
     .sort((a, b) => a.lastActiveAt - b.lastActiveAt)
     .map((t) => t.id);
@@ -77,7 +78,7 @@ export function sleepCandidates(state: State, now: number, afterMs: number, load
   const visible = visibleTabs(state);
   const out: NodeId[] = [];
   for (const id of loaded) {
-    const node = state.nodes[id];
+    const node = nodeOf(state, id);
     if (node?.kind !== 'tab' || visible.has(id) || busy.has(id)) continue;
     if (now - node.lastActiveAt >= afterMs) out.push(id);
   }

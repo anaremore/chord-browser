@@ -1,18 +1,4 @@
-import {
-  activeTabId,
-  chordsFor,
-  describeLoadError,
-  downloadsFor,
-  isInternalUrl,
-  keycapFor,
-  SIDEBAR_WIDTH,
-  sortedChords,
-  splitOf,
-  type ActionId,
-  type LiveTab,
-  type LoadError,
-  type TabNode,
-} from '@chord/core';
+import { activeTabId, chordsFor, describeLoadError, downloadsFor, isInternalUrl, keycapFor, SIDEBAR_WIDTH, sortedChords, splitOf, type ActionId, type LiveTab, type LoadError, type TabNode, nodeOf, nodeList } from '@chord/core';
 import type { ChordEdit, AssistantView, PlayerFrame, SystemInfo } from '@chord/ipc';
 import { durations } from '@chord/tokens';
 import { Archive, ArrowLeft, ArrowRight, Blend, BookOpenText, Ellipsis, Globe, Lock, PanelLeft, RotateCw, Volume2, VolumeX, X } from 'lucide-react';
@@ -383,7 +369,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   const isPrivate = Boolean(win?.private);
   const { style, appearance } = chordStyle(chord, info, state.settings.interface);
   const activeId = activeTabId(state, windowId);
-  const active = activeId ? (state.nodes[activeId] as TabNode | undefined) : undefined;
+  const active = activeId ? (nodeOf(state, activeId) as TabNode | undefined) : undefined;
   const live = activeId ? state.live[activeId] : undefined;
   // Split view: the frame divides between the split's panes; the active tab is the focused one.
   const split = activeId ? splitOf(state, activeId) : null;
@@ -488,7 +474,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   useEffect(() => {
     if (!chord || announcedChord.current === chord.id) return;
     announcedChord.current = chord.id;
-    const tabs = Object.values(state.nodes).filter((n) => n.kind === 'tab' && n.chordId === chord.id);
+    const tabs = nodeList(state).filter((n) => n.kind === 'tab' && n.chordId === chord.id);
     const pinned = tabs.filter((n) => n.section === 'pinned').length;
     announce(`${chord.name} chord, ${pinned} pinned, ${tabs.length - pinned} today`);
   }, [chord?.id]);

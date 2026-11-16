@@ -2,57 +2,7 @@
  * The orchestrator: owns windows, runs reducer effects against real views,
  * broadcasts patches to renderer mirrors, and carries out keyboard actions.
  */
-import {
-  ARCHIVE_URL,
-  type ImageSearchEngine,
-  activeTab,
-  activeTabId,
-  blockingOffSites,
-  blockingSite,
-  children,
-  chordsFor,
-  countShows,
-  DEFAULT_PROFILE,
-  DEFAULT_READER,
-  hostOf,
-  isBlockingOff,
-  isCrossSite,
-  effectsHost,
-  isInternalUrl,
-  isPrivateChord,
-  isPrivateProfile,
-  privateWindowOf,
-  proxyLabel,
-  sameProxy,
-  keycapFor,
-  markdownLink,
-  mediaVisibleTo,
-  motionEnabled,
-  READER_SIZES,
-  reopenableIndex,
-  routeFor,
-  routeHost,
-  shareableTabs,
-  shownTabs,
-  favoriteFits,
-  sortedChords,
-  splitMembers,
-  splitOf,
-  SPLIT,
-  findShortcut,
-  tabsInOrder,
-  uuidv7,
-  type ActionId,
-  type ArchiveReason,
-  type Effect,
-  type LiveTab,
-  type SavedEffects,
-  type NodeId,
-  type ProxySettings,
-  type State,
-  type TabNode,
-  type WindowId,
-} from '@chord/core';
+import { ARCHIVE_URL, type ImageSearchEngine, activeTab, activeTabId, blockingOffSites, blockingSite, children, chordsFor, countShows, DEFAULT_PROFILE, DEFAULT_READER, hostOf, isBlockingOff, isCrossSite, effectsHost, isInternalUrl, isPrivateChord, isPrivateProfile, privateWindowOf, proxyLabel, sameProxy, keycapFor, markdownLink, mediaVisibleTo, motionEnabled, READER_SIZES, reopenableIndex, routeFor, routeHost, shareableTabs, shownTabs, favoriteFits, sortedChords, splitMembers, splitOf, SPLIT, findShortcut, tabsInOrder, uuidv7, type ActionId, type ArchiveReason, type Effect, type LiveTab, type SavedEffects, type NodeId, type ProxySettings, type State, type TabNode, type WindowId, nodeOf, nodeList, nodeIds, patchTouchesNode } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
 import type { ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
 import { THEME_VARS, type KeyReport, type Theme } from '@chord/player-protocol';
@@ -416,7 +366,7 @@ export class Browser {
         attachContextMenu(contents, {
           surface: 'web',
           // Every web page; the archive (Chord's own page) only in development builds, as Chord's other views.
-          inspect: !app.isPackaged || this.store.state.nodes[nodeId]?.kind !== 'tab' || !isInternalUrl((this.store.state.nodes[nodeId] as TabNode).url),
+          inspect: !app.isPackaged || nodeOf(this.store.state, nodeId)?.kind !== 'tab' || !isInternalUrl((nodeOf(this.store.state, nodeId) as TabNode).url),
           // A tab's page opens its developer tools where they live (docked, or their window); Peek's and a mini window's, popped out.
           inspectElement: (x, y) => this.inspectAt(contents, nodeId, x, y),
           searchEngine: () => this.store.state.settings.searchEngine,
@@ -498,7 +448,7 @@ export class Browser {
       host: options.player.host,
       // Widevine's CDM comes from Google's component updater: never in Google-free mode.
       enabled: () => !this.store.state.settings.googleFree,
-      tabExists: (nodeId) => this.store.state.nodes[nodeId]?.kind === 'tab',
+      tabExists: (nodeId) => nodeOf(this.store.state, nodeId)?.kind === 'tab',
       setTabInPlayer: (nodeId, inPlayer) => this.store.dispatch({ t: 'tab.live', nodeId, live: { player: inPlayer } }),
       openLink: (url, nodeId) => this.openPlayerLink(url, nodeId),
       back: (nodeId) => this.backFromPlayer(nodeId),
@@ -548,7 +498,7 @@ export class Browser {
     this.devtools = new DevTools({
       page: (nodeId) => this.tabs.get(nodeId)?.webContents,
       sessionFor: (nodeId) => {
-        const node = this.store.state.nodes[nodeId];
+        const node = nodeOf(this.store.state, nodeId);
         const chord = node ? this.store.state.chords[node.chordId] : undefined;
         // What DevTools fetch (source maps) goes to the page's site: a private window's stays in its memory, and a chord's own proxy carries it.
         return options.devtoolsSession(chord && (isPrivateProfile(chord.profileId) || chord.proxy) ? chord.profileId : null);
@@ -637,11 +587,11 @@ export class Browser {
     this.histories = new HistorySaver({
       history: (nodeId) => this.tabs.history(nodeId),
       save: (nodeId, nav) => options.saveHistory(nodeId, nav),
-      savable: (nodeId) => this.store.state.nodes[nodeId]?.kind === 'tab' && !this.isPrivateNode(nodeId),
+      savable: (nodeId) => nodeOf(this.store.state, nodeId)?.kind === 'tab' && !this.isPrivateNode(nodeId),
     });
     // Back where they were: each open tab's saved history, if it still ends on the tab's page.
     for (const [nodeId, nav] of Object.entries(options.histories ?? {})) {
-      const node = this.store.state.nodes[nodeId];
+      const node = nodeOf(this.store.state, nodeId);
       if (node?.kind !== 'tab' || nav.entries[nav.index]?.url !== node.url) continue;
       this.tabs.restoreHistoryOnLoad(nodeId as NodeId, nav);
       this.histories.restored(nodeId as NodeId, nav);
@@ -683,7 +633,7 @@ export class Browser {
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       isPrivate: (contents) => {
-        const node = this.store.state.nodes[this.tabs.nodeFor(contents) ?? ''];
+        const node = nodeOf(this.store.state, this.tabs.nodeFor(contents) ?? '');
         return node ? isPrivateChord(this.store.state, node.chordId) : false;
       },
     });
@@ -740,8 +690,8 @@ export class Browser {
       // A playing tab moved, closed or changed chords: the cards that may show it change.
       if (change.patches.some((p) => p.path[0] === 'nodes' || p.path[0] === 'chords' || p.path[0] === 'windows')) this.syncMedia();
       // Chord Player: the tab it plays for closed, or its chord's colors changed.
-      if (this.player.nodeId && !change.state.nodes[this.player.nodeId]) this.player.tabClosed(this.player.nodeId);
-      if (change.patches.some((p) => p.path[0] === 'chords' || (p.path[0] === 'nodes' && p.path[1] === this.player.nodeId) || (p.path[0] === 'settings' && p.path[1] === 'interface'))) this.player.themeChanged();
+      if (this.player.nodeId && !nodeOf(change.state, this.player.nodeId)) this.player.tabClosed(this.player.nodeId);
+      if (change.patches.some((p) => p.path[0] === 'chords' || (this.player.nodeId !== null && patchTouchesNode(p.path, this.player.nodeId)) || (p.path[0] === 'settings' && p.path[1] === 'interface'))) this.player.themeChanged();
       this.extensions.sync();
       if (change.patches.some((p) => p.path[0] === 'extensions')) this.extensions.reconcile();
       // Pictures of tabs that were closed, archived or unpinned go; turning previews off takes them all.
@@ -818,7 +768,7 @@ export class Browser {
   }
 
   private isPrivateNode(nodeId: NodeId): boolean {
-    const node = this.store.state.nodes[nodeId];
+    const node = nodeOf(this.store.state, nodeId);
     return node ? isPrivateChord(this.store.state, node.chordId) : false;
   }
 
@@ -994,7 +944,7 @@ export class Browser {
     const models = Object.values(this.store.state.windows);
     const showing = models.find((m) => shownTabs(this.store.state, m.id).includes(nodeId));
     if (showing) return showing.id;
-    const node = this.store.state.nodes[nodeId];
+    const node = nodeOf(this.store.state, nodeId);
     const priv = node ? isPrivateChord(this.store.state, node.chordId) : false;
     return models.find((m) => m.activeChordId === node?.chordId)?.id ?? (priv ? undefined : models.find((m) => !m.private)?.id);
   }
@@ -1306,7 +1256,7 @@ export class Browser {
    */
   private shareLost(nodeId: NodeId): void {
     const contents = this.tabs.get(nodeId)?.webContents;
-    const node = this.store.state.nodes[nodeId];
+    const node = nodeOf(this.store.state, nodeId);
     const chord = node ? this.store.state.chords[node.chordId] : undefined;
     if (!contents || contents.isDestroyed() || node?.kind !== 'tab' || !chord || !this.options.screenShare.isShared(nodeId)) return;
     if (contents.session === this.options.profileSession(chord.profileId)) return;
@@ -1357,7 +1307,7 @@ export class Browser {
   /** A tab's Effects state for the button beside its address, sent only when it changes. */
   private setEffectsLive(nodeId: NodeId, effects: LiveTab['effects']): void {
     const live = this.store.state.live[nodeId];
-    if (this.store.state.nodes[nodeId]?.kind === 'tab' && (live?.effects ?? null) !== effects) this.store.dispatch({ t: 'tab.live', nodeId, live: { effects } });
+    if (nodeOf(this.store.state, nodeId)?.kind === 'tab' && (live?.effects ?? null) !== effects) this.store.dispatch({ t: 'tab.live', nodeId, live: { effects } });
   }
 
   /** The DRM notice for the window's page, saying where Chord Player would play it (in the tab, on Windows). */
@@ -1408,9 +1358,9 @@ export class Browser {
 
   /** A new tab in the window, on `url` for now, and its page, so main can load into it (an upload, say). */
   private openTabFor(w: AppWindow, url: string, background: boolean): WebContents | null {
-    const before = new Set(Object.keys(this.store.state.nodes));
+    const before = new Set(nodeIds(this.store.state));
     this.store.dispatch({ t: 'tab.open', windowId: w.id, url, background });
-    const nodeId = Object.keys(this.store.state.nodes).find((id) => !before.has(id));
+    const nodeId = nodeIds(this.store.state).find((id) => !before.has(id));
     return nodeId ? (this.tabs.ensure(nodeId)?.webContents ?? null) : null;
   }
 
@@ -1450,7 +1400,7 @@ export class Browser {
     const showing = nodeId ? this.windows.get(this.windowShowing(nodeId) ?? '') : undefined;
     const w = showing ?? this.lastNormalWindow();
     if (!w) return;
-    if (nodeId && this.store.state.nodes[nodeId]) this.store.dispatch({ t: 'tab.activate', windowId: w.id, nodeId });
+    if (nodeId && nodeOf(this.store.state, nodeId)) this.store.dispatch({ t: 'tab.activate', windowId: w.id, nodeId });
     if (w.window.isMinimized()) w.window.restore();
     // macOS doesn't let a background app take activation unless asked; this came from your click in the player.
     if (process.platform === 'darwin') app.focus({ steal: true });
@@ -1466,7 +1416,7 @@ export class Browser {
   /** The tab's chord's colors, as a solid window draws them (DESIGN.md §5). */
   private chordTheme(nodeId: NodeId) {
     const state = this.store.state;
-    const node = state.nodes[nodeId];
+    const node = nodeOf(state, nodeId);
     const chord = node ? state.chords[node.chordId] : undefined;
     if (!chord) return null;
     const info = systemInfo();
@@ -1703,7 +1653,7 @@ export class Browser {
 
   /** Whether a tab's developer tools may open: any web page; Chord's own pages only in development builds, as Inspect Chord UI. */
   private devtoolsAllowed(nodeId: NodeId): boolean {
-    const node = this.store.state.nodes[nodeId];
+    const node = nodeOf(this.store.state, nodeId);
     return node?.kind === 'tab' && (!app.isPackaged || !isInternalUrl(node.url));
   }
 
@@ -1931,7 +1881,7 @@ export class Browser {
 
   openTabMenu(contents: WebContents, nodeId: NodeId, at: { x: number; y: number }): void {
     const w = this.windowFor(contents);
-    const node = this.store.state.nodes[nodeId];
+    const node = nodeOf(this.store.state, nodeId);
     if (!w || !node) return;
     if (node.kind === 'folder') {
       w.popupMenu(
@@ -2057,7 +2007,7 @@ export class Browser {
   private followFromReader(nodeId: NodeId, url: string, target: ReaderLinkTarget): void {
     const windowId = this.windowShowing(nodeId);
     const w = windowId ? this.windows.get(windowId) : undefined;
-    const node = this.store.state.nodes[nodeId];
+    const node = nodeOf(this.store.state, nodeId);
     if (!w || node?.kind !== 'tab') return;
     if (target !== 'background' && node.section === 'pinned' && isCrossSite(node.url, url)) this.peeks.show(w, nodeId, url, null);
     else if (target === 'here') this.store.dispatch({ t: 'tab.navigate', nodeId, url });
@@ -2068,7 +2018,7 @@ export class Browser {
   readerLook(contents: WebContents): ReaderLook {
     const state = this.store.state;
     const nodeId = this.readers.nodeOf(contents);
-    const node = nodeId ? state.nodes[nodeId] : undefined;
+    const node = nodeId ? nodeOf(state, nodeId) : undefined;
     return {
       theme: node ? (state.chords[node.chordId]?.theme ?? null) : null,
       interface: state.settings.interface,
@@ -2120,14 +2070,14 @@ export class Browser {
   createFolder(w: AppWindow, chordId: string, tabId: NodeId | null, parentId: NodeId | null = null): void {
     const folderId = uuidv7();
     this.store.dispatch({ t: 'folder.create', folderId, chordId, title: 'New folder', ...(tabId ? { tabId } : {}) });
-    if (!this.store.state.nodes[folderId]) return;
+    if (!nodeOf(this.store.state, folderId)) return;
     if (parentId) this.store.dispatch({ t: 'node.move', nodeId: folderId, section: 'pinned', index: Number.MAX_SAFE_INTEGER, parentId });
     send(w.shell.webContents, 'sidebar:rename', { nodeId: folderId });
   }
 
   /** Delete at once and offer Undo (DESIGN.md §9: "Deleted folder 'Reading' · Undo"). */
   deleteFolder(w: AppWindow, nodeId: NodeId): void {
-    const folder = this.store.state.nodes[nodeId];
+    const folder = nodeOf(this.store.state, nodeId);
     if (folder?.kind !== 'folder') return;
     this.store.dispatch({ t: 'folder.delete', nodeId });
     w.toast({
@@ -2144,7 +2094,7 @@ export class Browser {
    */
   moveToChord(w: AppWindow, nodeId: NodeId, chordId: string): void {
     const state = this.store.state;
-    const tab = state.nodes[nodeId];
+    const tab = nodeOf(state, nodeId);
     const to = state.chords[chordId];
     if (tab?.kind !== 'tab' || !to || tab.chordId === chordId) return;
     // A private window's tabs stay in it, and nothing moves into one.
@@ -2193,7 +2143,7 @@ export class Browser {
    */
   separateSplit(w: AppWindow, splitId: NodeId): void {
     const state = this.store.state;
-    const split = state.nodes[splitId];
+    const split = nodeOf(state, splitId);
     if (split?.kind !== 'split') return;
     const nodeIds = splitMembers(state, splitId).map((t) => t.id);
     const focus = activeTabId(state, w.id);
@@ -2659,7 +2609,7 @@ export class Browser {
 
   /** Every archive page that's loaded. */
   private archivePages(): WebContents[] {
-    return Object.values(this.store.state.nodes)
+    return nodeList(this.store.state)
       .filter((n): n is TabNode => n.kind === 'tab' && isInternalUrl(n.url))
       .map((n) => this.tabs.get(n.id)?.webContents)
       .filter((c): c is WebContents => c !== undefined && !c.isDestroyed());
@@ -2677,7 +2627,7 @@ export class Browser {
   archiveSnapshot(contents: WebContents): ArchiveSnapshot {
     const state = this.store.state;
     const nodeId = this.tabs.nodeFor(contents);
-    const node = nodeId ? state.nodes[nodeId] : undefined;
+    const node = nodeId ? nodeOf(state, nodeId) : undefined;
     return {
       theme: node ? (state.chords[node.chordId]?.theme ?? null) : null,
       interface: state.settings.interface,

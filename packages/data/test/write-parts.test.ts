@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { apply, seedState, type Context, type SidebarNode, type State } from '@chord/core';
+import { apply, seedState, type Context, type SidebarNode, type State, nodeList, nodesFrom } from '@chord/core';
 import { ChordDatabase, WRITE_PART } from '../src/db';
 import { opsForState, opsFromPatches, type WriteOp } from '../src';
 
@@ -36,12 +36,12 @@ const PINNED = WRITE_PART * 3 + 7;
 function setUp(): State {
   let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
   const first = Object.values(state.chords)[0]!;
-  const nodes: Record<string, SidebarNode> = { ...state.nodes };
+  const nodes: SidebarNode[] = nodeList(state);
   for (let i = 0; i < PINNED; i++) {
     const id = `t${i}`;
-    nodes[id] = { kind: 'tab', id, chordId: 'big', section: 'pinned', parentId: null, rank: `a${String(i).padStart(4, '0')}V`, url: `https://t${i}.test/`, title: `T${i}`, pinnedUrl: `https://t${i}.test/`, customTitle: null, favicon: null, lastActiveAt: 1, createdAt: 1 } as SidebarNode;
+    nodes.push({ kind: 'tab', id, chordId: 'big', section: 'pinned', parentId: null, rank: `a${String(i).padStart(4, '0')}V`, url: `https://t${i}.test/`, title: `T${i}`, pinnedUrl: `https://t${i}.test/`, customTitle: null, favicon: null, lastActiveAt: 1, createdAt: 1 } as SidebarNode);
   }
-  state = { ...state, chords: { ...state.chords, big: { ...first, id: 'big', name: 'Big', rank: 'a5' } }, nodes };
+  state = { ...state, chords: { ...state.chords, big: { ...first, id: 'big', name: 'Big', rank: 'a5' } }, nodes: nodesFrom(nodes) };
   db.write(opsForState(state));
   db.sync.setMeta({ on: true, folder: '/sync', generation: 1, name: 'Desk' });
   db.atomically(() => db.sync.addLocal('all'));

@@ -331,10 +331,10 @@ test('split view: every pane is pictured and laid out with the same pane rects',
     await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('Second page');
     // Second page beside the first.
     await shell.evaluate(async () => {
-      const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string> }>; nodes: Record<string, { id: string; kind: string; title?: string }> } }>; dispatch(c: unknown): Promise<void> } } }).chord;
+      const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string> }>; nodes: Record<string, Record<string, { id: string; kind: string; title?: string }>> } }>; dispatch(c: unknown): Promise<void> } } }).chord;
       const { windowId, state } = await chord.state.snapshot();
       const win = state.windows[windowId]!;
-      const first = Object.values(state.nodes).find((n) => n.kind === 'tab' && n.title === 'Colored page')!;
+      const first = Object.values(state.nodes).flatMap((b) => Object.values(b)).find((n) => n.kind === 'tab' && n.title === 'Colored page')!;
       await chord.state.dispatch({ t: 'split.add', windowId, withId: win.activeTab[win.activeChordId], nodeId: first.id, direction: 'row' });
     });
     await expect.poll(async () => (await pages(app)).views.length).toBe(2);

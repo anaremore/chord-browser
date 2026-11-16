@@ -14,6 +14,7 @@ export * from './keywords';
 export * from './links';
 export * from './media';
 export * from './merge';
+export * from './nodes';
 export * from './model';
 export * from './page';
 export * from './password-forms';

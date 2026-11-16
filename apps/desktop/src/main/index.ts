@@ -1,24 +1,6 @@
 // First, so launch timing starts before any other module runs (ARCHITECTURE.md §1).
 import { launchTimings, markLaunch } from './perf';
-import {
-  ARCHIVE_AFTER_MS,
-  blockingOffSites,
-  DEFAULT_SETTINGS,
-  BATTERY_SLEEP_AFTER_MS,
-  IDLE_CHECK_MS,
-  MEMORY_CHECK_MS,
-  PRESSURE_SLEEP_AFTER_MS,
-  SLEEP_AFTER_MS,
-  isPrivateProfile,
-  isPrivateWindow,
-  privateWindowOf,
-  profilePartition,
-  proxyFor,
-  restoreState,
-  uuidv7,
-  type Command,
-  type WindowId,
-} from '@chord/core';
+import { ARCHIVE_AFTER_MS, blockingOffSites, DEFAULT_SETTINGS, BATTERY_SLEEP_AFTER_MS, IDLE_CHECK_MS, MEMORY_CHECK_MS, PRESSURE_SLEEP_AFTER_MS, SLEEP_AFTER_MS, isPrivateProfile, isPrivateWindow, privateWindowOf, profilePartition, proxyFor, restoreState, uuidv7, type Command, type WindowId, nodeList } from '@chord/core';
 import type { RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { hostname } from 'node:os';
@@ -1039,7 +1021,7 @@ if (!app.requestSingleInstanceLock()) {
         syncOff: () => store.sync({ type: 'sync.off' }),
         /** Pinned folders and tabs, and how many have a name ending in `suffix`: what a sync check waits for, without a state snapshot. */
         pinnedNames: (suffix: string) => {
-          const pinned = Object.values(browser!.store.state.nodes).filter((n) => n.section === 'pinned');
+          const pinned = nodeList(browser!.store.state).filter((n) => n.section === 'pinned');
           return { count: pinned.length, named: pinned.filter((n) => (n.kind === 'tab' ? n.customTitle : n.kind === 'folder' ? n.title : null)?.endsWith(suffix)).length };
         },
         /**
@@ -1049,7 +1031,7 @@ if (!app.requestSingleInstanceLock()) {
         chordForTests: async (what: 'spare' | 'delete' | 'restore') => {
           const state = browser!.store.state;
           const windowId = Object.keys(state.windows)[0]!;
-          const busiest = Object.values(state.chords).sort((a, b) => Object.values(state.nodes).filter((n) => n.chordId === b.id).length - Object.values(state.nodes).filter((n) => n.chordId === a.id).length)[0];
+          const busiest = Object.values(state.chords).sort((a, b) => nodeList(state).filter((n) => n.chordId === b.id).length - nodeList(state).filter((n) => n.chordId === a.id).length)[0];
           if (what === 'spare') browser!.store.dispatch({ t: 'chord.create', windowId, name: 'Spare', icon: 'S', theme: state.chords[Object.keys(state.chords)[0]!]!.theme });
           else if (what === 'delete' && busiest) browser!.store.dispatch({ t: 'chord.delete', chordId: busiest.id });
           else if (what === 'restore' && state.deletedChords[0]) browser!.store.dispatch({ t: 'chord.restore', windowId, chordId: state.deletedChords[0].chord.id });

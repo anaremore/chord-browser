@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { apply, seedState, type Context, type State } from '@chord/core';
+import { apply, seedState, type Context, type State, nodeOf, nodeList } from '@chord/core';
 import { opsForState, opsFromPatches } from '../src';
 
 let n = 0;
@@ -46,7 +46,7 @@ describe('private windows and persistence', () => {
     ]);
     const shown = opened.state.windows['p1']!.activeTab['pc']!;
     const { state, ops } = drive(opened.state, [{ t: 'split.add', windowId: 'p1', withId: shown, url: 'https://beside.test/' }]);
-    expect(Object.values(state.nodes).some((node) => node.kind === 'split' && node.chordId === 'pc')).toBe(true);
+    expect(nodeList(state).some((node) => node.kind === 'split' && node.chordId === 'pc')).toBe(true);
     expect(ops.filter((op) => op.value !== null && op.k === 'node')).toEqual([]);
     expect(opsForState(state).some((op) => op.k === 'node' && op.value?.chordId === 'pc')).toBe(false);
   });
@@ -58,7 +58,7 @@ describe('private windows and persistence', () => {
     ]);
     const nodeId = opened.state.windows['p1']!.activeTab['pc']!;
     const { state, ops } = drive(opened.state, [{ t: 'tab.mute', nodeId, muted: true }]);
-    expect(state.nodes[nodeId]).toMatchObject({ muted: true });
+    expect(nodeOf(state, nodeId)).toMatchObject({ muted: true });
     expect(ops.filter((op) => op.value !== null)).toEqual([]);
   });
 
