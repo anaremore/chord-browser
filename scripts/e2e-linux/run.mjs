@@ -12,6 +12,8 @@
 //   --wayland / --x11   which display server (x11 by default)
 //   --rebuild           rebuild the image from scratch (fresh Ubuntu packages)
 //   --cpus <n>          only n CPUs, as CI's runners have 4 (perf.spec.ts's baselines are taken so)
+//   --share <dir>       a folder of this machine's, read and written by the run at /share (CHORD_E2E_SHARE):
+//                       input and results that stay out of the tree (scripts/dev/signin-sweep)
 // CHORD_E2E_WSL_DISTRO picks the WSL distro that has Docker (WSL's default otherwise).
 // CHORD_NO_MINIFY, CHORD_PERF_ENFORCE, CHORD_PERF_PROFILE and CHORD_E2E_SCREEN (Xvfb's screen, e.g. 3200x2000x24),
 // when set, are passed into the container (PASSED_ENV).
@@ -42,7 +44,7 @@ const WINDOWS_SPEC_PATH = /^[^-][^\\]*\\.*\.[cm]?[jt]sx?(:\d+)*$/;
 
 /** The runner's own options, and the arguments that go to Playwright. */
 export function parseArgs(argv) {
-  const options = { display: 'x11', rebuild: false, help: false, cpus: null, playwright: [] };
+  const options = { display: 'x11', rebuild: false, help: false, cpus: null, share: null, playwright: [] };
   // `pnpm test:e2e:linux -- -g x` hands the script the `--` too.
   const args = argv[0] === '--' ? argv.slice(1) : argv;
   for (let i = 0; i < args.length; i++) {
@@ -52,6 +54,8 @@ export function parseArgs(argv) {
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--cpus') options.cpus = Number(args[++i]);
     else if (arg.startsWith('--cpus=')) options.cpus = Number(arg.slice('--cpus='.length));
+    else if (arg === '--share') options.share = args[++i] ?? '';
+    else if (arg.startsWith('--share=')) options.share = arg.slice('--share='.length);
     else options.playwright.push(WINDOWS_SPEC_PATH.test(arg) ? arg.replaceAll('\\', '/') : arg);
   }
   return options;
@@ -97,7 +101,7 @@ export function staleRuns(inspected, now = Date.now()) {
 export const PASSED_ENV = ['CHORD_NO_MINIFY', 'CHORD_PERF_ENFORCE', 'CHORD_PERF_PROFILE', 'CHORD_E2E_SCREEN'];
 
 /** `docker run`'s arguments: the tar of the working tree arrives on stdin and is unpacked in /work. */
-export function dockerRunArgs({ name, image, display, root, startedAt, playwright, cpus = null, env = {} }) {
+export function dockerRunArgs({ name, image, display, root, startedAt, playwright, cpus = null, share = null, env = {} }) {
   return [
     'run',
     '--interactive',
@@ -136,6 +140,8 @@ export function dockerRunArgs({ name, image, display, root, startedAt, playwrigh
     '--security-opt', 'seccomp=unconfined',
     '--volume', `${STORE_VOLUME}:/home/chord/.cache/pnpm-store`,
     '--volume', `${ELECTRON_VOLUME}:/home/chord/.cache/electron`,
+    // --share: a host folder (as Docker sees it), read and written as uid 1000.
+    ...(share ? ['--volume', `${share}:/share`, '--env', 'CHORD_E2E_SHARE=/share'] : []),
     '--env', `CHORD_E2E_DISPLAY=${display}`,
     '--env', `CHORD_E2E_STARTED=${Math.round(startedAt / 1000)}`,
     ...PASSED_ENV.filter((key) => env[key]).flatMap((key) => ['--env', `${key}=${env[key]}`]),
@@ -219,6 +225,7 @@ async function main() {
     return 0;
   }
   if (options.cpus !== null && !(Number.isInteger(options.cpus) && options.cpus > 0)) fail('--cpus takes a whole number of CPUs, such as 4');
+  if (options.share !== null && !(options.share && existsSync(options.share))) fail('--share takes a folder that exists');
 
   // Every spawn has windowsHide: started without a console (an editor's task, a background shell),
   // each wsl.exe and git would flash a console window of its own.
@@ -333,7 +340,8 @@ async function main() {
 
   const where = `${options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)'}${options.cpus ? `, ${options.cpus} CPUs` : ''}`;
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
-  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpus: options.cpus, env: process.env }), tar);
+  const share = options.share === null ? null : dockerPath(resolve(options.share));
+  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpus: options.cpus, share, env: process.env }), tar);
 
   // Results, back where a local run leaves them. A folder the run didn't write isn't touched.
   const appInDocker = dockerPath(appDir);
