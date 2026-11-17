@@ -291,6 +291,8 @@ export class AppWindow {
   private peek: PeekInfo | null = null;
   private peekSeq = 0;
   private peekTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Peek asked for before the overlay listens (a click just after launch): it opens once it does. */
+  private pendingPeek: { view: WebContentsView; info: PeekInfo; delayMs: number } | null = null;
   /** The assistant's panel on the right (0 when closed): the page's frame ends before it, with a gap. */
   private assistantWidth = 0;
   /** The assistant's openings and closings waiting for their frame change, oldest first. */
@@ -625,10 +627,18 @@ export class AppWindow {
   /**
    * Open Peek over the frame: the overlay draws the scrim and the card's
    * header, growing from the click; the page goes into the card once the
-   * card has landed (`delayMs`), so it never pops in ahead of it.
+   * card has landed (`delayMs`), so it never pops in ahead of it. Before
+   * the overlay listens (a brand-new window), it waits for it, as the
+   * command bar's opening does, and replaces one waiting there.
    */
   openPeek(view: WebContentsView, info: PeekInfo, delayMs: number): void {
-    if (!this.overlayReady || this.window.isDestroyed()) return;
+    if (this.window.isDestroyed()) return;
+    if (!this.overlayReady) {
+      this.pendingPeek = { view, info, delayMs };
+      this.pendingOpen = null;
+      return;
+    }
+    this.pendingPeek = null;
     this.closeFloating();
     this.hidePreview();
     this.peek = info;
@@ -655,6 +665,7 @@ export class AppWindow {
 
   /** The page moved on (address, title): Peek's header follows. */
   updatePeek(info: Partial<PeekInfo>): void {
+    if (this.pendingPeek) this.pendingPeek.info = { ...this.pendingPeek.info, ...info };
     if (!this.peek) return;
     this.peek = { ...this.peek, ...info };
     send(this.overlay.webContents, 'peek:state', this.peekState());
@@ -663,6 +674,7 @@ export class AppWindow {
   /** Take Peek's page out of the window (it closes, or becomes a tab) and put the overlay away. */
   closePeek(): WebContentsView | null {
     const view = this.peekView;
+    this.pendingPeek = null;
     clearTimeout(this.peekTimer);
     if (this.peek) send(this.overlay.webContents, 'overlay:dismiss', { seq: this.peekSeq });
     this.peek = null;
@@ -1055,9 +1067,11 @@ export class AppWindow {
   /** The command bar has started and listens for openings (it says so after every load). */
   markOverlayReady(): void {
     this.overlayReady = true;
+    const peek = this.pendingPeek;
     const pending = this.pendingOpen;
     this.pendingOpen = null;
-    if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, this.overlayFrom, pending.requestedAt, pending.capture);
+    if (peek) this.openPeek(peek.view, peek.info, peek.delayMs);
+    else if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, this.overlayFrom, pending.requestedAt, pending.capture);
     else if (this.shellPainted) send(this.overlay.webContents, 'overlay:warm', null);
   }
 
