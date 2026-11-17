@@ -230,6 +230,9 @@ describe('the username-only first step', () => {
     ['a real password beside it makes it a sign-in form instead', form([f('email', { name: 'email', autocomplete: 'username' }), pw()], { submits: ['Continue'] }), false],
     ['a hidden password field beside it (a later step’s) doesn’t stop it', form([f('email', { name: 'email', autocomplete: 'username' }), pw('password', HIDDEN)], { submits: ['Next'], title: 'Sign in' }), true],
     ['nor two hidden ones', form([f('email', { name: 'email' }), pw('a', HIDDEN), pw('b', HIDDEN)], { submits: ['Next'] }), true],
+    ['"Log in or sign up" over one email field, its Continue outside the form', form([f('text', { id: 'email', name: 'email', label: 'Email address' })], { headings: ['Log in or sign up'] }), true],
+    ['…but not a field that only might be one, under the same heading', form([f('text', { name: 'q', label: 'Your city' })], { headings: ['Log in or sign up'] }), false],
+    ['a sign-up heading alone over an email field', form([f('email', { name: 'email', label: 'Email address' })], { headings: ['Sign up for our deals'] }), false],
     ['a hidden password you typed in is a password', form([f('email', { name: 'email', autocomplete: 'username' }), pw('p', { ...HIDDEN, userTyped: true })], { submits: ['Next'] }), false],
   ])('%s', (_name, record, onlyUsername) => {
     expect(classifyPasswordForm(record, 'filling')?.kind === 'username-only').toBe(onlyUsername);

@@ -291,7 +291,10 @@ export function classifyPasswordForm(form: PasswordFormRecord, mode: ParseMode, 
   const looks = saysUsername(f) || isEmailish(f) || USERNAMEISH.test(fieldText(f)) || matchWords(DDG_USERNAME, f.label) === 'yes' || f.type === 'tel';
   const strong = saysUsername(f) || STRONG_USERNAME.test(f.id) || STRONG_USERNAME.test(f.name) || f.type === 'email' || /user|login|member|account|e-?mail/i.test(`${f.name} ${f.id}`);
   const nextButton = [...form.words.submits, ...form.words.buttons].some((b) => NEXT.test(b) || SIGN_IN.test(b));
-  if (!looks || !(kind === 'sign-in' || saysUsername(f) || (strong && nextButton))) return null;
+  // "Log in or sign up" over one email field: a first step that decides by the email which comes next (its Continue
+  // is often outside the <form>, so there's no button to read).
+  const either = form.words.headings.some((h) => SIGN_IN.test(spaced(h)) && SIGN_UP.test(spaced(h)));
+  if (!looks || !(kind === 'sign-in' || saysUsername(f) || (strong && (nextButton || either)))) return null;
   // A newsletter's email and its button ("Anmelden" is both sign in and subscribe) is no first step.
   if (!saysUsername(f) && NEWSLETTER.test(spaced(`${form.words.headings.join(' ')} ${form.words.attrs} ${form.words.submits.join(' ')} ${fieldText(f)}`))) return null;
   return { kind: 'username-only', roles: new Map([[f.key, 'username']]), username: f, password: null, newPassword: null, confirmation: null };

@@ -180,7 +180,7 @@ async function sweepStep(app: ElectronApplication, id: number, page: Page, snap:
     }
 
   // Focus on each, as a click would give it.
-  let menu: { formId: string; kind: string } | null = null;
+  let menu: { formId: string; kind: string; field: number } | null = null;
   for (const f of [...visible, ...snap.fields.filter((x) => x.role && !isSignInField(x) && x.visible)]) {
     // Blurred first: focus() on a field that has focus already (autofocus) fires nothing.
     await world(app, id, 'chordSweep.blur()');
@@ -199,7 +199,7 @@ async function sweepStep(app: ElectronApplication, id: number, page: Page, snap:
     step.focus.push(report);
     if (f.role && focused && typeof report.focus !== 'object') problems.push(`${prefix}focus reports nothing for a field with a role: ${describeField(f)} as ${f.role}`);
     if (typeof report.focus === 'object' && f.role && report.focus.role !== f.role) problems.push(`${prefix}focus reports ${report.focus.role}, the scan ${f.role}: ${describeField(f)}`);
-    if (!menu && last?.[0] === 'focus' && MENU_KINDS.has(String(last[1]['kind'])) && MENU_ROLES.has(String(last[1]['role']))) menu = { formId: String(last[1]['formId']), kind: String(last[1]['kind']) };
+    if (!menu && last?.[0] === 'focus' && MENU_KINDS.has(String(last[1]['kind'])) && MENU_ROLES.has(String(last[1]['role']))) menu = { formId: String(last[1]['formId']), kind: String(last[1]['kind']), field: f.i };
   }
   await world(app, id, 'chordSweep.blur()');
   if (!menu) {
@@ -210,6 +210,9 @@ async function sweepStep(app: ElectronApplication, id: number, page: Page, snap:
   // The fill, as main sends it (assist.ts): no password for a first step.
   const withPassword = menu.kind !== 'username-only';
   const payload = { formId: menu.formId, username: FAKE.username, ...(withPassword ? { password: FAKE.password } : {}), highlight: { color: 'Highlight', ms: 600, stagger: 60, easing: 'ease' } };
+  // As in Chord: the fill comes from the menu under the field that has focus, so that field is on screen.
+  await world(app, id, `chordSweep.focus(${menu.field})`);
+  await page.waitForTimeout(250);
   await world(app, id, 'chordSweep.clear()');
   await world(app, id, `chordSweep.fill(${JSON.stringify(payload)})`);
   await page.waitForTimeout(400);
