@@ -261,10 +261,17 @@ describe('export', () => {
   });
 });
 
-describe('5,000 rows', () => {
-  it('compared and written in slices, none long', async () => {
-    await vault(...Array.from({ length: 500 }, (_, i): [string, string, string] => [`https://s${i}.example`, 'ada', i % 2 ? `p${i}` : 'old']));
-    const file = Array.from({ length: 5000 }, (_, i) => login(`https://s${i}.example`, 'ada', `p${i}`, { note: 'imported' }));
+/**
+ * The size S17 measures (5,000 rows into a vault of 500) with CHORD_PASSWORD_PERF=1; a tenth of it otherwise, so
+ * the suite's other timed tests, running beside it, aren't starved of CPU.
+ */
+const BIG = process.env['CHORD_PASSWORD_PERF'] === '1' ? 5000 : 500;
+const SAVED = BIG / 10;
+
+describe(`${BIG} rows`, () => {
+  it('compared and written in slices, none long', { timeout: 60_000 }, async () => {
+    await vault(...Array.from({ length: SAVED }, (_, i): [string, string, string] => [`https://s${i}.example`, 'ada', i % 2 ? `p${i}` : 'old']));
+    const file = Array.from({ length: BIG }, (_, i) => login(`https://s${i}.example`, 'ada', `p${i}`, { note: 'imported' }));
     const stageId = stage(file);
     // The longest stretch chord-data's thread is held: the gaps between turns of a loop that yields as often as it can.
     let longest = 0;
@@ -284,13 +291,13 @@ describe('5,000 rows', () => {
     const t2 = performance.now();
     watching = false;
     // The file's note differs from every saved one's: all 500 differ, the half with the same password by their note.
-    expect(importPreview).toMatchObject({ added: 4500, same: 0, different: 500 });
-    expect(imported).toEqual({ added: 4500, updated: 500, kept: 0, same: 0, stopped: false });
-    console.log(`5,000 rows: preview ${(t1 - t0).toFixed(0)} ms, import ${(t2 - t1).toFixed(0)} ms, longest task ${longest.toFixed(1)} ms`);
+    expect(importPreview).toMatchObject({ added: BIG - SAVED, same: 0, different: SAVED });
+    expect(imported).toEqual({ added: BIG - SAVED, updated: SAVED, kept: 0, same: 0, stopped: false });
+    console.log(`${BIG} rows: preview ${(t1 - t0).toFixed(0)} ms, import ${(t2 - t1).toFixed(0)} ms, longest task ${longest.toFixed(1)} ms`);
     // A generous bound for CI's machines; the number above is what the PR reports.
     expect(longest).toBeLessThan(1000);
     const undo0 = performance.now();
-    expect((await run({ op: 'importUndo', importId: 'big' })).undone).toEqual({ removed: 4500, restored: 500, changed: 0 });
-    console.log(`5,000 rows: undo ${(performance.now() - undo0).toFixed(0)} ms`);
+    expect((await run({ op: 'importUndo', importId: 'big' })).undone).toEqual({ removed: BIG - SAVED, restored: SAVED, changed: 0 });
+    console.log(`${BIG} rows: undo ${(performance.now() - undo0).toFixed(0)} ms`);
   });
 });

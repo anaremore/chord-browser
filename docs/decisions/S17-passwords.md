@@ -1088,7 +1088,9 @@ Only what a real desktop can show; everything else above was measured.
 - **What a `login` record leaves out:** the password before the last change, which chords used it, and the never list.
 - **Limits:** 64 MB of CSV, 50,000 rows (the rest counted), 64 KB a field, 200 columns, 1,000 listed rows.
 
-**Measured** (MEASURED).
+**Measured:**
+- **In the app** (`e2e/passwords-transfer.spec.ts`, the Linux container, X11): the 6,240-row Bitwarden file into a vault of 329, from *Import* to its result line, **414 ms**.
+- **chord-data's side, 5,000 rows** against a vault of 500 (`data/test/password-transfer.test.ts`, Windows 11, Node 24): the preview 18–23 ms; the import 0.9–1.1 s; its Undo 0.2 s. A row is a seal, a tag and an insert, 100–250 µs (Node's cipher and HMAC objects are most of it), so the import writes for 4 ms, then lets chord-data answer anything else (the command bar's searches), and SQLite's checkpoints come smaller meanwhile, as for history's imports. ⚠ chord-data's longest task during the import was 6–16 ms on an SSD and up to 30–67 ms on a slower drive: a commit carrying a checkpoint, as S15 §12 found for history. Main does nothing but route, and the renderer draws only the lines in view.
 
 **Tests:** the reader, each manager's header, CSV's corners, which rows come in, the diff and the `login` record, table-driven in `core/test/password-import.test.ts`; staging, the preview (open, locked, none), the import as chosen, a lock part way, the same file again, Undo, the CSV export read back and the records' pages in `data/test/password-transfer.test.ts`; main's gates (busy, no vault, locked, the passphrase), the toast and its Undo in `unit/passwords-transfer.test.ts`; and three journeys in `e2e/passwords-transfer.spec.ts` on the Linux runner: a Chrome CSV with its preview, ticked, Undo, the same file again, both exports (light and dark, axe, captures); an encrypted file's passwords through Your data into a new profile; and the 6,240-row Bitwarden file with *Review all*.
 
