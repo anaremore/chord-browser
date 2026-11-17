@@ -25,9 +25,9 @@
     <section aria-labelledby="local">
       <h2 id="local">What stays on your computer</h2>
       <p>Your tabs, history, Archive, settings, passwords, screenshots and assistant chats are kept only on your computer (<a href="/install#data">where</a>). There’s no Chord server.</p>
-      <p>Passwords you save are kept in a vault encrypted with a passphrase only you know, and Chord fills one only into the site it was saved for: into its page when you pick it, or into the sign-in box it shows before its page, sent only when you press Sign in. Sync and Chord’s export files never carry them, and the assistant never reads them.</p>
+      <p>Passwords you save are kept in a vault encrypted with a passphrase only you know, and Chord fills one only into the site it was saved for: into its page when you pick it, or into the sign-in box it shows before its page, sent only when you press Sign in. Sync and Chord’s plain export files never carry them, and the assistant never reads them. An encrypted Chord file carries them only when you ask, after your passphrase, and its own passphrase can’t be your vault’s. A CSV export asks for your passphrase too, and warns you that anyone with the file can read it.</p>
       <p>If you turn on sync (Settings → Your data), Chord writes your setup to a folder you choose, one your own sync app (iCloud Drive, Dropbox, OneDrive, Syncthing) already syncs, encrypted with your passphrase before it leaves Chord: your sync app’s company can’t read it. History, open Today tabs, passwords, assistant chats, site permissions and proxies are never synced. Sync is off until you turn it on.</p>
-      <p>Importing from another browser reads that browser’s files on your computer. It never copies passwords, cookies or extensions.</p>
+      <p>Importing from another browser reads that browser’s files on your computer. It never copies passwords, cookies or extensions. Passwords come in only from a file you choose yourself: a CSV you exported, in Settings → Passwords, or an encrypted Chord file, in Settings → Your data.</p>
       <p>A private window keeps no history, cookies or site data once it closes, and the assistant never reads it.</p>
     </section>
 

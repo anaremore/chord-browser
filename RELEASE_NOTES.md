@@ -2,6 +2,33 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.12.0 · preview · 2026-11-17
+
+0.11.1 was never published: its changes come in this release.
+
+- **Bring your passwords in.** Settings → Passwords → *Import…* reads a CSV you've exported from Chrome, Edge or Brave, Firefox, Safari or Apple Passwords, Bitwarden or 1Password. Another manager's file works too when its columns have the usual names. Not there yet in 0.11.0, it's here now.
+  - **A preview first, before anything is written:** what's new, what you already have, and what's different from yours. Where a password differs, yours is kept unless you take the file's, all at once or row by row.
+  - **Rows left out are listed**, each with its row number and why: no address, an app's address, no password, too long.
+  - **One-time codes** in the file are never kept, and the preview says how many there were.
+  - **Undo** takes the import back, from the card or the toast. A password you've changed since stays as you left it.
+  - Chord reads only the file you chose, never another browser's own store. While the vault is locked, the preview waits for you to unlock it; with no vault yet, *Import* asks for its first passphrase.
+- **Take your passwords out.** Settings → Passwords → *Export…* asks for your passphrase, as *Show* does, then writes them as:
+  - **a CSV** in Chrome's shape, which every password manager reads. Its row says *Anyone with the file can read your passwords.*
+  - **a Chord file, encrypted** with a passphrase of its own, which can't be the one your passwords are locked with.
+- **Passwords in Chord's own file, only when it's encrypted.** Settings → Your data's encrypted export can carry your passwords, and importing that file brings them in with the same preview, keeping yours where they differ. A plain file never carries them, and sync still never does.
+- **A strong password, made for you.** On a sign-up or change-password form, the menu under the new password's field starts with *Use a strong password*: 20 characters of letters, digits and `-`, with no look-alike characters. ↻, or Ctrl+Shift+K (⇧⌘K), makes another.
+  - **Site rules take precedence.** The field's own rules come first, then Apple's list of rules for well-known sites, then the field's length limits. The menu says when they shaped it: *Letters and digits, 12–16, as this site asks*.
+  - **A site whose rules only allow a weak password** gets *Use a password this site allows*, the strongest it takes, with its limit in words.
+  - **Saved the moment it's filled**, so a sign-up that goes wrong never loses it. It's *Not confirmed* until a sign-in with it works. In the menu, an unconfirmed password shows for a day; in Settings → Passwords it stays until you delete it.
+  - Private windows get no generator, since they never save.
+- **Sign-up and change-password forms save too.** A sign-up with a password you typed gets the save card. A change is matched to your saved account by the current password the form asks for; when none or several match, the card asks which account you changed, or saves it as new. Filling an account into a change form fills only its current password, and leaves the new one to you.
+- ***Change password on the site*** in Settings → Passwords opens the site's own page for it, on `https` only.
+- **From 0.11.1, never published:**
+  - **Passwords in the browser's own sign-in box**, the one a site or router shows before its page. It opens filled with the account you saved for that address, and nothing is sent until you press Sign in. Tick *Remember* to save or update its password. A password saved from the box fills only the box, and a proxy's box never uses the vault.
+  - **More sign-in pages fill:** a password step showing the email from the step before, one swapped in where the email was, a first step whose password field isn't shown yet, a sign-in form beside a sign-up form, and a "Log in or sign up" page.
+  - **Peek opens right after Chord starts.** A link from a pinned tab, clicked in Chord's first moments, no longer loads out of sight.
+- Not there yet: sign-in forms inside another site's frame, and saving on sign-up forms with no `<form>` around them.
+
 ## 0.11.1 · preview · 2026-11-17
 
 - **Passwords in the browser's own sign-in box.** The box a site or router shows before its page (HTTP sign-in), not there yet in 0.11.0, now works with your vault.
