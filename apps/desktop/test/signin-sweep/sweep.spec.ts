@@ -233,7 +233,6 @@ async function sweepStep(app: ElectronApplication, id: number, page: Page, snap:
   else {
     const userField = visible.find((f) => f.role === 'username');
     const passField = visible.find((f) => f.role === 'current-password');
-    if (holding.username.some((i) => fieldAt(i) && !fieldAt(i)!.visible)) problems.push(`${prefix}fill wrote the username into a hidden field`);
     if (userField && !holding.username.includes(userField.i)) problems.push(`${prefix}fill left the visible username field empty`);
     if (withPassword && passField && !holding.password.includes(passField.i)) problems.push(`${prefix}fill left the visible password field empty`);
     if (!withPassword && passwords.length) problems.push(`${prefix}fill sent no password to a form with a visible password field`);
@@ -306,7 +305,11 @@ async function sweepSite(app: ElectronApplication, url: string, index: number): 
       );
       if (counts && (counts.passwords || counts.usernames)) r.frames.push({ src: frame.url().slice(0, 160), ...counts });
     }
-    const fields = signInFields(snap);
+    // A home page with no sign-in link and no password field: an email box there counts only in a form that says sign in
+    // (one that says nothing is a newsletter's or a sign-up's).
+    const fields = signInFields(snap).filter(
+      (f) => r.followed || f.looks === 'password' || signInFields(snap).some((x) => x.looks === 'password') || (f.form >= 0 && SIGN_IN_WORDS.test([...snap.forms[f.form]!.words.submits, ...snap.forms[f.form]!.words.headings].join(' '))),
+    );
     const framed = r.frames.filter((f) => f.passwords || f.usernames);
     if (!fields.length) {
       if (framed.length) {

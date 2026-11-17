@@ -150,21 +150,37 @@ const SIGN_IN_HREF = /(log-?in|sign-?in|signon|auth|account|sso|passport|session
 /** The page's way to its sign-in: a link's address, or where to click a button. */
 function signInLink(): { href: string | null; x: number; y: number; text: string } | null {
   const found: { el: Element; score: number; text: string }[] = [];
-  for (const el of document.querySelectorAll('a, button, [role=button], [role=link]')) {
-    if (!shown(el)) continue;
-    // Never a form's own button: pressing it could submit what's in the form.
+  // Open shadow roots too (header components), and links in a menu not yet opened, by their address.
+  const candidates: Element[] = [];
+  const walk = (root: Document | ShadowRoot) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.matches('a, button, [role=button], [role=link]')) candidates.push(el);
+      const sr = (el as HTMLElement).shadowRoot;
+      if (sr) walk(sr);
+      if (candidates.length > 5000) return;
+    }
+  };
+  walk(document);
+  for (const el of candidates) {
+    const visible = shown(el);
+    const isLink = el instanceof HTMLAnchorElement && /^https?:/.test(el.href);
+    if (!visible && !isLink) continue;
+    // Never a button of a form that holds an email or password field: pressing it could submit what's in it.
     const form = el.closest('form');
-    if (!(el instanceof HTMLAnchorElement) && (form?.querySelector('input:not([type=hidden])') || (el as HTMLButtonElement).type === 'submit')) continue;
-    const text = String((el as HTMLElement).innerText || el.getAttribute('aria-label') || el.getAttribute('title') || '')
+    if (!isLink && ((el as HTMLButtonElement).type === 'submit' || form?.querySelector('input[type=password], input[type=email], input[autocomplete~=username]'))) continue;
+    const text = String((el as HTMLElement).innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '')
       .replace(/\s+/g, ' ')
       .trim();
     if (!text || text.length > 40) continue;
-    const href = el instanceof HTMLAnchorElement ? el.href : '';
+    const href = isLink ? (el as HTMLAnchorElement).href : '';
     let score = 0;
     if (SIGN_IN_LINK.test(text)) score += 10;
     else if (/\b(sign ?in|log ?in|login)\b/i.test(text) && !/sign ?up|register|create/i.test(text)) score += 6;
     if (href && SIGN_IN_HREF.test(href)) score += 3;
+    if (href && /\/(log-?in|sign-?in|signin|users\/sign_in|session\/new|auth\/login|account\/login)\b/i.test(new URL(href).pathname)) score += 4;
     if (/google|apple|facebook|microsoft|github/i.test(text)) score -= 20;
+    // A link out of sight (a closed menu) only by its words and its address together.
+    if (!visible) score -= 6;
     if (score >= 6) found.push({ el, score, text });
   }
   found.sort((a, b) => b.score - a.score);
